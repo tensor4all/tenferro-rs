@@ -319,22 +319,42 @@ where
     L: TensorRank,
     R: TensorRank,
 {
-    if lhs.shape() != rhs.shape() {
+    let output_shape = if lhs.shape() == rhs.shape() {
+        lhs.shape()
+    } else if lhs.shape().is_empty() {
+        rhs.shape()
+    } else if rhs.shape().is_empty() {
+        lhs.shape()
+    } else {
         return Err(crate::Error::ShapeMismatch {
             op,
             lhs: lhs.shape().to_vec(),
             rhs: rhs.shape().to_vec(),
         });
+    };
+    // SAFETY: the selected map kernel overwrites every output element.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, output_shape) }?;
+    if lhs.shape() == rhs.shape() {
+        zip_map2_into(
+            &mut out.view_mut(),
+            &typed_view_from_view(op, lhs)?,
+            &typed_view_from_view(op, rhs)?,
+            |x, y| x.pow_elem(y),
+        )
+        .map_err(|err| crate::Error::backend_failure(op, err))?;
+    } else if lhs.shape().is_empty() {
+        let scalar = typed_view_from_view(op, lhs)?.get(&[]);
+        map_into(&mut out.view_mut(), &typed_view_from_view(op, rhs)?, |x| {
+            scalar.pow_elem(x)
+        })
+        .map_err(|err| crate::Error::backend_failure(op, err))?;
+    } else {
+        let scalar = typed_view_from_view(op, rhs)?.get(&[]);
+        map_into(&mut out.view_mut(), &typed_view_from_view(op, lhs)?, |x| {
+            x.pow_elem(scalar)
+        })
+        .map_err(|err| crate::Error::backend_failure(op, err))?;
     }
-    // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-    zip_map2_into(
-        &mut out.view_mut(),
-        &typed_view_from_view(op, lhs)?,
-        &typed_view_from_view(op, rhs)?,
-        |x, y| x.pow_elem(y),
-    )
-    .map_err(|err| crate::Error::backend_failure(op, err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -495,22 +515,42 @@ fn typed_pow_with_pool<T>(
 where
     T: PowElem + PoolScalar,
 {
-    if lhs.shape() != rhs.shape() {
+    let output_shape = if lhs.shape() == rhs.shape() {
+        lhs.shape()
+    } else if lhs.shape().is_empty() {
+        rhs.shape()
+    } else if rhs.shape().is_empty() {
+        lhs.shape()
+    } else {
         return Err(crate::Error::ShapeMismatch {
             op: "pow",
             lhs: lhs.shape().to_vec(),
             rhs: rhs.shape().to_vec(),
         });
+    };
+    // SAFETY: the selected map kernel overwrites every output element.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, output_shape) }?;
+    if lhs.shape() == rhs.shape() {
+        zip_map2_into(
+            &mut out.view_mut(),
+            &typed_view("pow", lhs)?,
+            &typed_view("pow", rhs)?,
+            |x, y| x.pow_elem(y),
+        )
+        .map_err(|err| crate::Error::backend_failure("pow", err))?;
+    } else if lhs.shape().is_empty() {
+        let scalar = typed_view("pow", lhs)?.get(&[]);
+        map_into(&mut out.view_mut(), &typed_view("pow", rhs)?, |x| {
+            scalar.pow_elem(x)
+        })
+        .map_err(|err| crate::Error::backend_failure("pow", err))?;
+    } else {
+        let scalar = typed_view("pow", rhs)?.get(&[]);
+        map_into(&mut out.view_mut(), &typed_view("pow", lhs)?, |x| {
+            x.pow_elem(scalar)
+        })
+        .map_err(|err| crate::Error::backend_failure("pow", err))?;
     }
-    // SAFETY: the following kernel overwrites every output element before any read.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
-    zip_map2_into(
-        &mut out.view_mut(),
-        &typed_view("pow", lhs)?,
-        &typed_view("pow", rhs)?,
-        |x, y| x.pow_elem(y),
-    )
-    .map_err(|err| crate::Error::backend_failure("pow", err))?;
     Ok(tensor_from_array(out))
 }
 

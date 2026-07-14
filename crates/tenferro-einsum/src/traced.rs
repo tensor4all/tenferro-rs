@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use computegraph::types::ValueRef;
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_runtime::error::{Error, Result};
 use tenferro_runtime::extension::{self, ExtensionCacheKey, ExtensionCacheStore};
 use tenferro_runtime::{GraphCompiler, SymDim, TracedTensor};
@@ -175,7 +174,12 @@ pub fn einsum_subscripts_with(
 
     let output_shape_hint = infer_symbolic_output_shape(subscripts, inputs)?;
     if let Some(result) = try_direct_binary_dot_general(inputs, subscripts, &optimize)? {
-        return Ok(result);
+        let contract_op = EinsumExtensionOp::with_output_shape_hint(
+            subscripts.clone(),
+            output_shape_hint,
+            EinsumPlanSpec::LeftToRight,
+        );
+        return extension::attach_expanded_shape_contract(&contract_op, inputs, result);
     }
 
     let subs = Subscripts::from(subscripts);
@@ -253,30 +257,19 @@ fn expand_traced_einsum_graph(
         output_shape_hint,
         EinsumPlanSpec::LeftToRight,
     );
-    let input_dtypes: Vec<_> = inputs.iter().map(|tensor| tensor.dtype).collect();
-    let input_sym_shapes: Vec<Vec<SymDim>> = inputs
-        .iter()
-        .map(|tensor| match tensor.sym_shape() {
-            Some(shape) => Ok(shape.to_vec()),
-            None => (0..tensor.rank)
-                .map(|axis| tensor.axis_sym_dim(axis))
-                .collect(),
-        })
-        .collect::<Result<_>>()?;
-    let input_sym_shape_refs: Vec<_> = input_sym_shapes.iter().map(Vec::as_slice).collect();
-    let output_metas = op.infer_output_meta(&input_dtypes, &input_sym_shape_refs)?;
     let input_dim_shapes = traced_dim_expr_shapes(inputs);
 
-    let outputs = extension::apply_expanded_graph(inputs, output_metas, |builder, input_refs| {
-        let result = build_einsum_graph_dim_expr(builder, tree, input_refs, &input_dim_shapes)
-            .map_err(|err| Error::ContractionError(err.to_string()))?;
-        let ValueRef::Local(local) = result else {
-            return Err(Error::Internal(
-                "expanded einsum returned an external value".into(),
-            ));
-        };
-        Ok(vec![local])
-    })?;
+    let outputs =
+        extension::apply_expanded_graph_with_shape_contract(&op, inputs, |builder, input_refs| {
+            let result = build_einsum_graph_dim_expr(builder, tree, input_refs, &input_dim_shapes)
+                .map_err(|err| Error::ContractionError(err.to_string()))?;
+            let ValueRef::Local(local) = result else {
+                return Err(Error::Internal(
+                    "expanded einsum returned an external value".into(),
+                ));
+            };
+            Ok(vec![local])
+        })?;
 
     outputs
         .into_iter()

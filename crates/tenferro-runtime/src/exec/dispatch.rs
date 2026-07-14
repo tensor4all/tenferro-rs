@@ -1,7 +1,8 @@
 use crate::error::{Error, Result};
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::{
-    BackendSession, GatherConfig, PadConfig, SliceConfig, Tensor, TensorBackend,
+    BackendSession, GatherConfig, PadConfig, SliceConfig, Tensor, TensorBackend, TensorBackendOps,
+    TensorDeviceTransfer,
 };
 
 use super::{
@@ -24,6 +25,10 @@ type FfiDispatchFn<B> = fn(
     DispatchMode,
     Option<&mut ExtensionExecutor<B>>,
 ) -> Result<()>;
+
+pub(super) trait HostExecution: TensorBackendOps + TensorDeviceTransfer {}
+
+impl<T> HostExecution for T where T: TensorBackendOps + TensorDeviceTransfer + ?Sized {}
 
 type HostDispatchFn<B> = fn(&mut B, &mut [Option<ExecSlot<'_>>], &ExecInstruction) -> Result<()>;
 
@@ -99,7 +104,7 @@ macro_rules! define_host_dispatch {
             }
         }
 
-        fn host_dispatch_table<B: TensorBackend>() -> [HostDispatchEntry<B>; HostDispatchKey::COUNT_FOR_TABLE] {
+        fn host_dispatch_table<B: HostExecution + ?Sized>() -> [HostDispatchEntry<B>; HostDispatchKey::COUNT_FOR_TABLE] {
             [
                 $(
                     HostDispatchEntry {
@@ -122,7 +127,7 @@ pub(super) struct FfiDispatchEntry<B: TensorBackend + 'static> {
     execute: FfiDispatchFn<B>,
 }
 
-pub(super) struct HostDispatchEntry<B: TensorBackend> {
+pub(super) struct HostDispatchEntry<B: HostExecution + ?Sized> {
     pub(super) key: HostDispatchKey,
     execute: HostDispatchFn<B>,
 }
@@ -135,9 +140,9 @@ impl<B: TensorBackend + 'static> Clone for FfiDispatchEntry<B> {
     }
 }
 
-impl<B: TensorBackend> Copy for HostDispatchEntry<B> {}
+impl<B: HostExecution + ?Sized> Copy for HostDispatchEntry<B> {}
 
-impl<B: TensorBackend> Clone for HostDispatchEntry<B> {
+impl<B: HostExecution + ?Sized> Clone for HostDispatchEntry<B> {
     fn clone(&self) -> Self {
         *self
     }
@@ -237,7 +242,9 @@ pub(super) fn is_exec_session_ffi_op(op: &ExecOp) -> bool {
     )
 }
 
-pub(super) fn host_dispatch_entry<B: TensorBackend>(op: &ExecOp) -> Option<HostDispatchEntry<B>> {
+pub(super) fn host_dispatch_entry<B: HostExecution + ?Sized>(
+    op: &ExecOp,
+) -> Option<HostDispatchEntry<B>> {
     let key = HostDispatchKey::for_op(op)?;
     // INVARIANT: the host dispatch table is macro-generated and fixed at
     // compile time, so this lookup is constant-bounded.
@@ -260,7 +267,7 @@ pub(super) fn execute_backend_dispatch(
     (entry.execute)(exec, slots, inst)
 }
 
-pub(super) fn execute_host_dispatch<B: TensorBackend>(
+pub(super) fn execute_host_dispatch<B: HostExecution + ?Sized>(
     backend: &mut B,
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
@@ -308,7 +315,7 @@ fn host_dispatch_mismatch(expected: HostDispatchKey, op: &ExecOp) -> Error {
     ))
 }
 
-fn execute_shape_of_host<B: TensorBackend>(
+fn execute_shape_of_host<B: HostExecution + ?Sized>(
     backend: &mut B,
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
@@ -332,7 +339,7 @@ fn execute_shape_of_host<B: TensorBackend>(
     Ok(())
 }
 
-fn execute_dynamic_truncate_host<B: TensorBackend>(
+fn execute_dynamic_truncate_host<B: HostExecution + ?Sized>(
     backend: &mut B,
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
@@ -366,7 +373,7 @@ fn execute_dynamic_truncate_host<B: TensorBackend>(
     Ok(())
 }
 
-fn execute_pad_to_match_host<B: TensorBackend>(
+fn execute_pad_to_match_host<B: HostExecution + ?Sized>(
     backend: &mut B,
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
@@ -404,7 +411,7 @@ fn execute_pad_to_match_host<B: TensorBackend>(
     Ok(())
 }
 
-fn execute_constant_host<B: TensorBackend>(
+fn execute_constant_host<B: HostExecution + ?Sized>(
     backend: &mut B,
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,

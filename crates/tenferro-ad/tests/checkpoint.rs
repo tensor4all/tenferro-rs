@@ -124,7 +124,7 @@ fn checkpoint_loop_grad_correct() {
     let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x0_value)).unwrap();
 
     for _ in 0..steps {
-        x = (&a * &x.cos()).unwrap();
+        x = (&a * &x.cos().unwrap()).unwrap();
         x.checkpoint(&mut compiler, &mut executor).unwrap();
     }
 

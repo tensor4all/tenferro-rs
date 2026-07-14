@@ -119,6 +119,20 @@ the now-superseded TBLIS backend-kind prototype, a private TBLIS FFI leaf, and d
   listed 17 intended files, and `cargo package --allow-dirty` packaged and
   verified `t4a-tblis-src 0.1.0` without publishing it.
 
+## Latest-main integration
+
+- Merged `origin/main` at `c889102e` without rewriting the PR branch. The main
+  branch had replaced the old single-context CPU backend with shared NUMA-aware
+  engines and placement-specific handles.
+- `DotGeneralProvider` remains handle-local policy. New placement handles copy
+  it, while `run_backend_session_cached` passes the selected policy into each
+  engine-owned `CpuExecSession`; the shared topology, engine resources, and
+  arbitration state remain provider-policy agnostic.
+- The new NUMA implementation had Linux-only test imports and discovery helpers
+  compiled but unused on macOS under `-D warnings`. Narrow target/test `cfg`s
+  now omit those helpers only from non-test, non-Linux builds; no lint
+  suppression was added, and the portable topology tests remain enabled.
+
 ## Provider-source integration review
 
 - Current feature shape separates deployment routes:

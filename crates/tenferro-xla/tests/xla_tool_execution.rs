@@ -153,12 +153,22 @@ fn stablehlo_nary_einsum_module() -> tenferro_xla::StableHloModule {
 
 fn stablehlo_phase_one_elementwise_module() -> tenferro_xla::StableHloModule {
     let x = TracedTensor::input_symbolic_shape(DType::F32, 1).unwrap();
-    let positive = x.abs().exp();
-    let analytic = positive.log().sqrt().rsqrt().expm1().log1p();
-    let trig = positive.sin().cos().tanh();
+    let positive = x.abs().unwrap().exp().unwrap();
+    let analytic = positive
+        .log()
+        .unwrap()
+        .sqrt()
+        .unwrap()
+        .rsqrt()
+        .unwrap()
+        .expm1()
+        .unwrap()
+        .log1p()
+        .unwrap();
+    let trig = positive.sin().unwrap().cos().unwrap().tanh().unwrap();
     let combined = (&analytic + &trig).unwrap();
     let divided = combined.div(&positive).unwrap();
-    let powered = divided.abs().pow(&positive).unwrap();
+    let powered = divided.abs().unwrap().pow(&positive).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&powered, &[(&x, DType::F32, &[4])])

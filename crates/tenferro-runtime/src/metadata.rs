@@ -3,6 +3,9 @@ use computegraph::types::{LocalValueId, ValueKey, ValueRef};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 use tenferro_ops::ad::context::{
     lookup_global_metadata, register_scoped_global_metadata_batch, GlobalMetadataScope, TensorMeta,
 };
@@ -12,7 +15,10 @@ use tenferro_ops::sym_dim::SymDim;
 use tenferro_tensor::DType;
 use tenferro_tensor::Tensor;
 
-use crate::shape_infer::{infer_extension_output_meta, infer_output_dtype, infer_output_extents};
+use crate::shape_constraint::{ScopedShapeConstraint, ShapeConstraintScope};
+use crate::shape_infer::{
+    infer_extension_output_meta_with_constraints, infer_output_dtype, infer_output_extents,
+};
 use crate::{Error, Result};
 
 #[derive(Clone)]
@@ -144,8 +150,62 @@ pub fn register_scoped_graph_metadata(
     graph: &Graph<StdTensorOp>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> Result<GlobalMetadataScope> {
-    register_scoped_global_metadata_batch(graph_metadata_registrations(graph, None, seeded)?)
-        .map_err(|err| metadata_error(err.to_string()))
+    Ok(register_scoped_graph_analysis(graph, seeded)?.metadata)
+}
+
+/// Metadata and shape constraints discovered by one graph-analysis walk.
+///
+/// The public container is used only by [`crate::ad_support`]; constraint
+/// representation remains private to `tenferro-runtime`.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_runtime::ad_support::register_scoped_graph_analysis;
+/// use tenferro_runtime::{DType, TracedTensor};
+///
+/// let input = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+/// let analysis = register_scoped_graph_analysis(input.graph(), []).unwrap();
+/// assert!(analysis.constraints.is_empty());
+/// ```
+pub struct RegisteredGraphAnalysis {
+    /// Graph-scoped metadata registered by the analysis walk.
+    pub metadata: GlobalMetadataScope,
+    /// Shape constraints recorded by extension nodes in the analyzed graph.
+    pub constraints: ShapeConstraintScope,
+}
+
+impl std::fmt::Debug for RegisteredGraphAnalysis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RegisteredGraphAnalysis")
+            .field("constraints", &self.constraints)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Analyze a graph once and register both output metadata and scoped shape constraints.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_runtime::ad_support::register_scoped_graph_analysis;
+/// use tenferro_runtime::{DType, TracedTensor};
+///
+/// let input = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+/// let analysis = register_scoped_graph_analysis(input.graph(), []).unwrap();
+/// assert!(analysis.constraints.is_empty());
+/// ```
+pub fn register_scoped_graph_analysis(
+    graph: &Graph<StdTensorOp>,
+    seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
+) -> Result<RegisteredGraphAnalysis> {
+    let analysis = graph_analysis_registrations(graph, None, seeded)?;
+    let metadata = register_scoped_global_metadata_batch(analysis.metadata)
+        .map_err(|err| metadata_error(err.to_string()))?;
+    Ok(RegisteredGraphAnalysis {
+        metadata,
+        constraints: ShapeConstraintScope::new(analysis.constraints),
+    })
 }
 
 pub fn register_scoped_live_graph_metadata(
@@ -153,11 +213,9 @@ pub fn register_scoped_live_graph_metadata(
     live_values: &HashSet<LocalValueId>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> Result<GlobalMetadataScope> {
-    register_scoped_global_metadata_batch(graph_metadata_registrations(
-        graph,
-        Some(live_values),
-        seeded,
-    )?)
+    register_scoped_global_metadata_batch(
+        graph_analysis_registrations(graph, Some(live_values), seeded)?.metadata,
+    )
     .map_err(|err| metadata_error(err.to_string()))
 }
 
@@ -215,11 +273,16 @@ fn extend_metadata_scopes<'a>(
     }
 }
 
-fn graph_metadata_registrations(
+struct GraphAnalysisRegistrations {
+    metadata: Vec<(ValueKey<StdTensorOp>, TensorMeta)>,
+    constraints: Vec<ScopedShapeConstraint>,
+}
+
+fn graph_analysis_registrations(
     graph: &Graph<StdTensorOp>,
     live_values: Option<&HashSet<LocalValueId>>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
-) -> Result<Vec<(ValueKey<StdTensorOp>, TensorMeta)>> {
+) -> Result<GraphAnalysisRegistrations> {
     let seeded: Vec<_> = seeded.into_iter().collect();
     // Start from just the seeded inputs. External keys not in `seeded` are
     // resolved on demand via a single-key lookup against the global
@@ -230,35 +293,44 @@ fn graph_metadata_registrations(
     let mut known: HashMap<ValueKey<StdTensorOp>, TensorMeta> = seeded.iter().cloned().collect();
 
     let mut registrations = seeded;
+    let mut constraints = Vec::new();
     let mut visited = HashSet::new();
     append_graph_metadata_registrations(
         graph,
         live_values,
+        true,
         &mut known,
         &mut registrations,
+        &mut constraints,
         &mut visited,
     )?;
 
-    Ok(registrations)
+    Ok(GraphAnalysisRegistrations {
+        metadata: registrations,
+        constraints,
+    })
 }
 
 fn append_graph_metadata_registrations(
     graph: &Graph<StdTensorOp>,
     live_values: Option<&HashSet<LocalValueId>>,
+    collect_constraints: bool,
     known: &mut HashMap<ValueKey<StdTensorOp>, TensorMeta>,
     registrations: &mut Vec<(ValueKey<StdTensorOp>, TensorMeta)>,
+    constraints: &mut Vec<ScopedShapeConstraint>,
     visited: &mut HashSet<*const Graph<StdTensorOp>>,
 ) -> Result<()> {
     let graph_ptr: *const Graph<StdTensorOp> = graph;
     if !visited.insert(graph_ptr) {
         return Ok(());
     }
-
-    for parent in graph.parents() {
-        append_graph_metadata_registrations(parent, None, known, registrations, visited)?;
-    }
+    #[cfg(test)]
+    test_support::record_graph_visit();
+    let mut parent_owner_index = None;
 
     for op_node in graph.operations() {
+        #[cfg(test)]
+        test_support::record_operation_visit();
         if let Some(live_values) = live_values {
             if !op_node
                 .outputs
@@ -269,25 +341,101 @@ fn append_graph_metadata_registrations(
             }
         }
 
-        let input_metas: Vec<_> = op_node
+        if !collect_constraints {
+            let mut all_outputs_registered = true;
+            for &output_id in &op_node.outputs {
+                let key = graph.values()[output_id].key.clone();
+                let Some(meta) =
+                    lookup_global_metadata(&key).map_err(|err| metadata_error(err.to_string()))?
+                else {
+                    all_outputs_registered = false;
+                    break;
+                };
+                known.insert(key, meta);
+            }
+            if all_outputs_registered {
+                continue;
+            }
+        }
+
+        let input_keys: Vec<_> = op_node
             .inputs
             .iter()
-            .map(|input| {
-                let key = match input {
-                    ValueRef::Local(local_id) => &graph.values()[*local_id].key,
-                    ValueRef::External(key) => key,
-                };
-                if let Some(meta) = known.get(key).cloned() {
-                    return Ok(meta);
-                }
-                lookup_global_metadata(key)
-                    .map_err(|err| metadata_error(err.to_string()))?
-                    .ok_or_else(|| metadata_error(format!("missing input metadata for {:?}", key)))
+            .map(|input| match input {
+                ValueRef::Local(local_id) => &graph.values()[*local_id].key,
+                ValueRef::External(key) => key,
             })
-            .collect::<Result<_>>()?;
+            .cloned()
+            .collect();
+        let mut input_metas = Vec::with_capacity(input_keys.len());
+        for key in &input_keys {
+            if let Some(meta) = known.get(key).cloned() {
+                input_metas.push(meta);
+                continue;
+            }
+            if let Some(meta) =
+                lookup_global_metadata(key).map_err(|err| metadata_error(err.to_string()))?
+            {
+                known.insert(key.clone(), meta.clone());
+                input_metas.push(meta);
+                continue;
+            }
 
-        let output_metas = infer_output_metas(&op_node.operation, &input_metas)?;
-        for (&output_id, meta) in op_node.outputs.iter().zip(output_metas) {
+            // Traced construction normally keeps parent metadata scopes alive,
+            // so this is only the compatibility path for manually assembled or
+            // otherwise unregistered parent graphs.
+            let owner_index = parent_owner_index.get_or_insert_with(|| {
+                #[cfg(test)]
+                test_support::record_parent_owner_index_build();
+                let mut owners = HashMap::new();
+                for (parent_index, parent) in graph.parents().iter().enumerate() {
+                    for value in parent.values() {
+                        #[cfg(test)]
+                        test_support::record_parent_value_visit();
+                        owners.entry(value.key.clone()).or_insert(parent_index);
+                    }
+                }
+                owners
+            });
+            let Some(&parent_index) = owner_index.get(key) else {
+                return Err(metadata_error(format!(
+                    "missing input metadata for {:?}",
+                    key
+                )));
+            };
+            let parent = &graph.parents()[parent_index];
+            append_graph_metadata_registrations(
+                parent,
+                None,
+                false,
+                known,
+                registrations,
+                constraints,
+                visited,
+            )?;
+            input_metas.push(
+                known.get(key).cloned().ok_or_else(|| {
+                    metadata_error(format!("missing input metadata for {:?}", key))
+                })?,
+            );
+        }
+
+        let inferred = infer_output_metas(&op_node.operation, &input_metas)?;
+        let origin_keys: Vec<_> = op_node
+            .outputs
+            .iter()
+            .map(|&output_id| graph.values()[output_id].key.clone())
+            .collect();
+        if collect_constraints {
+            constraints.extend(inferred.constraints.into_iter().map(|local| {
+                ScopedShapeConstraint {
+                    origins: origin_keys.clone(),
+                    inputs: input_keys.clone(),
+                    local,
+                }
+            }));
+        }
+        for (&output_id, meta) in op_node.outputs.iter().zip(inferred.output_metas) {
             let key = graph.values()[output_id].key.clone();
             // INVARIANT: both owners are required: `known` feeds later local
             // inference in this walk, while `registrations` is returned for
@@ -300,7 +448,12 @@ fn append_graph_metadata_registrations(
     Ok(())
 }
 
-fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<Vec<TensorMeta>> {
+struct InferredGraphOutput {
+    output_metas: Vec<TensorMeta>,
+    constraints: Vec<crate::shape_constraint::LocalShapeConstraint>,
+}
+
+fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<InferredGraphOutput> {
     let input_shape_exprs: Vec<Vec<DimExpr>> = input_metas
         .iter()
         .enumerate()
@@ -312,8 +465,13 @@ fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<Ve
     let resolved_input_refs: Vec<&[SymDim]> = resolved_inputs.iter().map(Vec::as_slice).collect();
 
     if let StdTensorOp::Extension(ext) = op {
-        let metas = infer_extension_output_meta(ext.as_ref(), &input_dtypes, &input_shape_refs)?;
-        return Ok(metas
+        let inferred = infer_extension_output_meta_with_constraints(
+            ext.as_ref(),
+            &input_dtypes,
+            &input_shape_refs,
+        )?;
+        let output_metas = inferred
+            .output_metas
             .into_iter()
             .map(|(dtype, shape)| {
                 tensor_meta(
@@ -324,11 +482,15 @@ fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<Ve
                         .collect(),
                 )
             })
-            .collect());
+            .collect();
+        return Ok(InferredGraphOutput {
+            output_metas,
+            constraints: inferred.constraints,
+        });
     }
 
     let output_dtype = infer_output_dtype(op, &input_dtypes)?;
-    Ok(infer_output_extents(op, &input_shape_refs)?
+    let output_metas = infer_output_extents(op, &input_shape_refs)?
         .into_iter()
         .map(|extents| {
             let resolved_extents = extents
@@ -337,7 +499,11 @@ fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<Ve
                 .collect();
             TensorMeta::with_extents(output_dtype, resolved_extents)
         })
-        .collect())
+        .collect();
+    Ok(InferredGraphOutput {
+        output_metas,
+        constraints: Vec::new(),
+    })
 }
 
 fn resolved_bound_shapes(input_metas: &[TensorMeta]) -> Result<Vec<Vec<SymDim>>> {

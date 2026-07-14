@@ -3,6 +3,10 @@ use std::ops::Range;
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::{Tensor, TypedTensor};
 
+#[cfg(test)]
+#[path = "helpers/tests.rs"]
+mod tests;
+
 pub(crate) fn matrix_dims<T>(
     input: &TypedTensor<T>,
     op: &'static str,
@@ -230,14 +234,15 @@ pub(crate) fn lower_triangle_from_lapack<T: Copy + Default>(
     data: &[T],
     rows: usize,
     cols: usize,
-) -> Vec<T> {
-    let mut out = vec![T::default(); rows * cols];
+) -> tenferro_tensor::Result<Vec<T>> {
+    let len = checked_product("lapack_linalg", "lower triangle", &[rows, cols])?;
+    let mut out = vec![T::default(); len];
     for col in 0..cols {
         for row in col..rows {
             out[row + col * rows] = data[row + col * rows];
         }
     }
-    out
+    Ok(out)
 }
 
 pub(crate) fn leading_upper_triangle_from_lapack<T: Copy + Default>(
@@ -245,14 +250,15 @@ pub(crate) fn leading_upper_triangle_from_lapack<T: Copy + Default>(
     source_rows: usize,
     rows: usize,
     cols: usize,
-) -> Vec<T> {
-    let mut out = vec![T::default(); rows * cols];
+) -> tenferro_tensor::Result<Vec<T>> {
+    let len = checked_product("lapack_linalg", "upper triangle", &[rows, cols])?;
+    let mut out = vec![T::default(); len];
     for col in 0..cols {
         for row in 0..rows.min(col + 1) {
             out[row + col * rows] = data[row + col * source_rows];
         }
     }
-    out
+    Ok(out)
 }
 
 pub(crate) fn transpose_col_major_data<T: Copy>(data: &[T], rows: usize, cols: usize) -> Vec<T> {

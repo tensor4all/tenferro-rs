@@ -107,3 +107,8 @@ harness = false
 name = "tblis_dot_general_provider"
 harness = false
 required-features = ["cpu-tblis-provider"]
+
+[[bench]]
+name = "numa_execution"
+harness = false
+required-features = ["cpu-faer"]

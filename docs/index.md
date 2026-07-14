@@ -23,6 +23,7 @@ compilation, CUDA, or experimental WebGPU only when the workflow needs them.
 | Understanding direct, eager, and traced execution | [Execution Models](guides/execution-models.md) |
 | Column-major storage and row-major import/export | [Memory Order](guides/memory-order.md) |
 | CPU, CUDA, and experimental WebGPU backend behavior | [Devices and GPU](guides/devices-and-gpu.md) |
+| CPU affinity, NUMA placement, faer, and external BLAS behavior | [CPU Execution and NUMA Placement](guides/cpu-execution.md) |
 | Static-shaped StableHLO and PJRT plugin loading | [XLA and PJRT](guides/xla.md) |
 | Runtime-dependent dimensions in traced graphs | [Dynamic and symbolic shapes](design/dynamic-symbolic-shapes.md) |
 | API documentation for every crate | [API Reference](api/index.md) |

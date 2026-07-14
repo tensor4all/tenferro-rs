@@ -46,6 +46,7 @@ mod metadata;
 #[doc(hidden)]
 pub mod scalar_semantics;
 mod segment;
+mod shape_constraint;
 mod shape_infer;
 mod shape_packing;
 pub mod sym_dim;
@@ -54,7 +55,7 @@ pub mod traced;
 mod typed_tensor;
 
 pub use compiler::{CompilerOptions, OptimizerConfig};
-pub use error::{ContextId, Error, Result};
+pub use error::{ContextId, Error, Result, ShapeConstraintEvalError};
 pub use extension_cache::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
 };
@@ -67,8 +68,11 @@ pub use graph::{
     GraphInstructionView, GraphOpView, GraphProgram, GraphProgramInput,
     GraphProgramLoweringShapeError, GraphProgramLoweringView,
 };
+#[doc(hidden)]
+pub use shape_constraint::ShapeGuard;
 pub use shape_packing::TracedSliceBuilder;
 pub use sym_dim::SymDim;
+pub use tenferro_ops::ShapeRelation;
 pub use tenferro_tensor::{
     CacheStats, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
     SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar, TensorValue, TensorView,

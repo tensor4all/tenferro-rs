@@ -12,8 +12,9 @@ use tenferro_tensor::DType;
 ///
 /// let x = TracedTensor::input_symbolic_shape(DType::I64, 1).unwrap();
 /// let mut compiler = GraphCompiler::new();
+/// let y = x.neg().unwrap();
 /// let program = compiler
-///     .compile_with_input_specs(&x.neg(), &[(&x, DType::I64, &[2])])
+///     .compile_with_input_specs(&y, &[(&x, DType::I64, &[2])])
 ///     .unwrap();
 /// let err = lower_to_stablehlo(&program).unwrap_err();
 /// assert!(matches!(err, Error::UnsupportedDType { .. }));

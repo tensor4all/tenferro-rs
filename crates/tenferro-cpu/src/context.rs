@@ -1,7 +1,63 @@
 use std::env;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use crate::{Error, Result};
+use thiserror::Error as ThisError;
+
+use crate::affinity::{SystemThreadAffinity, ThreadAffinity};
+use crate::arbiter::{
+    set_pool_execution_owner, with_execution_owner, with_pool_execution_owner, ResourceOwner,
+};
+use crate::{CpuId, CpuSet, Error, Result};
+
+#[derive(Debug, Default)]
+struct ExecutionOwnerState {
+    owner: Option<ResourceOwner>,
+    depth: usize,
+}
+
+/// Failure to construct a CPU context with pinned Rayon workers.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuContextError;
+///
+/// let error = CpuContextError::InvalidThreadCount;
+/// assert!(error.to_string().contains("thread count"));
+/// ```
+#[derive(Clone, Debug, ThisError, PartialEq, Eq)]
+pub enum CpuContextError {
+    /// A context must contain at least one worker.
+    #[error("thread count must be at least 1")]
+    InvalidThreadCount,
+    /// A pinned engine cannot create more workers than assigned CPUs.
+    #[error("requested {workers} workers for only {cpus} assigned CPUs")]
+    TooManyWorkers {
+        /// Requested Rayon worker count.
+        workers: usize,
+        /// Number of logical CPUs in the execution domain.
+        cpus: usize,
+    },
+    /// Rayon could not construct the custom thread pool.
+    #[error("failed to build pinned CPU thread pool: {message}")]
+    PoolBuild {
+        /// Rayon or OS thread-spawn error detail.
+        message: String,
+    },
+    /// A worker could not set or verify its assigned CPU affinity.
+    #[error("failed to pin worker {worker} to CPU {cpu}: {message}")]
+    WorkerPinning {
+        /// Stable Rayon worker index.
+        worker: usize,
+        /// Assigned operating-system logical CPU.
+        cpu: CpuId,
+        /// OS or verification failure detail.
+        message: String,
+    },
+    /// A worker terminated before reporting startup affinity.
+    #[error("worker startup channel closed before all workers reported")]
+    WorkerStartupClosed,
+}
 
 /// Reusable CPU execution context carrying CPU parallelism policy.
 ///
@@ -22,6 +78,8 @@ use crate::{Error, Result};
 pub struct CpuContext {
     num_threads: usize,
     pool: Option<Arc<rayon::ThreadPool>>,
+    pinned_cpus: Option<CpuSet>,
+    execution_owner: Arc<Mutex<ExecutionOwnerState>>,
 }
 
 impl CpuContext {
@@ -115,13 +173,112 @@ impl CpuContext {
                     })?,
             ))
         };
-        Ok(Self { num_threads, pool })
+        Ok(Self {
+            num_threads,
+            pool,
+            pinned_cpus: None,
+            execution_owner: Arc::new(Mutex::new(ExecutionOwnerState::default())),
+        })
+    }
+
+    /// Create a Rayon context whose workers are pinned to assigned logical CPUs.
+    ///
+    /// A real Rayon pool is constructed even when `num_threads` is one. The
+    /// worker count cannot exceed the assigned CPU count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{process_cpu_affinity, CpuContext};
+    ///
+    /// if let Some(allowed) = process_cpu_affinity() {
+    ///     let one_cpu = tenferro_cpu::CpuSet::new([allowed.as_slice()[0]])?;
+    ///     let context = CpuContext::with_pinned_cpus(one_cpu.clone(), 1)?;
+    ///     assert_eq!(context.pinned_cpus(), Some(&one_cpu));
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_pinned_cpus(
+        cpus: CpuSet,
+        num_threads: usize,
+    ) -> std::result::Result<Self, CpuContextError> {
+        Self::with_pinned_cpus_using(cpus, num_threads, SystemThreadAffinity)
+    }
+
+    pub(crate) fn with_pinned_cpus_using<A: ThreadAffinity>(
+        cpus: CpuSet,
+        num_threads: usize,
+        affinity: A,
+    ) -> std::result::Result<Self, CpuContextError> {
+        if num_threads == 0 {
+            return Err(CpuContextError::InvalidThreadCount);
+        }
+        if num_threads > cpus.len() {
+            return Err(CpuContextError::TooManyWorkers {
+                workers: num_threads,
+                cpus: cpus.len(),
+            });
+        }
+
+        let assigned_cpus = Arc::new(select_worker_cpus(&cpus, num_threads));
+        let (startup_tx, startup_rx) = std::sync::mpsc::channel();
+        let pool_assigned_cpus = Arc::clone(&assigned_cpus);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .spawn_handler(move |thread| {
+                let worker = thread.index();
+                let cpu = pool_assigned_cpus[worker];
+                let startup_tx = startup_tx.clone();
+                let affinity = affinity.clone();
+                std::thread::Builder::new()
+                    .name(format!("tenferro-cpu-{cpu}"))
+                    .spawn(move || {
+                        let result = affinity.pin_current(cpu).and_then(|observed| {
+                            (observed.len() == 1 && observed.contains(cpu))
+                                .then_some(())
+                                .ok_or_else(|| {
+                                    format!(
+                                        "verification returned affinity {:?}",
+                                        observed.as_usize_vec()
+                                    )
+                                })
+                        });
+                        let _ = startup_tx.send((worker, cpu, result));
+                        thread.run();
+                    })
+                    .map(|_| ())
+            })
+            .build()
+            .map_err(|err| CpuContextError::PoolBuild {
+                message: err.to_string(),
+            })?;
+        let pool = Arc::new(pool);
+        for _ in 0..num_threads {
+            let (worker, cpu, result) = startup_rx
+                .recv()
+                .map_err(|_| CpuContextError::WorkerStartupClosed)?;
+            if let Err(message) = result {
+                return Err(CpuContextError::WorkerPinning {
+                    worker,
+                    cpu,
+                    message,
+                });
+            }
+        }
+        Ok(Self {
+            num_threads,
+            pool: Some(pool),
+            pinned_cpus: Some(cpus),
+            execution_owner: Arc::new(Mutex::new(ExecutionOwnerState::default())),
+        })
     }
 
     fn single_threaded() -> Self {
         Self {
             num_threads: 1,
             pool: None,
+            pinned_cpus: None,
+            execution_owner: Arc::new(Mutex::new(ExecutionOwnerState::default())),
         }
     }
 
@@ -139,6 +296,23 @@ impl CpuContext {
         self.num_threads
     }
 
+    /// Return the worker CPU domain for a pinned context.
+    ///
+    /// Legacy thread-count-only contexts return `None` because they do not own
+    /// worker affinity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuContext;
+    ///
+    /// assert_eq!(CpuContext::with_threads(1)?.pinned_cpus(), None);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn pinned_cpus(&self) -> Option<&CpuSet> {
+        self.pinned_cpus.as_ref()
+    }
+
     /// Run a closure inside this context's CPU execution scope.
     ///
     /// # Examples
@@ -154,6 +328,76 @@ impl CpuContext {
         match &self.pool {
             Some(pool) => pool.install(op),
             None => op(),
+        }
+    }
+
+    pub(crate) fn install_with_execution_owner<R: Send>(
+        &self,
+        owner: ResourceOwner,
+        op: impl FnOnce() -> R + Send,
+    ) -> R {
+        let should_broadcast = {
+            let mut state = self
+                .execution_owner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match state.owner {
+                None => {
+                    state.owner = Some(owner);
+                    state.depth = 1;
+                    true
+                }
+                Some(active) if active == owner => {
+                    state.depth += 1;
+                    false
+                }
+                Some(active) => panic!(
+                    "CPU execution owner invariant violated: active {active:?}, requested {owner:?}"
+                ),
+            }
+        };
+        if should_broadcast {
+            self.broadcast_execution_owner(Some(owner));
+        }
+
+        struct OwnerGuard<'a> {
+            context: &'a CpuContext,
+            owner: ResourceOwner,
+        }
+
+        impl Drop for OwnerGuard<'_> {
+            fn drop(&mut self) {
+                let should_clear = {
+                    let mut state = self
+                        .context
+                        .execution_owner
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    debug_assert_eq!(state.owner, Some(self.owner));
+                    state.depth -= 1;
+                    if state.depth == 0 {
+                        state.owner = None;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if should_clear {
+                    self.context.broadcast_execution_owner(None);
+                }
+            }
+        }
+
+        let _guard = OwnerGuard {
+            context: self,
+            owner,
+        };
+        self.install(|| with_pool_execution_owner(owner, || with_execution_owner(owner, op)))
+    }
+
+    fn broadcast_execution_owner(&self, owner: Option<ResourceOwner>) {
+        if let Some(pool) = &self.pool {
+            pool.broadcast(|_| set_pool_execution_owner(owner));
         }
     }
 
@@ -177,6 +421,19 @@ impl CpuContext {
     pub fn faer_seq(&self) -> faer::Par {
         faer::Par::Seq
     }
+}
+
+fn select_worker_cpus(cpus: &CpuSet, num_threads: usize) -> Vec<CpuId> {
+    if num_threads == 1 {
+        return vec![cpus.as_slice()[cpus.len() / 2]];
+    }
+    (0..num_threads)
+        .map(|worker| {
+            let index = ((worker as u128) * ((cpus.len() - 1) as u128)
+                / ((num_threads - 1) as u128)) as usize;
+            cpus.as_slice()[index]
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -4,8 +4,8 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
-    batched_multi, batched_multi_convert, check_lapack_info, dim_i32, has_zero_dim,
-    matrix_with_batch_shape, square_core_and_batch_result, square_matrix_dim,
+    batched_multi, batched_multi_convert, check_lapack_info, checked_product, dim_i32,
+    has_zero_dim, matrix_with_batch_shape, square_core_and_batch_result, square_matrix_dim,
     tensor_from_vec_with_template, vector_with_batch_shape, work_len,
 };
 
@@ -198,7 +198,11 @@ macro_rules! impl_complex_eigh {
                 let mut vectors = input.host_data()?.to_vec();
                 let mut values = vec![0.0 as $real; n];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
-                let mut rwork = vec![0.0 as $real; (3 * n).saturating_sub(2).max(1)];
+                let rwork_len = checked_product("eigh", "real workspace", &[3, n])?
+                    .checked_sub(2)
+                    .unwrap_or(1)
+                    .max(1);
+                let mut rwork = vec![0.0 as $real; rwork_len];
                 let mut info = 0;
                 // SAFETY: `vectors`, `values`, and `rwork` satisfy LAPACK's
                 // Hermitian eigensolver dimensions; `lwork = -1` writes only `query`.
@@ -259,7 +263,11 @@ macro_rules! impl_complex_eigh {
                 let mut work_matrix = input.host_data()?.to_vec();
                 let mut values = vec![0.0 as $real; n];
                 let mut query = vec![<$complex>::new(0.0, 0.0); 1];
-                let mut rwork = vec![0.0 as $real; (3 * n).saturating_sub(2).max(1)];
+                let rwork_len = checked_product("eigh_values", "real workspace", &[3, n])?
+                    .checked_sub(2)
+                    .unwrap_or(1)
+                    .max(1);
+                let mut rwork = vec![0.0 as $real; rwork_len];
                 let mut info = 0;
                 // SAFETY: `work_matrix`, `values`, and `rwork` satisfy LAPACK's
                 // Hermitian eigensolver dimensions; `lwork = -1` writes only `query`.

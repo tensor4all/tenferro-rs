@@ -1,4 +1,577 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+fn rust_sources_under(dir: &Path, sources: &mut Vec<(PathBuf, String)>) {
+    for entry in fs::read_dir(dir).expect("source directory should be readable") {
+        let path = entry.expect("source entry should be readable").path();
+        if path.is_dir() {
+            rust_sources_under(&path, sources);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            let source = fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("source {path:?} should be readable: {err}"));
+            sources.push((path, source));
+        }
+    }
+}
+
+#[test]
+fn bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded() {
+    let source = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
+    for needle in [
+        "Tensor::Bool(t) => self.transpose_bool(t, perm).map(Tensor::Bool)",
+        "Tensor::Bool(t) => self.broadcast_bool(t, shape, dims).map(Tensor::Bool)",
+        "Tensor::Bool(t) => self.slice_bool(t, config).map(Tensor::Bool)",
+        "Tensor::Bool(operand), Tensor::I64(indices)",
+        "Tensor::Bool(input), Tensor::F32(starts)",
+        "Tensor::Bool(input), Tensor::F64(starts)",
+        "Tensor::Bool(input), Tensor::I64(starts)",
+    ] {
+        assert!(
+            source.contains(needle),
+            "missing Bool copy/index dispatch: {needle}"
+        );
+    }
+    assert!(source.contains("Bool data tensors are not supported by additive scatter"));
+    assert!(!source.contains("scatter_bool_typed"));
+}
+
+#[test]
+fn explicit_cast_uses_shared_device_kernel_families_and_keeps_checked_convert() {
+    let kernels = std::fs::read_to_string("src/kernels/structural.rs").unwrap();
+    for family in [
+        "pub fn convert_numeric<",
+        "pub fn convert_numeric_to_bool<",
+        "pub fn convert_bool_to_numeric<",
+        "pub fn convert_numeric_to_complex_raw<",
+        "pub fn convert_complex_to_numeric<",
+        "pub fn validate_real_cast<",
+    ] {
+        assert!(
+            kernels.contains(family),
+            "missing cast kernel family: {family}"
+        );
+    }
+
+    let backend = std::fs::read_to_string("../tenferro-tensor/src/backend.rs").unwrap();
+    let convert = source_section(
+        &backend,
+        "fn convert(&mut self, input: &Tensor, to: crate::DType)",
+        "fn cast(&mut self, input: &Tensor, to: crate::DType)",
+    );
+    assert!(convert.contains("validate_convert_dtype"));
+    assert!(convert.contains("self.cast(input, to)"));
+
+    let cuda = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
+    let validation = source_section(
+        &cuda,
+        "fn validate_cuda_real_cast",
+        "fn checked_integer_domain_error",
+    );
+    assert!(validation.find("if n == 0").unwrap() < validation.find("alloc_output::<F>").unwrap());
+    assert!(!validation.contains("download_tensor(backend.runtime(), input"));
+
+    for (start, end, allocation, binding) in [
+        (
+            "fn launch_cast_unary<",
+            "fn convert_numeric_to_bool<",
+            "alloc_output::<Out>",
+            "typed_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_numeric_to_bool<",
+            "fn convert_bool_to_numeric<",
+            "alloc_bool_output",
+            "typed_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_bool_to_numeric<",
+            "fn convert_numeric_to_complex<",
+            "alloc_output::<Out>",
+            "bool_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_bool_to_complex<",
+            "fn convert_complex_to_numeric<",
+            "alloc_output::<OutComplex>",
+            "bool_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_complex_to_bool<",
+            "fn convert_f32_to_c32",
+            "alloc_bool_output",
+            "typed_tensor_array_arg_as::<In, F>(input",
+        ),
+        (
+            "fn convert_float_to_complex_raw<",
+            "fn convert_c32_to_f32",
+            "alloc_output::<OutComplex>",
+            "typed_tensor_array_arg(input",
+        ),
+        (
+            "fn convert_complex_to_complex<",
+            "fn extract_diagonal_typed",
+            "alloc_output::<Out>",
+            "typed_tensor_array_arg_as::<In, InFloat>(input",
+        ),
+    ] {
+        let body = source_section(&cuda, start, end);
+        let allocation = body
+            .find(allocation)
+            .unwrap_or_else(|| panic!("missing allocation in {start}"));
+        assert!(
+            body.find("ensure_resident_on_runtime").unwrap() < allocation,
+            "residency after allocation in {start}"
+        );
+        assert!(
+            body.find(binding).unwrap() < allocation,
+            "binding after allocation in {start}"
+        );
+        assert!(
+            body.find("cube_count_for_len").unwrap() < allocation,
+            "launch count after allocation in {start}"
+        );
+        assert!(
+            body.find("if ").unwrap() < allocation,
+            "empty branch must be prepared before allocation in {start}"
+        );
+    }
+}
+
+#[test]
+fn bool_launch_domains_are_checked_before_output_allocation() {
+    let dispatch = std::fs::read_to_string("src/cubecl/dispatch.rs").unwrap();
+    for (start, end) in [
+        (
+            "pub(crate) fn launch_unary_bool_tensor(",
+            "pub(crate) fn launch_binary_bool_tensor",
+        ),
+        (
+            "pub(crate) fn launch_binary_bool_tensor",
+            "pub(crate) fn launch_bool_tensor_into",
+        ),
+    ] {
+        let body = source_section(&dispatch, start, end);
+        let checked_len = body.find("checked_shape_product(op, out_shape)?").unwrap();
+        let checked_count = body.find("cube_count_for_len(output_len)?").unwrap();
+        let allocation = body.find("alloc_bool_output(rt, out_shape)?").unwrap();
+        assert!(checked_len < checked_count && checked_count < allocation);
+        assert!(body.contains("let Some(launch_count) = launch_count else"));
+    }
+
+    let backend = std::fs::read_to_string("src/cubecl/mod.rs").unwrap();
+    let embed = source_section(&backend, "fn embed_diagonal_bool(", "pub fn tril_typed");
+    assert!(embed.find("checked_dim_product").unwrap() < embed.find("alloc_bool_output").unwrap());
+    assert!(
+        embed.find("cube_count_for_len(output_len)?").unwrap()
+            < embed.find("alloc_bool_output").unwrap()
+    );
+    assert!(
+        embed
+            .find("cube_count_for_len(input.n_elements())?")
+            .unwrap()
+            < embed.find("alloc_bool_output").unwrap()
+    );
+
+    let concatenate = source_section(&backend, "fn concatenate_bool(", "fn gather_typed");
+    assert!(
+        concatenate.find("checked_dim_product").unwrap()
+            < concatenate.find("alloc_bool_output").unwrap()
+    );
+    assert!(
+        concatenate.find("let launch_counts").unwrap()
+            < concatenate.find("alloc_bool_output").unwrap()
+    );
+}
+
+fn production_rust_sources() -> Vec<(PathBuf, String)> {
+    let mut sources = Vec::new();
+    rust_sources_under(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut sources,
+    );
+    sources
+}
+
+#[derive(Debug)]
+struct Lexeme {
+    text: String,
+    offset: usize,
+}
+
+fn rust_code_lexemes(source: &str) -> Vec<Lexeme> {
+    let bytes = source.as_bytes();
+    let mut lexemes = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"//") {
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if bytes[i..].starts_with(b"/*") {
+            i += 2;
+            let mut depth = 1;
+            while i < bytes.len() && depth > 0 {
+                if bytes[i..].starts_with(b"/*") {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i..].starts_with(b"*/") {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        let raw = if bytes[i] == b'r' {
+            Some(i + 1)
+        } else if bytes[i..].starts_with(b"br") {
+            Some(i + 2)
+        } else {
+            None
+        };
+        if let Some(mut cursor) = raw {
+            let mut hashes = 0;
+            while cursor < bytes.len() && bytes[cursor] == b'#' {
+                hashes += 1;
+                cursor += 1;
+            }
+            if cursor < bytes.len() && bytes[cursor] == b'"' {
+                i = cursor + 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'"' && bytes[i + 1..].starts_with(&vec![b'#'; hashes]) {
+                        i += 1 + hashes;
+                        break;
+                    }
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        let quote = if bytes[i] == b'"' {
+            Some(i)
+        } else if bytes[i..].starts_with(b"b\"") {
+            Some(i + 1)
+        } else {
+            None
+        };
+        if let Some(quote) = quote {
+            i = quote + 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' {
+                    i = (i + 2).min(bytes.len());
+                } else if bytes[i] == b'"' {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        if bytes[i] == b'\'' {
+            let mut end = i + 1;
+            if end < bytes.len() && bytes[end] == b'\\' {
+                end += 2;
+            } else {
+                end += 1;
+            }
+            if end < bytes.len() && bytes[end] == b'\'' {
+                i = end + 1;
+                continue;
+            }
+        }
+        if bytes[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+        } else {
+            i += if bytes[i..].starts_with(b"::") { 2 } else { 1 };
+        }
+        lexemes.push(Lexeme {
+            text: source[start..i].to_owned(),
+            offset: start,
+        });
+    }
+    lexemes
+}
+
+fn lexeme_positions(lexemes: &[Lexeme], sequence: &[&str]) -> Vec<usize> {
+    lexemes
+        .windows(sequence.len())
+        .filter(|window| {
+            window
+                .iter()
+                .zip(sequence)
+                .all(|(lexeme, expected)| lexeme.text == *expected)
+        })
+        .map(|window| window[0].offset)
+        .collect()
+}
+
+fn contains_lexeme_subsequence(lexemes: &[Lexeme], sequence: &[&str]) -> bool {
+    let mut next = 0;
+    for lexeme in lexemes {
+        if lexeme.text == sequence[next] {
+            next += 1;
+            if next == sequence.len() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn forbidden_scatter_aliases(lexemes: &[Lexeme]) -> Vec<usize> {
+    let protected = [
+        "update_window_len",
+        "scatter_float_kernel",
+        "scatter_complex_kernel",
+        "indexing",
+    ];
+    let mut violations = Vec::new();
+    let mut index = 0;
+    while index < lexemes.len() {
+        if lexemes[index].text != "use" {
+            index += 1;
+            continue;
+        }
+        let end = lexemes[index..]
+            .iter()
+            .position(|lexeme| lexeme.text == ";")
+            .map_or(lexemes.len(), |offset| index + offset);
+        let statement = &lexemes[index..end];
+        if statement.iter().any(|lexeme| lexeme.text == "as")
+            && statement
+                .iter()
+                .any(|lexeme| protected.contains(&lexeme.text.as_str()))
+        {
+            violations.push(lexemes[index].offset);
+        }
+        index = end.saturating_add(1);
+    }
+    violations
+}
+
+fn scatter_update_window_contract(sources: &[(PathBuf, String)]) -> Result<(), String> {
+    let invariants = [
+        "    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_float_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());",
+        "    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_complex_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());",
+    ];
+    let mut product_calls = Vec::new();
+    let mut definitions = Vec::new();
+    let mut launches = Vec::new();
+    let mut aliases = Vec::new();
+    for (path, source) in sources {
+        let lexemes = rust_code_lexemes(source);
+        for offset in forbidden_scatter_aliases(&lexemes) {
+            aliases.push((path, offset));
+        }
+        let local_definitions: Vec<_> = lexemes
+            .windows(2)
+            .filter(|window| window[0].text == "fn" && window[1].text == "update_window_len")
+            .map(|window| window[1].offset)
+            .collect();
+        definitions.extend(local_definitions.iter().copied());
+        for offset in lexeme_positions(&lexemes, &["update_window_len", "("]) {
+            if local_definitions.contains(&offset) {
+                continue;
+            }
+            let line_start = source[..offset]
+                .rfind('\n')
+                .map_or(0, |newline| newline + 1);
+            let before = source[..line_start].trim_end_matches('\n');
+            let context_start = before
+                .rmatch_indices('\n')
+                .nth(1)
+                .map_or(0, |(newline, _)| newline + 1);
+            let call_end = source[offset..]
+                .find(';')
+                .map_or(source.len(), |end| offset + end + 1);
+            let context = &source[context_start..call_end];
+            product_calls.push((
+                path,
+                offset,
+                invariants.iter().position(|item| context.contains(item)),
+            ));
+        }
+        for sequence in [
+            &["scatter_float_kernel", "::", "launch_unchecked"][..],
+            &["scatter_complex_kernel", "::", "launch_unchecked"][..],
+        ] {
+            for offset in lexeme_positions(&lexemes, sequence) {
+                launches.push((path, offset));
+            }
+        }
+    }
+
+    if !aliases.is_empty() {
+        return Err(format!(
+            "scatter update-window proof symbols must not be imported or re-exported with aliases: {aliases:?}"
+        ));
+    }
+
+    if definitions.len() != 1 {
+        return Err(format!(
+            "expected one update_window_len definition, found {definitions:?}"
+        ));
+    }
+
+    if product_calls.len() != 2 {
+        return Err(format!(
+            "expected exactly two update_window_len call sites, found {product_calls:?}"
+        ));
+    }
+    let mut seen_invariants = Vec::new();
+    for (path, line, invariant_index) in product_calls {
+        let Some(invariant_index) = invariant_index else {
+            return Err(format!(
+                "{path:?}:{line} lacks the adjacent checked host invariant"
+            ));
+        };
+        seen_invariants.push(invariant_index);
+    }
+    seen_invariants.sort_unstable();
+    if seen_invariants != [0, 1] {
+        return Err(format!(
+            "expected one concrete invariant per kernel, found {seen_invariants:?}"
+        ));
+    }
+
+    if launches.len() != 2 {
+        return Err(format!(
+            "expected exactly two scatter update kernel launches, found {launches:?}"
+        ));
+    }
+    let mod_source = sources
+        .iter()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source.as_str()))
+        .ok_or_else(|| "cubecl/mod.rs was not inventoried".to_owned())?;
+    let meta_lexemes = rust_code_lexemes(source_section(
+        mod_source,
+        "fn scatter_launch_meta(",
+        "impl TensorIndexing for CudaBackend",
+    ));
+    for required in [
+        &[
+            "ensure_axes_unique",
+            "(",
+            ",",
+            ",",
+            "&",
+            "config",
+            ".",
+            "update_window_dims",
+            ",",
+            "updates_shape",
+            ".",
+            "len",
+            "(",
+            ")",
+        ][..],
+        &[
+            "window_shape_updates",
+            "=",
+            "config",
+            ".",
+            "update_window_dims",
+            ".",
+            "iter",
+            "(",
+            ")",
+            ".",
+            "map",
+            "(",
+            "|",
+            "&",
+            "axis",
+            "|",
+            "updates_shape",
+            "[",
+            "axis",
+            "]",
+            ")",
+            ".",
+            "collect",
+            "(",
+            ")",
+        ][..],
+    ] {
+        if lexeme_positions(&meta_lexemes, required).is_empty() {
+            return Err(format!(
+                "scatter_launch_meta lacks update-window derivation proof {required:?}"
+            ));
+        }
+    }
+    for (name, start, end, launch) in [
+        (
+            "scatter_float_typed",
+            "    fn scatter_float_typed<",
+            "    fn scatter_complex_typed<",
+            "indexing::scatter_float_kernel::launch_unchecked",
+        ),
+        (
+            "scatter_complex_typed",
+            "    fn scatter_complex_typed<",
+            "impl BackendRuntimeCache for CudaBackend",
+            "indexing::scatter_complex_kernel::launch_unchecked",
+        ),
+    ] {
+        let section = source_section(mod_source, start, end);
+        let section_lexemes = rust_code_lexemes(section);
+        let kernel = launch
+            .strip_prefix("indexing::")
+            .and_then(|launch| launch.strip_suffix("::launch_unchecked"))
+            .expect("launch descriptor should be qualified");
+        let required = [
+            "scatter_launch_meta",
+            "(",
+            "let",
+            "update_len",
+            "=",
+            "scatter_update_len",
+            "(",
+            "&",
+            "meta",
+            ")",
+            "?",
+            ";",
+            "if",
+            "update_len",
+            "=",
+            "=",
+            "0",
+            "{",
+            "return",
+            "Ok",
+            "(",
+            "output",
+            ")",
+            ";",
+            "}",
+            "indexing",
+            "::",
+            kernel,
+            "::",
+            "launch_unchecked",
+        ];
+        if !contains_lexeme_subsequence(&section_lexemes, &required) {
+            return Err(format!("{name} lacks ordered checked launch proof"));
+        }
+    }
+    Ok(())
+}
 
 fn cubecl_source(file: &str) -> String {
     fs::read_to_string(
@@ -74,6 +647,137 @@ fn cubecl_scatter_does_not_use_single_thread_launch_fallback() {
         "CubeCL scatter launch must not use a single-thread fallback:\n{}",
         violations.join("\n")
     );
+}
+
+#[test]
+fn cubecl_scatter_update_window_product_has_checked_host_invariant() {
+    let sources = production_rust_sources();
+    let mod_source = sources
+        .iter()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source.as_str()))
+        .expect("cubecl/mod.rs should be inventoried");
+    let update_len = source_section(
+        mod_source,
+        "fn scatter_update_len(",
+        "/// CubeCL-based GPU backend.",
+    );
+    assert_ordered_needles(
+        "scatter_update_len",
+        update_len,
+        &[
+            "checked_dim_product(\"scatter\", \"batch shape\", &meta.batch_shape)?",
+            "checked_dim_product(\"scatter\", \"window update shape\", &meta.window_shape_updates)?",
+            "batch_len.checked_mul(window_len)",
+        ],
+    );
+
+    scatter_update_window_contract(&sources).unwrap_or_else(|err| panic!("{err}"));
+}
+
+#[test]
+fn rust_lexeme_inventory_ignores_literals_and_accepts_multiline_calls() {
+    let source = r####"
+        // update_window_len(fake)
+        /* scatter_float_kernel::launch_unchecked(fake) */
+        let normal = "update_window_len(fake)";
+        let raw = r#"scatter_complex_kernel::launch_unchecked(fake)"#;
+        let byte = b"update_window_len(fake)";
+        let character = '(';
+        update_window_len
+            (
+                updates,
+                dims,
+            );
+        scatter_float_kernel
+            ::
+            launch_unchecked
+            ();
+    "####;
+    let lexemes = rust_code_lexemes(source);
+    assert_eq!(
+        lexeme_positions(&lexemes, &["update_window_len", "("]).len(),
+        1
+    );
+    assert_eq!(
+        lexeme_positions(
+            &lexemes,
+            &["scatter_float_kernel", "::", "launch_unchecked", "("]
+        )
+        .len(),
+        1
+    );
+    assert!(lexeme_positions(
+        &lexemes,
+        &["scatter_complex_kernel", "::", "launch_unchecked", "("]
+    )
+    .is_empty());
+}
+
+#[test]
+fn scatter_update_window_inventory_rejects_unproved_new_paths() {
+    let sources = production_rust_sources();
+
+    let invariant = "// INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;\n    // `scatter_float_typed` returns before launch when that checked length is zero.\n    let window_iters = update_window_len(updates, update_window_dims.clone());";
+    let bare_call = "let window_iters = update_window_len(updates, update_window_dims.clone());";
+    let mut one_unmarked = sources.clone();
+    let indexing_source = one_unmarked
+        .iter_mut()
+        .find_map(|(path, source)| path.ends_with("kernels/indexing.rs").then_some(source))
+        .expect("indexing.rs should be inventoried");
+    *indexing_source = indexing_source.replacen(invariant, bare_call, 1);
+    assert!(scatter_update_window_contract(&one_unmarked).is_err());
+
+    let mut divergent_derivation = sources.clone();
+    let mod_source = divergent_derivation
+        .iter_mut()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source))
+        .expect("cubecl/mod.rs should be inventoried");
+    *mod_source = mod_source.replacen("updates_shape[axis]", "operand_shape[axis]", 1);
+    assert!(scatter_update_window_contract(&divergent_derivation).is_err());
+
+    let mut divergent_axes = sources.clone();
+    let mod_source = divergent_axes
+        .iter_mut()
+        .find_map(|(path, source)| path.ends_with("cubecl/mod.rs").then_some(source))
+        .expect("cubecl/mod.rs should be inventoried");
+    *mod_source = mod_source.replacen(
+        "&config.update_window_dims,\n        updates_shape.len(),",
+        "&config.inserted_window_dims,\n        updates_shape.len(),",
+        1,
+    );
+    assert!(scatter_update_window_contract(&divergent_axes).is_err());
+
+    let mut extra_product = sources.clone();
+    extra_product.push((
+        PathBuf::from("synthetic/unmarked.rs"),
+        "let third = update_window_len(updates, dims);".to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&extra_product).is_err());
+
+    let mut aliased_product = sources.clone();
+    aliased_product.push((
+        PathBuf::from("synthetic/aliased_product.rs"),
+        "use crate::kernels::indexing::update_window_len as checked_window;\n\
+         let third = checked_window(updates, dims);"
+            .to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&aliased_product).is_err());
+
+    let mut aliased_scatter_module = sources.clone();
+    aliased_scatter_module.push((
+        PathBuf::from("synthetic/aliased_launch.rs"),
+        "use crate::kernels::indexing as scatter_kernels;\n\
+         scatter_kernels::scatter_float_kernel::launch_unchecked();"
+            .to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&aliased_scatter_module).is_err());
+
+    let mut extra_launch = sources;
+    extra_launch.push((
+        PathBuf::from("synthetic/launch.rs"),
+        "indexing::scatter_float_kernel::launch_unchecked();".to_owned(),
+    ));
+    assert!(scatter_update_window_contract(&extra_launch).is_err());
 }
 
 #[test]
@@ -192,6 +896,22 @@ fn cubecl_zero_length_launches_validate_buffers_before_returning() {
         assert_ordered_needles(name, section, &needles);
     }
 
+    let backend_source = cubecl_source("mod.rs");
+    let reduction_section = source_section(
+        &backend_source,
+        "    fn launch_reduce_axis_typed<T>(",
+        "    fn reduce_axes_typed<T>(",
+    );
+    assert_ordered_needles(
+        "launch_reduce_axis_typed",
+        reduction_section,
+        &[
+            "let input_binding = typed_tensor_binding(input, op)?;",
+            "let output = alloc_output::<T>(self.runtime(), &output_shape)?;",
+            "if output.n_elements() == 0",
+        ],
+    );
+
     let fusion_source = cubecl_source("fusion/launch.rs");
     assert_ordered_needles(
         "fusion::launch",
@@ -203,6 +923,206 @@ fn cubecl_zero_length_launches_validate_buffers_before_returning() {
             "if classified.n_elements == 0",
         ],
     );
+}
+
+#[test]
+fn cubecl_binary_elementwise_kernels_do_not_materialize_scalar_broadcasts() {
+    let dispatch_source = cubecl_source("dispatch.rs");
+    let binary_macro = source_section(
+        &dispatch_source,
+        "macro_rules! launch_binary_elementwise_kernel",
+        "macro_rules! dispatch_binary_float_complex_int",
+    );
+
+    assert!(
+        !binary_macro.contains("broadcast_typed"),
+        "raw binary elementwise launchers must not allocate dense scalar-broadcast temporaries"
+    );
+    assert!(
+        !binary_macro.contains("shape().is_empty()"),
+        "scalar broadcast should be represented as BroadcastInDim and fused by backend hooks"
+    );
+
+    let mod_source = cubecl_source("mod.rs");
+    let fusion_impl = source_section(
+        &mod_source,
+        "impl TensorFusion for CudaBackend",
+        "impl BackendCachedDot for CudaBackend",
+    );
+    assert_ordered_needles(
+        "CudaBackend broadcast multiply hook",
+        fusion_impl,
+        &[
+            "fn execute_broadcast_multiply(",
+            "launch_broadcast_multiply_typed",
+            "launch_broadcast_multiply_int_typed",
+            "launch_broadcast_multiply_complex_typed",
+        ],
+    );
+}
+
+#[test]
+fn cubecl_scalar_div_rem_pow_launches_are_narrow() {
+    let mod_source = cubecl_source("mod.rs");
+    let helper = source_section(
+        &mod_source,
+        "fn launch_scalar_binary",
+        "fn launch_checked_integer_scalar_binary",
+    );
+    assert!(!helper.contains("broadcast_typed"));
+    assert_ordered_needles(
+        "scalar binary shape gate",
+        helper,
+        &[
+            "lhs.shape().is_empty() ^ rhs.shape().is_empty()",
+            "ensure_resident_on_runtime(backend.runtime(), lhs, op)?",
+            "ensure_resident_on_runtime(backend.runtime(), rhs, op)?",
+            "let lhs_scalar = lhs.shape().is_empty()",
+            "if lhs_scalar",
+            "rhs.shape()",
+            "lhs.shape()",
+            "let output = alloc_output::<I>",
+            "typed_tensor_array_arg(&output, op)?",
+            "typed_tensor_array_arg(lhs, op)?",
+            "typed_tensor_array_arg(rhs, op)?",
+            "if output.n_elements() == 0",
+        ],
+    );
+
+    let checked_helper = source_section(
+        &mod_source,
+        "fn launch_checked_integer_scalar_binary",
+        "impl TensorElementwise for CudaBackend",
+    );
+    assert_ordered_needles(
+        "checked scalar binary launch validation",
+        checked_helper,
+        &[
+            "lhs.shape().is_empty() ^ rhs.shape().is_empty()",
+            "ensure_resident_on_runtime(backend.runtime(), lhs, op)?",
+            "ensure_resident_on_runtime(backend.runtime(), rhs, op)?",
+            "let output = alloc_output::<I>",
+            "typed_tensor_array_arg(&output, op)?",
+            "typed_tensor_array_arg(lhs, op)?",
+            "typed_tensor_array_arg(rhs, op)?",
+            "if output.n_elements() == 0",
+            "let flag = alloc_output::<i32>",
+            "typed_tensor_array_arg(&flag, op)?",
+            "launch_nullary_into(",
+        ],
+    );
+
+    for (op, end) in [("fn div(", "fn rem("), ("fn rem(", "fn abs(")] {
+        let section = source_section(&mod_source, op, end);
+        assert!(
+            section.contains("launch_scalar_binary"),
+            "{op} must use the narrow scalar launcher"
+        );
+        assert!(
+            !section.contains("broadcast_typed"),
+            "{op} must not materialize the scalar"
+        );
+    }
+    let pow = source_section(&mod_source, "fn pow(", "fn transpose(");
+    assert!(pow.contains("launch_scalar_binary"));
+    assert!(pow.contains("launch_checked_integer_scalar_binary"));
+    assert!(!pow.contains("broadcast_typed"));
+    assert_ordered_needles(
+        "pow dtype validation before scalar shape dispatch",
+        pow,
+        &[
+            "if lhs.dtype() != rhs.dtype()",
+            "return Err(dtype_mismatch(op, lhs, rhs))",
+            "match (lhs, rhs)",
+        ],
+    );
+    assert!(pow.contains("launch_binary("));
+}
+
+#[test]
+fn cubecl_real_complex_scalar_promotion_stays_device_native_and_narrow() {
+    let mod_source = cubecl_source("mod.rs");
+    let helper = source_section(
+        &mod_source,
+        "fn launch_real_complex_scalar_binary",
+        "fn promoted_real_complex_scalar_binary",
+    );
+    assert_ordered_needles(
+        "mixed real-complex scalar validation",
+        helper,
+        &[
+            "if !real.shape().is_empty()",
+            "ensure_resident_on_runtime(backend.runtime(), real, op)?",
+            "ensure_resident_on_runtime(backend.runtime(), complex, op)?",
+            "let component_len = complex\n        .n_elements()\n        .checked_mul(2)",
+            "let real_arg = typed_tensor_array_arg(real, op)?",
+            "// INVARIANT: `num_complex::Complex<T>` is `repr(C)` with interleaved `{ re, im }`",
+            "let complex_arg = typed_tensor_array_arg_as::<C, R>(complex, component_len, op)?",
+            "let output = alloc_output::<C>",
+            "let output_arg = typed_tensor_array_arg_as::<C, R>(&output, component_len, op)?",
+            "if output.n_elements() == 0",
+            "scalar_real_complex_binary::launch_unchecked",
+        ],
+    );
+    for banned in [
+        "download_tensor",
+        "upload_tensor",
+        "broadcast_typed",
+        "convert(",
+    ] {
+        assert!(
+            !helper.contains(banned),
+            "mixed scalar promotion must not use host transfer or full-size materialization: {banned}"
+        );
+    }
+
+    let dispatch = source_section(
+        &mod_source,
+        "fn promoted_real_complex_scalar_binary",
+        "fn launch_checked_integer_scalar_binary",
+    );
+    for accepted in [
+        "Tensor::F32(real), Tensor::C32(complex)",
+        "Tensor::C32(complex), Tensor::F32(real)",
+        "Tensor::F64(real), Tensor::C64(complex)",
+        "Tensor::C64(complex), Tensor::F64(real)",
+    ] {
+        assert!(
+            dispatch.contains(accepted),
+            "missing accepted pair {accepted}"
+        );
+    }
+    assert_eq!(dispatch.matches("if real.shape().is_empty()").count(), 4);
+
+    let kernel_source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/kernels/elementwise.rs"),
+    )
+    .expect("elementwise kernel source should be readable");
+    let kernel = source_section(
+        &kernel_source,
+        "pub fn scalar_real_complex_binary",
+        "pub fn scalar_div_int_checked",
+    );
+    assert!(kernel.contains("let complex_idx = ABSOLUTE_POS * 2"));
+    assert!(kernel
+        .contains("// INVARIANT: These unsimplified component expressions must evaluate in the"));
+    assert!(kernel.contains("Keep zero cross terms"));
+    for generic_complex_term in [
+        "zero + im",
+        "im + zero",
+        "scalar * re - zero * im",
+        "re * scalar - im * zero",
+        "let norm_sqr = scalar * scalar + zero * zero",
+        "(re * scalar + im * zero) / norm_sqr",
+        "let norm_sqr = re * re + im * im",
+        "(scalar * re + zero * im) / norm_sqr",
+        "(zero * re - scalar * im) / norm_sqr",
+    ] {
+        assert!(
+            kernel.contains(generic_complex_term),
+            "mixed scalar kernel must preserve generic complex operation order: {generic_complex_term}"
+        );
+    }
 }
 
 #[test]
@@ -426,6 +1346,27 @@ fn cubecl_gather_and_pad_validate_shape_bounds_before_launch() {
 }
 
 #[test]
+fn cubecl_pad_mapping_avoids_signed_edge_subtraction_overflow() {
+    let indexing_source = gpu_source(&["kernels", "indexing.rs"]);
+    let pad_kernel = source_section(
+        &indexing_source,
+        "pub fn pad_kernel",
+        "pub fn gather_kernel",
+    );
+    assert!(!pad_kernel.contains("out_idx[axis] as i64 - low"));
+    assert!(pad_kernel.contains("low.unsigned_abs()"));
+    assert_ordered_needles(
+        "pad_kernel candidate bounds check",
+        pad_kernel,
+        &[
+            "let candidate = shifted / spacing;",
+            "if candidate >= input.shape(axis) as u64",
+            "input_idx[axis] = candidate as usize;",
+        ],
+    );
+}
+
+#[test]
 fn cubecl_scatter_reports_unsupported_integer_operand_dtypes() {
     let mod_source = cubecl_source("mod.rs");
     let scatter_source = source_section(&mod_source, "    fn scatter(", "    fn slice(");
@@ -638,6 +1579,201 @@ fn cubecl_i64_index_conversion_does_not_roundtrip_through_host() {
         "CubeCL I64 index conversion must stay on device; host roundtrips in indexing paths are performance regressions:\n{}",
         violations.join("\n")
     );
+}
+
+#[test]
+fn cuda_float_index_validation_stays_device_native_and_preflighted() {
+    let backend = cubecl_source("mod.rs");
+    let validation = source_section(
+        &backend,
+        "fn validate_float_index_tensor<F>(",
+        "fn launch_checked_integer_binary<I>(",
+    );
+    for needle in [
+        "ensure_resident_on_runtime(backend.runtime(), indices, \"index_tensor\")?;",
+        "typed_tensor_binding(indices, \"index_tensor\")?;",
+        "if indices.n_elements() == 0",
+        "u32::try_from(indices.n_elements())",
+        "cube_count_for_len(indices.n_elements())?;",
+        "validate_float_indices_kernel::launch_unchecked",
+        "extract_invalid_float_index_kernel::launch_unchecked",
+        "F::read_invalid_flag(backend, &flag)?",
+    ] {
+        assert!(
+            validation.contains(needle),
+            "missing float-index contract: {needle}"
+        );
+    }
+    let allocation = validation.find("alloc_output::<F>").unwrap();
+    assert!(validation.find("ensure_resident_on_runtime").unwrap() < allocation);
+    assert!(validation.find("typed_tensor_binding").unwrap() < allocation);
+    assert!(validation.find("cube_count_for_len").unwrap() < allocation);
+    assert!(validation.find("u32::try_from").unwrap() < allocation);
+    assert!(!validation.contains("download_tensor(backend.runtime(), indices"));
+
+    for (start, end, index_name) in [
+        (
+            "fn dynamic_slice_typed<T, I>(",
+            "fn dynamic_slice_bool<I>(",
+            "starts",
+        ),
+        (
+            "fn gather_typed<T, I>(",
+            "fn gather_bool<I>(",
+            "start_indices",
+        ),
+        (
+            "fn scatter_float_typed<T, I>(",
+            "fn scatter_complex_typed<T, F, I>(",
+            "scatter_indices",
+        ),
+    ] {
+        let operation = source_section(&backend, start, end);
+        assert!(
+            operation
+                .find(&format!("I::validate(self, {index_name})?;"))
+                .unwrap()
+                < operation.find("alloc_output").unwrap_or(operation.len()),
+            "{start} must validate float index values before allocation"
+        );
+    }
+
+    let kernels = std::fs::read_to_string("src/kernels/indexing.rs").unwrap();
+    assert!(kernels.contains("flag[0].fetch_min(ABSOLUTE_POS as u32)"));
+    assert!(kernels.contains("flag_values[1] = indices[invalid_index as usize]"));
+}
+
+#[test]
+fn cuda_dynamic_slice_dispatch_matches_cpu_supported_dtype_matrix() {
+    let backend = cubecl_source("mod.rs");
+    let dispatch = source_section(
+        &backend,
+        "    fn dynamic_slice(\n",
+        "    fn dynamic_update_slice(\n",
+    );
+    for data in ["F32", "F64", "C32", "C64", "I32"] {
+        for starts in ["F32", "F64", "I32", "I64"] {
+            assert!(
+                dispatch.contains(&format!(
+                    "(Tensor::{data}(input), Tensor::{starts}(starts))"
+                )),
+                "dynamic_slice must dispatch CPU-supported {data} data with {starts} starts"
+            );
+        }
+    }
+    for starts in ["F32", "F64", "I32", "I64"] {
+        assert!(
+            dispatch.contains(&format!("(Tensor::Bool(input), Tensor::{starts}(starts))")),
+            "dynamic_slice must dispatch CPU-supported Bool data with {starts} starts"
+        );
+    }
+    assert!(dispatch.contains("(_, Tensor::Bool(_))"));
+    assert!(dispatch.contains("(_, Tensor::C32(_) | Tensor::C64(_))"));
+    assert!(dispatch.contains("(Tensor::I64(_), _)"));
+}
+
+#[test]
+fn cuda_indexing_preflights_structure_and_all_inputs_before_value_scans() {
+    let backend = cubecl_source("mod.rs");
+    for (start, end, ordered) in [
+        (
+            "fn dynamic_slice_typed<T, I>(",
+            "fn dynamic_slice_bool<I>(",
+            vec![
+                "ensure_rank(\"dynamic_slice\"",
+                "checked_dim_product(\"dynamic_slice\"",
+                "ensure_resident_on_runtime(self.runtime(), input, \"dynamic_slice\")?;",
+                "typed_tensor_binding(input, \"dynamic_slice\")?;",
+                "ensure_resident_on_runtime(self.runtime(), starts, \"dynamic_slice\")?;",
+                "typed_tensor_binding(starts, \"dynamic_slice\")?;",
+                "I::validate(self, starts)?;",
+                "launch_binary_tensor(",
+            ],
+        ),
+        (
+            "fn gather_typed<T, I>(",
+            "fn gather_bool<I>(",
+            vec![
+                "gather_launch_meta(",
+                "checked_dim_product(\"gather\"",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"gather\")?;",
+                "typed_tensor_binding(operand, \"gather\")?;",
+                "ensure_resident_on_runtime(self.runtime(), start_indices, \"gather\")?;",
+                "typed_tensor_binding(start_indices, \"gather\")?;",
+                "I::validate(self, start_indices)?;",
+                "launch_binary_tensor(",
+            ],
+        ),
+        (
+            "fn scatter_float_typed<T, I>(",
+            "fn scatter_complex_typed<T, F, I>(",
+            vec![
+                "scatter_launch_meta(",
+                "scatter_update_len(&meta)?;",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"scatter\")?;",
+                "typed_tensor_binding(operand, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), scatter_indices, \"scatter\")?;",
+                "typed_tensor_binding(scatter_indices, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), updates, \"scatter\")?;",
+                "typed_tensor_binding(updates, \"scatter\")?;",
+                "ensure_atomic_add_supported::<T>",
+                "I::validate(self, scatter_indices)?;",
+                "alloc_output::<T>",
+            ],
+        ),
+    ] {
+        assert_ordered_needles(start, source_section(&backend, start, end), &ordered);
+    }
+
+    for (start, end, ordered) in [
+        (
+            "fn dynamic_slice_bool<I>(",
+            "fn pad_typed<T>(",
+            vec![
+                "ensure_rank(\"dynamic_slice\"",
+                "checked_dim_product(\"dynamic_slice\"",
+                "ensure_resident_on_runtime(self.runtime(), input, \"dynamic_slice\")?;",
+                "bool_tensor_array_arg(input, \"dynamic_slice\")?;",
+                "ensure_resident_on_runtime(self.runtime(), starts, \"dynamic_slice\")?;",
+                "typed_tensor_binding(starts, \"dynamic_slice\")?;",
+                "I::validate(self, starts)?;",
+                "launch_binary_bool_tensor(",
+            ],
+        ),
+        (
+            "fn gather_bool<I>(",
+            "fn scatter_float_typed<T, I>(",
+            vec![
+                "gather_launch_meta(",
+                "checked_dim_product(\"gather\"",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"gather\")?;",
+                "bool_tensor_array_arg(operand, \"gather\")?;",
+                "ensure_resident_on_runtime(self.runtime(), start_indices, \"gather\")?;",
+                "typed_tensor_binding(start_indices, \"gather\")?;",
+                "I::validate(self, start_indices)?;",
+                "launch_binary_bool_tensor(",
+            ],
+        ),
+        (
+            "fn scatter_complex_typed<T, F, I>(",
+            "}\n}\n\nimpl BackendRuntimeCache",
+            vec![
+                "scatter_launch_meta(",
+                "scatter_update_len(&meta)?;",
+                "ensure_resident_on_runtime(self.runtime(), operand, \"scatter\")?;",
+                "typed_tensor_binding(operand, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), scatter_indices, \"scatter\")?;",
+                "typed_tensor_binding(scatter_indices, \"scatter\")?;",
+                "ensure_resident_on_runtime(self.runtime(), updates, \"scatter\")?;",
+                "typed_tensor_binding(updates, \"scatter\")?;",
+                "ensure_atomic_add_supported::<F>",
+                "I::validate(self, scatter_indices)?;",
+                "alloc_output::<T>",
+            ],
+        ),
+    ] {
+        assert_ordered_needles(start, source_section(&backend, start, end), &ordered);
+    }
 }
 
 #[cfg(feature = "cuda")]

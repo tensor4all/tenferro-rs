@@ -10,7 +10,7 @@ use computegraph::types::OperationRole;
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ext_op::ExtensionLinearTransposeRule;
-use tenferro_ops::ext_op::ExtensionOp;
+use tenferro_ops::ext_op::{invoke_extension_shape_inference, ExtensionOp};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::input_key::TensorInputKey;
 #[cfg(feature = "autodiff")]
@@ -26,12 +26,13 @@ fn infer_output_meta_uses_output_labels_and_promotes_dtype() {
     let lhs_shape = [SymDim::from(2usize), SymDim::from(3usize)];
     let rhs_shape = [SymDim::from(3usize), SymDim::from(4usize)];
 
-    let meta = op
-        .infer_output_meta(
-            &[DType::F32, DType::F64],
-            &[lhs_shape.as_slice(), rhs_shape.as_slice()],
-        )
-        .unwrap();
+    let meta = invoke_extension_shape_inference(
+        &op,
+        &[DType::F32, DType::F64],
+        &[lhs_shape.as_slice(), rhs_shape.as_slice()],
+    )
+    .unwrap()
+    .output_metas;
 
     assert_eq!(meta[0].0, DType::F64);
     assert_eq!(meta[0].1, vec![SymDim::from(2usize), SymDim::from(4usize)]);
@@ -66,30 +67,31 @@ fn extension_dtype_promotion_delegates_to_canonical_tensor_rules() {
 }
 
 #[test]
-fn infer_output_meta_returns_error_for_invalid_extension_metadata() {
+fn infer_output_meta_keeps_structural_errors_and_records_extent_equality() {
     let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]));
     let lhs_shape = [SymDim::from(2usize), SymDim::from(3usize)];
     let bad_rhs_rank = [SymDim::from(3usize)];
     let bad_rhs_extent = [SymDim::from(5usize), SymDim::from(4usize)];
 
-    assert!(op
-        .infer_output_meta(
-            &[DType::F64],
-            &[lhs_shape.as_slice(), bad_rhs_rank.as_slice()]
-        )
-        .is_err());
-    assert!(op
-        .infer_output_meta(
-            &[DType::F64, DType::F64],
-            &[lhs_shape.as_slice(), bad_rhs_rank.as_slice()]
-        )
-        .is_err());
-    assert!(op
-        .infer_output_meta(
-            &[DType::F64, DType::F64],
-            &[lhs_shape.as_slice(), bad_rhs_extent.as_slice()]
-        )
-        .is_err());
+    assert!(invoke_extension_shape_inference(
+        &op,
+        &[DType::F64],
+        &[lhs_shape.as_slice(), bad_rhs_rank.as_slice()]
+    )
+    .is_err());
+    assert!(invoke_extension_shape_inference(
+        &op,
+        &[DType::F64, DType::F64],
+        &[lhs_shape.as_slice(), bad_rhs_rank.as_slice()]
+    )
+    .is_err());
+    let inferred = invoke_extension_shape_inference(
+        &op,
+        &[DType::F64, DType::F64],
+        &[lhs_shape.as_slice(), bad_rhs_extent.as_slice()],
+    )
+    .expect("extent mismatch is represented as a shape equality");
+    assert_eq!(inferred.constraints.len(), 1);
 }
 
 #[test]

@@ -38,7 +38,8 @@ impl fmt::Debug for XlaExecutorOptions {
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 /// let mut compiler = GraphCompiler::new();
-/// let program = compiler.compile(&x.neg()).unwrap();
+/// let y = x.neg().unwrap();
+/// let program = compiler.compile(&y).unwrap();
 /// let module = XlaExecutor::default().lower_to_stablehlo(&program).unwrap();
 /// assert!(module.as_str().contains("stablehlo.negate"));
 /// ```
@@ -170,7 +171,8 @@ impl XlaExecutor {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let module = XlaExecutor::default().lower_to_stablehlo(&program).unwrap();
     /// assert!(module.as_str().contains("stablehlo.negate"));
     /// ```
@@ -193,7 +195,8 @@ impl XlaExecutor {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let err = XlaExecutor::default()
     ///     .run_many_with_inputs(&program, &[&input])
@@ -230,7 +233,8 @@ impl XlaExecutor {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let err = XlaExecutor::default().run_with_inputs(&program, &[&input]).unwrap_err();
     /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
@@ -280,7 +284,7 @@ mod tests {
     fn default_executor_reports_missing_pjrt_before_dispatch() {
         let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
         let mut compiler = GraphCompiler::new();
-        let program = compiler.compile(&x.neg()).unwrap();
+        let program = compiler.compile(&x.neg().unwrap()).unwrap();
         let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 
         let err = XlaExecutor::default()

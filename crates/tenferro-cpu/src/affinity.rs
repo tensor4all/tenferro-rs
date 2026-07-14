@@ -1,5 +1,95 @@
 use std::num::NonZeroUsize;
 
+use crate::{CpuId, CpuSet};
+
+pub(crate) trait ThreadAffinity: Clone + Send + Sync + 'static {
+    fn pin_current(&self, cpu: CpuId) -> Result<CpuSet, String>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SystemThreadAffinity;
+
+impl ThreadAffinity for SystemThreadAffinity {
+    fn pin_current(&self, cpu: CpuId) -> Result<CpuSet, String> {
+        set_current_thread_affinity(&CpuSet::new([cpu]).map_err(|err| err.to_string())?)?;
+        process_cpu_affinity().ok_or_else(|| "failed to verify worker affinity".to_owned())
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn current_cpu() -> Result<CpuId, String> {
+    unsafe extern "C" {
+        fn sched_getcpu() -> i32;
+    }
+    // SAFETY: `sched_getcpu` takes no arguments and returns the calling
+    // thread's current logical CPU or a negative error sentinel.
+    let cpu = unsafe { sched_getcpu() };
+    usize::try_from(cpu)
+        .map(CpuId::new)
+        .map_err(|_| std::io::Error::last_os_error().to_string())
+}
+
+fn set_current_thread_affinity(cpus: &CpuSet) -> Result<(), String> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        unsafe extern "C" {
+            fn sched_setaffinity(
+                pid: i32,
+                cpusetsize: usize,
+                mask: *const core::ffi::c_void,
+            ) -> i32;
+        }
+
+        let mask = build_affinity_mask(cpus)?;
+        // SAFETY: `mask` remains allocated for the call, `cpusetsize` exactly
+        // matches its byte length, and pid 0 selects the calling thread.
+        let rc =
+            unsafe { sched_setaffinity(0, mask.len(), mask.as_ptr().cast::<core::ffi::c_void>()) };
+        (rc == 0)
+            .then_some(())
+            .ok_or_else(|| std::io::Error::last_os_error().to_string())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        let _ = cpus;
+        Err("setting thread affinity is unsupported on this platform".to_owned())
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", test))]
+fn build_affinity_mask(cpus: &CpuSet) -> Result<Vec<u8>, String> {
+    const MIN_MASK_BYTES: usize = 128;
+    const MAX_MASK_BYTES: usize = 1 << 20;
+
+    let highest_cpu = cpus
+        .as_slice()
+        .last()
+        .copied()
+        .ok_or_else(|| "cannot set an empty affinity mask".to_owned())?;
+    let required_bytes = highest_cpu
+        .as_usize()
+        .checked_div(u8::BITS as usize)
+        .and_then(|index| index.checked_add(1))
+        .ok_or_else(|| "affinity mask size overflow".to_owned())?
+        .max(MIN_MASK_BYTES);
+    if required_bytes > MAX_MASK_BYTES {
+        return Err(format!(
+            "CPU {highest_cpu} exceeds supported affinity mask size of {MAX_MASK_BYTES} bytes"
+        ));
+    }
+
+    let mut mask = Vec::new();
+    mask.try_reserve_exact(required_bytes)
+        .map_err(|error| format!("failed to allocate affinity mask: {error}"))?;
+    mask.resize(required_bytes, 0u8);
+    for cpu in cpus.as_slice() {
+        let byte = cpu.as_usize() / u8::BITS as usize;
+        let bit = cpu.as_usize() % u8::BITS as usize;
+        mask[byte] |= 1 << bit;
+    }
+    Ok(mask)
+}
+
 /// Return a best-effort CPU count available to the current process.
 ///
 /// This first tries an OS-standard process-affinity query when supported, then
@@ -34,16 +124,41 @@ pub fn process_cpu_affinity_count() -> Option<usize> {
     platform_process_cpu_affinity_count()
 }
 
+/// Return the process affinity mask as logical CPU identifiers when supported.
+///
+/// The returned set preserves sparse operating-system CPU IDs. Platforms where
+/// the standard affinity API exposes only a count return `None`.
+///
+/// # Examples
+///
+/// ```
+/// if let Some(cpus) = tenferro_cpu::process_cpu_affinity() {
+///     assert!(!cpus.is_empty());
+/// }
+/// ```
+pub fn process_cpu_affinity() -> Option<CpuSet> {
+    platform_process_cpu_affinity()
+}
+
 pub(crate) fn standard_available_parallelism() -> Option<usize> {
     std::thread::available_parallelism()
         .ok()
         .map(NonZeroUsize::get)
 }
 
-#[cfg(any(target_os = "linux", target_os = "android", test))]
+#[cfg(test)]
 fn count_affinity_mask_bits(mask: &[u8]) -> Option<usize> {
-    let count = mask.iter().map(|byte| byte.count_ones() as usize).sum();
-    (count > 0).then_some(count)
+    cpu_set_from_affinity_mask(mask).map(|cpus| cpus.len())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android", test))]
+fn cpu_set_from_affinity_mask(mask: &[u8]) -> Option<CpuSet> {
+    let cpus = mask.iter().enumerate().flat_map(|(byte_index, byte)| {
+        (0..u8::BITS as usize)
+            .filter(move |bit| byte & (1 << bit) != 0)
+            .map(move |bit| CpuId::new(byte_index * u8::BITS as usize + bit))
+    });
+    CpuSet::new(cpus).ok()
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -58,6 +173,11 @@ fn linux_next_affinity_mask_bytes(mask_bytes: usize, errno: Option<i32>) -> Opti
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_process_cpu_affinity_count() -> Option<usize> {
+    platform_process_cpu_affinity().map(|cpus| cpus.len())
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_process_cpu_affinity() -> Option<CpuSet> {
     unsafe extern "C" {
         fn sched_getaffinity(pid: i32, cpusetsize: usize, mask: *mut core::ffi::c_void) -> i32;
     }
@@ -73,7 +193,7 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
             sched_getaffinity(0, mask_bytes, mask.as_mut_ptr().cast::<core::ffi::c_void>())
         };
         if rc == 0 {
-            return count_affinity_mask_bits(&mask);
+            return cpu_set_from_affinity_mask(&mask);
         }
 
         mask_bytes = linux_next_affinity_mask_bytes(
@@ -81,6 +201,11 @@ fn platform_process_cpu_affinity_count() -> Option<usize> {
             std::io::Error::last_os_error().raw_os_error(),
         )?;
     }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn platform_process_cpu_affinity() -> Option<CpuSet> {
+    None
 }
 
 #[cfg(target_os = "windows")]

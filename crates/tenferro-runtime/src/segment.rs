@@ -8,18 +8,18 @@ use crate::exec::{
     eval_exec_ir_single_session_slots_with_workspace,
     eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace,
     eval_exec_ir_unsegmented_slots_with_cache_and_workspace, execute_backend_op,
-    execute_ffi_instruction_cached, execute_host_instruction, get_read, initialize_exec_slots_in,
-    is_ffi_instruction, is_host_instruction, reclaim_last_use_inputs_backend,
-    reclaim_last_use_inputs_exec, resolve_tensor_shape_exprs, terminal_output_slots,
-    try_execute_terminal_value_instruction, validate_exec_program, DispatchMode, ExecInstruction,
-    ExecOp, ExecProgram, ExecSlot,
+    execute_ffi_instruction_cached, execute_ffi_instruction_exec, execute_host_instruction,
+    execute_host_instruction_exec, get_read, initialize_exec_slots_in, is_ffi_instruction,
+    is_host_instruction, reclaim_last_use_inputs_backend, reclaim_last_use_inputs_exec,
+    resolve_tensor_shape_exprs, terminal_output_slots, try_execute_terminal_value_instruction,
+    validate_exec_program, DispatchMode, ExecInstruction, ExecOp, ExecProgram, ExecSlot,
 };
 use crate::extension_runtime::ExtensionExecutor;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::backend::{
     ElementwiseFusionInputView, ElementwiseFusionInst, ElementwiseFusionPlan,
 };
-use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorValue};
+use tenferro_tensor::{BackendSession, Tensor, TensorBackend, TensorRead, TensorValue};
 
 /// A compiled execution segment.
 ///
@@ -212,6 +212,15 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
 ) -> Result<Vec<Tensor>> {
     validate_exec_program(program, "segmented executor")?;
     let has_fused_segment = has_multi_instruction_fused_segment(program);
+    if has_fused_segment && can_run_in_single_exec_session(program) {
+        return eval_exec_segmented_single_session_slots_with_workspace(
+            backend,
+            program,
+            inputs,
+            slots,
+            backend_cache,
+        );
+    }
     if !has_fused_segment && can_run_in_single_exec_session(program) {
         return eval_exec_ir_single_session_slots_with_workspace(
             backend,
@@ -245,55 +254,15 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
                     output_slots,
                     last_use,
                 } => {
-                    backend.with_backend_session(|exec| -> Result<()> {
-                        if let Some(plan) =
-                            build_elementwise_fusion_plan(instructions, input_slots, output_slots)
-                        {
-                            let inputs = collect_segment_inputs(slots, input_slots)?;
-                            if let Some(outputs) =
-                                exec.execute_elementwise_fusion(&inputs, &plan)?
-                            {
-                                if outputs.len() != output_slots.len() {
-                                    return Err(crate::error::Error::Internal(format!(
-                                        "fused elementwise kernel produced {} outputs for {} slots",
-                                        outputs.len(),
-                                        output_slots.len()
-                                    )));
-                                }
-                                for (slot, tensor) in output_slots.iter().copied().zip(outputs) {
-                                    slots[slot] = Some(ExecSlot::Owned(tensor));
-                                }
-                                reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
-                                return Ok(());
-                            }
-                        }
-                        if let Some(output) = try_execute_broadcast_multiply_segment(
+                    backend.with_backend_session(|exec| {
+                        execute_fused_segment(
                             exec,
                             slots,
                             instructions,
+                            input_slots,
                             output_slots,
-                        )? {
-                            slots[output_slots[0]] = Some(ExecSlot::Owned(output));
-                            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
-                            return Ok(());
-                        }
-                        if let Some(output) = try_execute_single_broadcast_multiply_segment(
-                            exec,
-                            slots,
-                            instructions,
-                            output_slots,
-                        )? {
-                            slots[output_slots[0]] = Some(ExecSlot::Owned(output));
-                            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
-                            return Ok(());
-                        }
-
-                        for inst in instructions {
-                            let result = execute_backend_op(exec, slots, inst)?;
-                            slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
-                            reclaim_last_use_inputs_exec(slots, inst, exec);
-                        }
-                        Ok(())
+                            last_use,
+                        )
                     })?;
                     inst_idx += instructions.len();
                 }
@@ -337,6 +306,15 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
 ) -> Result<Vec<TensorValue>> {
     validate_exec_program(program, "segmented value executor")?;
     let has_fused_segment = has_multi_instruction_fused_segment(program);
+    if can_run_in_single_exec_session(program) {
+        return eval_exec_segmented_single_session_slot_values_with_workspace(
+            backend,
+            program,
+            inputs,
+            slots,
+            backend_cache,
+        );
+    }
     if !has_fused_segment {
         return eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace(
             backend,
@@ -362,84 +340,16 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
                     output_slots,
                     last_use,
                 } => {
-                    backend.with_backend_session(|exec| -> Result<()> {
-                        if let Some(plan) =
-                            build_elementwise_fusion_plan(instructions, input_slots, output_slots)
-                        {
-                            let inputs = collect_segment_inputs(slots, input_slots)?;
-                            if let Some(outputs) =
-                                exec.execute_elementwise_fusion(&inputs, &plan)?
-                            {
-                                if outputs.len() != output_slots.len() {
-                                    return Err(crate::error::Error::Internal(format!(
-                                        "fused elementwise kernel produced {} outputs for {} slots",
-                                        outputs.len(),
-                                        output_slots.len()
-                                    )));
-                                }
-                                for (slot, tensor) in output_slots.iter().copied().zip(outputs) {
-                                    slots[slot] = Some(ExecSlot::Owned(tensor));
-                                }
-                                reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
-                                return Ok(());
-                            }
-                        }
-                        if let Some(output) = try_execute_terminal_broadcast_multiply_value_segment(
+                    backend.with_backend_session(|exec| {
+                        execute_fused_value_segment(
                             exec,
                             slots,
                             instructions,
+                            input_slots,
                             output_slots,
+                            last_use,
                             &terminal_slots,
-                        )? {
-                            slots[output_slots[0]] = Some(ExecSlot::Value(output));
-                            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
-                            return Ok(());
-                        }
-                        if let Some(output) =
-                            try_execute_terminal_single_broadcast_multiply_value_segment(
-                                exec,
-                                slots,
-                                instructions,
-                                output_slots,
-                                &terminal_slots,
-                            )?
-                        {
-                            slots[output_slots[0]] = Some(ExecSlot::Value(output));
-                            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
-                            return Ok(());
-                        }
-                        if let Some(output) = try_execute_broadcast_multiply_segment(
-                            exec,
-                            slots,
-                            instructions,
-                            output_slots,
-                        )? {
-                            slots[output_slots[0]] = Some(ExecSlot::Owned(output));
-                            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
-                            return Ok(());
-                        }
-                        if let Some(output) = try_execute_single_broadcast_multiply_segment(
-                            exec,
-                            slots,
-                            instructions,
-                            output_slots,
-                        )? {
-                            slots[output_slots[0]] = Some(ExecSlot::Owned(output));
-                            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
-                            return Ok(());
-                        }
-
-                        for inst in instructions {
-                            if try_execute_terminal_value_instruction(slots, inst, &terminal_slots)?
-                            {
-                                // Already handled as a metadata-only TensorValue.
-                            } else {
-                                let result = execute_backend_op(exec, slots, inst)?;
-                                slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
-                            }
-                            reclaim_last_use_inputs_exec(slots, inst, exec);
-                        }
-                        Ok(())
+                        )
                     })?;
                     inst_idx += instructions.len();
                 }
@@ -476,6 +386,235 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
     })();
     slots.clear();
     result
+}
+
+fn eval_exec_segmented_single_session_slots_with_workspace<'input, B: TensorBackend>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
+    backend_cache: &mut B::RuntimeCache,
+) -> Result<Vec<Tensor>> {
+    let result = (|| {
+        initialize_exec_slots_in(program, inputs, slots)?;
+        let segments = segment_exec_program(program);
+
+        backend.with_backend_session_cached(backend_cache, |exec| -> Result<()> {
+            let mut inst_idx = 0usize;
+            for segment in &segments {
+                match segment {
+                    Segment::Fused {
+                        instructions,
+                        input_slots,
+                        output_slots,
+                        last_use,
+                    } => execute_fused_segment(
+                        exec,
+                        slots,
+                        instructions,
+                        input_slots,
+                        output_slots,
+                        last_use,
+                    )?,
+                    Segment::Ffi(inst) => {
+                        execute_ffi_instruction_exec(exec, slots, inst, Some(inst_idx))?;
+                        reclaim_last_use_inputs_exec(slots, inst, exec);
+                    }
+                    Segment::Host(inst) => {
+                        execute_host_instruction_exec(exec, slots, inst)?;
+                        reclaim_last_use_inputs_exec(slots, inst, exec);
+                    }
+                }
+                inst_idx += match segment {
+                    Segment::Fused { instructions, .. } => instructions.len(),
+                    Segment::Ffi(_) | Segment::Host(_) => 1,
+                };
+            }
+            Ok(())
+        })?;
+
+        collect_outputs_from(program, slots)
+    })();
+    slots.clear();
+    result
+}
+
+fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: TensorBackend>(
+    backend: &mut B,
+    program: &ExecProgram,
+    inputs: Vec<ExecSlot<'input>>,
+    slots: &mut Vec<Option<ExecSlot<'input>>>,
+    backend_cache: &mut B::RuntimeCache,
+) -> Result<Vec<TensorValue>> {
+    let result = (|| {
+        initialize_exec_slots_in(program, inputs, slots)?;
+        let terminal_slots = terminal_output_slots(program);
+        let segments = segment_exec_program(program);
+
+        backend.with_backend_session_cached(backend_cache, |exec| -> Result<()> {
+            let mut inst_idx = 0usize;
+            for segment in &segments {
+                match segment {
+                    Segment::Fused {
+                        instructions,
+                        input_slots,
+                        output_slots,
+                        last_use,
+                    } => execute_fused_value_segment(
+                        exec,
+                        slots,
+                        instructions,
+                        input_slots,
+                        output_slots,
+                        last_use,
+                        &terminal_slots,
+                    )?,
+                    Segment::Ffi(inst) => {
+                        if !try_execute_terminal_value_instruction(slots, inst, &terminal_slots)? {
+                            execute_ffi_instruction_exec(exec, slots, inst, Some(inst_idx))?;
+                        }
+                        reclaim_last_use_inputs_exec(slots, inst, exec);
+                    }
+                    Segment::Host(inst) => {
+                        if !try_execute_terminal_value_instruction(slots, inst, &terminal_slots)? {
+                            execute_host_instruction_exec(exec, slots, inst)?;
+                        }
+                        reclaim_last_use_inputs_exec(slots, inst, exec);
+                    }
+                }
+                inst_idx += match segment {
+                    Segment::Fused { instructions, .. } => instructions.len(),
+                    Segment::Ffi(_) | Segment::Host(_) => 1,
+                };
+            }
+            Ok(())
+        })?;
+
+        collect_output_values_from(program, slots)
+    })();
+    slots.clear();
+    result
+}
+
+fn execute_fused_segment(
+    exec: &mut dyn BackendSession,
+    slots: &mut [Option<ExecSlot<'_>>],
+    instructions: &[ExecInstruction],
+    input_slots: &[usize],
+    output_slots: &[usize],
+    last_use: &[bool],
+) -> Result<()> {
+    if let Some(plan) = build_elementwise_fusion_plan(instructions, input_slots, output_slots) {
+        let inputs = collect_segment_inputs(slots, input_slots)?;
+        if let Some(outputs) = exec.execute_elementwise_fusion(&inputs, &plan)? {
+            if outputs.len() != output_slots.len() {
+                return Err(crate::error::Error::Internal(format!(
+                    "fused elementwise kernel produced {} outputs for {} slots",
+                    outputs.len(),
+                    output_slots.len()
+                )));
+            }
+            for (slot, tensor) in output_slots.iter().copied().zip(outputs) {
+                slots[slot] = Some(ExecSlot::Owned(tensor));
+            }
+            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+            return Ok(());
+        }
+    }
+    if let Some(output) =
+        try_execute_broadcast_multiply_segment(exec, slots, instructions, output_slots)?
+    {
+        slots[output_slots[0]] = Some(ExecSlot::Owned(output));
+        reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+        return Ok(());
+    }
+    if let Some(output) =
+        try_execute_single_broadcast_multiply_segment(exec, slots, instructions, output_slots)?
+    {
+        slots[output_slots[0]] = Some(ExecSlot::Owned(output));
+        reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+        return Ok(());
+    }
+
+    for inst in instructions {
+        let result = execute_backend_op(exec, slots, inst)?;
+        slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
+        reclaim_last_use_inputs_exec(slots, inst, exec);
+    }
+    Ok(())
+}
+
+fn execute_fused_value_segment(
+    exec: &mut dyn BackendSession,
+    slots: &mut [Option<ExecSlot<'_>>],
+    instructions: &[ExecInstruction],
+    input_slots: &[usize],
+    output_slots: &[usize],
+    last_use: &[bool],
+    terminal_slots: &[bool],
+) -> Result<()> {
+    if let Some(plan) = build_elementwise_fusion_plan(instructions, input_slots, output_slots) {
+        let inputs = collect_segment_inputs(slots, input_slots)?;
+        if let Some(outputs) = exec.execute_elementwise_fusion(&inputs, &plan)? {
+            if outputs.len() != output_slots.len() {
+                return Err(crate::error::Error::Internal(format!(
+                    "fused elementwise kernel produced {} outputs for {} slots",
+                    outputs.len(),
+                    output_slots.len()
+                )));
+            }
+            for (slot, tensor) in output_slots.iter().copied().zip(outputs) {
+                slots[slot] = Some(ExecSlot::Owned(tensor));
+            }
+            reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+            return Ok(());
+        }
+    }
+    if let Some(output) = try_execute_terminal_broadcast_multiply_value_segment(
+        exec,
+        slots,
+        instructions,
+        output_slots,
+        terminal_slots,
+    )? {
+        slots[output_slots[0]] = Some(ExecSlot::Value(output));
+        reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+        return Ok(());
+    }
+    if let Some(output) = try_execute_terminal_single_broadcast_multiply_value_segment(
+        exec,
+        slots,
+        instructions,
+        output_slots,
+        terminal_slots,
+    )? {
+        slots[output_slots[0]] = Some(ExecSlot::Value(output));
+        reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+        return Ok(());
+    }
+    if let Some(output) =
+        try_execute_broadcast_multiply_segment(exec, slots, instructions, output_slots)?
+    {
+        slots[output_slots[0]] = Some(ExecSlot::Owned(output));
+        reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+        return Ok(());
+    }
+    if let Some(output) =
+        try_execute_single_broadcast_multiply_segment(exec, slots, instructions, output_slots)?
+    {
+        slots[output_slots[0]] = Some(ExecSlot::Owned(output));
+        reclaim_segment_inputs_exec(slots, input_slots, last_use, exec);
+        return Ok(());
+    }
+
+    for inst in instructions {
+        if !try_execute_terminal_value_instruction(slots, inst, terminal_slots)? {
+            let result = execute_backend_op(exec, slots, inst)?;
+            slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
+        }
+        reclaim_last_use_inputs_exec(slots, inst, exec);
+    }
+    Ok(())
 }
 
 fn has_multi_instruction_fused_segment(program: &ExecProgram) -> bool {

@@ -42,10 +42,9 @@ impl ExtensionOp for TestExtensionOp {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 }
 
@@ -107,20 +106,35 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
     }
 
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
-    assert_eq!(run(&x.neg()).as_slice::<f64>().unwrap(), &[-1.0, -4.0]);
-    assert_eq!(run(&x.abs()).as_slice::<f64>().unwrap(), &[1.0, 4.0]);
-    assert_eq!(run(&x.sign()).as_slice::<f64>().unwrap(), &[1.0, 1.0]);
-    assert_eq!(run(&x.sqrt()).as_slice::<f64>().unwrap(), &[1.0, 2.0]);
-    assert_eq!(run(&x.rsqrt()).as_slice::<f64>().unwrap(), &[1.0, 0.5]);
+    assert_eq!(
+        run(&x.neg().unwrap()).as_slice::<f64>().unwrap(),
+        &[-1.0, -4.0]
+    );
+    assert_eq!(
+        run(&x.abs().unwrap()).as_slice::<f64>().unwrap(),
+        &[1.0, 4.0]
+    );
+    assert_eq!(
+        run(&x.sign().unwrap()).as_slice::<f64>().unwrap(),
+        &[1.0, 1.0]
+    );
+    assert_eq!(
+        run(&x.sqrt().unwrap()).as_slice::<f64>().unwrap(),
+        &[1.0, 2.0]
+    );
+    assert_eq!(
+        run(&x.rsqrt().unwrap()).as_slice::<f64>().unwrap(),
+        &[1.0, 0.5]
+    );
 
     let analytic = TracedTensor::from_vec_col_major(vec![2], vec![0.0_f64, 1.0]).unwrap();
-    let exp = run(&analytic.exp());
-    let log = run(&x.log());
-    let sin = run(&analytic.sin());
-    let cos = run(&analytic.cos());
-    let tanh = run(&analytic.tanh());
-    let expm1 = run(&analytic.expm1());
-    let log1p = run(&analytic.log1p());
+    let exp = run(&analytic.exp().unwrap());
+    let log = run(&x.log().unwrap());
+    let sin = run(&analytic.sin().unwrap());
+    let cos = run(&analytic.cos().unwrap());
+    let tanh = run(&analytic.tanh().unwrap());
+    let expm1 = run(&analytic.expm1().unwrap());
+    let log1p = run(&analytic.log1p().unwrap());
     assert_eq!(exp.as_slice::<f64>().unwrap(), &[1.0, std::f64::consts::E]);
     assert_eq!(log.as_slice::<f64>().unwrap(), &[0.0, 4.0_f64.ln()]);
     assert_eq!(sin.as_slice::<f64>().unwrap(), &[0.0, 1.0_f64.sin()]);
@@ -135,7 +149,7 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
     )
     .unwrap();
     assert_eq!(
-        run(&z.conj()).as_slice::<Complex64>().unwrap(),
+        run(&z.conj().unwrap()).as_slice::<Complex64>().unwrap(),
         &[Complex64::new(1.0, -2.0), Complex64::new(3.0, 4.0)]
     );
 }

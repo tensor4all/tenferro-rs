@@ -25,6 +25,7 @@ fn core_exec_program_context_rejects_nested_extension_ops() {
         input_slots: vec![],
         output_slots: vec![0],
         n_slots: 1,
+        shape_guards: Vec::new(),
     };
 
     let mut backend = CpuBackend::new();
@@ -73,8 +74,7 @@ impl ExtensionOp for TestExtension {
 
     fn infer_output_meta(
         &self,
-        _input_dtypes: &[DType],
-        _input_shapes: &[&[SymDim]],
+        _ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(DType::F64, vec![])])
     }

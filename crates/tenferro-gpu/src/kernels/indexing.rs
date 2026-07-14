@@ -5,6 +5,56 @@ use crate::kernels::helpers::{
     zero_value,
 };
 
+#[cube(launch_unchecked)]
+pub fn init_float_index_validation_flag<F: Float>(
+    flag: &mut Array<Atomic<u32>>,
+    flag_values: &mut Array<F>,
+) {
+    // INVARIANT: exactly one worker initializes two scalar validation outputs; this is O(1)
+    // setup and does not perform tensor-sized serial work.
+    if ABSOLUTE_POS == 0 {
+        flag[0].store(u32::MAX);
+        flag_values[1] = F::new(0.0_f32);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn validate_float_indices_kernel<
+    F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>,
+>(
+    indices: &Tensor<F>,
+    flag: &mut Array<Atomic<u32>>,
+    max_exact_integer: F,
+) {
+    if ABSOLUTE_POS < indices.len() {
+        let value = indices[ABSOLUTE_POS];
+        if value.is_nan()
+            || value.is_inf()
+            || value != value.floor()
+            || value > max_exact_integer
+            || value < -max_exact_integer
+        {
+            flag[0].fetch_min(ABSOLUTE_POS as u32);
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn extract_invalid_float_index_kernel<F: Float>(
+    indices: &Tensor<F>,
+    flag: &Array<Atomic<u32>>,
+    flag_values: &mut Array<F>,
+) {
+    // INVARIANT: exactly one worker reads the scalar flag and, when invalid, extracts one
+    // selected index value; this is O(1) work and does not scan the tensor serially.
+    if ABSOLUTE_POS == 0 {
+        let invalid_index = flag[0].load();
+        if invalid_index != u32::MAX {
+            flag_values[1] = indices[invalid_index as usize];
+        }
+    }
+}
+
 #[cube]
 pub(crate) fn clamp_window_start<I: Numeric + CubePrimitive>(
     start: I,
@@ -173,16 +223,25 @@ pub fn pad_kernel<E: CubePrimitive>(
         #[unroll]
         for axis in 0..rank {
             let low = comptime! { *edge_padding_low.index(axis) };
-            let spacing = comptime! { *interior_padding.index(axis) } + 1;
-            let shifted = out_idx[axis] as i64 - low;
-            if shifted < 0 || shifted % spacing != 0 {
+            let low_magnitude = comptime! { low.unsigned_abs() };
+            let spacing = comptime! { (*interior_padding.index(axis) + 1) as u64 };
+            let out_pos = out_idx[axis] as u64;
+            let mut shifted = 0_u64;
+            if comptime! { low < 0 } {
+                shifted = out_pos + low_magnitude;
+            } else if out_pos < low_magnitude {
                 in_bounds = false;
             } else {
-                let candidate = (shifted / spacing) as usize;
-                if candidate >= input.shape(axis) {
+                shifted = out_pos - low_magnitude;
+            }
+            if shifted % spacing != 0 {
+                in_bounds = false;
+            } else {
+                let candidate = shifted / spacing;
+                if candidate >= input.shape(axis) as u64 {
                     in_bounds = false;
                 } else {
-                    input_idx[axis] = candidate;
+                    input_idx[axis] = candidate as usize;
                 }
             }
         }
@@ -297,6 +356,8 @@ pub fn scatter_float_kernel<E: Float, I: Numeric + CubePrimitive>(
     #[comptime] updates_rank: usize,
     #[comptime] scatter_indices_rank: usize,
 ) {
+    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;
+    // `scatter_float_typed` returns before launch when that checked length is zero.
     let window_iters = update_window_len(updates, update_window_dims.clone());
     let update_iters = updates.len();
     if ABSOLUTE_POS < update_iters {
@@ -399,6 +460,8 @@ pub fn scatter_complex_kernel<E: ComplexCore, F: Float, I: Numeric + CubePrimiti
     #[comptime] updates_rank: usize,
     #[comptime] scatter_indices_rank: usize,
 ) {
+    // INVARIANT: `scatter_update_len` returns the checked batch-window product, including zero;
+    // `scatter_complex_typed` returns before launch when that checked length is zero.
     let window_iters = update_window_len(updates, update_window_dims.clone());
     let update_iters = updates.len();
     if ABSOLUTE_POS < update_iters {

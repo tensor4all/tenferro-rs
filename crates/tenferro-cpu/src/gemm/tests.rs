@@ -6,7 +6,9 @@ use super::{
 #[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
 use super::blas_gemm::provider_should_use_gemm_batch;
 #[cfg(feature = "cpu-blas")]
-use super::blas_gemm::{BlasGemm, BlasGemmBatch};
+use super::blas_gemm::BlasGemm;
+#[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
+use super::blas_gemm::BlasGemmBatch;
 #[cfg(feature = "cpu-blas")]
 use super::dot_general_blas_cached;
 #[cfg(feature = "cpu-faer")]

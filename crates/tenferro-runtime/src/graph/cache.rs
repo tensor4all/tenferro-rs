@@ -3,10 +3,11 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use lru::LruCache;
-use tenferro_ops::ext_op::ExtensionOp;
+use tenferro_ops::{dim_expr::DimExpr, ext_op::ExtensionOp, ShapeRelation};
 use tenferro_tensor::CacheStats;
 
 use crate::exec::{ExecInstruction, ExecOp, ExecOutputExtents, ExecOutputShapes, ExecProgram};
+use crate::ShapeGuard;
 
 /// Default capacity for compiled graph programs retained by a [`GraphCompiler`](super::GraphCompiler).
 // Public constant kept as the documented default; the crate-local alias below
@@ -117,6 +118,14 @@ struct ExecProgramKey {
     input_slots: Vec<usize>,
     output_slots: Vec<usize>,
     n_slots: usize,
+    shape_guards: Vec<ShapeGuardKey>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct ShapeGuardKey {
+    relation: ShapeRelation,
+    lhs: DimExpr,
+    rhs: DimExpr,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -254,6 +263,15 @@ fn exec_program_key(
         input_slots: exec.input_slots.clone(),
         output_slots: exec.output_slots.clone(),
         n_slots: exec.n_slots,
+        shape_guards: exec
+            .shape_guards
+            .iter()
+            .map(|guard| ShapeGuardKey {
+                relation: guard.relation,
+                lhs: guard.lhs.clone(),
+                rhs: guard.rhs.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -417,6 +435,12 @@ fn exec_program_key_retained_bytes(key: &ExecProgramKey) -> usize {
         ),
         vec_retained_bytes(&key.input_slots),
         vec_retained_bytes(&key.output_slots),
+        vec_retained_bytes(&key.shape_guards),
+        saturating_sum(
+            key.shape_guards
+                .iter()
+                .map(shape_guard_key_heap_retained_bytes),
+        ),
     ])
 }
 
@@ -430,6 +454,29 @@ fn exec_instruction_key_retained_bytes(key: &ExecInstructionKey) -> usize {
         vec_of_vec_retained_bytes(&key.output_extents),
         vec_retained_bytes(&key.last_use),
     ])
+}
+
+fn shape_guard_key_heap_retained_bytes(guard: &ShapeGuardKey) -> usize {
+    saturating_sum([
+        dim_expr_heap_retained_bytes(&guard.lhs),
+        dim_expr_heap_retained_bytes(&guard.rhs),
+    ])
+}
+
+fn dim_expr_heap_retained_bytes(expr: &DimExpr) -> usize {
+    match expr {
+        DimExpr::Const(_) | DimExpr::InputDim { .. } => 0,
+        DimExpr::Add(lhs, rhs)
+        | DimExpr::Sub(lhs, rhs)
+        | DimExpr::Mul(lhs, rhs)
+        | DimExpr::FloorDiv(lhs, rhs)
+        | DimExpr::Min(lhs, rhs)
+        | DimExpr::Max(lhs, rhs) => saturating_sum([
+            2usize.saturating_mul(size_of::<DimExpr>()),
+            dim_expr_heap_retained_bytes(lhs),
+            dim_expr_heap_retained_bytes(rhs),
+        ]),
+    }
 }
 
 fn exec_op_key_retained_bytes(key: &ExecOpKey) -> usize {
@@ -581,6 +628,20 @@ fn exec_program_retained_bytes(program: &ExecProgram) -> usize {
         ),
         vec_retained_bytes(&program.input_slots),
         vec_retained_bytes(&program.output_slots),
+        vec_retained_bytes(&program.shape_guards),
+        saturating_sum(
+            program
+                .shape_guards
+                .iter()
+                .map(shape_guard_heap_retained_bytes),
+        ),
+    ])
+}
+
+fn shape_guard_heap_retained_bytes(guard: &ShapeGuard) -> usize {
+    saturating_sum([
+        dim_expr_heap_retained_bytes(&guard.lhs),
+        dim_expr_heap_retained_bytes(&guard.rhs),
     ])
 }
 

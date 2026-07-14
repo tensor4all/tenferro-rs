@@ -130,6 +130,112 @@ pub fn convert_float_to_float<Out: Float, In: Float>(out: &mut Array<Out>, input
 }
 
 #[cube(launch_unchecked)]
+pub fn convert_numeric<Out: Numeric, In: Numeric>(out: &mut Array<Out>, input: &Array<In>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS]);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn convert_numeric_to_bool<In: Numeric>(out: &mut Array<u8>, input: &Array<In>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = if input[ABSOLUTE_POS] != In::from_int(0) {
+            1u8
+        } else {
+            0u8
+        };
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn convert_bool_to_numeric<Out: Numeric>(out: &mut Array<Out>, input: &Array<u8>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS]);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn convert_numeric_to_complex_raw<Out: Float, In: Numeric>(
+    out: &mut Array<Out>,
+    input: &Array<In>,
+) {
+    if ABSOLUTE_POS < input.len() {
+        out[ABSOLUTE_POS * 2] = Out::cast_from(input[ABSOLUTE_POS]);
+        out[ABSOLUTE_POS * 2 + 1] = Out::new(0.0f32);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn convert_bool_to_complex_raw<Out: Float>(out: &mut Array<Out>, input: &Array<u8>) {
+    if ABSOLUTE_POS < input.len() {
+        out[ABSOLUTE_POS * 2] = Out::cast_from(input[ABSOLUTE_POS]);
+        out[ABSOLUTE_POS * 2 + 1] = Out::new(0.0f32);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn convert_complex_to_numeric<Out: Numeric, In: ComplexCore>(
+    out: &mut Array<Out>,
+    input: &Array<In>,
+) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS].real_val());
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn convert_complex_raw_to_bool<F: Float>(out: &mut Array<u8>, input: &Array<F>) {
+    if ABSOLUTE_POS < out.len() {
+        let real = input[ABSOLUTE_POS * 2];
+        let imag = input[ABSOLUTE_POS * 2 + 1];
+        out[ABSOLUTE_POS] = if real != F::new(0.0f32) || imag != F::new(0.0f32) {
+            1u8
+        } else {
+            0u8
+        };
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn validate_real_cast<
+    F: Float + CubeElement + CubePrimitive<WithScalar<bool> = bool, WithScalar<F> = F>,
+>(
+    input: &Array<F>,
+    flag: &mut Array<Atomic<u32>>,
+    min: F,
+    max: F,
+    #[comptime] stride: usize,
+    #[comptime] max_inclusive: bool,
+) {
+    if ABSOLUTE_POS * stride < input.len() {
+        let value = input[ABSOLUTE_POS * stride];
+        let invalid_max = if max_inclusive {
+            value > max
+        } else {
+            value >= max
+        };
+        if value.is_nan() || value.is_inf() || value < min || invalid_max {
+            flag[0].fetch_min(ABSOLUTE_POS as u32);
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn extract_invalid_real_cast<F: Float>(
+    input: &Array<F>,
+    flag: &Array<Atomic<u32>>,
+    values: &mut Array<F>,
+    #[comptime] stride: usize,
+) {
+    if ABSOLUTE_POS == 0 {
+        let index = flag[0].load();
+        if index != u32::MAX {
+            values[1] = input[index as usize * stride];
+        }
+    }
+}
+
+#[cube(launch_unchecked)]
 pub fn convert_c32_to_f32(out: &mut Array<f32>, input: &Array<Complex32>) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = input[ABSOLUTE_POS].real_val();
@@ -202,6 +308,13 @@ pub fn convert_complex_to_complex<Out: ComplexCore, In: ComplexCore>(
     out: &mut Array<Out>,
     input: &Array<In>,
 ) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS]);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn convert_complex_raw<Out: Float, In: Float>(out: &mut Array<Out>, input: &Array<In>) {
     if ABSOLUTE_POS < out.len() {
         out[ABSOLUTE_POS] = Out::cast_from(input[ABSOLUTE_POS]);
     }

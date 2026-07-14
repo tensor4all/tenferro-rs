@@ -4,10 +4,11 @@ use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
 use tenferro_tensor::TypedTensor;
 
 use super::helpers::{
-    batch_element_count, batched_binary_result, check_lapack_info, dim_i32, has_zero_dim,
-    leading_upper_triangle_from_lapack, lower_triangle_from_lapack, matrix_core_and_batch_result,
-    matrix_dims, matrix_with_batch_shape, square_core_and_batch_result, square_matrix_dim,
-    tensor_from_vec_with_template, transpose_col_major_data,
+    batch_element_count, batched_binary_result, check_lapack_info, checked_product, dim_i32,
+    has_zero_dim, leading_upper_triangle_from_lapack, lower_triangle_from_lapack,
+    matrix_core_and_batch_result, matrix_dims, matrix_with_batch_shape,
+    square_core_and_batch_result, square_matrix_dim, tensor_from_vec_with_template,
+    transpose_col_major_data,
 };
 
 extern "C" {
@@ -432,13 +433,16 @@ fn permutation_from_lapack_pivots(
     Ok(permutation)
 }
 
-fn permutation_matrix<T: LapackFullPivLu>(permutation: &[usize]) -> Vec<T> {
+fn permutation_matrix<T: LapackFullPivLu>(
+    permutation: &[usize],
+) -> tenferro_tensor::Result<Vec<T>> {
     let n = permutation.len();
-    let mut data = vec![T::default(); n * n];
+    let len = checked_product("full_piv_lu", "permutation matrix", &[n, n])?;
+    let mut data = vec![T::default(); len];
     for (row, &source) in permutation.iter().enumerate() {
         data[row + source * n] = T::one();
     }
-    data
+    Ok(data)
 }
 
 fn factor_getc2<T: LapackFullPivLu>(
@@ -471,13 +475,13 @@ fn full_piv_lu_2d<T: LapackFullPivLu>(
 
     let row_perm = permutation_from_lapack_pivots(&ipiv, "full_piv_lu")?;
     let col_perm = permutation_from_lapack_pivots(&jpiv, "full_piv_lu")?;
-    let p_data = permutation_matrix::<T>(&row_perm);
-    let q_data = permutation_matrix::<T>(&col_perm);
-    let mut l_data = lower_triangle_from_lapack(&lu, n, n);
+    let p_data = permutation_matrix::<T>(&row_perm)?;
+    let q_data = permutation_matrix::<T>(&col_perm)?;
+    let mut l_data = lower_triangle_from_lapack(&lu, n, n)?;
     for index in 0..n {
         l_data[index + index * n] = T::one();
     }
-    let u_data = leading_upper_triangle_from_lapack(&lu, n, n, n);
+    let u_data = leading_upper_triangle_from_lapack(&lu, n, n, n)?;
     let row_swap_count = ipiv
         .iter()
         .enumerate()

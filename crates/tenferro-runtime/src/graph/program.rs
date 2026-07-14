@@ -40,7 +40,8 @@ impl GraphProgram {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// assert_eq!(program.input_count(), 1);
     /// ```
     #[inline(never)]
@@ -57,7 +58,8 @@ impl GraphProgram {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// assert_eq!(program.output_count(), 1);
     /// ```
     #[inline(never)]
@@ -74,8 +76,9 @@ impl GraphProgram {
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// let mut compiler = GraphCompiler::new();
+    /// let y = x.neg().unwrap();
     /// let program = compiler
-    ///     .compile_with_input_specs(&x.neg(), &[(&x, DType::F64, &[4])])
+    ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[4])])
     ///     .unwrap();
     /// assert_eq!(program.input_specs()[0].shape(), &[4]);
     /// ```
@@ -96,7 +99,8 @@ impl GraphProgram {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// assert_eq!(program.lowering_view().output_slots().len(), 1);
     /// ```
     #[inline(never)]
@@ -114,7 +118,8 @@ impl GraphProgram {
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 /// let mut compiler = GraphCompiler::new();
-/// let program = compiler.compile(&x.neg()).unwrap();
+/// let y = x.neg().unwrap();
+/// let program = compiler.compile(&y).unwrap();
 /// let input = &program.input_specs()[0];
 /// assert_eq!(input.shape(), &[2]);
 /// ```

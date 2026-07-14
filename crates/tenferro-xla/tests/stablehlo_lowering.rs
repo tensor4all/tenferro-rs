@@ -26,15 +26,25 @@ fn lowers_phase_one_real_elementwise_ops() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let unary = x
         .abs()
+        .unwrap()
         .exp()
+        .unwrap()
         .log()
+        .unwrap()
         .sin()
+        .unwrap()
         .cos()
+        .unwrap()
         .tanh()
+        .unwrap()
         .sqrt()
+        .unwrap()
         .rsqrt()
+        .unwrap()
         .expm1()
-        .log1p();
+        .unwrap()
+        .log1p()
+        .unwrap();
     let divided = unary.div(&x).unwrap();
     let powered = divided.pow(&x).unwrap();
     let mut compiler = GraphCompiler::new();

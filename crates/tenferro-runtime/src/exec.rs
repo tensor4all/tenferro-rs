@@ -38,6 +38,69 @@ pub struct ExecProgram {
     pub input_slots: Vec<usize>,
     pub output_slots: Vec<usize>,
     pub n_slots: usize,
+    /// Normalized symbolic shape obligations retained during compilation.
+    ///
+    /// Guard internals are opaque. Execution validates them before backend,
+    /// host, or extension work.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::{any::Any, sync::Arc};
+    ///
+    /// use computegraph::compile::{CompiledProgram, Instruction};
+    /// use tenferro_ops::{
+    ///     dim_expr::DimExpr, ext_op::ExtensionOp, std_tensor_op::StdTensorOp,
+    ///     ExtensionShapeContext, SymDim,
+    /// };
+    /// use tenferro_runtime::{extension::compile_std_to_exec, DType};
+    ///
+    /// #[derive(Clone, Debug)]
+    /// struct MatchingAxes;
+    ///
+    /// impl ExtensionOp for MatchingAxes {
+    ///     fn family_id(&self) -> &'static str { "example.matching-axes.v1" }
+    ///     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
+    ///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+    ///         other.as_any().downcast_ref::<Self>().is_some()
+    ///     }
+    ///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> { Arc::new(self.clone()) }
+    ///     fn as_any(&self) -> &dyn Any { self }
+    ///     fn input_count(&self) -> usize { 2 }
+    ///     fn output_count(&self) -> usize { 1 }
+    ///     fn infer_output_meta(
+    ///         &self,
+    ///         ctx: &mut ExtensionShapeContext<'_>,
+    ///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    ///         let lhs = ctx.input_axis(0, 0)?;
+    ///         let rhs = ctx.input_axis(1, 0)?;
+    ///         ctx.require_equal(lhs, rhs * 2)?;
+    ///         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+    ///     }
+    /// }
+    ///
+    /// let program = CompiledProgram {
+    ///     instructions: vec![Instruction {
+    ///         operation: StdTensorOp::Extension(Arc::new(MatchingAxes)),
+    ///         inputs: vec![0, 1],
+    ///         outputs: vec![2],
+    ///     }],
+    ///     input_slots: vec![0, 1],
+    ///     output_slots: vec![2],
+    ///     n_slots: 3,
+    /// };
+    /// let compiled = compile_std_to_exec(
+    ///     &program,
+    ///     &[DType::F64, DType::F64],
+    ///     &[
+    ///         vec![DimExpr::InputDim { input_idx: 0, axis: 0 }],
+    ///         vec![DimExpr::InputDim { input_idx: 1, axis: 0 }],
+    ///     ],
+    /// ).unwrap();
+    /// assert_eq!(compiled.shape_guards.len(), 1);
+    /// ```
+    #[doc(hidden)]
+    pub shape_guards: Vec<crate::ShapeGuard>,
 }
 
 impl ExecProgram {
@@ -64,14 +127,6 @@ pub(crate) enum ExecSlot<'a> {
 }
 
 impl<'a> ExecSlot<'a> {
-    pub(crate) fn dtype(&self) -> DType {
-        match self {
-            Self::Owned(tensor) => tensor.dtype(),
-            Self::Value(value) => value.dtype(),
-            Self::Read(read) => read.dtype(),
-        }
-    }
-
     pub(crate) fn as_read<'slot>(&'slot self) -> TensorRead<'slot>
     where
         'a: 'slot,
@@ -341,13 +396,7 @@ pub(crate) fn initialize_exec_slots_in<'input>(
     inputs: Vec<ExecSlot<'input>>,
     slots: &mut Vec<Option<ExecSlot<'input>>>,
 ) -> Result<()> {
-    if inputs.len() != program.input_slots.len() {
-        return Err(invalid_compiled_graph(format!(
-            "initialize_exec_slots_in: expected {} inputs, got {}",
-            program.input_slots.len(),
-            inputs.len()
-        )));
-    }
+    validate_exec_input_count(program, inputs.len(), "initialize_exec_slots_in")?;
     slots.clear();
     slots.resize_with(program.n_slots, || None);
     for (i, input) in inputs.into_iter().enumerate() {
@@ -540,6 +589,16 @@ pub(crate) fn ensure_core_exec_program(program: &ExecProgram, caller: &str) -> R
     Ok(())
 }
 
+pub(crate) fn validate_shape_guards(
+    program: &ExecProgram,
+    input_shapes: &[&[usize]],
+) -> Result<()> {
+    for guard in &program.shape_guards {
+        guard.evaluate(input_shapes)?;
+    }
+    Ok(())
+}
+
 /// Evaluate an [`ExecProgram`] with caller-owned backend runtime cache state.
 pub(crate) fn eval_exec_ir_with_backend_cache<B: TensorBackend + 'static>(
     backend: &mut B,
@@ -547,6 +606,9 @@ pub(crate) fn eval_exec_ir_with_backend_cache<B: TensorBackend + 'static>(
     inputs: Vec<Tensor>,
     backend_cache: &mut B::RuntimeCache,
 ) -> Result<Vec<Tensor>> {
+    validate_exec_input_count(program, inputs.len(), "initialize_exec_slots_in")?;
+    let input_shapes: Vec<&[usize]> = inputs.iter().map(Tensor::shape).collect();
+    validate_shape_guards(program, &input_shapes)?;
     let mut slots = Vec::new();
     crate::segment::eval_exec_segmented_with_cache_and_workspace(
         backend,
@@ -574,6 +636,9 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<B: TensorBackend
     slots: &mut Vec<Option<ExecSlot<'static>>>,
     extension_executor: Option<&mut ExtensionExecutor<B>>,
 ) -> Result<Vec<Tensor>> {
+    validate_exec_input_count(program, inputs.len(), "initialize_exec_slots_in")?;
+    let input_shapes: Vec<&[usize]> = inputs.iter().map(Tensor::shape).collect();
+    validate_shape_guards(program, &input_shapes)?;
     let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
     eval_exec_ir_unsegmented_slots_with_cache_and_workspace(
         backend,
@@ -582,6 +647,16 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<B: TensorBackend
         slots,
         extension_executor,
     )
+}
+
+fn validate_exec_input_count(program: &ExecProgram, actual: usize, caller: &str) -> Result<()> {
+    let expected = program.input_slots.len();
+    if actual != expected {
+        return Err(invalid_compiled_graph(format!(
+            "{caller}: expected {expected} inputs, got {actual}"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn eval_exec_ir_unsegmented_slots_with_cache_and_workspace<
@@ -669,10 +744,10 @@ pub(crate) fn eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace<
 }
 
 pub(crate) fn can_run_in_single_exec_session(program: &ExecProgram) -> bool {
-    program.instructions.iter().all(|inst| {
-        !is_host_instruction(inst)
-            && (!is_ffi_instruction(inst) || is_exec_session_ffi_instruction(inst))
-    })
+    program
+        .instructions
+        .iter()
+        .all(|inst| !is_ffi_instruction(inst) || is_exec_session_ffi_instruction(inst))
 }
 
 pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: TensorBackend>(
@@ -689,9 +764,7 @@ pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: Tensor
         backend.with_backend_session_cached(backend_cache, |exec| -> Result<()> {
             for (inst_idx, inst) in program.instructions.iter().enumerate() {
                 if is_host_instruction(inst) {
-                    return Err(Error::Internal(
-                        "host instruction reached single-session executor".into(),
-                    ));
+                    execute_host_instruction_exec(exec, slots, inst)?;
                 } else if is_ffi_instruction(inst) {
                     execute_ffi_instruction_exec(exec, slots, inst, Some(inst_idx))?;
                 } else {
@@ -723,6 +796,14 @@ pub(crate) fn execute_host_instruction<B: TensorBackend>(
     inst: &ExecInstruction,
 ) -> Result<()> {
     dispatch::execute_host_dispatch(backend, slots, inst)
+}
+
+pub(crate) fn execute_host_instruction_exec(
+    exec: &mut dyn BackendSession,
+    slots: &mut [Option<ExecSlot<'_>>],
+    inst: &ExecInstruction,
+) -> Result<()> {
+    dispatch::execute_host_dispatch(exec, slots, inst)
 }
 
 pub(crate) fn execute_ffi_instruction<B: TensorBackend + 'static>(

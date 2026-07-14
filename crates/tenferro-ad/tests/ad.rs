@@ -1171,7 +1171,7 @@ fn jvp_elementwise_add_y_tangent() {
 fn grad_neg_sum() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, -2.0, 3.0]))
         .unwrap();
-    let loss = (-&x).reduce_sum(&[0]).unwrap();
+    let loss = (-&x).unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);
@@ -1185,7 +1185,7 @@ fn grad_conj_sum_complex() {
         vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
     ))
     .unwrap();
-    let loss = x.conj().reduce_sum(&[0]).unwrap();
+    let loss = x.conj().unwrap().reduce_sum(&[0]).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);
@@ -1263,12 +1263,12 @@ fn complex_abs_ad_matches_jax_real_output_convention() {
         TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], input_data.clone())).unwrap();
     let dx = TracedTensor::from_tensor_concrete_shape(c64_tensor(vec![2], tangent_data.clone()))
         .unwrap();
-    let dy = x.abs().jvp(&x, &dx).unwrap();
+    let dy = x.abs().unwrap().jvp(&x, &dx).unwrap();
 
     let cotangent =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], cotangent_data.clone()))
             .unwrap();
-    let grad = x.abs().vjp(&x, &cotangent).unwrap();
+    let grad = x.abs().unwrap().vjp(&x, &cotangent).unwrap();
 
     let results =
         run_many_traced_with(&mut GraphExecutor::new(CpuBackend::new()), &[&dy, &grad]).unwrap();
@@ -1311,7 +1311,7 @@ fn complex_sign_ad_is_zero_like_jax() {
     ))
     .unwrap();
 
-    let signed = x.sign();
+    let signed = x.sign().unwrap();
     let tangent = signed.jvp(&x, &dx).unwrap();
     let grad = signed.vjp(&x, &cotangent).unwrap();
 
@@ -1920,7 +1920,7 @@ fn cast_eval_jvp_and_vjp_follow_real_complex_adjoint_rules() {
     .unwrap();
 
     let x_c64 = x.convert(DType::C64).unwrap();
-    let roundtrip = x_c64.cast(DType::F64);
+    let roundtrip = x_c64.cast(DType::F64).unwrap();
     let jvp = x_c64.jvp(&x, &dx).unwrap();
     let vjp = x_c64.vjp(&x, &cotangent).unwrap();
 
@@ -1952,6 +1952,7 @@ fn cast_ad_treats_integer_and_bool_boundaries_as_inactive_like_jax_float0() {
 
     assert!(
         real.cast(DType::I64)
+            .unwrap()
             .jvp_optional(&real, &real_tangent)
             .unwrap()
             .is_none(),
@@ -1959,6 +1960,7 @@ fn cast_ad_treats_integer_and_bool_boundaries_as_inactive_like_jax_float0() {
     );
     assert!(
         real.cast(DType::Bool)
+            .unwrap()
             .jvp_optional(&real, &real_tangent)
             .unwrap()
             .is_none(),
@@ -1985,6 +1987,7 @@ fn cast_ad_treats_integer_and_bool_boundaries_as_inactive_like_jax_float0() {
 
     assert!(
         real.cast(DType::I64)
+            .unwrap()
             .vjp_optional(
                 &real,
                 &TracedTensor::from_tensor_concrete_shape(i64_tensor(vec![2], vec![3, -4]))
@@ -1996,6 +1999,7 @@ fn cast_ad_treats_integer_and_bool_boundaries_as_inactive_like_jax_float0() {
     );
     assert!(
         real.cast(DType::Bool)
+            .unwrap()
             .vjp_optional(
                 &real,
                 &TracedTensor::from_tensor_concrete_shape(bool_tensor(vec![2], vec![true, false]))

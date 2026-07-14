@@ -306,6 +306,84 @@ fn test_integer_div_rem_pow_contract() {
 }
 
 #[test]
+fn test_pow_accepts_rank_zero_operands() {
+    let f64_tensor = Tensor::from_vec_col_major(vec![3], vec![2.0_f64, 3.0, 4.0]).unwrap();
+    let f64_exponent = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let f64_base = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+
+    let tensor_base = pow(&f64_tensor, &f64_exponent).unwrap();
+    assert_eq!(tensor_base.shape(), &[3]);
+    assert_eq!(tensor_base.as_slice::<f64>().unwrap(), &[4.0, 9.0, 16.0]);
+
+    let scalar_base = pow(&f64_base, &f64_tensor).unwrap();
+    assert_eq!(scalar_base.shape(), &[3]);
+    assert_eq!(scalar_base.as_slice::<f64>().unwrap(), &[4.0, 8.0, 16.0]);
+
+    let i32_tensor = Tensor::from_vec_col_major(vec![3], vec![2_i32, 3, 4]).unwrap();
+    let i32_exponent = Tensor::from_vec_col_major(vec![], vec![3_i32]).unwrap();
+    let i32_base = Tensor::from_vec_col_major(vec![], vec![2_i32]).unwrap();
+
+    let tensor_base = pow(&i32_tensor, &i32_exponent).unwrap();
+    assert_eq!(tensor_base.shape(), &[3]);
+    assert_eq!(tensor_base.as_slice::<i32>().unwrap(), &[8, 27, 64]);
+
+    let scalar_base = pow(&i32_base, &i32_tensor).unwrap();
+    assert_eq!(scalar_base.shape(), &[3]);
+    assert_eq!(scalar_base.as_slice::<i32>().unwrap(), &[4, 8, 16]);
+}
+
+#[test]
+fn test_pow_rank_zero_read_views_and_domain_contracts() {
+    let tensor = TypedTensor::<f32>::from_vec_col_major(vec![3], vec![2.0, 3.0, 4.0]).unwrap();
+    let exponent = TypedTensor::<f32>::from_vec_col_major(vec![], vec![2.0]).unwrap();
+    let base = TypedTensor::<f32>::from_vec_col_major(vec![], vec![2.0]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    let tensor_base = backend
+        .pow_read(
+            TensorRead::from_view(TensorView::F32(tensor.as_view())),
+            TensorRead::from_view(TensorView::F32(exponent.as_view())),
+        )
+        .unwrap();
+    assert_eq!(tensor_base.shape(), &[3]);
+    assert_eq!(tensor_base.as_slice::<f32>().unwrap(), &[4.0, 9.0, 16.0]);
+
+    let scalar_base = backend
+        .pow_read(
+            TensorRead::from_view(TensorView::F32(base.as_view())),
+            TensorRead::from_view(TensorView::F32(tensor.as_view())),
+        )
+        .unwrap();
+    assert_eq!(scalar_base.shape(), &[3]);
+    assert_eq!(scalar_base.as_slice::<f32>().unwrap(), &[4.0, 8.0, 16.0]);
+
+    let empty = Tensor::from_vec_col_major(vec![0, 2], Vec::<f64>::new()).unwrap();
+    let scalar = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
+    let empty_out = pow(&empty, &scalar).unwrap();
+    assert_eq!(empty_out.shape(), &[0, 2]);
+    assert!(empty_out.as_slice::<f64>().unwrap().is_empty());
+
+    for (base, exponent) in [
+        (
+            Tensor::from_vec_col_major(vec![2], vec![2_i64, 3]).unwrap(),
+            Tensor::from_vec_col_major(vec![], vec![-1_i64]).unwrap(),
+        ),
+        (
+            Tensor::from_vec_col_major(vec![], vec![2_i64]).unwrap(),
+            Tensor::from_vec_col_major(vec![2], vec![2_i64, -1]).unwrap(),
+        ),
+    ] {
+        assert!(matches!(
+            pow(&base, &exponent),
+            Err(Error::NegativeIntegerExponent {
+                op: "pow",
+                dtype: DType::I64
+            })
+        ));
+    }
+}
+
+#[test]
 fn test_integer_div_rem_pow_read_views_contract() {
     let lhs =
         TypedTensor::<i32>::from_vec_col_major(vec![6], vec![7_i32, -7, 7, -7, i32::MIN, i32::MAX])
@@ -383,6 +461,90 @@ fn test_integer_div_rem_pow_domain_errors_are_structured() {
             dtype: DType::I32
         }
     ));
+}
+
+#[test]
+fn float_div_rem_preserve_ieee_special_values() {
+    let f32_lhs = Tensor::from_vec_col_major(
+        vec![6],
+        vec![1.0_f32, 1.0, 0.0, f32::NAN, f32::INFINITY, -0.0],
+    )
+    .unwrap();
+    let f32_div_rhs =
+        Tensor::from_vec_col_major(vec![6], vec![0.0_f32, -0.0, 0.0, 1.0, f32::INFINITY, 2.0])
+            .unwrap();
+    let f32_div = div(&f32_lhs, &f32_div_rhs).unwrap();
+    let f32_div = f32_div.as_slice::<f32>().unwrap();
+    assert!(f32_div[0].is_infinite() && f32_div[0].is_sign_positive());
+    assert!(f32_div[1].is_infinite() && f32_div[1].is_sign_negative());
+    assert!(f32_div[2].is_nan());
+    assert!(f32_div[3].is_nan());
+    assert!(f32_div[4].is_nan());
+    assert_eq!(f32_div[5].to_bits(), (-0.0_f32).to_bits());
+
+    let f32_rem_rhs =
+        Tensor::from_vec_col_major(vec![6], vec![0.0_f32, -0.0, 2.0, 2.0, 2.0, 2.0]).unwrap();
+    let f32_rem = rem(&f32_lhs, &f32_rem_rhs).unwrap();
+    let f32_rem = f32_rem.as_slice::<f32>().unwrap();
+    assert!(f32_rem[0].is_nan());
+    assert!(f32_rem[1].is_nan());
+    assert_eq!(f32_rem[2].to_bits(), 0.0_f32.to_bits());
+    assert!(f32_rem[3].is_nan());
+    assert!(f32_rem[4].is_nan());
+    assert_eq!(f32_rem[5].to_bits(), (-0.0_f32).to_bits());
+
+    let f64_lhs = Tensor::from_vec_col_major(
+        vec![6],
+        vec![1.0_f64, 1.0, 0.0, f64::NAN, f64::INFINITY, -0.0],
+    )
+    .unwrap();
+    let f64_div_rhs =
+        Tensor::from_vec_col_major(vec![6], vec![0.0_f64, -0.0, 0.0, 1.0, f64::INFINITY, 2.0])
+            .unwrap();
+    let f64_div = div(&f64_lhs, &f64_div_rhs).unwrap();
+    let f64_div = f64_div.as_slice::<f64>().unwrap();
+    assert!(f64_div[0].is_infinite() && f64_div[0].is_sign_positive());
+    assert!(f64_div[1].is_infinite() && f64_div[1].is_sign_negative());
+    assert!(f64_div[2].is_nan());
+    assert!(f64_div[3].is_nan());
+    assert!(f64_div[4].is_nan());
+    assert_eq!(f64_div[5].to_bits(), (-0.0_f64).to_bits());
+
+    let f64_rem_rhs =
+        Tensor::from_vec_col_major(vec![6], vec![0.0_f64, -0.0, 2.0, 2.0, 2.0, 2.0]).unwrap();
+    let f64_rem = rem(&f64_lhs, &f64_rem_rhs).unwrap();
+    let f64_rem = f64_rem.as_slice::<f64>().unwrap();
+    assert!(f64_rem[0].is_nan());
+    assert!(f64_rem[1].is_nan());
+    assert_eq!(f64_rem[2].to_bits(), 0.0_f64.to_bits());
+    assert!(f64_rem[3].is_nan());
+    assert!(f64_rem[4].is_nan());
+    assert_eq!(f64_rem[5].to_bits(), (-0.0_f64).to_bits());
+
+    for (zero_rhs, expected_dtype) in [
+        (
+            Tensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap(),
+            DType::I32,
+        ),
+        (
+            Tensor::from_vec_col_major(vec![1], vec![0_i64]).unwrap(),
+            DType::I64,
+        ),
+    ] {
+        let lhs = match zero_rhs.dtype() {
+            DType::I32 => Tensor::from_vec_col_major(vec![1], vec![1_i32]).unwrap(),
+            DType::I64 => Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap(),
+            _ => unreachable!(),
+        };
+        assert!(matches!(
+            div(&lhs, &zero_rhs),
+            Err(Error::DivisionByZero { op: "div", dtype }) if dtype == expected_dtype
+        ));
+        assert!(matches!(
+            rem(&lhs, &zero_rhs),
+            Err(Error::DivisionByZero { op: "rem", dtype }) if dtype == expected_dtype
+        ));
+    }
 }
 
 #[test]

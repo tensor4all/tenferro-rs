@@ -25,6 +25,7 @@ use crate::metadata::{
     symbolic_input_meta, tensor_meta, MetadataScopeChain,
 };
 use crate::scalar_semantics::{bool_from_real_for_op, round_real_to_i32_for_op, round_real_to_i64};
+use crate::shape_constraint::ConstraintScopeChain;
 
 static NEXT_INPUT_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_TRACED_ID: AtomicU64 = AtomicU64::new(0);
@@ -56,6 +57,7 @@ pub struct TracedTensor {
     pub(crate) extra_roots: Vec<Arc<Graph<StdTensorOp>>>,
     pub(crate) checkpoint_chain: Option<Arc<CheckpointNode>>,
     pub(crate) metadata_scopes: MetadataScopeChain,
+    pub(crate) constraint_scopes: ConstraintScopeChain,
 }
 
 impl fmt::Debug for TracedTensor {
@@ -214,8 +216,8 @@ pub(crate) fn broadcast_ternary(
     ))
 }
 
-fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> TracedTensor {
-    let scalar = apply_nullary(op, 0, input.dtype, Some(vec![]));
+fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> Result<TracedTensor> {
+    let scalar = apply_nullary(op, 0, input.dtype, Some(vec![]))?;
     apply_binary(
         StdTensorOp::Mul,
         input,
@@ -350,7 +352,7 @@ pub(crate) fn infer_traced_single_output_shape(
     Ok((output_shape.len(), Some(out_shape_hint)))
 }
 
-fn register_metadata_or_internal(
+pub(crate) fn register_metadata_or_internal(
     result: std::result::Result<GlobalMetadataScope, impl std::fmt::Display>,
 ) -> Result<GlobalMetadataScope> {
     result.map_err(|err| Error::Internal(format!("metadata registration failed: {err}")))
@@ -553,9 +555,9 @@ impl std::ops::Mul<&TracedTensor> for f64 {
 }
 
 impl std::ops::Neg for &TracedTensor {
-    type Output = TracedTensor;
+    type Output = Result<TracedTensor>;
 
-    fn neg(self) -> TracedTensor {
+    fn neg(self) -> Self::Output {
         TracedTensor::neg(self)
     }
 }
@@ -664,6 +666,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
         })
     }
 
@@ -718,6 +721,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
         })
     }
 
@@ -764,6 +768,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
         })
     }
 
@@ -808,6 +813,7 @@ impl TracedTensor {
             extra_roots: Vec::new(),
             checkpoint_chain: None,
             metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
+            constraint_scopes: ConstraintScopeChain::empty(),
         })
     }
 
@@ -907,13 +913,13 @@ impl TracedTensor {
     /// ```
     pub fn add(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
-        Ok(apply_binary(
+        apply_binary(
             StdTensorOp::Add,
             &lhs,
             &rhs,
             lhs.rank,
             lhs.shape_hint.clone(),
-        ))
+        )
     }
 
     /// Elementwise subtraction with NumPy-style broadcasting.
@@ -921,13 +927,13 @@ impl TracedTensor {
     /// Prefer using the `-` operator when it reads naturally.
     pub fn sub(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
-        Ok(apply_binary(
+        apply_binary(
             StdTensorOp::Sub,
             &lhs,
             &rhs,
             lhs.rank,
             lhs.shape_hint.clone(),
-        ))
+        )
     }
 
     /// Elementwise multiplication with NumPy-style broadcasting.
@@ -945,13 +951,13 @@ impl TracedTensor {
     /// ```
     pub fn mul(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
-        Ok(apply_binary(
+        apply_binary(
             StdTensorOp::Mul,
             &lhs,
             &rhs,
             lhs.rank,
             lhs.shape_hint.clone(),
-        ))
+        )
     }
 
     /// Elementwise division with NumPy-style broadcasting.
@@ -969,13 +975,13 @@ impl TracedTensor {
     /// ```
     pub fn div(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
-        Ok(apply_binary(
+        apply_binary(
             StdTensorOp::Div,
             &lhs,
             &rhs,
             lhs.rank,
             lhs.shape_hint.clone(),
-        ))
+        )
     }
 
     /// Elementwise remainder with NumPy-style broadcasting.
@@ -983,13 +989,13 @@ impl TracedTensor {
     /// Prefer using the `%` operator when it reads naturally.
     pub fn rem(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
-        Ok(apply_binary(
+        apply_binary(
             StdTensorOp::Rem,
             &lhs,
             &rhs,
             lhs.rank,
             lhs.shape_hint.clone(),
-        ))
+        )
     }
 
     /// Elementwise comparison with NumPy-style broadcasting.
@@ -1030,7 +1036,7 @@ impl TracedTensor {
         apply_broadcast_ternary_op(StdTensorOp::Clamp, self, lower, upper)
     }
 
-    fn apply_same_shape_unary(&self, op: StdTensorOp) -> TracedTensor {
+    fn apply_same_shape_unary(&self, op: StdTensorOp) -> Result<TracedTensor> {
         apply_unary(op, self, self.rank, self.shape_hint.clone())
     }
 
@@ -1043,10 +1049,10 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.neg();
-    /// let y2 = -&x;
+    /// let y = x.neg().unwrap();
+    /// let y2 = (-&x).unwrap();
     /// ```
-    pub fn neg(&self) -> TracedTensor {
+    pub fn neg(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Neg)
     }
 
@@ -1062,9 +1068,9 @@ impl TracedTensor {
     /// #     vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
     /// # )
     /// # .unwrap();
-    /// let y = x.conj();
+    /// let y = x.conj().unwrap();
     /// ```
-    pub fn conj(&self) -> TracedTensor {
+    pub fn conj(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Conj)
     }
 
@@ -1077,9 +1083,9 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]).unwrap();
-    /// let y = x.abs();
+    /// let y = x.abs().unwrap();
     /// ```
-    pub fn abs(&self) -> TracedTensor {
+    pub fn abs(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Abs)
     }
 
@@ -1090,9 +1096,9 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]).unwrap();
-    /// let y = x.sign();
+    /// let y = x.sign().unwrap();
     /// ```
-    pub fn sign(&self) -> TracedTensor {
+    pub fn sign(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Sign)
     }
 
@@ -1116,7 +1122,7 @@ impl TracedTensor {
             DType::C64 => StdTensorOp::constant(Complex64::new(factor, 0.0)),
             DType::C32 => StdTensorOp::constant(Complex32::new(factor as f32, 0.0)),
         };
-        Ok(scale_with_constant(self, op))
+        scale_with_constant(self, op)
     }
 
     /// Scale by a complex scalar: `y = factor * x`.
@@ -1138,11 +1144,11 @@ impl TracedTensor {
     /// ```
     pub fn scale_complex(&self, factor: Complex64) -> Result<TracedTensor> {
         match self.dtype {
-            DType::C64 => Ok(scale_with_constant(self, StdTensorOp::constant(factor))),
-            DType::C32 => Ok(scale_with_constant(
+            DType::C64 => scale_with_constant(self, StdTensorOp::constant(factor)),
+            DType::C32 => scale_with_constant(
                 self,
                 StdTensorOp::constant(Complex32::new(factor.re as f32, factor.im as f32)),
-            )),
+            ),
             DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
                 Err(Error::InvalidGraphBuild {
                     op: "scale_complex",
@@ -1159,9 +1165,9 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.exp();
+    /// let y = x.exp().unwrap();
     /// ```
-    pub fn exp(&self) -> TracedTensor {
+    pub fn exp(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Exp)
     }
 
@@ -1172,9 +1178,9 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.log();
+    /// let y = x.log().unwrap();
     /// ```
-    pub fn log(&self) -> TracedTensor {
+    pub fn log(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Log)
     }
 
@@ -1185,9 +1191,9 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.sin();
+    /// let y = x.sin().unwrap();
     /// ```
-    pub fn sin(&self) -> TracedTensor {
+    pub fn sin(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Sin)
     }
 
@@ -1198,9 +1204,9 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.cos();
+    /// let y = x.cos().unwrap();
     /// ```
-    pub fn cos(&self) -> TracedTensor {
+    pub fn cos(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Cos)
     }
 
@@ -1211,9 +1217,9 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.tanh();
+    /// let y = x.tanh().unwrap();
     /// ```
-    pub fn tanh(&self) -> TracedTensor {
+    pub fn tanh(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Tanh)
     }
 
@@ -1224,9 +1230,9 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
-    /// let y = x.sqrt();
+    /// let y = x.sqrt().unwrap();
     /// ```
-    pub fn sqrt(&self) -> TracedTensor {
+    pub fn sqrt(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Sqrt)
     }
 
@@ -1237,9 +1243,9 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
-    /// let y = x.rsqrt();
+    /// let y = x.rsqrt().unwrap();
     /// ```
-    pub fn rsqrt(&self) -> TracedTensor {
+    pub fn rsqrt(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Rsqrt)
     }
 
@@ -1255,13 +1261,13 @@ impl TracedTensor {
     /// ```
     pub fn pow(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
-        Ok(apply_binary(
+        apply_binary(
             StdTensorOp::Pow,
             &lhs,
             &rhs,
             lhs.rank,
             lhs.shape_hint.clone(),
-        ))
+        )
     }
 
     /// Elementwise `exp(x) - 1`.
@@ -1271,9 +1277,9 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.expm1();
+    /// let y = x.expm1().unwrap();
     /// ```
-    pub fn expm1(&self) -> TracedTensor {
+    pub fn expm1(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Expm1)
     }
 
@@ -1284,9 +1290,9 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let y = x.log1p();
+    /// let y = x.log1p().unwrap();
     /// ```
-    pub fn log1p(&self) -> TracedTensor {
+    pub fn log1p(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Log1p)
     }
 
@@ -1312,7 +1318,7 @@ impl TracedTensor {
     /// lossy dtype projection.
     pub fn convert(&self, to: DType) -> Result<TracedTensor> {
         tenferro_tensor::validate::validate_convert_dtype("TracedTensor::convert", self.dtype, to)?;
-        Ok(self.cast(to))
+        self.cast(to)
     }
 
     /// Cast the tensor to a different dtype using explicit dtype projection.
@@ -1328,11 +1334,11 @@ impl TracedTensor {
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.2_f64, -2.8]).unwrap();
     ///
-    /// let y = x.cast(DType::I32);
+    /// let y = x.cast(DType::I32).unwrap();
     /// ```
-    pub fn cast(&self, to: DType) -> TracedTensor {
+    pub fn cast(&self, to: DType) -> Result<TracedTensor> {
         if self.dtype == to {
-            return self.clone();
+            return Ok(self.clone());
         }
 
         apply_unary_with_dtype(
@@ -1408,13 +1414,13 @@ impl TracedTensor {
             _ => None,
         };
 
-        Ok(apply_binary(
+        apply_binary(
             StdTensorOp::DotGeneral { config },
             self,
             other,
             out_rank,
             out_shape_hint,
-        ))
+        )
     }
 
     /// Matrix multiplication for rank-2 tensors.
@@ -1474,14 +1480,14 @@ impl TracedTensor {
     pub fn reduce_sum(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_sum")?;
-        Ok(apply_unary(
+        apply_unary(
             StdTensorOp::ReduceSum {
                 axes: axes.to_vec(),
             },
             self,
             out_rank,
             out_shape_hint,
-        ))
+        )
     }
 
     /// Reduce by taking the maximum along the given axes.
@@ -1563,14 +1569,14 @@ impl TracedTensor {
     pub fn reduce_prod(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_prod")?;
-        Ok(apply_unary(
+        apply_unary(
             StdTensorOp::ReduceProd {
                 axes: axes.to_vec(),
             },
             self,
             out_rank,
             out_shape_hint,
-        ))
+        )
     }
 
     /// Reshape without changing element order.
@@ -1591,7 +1597,7 @@ impl TracedTensor {
     /// overflows `usize`.
     pub fn reshape(&self, shape: &[usize]) -> Result<TracedTensor> {
         validate_concrete_reshape_shape(self, shape)?;
-        Ok(apply_unary_with_dtype(
+        apply_unary_with_dtype(
             StdTensorOp::Reshape {
                 to_shape: DimExpr::from_concrete(shape),
             },
@@ -1599,7 +1605,7 @@ impl TracedTensor {
             shape.len(),
             Some(shape.iter().copied().map(SymDim::from).collect()),
             self.dtype,
-        ))
+        )
     }
 
     /// Return a symbolic expression for the size of one axis, suitable as
@@ -1723,12 +1729,12 @@ impl TracedTensor {
             .map(|dim| dim.to_dim_expr(&tensor_map).map_err(Error::Internal))
             .collect::<Result<Vec<_>>>()?;
         let out_shape_hint = Some(shape.to_vec());
-        Ok(apply_unary(
+        apply_unary(
             StdTensorOp::Reshape { to_shape },
             self,
             shape.len(),
             out_shape_hint,
-        ))
+        )
     }
 
     /// Broadcast into a larger shape with explicit dimension placement.
@@ -1755,7 +1761,7 @@ impl TracedTensor {
             dims,
             "TracedTensor::broadcast_in_dim",
         )?;
-        Ok(apply_unary(
+        apply_unary(
             StdTensorOp::BroadcastInDim {
                 shape: DimExpr::from_concrete(shape),
                 dims: dims.to_vec(),
@@ -1763,7 +1769,7 @@ impl TracedTensor {
             self,
             shape.len(),
             Some(out_shape_hint),
-        ))
+        )
     }
 
     /// Broadcast into a symbolic target shape with explicit dimension
@@ -1844,7 +1850,7 @@ impl TracedTensor {
         let used_refs: Vec<&TracedTensor> = dedup_refs.into_iter().take(max_used_idx).collect();
 
         let out_shape_hint = Some(shape.to_vec());
-        Ok(apply_unary_with_shape_refs(
+        apply_unary_with_shape_refs(
             StdTensorOp::BroadcastInDim {
                 shape: to_shape,
                 dims: dims.to_vec(),
@@ -1853,7 +1859,7 @@ impl TracedTensor {
             &used_refs,
             shape.len(),
             out_shape_hint,
-        ))
+        )
     }
 
     /// Slice with explicit start, limit, and stride per axis.
@@ -1861,7 +1867,7 @@ impl TracedTensor {
         let op = StdTensorOp::Slice(config);
         let (out_rank, out_shape_hint) =
             infer_traced_single_output_shape("TracedTensor::slice", &op, &[self])?;
-        Ok(apply_unary(op, self, out_rank, out_shape_hint))
+        apply_unary(op, self, out_rank, out_shape_hint)
     }
 
     /// Pad with zeros using StableHLO-style edge and interior padding.
@@ -1869,20 +1875,20 @@ impl TracedTensor {
         let op = StdTensorOp::Pad(config);
         let (out_rank, out_shape_hint) =
             infer_traced_single_output_shape("TracedTensor::pad", &op, &[self])?;
-        Ok(apply_unary(op, self, out_rank, out_shape_hint))
+        apply_unary(op, self, out_rank, out_shape_hint)
     }
 
     /// Reverse the order of elements along the requested axes.
     pub fn reverse(&self, axes: &[usize]) -> Result<TracedTensor> {
         validate_traced_axes(self.rank, axes, "TracedTensor::reverse")?;
-        Ok(apply_unary(
+        apply_unary(
             StdTensorOp::Reverse {
                 axes: axes.to_vec(),
             },
             self,
             self.rank,
             self.shape_hint.clone(),
-        ))
+        )
     }
 
     /// Gather slices from `self` using integer start indices.
@@ -1890,14 +1896,7 @@ impl TracedTensor {
         let op = StdTensorOp::Gather(config);
         let (out_rank, out_shape_hint) =
             infer_traced_single_output_shape("TracedTensor::gather", &op, &[self, indices])?;
-        Ok(apply_binary_preserve_input_dtypes(
-            op,
-            self,
-            indices,
-            out_rank,
-            out_shape_hint,
-            self.dtype,
-        ))
+        apply_binary_preserve_input_dtypes(op, self, indices, out_rank, out_shape_hint, self.dtype)
     }
 
     /// Scatter updates into `self` using StableHLO scatter semantics.
@@ -1915,16 +1914,16 @@ impl TracedTensor {
         )?;
         let out_dtype = crate::shape_infer::promote_dtype(self.dtype, updates.dtype);
         let operand = if self.dtype != out_dtype {
-            self.cast(out_dtype)
+            self.cast(out_dtype)?
         } else {
             self.clone()
         };
         let updates = if updates.dtype != out_dtype {
-            updates.cast(out_dtype)
+            updates.cast(out_dtype)?
         } else {
             updates.clone()
         };
-        Ok(apply_ternary_with_output_dtype(
+        apply_ternary_with_output_dtype(
             op,
             &operand,
             indices,
@@ -1932,7 +1931,7 @@ impl TracedTensor {
             out_rank,
             out_shape_hint,
             out_dtype,
-        ))
+        )
     }
 
     /// Slice using runtime start indices.
@@ -1942,18 +1941,25 @@ impl TracedTensor {
         };
         let (out_rank, out_shape_hint) =
             infer_traced_single_output_shape("TracedTensor::dynamic_slice", &op, &[self, starts])?;
-        Ok(apply_binary_preserve_input_dtypes(
-            op,
-            self,
-            starts,
-            out_rank,
-            out_shape_hint,
-            self.dtype,
-        ))
+        apply_binary_preserve_input_dtypes(op, self, starts, out_rank, out_shape_hint, self.dtype)
     }
 
     /// Keep the lower triangle and zero the rest.
-    pub fn tril(&self, k: i64) -> TracedTensor {
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_runtime::TracedTensor;
+    /// let matrix = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
+    /// let lower = matrix.tril(0)?;
+    /// assert_eq!(lower.rank, 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if traced output metadata registration fails.
+    pub fn tril(&self, k: i64) -> Result<TracedTensor> {
         apply_unary(
             StdTensorOp::Tril { k },
             self,
@@ -1963,7 +1969,21 @@ impl TracedTensor {
     }
 
     /// Keep the upper triangle and zero the rest.
-    pub fn triu(&self, k: i64) -> TracedTensor {
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_runtime::TracedTensor;
+    /// let matrix = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4])?;
+    /// let upper = matrix.triu(0)?;
+    /// assert_eq!(upper.rank, 2);
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if traced output metadata registration fails.
+    pub fn triu(&self, k: i64) -> Result<TracedTensor> {
         apply_unary(
             StdTensorOp::Triu { k },
             self,
@@ -1993,14 +2013,14 @@ impl TracedTensor {
             .shape_hint
             .as_ref()
             .map(|shape| perm.iter().map(|&p| shape[p].clone()).collect());
-        Ok(apply_unary(
+        apply_unary(
             StdTensorOp::Transpose {
                 perm: perm.to_vec(),
             },
             self,
             self.rank,
             out_shape_hint,
-        ))
+        )
     }
 
     /// Extract the diagonal along two axes.
@@ -2030,7 +2050,7 @@ impl TracedTensor {
         let op = StdTensorOp::ExtractDiag { axis_a, axis_b };
         let (out_rank, out_shape_hint) =
             infer_traced_single_output_shape("TracedTensor::extract_diag", &op, &[self])?;
-        Ok(apply_unary(op, self, out_rank, out_shape_hint))
+        apply_unary(op, self, out_rank, out_shape_hint)
     }
 
     /// Embed a vector or lower-rank tensor along a diagonal.
@@ -2056,12 +2076,12 @@ impl TracedTensor {
             out_shape.insert(axis_b, shape[axis_a].clone());
             out_shape
         });
-        Ok(apply_unary(
+        apply_unary(
             StdTensorOp::EmbedDiag { axis_a, axis_b },
             self,
             self.rank + 1,
             out_shape_hint,
-        ))
+        )
     }
 
     /// Return the runtime size of one axis as a scalar `f64` tensor.
@@ -2088,13 +2108,13 @@ impl TracedTensor {
     /// Returns an error when `axis` is out of bounds.
     pub fn shape_of(&self, axis: usize) -> Result<TracedTensor> {
         validate_traced_axis(self, axis, "TracedTensor::shape_of")?;
-        Ok(apply_unary_with_dtype(
+        apply_unary_with_dtype(
             StdTensorOp::ShapeOf { axis },
             self,
             0,
             Some(vec![]),
             DType::F64,
-        ))
+        )
     }
 
     /// Truncate this tensor along `axis` to the first `size` elements.
@@ -2130,14 +2150,14 @@ impl TracedTensor {
                 message: format!("size must be a scalar tensor, got rank {}", size.rank),
             });
         }
-        Ok(apply_binary_preserve_input_dtypes(
+        apply_binary_preserve_input_dtypes(
             StdTensorOp::DynamicTruncate { axis },
             self,
             size,
             self.rank,
             None,
             self.dtype,
-        ))
+        )
     }
 
     /// Pad this tensor with zeros along `axis` to match `reference.shape[axis]`.
@@ -2172,14 +2192,14 @@ impl TracedTensor {
             &op,
             &[self, reference],
         )?;
-        Ok(apply_binary_preserve_input_dtypes(
+        apply_binary_preserve_input_dtypes(
             op,
             self,
             reference,
             out_rank,
             out_shape_hint,
             self.dtype,
-        ))
+        )
     }
 }
 
@@ -2188,7 +2208,7 @@ pub(crate) fn apply_unary(
     input: &TracedTensor,
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     let out_dtype = inferred_output_dtype(&op, &[input.dtype], "apply_unary");
     apply_unary_with_dtype(op, input, out_rank, out_shape_hint, out_dtype)
 }
@@ -2201,13 +2221,7 @@ fn try_apply_unary(
     context: &'static str,
 ) -> Result<TracedTensor> {
     let out_dtype = try_inferred_output_dtype(&op, &[input.dtype], context)?;
-    Ok(apply_unary_with_dtype(
-        op,
-        input,
-        out_rank,
-        out_shape_hint,
-        out_dtype,
-    ))
+    apply_unary_with_dtype(op, input, out_rank, out_shape_hint, out_dtype)
 }
 
 pub(crate) fn apply_unary_with_dtype(
@@ -2216,7 +2230,7 @@ pub(crate) fn apply_unary_with_dtype(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
     out_dtype: DType,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     let mut builder = GraphBuilder::new();
     builder.add_parent(input.graph.clone());
     let input_ref = ValueRef::External(input.graph.values()[input.val].key.clone());
@@ -2224,9 +2238,9 @@ pub(crate) fn apply_unary_with_dtype(
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
     let metadata_scope =
-        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint);
+        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint)?;
 
-    TracedTensor {
+    Ok(TracedTensor {
         id: next_traced_id(),
         rank: out_rank,
         dtype: out_dtype,
@@ -2238,7 +2252,8 @@ pub(crate) fn apply_unary_with_dtype(
         extra_roots: input.extra_roots.clone(),
         checkpoint_chain: input.checkpoint_chain.clone(),
         metadata_scopes: MetadataScopeChain::with_new(metadata_scope, [&input.metadata_scopes]),
-    }
+        constraint_scopes: input.constraint_scopes.clone(),
+    })
 }
 
 /// Apply a unary-primary op that additionally references one or more
@@ -2255,7 +2270,7 @@ pub(crate) fn apply_unary_with_shape_refs(
     shape_refs: &[&TracedTensor],
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     let mut builder = GraphBuilder::new();
     builder.add_parent(input.graph.clone());
     for t in shape_refs {
@@ -2272,7 +2287,7 @@ pub(crate) fn apply_unary_with_shape_refs(
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
     let metadata_scope =
-        register_single_output_metadata(graph.as_ref(), outputs[0], input.dtype, &out_shape_hint);
+        register_single_output_metadata(graph.as_ref(), outputs[0], input.dtype, &out_shape_hint)?;
 
     let inputs_map =
         merge_traced_inputs_map(std::iter::once(input).chain(shape_refs.iter().copied()));
@@ -2288,7 +2303,7 @@ pub(crate) fn apply_unary_with_shape_refs(
             CheckpointNode::merge_chains(checkpoint_chain, t.checkpoint_chain.clone());
     }
 
-    TracedTensor {
+    Ok(TracedTensor {
         id: next_traced_id(),
         rank: out_rank,
         dtype: input.dtype,
@@ -2304,7 +2319,11 @@ pub(crate) fn apply_unary_with_shape_refs(
             std::iter::once(&input.metadata_scopes)
                 .chain(shape_refs.iter().map(|tensor| &tensor.metadata_scopes)),
         ),
-    }
+        constraint_scopes: ConstraintScopeChain::merge(
+            std::iter::once(&input.constraint_scopes)
+                .chain(shape_refs.iter().map(|tensor| &tensor.constraint_scopes)),
+        ),
+    })
 }
 
 pub(crate) fn apply_nullary(
@@ -2312,15 +2331,15 @@ pub(crate) fn apply_nullary(
     rank: usize,
     dtype: DType,
     shape_hint: Option<Vec<SymDim>>,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     let mut builder = GraphBuilder::new();
     let outputs = builder.add_operation(op, vec![], OperationRole::Primary);
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
     let metadata_scope =
-        register_single_output_metadata(graph.as_ref(), outputs[0], dtype, &shape_hint);
+        register_single_output_metadata(graph.as_ref(), outputs[0], dtype, &shape_hint)?;
 
-    TracedTensor {
+    Ok(TracedTensor {
         id: next_traced_id(),
         rank,
         dtype,
@@ -2332,7 +2351,8 @@ pub(crate) fn apply_nullary(
         extra_roots: Vec::new(),
         checkpoint_chain: None,
         metadata_scopes: MetadataScopeChain::from_scope(metadata_scope),
-    }
+        constraint_scopes: ConstraintScopeChain::empty(),
+    })
 }
 
 pub(crate) fn apply_binary(
@@ -2341,18 +2361,18 @@ pub(crate) fn apply_binary(
     rhs: &TracedTensor,
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     let input_dtype = crate::shape_infer::promote_dtype_for_binary_op(&op, lhs.dtype, rhs.dtype);
     let out_dtype = inferred_output_dtype(&op, &[lhs.dtype, rhs.dtype], "apply_binary");
 
     // Insert Convert ops when an input dtype differs from the primitive input dtype.
     let lhs = if lhs.dtype != input_dtype {
-        lhs.cast(input_dtype)
+        lhs.cast(input_dtype)?
     } else {
         lhs.clone()
     };
     let rhs = if rhs.dtype != input_dtype {
-        rhs.cast(input_dtype)
+        rhs.cast(input_dtype)?
     } else {
         rhs.clone()
     };
@@ -2372,24 +2392,17 @@ fn try_apply_binary(
     let out_dtype = try_inferred_output_dtype(&op, &[lhs.dtype, rhs.dtype], context)?;
 
     let lhs = if lhs.dtype != input_dtype {
-        lhs.cast(input_dtype)
+        lhs.cast(input_dtype)?
     } else {
         lhs.clone()
     };
     let rhs = if rhs.dtype != input_dtype {
-        rhs.cast(input_dtype)
+        rhs.cast(input_dtype)?
     } else {
         rhs.clone()
     };
 
-    Ok(apply_binary_with_output_dtype(
-        op,
-        &lhs,
-        &rhs,
-        out_rank,
-        out_shape_hint,
-        out_dtype,
-    ))
+    apply_binary_with_output_dtype(op, &lhs, &rhs, out_rank, out_shape_hint, out_dtype)
 }
 
 pub(crate) fn apply_binary_preserve_input_dtypes(
@@ -2399,7 +2412,7 @@ pub(crate) fn apply_binary_preserve_input_dtypes(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
     out_dtype: DType,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     apply_binary_with_output_dtype(op, lhs, rhs, out_rank, out_shape_hint, out_dtype)
 }
 
@@ -2452,12 +2465,12 @@ fn try_apply_ternary(
         StdTensorOp::Select => {
             let value_dtype = crate::shape_infer::promote_dtype(second.dtype, third.dtype);
             let second = if second.dtype != value_dtype {
-                second.cast(value_dtype)
+                second.cast(value_dtype)?
             } else {
                 second.clone()
             };
             let third = if third.dtype != value_dtype {
-                third.cast(value_dtype)
+                third.cast(value_dtype)?
             } else {
                 third.clone()
             };
@@ -2467,24 +2480,24 @@ fn try_apply_ternary(
             let input_dtype =
                 crate::shape_infer::promote_dtypes([first.dtype, second.dtype, third.dtype]);
             let first = if first.dtype != input_dtype {
-                first.cast(input_dtype)
+                first.cast(input_dtype)?
             } else {
                 first.clone()
             };
             let second = if second.dtype != input_dtype {
-                second.cast(input_dtype)
+                second.cast(input_dtype)?
             } else {
                 second.clone()
             };
             let third = if third.dtype != input_dtype {
-                third.cast(input_dtype)
+                third.cast(input_dtype)?
             } else {
                 third.clone()
             };
             (first, second, third)
         }
     };
-    Ok(apply_ternary_with_output_dtype(
+    apply_ternary_with_output_dtype(
         op,
         &first,
         &second,
@@ -2492,7 +2505,7 @@ fn try_apply_ternary(
         out_rank,
         out_shape_hint,
         out_dtype,
-    ))
+    )
 }
 
 fn apply_binary_with_output_dtype(
@@ -2502,7 +2515,7 @@ fn apply_binary_with_output_dtype(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
     out_dtype: DType,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     let lhs_ref = ValueRef::External(lhs.graph.values()[lhs.val].key.clone());
     let rhs_ref = ValueRef::External(rhs.graph.values()[rhs.val].key.clone());
 
@@ -2513,12 +2526,12 @@ fn apply_binary_with_output_dtype(
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
     let metadata_scope =
-        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint);
+        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint)?;
 
     let mut extra_roots = lhs.extra_roots.clone();
     extra_roots.extend(rhs.extra_roots.iter().cloned());
 
-    TracedTensor {
+    Ok(TracedTensor {
         id: next_traced_id(),
         rank: out_rank,
         dtype: out_dtype,
@@ -2536,7 +2549,11 @@ fn apply_binary_with_output_dtype(
             metadata_scope,
             [&lhs.metadata_scopes, &rhs.metadata_scopes],
         ),
-    }
+        constraint_scopes: ConstraintScopeChain::merge([
+            &lhs.constraint_scopes,
+            &rhs.constraint_scopes,
+        ]),
+    })
 }
 
 fn apply_ternary_with_output_dtype(
@@ -2547,7 +2564,7 @@ fn apply_ternary_with_output_dtype(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
     out_dtype: DType,
-) -> TracedTensor {
+) -> Result<TracedTensor> {
     let first_ref = ValueRef::External(first.graph.values()[first.val].key.clone());
     let second_ref = ValueRef::External(second.graph.values()[second.val].key.clone());
     let third_ref = ValueRef::External(third.graph.values()[third.val].key.clone());
@@ -2564,7 +2581,7 @@ fn apply_ternary_with_output_dtype(
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());
     let metadata_scope =
-        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint);
+        register_single_output_metadata(graph.as_ref(), outputs[0], out_dtype, &out_shape_hint)?;
 
     let mut extra_roots = first.extra_roots.clone();
     extra_roots.extend(second.extra_roots.iter().cloned());
@@ -2578,7 +2595,7 @@ fn apply_ternary_with_output_dtype(
         third.checkpoint_chain.clone(),
     );
 
-    TracedTensor {
+    Ok(TracedTensor {
         id: next_traced_id(),
         rank: out_rank,
         dtype: out_dtype,
@@ -2597,7 +2614,12 @@ fn apply_ternary_with_output_dtype(
                 &third.metadata_scopes,
             ],
         ),
-    }
+        constraint_scopes: ConstraintScopeChain::merge([
+            &first.constraint_scopes,
+            &second.constraint_scopes,
+            &third.constraint_scopes,
+        ]),
+    })
 }
 
 fn register_single_output_metadata(
@@ -2605,20 +2627,18 @@ fn register_single_output_metadata(
     output: LocalValueId,
     dtype: DType,
     shape_hint: &Option<Vec<SymDim>>,
-) -> GlobalMetadataScope {
+) -> Result<GlobalMetadataScope> {
     if let Some(shape) = shape_hint {
         // Fresh graph output keys are generated in this builder, so metadata
         // registration failure would indicate a global metadata invariant bug.
-        register_scoped_value_metadata(
+        register_metadata_or_internal(register_scoped_value_metadata(
             graph.values()[output].key.clone(),
             tensor_meta(dtype, shape.clone()),
-        )
-        .expect("fresh traced graph output metadata registration failed")
+        ))
     } else {
         // Fresh graph output keys are generated in this builder, so metadata
         // registration failure would indicate a global metadata invariant bug.
-        register_scoped_graph_metadata(graph, std::iter::empty())
-            .expect("fresh traced graph metadata registration failed")
+        register_metadata_or_internal(register_scoped_graph_metadata(graph, std::iter::empty()))
     }
 }
 

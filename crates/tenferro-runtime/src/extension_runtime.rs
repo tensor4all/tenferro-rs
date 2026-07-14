@@ -96,6 +96,7 @@ impl<'a, B: TensorBackend> ExtensionExecutionContext<'a, B> {
     ///     input_slots: vec![0, 1],
     ///     output_slots: vec![2],
     ///     n_slots: 3,
+    ///     shape_guards: Vec::new(),
     /// };
     /// let lhs = Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap();
     /// let rhs = Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
@@ -481,10 +482,9 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     ///
     ///     fn infer_output_meta(
     ///         &self,
-    ///         input_dtypes: &[DType],
-    ///         input_shapes: &[&[SymDim]],
+    ///         ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-    ///         Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+    ///         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     ///     }
     ///
     ///     fn host_reference(&self) -> Option<&dyn HostReference> {

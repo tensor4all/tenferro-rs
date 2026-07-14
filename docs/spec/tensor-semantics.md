@@ -161,6 +161,32 @@ The internal primitive and execution IR may continue to use the legacy
 projection, but public APIs must keep checked `convert` separate from explicit
 lossy `cast`.
 
+### Floating-point domain behavior
+
+`F32` and `F64` scalar and elementwise operations preserve IEEE-style special
+values wherever the backend can reasonably do so. Inputs at a mathematical
+domain edge produce tensor values such as `NaN`, positive or negative infinity,
+and signed zero rather than typed domain errors. This includes division and
+remainder by zero: a nonzero finite value divided by signed zero produces the
+correspondingly signed infinity, zero divided by zero produces `NaN`, and a
+floating-point remainder with a zero divisor produces `NaN`. NaN inputs and
+signed-zero results follow the operation's IEEE semantics.
+
+Backends do not preflight-scan floating-point tensors for zero, non-finite, or
+otherwise exceptional values. Integer operations retain their structured
+domain checks because integer dtypes have no IEEE special values: integer
+division and remainder by zero return `DivisionByZero`, and integer power with a
+negative exponent returns its typed domain error. Structural failures remain
+typed errors, including invalid shapes, axes, dtypes, indices, layouts, device
+placement, backend capabilities, and operation configurations.
+
+Complex operations follow the same principle where they are defined in terms
+of IEEE floating-point components. Operation-specific complex behavior remains
+governed by the relevant operation contract. CPU and CUDA must agree on result
+classification and on signed-zero behavior where the operation makes the sign
+bit contractual; any corner case where Rust, IEEE 754, NumPy, and JAX differ
+must be specified explicitly.
+
 CPU backend implementations, CPU kernels, and CPU resource pools belong in
 `tenferro-cpu`. GPU backend implementations and GPU transfer helpers belong in
 `tenferro-gpu`.

@@ -1,13 +1,107 @@
 // Run with: cargo test --features cuda -- --ignored
 use crate::{DType, Error, MemoryKind, Tensor, TypedTensor};
+use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
     GpuBackendKind, StridedSliceSpec, TensorIndexing, TensorStructural, TensorViewCanonicalization,
 };
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool, tensor_c64, tensor_f64,
-    tensor_i32, tensor_i64, upload,
+    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool, tensor_c32, tensor_c64,
+    tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
 };
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_bool_structural_ops_match_cpu() {
+    let matrix = tensor_bool(vec![2, 2], vec![true, false, false, true]);
+    let vector = tensor_bool(vec![2], vec![true, false]);
+    let scalar = tensor_bool(vec![], vec![true]);
+    let empty = tensor_bool(vec![0, 2], vec![]);
+    let empty_matrix = tensor_bool(vec![0, 0], vec![]);
+    let empty_vector = tensor_bool(vec![0], vec![]);
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    let gm = upload(&gpu, &matrix);
+    let gv = upload(&gpu, &vector);
+    let gs = upload(&gpu, &scalar);
+    let ge = upload(&gpu, &empty);
+    let gem = upload(&gpu, &empty_matrix);
+    let gev = upload(&gpu, &empty_vector);
+    macro_rules! parity {
+        ($cpu:expr, $gpu:expr) => {{
+            let expected = $cpu.unwrap();
+            let out = $gpu.unwrap();
+            let actual = download(&gpu, &out);
+            assert_tensor_close(&actual, &expected, 0.0);
+        }};
+    }
+    macro_rules! error_parity {
+        ($cpu:expr, $gpu:expr) => {{
+            assert_eq!($cpu.unwrap_err(), $gpu.unwrap_err());
+        }};
+    }
+    parity!(cpu.transpose(&matrix, &[1, 0]), gpu.transpose(&gm, &[1, 0]));
+    parity!(
+        cpu.broadcast_in_dim(&scalar, &[2, 2], &[]),
+        gpu.broadcast_in_dim(&gs, &[2, 2], &[])
+    );
+    parity!(
+        cpu.extract_diagonal(&matrix, 0, 1),
+        gpu.extract_diagonal(&gm, 0, 1)
+    );
+    parity!(
+        cpu.embed_diagonal(&vector, 0, 1),
+        gpu.embed_diagonal(&gv, 0, 1)
+    );
+    parity!(cpu.tril(&matrix, 0), gpu.tril(&gm, 0));
+    parity!(cpu.triu(&matrix, 0), gpu.triu(&gm, 0));
+    parity!(
+        cpu.concatenate(&[&matrix, &matrix], 0),
+        gpu.concatenate(&[&gm, &gm], 0)
+    );
+    parity!(cpu.reverse(&matrix, &[0]), gpu.reverse(&gm, &[0]));
+    parity!(cpu.transpose(&empty, &[1, 0]), gpu.transpose(&ge, &[1, 0]));
+    parity!(
+        cpu.broadcast_in_dim(&empty_vector, &[0, 2], &[0]),
+        gpu.broadcast_in_dim(&gev, &[0, 2], &[0])
+    );
+    parity!(
+        cpu.extract_diagonal(&empty_matrix, 0, 1),
+        gpu.extract_diagonal(&gem, 0, 1)
+    );
+    parity!(
+        cpu.embed_diagonal(&empty_vector, 0, 1),
+        gpu.embed_diagonal(&gev, 0, 1)
+    );
+    parity!(cpu.tril(&empty_matrix, 0), gpu.tril(&gem, 0));
+    parity!(cpu.triu(&empty_matrix, 0), gpu.triu(&gem, 0));
+    parity!(
+        cpu.concatenate(&[&empty, &empty], 0),
+        gpu.concatenate(&[&ge, &ge], 0)
+    );
+    parity!(cpu.reverse(&empty, &[1]), gpu.reverse(&ge, &[1]));
+
+    error_parity!(cpu.transpose(&matrix, &[0, 0]), gpu.transpose(&gm, &[0, 0]));
+    error_parity!(
+        cpu.broadcast_in_dim(&vector, &[2, 2], &[]),
+        gpu.broadcast_in_dim(&gv, &[2, 2], &[])
+    );
+    error_parity!(
+        cpu.extract_diagonal(&matrix, 0, 0),
+        gpu.extract_diagonal(&gm, 0, 0)
+    );
+    error_parity!(
+        cpu.embed_diagonal(&vector, 0, 3),
+        gpu.embed_diagonal(&gv, 0, 3)
+    );
+    error_parity!(cpu.tril(&vector, 0), gpu.tril(&gv, 0));
+    error_parity!(cpu.triu(&vector, 0), gpu.triu(&gv, 0));
+    error_parity!(
+        cpu.concatenate(&[&matrix, &matrix], 2),
+        gpu.concatenate(&[&gm, &gm], 2)
+    );
+    error_parity!(cpu.reverse(&matrix, &[2]), gpu.reverse(&gm, &[2]));
+}
 
 #[test]
 #[ignore]
@@ -222,6 +316,232 @@ fn test_cubecl_convert_matches_cpu() {
     let gpu_out = gpu.cast(&gpu_complex, DType::F64).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_cuda_explicit_cast_matrix_matches_cpu() {
+    let sources = [
+        tensor_f32(vec![4], vec![0.0, -2.75, 3.5, f32::NAN]),
+        tensor_f64(vec![4], vec![0.0, -2.75, 3.5, f64::NAN]),
+        tensor_i32(vec![4], vec![0, -2, 3, i32::MAX]),
+        tensor_i64(vec![4], vec![0, -2, 3, i64::MAX]),
+        tensor_bool(vec![4], vec![false, true, true, false]),
+        tensor_c32(
+            vec![4],
+            vec![
+                Complex32::new(0.0, 0.0),
+                Complex32::new(-2.75, 4.0),
+                Complex32::new(3.5, -1.0),
+                Complex32::new(f32::NAN, 0.0),
+            ],
+        ),
+        tensor_c64(
+            vec![4],
+            vec![
+                Complex64::new(0.0, 0.0),
+                Complex64::new(-2.75, 4.0),
+                Complex64::new(3.5, -1.0),
+                Complex64::new(f64::NAN, 0.0),
+            ],
+        ),
+    ];
+    let targets = [
+        DType::F32,
+        DType::F64,
+        DType::I32,
+        DType::I64,
+        DType::Bool,
+        DType::C32,
+        DType::C64,
+    ];
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+
+    for source in &sources {
+        let gpu_source = upload(&gpu, source);
+        for &target in &targets {
+            let expected = cpu.cast(source, target);
+            let actual = gpu.cast(&gpu_source, target);
+            match (expected, actual) {
+                (Err(expected), Err(actual)) => assert_eq!(actual, expected),
+                (Ok(expected), Ok(actual)) => {
+                    let actual = download(&gpu, &actual);
+                    assert_cast_tensor_equal(&actual, &expected);
+                }
+                (expected, actual) => panic!(
+                    "cast {:?} -> {target:?} differs: CPU={expected:?}, CUDA={actual:?}",
+                    source.dtype()
+                ),
+            }
+        }
+    }
+
+    let empty_sources = [
+        tensor_f32(vec![0], vec![]),
+        tensor_f64(vec![0], vec![]),
+        tensor_i32(vec![0], vec![]),
+        tensor_i64(vec![0], vec![]),
+        tensor_bool(vec![0], vec![]),
+        tensor_c32(vec![0], vec![]),
+        tensor_c64(vec![0], vec![]),
+    ];
+    for source in &empty_sources {
+        let gpu_source = upload(&gpu, source);
+        for &target in &targets {
+            let expected = cpu.cast(source, target).unwrap();
+            let gpu_actual = gpu.cast(&gpu_source, target).unwrap();
+            let actual = download(&gpu, &gpu_actual);
+            assert_cast_tensor_equal(&actual, &expected);
+        }
+    }
+
+    for source in [
+        tensor_f32(vec![3], vec![0.0, -2.75, 3.5]),
+        tensor_f64(vec![3], vec![0.0, -2.75, 3.5]),
+        tensor_c32(
+            vec![3],
+            vec![
+                Complex32::new(0.0, 9.0),
+                Complex32::new(-2.75, 4.0),
+                Complex32::new(3.5, -1.0),
+            ],
+        ),
+        tensor_c64(
+            vec![3],
+            vec![
+                Complex64::new(0.0, 9.0),
+                Complex64::new(-2.75, 4.0),
+                Complex64::new(3.5, -1.0),
+            ],
+        ),
+    ] {
+        let gpu_source = upload(&gpu, &source);
+        for target in [DType::I32, DType::I64] {
+            let expected = cpu.cast(&source, target).unwrap();
+            let gpu_actual = gpu.cast(&gpu_source, target).unwrap();
+            assert_cast_tensor_equal(&download(&gpu, &gpu_actual), &expected);
+        }
+    }
+
+    for (source, target) in [
+        (tensor_f64(vec![1], vec![f64::INFINITY]), DType::I32),
+        (tensor_f64(vec![1], vec![f64::INFINITY]), DType::I64),
+        (tensor_f64(vec![1], vec![i32::MAX as f64 + 1.0]), DType::I32),
+        (
+            tensor_f64(vec![1], vec![9_223_372_036_854_775_808.0]),
+            DType::I64,
+        ),
+        (
+            tensor_c64(vec![1], vec![Complex64::new(f64::NEG_INFINITY, 7.0)]),
+            DType::I64,
+        ),
+    ] {
+        let gpu_source = upload(&gpu, &source);
+        assert_eq!(
+            gpu.cast(&gpu_source, target).unwrap_err(),
+            cpu.cast(&source, target).unwrap_err()
+        );
+    }
+
+    for source in [
+        tensor_f32(vec![2], vec![-2_147_483_648.0, 2_147_483_520.0]),
+        tensor_c32(
+            vec![2],
+            vec![
+                Complex32::new(-2_147_483_648.0, 11.0),
+                Complex32::new(2_147_483_520.0, -9.0),
+            ],
+        ),
+    ] {
+        let gpu_source = upload(&gpu, &source);
+        let expected = cpu.cast(&source, DType::I32).unwrap();
+        let actual = gpu.cast(&gpu_source, DType::I32).unwrap();
+        assert_cast_tensor_equal(&download(&gpu, &actual), &expected);
+    }
+
+    for source in [
+        tensor_f32(vec![2], vec![2_147_483_648.0, f32::NAN]),
+        tensor_f32(vec![1], vec![-2_147_483_904.0]),
+        tensor_c32(
+            vec![2],
+            vec![
+                Complex32::new(2_147_483_648.0, 3.0),
+                Complex32::new(f32::NAN, 0.0),
+            ],
+        ),
+        tensor_c32(vec![1], vec![Complex32::new(-2_147_483_904.0, 3.0)]),
+    ] {
+        let gpu_source = upload(&gpu, &source);
+        assert_eq!(
+            gpu.cast(&gpu_source, DType::I32).unwrap_err(),
+            cpu.cast(&source, DType::I32).unwrap_err()
+        );
+    }
+
+    let i64_upper_exclusive = 9_223_372_036_854_775_808.0_f32;
+    let i64_upper_valid = f32::from_bits(i64_upper_exclusive.to_bits() - 1);
+    let i64_lower_valid = -i64_upper_exclusive;
+    let i64_lower_invalid = f32::from_bits(i64_lower_valid.to_bits() + 1);
+    for source in [
+        tensor_f32(vec![2], vec![i64_lower_valid, i64_upper_valid]),
+        tensor_c32(
+            vec![2],
+            vec![
+                Complex32::new(i64_lower_valid, 2.0),
+                Complex32::new(i64_upper_valid, -2.0),
+            ],
+        ),
+    ] {
+        let gpu_source = upload(&gpu, &source);
+        let expected = cpu.cast(&source, DType::I64).unwrap();
+        let actual = gpu.cast(&gpu_source, DType::I64).unwrap();
+        assert_cast_tensor_equal(&download(&gpu, &actual), &expected);
+    }
+    for source in [
+        tensor_f32(vec![1], vec![i64_upper_exclusive]),
+        tensor_f32(vec![1], vec![i64_lower_invalid]),
+        tensor_c32(vec![1], vec![Complex32::new(i64_upper_exclusive, 2.0)]),
+        tensor_c32(vec![1], vec![Complex32::new(i64_lower_invalid, 2.0)]),
+    ] {
+        let gpu_source = upload(&gpu, &source);
+        assert_eq!(
+            gpu.cast(&gpu_source, DType::I64).unwrap_err(),
+            cpu.cast(&source, DType::I64).unwrap_err()
+        );
+    }
+}
+
+fn assert_cast_tensor_equal(actual: &Tensor, expected: &Tensor) {
+    assert_eq!(actual.dtype(), expected.dtype());
+    assert_eq!(actual.shape(), expected.shape());
+    macro_rules! scalar_equal {
+        ($ty:ty, $eq:expr) => {{
+            let actual = actual.as_slice::<$ty>().unwrap();
+            let expected = expected.as_slice::<$ty>().unwrap();
+            assert!(
+                actual.iter().zip(expected).all($eq),
+                "actual={actual:?} expected={expected:?}"
+            );
+        }};
+    }
+    match actual.dtype() {
+        DType::F32 => scalar_equal!(f32, |(a, e): (&f32, &f32)| a == e
+            || (a.is_nan() && e.is_nan())),
+        DType::F64 => scalar_equal!(f64, |(a, e): (&f64, &f64)| a == e
+            || (a.is_nan() && e.is_nan())),
+        DType::I32 => scalar_equal!(i32, |(a, e): (&i32, &i32)| a == e),
+        DType::I64 => scalar_equal!(i64, |(a, e): (&i64, &i64)| a == e),
+        DType::Bool => scalar_equal!(bool, |(a, e): (&bool, &bool)| a == e),
+        DType::C32 => scalar_equal!(Complex32, |(a, e): (&Complex32, &Complex32)| {
+            (a.re == e.re || (a.re.is_nan() && e.re.is_nan()))
+                && (a.im == e.im || (a.im.is_nan() && e.im.is_nan()))
+        }),
+        DType::C64 => scalar_equal!(Complex64, |(a, e): (&Complex64, &Complex64)| {
+            (a.re == e.re || (a.re.is_nan() && e.re.is_nan()))
+                && (a.im == e.im || (a.im.is_nan() && e.im.is_nan()))
+        }),
+    }
 }
 
 #[test]

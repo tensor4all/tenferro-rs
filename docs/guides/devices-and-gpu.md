@@ -227,7 +227,7 @@ Legend:
 | `conj` | `F32`, `F64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 | `div` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 | `rem` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
-| `abs` | `F32`, `F64`, `I32`, `I64` | `C32`, `C64` | `F32->F32`, `F64->F64`, `I32->I32`, `I64->I64`, `C32->F32`, `C64->F64` | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
+| `abs` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | none | `F32->F32`, `F64->F64`, `I32->I32`, `I64->I64`, `C32->F32`, `C64->F64` | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 | `sign` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 | `maximum` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
 | `minimum` | `F32`, `F64`, `I32`, `I64` | none | same as input | result Native; read FallbackCopy; write Unsupported; strided Unsupported; accumulation Unsupported |
@@ -259,12 +259,12 @@ descriptor.
 | --- | --- | --- |
 | Allocation, upload, download | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Explicit CPU/GPU transfer only |
 | `reshape` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Metadata-only shape change |
-| `transpose`, `broadcast_in_dim`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Structural tensor operations; `Bool` is not implemented |
-| checked `convert`, explicit `cast` | `F32`, `F64`, `C32`, `C64` among those dtypes; `I32`, `I64`, and `Bool` identity only | `convert` applies the public checked conversion contract before backend dispatch; `cast` is explicit dtype projection. Conversion to or from integer or `Bool` dtypes is not implemented on CUDA except identity |
-| `gather` | operand `F32`, `F64`, `I32`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` index tensors; `I64` and `Bool` operands are not implemented |
+| `transpose`, `broadcast_in_dim`, `extract_diagonal`, `embed_diagonal`, `tril`, `triu` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Structural tensor operations |
+| checked `convert`, explicit `cast` | All CPU-supported pairs among `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | `convert` remains restricted by the public promotion lattice; explicit `cast` supports lossy narrowing, real-component projection, zero-imaginary injection, integer conversion, and nonzero Bool truthiness. Fallible real/complex-to-integer casts validate on device and return the same typed errors as CPU |
+| `gather` | operand `F32`, `F64`, `I32`, `Bool`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` index tensors; `I64` operands are not implemented |
 | `scatter` | operand/update `F32`, `F64`, `C32`, `C64`; indices `F32`, `F64`, `I32`, or `I64` | Add-scatter semantics; complex and `Bool` index tensors and integer/`Bool` operands are not implemented |
-| `slice`, `pad`, `concatenate`, `reverse` | `F32`, `F64`, `I32`, `I64`, `C32`, `C64` | Dense structural/indexing operations; `Bool` is not implemented |
-| `dynamic_slice` | input `F32`, `F64`, `I32`, `C32`, `C64`; starts `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` start tensors; `I64` and `Bool` inputs are not implemented |
+| `slice`, `pad`, `concatenate`, `reverse` | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Dense structural/indexing operations |
+| `dynamic_slice` | input `F32`, `F64`, `I32`, `Bool`, `C32`, `C64` with starts `F32`, `F64`, `I32`, or `I64` | Complex and `Bool` start tensors; `I64` inputs are not implemented |
 | `dynamic_update_slice` | No CUDA implementation | Returns an error |
 | `cholesky`, `triangular_solve`, `lu`, `svd`, `qr`, `eigh`, `solve` | `F32`, `F64`, `C32`, `C64` | cuSOLVER/cuBLAS-backed; integer and `Bool` dtypes are not implemented |
 | `full_piv_lu`, `full_piv_lu_solve` | No CUDA implementation | Returns an error |

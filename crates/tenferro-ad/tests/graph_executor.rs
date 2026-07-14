@@ -9,7 +9,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::extension::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_runtime::{
-    ad_support::{tensor_from_parts, TracedTensorParts},
+    ad_support::{tensor_from_parts, ConstraintScopeTransfer, TracedTensorParts},
     DType, GraphCompiler, GraphExecutor, SymDim, Tensor, TensorRead, TracedTensor,
 };
 use tidu::ADKey;
@@ -186,6 +186,7 @@ fn graph_executor_eval_exec_ir_rejects_wrong_input_count() {
         input_slots: vec![0, 1],
         output_slots: vec![2],
         n_slots: 3,
+        shape_guards: Vec::new(),
     };
     let inputs = vec![
         Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap(),
@@ -293,6 +294,7 @@ fn graph_compiler_rejects_unbound_tangent_even_when_primal_has_default() {
         extra_roots: Vec::new(),
         checkpoint_chain: None,
         metadata_scopes: Vec::new(),
+        constraint_scope_transfer: ConstraintScopeTransfer::empty(),
     });
 
     let err = GraphCompiler::new().compile(&output).unwrap_err();

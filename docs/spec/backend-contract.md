@@ -64,6 +64,7 @@ pub struct ExecProgram {
     pub input_slots: Vec<usize>,
     pub output_slots: Vec<usize>,
     pub n_slots: usize,
+    pub shape_guards: Vec<ShapeGuard>,
 }
 
 pub struct ExecInstruction {
@@ -86,8 +87,30 @@ pub struct ExecInstruction {
 - `output_shapes` contains one symbolic shape per output slot.
 - `output_extents` contains one extent vector per output slot.
 - `last_use` is populated after lowering and is used for buffer reclamation.
+- `shape_guards` retains normalized symbolic shape obligations that could not
+  be discharged from compile-time input metadata. Guard semantics are the
+  relation and normalized left/right expressions; diagnostic source and
+  instruction provenance are not semantic cache identity.
 - Multi-output extension instructions write directly to multiple output slots
   and may use mixed output dtypes.
+
+Before dispatching any backend, host, or extension instruction, execution must
+evaluate every retained shape guard against the concrete program-input shapes
+in stored order and return the first typed shape-constraint error on failure.
+This validation is enforced immediately after execution-program input-count
+validation and before segmentation, tensor allocation, backend-buffer
+allocation, execution-output allocation, backend sessions, host work, or
+extension dispatch. Validation may allocate small metadata vectors. The
+input-count error therefore takes precedence over a guard expression's
+`MissingInput` evaluation error.
+
+The guarantee covers owned tensor and owned value-output execution, borrowed
+and non-consuming reads, every `GraphExecutor::run*` convenience wrapper,
+segmented execution, extension-owned core-program execution through the
+nonsegmented path, and programs with no instructions. Programs with no guards
+retain their previous behavior. Compiler-cache hits reuse semantic plans while
+restoring the current compilation's guard provenance, so executor failures
+report the current extension family and final instruction index.
 
 ### ExecOp vocabulary
 
@@ -126,13 +149,16 @@ variants.
 For each computegraph instruction it:
 
 1. infers output dtype, shape, and extent metadata; extension instructions use
-   `infer_extension_output_meta()` for one `(dtype, shape)` pair per output
-   slot
+   constraint-aware output-meta inference for one `(dtype, shape)` pair per
+   output slot and collect local shape obligations
 2. resolves output extents
 3. lowers `StdTensorOp` to `ExecOp`
 4. records output slot dtype/shape/extent metadata
-5. runs the compiler passes on the resulting `ExecProgram`
-6. populates `last_use`
+5. runs the compiler passes on the resulting `ExecProgram` and populates
+   `last_use`
+6. resolves retained constraint provenance against the final instruction
+   stream, discharges compile-time-provable obligations, and stores the
+   remaining normalized obligations in `shape_guards`
 
 ### Current pass pipeline
 

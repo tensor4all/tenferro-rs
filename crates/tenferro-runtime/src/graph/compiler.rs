@@ -19,10 +19,11 @@ use super::cache::{
     DEFAULT_COMPILE_CACHE_CAPACITY,
 };
 use super::program::{GraphProgram, GraphProgramInput};
-use crate::compiler::{compile_std_to_exec_with_options, CompilerOptions};
+use crate::compiler::{compile_std_to_exec_with_options_and_constraints, CompilerOptions};
 use crate::error::{Error, Result};
 use crate::exec::ExecProgram;
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
+use crate::shape_constraint::SlotScopedShapeConstraint;
 use crate::traced::{try_concrete_shape, TracedTensor};
 
 #[derive(Clone)]
@@ -122,7 +123,8 @@ impl GraphCompiler {
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let mut compiler = GraphCompiler::new();
-    /// let program = compiler.compile(&x.neg()).unwrap();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
     /// assert_eq!(program.input_count(), 1);
     /// ```
     pub fn compile(&mut self, output: &TracedTensor) -> Result<GraphProgram> {
@@ -137,7 +139,7 @@ impl GraphCompiler {
     /// use tenferro_runtime::{GraphCompiler, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    /// let y = x.neg();
+    /// let y = x.neg().unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile_many(&[&x, &y]).unwrap();
     /// assert_eq!(program.output_count(), 2);
@@ -169,8 +171,9 @@ impl GraphCompiler {
     ///
     /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     /// let mut compiler = GraphCompiler::new();
+    /// let y = x.neg().unwrap();
     /// let program = compiler
-    ///     .compile_with_input_specs(&x.neg(), &[(&x, DType::F64, &[3])])
+    ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[3])])
     ///     .unwrap();
     /// assert_eq!(program.input_specs()[0].shape(), &[3]);
     /// ```
@@ -390,6 +393,18 @@ impl GraphCompiler {
         binding_specs: &HashMap<TensorInputKey, InputDescriptor>,
         default_inputs: &HashMap<TensorInputKey, Arc<Tensor>>,
     ) -> Result<GraphProgram> {
+        let mut constraint_scopes = Vec::new();
+        let mut seen_constraint_scopes = std::collections::HashSet::new();
+        for output in outputs {
+            for scope in output.constraint_scopes.as_slice() {
+                if seen_constraint_scopes.insert(Arc::as_ptr(scope)) {
+                    #[cfg(test)]
+                    test_support::record_constraint_scope_clones(1);
+                    constraint_scopes.push(Arc::clone(scope));
+                }
+            }
+        }
+
         let mut roots = Vec::new();
         let mut output_keys = Vec::with_capacity(outputs.len());
         for output in outputs {
@@ -401,6 +416,56 @@ impl GraphCompiler {
         let graph = materialize_merge(&view, &output_keys);
         let mut compiled = compile(&graph);
         prune_compiled_extension_outputs(&mut compiled)?;
+        let slot_by_key: HashMap<_, _> = graph
+            .values
+            .iter()
+            .enumerate()
+            .map(|(slot, value)| (value.key.clone(), slot))
+            .collect();
+        let mut scoped_constraints = Vec::new();
+        for scope in constraint_scopes {
+            for scoped in scope.constraints() {
+                let origin_slots: Vec<_> = scoped
+                    .origins
+                    .iter()
+                    .filter_map(|key| slot_by_key.get(key).copied())
+                    .collect();
+                if origin_slots.is_empty() {
+                    continue;
+                }
+                let origin_instruction = origin_slots.iter().find_map(|&slot| {
+                    graph
+                        .values
+                        .get(slot)
+                        .and_then(|value| value.producer.map(|p| p.0))
+                });
+                let mut local = scoped.local.clone();
+                if let Some(instruction_index) = origin_instruction {
+                    local.source = local.source.with_instruction(instruction_index);
+                }
+                let mut input_slots = Vec::with_capacity(scoped.inputs.len());
+                for (input_idx, key) in scoped.inputs.iter().enumerate() {
+                    let Some(slot) = slot_by_key.get(key).copied() else {
+                        return Err(Error::ShapeConstraintEvaluation {
+                            family: local.source.family_id,
+                            instruction_index: local.source.instruction_index,
+                            relation: local.relation,
+                            expression: format!("{:?}", local.lhs),
+                            cause: crate::ShapeConstraintEvalError::MissingInput {
+                                input_idx,
+                                input_count: scoped.inputs.len(),
+                            },
+                        });
+                    };
+                    input_slots.push(slot);
+                }
+                scoped_constraints.push(SlotScopedShapeConstraint {
+                    origin_slots,
+                    input_slots,
+                    local,
+                });
+            }
+        }
 
         let mut descriptors = Vec::with_capacity(graph.inputs.len());
         let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
@@ -423,11 +488,13 @@ impl GraphCompiler {
             ));
         }
 
-        let exec = compile_std_to_exec_with_options(
+        let exec = compile_std_to_exec_with_options_and_constraints(
             &compiled,
             &input_dtypes,
             &input_shapes,
             self.compiler_options,
+            &scoped_constraints,
+            &input_shapes,
         )?;
         let exec = self.get_or_compile(exec);
         Ok(GraphProgram::new(exec, descriptors))
@@ -436,7 +503,9 @@ impl GraphCompiler {
     fn get_or_compile(&mut self, exec: ExecProgram) -> ExecProgram {
         let key = compute_cache_key(&exec);
         if let Some(cached) = self.compile_cache.get(&key) {
-            return cached.clone();
+            let mut current = cached.clone();
+            current.shape_guards = exec.shape_guards;
+            return current;
         }
         self.compile_cache.put(key, exec.clone());
         exec
@@ -613,22 +682,92 @@ fn default_slices_equivalent<T: TensorScalar + PartialEq>(lhs: &Tensor, rhs: &Te
 }
 
 #[cfg(test)]
+mod constraint_scope_tests;
+
+#[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shape_constraint::ConstraintSource;
+    use crate::ShapeGuard;
     use std::any::Any;
     use std::hash::Hasher;
     use std::sync::Arc;
-    use tenferro_ops::{ext_op::ExtensionOp, SymDim};
+    use tenferro_ops::{dim_expr::DimExpr, ext_op::ExtensionOp, ShapeRelation, SymDim};
     use tenferro_tensor::{
         Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
         TypedTensor,
     };
 
     #[test]
+    fn compile_cache_hit_preserves_current_guard_provenance() {
+        use tenferro_cpu::CpuBackend;
+
+        let mut compiler = GraphCompiler::new();
+        let mut first = ExecProgram {
+            instructions: Vec::new(),
+            input_slots: vec![0],
+            output_slots: vec![0],
+            n_slots: 1,
+            shape_guards: vec![test_guard("example.first.v1", 3)],
+        };
+        let mut second = first.clone();
+        second.shape_guards = vec![test_guard("example.second.v1", 9)];
+
+        first = compiler.get_or_compile(first);
+        let cached = compiler.get_or_compile(second);
+
+        assert_eq!(compiler.compile_cache_len(), 1);
+        assert_eq!(first.shape_guards[0].source.family_id, "example.first.v1");
+        assert_eq!(
+            cached.shape_guards[0].source,
+            ConstraintSource {
+                family_id: "example.second.v1",
+                instruction_index: Some(9),
+            }
+        );
+
+        let mut executor = crate::GraphExecutor::new(CpuBackend::new());
+        let error = executor
+            .eval_exec_ir(
+                &cached,
+                vec![Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap()],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::ShapeConstraintViolation {
+                family: "example.second.v1",
+                instruction_index: Some(9),
+                lhs_value: 3,
+                rhs_value: 2,
+                ..
+            }
+        ));
+    }
+
+    fn test_guard(family_id: &'static str, instruction_index: usize) -> ShapeGuard {
+        ShapeGuard {
+            source: ConstraintSource {
+                family_id,
+                instruction_index: Some(instruction_index),
+            },
+            relation: ShapeRelation::Equal,
+            lhs: DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            },
+            rhs: DimExpr::Const(2),
+        }
+    }
+
+    #[test]
     fn compile_many_rejects_conflicting_default_inputs_for_same_key() {
         let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
-        let y1 = x.neg();
-        let mut y2 = x.neg();
+        let y1 = x.neg().unwrap();
+        let mut y2 = x.neg().unwrap();
         let key = x.input_key().expect("concrete traced tensor has input key");
         let replacement = Arc::new(Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap());
         let mut inputs = (*y2.inputs_map).clone();
@@ -719,11 +858,12 @@ mod tests {
 
         fn infer_output_meta(
             &self,
-            input_dtypes: &[DType],
-            input_shapes: &[&[SymDim]],
+            ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
         ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+            let dtype = ctx.input_dtype(0)?;
+            let shape = ctx.input_shape(0)?.to_vec();
             Ok((0..self.output_count())
-                .map(|_| (input_dtypes[0], input_shapes[0].to_vec()))
+                .map(|_| (dtype, shape.clone()))
                 .collect())
         }
 

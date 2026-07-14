@@ -1395,12 +1395,6 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
                 message: format!("interior padding must be non-negative on axis {axis}"),
             });
         }
-        if config.edge_padding_low[axis] < 0 || config.edge_padding_high[axis] < 0 {
-            return Err(crate::Error::InvalidConfig {
-                op: "pad",
-                message: format!("edge padding must be non-negative on axis {axis}"),
-            });
-        }
         let input_extent_i64 =
             i64::try_from(input_extent).map_err(|_| crate::Error::InvalidConfig {
                 op: "pad",
@@ -1446,9 +1440,9 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
     for input_value in input.as_slice()? {
         let mut in_bounds = true;
         for axis in 0..input_shape.len() {
-            let out_pos = config.edge_padding_low[axis]
-                + input_idx[axis] as i64 * (config.interior_padding[axis] + 1);
-            if !(0..out_shape[axis] as i64).contains(&out_pos) {
+            let out_pos = i128::from(config.edge_padding_low[axis])
+                + input_idx[axis] as i128 * i128::from(config.interior_padding[axis] + 1);
+            if !(0..out_shape[axis] as i128).contains(&out_pos) {
                 in_bounds = false;
                 break;
             }

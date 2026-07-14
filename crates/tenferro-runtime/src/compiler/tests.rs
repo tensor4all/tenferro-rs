@@ -14,6 +14,8 @@ use tenferro_tensor::{DType, DotGeneralConfig};
 
 #[path = "tests/dot_decomposer_tests.rs"]
 mod dot_decomposer_tests;
+#[path = "tests/shape_constraints.rs"]
+mod shape_constraints;
 
 fn dim_shape(shape: &[usize]) -> Vec<DimExpr> {
     DimExpr::from_concrete(shape)
@@ -34,6 +36,7 @@ fn make_exec_program(
         input_slots,
         output_slots,
         n_slots,
+        shape_guards: Vec::new(),
     }
 }
 
@@ -194,6 +197,21 @@ fn producer_index_by_slot_rejects_out_of_range_output_slot() {
         err,
         Error::InvalidCompiledGraph { ref message }
             if message.contains("producer output slot 3")
+    ));
+}
+
+#[test]
+fn producer_index_by_slot_rejects_duplicate_output_slot() {
+    let first = make_exec_instr(ExecOp::Negate, vec![0], vec![1]);
+    let second = make_exec_instr(ExecOp::Negate, vec![0], vec![1]);
+    let program = make_exec_program(vec![first, second], vec![0], vec![1], 2);
+
+    let err = producer_index_by_slot(&program).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidCompiledGraph { ref message }
+            if message == "producer output slot 1 has duplicate producers at instructions 0 and 1"
     ));
 }
 

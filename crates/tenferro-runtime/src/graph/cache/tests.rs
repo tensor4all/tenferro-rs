@@ -5,12 +5,14 @@ use std::sync::Arc;
 use lru::LruCache;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
-use tenferro_ops::{ShapeExtent, SymDim};
+use tenferro_ops::{ShapeExtent, ShapeRelation, SymDim};
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 
 use super::*;
+use crate::shape_constraint::ConstraintSource;
+use crate::ShapeGuard;
 
 #[test]
 fn cache_key_uses_structural_program_key() {
@@ -42,6 +44,89 @@ fn extension_payload_equality_still_breaks_payload_hash_collisions() {
 
     assert_eq!(left_key.fingerprint, right_key.fingerprint);
     assert_ne!(left_key, right_key);
+}
+
+#[test]
+fn cache_key_includes_guard_semantics_but_excludes_provenance() {
+    let without_guard = unary_program(ExecOp::Negate);
+    let mut scaled_by_two = without_guard.clone();
+    scaled_by_two.shape_guards = vec![scaled_guard(2, "example.first.v1", Some(3))];
+    let mut scaled_by_three = without_guard.clone();
+    scaled_by_three.shape_guards = vec![scaled_guard(3, "example.first.v1", Some(3))];
+    let mut different_provenance = scaled_by_two.clone();
+    different_provenance.shape_guards[0].source = ConstraintSource {
+        family_id: "example.second.v1",
+        instruction_index: Some(9),
+    };
+
+    assert_ne!(
+        compute_cache_key(&without_guard),
+        compute_cache_key(&scaled_by_two)
+    );
+    assert_ne!(
+        compute_cache_key(&scaled_by_two),
+        compute_cache_key(&scaled_by_three)
+    );
+    assert_eq!(
+        compute_cache_key(&scaled_by_two),
+        compute_cache_key(&different_provenance)
+    );
+}
+
+#[test]
+fn compile_cache_stats_include_recursive_guard_expression_storage() {
+    let base = unary_program(ExecOp::Negate);
+    let mut guarded = base.clone();
+    guarded.shape_guards = vec![ShapeGuard {
+        source: ConstraintSource {
+            family_id: "example.nested.v1",
+            instruction_index: Some(0),
+        },
+        relation: ShapeRelation::Equal,
+        lhs: DimExpr::InputDim {
+            input_idx: 0,
+            axis: 0,
+        },
+        rhs: DimExpr::mul(
+            DimExpr::add(
+                DimExpr::InputDim {
+                    input_idx: 1,
+                    axis: 0,
+                },
+                DimExpr::Const(2),
+            ),
+            DimExpr::max(
+                DimExpr::InputDim {
+                    input_idx: 2,
+                    axis: 1,
+                },
+                DimExpr::Const(3),
+            ),
+        ),
+    }];
+    let expected_guard_bytes = guarded
+        .shape_guards
+        .capacity()
+        .saturating_mul(std::mem::size_of::<ShapeGuard>())
+        .saturating_add(6 * std::mem::size_of::<DimExpr>());
+    let base_key = compute_cache_key(&base);
+    let guarded_key = compute_cache_key(&guarded);
+    let expected_guard_key_bytes = guarded_key
+        .fingerprint
+        .shape_guards
+        .capacity()
+        .saturating_mul(std::mem::size_of::<ShapeGuardKey>())
+        .saturating_add(6 * std::mem::size_of::<DimExpr>());
+
+    assert_eq!(
+        exec_program_retained_bytes(&guarded) - exec_program_retained_bytes(&base),
+        expected_guard_bytes
+    );
+    assert_eq!(
+        exec_program_key_retained_bytes(&guarded_key.fingerprint)
+            - exec_program_key_retained_bytes(&base_key.fingerprint),
+        expected_guard_key_bytes
+    );
 }
 
 #[test]
@@ -196,6 +281,7 @@ fn unary_program(op: ExecOp) -> ExecProgram {
         input_slots: vec![0],
         output_slots: vec![1],
         n_slots: 2,
+        shape_guards: Vec::new(),
     }
 }
 
@@ -219,11 +305,37 @@ fn program_with_ops(ops: Vec<ExecOp>) -> ExecProgram {
         input_slots: vec![0],
         output_slots: vec![n_slots - 1],
         n_slots,
+        shape_guards: Vec::new(),
     }
 }
 
 fn extension_program(payload: u8) -> ExecProgram {
     unary_program(ExecOp::Extension(Arc::new(CollidingExtension { payload })))
+}
+
+fn scaled_guard(
+    scale: usize,
+    family_id: &'static str,
+    instruction_index: Option<usize>,
+) -> ShapeGuard {
+    ShapeGuard {
+        source: ConstraintSource {
+            family_id,
+            instruction_index,
+        },
+        relation: ShapeRelation::Equal,
+        lhs: DimExpr::InputDim {
+            input_idx: 0,
+            axis: 0,
+        },
+        rhs: DimExpr::mul(
+            DimExpr::Const(scale),
+            DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            },
+        ),
+    }
 }
 
 fn dot_config() -> DotGeneralConfig {
@@ -309,9 +421,8 @@ impl ExtensionOp for CollidingExtension {
 
     fn infer_output_meta(
         &self,
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
+        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(input_dtypes[0], input_shapes[0].to_vec())])
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
 }

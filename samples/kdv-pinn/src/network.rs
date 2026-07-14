@@ -67,7 +67,7 @@ impl Mlp {
         for (i, layer) in self.layers.iter().enumerate() {
             y = layer.forward(&y)?;
             if i < self.layers.len() - 1 {
-                y = y.tanh();
+                y = y.tanh()?;
             }
         }
         Ok(y)

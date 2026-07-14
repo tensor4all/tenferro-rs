@@ -47,11 +47,7 @@ where
     };
     for input in &typed_inputs[1..] {
         if input.shape() != first.shape() {
-            return Err(crate::Error::ShapeMismatch {
-                op: "fused_elementwise",
-                lhs: first.shape().to_vec(),
-                rhs: input.shape().to_vec(),
-            });
+            return Ok(None);
         }
     }
 
