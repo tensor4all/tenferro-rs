@@ -36,3 +36,18 @@ Local benchmark verification on 2026-07-14:
   usable node (64 allowed logical CPUs). Live two-node timing evidence is
   therefore unavailable in this environment; fixture/unit tests cover sparse
   multi-node resolution and disjoint arbitration.
+
+Repository verification evidence:
+
+- `cargo test --workspace --release` passed, including workspace doctests.
+- `cargo llvm-cov --workspace --release --json --output-path coverage.json --
+  --test-threads=1` passed; `scripts/check-coverage.py` reported 159/159 files
+  meeting thresholds (3 excluded).
+- The first parallel coverage run exposed a pre-existing graph-metadata registry
+  race in one linalg test. The same instrumented test passed alone; serializing
+  the coverage harness made the full run deterministic. Normal parallel release
+  tests passed.
+- `cargo doc --workspace --no-deps` and `scripts/check-docs-site.py` passed,
+  including guide dependency snippets and 13 workspace API crates.
+- CI-equivalent workspace and tropical-extension clippy commands passed with
+  `-D warnings`.

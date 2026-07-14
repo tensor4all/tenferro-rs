@@ -26,9 +26,9 @@ pub(crate) fn current_cpu() -> Result<CpuId, String> {
         // SAFETY: `sched_getcpu` takes no arguments and returns the calling
         // thread's current logical CPU or a negative error sentinel.
         let cpu = unsafe { sched_getcpu() };
-        return usize::try_from(cpu)
+        usize::try_from(cpu)
             .map(CpuId::new)
-            .map_err(|_| std::io::Error::last_os_error().to_string());
+            .map_err(|_| std::io::Error::last_os_error().to_string())
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -67,9 +67,9 @@ fn set_current_thread_affinity(cpus: &CpuSet) -> Result<(), String> {
         // matches its byte length, and pid 0 selects the calling thread.
         let rc =
             unsafe { sched_setaffinity(0, mask.len(), mask.as_ptr().cast::<core::ffi::c_void>()) };
-        return (rc == 0)
+        (rc == 0)
             .then_some(())
-            .ok_or_else(|| std::io::Error::last_os_error().to_string());
+            .ok_or_else(|| std::io::Error::last_os_error().to_string())
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {

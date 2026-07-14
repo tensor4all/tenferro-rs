@@ -449,13 +449,13 @@ pub(crate) fn parse_linux_cpu_list(input: &str) -> Result<CpuSet, CpuTopologyErr
 pub fn discover_cpu_topology() -> Result<CpuTopology, CpuTopologyError> {
     #[cfg(target_os = "linux")]
     {
-        return discover_from(&LinuxTopologySource);
+        discover_from(&LinuxTopologySource)
     }
     #[cfg(not(target_os = "linux"))]
     {
         let allowed = crate::process_cpu_affinity().unwrap_or_else(|| {
             CpuSet::new((0..crate::available_parallelism()).map(CpuId::new))
-                .expect("available_parallelism always returns at least one CPU")
+                .unwrap_or_else(|_| CpuSet::singleton(CpuId::new(0)))
         });
         Ok(CpuTopology::all_allowed(allowed))
     }
