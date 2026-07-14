@@ -59,6 +59,14 @@ class CreateResult:
     body: bytes
 
 
+class AssignedGpuError(PermanentRunPodError):
+    """A created pod reported an unsafe or unverifiable assigned GPU."""
+
+    def __init__(self, message: str, result: CreateResult) -> None:
+        super().__init__(message)
+        self.result = result
+
+
 Transport = Callable[
     [bytes, float], tuple[int, Mapping[str, str], bytes]
 ]
@@ -255,18 +263,19 @@ def create_pod(
                         status, body, gpu_tier=request.tier_name
                     )
                     if request.gpu_type_ids and not result.gpu_type_id:
-                        raise PermanentRunPodError(
+                        raise AssignedGpuError(
                             "RunPod response is missing assigned GPU for "
-                            f"selected tier {request.tier_name}"
+                            f"selected tier {request.tier_name}",
+                            result,
                         )
                     if (
                         result.gpu_type_id
                         and request.gpu_type_ids
                         and result.gpu_type_id not in request.gpu_type_ids
                     ):
-                        raise PermanentRunPodError(
-                            "RunPod assigned GPU outside selected tier: "
-                            f"{result.gpu_type_id}"
+                        raise AssignedGpuError(
+                            "RunPod assigned GPU outside selected tier",
+                            result,
                         )
                     return result
                 message = redacted_error_message(body, secrets=secrets)
@@ -280,7 +289,8 @@ def create_pod(
                         print(
                             "RunPod capacity unavailable in tier "
                             f"{request.tier_name}; trying "
-                            f"{requests[tier_index + 1].tier_name}"
+                            f"{requests[tier_index + 1].tier_name}; "
+                            f"error={str(failure)!r}"
                         )
                         break
                     raise failure
@@ -303,7 +313,7 @@ def create_pod(
             bounded_delay = min(delay, max(0.0, deadline - now))
             print(
                 f"RunPod transient failure in tier {request.tier_name}; "
-                f"retrying after {bounded_delay:.1f}s: {failure}"
+                f"retrying after {bounded_delay:.1f}s: {str(failure)!r}"
             )
             sleep(bounded_delay)
     raise AssertionError("unreachable retry loop")
@@ -340,6 +350,18 @@ def publish_github_result(
             summary.write("### RunPod GPU selection\n\n")
             summary.write(f"- Price tier: {gpu_tier}\n")
             summary.write(f"- Selected GPU: {gpu_type_id}\n")
+
+
+def publish_cleanup_pod_id(
+    result: CreateResult, output_path: Path | None
+) -> None:
+    """Publish only a validated pod ID so a rejected pod can be deleted."""
+
+    if "\n" in result.pod_id or "\r" in result.pod_id:
+        raise PermanentRunPodError("unsafe GitHub output value for pod_id")
+    if output_path is not None:
+        with output_path.open("a", encoding="utf-8") as output:
+            output.write(f"pod_id={result.pod_id}\n")
 
 
 def _http_transport(url: str, api_key: str) -> Transport:
@@ -415,12 +437,21 @@ def main() -> int:
                     gpu_type_ids,
                 )
             )
-        result = create_pod(
-            config,
-            requests,
-            transport=_http_transport(str(config["api_url"]), api_key),
-            secrets=(api_key, jit_config),
-        )
+        try:
+            result = create_pod(
+                config,
+                requests,
+                transport=_http_transport(str(config["api_url"]), api_key),
+                secrets=(api_key, jit_config),
+            )
+        except AssignedGpuError as error:
+            args.response_file.write_bytes(error.result.body)
+            output_path = os.environ.get("GITHUB_OUTPUT")
+            publish_cleanup_pod_id(
+                error.result,
+                Path(output_path) if output_path else None,
+            )
+            raise
         args.response_file.write_bytes(result.body)
         output_path = os.environ.get("GITHUB_OUTPUT")
         summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -440,7 +471,7 @@ def main() -> int:
         ContractError,
         RunPodError,
     ) as error:
-        print(f"RunPod create failed: {error}", file=sys.stderr)
+        print(f"RunPod create failed: {str(error)!r}", file=sys.stderr)
         return 1
     return 0
 

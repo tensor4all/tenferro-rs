@@ -107,6 +107,19 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("${RUNPOD_GPU_TYPE_ID}", run_script)
         self.assertIn("${RUNPOD_GPU_TIER}", run_script)
 
+    def test_runpod_rejected_gpu_still_reaches_cleanup(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        client = read("scripts/ci/runpod_client.py")
+        main = client[client.index("def main()") :]
+        self.assertIn("except AssignedGpuError as error:", main)
+        self.assertIn("publish_cleanup_pod_id(", main)
+        startup_cleanup = text[
+            text.index("      - name: Delete pod if runner startup failed") :
+            text.index("  run-gpu-tests:")
+        ]
+        self.assertIn("steps.create_pod.outputs.pod_id != ''", startup_cleanup)
+        self.assertIn("POD_ID: ${{ steps.create_pod.outputs.pod_id }}", startup_cleanup)
+
     def test_runpod_cache_key_uses_content_not_ref_identity(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         key_line = next(

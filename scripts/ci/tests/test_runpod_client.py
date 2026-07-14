@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.ci.runpod_client import (
+    AssignedGpuError,
     CreateRequest,
     CreateResult,
     PermanentRunPodError,
@@ -16,6 +17,7 @@ from scripts.ci.runpod_client import (
     create_pod,
     is_capacity_failure,
     parse_create_response,
+    publish_cleanup_pod_id,
     publish_github_result,
     redacted_error_message,
 )
@@ -76,8 +78,8 @@ class RunPodClientTests(unittest.TestCase):
 
     def test_create_rejects_gpu_outside_selected_tier(self) -> None:
         with self.assertRaisesRegex(
-            PermanentRunPodError, "outside selected tier"
-        ):
+            AssignedGpuError, "outside selected tier"
+        ) as caught:
             create_pod(
                 CONFIG,
                 [
@@ -94,6 +96,10 @@ class RunPodClientTests(unittest.TestCase):
                     b'{"gpuTypeId":"NVIDIA H100 80GB HBM3"}}',
                 ),
             )
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            publish_cleanup_pod_id(caught.exception.result, output)
+            self.assertEqual(output.read_text(), "pod_id=pod-1\n")
 
     def test_create_requires_assigned_gpu_for_selected_tier(self) -> None:
         with self.assertRaisesRegex(

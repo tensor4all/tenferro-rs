@@ -46,6 +46,8 @@ control plane against schema drift and deterministic request failures.
 - Bound every HTTP request by the remaining global deadline, reject a missing
   or out-of-tier assigned GPU, and pass provider output to shell through the
   step environment rather than interpolating it into shell source.
+- Preserve the pod ID for trusted cleanup even when assigned-GPU validation
+  rejects an otherwise successful create response.
 - Exclude ref/SHA identity from the CUDA archive cache key and include all
   content/configuration inputs that affect the archive.
 - Replace raw PR ref/SHA recovery with a PR-number command that dispatches only
