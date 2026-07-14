@@ -67,7 +67,9 @@ requests and sleeps share a 60-second deadline, honor numeric `Retry-After`,
 and use bounded jittered backoff. Request diagnostics redact the JIT
 configuration and startup command. The `Start RunPod org runner` job summary
 records the selected price tier and provider GPU ID, and the GPU job prints the
-same values next to `nvidia-smi` so the assigned machine remains auditable.
+same values next to `nvidia-smi` so the assigned machine remains auditable. A
+successful response without an assigned GPU ID, or with an ID outside the
+requested tier, is rejected before the external runner starts.
 
 The CUDA test archive key is content-addressed across source, manifests,
 tests, lockfile, workflow, and RunPod configuration. It excludes branch, ref,

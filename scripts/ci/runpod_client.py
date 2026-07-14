@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import enum
+import html
 import json
 import os
 import random
@@ -45,6 +46,7 @@ class CreateRequest:
 
     tier_name: str
     payload: bytes
+    gpu_type_ids: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -57,7 +59,9 @@ class CreateResult:
     body: bytes
 
 
-Transport = Callable[[bytes], tuple[int, Mapping[str, str], bytes]]
+Transport = Callable[
+    [bytes, float], tuple[int, Mapping[str, str], bytes]
+]
 
 _CAPACITY_MESSAGES = (
     "does not have the resources to deploy your pod",
@@ -227,27 +231,51 @@ def create_pod(
     deadline = monotonic() + float(config["create_deadline_seconds"])
     for tier_index, request in enumerate(requests):
         for attempt in range(1, attempts_per_tier + 1):
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise RetryableRunPodError(
+                    "RunPod create deadline expired"
+                )
             print(
                 f"RunPod create tier={request.tier_name} "
                 f"tier_attempt={attempt}/{attempts_per_tier}"
             )
             headers: Mapping[str, str] = {}
             try:
-                status, headers, body = transport(request.payload)
+                status, headers, body = transport(
+                    request.payload, remaining
+                )
             except OSError as error:
                 failure: RunPodError = RetryableRunPodError(
                     f"transport failure: {error}"
                 )
             else:
                 if 200 <= status < 300:
-                    return parse_create_response(
+                    result = parse_create_response(
                         status, body, gpu_tier=request.tier_name
                     )
+                    if request.gpu_type_ids and not result.gpu_type_id:
+                        raise PermanentRunPodError(
+                            "RunPod response is missing assigned GPU for "
+                            f"selected tier {request.tier_name}"
+                        )
+                    if (
+                        result.gpu_type_id
+                        and request.gpu_type_ids
+                        and result.gpu_type_id not in request.gpu_type_ids
+                    ):
+                        raise PermanentRunPodError(
+                            "RunPod assigned GPU outside selected tier: "
+                            f"{result.gpu_type_id}"
+                        )
+                    return result
                 message = redacted_error_message(body, secrets=secrets)
                 if is_capacity_failure(status, body):
                     failure = RetryableRunPodError(
                         f"RunPod capacity unavailable: {message}"
                     )
+                    if monotonic() >= deadline:
+                        raise failure
                     if tier_index + 1 < len(requests):
                         print(
                             "RunPod capacity unavailable in tier "
@@ -272,7 +300,12 @@ def create_pod(
                 delay = backoff_seconds(
                     attempt, base=base, cap=cap, jitter=jitter
                 )
-            sleep(min(delay, max(0.0, deadline - now)))
+            bounded_delay = min(delay, max(0.0, deadline - now))
+            print(
+                f"RunPod transient failure in tier {request.tier_name}; "
+                f"retrying after {bounded_delay:.1f}s: {failure}"
+            )
+            sleep(bounded_delay)
     raise AssertionError("unreachable retry loop")
 
 
@@ -299,16 +332,20 @@ def publish_github_result(
             output.write(f"gpu_type_id={result.gpu_type_id}\n")
             output.write(f"gpu_tier={result.gpu_tier}\n")
     if summary_path is not None:
+        gpu_tier = html.escape(result.gpu_tier).replace("`", "&#96;")
+        gpu_type_id = html.escape(
+            result.gpu_type_id or "unknown"
+        ).replace("`", "&#96;")
         with summary_path.open("a", encoding="utf-8") as summary:
             summary.write("### RunPod GPU selection\n\n")
-            summary.write(f"- Price tier: `{result.gpu_tier}`\n")
-            summary.write(
-                f"- Selected GPU: `{result.gpu_type_id or 'unknown'}`\n"
-            )
+            summary.write(f"- Price tier: {gpu_tier}\n")
+            summary.write(f"- Selected GPU: {gpu_type_id}\n")
 
 
 def _http_transport(url: str, api_key: str) -> Transport:
-    def send(payload: bytes) -> tuple[int, Mapping[str, str], bytes]:
+    def send(
+        payload: bytes, timeout: float
+    ) -> tuple[int, Mapping[str, str], bytes]:
         request = urllib.request.Request(
             url,
             data=payload,
@@ -321,7 +358,7 @@ def _http_transport(url: str, api_key: str) -> Transport:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.status, dict(response.headers.items()), response.read()
         except urllib.error.HTTPError as error:
             return error.code, dict(error.headers.items()), error.read()
@@ -372,7 +409,11 @@ def main() -> int:
                 + json.dumps(_redact(payload), sort_keys=True)
             )
             requests.append(
-                CreateRequest(tier_name, json.dumps(payload).encode())
+                CreateRequest(
+                    tier_name,
+                    json.dumps(payload).encode(),
+                    gpu_type_ids,
+                )
             )
         result = create_pod(
             config,

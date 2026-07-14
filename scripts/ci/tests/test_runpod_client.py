@@ -52,9 +52,9 @@ class RunPodClientTests(unittest.TestCase):
                 "gpu_tier=premium\n",
             )
             self.assertIn(
-                "Selected GPU: `NVIDIA L40S`", summary.read_text()
+                "Selected GPU: NVIDIA L40S", summary.read_text()
             )
-            self.assertIn("Price tier: `premium`", summary.read_text())
+            self.assertIn("Price tier: premium", summary.read_text())
 
     def test_publish_github_result_rejects_multiline_provider_values(
         self,
@@ -73,6 +73,62 @@ class RunPodClientTests(unittest.TestCase):
                 output_path=Path("unused-output"),
                 summary_path=None,
             )
+
+    def test_create_rejects_gpu_outside_selected_tier(self) -> None:
+        with self.assertRaisesRegex(
+            PermanentRunPodError, "outside selected tier"
+        ):
+            create_pod(
+                CONFIG,
+                [
+                    CreateRequest(
+                        "premium",
+                        b"premium",
+                        ("NVIDIA L40S",),
+                    )
+                ],
+                transport=lambda _payload, _timeout: (
+                    201,
+                    {},
+                    b'{"id":"pod-1","machine":'
+                    b'{"gpuTypeId":"NVIDIA H100 80GB HBM3"}}',
+                ),
+            )
+
+    def test_create_requires_assigned_gpu_for_selected_tier(self) -> None:
+        with self.assertRaisesRegex(
+            PermanentRunPodError, "missing assigned GPU"
+        ):
+            create_pod(
+                CONFIG,
+                [
+                    CreateRequest(
+                        "premium",
+                        b"premium",
+                        ("NVIDIA L40S",),
+                    )
+                ],
+                transport=lambda _payload, _timeout: (
+                    201,
+                    {},
+                    b'{"id":"pod-1"}',
+                ),
+            )
+
+    def test_summary_escapes_markdown_from_provider_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            summary = Path(directory) / "summary"
+            publish_github_result(
+                CreateResult(
+                    pod_id="pod-1",
+                    gpu_type_id="GPU `spoof`",
+                    gpu_tier="premium",
+                    body=b"{}",
+                ),
+                output_path=None,
+                summary_path=summary,
+            )
+            self.assertIn("GPU &#96;spoof&#96;", summary.read_text())
 
     def test_capacity_failure_requires_server_error_and_known_message(
         self,
@@ -110,7 +166,9 @@ class RunPodClientTests(unittest.TestCase):
         )
         seen: list[bytes] = []
 
-        def transport(payload: bytes) -> tuple[int, dict[str, str], bytes]:
+        def transport(
+            payload: bytes, _timeout: float
+        ) -> tuple[int, dict[str, str], bytes]:
             seen.append(payload)
             return next(responses)
 
@@ -168,7 +226,9 @@ class RunPodClientTests(unittest.TestCase):
     def test_permanent_error_is_not_retried(self) -> None:
         calls = 0
 
-        def transport(_payload: bytes) -> tuple[int, dict[str, str], bytes]:
+        def transport(
+            _payload: bytes, _timeout: float
+        ) -> tuple[int, dict[str, str], bytes]:
             nonlocal calls
             calls += 1
             return 400, {}, b'{"error":"bad gpu id"}'
@@ -194,7 +254,7 @@ class RunPodClientTests(unittest.TestCase):
         result = create_pod(
             CONFIG,
             [CreateRequest("cost-preferred", b"{}")],
-            transport=lambda _payload: next(responses),
+            transport=lambda _payload, _timeout: next(responses),
             sleep=sleeps.append,
             jitter=lambda: 0.5,
         )
@@ -218,7 +278,9 @@ class RunPodClientTests(unittest.TestCase):
         seen: list[bytes] = []
         sleeps: list[float] = []
 
-        def transport(payload: bytes) -> tuple[int, dict[str, str], bytes]:
+        def transport(
+            payload: bytes, _timeout: float
+        ) -> tuple[int, dict[str, str], bytes]:
             seen.append(payload)
             return next(responses)
 
@@ -236,7 +298,9 @@ class RunPodClientTests(unittest.TestCase):
     def test_generic_service_failure_stops_after_one_retry(self) -> None:
         calls = 0
 
-        def transport(_payload: bytes) -> tuple[int, dict[str, str], bytes]:
+        def transport(
+            _payload: bytes, _timeout: float
+        ) -> tuple[int, dict[str, str], bytes]:
             nonlocal calls
             calls += 1
             if calls == 3:
@@ -254,7 +318,7 @@ class RunPodClientTests(unittest.TestCase):
         self.assertEqual(calls, 2)
 
     def test_creation_deadline_caps_retry_sleep(self) -> None:
-        ticks = iter([0.0, 59.0, 60.0])
+        ticks = iter([0.0, 0.0, 59.0, 60.0])
         sleeps: list[float] = []
         with self.assertRaises(RetryableRunPodError):
             create_pod(
@@ -264,7 +328,7 @@ class RunPodClientTests(unittest.TestCase):
                     "create_deadline_seconds": 60,
                 },
                 [CreateRequest("cost-preferred", b"cheap")],
-                transport=lambda _payload: (
+                transport=lambda _payload, _timeout: (
                     503,
                     {"Retry-After": "30"},
                     b"{}",
@@ -274,15 +338,44 @@ class RunPodClientTests(unittest.TestCase):
             )
         self.assertEqual(sleeps, [1.0])
 
+    def test_creation_deadline_caps_each_transport_timeout(self) -> None:
+        ticks = iter([0.0, 0.0, 59.0, 59.0])
+        timeouts: list[float] = []
+        responses = iter(
+            [
+                (503, {}, b'{"error":"busy"}'),
+                (201, {}, b'{"id":"pod-1"}'),
+            ]
+        )
+
+        def transport(
+            _payload: bytes, timeout: float
+        ) -> tuple[int, dict[str, str], bytes]:
+            timeouts.append(timeout)
+            return next(responses)
+
+        result = create_pod(
+            CONFIG,
+            [CreateRequest("cost-preferred", b"cheap")],
+            transport=transport,
+            sleep=lambda _delay: None,
+            monotonic=lambda: next(ticks),
+        )
+
+        self.assertEqual(result.pod_id, "pod-1")
+        self.assertEqual(timeouts, [60.0, 1.0])
+
     def test_transport_failure_is_retryable_but_bounded(self) -> None:
         calls = 0
 
-        def transport(_payload: bytes) -> tuple[int, dict[str, str], bytes]:
+        def transport(
+            _payload: bytes, _timeout: float
+        ) -> tuple[int, dict[str, str], bytes]:
             nonlocal calls
             calls += 1
             raise OSError("connection reset")
 
-        config: dict[str, Any] = CONFIG | {"max_create_attempts": 2}
+        config: dict[str, Any] = CONFIG | {"same_tier_retries": 1}
         with self.assertRaisesRegex(RetryableRunPodError, "transport failure"):
             create_pod(
                 config,

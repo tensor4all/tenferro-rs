@@ -97,6 +97,15 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("needs.start-runpod.outputs.gpu_type_id", text)
         self.assertIn("needs.start-runpod.outputs.gpu_tier", text)
         self.assertIn("nvidia-smi --query-gpu=index,name", text)
+        check_machine = text[
+            text.index("      - name: Check machine") : text.index(
+                "      - name: Cache cuTENSOR redistributable"
+            )
+        ]
+        run_script = check_machine[check_machine.index("        run: |") :]
+        self.assertNotIn("${{ needs.start-runpod.outputs", run_script)
+        self.assertIn("${RUNPOD_GPU_TYPE_ID}", run_script)
+        self.assertIn("${RUNPOD_GPU_TIER}", run_script)
 
     def test_runpod_cache_key_uses_content_not_ref_identity(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
