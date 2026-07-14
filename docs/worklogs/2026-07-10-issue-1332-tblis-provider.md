@@ -106,7 +106,7 @@ the now-superseded TBLIS backend-kind prototype, a private TBLIS FFI leaf, and d
 - `cargo test --workspace --release` passed.
 - `cargo llvm-cov --workspace --release --json --output-path coverage.json`
   passed, and `python3 scripts/check-coverage.py coverage.json` reported all
-  150 checked files above their thresholds.
+  159 checked files above their thresholds.
 - `cargo doc --workspace --no-deps` passed. The system `python3` is 3.9, so
   `python3.11 scripts/check-docs-site.py` was used;
   it verified 13 workspace library crates and four guide dependency snippets.
@@ -136,6 +136,10 @@ the now-superseded TBLIS backend-kind prototype, a private TBLIS FFI leaf, and d
   public placement contract. Platform-independent placement resolver tests pass
   `managed_affinity_available = true` explicitly, while the portable capability
   test checks that explicit placement is rejected on unsupported hosts.
+- Portable affinity and engine tests exercise sparse affinity-mask construction,
+  unsupported worker pinning, compatibility-context ownership, and the typed
+  explicit-placement failure on macOS. Workspace coverage reports 92.4% for
+  `affinity.rs`, 79.3% for `backend.rs`, and 87.2% for `engine.rs`.
 
 ## Provider-source integration review
 
