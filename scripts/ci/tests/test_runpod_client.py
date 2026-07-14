@@ -98,10 +98,17 @@ class RunPodClientTests(unittest.TestCase):
         self.assertEqual(delays, [2.5, 5.0, 10.0, 20.0, 30.0, 30.0, 30.0])
 
     def test_payload_preserves_secure_trust_boundary(self) -> None:
-        payload = build_pod_payload(CONFIG, "image", "startup", "jit")
+        gpu_type_ids = CONFIG["gpu_tiers"][0]["gpu_type_ids"]
+        payload = build_pod_payload(
+            CONFIG,
+            "image",
+            "startup",
+            "jit",
+            gpu_type_ids,
+        )
         self.assertEqual(payload["cloudType"], "SECURE")
         self.assertIs(payload["interruptible"], False)
-        self.assertEqual(payload["gpuTypeIds"], CONFIG["gpu_type_ids"])
+        self.assertEqual(payload["gpuTypeIds"], gpu_type_ids)
         self.assertEqual(payload["env"]["RUNNER_JIT_CONFIG"], "jit")
         self.assertEqual(payload["dockerStartCmd"], ["startup"])
 

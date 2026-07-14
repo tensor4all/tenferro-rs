@@ -21,6 +21,51 @@ class ContractError(RuntimeError):
     """The RunPod schema or repository configuration violates the contract."""
 
 
+def configured_gpu_tiers(
+    config: Mapping[str, object],
+) -> list[tuple[str, tuple[str, ...]]]:
+    """Validate and return ordered, disjoint GPU tiers."""
+
+    value = config.get("gpu_tiers")
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes))
+        or not value
+    ):
+        raise ContractError(
+            "runpod_config.json gpu_tiers must be a nonempty array"
+        )
+    tiers: list[tuple[str, tuple[str, ...]]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise ContractError("each GPU tier must be an object")
+        name = item.get("name")
+        ids = item.get("gpu_type_ids")
+        if not isinstance(name, str) or not name:
+            raise ContractError("each GPU tier requires a nonempty name")
+        if (
+            not isinstance(ids, Sequence)
+            or isinstance(ids, (str, bytes))
+            or not ids
+        ):
+            raise ContractError(
+                f"GPU tier {name} requires nonempty gpu_type_ids"
+            )
+        if any(not isinstance(gpu_id, str) or not gpu_id for gpu_id in ids):
+            raise ContractError(
+                f"GPU tier {name} IDs must be nonempty strings"
+            )
+        duplicate = seen.intersection(ids)
+        if duplicate:
+            raise ContractError(
+                f"duplicate GPU ID across tiers: {sorted(duplicate)}"
+            )
+        seen.update(ids)
+        tiers.append((name, tuple(ids)))
+    return tiers
+
+
 def resolve_local_ref(
     document: Mapping[str, object], ref: str
 ) -> Mapping[str, object]:
@@ -163,14 +208,10 @@ def main() -> int:
     args = _parse_args()
     try:
         config = _load_json(args.config)
-        configured_ids = config.get("gpu_type_ids")
-        if (
-            not isinstance(configured_ids, Sequence)
-            or isinstance(configured_ids, (str, bytes))
-            or not configured_ids
-            or any(not isinstance(value, str) for value in configured_ids)
-        ):
-            raise ContractError("runpod_config.json gpu_type_ids must be nonempty strings")
+        tiers = configured_gpu_tiers(config)
+        configured_ids = [
+            gpu_id for _name, gpu_ids in tiers for gpu_id in gpu_ids
+        ]
         if args.schema_file:
             schema = _load_json(args.schema_file)
         else:

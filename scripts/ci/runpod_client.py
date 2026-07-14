@@ -17,6 +17,8 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from scripts.ci.runpod_contract import ContractError, configured_gpu_tiers
+
 
 class RetryClass(enum.Enum):
     """Whether an HTTP failure may be retried safely."""
@@ -95,6 +97,7 @@ def build_pod_payload(
     image_name: str,
     startup_script: str,
     jit_config: str,
+    gpu_type_ids: Sequence[str],
 ) -> dict[str, object]:
     """Build the reviewed SECURE Cloud request from repository configuration."""
 
@@ -103,7 +106,7 @@ def build_pod_payload(
         "computeType": config["compute_type"],
         "name": f"tenferro-rs-gpu-ci-{os.environ.get('GITHUB_RUN_ID', 'local')}",
         "imageName": image_name,
-        "gpuTypeIds": config["gpu_type_ids"],
+        "gpuTypeIds": list(gpu_type_ids),
         "gpuTypePriority": config["gpu_type_priority"],
         "gpuCount": config["gpu_count"],
         "containerDiskInGb": config["container_disk_gb"],
@@ -323,20 +326,26 @@ def main() -> int:
             raise PermanentRunPodError(
                 "RUNPOD_API_KEY and RUNNER_JIT_CONFIG are required"
             )
-        payload = build_pod_payload(
-            config,
-            args.image_name,
-            args.startup_script.read_text(encoding="utf-8"),
-            jit_config,
-        )
-        print(
-            "RunPod request payload, secrets redacted: "
-            + json.dumps(_redact(payload), sort_keys=True)
-        )
-        encoded = json.dumps(payload).encode()
+        startup_script = args.startup_script.read_text(encoding="utf-8")
+        requests: list[CreateRequest] = []
+        for tier_name, gpu_type_ids in configured_gpu_tiers(config):
+            payload = build_pod_payload(
+                config,
+                args.image_name,
+                startup_script,
+                jit_config,
+                gpu_type_ids,
+            )
+            print(
+                f"RunPod request tier={tier_name}, secrets redacted: "
+                + json.dumps(_redact(payload), sort_keys=True)
+            )
+            requests.append(
+                CreateRequest(tier_name, json.dumps(payload).encode())
+            )
         result = create_pod(
             config,
-            [CreateRequest("cost-preferred", encoded)],
+            requests,
             transport=_http_transport(str(config["api_url"]), api_key),
             secrets=(api_key, jit_config),
         )
@@ -347,7 +356,14 @@ def main() -> int:
                 output.write(f"gpu_type_id={result.gpu_type_id}\n")
         print(f"Created RunPod pod: {result.pod_id}")
         print(f"RunPod assigned GPU type: {result.gpu_type_id or 'unknown'}")
-    except (OSError, KeyError, ValueError, json.JSONDecodeError, RunPodError) as error:
+    except (
+        OSError,
+        KeyError,
+        ValueError,
+        json.JSONDecodeError,
+        ContractError,
+        RunPodError,
+    ) as error:
         print(f"RunPod create failed: {error}", file=sys.stderr)
         return 1
     return 0
