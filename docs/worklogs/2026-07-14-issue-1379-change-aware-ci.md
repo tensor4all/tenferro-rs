@@ -74,6 +74,7 @@ control plane against schema drift and deterministic request failures.
   dependency snippets, the 78-page Quarto render, and rendered-site validation.
 - The coverage profile passed all 159 included source files at their configured
   thresholds.
+- The committed-head repository-rules review passed with no findings.
 - The saved live RunPod OpenAPI schema accepted all 11 configured GPU IDs.
 - Trusted PR recovery dry run targets only
   `runpod-gpu-test.yml --ref main -f pr_number=1379`.
