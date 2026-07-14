@@ -313,9 +313,13 @@ Exercise classifier fixtures representing:
 - an unknown new top-level path;
 - push-to-main override.
 
-Perform one trusted manual dry-run of PR resolution without starting a pod. A
-live RunPod run is required before merge because the request and recovery
-control plane changes. It must use SECURE Cloud and complete cleanup.
+Perform one trusted manual dry-run of PR resolution without starting a pod.
+Because the new secret-bearing workflow and helpers are not trusted `main`
+content until they land, pre-merge validation is limited to fixtures,
+actionlint, source contracts, and dry runs. Immediately after landing, run the
+workflow from `main` against the landed revision. That live validation must use
+SECURE Cloud, complete CUDA and OpenXLA tests, and complete cleanup. A failure
+requires a corrective follow-up before issue #1379 is closed.
 
 ## Documentation and records
 
