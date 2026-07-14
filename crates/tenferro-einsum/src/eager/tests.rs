@@ -1,9 +1,9 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     BackendSessionHost, CompareDir, DotGeneralConfig, Error, GatherConfig, PadConfig, Result,
-    ScatterConfig, SessionCachedDot, SliceConfig, Tensor, TensorAnalytic, TensorBuffer, TensorDot,
-    TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
-    TensorView,
+    ScatterConfig, SessionCachedDot, SliceConfig, Tensor, TensorAnalytic, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
+    TensorReduction, TensorStructural, TensorView,
 };
 
 use super::{
@@ -412,6 +412,7 @@ impl TensorDot for NoBroadcastMaterializationBackend {
 impl TensorFusion for NoBroadcastMaterializationBackend {}
 impl TensorBuffer for NoBroadcastMaterializationBackend {}
 impl SessionCachedDot for NoBroadcastMaterializationBackend {}
+impl TensorDeviceTransfer for NoBroadcastMaterializationBackend {}
 
 #[test]
 fn generic_read_exec_reduces_single_view_input() {
