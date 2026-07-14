@@ -129,6 +129,10 @@ pub struct CpuSet {
 }
 
 impl CpuSet {
+    pub(crate) fn singleton(cpu: CpuId) -> Self {
+        Self { cpus: vec![cpu] }
+    }
+
     /// Construct a sorted and deduplicated CPU set.
     ///
     /// # Examples

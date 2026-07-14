@@ -140,10 +140,21 @@ pub enum CpuPlacementError {
         /// The selected public backend kind.
         backend: CpuBackendKind,
     },
+    /// A pinned engine could not be built for an otherwise valid placement.
+    #[error("cannot resolve {requested:?} for {backend:?}: engine construction failed: {message}")]
+    EngineConstruction {
+        /// The placement requested by the caller.
+        requested: CpuPlacement,
+        /// The selected public backend kind.
+        backend: CpuBackendKind,
+        /// Worker-pool construction or affinity verification detail.
+        message: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ResolvedCpuExecution {
+    Compatibility,
     Managed(ResolvedCpuPlacement),
     ProviderDefaultExclusive,
 }

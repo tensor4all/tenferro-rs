@@ -45,6 +45,50 @@ fn explicit_backend_kind_constructor_records_selection() {
 }
 
 #[test]
+#[cfg(feature = "cpu-faer")]
+fn placement_handle_clones_share_coordinator_engine_and_resources() {
+    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+    let mut placed = backend.for_placement(CpuPlacement::AllAllowed).unwrap();
+    let clone = placed.clone();
+
+    assert_eq!(
+        placed.coordinator_id_for_test(),
+        clone.coordinator_id_for_test()
+    );
+    assert_eq!(placed.placement(), CpuPlacement::AllAllowed);
+    assert!(matches!(
+        placed.resolved_placement(),
+        Some(ResolvedCpuPlacement::AllAllowed { .. })
+    ));
+    placed.with_linalg_pool(|pool| {
+        <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
+    });
+    assert_eq!(clone.buffer_pool_len(), 1);
+}
+
+#[test]
+#[cfg(feature = "cpu-faer")]
+fn placement_capabilities_follow_public_backend_kind() {
+    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+    assert!(backend.supports_placement(CpuPlacement::Auto));
+    assert!(backend.supports_placement(CpuPlacement::AllAllowed));
+    assert_eq!(
+        backend.topology().allowed_cpus(),
+        crate::process_cpu_affinity().as_ref().unwrap()
+    );
+}
+
+#[test]
+#[cfg(feature = "cpu-blas")]
+fn blas_auto_is_provider_exclusive_and_explicit_placement_is_rejected() {
+    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
+
+    assert!(backend.for_placement(CpuPlacement::AllAllowed).is_err());
+    assert!(!backend.supports_placement(CpuPlacement::AllAllowed));
+    assert!(backend.resolved_placement().is_none());
+}
+
+#[test]
 #[cfg(feature = "cpu-blas")]
 fn explicit_blas_backend_kind_constructor_records_selection() {
     let backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
@@ -86,11 +130,11 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
         }
     ));
 
-    let mut backend = CpuBackend {
-        ctx: Arc::new(CpuContext::with_threads(1).unwrap()),
-        buffers: BufferPool::new(),
-        kind: CpuBackendKind::Blas,
-    };
+    let mut backend = CpuBackend::compatibility(
+        Arc::new(CpuContext::with_threads(1).unwrap()),
+        crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
+        CpuBackendKind::Blas,
+    );
     let retained = backend.with_linalg_pool(|pool| {
         <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
         pool.len()
@@ -175,10 +219,12 @@ fn with_linalg_pool_restores_backend_pool_and_context() {
 #[test]
 fn linalg_pool_acquire_then_panic_replenishes_retained_buffer() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    <f64 as PoolScalar>::pool_release(&mut backend.buffers, Vec::with_capacity(1024));
+    backend.with_linalg_pool(|pool| {
+        <f64 as PoolScalar>::pool_release(pool, Vec::with_capacity(1024));
+    });
     assert_eq!(backend.buffer_pool_len(), 1);
     assert_eq!(
-        backend.buffers.retained_capacity_bytes(),
+        backend.buffer_pool_stats().capacity_bytes,
         1024 * std::mem::size_of::<f64>()
     );
 
@@ -193,7 +239,7 @@ fn linalg_pool_acquire_then_panic_replenishes_retained_buffer() {
     assert!(result.is_err());
     assert_eq!(backend.buffer_pool_len(), 1);
     assert_eq!(
-        backend.buffers.retained_capacity_bytes(),
+        backend.buffer_pool_stats().capacity_bytes,
         1024 * std::mem::size_of::<f64>()
     );
 }

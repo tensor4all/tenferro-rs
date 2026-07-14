@@ -58,10 +58,12 @@ impl ResourceArbiter {
         Self::default()
     }
 
+    #[cfg(test)]
     pub(crate) fn acquire(&self, cpus: CpuSet) -> Result<ResourcePermit, ResourceArbiterError> {
         self.acquire_request(ResourceRequest::CpuSet(cpus))
     }
 
+    #[cfg(test)]
     pub(crate) fn try_acquire(
         &self,
         cpus: CpuSet,
@@ -69,16 +71,52 @@ impl ResourceArbiter {
         self.try_acquire_request(ResourceRequest::CpuSet(cpus))
     }
 
+    #[cfg(test)]
     pub(crate) fn acquire_provider_exclusive(
         &self,
     ) -> Result<ResourcePermit, ResourceArbiterError> {
         self.acquire_request(ResourceRequest::ProviderExclusive)
     }
 
+    #[cfg(test)]
     pub(crate) fn try_acquire_provider_exclusive(
         &self,
     ) -> Result<Option<ResourcePermit>, ResourceArbiterError> {
         self.try_acquire_request(ResourceRequest::ProviderExclusive)
+    }
+
+    pub(crate) fn acquire_recovering(&self, cpus: CpuSet) -> ResourcePermit {
+        self.acquire_request_recovering(ResourceRequest::CpuSet(cpus))
+    }
+
+    pub(crate) fn acquire_provider_exclusive_recovering(&self) -> ResourcePermit {
+        self.acquire_request_recovering(ResourceRequest::ProviderExclusive)
+    }
+
+    fn acquire_request_recovering(&self, request: ResourceRequest) -> ResourcePermit {
+        loop {
+            match self.acquire_request(request.clone()) {
+                Ok(permit) => return permit,
+                Err(ResourceArbiterError::StatePoisoned) => {
+                    self.inner.state.clear_poison();
+                }
+                Err(ResourceArbiterError::RequestIdExhausted) => {
+                    let mut state = self
+                        .inner
+                        .state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    while !state.active.is_empty() || !state.waiters.is_empty() {
+                        state = self
+                            .inner
+                            .changed
+                            .wait(state)
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    }
+                    state.next_request_id = 0;
+                }
+            }
+        }
     }
 
     fn acquire_request(
@@ -135,6 +173,7 @@ impl ResourceArbiter {
         }
     }
 
+    #[cfg(test)]
     fn try_acquire_request(
         &self,
         request: ResourceRequest,

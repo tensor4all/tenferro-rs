@@ -7,6 +7,8 @@ use crate::{CpuContext, CpuContextError, ResolvedCpuPlacement};
 #[derive(Debug)]
 pub(crate) struct EngineResources {
     pub(crate) buffers: BufferPool,
+    // Session-cache ownership migrates here in the graph-session stage.
+    #[allow(dead_code)]
     pub(crate) gemm_analysis_cache: GemmAnalysisCache,
 }
 
@@ -35,12 +37,31 @@ impl CpuEngine {
         })
     }
 
+    pub(crate) fn from_context(
+        placement: ResolvedCpuPlacement,
+        context: Arc<CpuContext>,
+        buffer_limit: usize,
+    ) -> Self {
+        Self {
+            placement,
+            context,
+            resources: Mutex::new(EngineResources {
+                buffers: BufferPool::with_max_retained_capacity_bytes(buffer_limit),
+                gemm_analysis_cache: GemmAnalysisCache::default(),
+            }),
+        }
+    }
+
     pub(crate) fn placement(&self) -> &ResolvedCpuPlacement {
         &self.placement
     }
 
     pub(crate) fn context(&self) -> &CpuContext {
         self.context.as_ref()
+    }
+
+    pub(crate) fn context_arc(&self) -> Arc<CpuContext> {
+        Arc::clone(&self.context)
     }
 }
 

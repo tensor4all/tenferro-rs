@@ -134,7 +134,7 @@ fn cpu_backend_shared_context() {
     let ctx = Arc::new(CpuContext::with_threads(3).unwrap());
     let b1 = CpuBackend::from_context(ctx.clone());
     let b2 = CpuBackend::from_context(ctx);
-    assert!(Arc::ptr_eq(&b1.ctx, &b2.ctx));
+    assert_eq!(b1.context_id_for_test(), b2.context_id_for_test());
 }
 
 #[test]
