@@ -68,20 +68,18 @@ if let Some(node) = coordinator.topology().nodes().first() {
 granted to the process, so splitting work by NUMA node does not prevent a
 separate all-node computation. Overlapping placements are serialized by the
 process-wide arbiter, including placements created by independently constructed
-backends; disjoint node placements may execute concurrently. Synchronous direct
-nesting carries one logical owner across Rayon pools, so nested clone or
-independent-backend work cannot wait on its own permit. Reentrant operations use
-transient scratch buffers and analysis caches instead of re-locking an outer
-engine session's resources. Other logical executions remain subject to the
-overlap rules.
+backends; disjoint node placements may execute concurrently. Other top-level
+executions remain subject to these overlap rules.
 
-Do not call a CPU backend from a parallel Rayon child task spawned inside
-`CpuBackend::install`, or from unrelated work submitted to the same active
-`CpuContext`. tenferro rejects that re-entry with a panic instead of allowing a
-deadlock or concurrent access to one engine or external provider. Finish the
-outer backend execution before launching those backend calls, or give each
-concurrent top-level operation a disjoint managed placement. Ordinary Rayon
-work that does not re-enter a CPU backend remains supported.
+CPU backend execution is not reentrant. Do not call a backend clone or another
+CPU backend directly from `CpuBackend::install` or a backend session, and do not
+make backend calls from Rayon tasks spawned inside one. A managed scope rejects
+same-thread, spawned, stolen, and shared-context re-entry with a panic before a
+second permit is acquired. Work moved to an unrelated executor cannot always
+inherit that diagnostic marker and may instead wait for the outer permit, so
+waiting for it from the outer execution can deadlock. Finish the outer backend
+execution before launching new top-level backend calls. Ordinary Rayon work
+that does not re-enter a CPU backend remains supported.
 
 ## External BLAS Providers
 

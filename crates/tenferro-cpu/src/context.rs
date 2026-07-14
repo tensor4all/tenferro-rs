@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use thiserror::Error as ThisError;
 
 use crate::affinity::{SystemThreadAffinity, ThreadAffinity};
-use crate::arbiter::{set_pool_execution_owner, with_execution_owner, ResourceOwner};
+use crate::arbiter::{
+    set_pool_execution_owner, with_execution_owner, with_pool_execution_owner, ResourceOwner,
+};
 use crate::{CpuId, CpuSet, Error, Result};
 
 #[derive(Debug, Default)]
@@ -390,7 +392,7 @@ impl CpuContext {
             context: self,
             owner,
         };
-        self.install(|| with_execution_owner(owner, op))
+        self.install(|| with_pool_execution_owner(owner, || with_execution_owner(owner, op)))
     }
 
     fn broadcast_execution_owner(&self, owner: Option<ResourceOwner>) {

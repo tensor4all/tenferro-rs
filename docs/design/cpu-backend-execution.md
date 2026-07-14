@@ -23,19 +23,18 @@ Host operations, native operations, and session-capable FFI operations.
 Non-session extension runtimes are boundaries. Cache ownership follows engine
 ownership so clone handles do not duplicate retained execution state.
 
-Synchronous nested execution propagates one logical owner across nested pools.
-Direct clone and independent-backend calls can therefore reenter permits
-already held by that call chain. Reentrant operations use transient scratch
-buffers and analysis caches rather than re-locking an outer session's engine
-resources.
+Backend execution is non-reentrant. An active managed Rayon scope marks both
+the root call and every owned worker; direct nesting, a spawned or stolen child
+task, and unrelated work submitted to the same active `CpuContext` are rejected
+before acquiring another permit. External-provider execution also rejects
+same-thread nesting.
 
-That owner is deliberately not inherited as permission by parallel Rayon child
-tasks. A backend call from a spawned or stolen child task, or from unrelated
-work submitted to the same active `CpuContext`, is rejected immediately. If
-parallel siblings shared the owner's permission, they could enter the same
-engine resources or an external BLAS provider concurrently and defeat the
-process-wide exclusion contract. Separate logical executions remain governed
-by process-wide overlap and provider exclusion.
+This intentionally does not infer permission from an execution owner. During a
+cross-pool wait Rayon may schedule a parallel sibling on the same OS worker as
+the direct call chain, so thread-local identity cannot distinguish those cases.
+Treating that sibling as reentrant could enter overlapping engine resources or
+an external BLAS provider concurrently. Separate top-level executions remain
+governed by process-wide overlap and provider exclusion.
 
 The stable public identity is `CpuBackendKind::{Faer, Blas}`. Concrete provider
 names are diagnostic strings, not dispatch or compatibility keys.

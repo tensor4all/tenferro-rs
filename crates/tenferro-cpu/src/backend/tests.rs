@@ -160,33 +160,70 @@ fn independently_constructed_backends_share_global_provider_exclusion() {
 
 #[test]
 #[cfg(feature = "cpu-faer")]
-fn nested_clone_install_crosses_the_rayon_boundary_without_waiting() {
+fn direct_nested_clone_install_is_rejected_in_a_managed_scope() {
     let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let nested = backend.clone();
-    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
-    std::thread::spawn(move || {
-        let value = backend.install(|| nested.install(|| 7_u32));
-        completed_tx.send(value).unwrap();
-    });
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.install(|| nested.install(|| 7_u32))
+    }));
 
-    assert_eq!(completed_rx.recv_timeout(Duration::from_secs(2)), Ok(7));
+    let message = outcome
+        .err()
+        .map(panic_message)
+        .expect("nesting should panic");
+    assert!(
+        message.contains("another CPU backend execution"),
+        "{message}"
+    );
 }
 
 #[test]
 #[cfg(feature = "cpu-faer")]
-fn nested_independent_engines_propagate_reentrancy_across_rayon_pools() {
+fn direct_nested_independent_engine_is_rejected_in_a_managed_scope() {
     let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let middle = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
-    let inner = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
-    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
-    std::thread::spawn(move || {
-        let value = outer.install(|| middle.install(|| inner.install(|| 11_u32)));
-        completed_tx.send(value).unwrap();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        outer.install(|| middle.install(|| 11_u32))
+    }));
+
+    let message = outcome
+        .err()
+        .map(panic_message)
+        .expect("nesting should panic");
+    assert!(
+        message.contains("another CPU backend execution"),
+        "{message}"
+    );
+}
+
+#[test]
+#[cfg(feature = "cpu-faer")]
+fn cross_pool_wait_cannot_misclassify_a_scheduled_sibling_as_direct_nesting() {
+    let outer = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+    let middle = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+    let sibling = outer.clone();
+
+    let (_, sibling_outcome) = outer.install(move || {
+        rayon::join(
+            || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    middle.install(|| std::thread::sleep(Duration::from_millis(50)))
+                }))
+            },
+            || std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sibling.install(|| ()))),
+        )
     });
 
-    assert_eq!(completed_rx.recv_timeout(Duration::from_secs(2)), Ok(11));
+    let message = sibling_outcome
+        .err()
+        .map(panic_message)
+        .expect("scheduled sibling reentry should panic");
+    assert!(
+        message.contains("another CPU backend execution"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -215,7 +252,10 @@ fn stolen_rayon_child_task_backend_reentry_is_rejected() {
         .recv_timeout(Duration::from_secs(2))
         .expect("parallel child reentry should fail without deadlocking")
         .expect("parallel child reentry should panic");
-    assert!(message.contains("parallel Rayon child task"), "{message}");
+    assert!(
+        message.contains("another CPU backend execution"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -246,7 +286,10 @@ fn parallel_rayon_sibling_backend_reentry_is_rejected() {
             .recv_timeout(Duration::from_secs(2))
             .expect("parallel sibling reentry should fail without deadlocking")
             .expect("parallel sibling reentry should panic");
-        assert!(message.contains("parallel Rayon child task"), "{message}");
+        assert!(
+            message.contains("another CPU backend execution"),
+            "{message}"
+        );
     }
 }
 
@@ -271,7 +314,10 @@ fn shared_context_work_is_not_mistaken_for_backend_reentry() {
             .expect("shared-context work should not bypass backend exclusion")
     });
 
-    assert!(message.contains("parallel Rayon child task"), "{message}");
+    assert!(
+        message.contains("another CPU backend execution"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -289,44 +335,45 @@ fn execution_owner_broadcast_is_cleared_after_panic() {
 
 #[test]
 #[cfg(feature = "cpu-faer")]
-fn nested_clone_tensor_operation_does_not_relock_engine_resources() {
+fn nested_clone_tensor_operation_is_rejected_in_a_managed_scope() {
     let mut backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let mut nested = backend.clone();
     let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
-    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
 
-    std::thread::spawn(move || {
-        let result = backend.with_backend_session(|_| nested.add(&lhs, &rhs));
-        completed_tx.send(result).unwrap();
-    });
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.with_backend_session(|_| nested.add(&lhs, &rhs))
+    }));
 
-    let result = completed_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("nested tensor operation should not deadlock")
-        .unwrap();
-    assert_eq!(result.as_slice::<f64>().unwrap(), &[5.0]);
+    let message = outcome
+        .err()
+        .map(panic_message)
+        .expect("nesting should panic");
+    assert!(
+        message.contains("another CPU backend execution"),
+        "{message}"
+    );
 }
 
 #[test]
 #[cfg(feature = "cpu-blas")]
-fn nested_provider_session_uses_reentrant_transient_resources() {
+fn nested_provider_session_is_rejected() {
     let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
     let mut nested = backend.clone();
     let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
-    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.with_backend_session(|_| nested.add(&lhs, &rhs))
+    }));
 
-    std::thread::spawn(move || {
-        let result = backend.with_backend_session(|_| nested.add(&lhs, &rhs));
-        completed_tx.send(result).unwrap();
-    });
-
-    let result = completed_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("nested provider operation should not deadlock")
-        .unwrap();
-    assert_eq!(result.as_slice::<f64>().unwrap(), &[5.0]);
+    let message = outcome
+        .err()
+        .map(panic_message)
+        .expect("nesting should panic");
+    assert!(
+        message.contains("another CPU backend execution"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -358,7 +405,10 @@ fn parallel_rayon_siblings_cannot_bypass_provider_exclusion() {
             .recv_timeout(Duration::from_secs(2))
             .expect("provider sibling reentry should fail without deadlocking")
             .expect("provider sibling reentry should panic");
-        assert!(message.contains("parallel Rayon child task"), "{message}");
+        assert!(
+            message.contains("another CPU backend execution"),
+            "{message}"
+        );
     }
 }
 

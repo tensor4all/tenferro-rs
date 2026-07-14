@@ -24,15 +24,15 @@ thread_local! {
     static POOL_EXECUTION_OWNER: Cell<Option<ResourceOwner>> = const { Cell::new(None) };
 }
 
-pub(crate) const PARALLEL_REENTRY_PANIC: &str =
-    "CpuBackend cannot be re-entered from a parallel Rayon child task while its CPU execution pool is active";
+pub(crate) const BACKEND_REENTRY_PANIC: &str =
+    "CpuBackend cannot be re-entered while another CPU backend execution is active on this thread or managed Rayon scope";
 
 pub(crate) fn inherited_or_new_execution_owner() -> ResourceOwner {
-    if let Some(owner) = EXECUTION_OWNER.with(Cell::get) {
-        return owner;
-    }
     if POOL_EXECUTION_OWNER.with(Cell::get).is_some() {
-        panic!("{PARALLEL_REENTRY_PANIC}");
+        panic!("{BACKEND_REENTRY_PANIC}");
+    }
+    if EXECUTION_OWNER.with(Cell::get).is_some() {
+        panic!("{BACKEND_REENTRY_PANIC}");
     }
     ResourceOwner::fresh()
 }
@@ -53,6 +53,20 @@ pub(crate) fn with_execution_owner<R>(owner: ResourceOwner, op: impl FnOnce() ->
 
 pub(crate) fn set_pool_execution_owner(owner: Option<ResourceOwner>) {
     POOL_EXECUTION_OWNER.set(owner);
+}
+
+pub(crate) fn with_pool_execution_owner<R>(owner: ResourceOwner, op: impl FnOnce() -> R) -> R {
+    struct RestoreOwner(Option<ResourceOwner>);
+
+    impl Drop for RestoreOwner {
+        fn drop(&mut self) {
+            POOL_EXECUTION_OWNER.set(self.0);
+        }
+    }
+
+    let previous = POOL_EXECUTION_OWNER.replace(Some(owner));
+    let _restore = RestoreOwner(previous);
+    op()
 }
 
 #[cfg(test)]
