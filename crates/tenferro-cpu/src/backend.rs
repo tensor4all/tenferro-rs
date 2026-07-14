@@ -217,6 +217,105 @@ impl CpuBackendKind {
     }
 }
 
+/// Snapshot of the stable CPU execution contract and non-contractual provider diagnostics.
+///
+/// [`CpuBackendKind`] is the stable provider identity. The diagnostic string is
+/// intended for logs and may change between builds or releases.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{CpuBackend, CpuPlacement};
+///
+/// let info = CpuBackend::new().execution_info();
+/// assert_eq!(info.requested_placement(), CpuPlacement::Auto);
+/// assert!(!info.provider_diagnostic().is_empty());
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CpuExecutionInfo {
+    backend_kind: CpuBackendKind,
+    requested_placement: CpuPlacement,
+    resolved_placement: Option<ResolvedCpuPlacement>,
+    provider_diagnostic: &'static str,
+}
+
+impl CpuExecutionInfo {
+    /// Return the stable public provider identity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let info = tenferro_cpu::CpuBackend::new().execution_info();
+    /// assert_eq!(info.backend_kind(), tenferro_cpu::CpuBackend::new().kind());
+    /// ```
+    pub fn backend_kind(&self) -> CpuBackendKind {
+        self.backend_kind
+    }
+
+    /// Return the placement requested by this backend handle.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let info = tenferro_cpu::CpuBackend::new().execution_info();
+    /// assert_eq!(info.requested_placement(), tenferro_cpu::CpuPlacement::Auto);
+    /// ```
+    pub fn requested_placement(&self) -> CpuPlacement {
+        self.requested_placement
+    }
+
+    /// Return the concrete CPU placement when tenferro owns worker affinity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let backend = tenferro_cpu::CpuBackend::new();
+    /// let _managed = backend.execution_info().resolved_placement();
+    /// ```
+    pub fn resolved_placement(&self) -> Option<&ResolvedCpuPlacement> {
+        self.resolved_placement.as_ref()
+    }
+
+    /// Return a human-readable provider description for logs.
+    ///
+    /// This string is diagnostic only and is not a provider identity contract.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let diagnostic = tenferro_cpu::CpuBackend::new()
+    ///     .execution_info()
+    ///     .provider_diagnostic();
+    /// assert!(!diagnostic.is_empty());
+    /// ```
+    pub fn provider_diagnostic(&self) -> &'static str {
+        self.provider_diagnostic
+    }
+}
+
+fn provider_diagnostic(kind: CpuBackendKind) -> &'static str {
+    match kind {
+        CpuBackendKind::Faer => "faer (tenferro-managed Rayon affinity)",
+        CpuBackendKind::Blas => {
+            #[cfg(feature = "blas-openblas")]
+            return "OpenBLAS (external worker affinity)";
+            #[cfg(feature = "blas-mkl")]
+            return "Intel MKL (external worker affinity)";
+            #[cfg(feature = "blas-accelerate")]
+            return "Apple Accelerate (external worker affinity)";
+            #[cfg(feature = "provider-inject")]
+            return "runtime-injected BLAS/LAPACK (external worker affinity)";
+            #[cfg(not(any(
+                feature = "blas-openblas",
+                feature = "blas-mkl",
+                feature = "blas-accelerate",
+                feature = "provider-inject"
+            )))]
+            return "linked BLAS/LAPACK provider (identity unknown; external worker affinity)";
+        }
+    }
+}
+
 fn ensure_cpu_backend_kind_available(kind: CpuBackendKind, op: &'static str) -> crate::Result<()> {
     let _ = op;
     match kind {
@@ -774,6 +873,23 @@ impl CpuBackend {
     /// ```
     pub fn supports_placement(&self, placement: CpuPlacement) -> bool {
         resolve_placement(self.kind(), placement, &self.shared.topology).is_ok()
+    }
+
+    /// Return a snapshot suitable for diagnostics and placement reporting.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let backend = tenferro_cpu::CpuBackend::new();
+    /// assert_eq!(backend.execution_info().backend_kind(), backend.kind());
+    /// ```
+    pub fn execution_info(&self) -> CpuExecutionInfo {
+        CpuExecutionInfo {
+            backend_kind: self.kind(),
+            requested_placement: self.requested,
+            resolved_placement: self.resolved_placement().cloned(),
+            provider_diagnostic: provider_diagnostic(self.kind()),
+        }
     }
 
     #[cfg(all(test, feature = "cpu-faer"))]

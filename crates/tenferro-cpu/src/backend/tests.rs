@@ -79,6 +79,17 @@ fn placement_capabilities_follow_public_backend_kind() {
 }
 
 #[test]
+fn execution_info_exposes_stable_kind_and_placement_contract() {
+    let backend = CpuBackend::new();
+    let info = backend.execution_info();
+
+    assert_eq!(info.backend_kind(), backend.kind());
+    assert_eq!(info.requested_placement(), CpuPlacement::Auto);
+    assert_eq!(info.resolved_placement(), backend.resolved_placement());
+    assert!(!info.provider_diagnostic().is_empty());
+}
+
+#[test]
 #[cfg(feature = "cpu-blas")]
 fn blas_provider_session_body_stays_outside_the_rayon_engine() {
     use tenferro_tensor::BackendSessionHost;

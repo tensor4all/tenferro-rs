@@ -61,6 +61,8 @@ website:
           - guides/devices-and-gpu.md
           - guides/xla.md
           - guides/memory-order.md
+          - text: "CPU Execution and NUMA"
+            href: guides/cpu-execution.md
           - text: "Parallelism and Caching"
             href: guides/parallelism-and-caching.md
           - guides/troubleshooting.md

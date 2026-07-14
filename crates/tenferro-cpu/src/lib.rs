@@ -79,7 +79,7 @@ extern crate lapack_src as _;
 
 pub use affinity::{available_parallelism, process_cpu_affinity, process_cpu_affinity_count};
 pub use analytic::pow;
-pub use backend::{CpuBackend, CpuBackendKind};
+pub use backend::{CpuBackend, CpuBackendKind, CpuExecutionInfo};
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 pub use context::{CpuContext, CpuContextError};
