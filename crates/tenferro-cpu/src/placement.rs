@@ -193,7 +193,7 @@ pub(crate) fn resolve_placement(
     )
 }
 
-fn resolve_placement_with_affinity(
+pub(crate) fn resolve_placement_with_affinity(
     backend: CpuBackendKind,
     requested: CpuPlacement,
     topology: &CpuTopology,

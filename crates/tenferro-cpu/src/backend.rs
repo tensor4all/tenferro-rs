@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use crate::arbiter::{ResourceArbiter, ResourcePermit};
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::engine::CpuEngine;
-use crate::placement::{resolve_placement, ResolvedCpuExecution};
+use crate::placement::{resolve_placement, resolve_placement_with_affinity, ResolvedCpuExecution};
 use crate::{
     discover_cpu_topology, CpuId, CpuPlacement, CpuPlacementError, CpuSet, CpuTopology,
     CpuTopologyError, NumaNodeId, ResolvedCpuPlacement,
@@ -242,6 +242,70 @@ pub enum CpuExecutionMode {
     Compatibility,
 }
 
+/// Errors returned while constructing a [`CpuBackend`].
+///
+/// Placement failures remain typed so callers can distinguish topology
+/// discovery failures from unsupported placement requests. Configuration and
+/// provider-selection failures retain the existing tensor error contract.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{CpuBackend, CpuBackendError};
+///
+/// let error = CpuBackend::with_threads(0).unwrap_err();
+/// assert!(matches!(error, CpuBackendError::Tensor(_)));
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum CpuBackendError {
+    /// CPU context configuration or provider selection failed.
+    #[error(transparent)]
+    Tensor(#[from] crate::Error),
+    /// CPU placement resolution or engine construction failed.
+    #[error("{op}: {source}")]
+    Placement {
+        /// Constructor that observed the placement failure.
+        op: &'static str,
+        /// Typed placement failure.
+        #[source]
+        source: CpuPlacementError,
+    },
+}
+
+impl CpuBackendError {
+    fn placement(op: &'static str, source: CpuPlacementError) -> Self {
+        Self::Placement { op, source }
+    }
+
+    /// Return the typed placement failure, when construction reached placement resolution.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBackend, CpuBackendError};
+    ///
+    /// let result: Result<CpuBackend, CpuBackendError> = CpuBackend::with_threads(1);
+    /// if let Err(error) = result {
+    ///     let _placement_failure = error.placement_error();
+    /// }
+    /// ```
+    pub fn placement_error(&self) -> Option<&CpuPlacementError> {
+        match self {
+            Self::Tensor(_) => None,
+            Self::Placement { source, .. } => Some(source),
+        }
+    }
+}
+
+impl From<CpuBackendError> for crate::Error {
+    fn from(error: CpuBackendError) -> Self {
+        match error {
+            CpuBackendError::Tensor(error) => error,
+            CpuBackendError::Placement { op, source } => Self::backend_failure(op, source),
+        }
+    }
+}
+
 /// Snapshot of the stable CPU execution contract and non-contractual provider diagnostics.
 ///
 /// [`CpuBackendKind`] is the stable provider identity. The diagnostic string is
@@ -412,6 +476,14 @@ fn ensure_cpu_backend_kind_available(kind: CpuBackendKind, op: &'static str) -> 
             }
         }
     }
+}
+
+fn constructor_tensor_error(op: &'static str, error: crate::Error) -> CpuBackendError {
+    CpuBackendError::Tensor(match error {
+        crate::Error::InvalidConfig { message, .. } => crate::Error::InvalidConfig { op, message },
+        crate::Error::BackendFailure { message, .. } => crate::Error::backend_failure(op, message),
+        error => error,
+    })
 }
 
 // Used by feature-disabled backend paths; a given feature build may compile no
@@ -660,10 +732,6 @@ impl CpuBackend {
         }
     }
 
-    fn placement_failure(op: &'static str, error: CpuPlacementError) -> crate::Error {
-        crate::Error::backend_failure(op, error)
-    }
-
     /// Create a CPU backend using the environment-driven CPU context.
     ///
     /// # Examples
@@ -698,15 +766,22 @@ impl CpuBackend {
     /// let backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
     /// assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
     /// ```
-    pub fn with_kind(kind: CpuBackendKind) -> crate::Result<Self> {
-        ensure_cpu_backend_kind_available(kind, "CpuBackend::with_kind")?;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the provider is unavailable or CPU topology and
+    /// placement initialization fails.
+    pub fn with_kind(kind: CpuBackendKind) -> Result<Self, CpuBackendError> {
+        let op = "CpuBackend::with_kind";
+        ensure_cpu_backend_kind_available(kind, op)
+            .map_err(|error| constructor_tensor_error(op, error))?;
         let context = CpuContext::from_env();
         Self::from_thread_budget_and_kind(
             context.num_threads(),
             kind,
             crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
         )
-        .map_err(|error| Self::placement_failure("CpuBackend::with_kind", error))
+        .map_err(|error| CpuBackendError::placement(op, error))
     }
 
     /// Try to create a CPU backend using `RAYON_NUM_THREADS`.
@@ -720,14 +795,21 @@ impl CpuBackend {
     ///     .unwrap_or_else(|_| CpuBackend::with_threads(1).unwrap());
     /// let _ = backend.num_threads();
     /// ```
-    pub fn try_new() -> crate::Result<Self> {
-        let context = CpuContext::try_from_env()?;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the environment-driven thread configuration is
+    /// invalid or CPU topology and placement initialization fails.
+    pub fn try_new() -> Result<Self, CpuBackendError> {
+        let op = "CpuBackend::try_new";
+        let context =
+            CpuContext::try_from_env().map_err(|error| constructor_tensor_error(op, error))?;
         Self::from_thread_budget_and_kind(
             context.num_threads(),
             CpuBackendKind::default_compiled(),
             crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
         )
-        .map_err(|error| Self::placement_failure("CpuBackend::try_new", error))
+        .map_err(|error| CpuBackendError::placement(op, error))
     }
 
     /// Create a CPU backend from an existing context.
@@ -797,27 +879,18 @@ impl CpuBackend {
     ///
     /// # Errors
     ///
-    /// Returns an error when `num_threads` is zero or Rayon rejects the pool.
-    pub fn with_threads(num_threads: usize) -> crate::Result<Self> {
-        CpuContext::with_threads(num_threads)
-            .and_then(|context| {
-                Self::from_thread_budget_and_kind(
-                    context.num_threads(),
-                    CpuBackendKind::default_compiled(),
-                    crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
-                )
-                .map_err(|error| Self::placement_failure("CpuBackend::with_threads", error))
-            })
-            .map_err(|err| match err {
-                crate::Error::InvalidConfig { message, .. } => crate::Error::InvalidConfig {
-                    op: "CpuBackend::with_threads",
-                    message,
-                },
-                crate::Error::BackendFailure { message, .. } => {
-                    crate::Error::backend_failure("CpuBackend::with_threads", message)
-                }
-                err => err,
-            })
+    /// Returns an error when `num_threads` is zero, Rayon rejects the pool, or
+    /// CPU topology and placement initialization fails.
+    pub fn with_threads(num_threads: usize) -> Result<Self, CpuBackendError> {
+        let op = "CpuBackend::with_threads";
+        let context = CpuContext::with_threads(num_threads)
+            .map_err(|error| constructor_tensor_error(op, error))?;
+        Self::from_thread_budget_and_kind(
+            context.num_threads(),
+            CpuBackendKind::default_compiled(),
+            crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
+        )
+        .map_err(|error| CpuBackendError::placement(op, error))
     }
 
     /// Create a CPU backend with a custom thread count and provider.
@@ -838,30 +911,23 @@ impl CpuBackend {
     /// # Errors
     ///
     /// Returns an error when `num_threads` is zero, Rayon rejects the pool, or
-    /// the selected provider is unavailable.
-    pub fn with_threads_and_kind(num_threads: usize, kind: CpuBackendKind) -> crate::Result<Self> {
-        ensure_cpu_backend_kind_available(kind, "CpuBackend::with_threads_and_kind")?;
-        CpuContext::with_threads(num_threads)
-            .and_then(|context| {
-                Self::from_thread_budget_and_kind(
-                    context.num_threads(),
-                    kind,
-                    crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
-                )
-                .map_err(|error| {
-                    Self::placement_failure("CpuBackend::with_threads_and_kind", error)
-                })
-            })
-            .map_err(|err| match err {
-                crate::Error::InvalidConfig { message, .. } => crate::Error::InvalidConfig {
-                    op: "CpuBackend::with_threads_and_kind",
-                    message,
-                },
-                crate::Error::BackendFailure { message, .. } => {
-                    crate::Error::backend_failure("CpuBackend::with_threads_and_kind", message)
-                }
-                err => err,
-            })
+    /// the selected provider is unavailable, or CPU topology and placement
+    /// initialization fails.
+    pub fn with_threads_and_kind(
+        num_threads: usize,
+        kind: CpuBackendKind,
+    ) -> Result<Self, CpuBackendError> {
+        let op = "CpuBackend::with_threads_and_kind";
+        ensure_cpu_backend_kind_available(kind, op)
+            .map_err(|error| constructor_tensor_error(op, error))?;
+        let context = CpuContext::with_threads(num_threads)
+            .map_err(|error| constructor_tensor_error(op, error))?;
+        Self::from_thread_budget_and_kind(
+            context.num_threads(),
+            kind,
+            crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
+        )
+        .map_err(|error| CpuBackendError::placement(op, error))
     }
 
     /// Clone this backend coordinator with a specific CPU placement request.
@@ -883,7 +949,31 @@ impl CpuBackend {
     /// # Ok::<(), tenferro_cpu::CpuPlacementError>(())
     /// ```
     pub fn for_placement(&self, requested: CpuPlacement) -> Result<Self, CpuPlacementError> {
-        let resolved = resolve_placement(self.kind(), requested, &self.shared.topology)?;
+        self.for_placement_with_affinity(
+            requested,
+            cfg!(any(target_os = "linux", target_os = "android")),
+        )
+    }
+
+    fn for_placement_with_affinity(
+        &self,
+        requested: CpuPlacement,
+        managed_affinity_available: bool,
+    ) -> Result<Self, CpuPlacementError> {
+        let resolved = resolve_placement_with_affinity(
+            self.kind(),
+            requested,
+            &self.shared.topology,
+            managed_affinity_available,
+        )?;
+        if requested == CpuPlacement::Auto && !managed_affinity_available {
+            return Ok(Self {
+                shared: Arc::clone(&self.shared),
+                requested,
+                resolved,
+                engine: Arc::clone(&self.shared.base_engine),
+            });
+        }
         let engine_placement = match &resolved {
             ResolvedCpuExecution::Managed(placement) => placement.clone(),
             ResolvedCpuExecution::ProviderDefaultExclusive => ResolvedCpuPlacement::AllAllowed {

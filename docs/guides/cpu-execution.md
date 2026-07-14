@@ -67,7 +67,10 @@ if let Some(node) = coordinator.topology().nodes().first() {
 `Auto` resolves to `AllAllowed` for faer. An all-allowed engine can use all CPUs
 granted to the process, so splitting work by NUMA node does not prevent a
 separate all-node computation. Overlapping placements are serialized by the
-shared coordinator; disjoint node placements may execute concurrently.
+process-wide arbiter, including placements created by independently constructed
+backends; disjoint node placements may execute concurrently. Synchronous nested
+work on the same thread is treated as reentrant so a backend call cannot wait on
+its own permit. Other threads remain subject to the overlap rules.
 
 ## External BLAS Providers
 
@@ -87,6 +90,10 @@ tenferro-managed affinity contract.
 If strict NUMA placement is required, select `CpuBackendKind::Faer`. If an
 application configures and pins a BLAS provider independently, that remains an
 application/provider responsibility outside the tenferro placement guarantee.
+
+Fallible backend constructors return `CpuBackendError`. Configuration failures
+appear as `CpuBackendError::Tensor`, while topology discovery and engine
+placement failures remain inspectable through `CpuBackendError::placement_error`.
 
 ## CPU Affinity Is Not NUMA Memory Placement
 

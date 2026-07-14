@@ -64,8 +64,12 @@ The same review tightened the remaining safety contracts:
 
 - arbitration is process-wide, so independently constructed backends cannot
   overlap an unmanaged external-provider call with any tenferro CPU domain;
-- fallible constructors preserve `CpuTopologyError`, while only infallible
-  construction may use the documented compatibility fallback;
+- process-wide arbitration is same-thread reentrant, preventing synchronous
+  nested backend calls from waiting on their own permit while preserving
+  exclusion across threads;
+- fallible constructors expose `CpuBackendError` and preserve typed placement
+  and `CpuTopologyError` detail, while only infallible construction may use the
+  documented compatibility fallback;
 - unsupported-affinity platforms resolve faer `Auto` to compatibility mode and
   reject explicit managed placement;
 - affinity-mask allocation rejects extreme public CPU IDs using checked,
@@ -74,7 +78,7 @@ The same review tightened the remaining safety contracts:
 - typed diagnostics now report topology, worker count, and managed,
   provider-exclusive, or compatibility execution mode.
 
-Focused post-review verification passed for 276 CPU unit tests, fused runtime
+Focused post-review verification passed for 280 CPU unit tests, fused runtime
 owned/value session tests, the provider-inject integration suite, and benchmark
 compilation. A `wasm32-unknown-unknown` portability check stopped in the
 third-party `atomic-wait` crate before compiling tenferro; the unavailable

@@ -136,12 +136,16 @@ fn independently_constructed_backends_share_global_provider_exclusion() {
     let second = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Blas).unwrap();
 
     let _permit = first.shared.arbiter.acquire_provider_exclusive().unwrap();
-    assert!(second
-        .shared
-        .arbiter
-        .try_acquire_provider_exclusive()
-        .unwrap()
-        .is_none());
+    let second_arbiter = second.shared.arbiter.clone();
+    let blocked = std::thread::spawn(move || {
+        second_arbiter
+            .try_acquire_provider_exclusive()
+            .unwrap()
+            .is_none()
+    })
+    .join()
+    .unwrap();
+    assert!(blocked);
 }
 
 #[test]
@@ -164,10 +168,10 @@ fn with_threads_and_kind_records_selection_and_validates_threads() {
     };
     assert!(matches!(
         err,
-        crate::Error::InvalidConfig {
+        CpuBackendError::Tensor(crate::Error::InvalidConfig {
             op: "CpuBackend::with_threads_and_kind",
             ..
-        }
+        })
     ));
 }
 
@@ -180,10 +184,10 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
     };
     assert!(matches!(
         err,
-        crate::Error::InvalidConfig {
+        CpuBackendError::Tensor(crate::Error::InvalidConfig {
             op: "CpuBackend::with_kind",
             ..
-        }
+        })
     ));
 
     let mut backend = CpuBackend::compatibility(
@@ -350,7 +354,30 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
 
 #[test]
 fn with_threads_rejects_invalid_thread_count() {
-    assert!(CpuBackend::with_threads(0).is_err());
+    let result: Result<CpuBackend, CpuBackendError> = CpuBackend::with_threads(0);
+    let error = result.unwrap_err();
+    assert!(matches!(
+        error,
+        CpuBackendError::Tensor(crate::Error::InvalidConfig {
+            op: "CpuBackend::with_threads",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn backend_error_keeps_placement_failure_typed() {
+    let placement = CpuPlacementError::TopologyDiscovery {
+        requested: CpuPlacement::Auto,
+        backend: CpuBackendKind::Faer,
+        source: CpuTopologyError::InvalidCpuList {
+            list: "bad".to_owned(),
+            reason: "test failure",
+        },
+    };
+
+    let error = CpuBackendError::placement("CpuBackend::try_new", placement.clone());
+    assert_eq!(error.placement_error(), Some(&placement));
 }
 
 #[test]
@@ -369,4 +396,20 @@ fn fallible_backend_construction_preserves_topology_error_category() {
             source,
         }
     );
+}
+
+#[test]
+#[cfg(feature = "cpu-faer")]
+fn unavailable_affinity_auto_placement_reuses_compatibility_engine() {
+    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+
+    let placed = backend
+        .for_placement_with_affinity(CpuPlacement::Auto, false)
+        .unwrap();
+
+    assert_eq!(
+        placed.execution_info().execution_mode(),
+        CpuExecutionMode::Compatibility
+    );
+    assert_eq!(placed.context_id_for_test(), backend.context_id_for_test());
 }

@@ -8,11 +8,8 @@ use std::time::Duration;
 fn disjoint_domains_run_together_but_all_allowed_waits() {
     let arbiter = ResourceArbiter::new();
     let node0 = arbiter.acquire(cpu_set([0, 1])).unwrap();
-    let node1 = arbiter.try_acquire(cpu_set([2, 3])).unwrap().unwrap();
-    assert!(arbiter
-        .try_acquire(cpu_set([0, 1, 2, 3]))
-        .unwrap()
-        .is_none());
+    let node1 = try_cpu_on_other_thread(&arbiter, cpu_set([2, 3])).unwrap();
+    assert!(try_cpu_on_other_thread(&arbiter, cpu_set([0, 1, 2, 3])).is_none());
     drop((node0, node1));
     assert!(arbiter
         .try_acquire(cpu_set([0, 1, 2, 3]))
@@ -24,7 +21,36 @@ fn disjoint_domains_run_together_but_all_allowed_waits() {
 fn provider_exclusive_conflicts_with_every_cpu_domain() {
     let arbiter = ResourceArbiter::new();
     let _node = arbiter.acquire(cpu_set([4, 5])).unwrap();
-    assert!(arbiter.try_acquire_provider_exclusive().unwrap().is_none());
+    let other = arbiter.clone();
+    assert!(
+        std::thread::spawn(move || other.try_acquire_provider_exclusive().unwrap())
+            .join()
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn same_thread_reentrant_request_does_not_wait_on_its_own_permit() {
+    let arbiter = ResourceArbiter::new();
+    let _outer = arbiter.acquire_provider_exclusive().unwrap();
+
+    assert!(arbiter.try_acquire(cpu_set([0])).unwrap().is_some());
+}
+
+#[test]
+fn blocking_same_thread_reentrant_request_completes() {
+    let (completed_tx, completed_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let arbiter = ResourceArbiter::new();
+        let _outer = arbiter.acquire_provider_exclusive().unwrap();
+        let _inner = arbiter.acquire(cpu_set([0])).unwrap();
+        completed_tx.send(()).unwrap();
+    });
+
+    assert!(completed_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .is_ok());
 }
 
 #[test]
@@ -45,7 +71,7 @@ fn older_all_allowed_waiter_blocks_younger_disjoint_admission() {
     let waiter = std::thread::spawn(move || waiter_arbiter.acquire(cpu_set([0, 1, 2, 3])).unwrap());
     assert!(arbiter.wait_for_waiter_count_for_test(1, Duration::from_secs(2)));
 
-    assert!(arbiter.try_acquire(cpu_set([2, 3])).unwrap().is_none());
+    assert!(try_cpu_on_other_thread(&arbiter, cpu_set([2, 3])).is_none());
     drop(active);
     drop(waiter.join().unwrap());
 }
@@ -58,7 +84,7 @@ fn older_blocked_node_waiter_does_not_serialize_a_disjoint_node() {
     let waiter = std::thread::spawn(move || waiter_arbiter.acquire(cpu_set([0, 1])).unwrap());
     assert!(arbiter.wait_for_waiter_count_for_test(1, Duration::from_secs(2)));
 
-    let disjoint = arbiter.try_acquire(cpu_set([2, 3])).unwrap();
+    let disjoint = try_cpu_on_other_thread(&arbiter, cpu_set([2, 3]));
     assert!(disjoint.is_some());
     drop(disjoint);
     drop(active);
@@ -78,4 +104,11 @@ fn poisoned_state_returns_a_typed_error() {
 
 fn cpu_set<const N: usize>(cpus: [usize; N]) -> CpuSet {
     CpuSet::new(cpus.map(CpuId::new)).unwrap()
+}
+
+fn try_cpu_on_other_thread(arbiter: &ResourceArbiter, cpus: CpuSet) -> Option<ResourcePermit> {
+    let other = arbiter.clone();
+    std::thread::spawn(move || other.try_acquire(cpus).unwrap())
+        .join()
+        .unwrap()
 }

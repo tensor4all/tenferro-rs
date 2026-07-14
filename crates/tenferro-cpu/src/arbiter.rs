@@ -33,13 +33,20 @@ impl ResourceRequest {
 struct Waiter {
     id: u64,
     request: ResourceRequest,
+    owner: std::thread::ThreadId,
+}
+
+#[derive(Debug)]
+struct ActiveRequest {
+    request: ResourceRequest,
+    owner: std::thread::ThreadId,
 }
 
 #[derive(Debug, Default)]
 struct ArbiterState {
     next_request_id: u64,
     waiters: VecDeque<Waiter>,
-    active: BTreeMap<u64, ResourceRequest>,
+    active: BTreeMap<u64, ActiveRequest>,
 }
 
 #[derive(Debug, Default)]
@@ -134,11 +141,12 @@ impl ResourceArbiter {
             .lock()
             .map_err(|_| ResourceArbiterError::StatePoisoned)?;
         let id = state.next_request_id;
+        let owner = std::thread::current().id();
         state.next_request_id = state
             .next_request_id
             .checked_add(1)
             .ok_or(ResourceArbiterError::RequestIdExhausted)?;
-        state.waiters.push_back(Waiter { id, request });
+        state.waiters.push_back(Waiter { id, request, owner });
         self.inner.changed.notify_all();
 
         loop {
@@ -146,20 +154,28 @@ impl ResourceArbiter {
                 return Err(ResourceArbiterError::StatePoisoned);
             };
             let request = &state.waiters[position].request;
+            let reentrant = state.active.values().any(|active| active.owner == owner);
             let active_compatible = state
                 .active
                 .values()
-                .all(|active| !active.conflicts_with(request));
-            let older_compatible = state
-                .waiters
-                .iter()
-                .take(position)
-                .all(|older| !older.request.conflicts_with(request));
+                .all(|active| active.owner == owner || !active.request.conflicts_with(request));
+            let older_compatible = reentrant
+                || state
+                    .waiters
+                    .iter()
+                    .take(position)
+                    .all(|older| !older.request.conflicts_with(request));
             if active_compatible && older_compatible {
                 let Some(waiter) = state.waiters.remove(position) else {
                     return Err(ResourceArbiterError::StatePoisoned);
                 };
-                state.active.insert(id, waiter.request);
+                state.active.insert(
+                    id,
+                    ActiveRequest {
+                        request: waiter.request,
+                        owner: waiter.owner,
+                    },
+                );
                 return Ok(ResourcePermit {
                     inner: Arc::clone(&self.inner),
                     id,
@@ -188,14 +204,17 @@ impl ResourceArbiter {
             .state
             .lock()
             .map_err(|_| ResourceArbiterError::StatePoisoned)?;
+        let owner = std::thread::current().id();
+        let reentrant = state.active.values().any(|active| active.owner == owner);
         let conflicts_with_active = state
             .active
             .values()
-            .any(|active| active.conflicts_with(&request));
-        let bypasses_waiter = state
-            .waiters
-            .iter()
-            .any(|waiter| waiter.request.conflicts_with(&request));
+            .any(|active| active.owner != owner && active.request.conflicts_with(&request));
+        let bypasses_waiter = !reentrant
+            && state
+                .waiters
+                .iter()
+                .any(|waiter| waiter.request.conflicts_with(&request));
         if conflicts_with_active || bypasses_waiter {
             return Ok(None);
         }
@@ -204,7 +223,7 @@ impl ResourceArbiter {
             .next_request_id
             .checked_add(1)
             .ok_or(ResourceArbiterError::RequestIdExhausted)?;
-        state.active.insert(id, request);
+        state.active.insert(id, ActiveRequest { request, owner });
         Ok(Some(ResourcePermit {
             inner: Arc::clone(&self.inner),
             id,
