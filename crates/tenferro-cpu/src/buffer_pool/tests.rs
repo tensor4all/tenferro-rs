@@ -1,6 +1,40 @@
 use std::mem::size_of;
 
-use super::{BufferPool, PoolScalar};
+use super::{
+    parse_default_max_retained_capacity_bytes, BufferPool, PoolScalar,
+    DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
+};
+
+#[test]
+fn default_retention_limit_parser_covers_missing_invalid_zero_and_valid_values() {
+    assert_eq!(
+        parse_default_max_retained_capacity_bytes(None),
+        DEFAULT_MAX_RETAINED_CAPACITY_BYTES
+    );
+    assert_eq!(
+        parse_default_max_retained_capacity_bytes(Some("invalid".into())),
+        DEFAULT_MAX_RETAINED_CAPACITY_BYTES
+    );
+    assert_eq!(
+        parse_default_max_retained_capacity_bytes(Some("0".into())),
+        0
+    );
+    assert_eq!(
+        parse_default_max_retained_capacity_bytes(Some("4096".into())),
+        4096
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn default_retention_limit_parser_rejects_non_unicode_values() {
+    use std::os::unix::ffi::OsStringExt;
+
+    assert_eq!(
+        parse_default_max_retained_capacity_bytes(Some(std::ffi::OsString::from_vec(vec![0xff]))),
+        DEFAULT_MAX_RETAINED_CAPACITY_BYTES
+    );
+}
 
 #[test]
 fn acquire_release_reuse() {

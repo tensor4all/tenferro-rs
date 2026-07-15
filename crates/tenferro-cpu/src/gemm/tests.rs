@@ -290,8 +290,8 @@ fn faer_read_transposed_view_uses_strided_dot_without_materializing_input() {
         &mut cache,
         Some(0),
         &ctx,
-        TensorRead::from_view(TensorView::F64(lhs_view)),
-        TensorRead::from_tensor(&rhs),
+        &TensorRead::from_view(TensorView::F64(lhs_view)),
+        &TensorRead::from_tensor(&rhs),
         &config,
     )
     .unwrap()

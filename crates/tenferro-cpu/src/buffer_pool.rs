@@ -14,8 +14,10 @@
 
 use std::collections::BTreeMap;
 use std::env;
+use std::ffi::OsString;
 use std::fmt;
 use std::mem::size_of;
+use std::sync::OnceLock;
 
 use num_complex::{Complex32, Complex64};
 
@@ -33,6 +35,8 @@ pub const BUFFER_POOL_MAX_RETAINED_BYTES_ENV: &str = "TENFERRO_BUFFER_POOL_MAX_R
 /// sizes as tensor shapes grow while still preserving reuse for hot working
 /// sets.
 pub const DEFAULT_MAX_RETAINED_CAPACITY_BYTES: usize = 100 * 1024 * 1024;
+
+static DEFAULT_MAX_RETAINED_CAPACITY_FROM_ENV: OnceLock<usize> = OnceLock::new();
 
 /// Snapshot of typed host buffers retained by a [`BufferPool`].
 ///
@@ -714,8 +718,14 @@ impl BufferPool {
 }
 
 fn default_max_retained_capacity_bytes() -> usize {
-    env::var(BUFFER_POOL_MAX_RETAINED_BYTES_ENV)
-        .ok()
+    *DEFAULT_MAX_RETAINED_CAPACITY_FROM_ENV.get_or_init(|| {
+        parse_default_max_retained_capacity_bytes(env::var_os(BUFFER_POOL_MAX_RETAINED_BYTES_ENV))
+    })
+}
+
+fn parse_default_max_retained_capacity_bytes(value: Option<OsString>) -> usize {
+    value
+        .and_then(|value| value.into_string().ok())
         .and_then(|value| value.parse().ok())
         .unwrap_or(DEFAULT_MAX_RETAINED_CAPACITY_BYTES)
 }

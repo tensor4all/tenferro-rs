@@ -136,3 +136,22 @@ fn cpu_public_ops_require_backend_owner() {
         );
     }
 }
+
+#[test]
+fn install_pool_has_no_placeholder_construction_or_gemm_descriptor_clones() {
+    let backend_source = include_str!("../src/backend.rs");
+    let buffer_pool_source = include_str!("../src/buffer_pool.rs");
+    let gemm_source = include_str!("../src/gemm/mod.rs");
+    let exec_session_source = include_str!("../src/exec_session.rs");
+
+    assert!(!backend_source.contains("std::mem::take(target)"));
+    assert!(backend_source.contains("buffers: &'a mut BufferPool"));
+    assert!(buffer_pool_source.contains("OnceLock"));
+    assert!(buffer_pool_source.contains("parse_default_max_retained_capacity_bytes"));
+    assert!(gemm_source.contains("lhs: &TensorRead<'_>"));
+    assert!(gemm_source.contains("rhs: &TensorRead<'_>"));
+    assert!(!backend_source.contains("lhs.clone()"));
+    assert!(!backend_source.contains("rhs.clone()"));
+    assert!(!exec_session_source.contains("lhs.clone()"));
+    assert!(!exec_session_source.contains("rhs.clone()"));
+}

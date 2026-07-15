@@ -265,12 +265,8 @@ impl TensorDot for CpuExecSession<'_> {
             DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
                 #[cfg(feature = "cpu-tblis-provider")]
                 {
-                    let direct = gemm::dot_general_tblis_read_cached(
-                        self.buffers,
-                        lhs.clone(),
-                        rhs.clone(),
-                        config,
-                    )?;
+                    let direct =
+                        gemm::dot_general_tblis_read_cached(self.buffers, &lhs, &rhs, config)?;
                     if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
                         return Ok(result);
                     }
@@ -295,8 +291,8 @@ impl TensorDot for CpuExecSession<'_> {
                         self.gemm_analysis_cache,
                         None,
                         self.ctx,
-                        lhs.clone(),
-                        rhs.clone(),
+                        &lhs,
+                        &rhs,
                         config,
                     )?
                 }
@@ -315,8 +311,8 @@ impl TensorDot for CpuExecSession<'_> {
                         self.buffers,
                         self.gemm_analysis_cache,
                         None,
-                        lhs.clone(),
-                        rhs.clone(),
+                        &lhs,
+                        &rhs,
                         config,
                     )?
                 }
@@ -798,8 +794,8 @@ impl SessionCachedDot for CpuExecSession<'_> {
                 #[cfg(feature = "cpu-tblis-provider")]
                 {
                     let direct = gemm::dot_general_tblis_read_into_accum_cached(
-                        lhs.clone(),
-                        rhs.clone(),
+                        &lhs,
+                        &rhs,
                         config,
                         accumulation,
                         &mut out,
@@ -823,8 +819,8 @@ impl SessionCachedDot for CpuExecSession<'_> {
                         self.gemm_analysis_cache,
                         cache_slot,
                         self.ctx,
-                        lhs.clone(),
-                        rhs.clone(),
+                        &lhs,
+                        &rhs,
                         config,
                         accumulation,
                         &mut out,
@@ -845,8 +841,8 @@ impl SessionCachedDot for CpuExecSession<'_> {
                         self.buffers,
                         self.gemm_analysis_cache,
                         cache_slot,
-                        lhs.clone(),
-                        rhs.clone(),
+                        &lhs,
+                        &rhs,
                         config,
                         accumulation,
                         &mut out,
@@ -883,13 +879,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
-                    gemm::grouped_gemm_faer_cached(
-                        self.ctx,
-                        lhs.clone(),
-                        rhs.clone(),
-                        config,
-                        &mut out,
-                    )?
+                    gemm::grouped_gemm_faer_cached(self.ctx, &lhs, &rhs, config, &mut out)?
                 }
                 #[cfg(not(feature = "cpu-faer"))]
                 {
@@ -902,7 +892,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
             CpuBackendKind::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
-                    gemm::grouped_gemm_blas_cached(lhs.clone(), rhs.clone(), config, &mut out)?
+                    gemm::grouped_gemm_blas_cached(&lhs, &rhs, config, &mut out)?
                 }
                 #[cfg(not(feature = "cpu-blas"))]
                 {

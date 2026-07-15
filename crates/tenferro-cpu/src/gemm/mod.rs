@@ -1036,14 +1036,14 @@ pub(crate) fn dot_general_faer_read_cached(
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
     ctx: &crate::CpuContext,
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
     config: &DotGeneralConfig,
 ) -> crate::Result<Option<crate::Tensor>> {
     let _ = (cache, cache_slot, ctx);
     macro_rules! dispatch {
         ($owned:ident, $view:ident, $wrap:ident) => {
-            match (&lhs, &rhs) {
+            match (lhs, rhs) {
                 (
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -1115,14 +1115,14 @@ pub(crate) fn dot_general_faer_read_cached(
 
 #[cfg(feature = "cpu-faer")]
 pub(crate) fn dot_general_faer_read_into_cached(
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
     config: &DotGeneralConfig,
     out: &mut TensorWrite<'_>,
 ) -> crate::Result<bool> {
     macro_rules! dispatch {
         ($owned:ident, $view:ident) => {
-            match (&lhs, &rhs, &mut *out) {
+            match (lhs, rhs, &mut *out) {
                 (
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -1211,8 +1211,8 @@ pub(crate) fn dot_general_faer_read_into_accum_cached(
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
     ctx: &crate::CpuContext,
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
     config: &DotGeneralConfig,
     accumulation: DotGeneralAccumulation,
     out: &mut TensorWrite<'_>,
@@ -1230,7 +1230,7 @@ pub(crate) fn dot_general_faer_read_into_accum_cached(
             if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
                 (accumulation.alpha, accumulation.beta)
             {
-                match (&lhs, &rhs, &mut *out) {
+                match (lhs, rhs, &mut *out) {
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
                         TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -1395,8 +1395,8 @@ pub(crate) fn dot_general_faer_read_into_accum_cached(
 #[cfg(feature = "cpu-faer")]
 pub(crate) fn grouped_gemm_faer_cached(
     ctx: &crate::CpuContext,
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
     config: &GroupedGemmConfig<'_>,
     out: &mut TensorWrite<'_>,
 ) -> crate::Result<bool> {
@@ -1405,7 +1405,7 @@ pub(crate) fn grouped_gemm_faer_cached(
             if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
                 (config.accumulation().alpha, config.accumulation().beta)
             {
-                match (&lhs, &rhs, &mut *out) {
+                match (lhs, rhs, &mut *out) {
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
                         TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -1904,13 +1904,13 @@ pub(crate) fn dot_general_blas_read_cached(
     buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
     config: &DotGeneralConfig,
 ) -> crate::Result<Option<crate::Tensor>> {
     macro_rules! dispatch {
         ($owned:ident, $view:ident, $wrap:ident) => {
-            match (&lhs, &rhs) {
+            match (lhs, rhs) {
                 (
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -2000,8 +2000,8 @@ pub(crate) fn dot_general_blas_read_into_accum_cached(
     _buffers: &mut BufferPool,
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
     config: &DotGeneralConfig,
     accumulation: DotGeneralAccumulation,
     out: &mut TensorWrite<'_>,
@@ -2011,7 +2011,7 @@ pub(crate) fn dot_general_blas_read_into_accum_cached(
             if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
                 (accumulation.alpha, accumulation.beta)
             {
-                match (&lhs, &rhs, &mut *out) {
+                match (lhs, rhs, &mut *out) {
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
                         TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -2167,8 +2167,8 @@ pub(crate) fn dot_general_blas_read_into_accum_cached(
 
 #[cfg(feature = "cpu-blas")]
 pub(crate) fn grouped_gemm_blas_cached(
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
     config: &GroupedGemmConfig<'_>,
     out: &mut TensorWrite<'_>,
 ) -> crate::Result<bool> {
@@ -2177,7 +2177,7 @@ pub(crate) fn grouped_gemm_blas_cached(
             if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
                 (config.accumulation().alpha, config.accumulation().beta)
             {
-                match (&lhs, &rhs, &mut *out) {
+                match (lhs, rhs, &mut *out) {
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
                         TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -2647,13 +2647,13 @@ where
 #[cfg(feature = "cpu-tblis-provider")]
 pub(crate) fn dot_general_tblis_read_cached(
     buffers: &mut BufferPool,
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
     config: &DotGeneralConfig,
 ) -> crate::Result<Option<crate::Tensor>> {
     macro_rules! dispatch {
         ($owned:ident, $view:ident, $wrap:ident) => {
-            match (&lhs, &rhs) {
+            match (lhs, rhs) {
                 (
                     TensorRead::Tensor(crate::Tensor::$owned(a)),
                     TensorRead::Tensor(crate::Tensor::$owned(b)),
@@ -2708,8 +2708,8 @@ pub(crate) fn dot_general_tblis_read_cached(
 // and output-write metadata for one TBLIS dispatch.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn dot_general_tblis_read_into_accum_cached(
-    lhs: TensorRead<'_>,
-    rhs: TensorRead<'_>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
     config: &DotGeneralConfig,
     accumulation: DotGeneralAccumulation,
     out: &mut TensorWrite<'_>,
@@ -2725,7 +2725,7 @@ pub(crate) fn dot_general_tblis_read_into_accum_cached(
                     accumulation.lhs_conj,
                     accumulation.rhs_conj,
                 );
-                match (&lhs, &rhs, &mut *out) {
+                match (lhs, rhs, &mut *out) {
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
                         TensorRead::Tensor(crate::Tensor::$owned(b)),
