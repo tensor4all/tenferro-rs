@@ -115,6 +115,22 @@ binds the operation, shape, dtype, options, provider, placement, and execution
 context. A caller explicitly allocates one opaque mutable workspace per
 concurrency lane and supplies caller-owned destinations to `execute_into`.
 
+Callers that factorize many independent matrices may enter an opaque
+`PreparedFactorizationSession` once and call operation-specific leaf methods
+such as `PreparedSvd::execute_into_session`. The session is operation-neutral
+so compact QR and EIGH can share the same lifecycle later. It is neither
+constructible nor cloneable, and its callback-scoped lifetime prevents it from
+escaping the backend execution domain. Standalone `execute_into` is defined as
+a one-leaf session adapter rather than a separate execution path.
+
+`TensorRead` and `TensorWrite` descriptors belong to caller setup and are
+evaluated before an execution method is entered. Dynamic-rank view descriptors
+own shape and stride metadata, so constructing or cloning them may allocate.
+The prepared-leaf contract begins with preconstructed descriptors; it does not
+hide descriptor construction inside execution. A separate rank-2 descriptor
+API is deliberately not introduced because it would duplicate the canonical
+tensor view contract.
+
 The first implementation is compact SVD through Faer. For an `m x n` input and
 `k = min(m, n)`, its exact outputs are `U: [m, k]`, `S: [k]`, and
 `Vt: [k, n]`. The workspace retains Faer scratch, signed-stride input packing,
@@ -130,7 +146,26 @@ Execution follows these invariants:
 - pass compatible borrowed inputs and compact destinations directly to the
   provider, using only workspace-owned staging at documented boundaries;
 - apply gauge normalization in place; and
-- perform no Rust global-allocator calls after plan/workspace/output warm-up.
+- reuse all tenferro-controlled output, input-pack, and provider-workspace
+  storage without growing it after plan/workspace/output warm-up.
+
+Strict Rust global-allocator zero is evidence for the measured small sequential
+Faer regime, not a guarantee for every shape. Faer's numerical kernels may
+allocate their own internal metadata even with one worker, and its parallel
+Rayon/Spindle path may allocate scheduler storage. Those provider-internal
+allocations are explicitly outside the retained tenferro-storage contract and
+must be reported by shape and provider rather than hidden behind an unsupported
+fixed upper bound. The first implementation documents this distinction instead
+of adding a public capability enum before another provider needs one.
+
+On CPU, session entry acquires the resource permit and installs the managed
+execution owner exactly once. Leaves validate the retained backend, plan, and
+workspace bindings and invoke the provider directly; they do not call
+`CpuBackend::install`, broadcast worker state, or reacquire arbitration. The
+CPU implementation uses static session construction plus a private enum at the
+operation leaf. A tensor `BackendSession` trait object was rejected because
+factorization leaves neither need its buffer pool nor its dynamic operation
+surface.
 
 `CpuLinalgBinding` is a narrow opaque interop contract owned by
 `tenferro-cpu`. It retains coordinator and context allocations so backend

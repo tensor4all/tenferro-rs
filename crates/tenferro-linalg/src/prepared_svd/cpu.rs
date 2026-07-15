@@ -117,37 +117,6 @@ impl private::PreparedSvdDispatch for CpuBackend {
             inner,
         })
     }
-
-    fn execute_prepared_svd_into_impl(
-        &mut self,
-        plan: &PreparedSvd,
-        workspace: &mut SvdWorkspace,
-        input: TensorRead<'_>,
-        outputs: SvdOutputWrites<'_>,
-    ) -> tenferro_tensor::Result<()> {
-        plan.binding.validate(self, plan.dtype)?;
-        workspace.binding.validate(self, workspace.dtype)?;
-        if !workspace.binding.resources.matches(self)
-            || !plan.binding.resources.matches(self)
-            || workspace.shape != plan.shape
-            || workspace.dtype != plan.dtype
-            || !Arc::ptr_eq(&workspace.plan_token, &plan.plan_token)
-        {
-            return Err(Error::unsupported_capability(
-                EXECUTE_OP,
-                BackendId::Cpu,
-                cpu_provider_name(self.kind()),
-                plan.dtype,
-                BINDING_CAPABILITY,
-            ));
-        }
-        validate_execution(plan, &input, &outputs)?;
-        if plan.shape[0] == 0 || plan.shape[1] == 0 {
-            return Ok(());
-        }
-        let par = self.linalg_context().faer_par();
-        self.install(move || execute_faer(plan, &mut workspace.inner, par, input, outputs))
-    }
 }
 
 #[cfg(not(feature = "cpu-faer"))]
@@ -179,22 +148,55 @@ impl private::PreparedSvdDispatch for CpuBackend {
             PREPARED_CAPABILITY,
         ))
     }
+}
 
-    fn execute_prepared_svd_into_impl(
-        &mut self,
-        plan: &PreparedSvd,
-        _workspace: &mut SvdWorkspace,
-        _input: TensorRead<'_>,
-        _outputs: SvdOutputWrites<'_>,
-    ) -> tenferro_tensor::Result<()> {
-        Err(Error::unsupported_capability(
+#[cfg(feature = "cpu-faer")]
+pub(super) fn execute_prepared_svd_into_session(
+    session: &mut crate::prepared_factorization::CpuPreparedFactorizationSession,
+    plan: &PreparedSvd,
+    workspace: &mut SvdWorkspace,
+    input: TensorRead<'_>,
+    outputs: SvdOutputWrites<'_>,
+) -> tenferro_tensor::Result<()> {
+    let backend = &session.backend;
+    plan.binding.validate(backend, plan.dtype)?;
+    workspace.binding.validate(backend, workspace.dtype)?;
+    if !workspace.binding.resources.matches(backend)
+        || !plan.binding.resources.matches(backend)
+        || workspace.shape != plan.shape
+        || workspace.dtype != plan.dtype
+        || !Arc::ptr_eq(&workspace.plan_token, &plan.plan_token)
+    {
+        return Err(Error::unsupported_capability(
             EXECUTE_OP,
             BackendId::Cpu,
-            cpu_provider_name(self.kind()),
+            cpu_provider_name(backend.kind()),
             plan.dtype,
-            PREPARED_CAPABILITY,
-        ))
+            BINDING_CAPABILITY,
+        ));
     }
+    validate_execution(plan, &input, &outputs)?;
+    if plan.shape[0] == 0 || plan.shape[1] == 0 {
+        return Ok(());
+    }
+    execute_faer(plan, &mut workspace.inner, session.par, input, outputs)
+}
+
+#[cfg(not(feature = "cpu-faer"))]
+pub(super) fn execute_prepared_svd_into_session(
+    session: &mut crate::prepared_factorization::CpuPreparedFactorizationSession,
+    plan: &PreparedSvd,
+    _workspace: &mut SvdWorkspace,
+    _input: TensorRead<'_>,
+    _outputs: SvdOutputWrites<'_>,
+) -> tenferro_tensor::Result<()> {
+    Err(Error::unsupported_capability(
+        EXECUTE_OP,
+        BackendId::Cpu,
+        cpu_provider_name(session.backend.kind()),
+        plan.dtype,
+        PREPARED_CAPABILITY,
+    ))
 }
 
 #[cfg(feature = "cpu-faer")]

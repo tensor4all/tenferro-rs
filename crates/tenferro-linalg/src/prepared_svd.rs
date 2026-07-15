@@ -20,6 +20,10 @@ use tenferro_tensor::{
 };
 use tenferro_tensor::{BackendId, DType, Error, Placement, TensorRead, TensorWrite};
 
+use crate::prepared_factorization::{
+    private::PreparedFactorizationDispatch, PreparedFactorizationBackendExt,
+    PreparedFactorizationSession, PreparedFactorizationSessionInner,
+};
 use crate::{backend::LinalgBackend, SvdOptions};
 #[cfg(feature = "cpu-faer")]
 use crate::{
@@ -411,6 +415,10 @@ impl PreparedSvd {
     /// Once the provider call starts, a numerical provider failure may leave
     /// destinations partially overwritten.
     ///
+    /// `TensorRead` and `TensorWrite` descriptor construction is caller-owned
+    /// setup evaluated before this method is entered. In particular, creating
+    /// dynamic-rank shape and stride metadata may allocate.
+    ///
     /// # Examples
     ///
     /// ```rust
@@ -444,9 +452,64 @@ impl PreparedSvd {
         input: TensorRead<'_>,
         outputs: SvdOutputWrites<'_>,
     ) -> tenferro_tensor::Result<()> {
-        private::PreparedSvdDispatch::execute_prepared_svd_into_impl(
-            backend, self, workspace, input, outputs,
-        )
+        backend.with_prepared_factorization_session(move |session| {
+            self.execute_into_session(session, workspace, input, outputs)
+        })
+    }
+
+    /// Execute inside an already-entered prepared factorization session.
+    ///
+    /// This leaf operation does not reacquire backend resources or re-enter a
+    /// backend worker pool. All metadata and overlap checks complete before
+    /// the first output write.
+    ///
+    /// The prepared-leaf allocation boundary begins with already-constructed
+    /// `TensorRead` and `TensorWrite` descriptors. Creating dynamic-rank view
+    /// descriptors is caller setup and may allocate before function entry.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::{
+    ///     PreparedFactorizationBackendExt, PreparedSvdBackendExt, SvdOptions,
+    ///     SvdOutputWrites,
+    /// };
+    /// use tenferro_tensor::{DType, Tensor, TensorRead, TensorWrite};
+    /// let mut backend = CpuBackend::new();
+    /// let plan = backend.prepare_svd([1, 1], DType::F64, SvdOptions::default())?;
+    /// let mut workspace = plan.allocate_workspace(&mut backend)?;
+    /// let input = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64])?;
+    /// let mut u = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64])?;
+    /// let mut s = Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?;
+    /// let mut vt = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64])?;
+    /// backend.with_prepared_factorization_session(|session| {
+    ///     plan.execute_into_session(
+    ///         session,
+    ///         &mut workspace,
+    ///         TensorRead::from_tensor(&input),
+    ///         SvdOutputWrites::new(
+    ///             TensorWrite::from_tensor(&mut u),
+    ///             TensorWrite::from_tensor(&mut s),
+    ///             TensorWrite::from_tensor(&mut vt),
+    ///         ),
+    ///     )
+    /// })?;
+    /// assert_eq!(s.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn execute_into_session(
+        &self,
+        session: &mut PreparedFactorizationSession<'_>,
+        workspace: &mut SvdWorkspace,
+        input: TensorRead<'_>,
+        outputs: SvdOutputWrites<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        match &mut session.inner {
+            PreparedFactorizationSessionInner::Cpu(cpu_session) => {
+                cpu::execute_prepared_svd_into_session(cpu_session, self, workspace, input, outputs)
+            }
+        }
     }
 }
 
@@ -515,7 +578,9 @@ impl fmt::Debug for SvdWorkspace {
 /// assert_eq!(plan.output_specs().s().shape(), &[2]);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub trait PreparedSvdBackendExt: private::PreparedSvdDispatch {
+pub trait PreparedSvdBackendExt:
+    private::PreparedSvdDispatch + PreparedFactorizationBackendExt
+{
     /// Prepare compact SVD for one fixed rank-2 shape and dtype.
     ///
     /// # Examples
@@ -539,12 +604,15 @@ pub trait PreparedSvdBackendExt: private::PreparedSvdDispatch {
     }
 }
 
-impl<T: private::PreparedSvdDispatch> PreparedSvdBackendExt for T {}
+impl<T> PreparedSvdBackendExt for T where
+    T: private::PreparedSvdDispatch + PreparedFactorizationBackendExt
+{
+}
 
 mod private {
     use super::*;
 
-    pub trait PreparedSvdDispatch: LinalgBackend {
+    pub trait PreparedSvdDispatch: LinalgBackend + PreparedFactorizationDispatch {
         fn prepare_svd_impl(
             &mut self,
             shape: [usize; 2],
@@ -556,14 +624,6 @@ mod private {
             &mut self,
             plan: &PreparedSvd,
         ) -> tenferro_tensor::Result<SvdWorkspace>;
-
-        fn execute_prepared_svd_into_impl(
-            &mut self,
-            plan: &PreparedSvd,
-            workspace: &mut SvdWorkspace,
-            input: TensorRead<'_>,
-            outputs: SvdOutputWrites<'_>,
-        ) -> tenferro_tensor::Result<()>;
     }
 }
 

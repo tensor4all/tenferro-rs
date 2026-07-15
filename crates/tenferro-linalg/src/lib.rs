@@ -37,6 +37,7 @@ mod eager_ext;
 mod extension;
 #[cfg(feature = "cuda")]
 mod gpu;
+mod prepared_factorization;
 mod prepared_svd;
 mod traced;
 
@@ -54,6 +55,7 @@ pub use extension::{
     register_runtime, EighGauge, EighOptions, QrGauge, QrOptions, SvdGauge, SvdOptions,
     DEFAULT_DECOMPOSITION_DERIVATIVE_EPS, LINALG_EXTENSION_FAMILY_ID,
 };
+pub use prepared_factorization::{PreparedFactorizationBackendExt, PreparedFactorizationSession};
 pub use prepared_svd::{
     PreparedSvd, PreparedSvdBackendExt, SvdOutputSpec, SvdOutputSpecs, SvdOutputWrites,
     SvdWorkspace,

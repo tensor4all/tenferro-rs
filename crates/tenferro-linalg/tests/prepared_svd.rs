@@ -1,7 +1,8 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{CpuBackend, CpuBackendKind};
 use tenferro_linalg::{
-    LinalgBackend, PreparedSvdBackendExt, SvdGauge, SvdOptions, SvdOutputWrites,
+    LinalgBackend, PreparedFactorizationBackendExt, PreparedSvdBackendExt, SvdGauge, SvdOptions,
+    SvdOutputWrites,
 };
 use tenferro_tensor::{
     BackendId, DType, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, Tensor,
@@ -841,6 +842,98 @@ fn prepared_svd_binding_accepts_clone_and_rejects_distinct_backend_before_writes
 }
 
 #[test]
+fn prepared_svd_session_rejects_distinct_binding_before_writes() {
+    let mut creator = CpuBackend::with_kind(CpuBackendKind::Faer).unwrap();
+    let plan = creator
+        .prepare_svd([2, 2], DType::F64, SvdOptions::default())
+        .unwrap();
+    let mut workspace = plan.allocate_workspace(&mut creator).unwrap();
+    let input = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 2.0]).unwrap();
+    let mut distinct = CpuBackend::with_kind(CpuBackendKind::Faer).unwrap();
+    let (mut u, mut s, mut vt) = f64_outputs(2, 2, 43.0);
+
+    let error = distinct.with_prepared_factorization_session(|session| {
+        plan.execute_into_session(
+            session,
+            &mut workspace,
+            TensorRead::from_tensor(&input),
+            SvdOutputWrites::new(
+                TensorWrite::from_tensor(&mut u),
+                TensorWrite::from_tensor(&mut s),
+                TensorWrite::from_tensor(&mut vt),
+            ),
+        )
+    });
+
+    assert!(matches!(
+        error,
+        Err(Error::UnsupportedCapability {
+            capability: "prepared SVD backend/context binding",
+            ..
+        })
+    ));
+    assert_eq!(u.as_slice::<f64>().unwrap(), &[43.0; 4]);
+    assert_eq!(s.as_slice::<f64>().unwrap(), &[43.0; 2]);
+    assert_eq!(vt.as_slice::<f64>().unwrap(), &[43.0; 4]);
+    assert_eq!(distinct.with_prepared_factorization_session(|_| 19_u32), 19);
+}
+
+#[test]
+fn prepared_factorization_session_releases_execution_after_panic() {
+    let mut backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.with_prepared_factorization_session(|_| panic!("forced session panic"));
+    }));
+    assert!(panic.is_err());
+    assert_eq!(backend.with_prepared_factorization_session(|_| 17_u32), 17);
+}
+
+#[test]
+fn prepared_svd_session_repeats_correctly_with_multiple_workers() {
+    let input = Tensor::from_vec_col_major(
+        vec![4, 3],
+        vec![
+            3.0_f64, 1.0, -2.0, 4.0, -1.0, 2.0, 0.5, 3.5, 2.0, -3.0, 1.5, 0.25,
+        ],
+    )
+    .unwrap();
+
+    for workers in [2, 4] {
+        let mut backend = CpuBackend::with_threads_and_kind(workers, CpuBackendKind::Faer).unwrap();
+        let plan = backend
+            .prepare_svd([4, 3], DType::F64, SvdOptions::default())
+            .unwrap();
+        let mut workspace = plan.allocate_workspace(&mut backend).unwrap();
+        let (mut u, mut s, mut vt) = f64_outputs(4, 3, -1.0);
+
+        backend.with_prepared_factorization_session(|session| {
+            for _ in 0..128 {
+                plan.execute_into_session(
+                    session,
+                    &mut workspace,
+                    TensorRead::from_tensor(&input),
+                    SvdOutputWrites::new(
+                        TensorWrite::from_tensor(&mut u),
+                        TensorWrite::from_tensor(&mut s),
+                        TensorWrite::from_tensor(&mut vt),
+                    ),
+                )
+                .unwrap();
+            }
+        });
+
+        assert_f64_svd_residual(
+            input.as_slice::<f64>().unwrap(),
+            u.as_slice::<f64>().unwrap(),
+            s.as_slice::<f64>().unwrap(),
+            vt.as_slice::<f64>().unwrap(),
+            4,
+            3,
+        );
+    }
+}
+
+#[test]
 fn prepared_svd_validation_failure_leaves_all_destinations_unchanged() {
     let mut backend = CpuBackend::with_kind(CpuBackendKind::Faer).unwrap();
     let plan = backend
@@ -1070,28 +1163,30 @@ fn prepared_svd_supports_multiple_workspaces_and_rejects_cross_plan_workspace() 
     let mut second_workspace = plan.allocate_workspace(&mut backend).unwrap();
     let input = Tensor::from_vec_col_major(vec![2, 2], vec![3.0_f64, 0.0, 0.0, 2.0]).unwrap();
 
-    for workspace in [&mut first_workspace, &mut second_workspace] {
-        let (mut u, mut s, mut vt) = f64_outputs(2, 2, -1.0);
-        plan.execute_into(
-            &mut backend,
-            workspace,
-            TensorRead::from_tensor(&input),
-            SvdOutputWrites::new(
-                TensorWrite::from_tensor(&mut u),
-                TensorWrite::from_tensor(&mut s),
-                TensorWrite::from_tensor(&mut vt),
-            ),
-        )
-        .unwrap();
-        assert_f64_svd_residual(
-            input.as_slice::<f64>().unwrap(),
-            u.as_slice::<f64>().unwrap(),
-            s.as_slice::<f64>().unwrap(),
-            vt.as_slice::<f64>().unwrap(),
-            2,
-            2,
-        );
-    }
+    backend.with_prepared_factorization_session(|session| {
+        for workspace in [&mut first_workspace, &mut second_workspace] {
+            let (mut u, mut s, mut vt) = f64_outputs(2, 2, -1.0);
+            plan.execute_into_session(
+                session,
+                workspace,
+                TensorRead::from_tensor(&input),
+                SvdOutputWrites::new(
+                    TensorWrite::from_tensor(&mut u),
+                    TensorWrite::from_tensor(&mut s),
+                    TensorWrite::from_tensor(&mut vt),
+                ),
+            )
+            .unwrap();
+            assert_f64_svd_residual(
+                input.as_slice::<f64>().unwrap(),
+                u.as_slice::<f64>().unwrap(),
+                s.as_slice::<f64>().unwrap(),
+                vt.as_slice::<f64>().unwrap(),
+                2,
+                2,
+            );
+        }
+    });
 
     let (mut u, mut s, mut vt) = f64_outputs(2, 2, 37.0);
     let error = other_plan
