@@ -370,16 +370,17 @@ impl CpuContext {
 
     /// Return the faer parallelism policy for work run inside this context.
     ///
-    /// `Par::rayon(0)` is intentional for multi-threaded contexts: faer reads
-    /// `rayon::current_num_threads()`, so calls made under [`Self::install`]
-    /// inherit this context's Rayon pool size.
+    /// The explicit degree keeps policy construction independent of the
+    /// ambient Rayon pool, including plans prepared before [`Self::install`].
     #[cfg(feature = "cpu-faer")]
     #[doc(hidden)]
     pub fn faer_par(&self) -> faer::Par {
         if self.num_threads == 1 {
             faer::Par::Seq
         } else {
-            faer::Par::rayon(0)
+            // `rayon(0)` captures the ambient pool immediately, which may not
+            // be this context when a provider plan is prepared outside install.
+            faer::Par::rayon(self.num_threads)
         }
     }
 

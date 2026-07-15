@@ -100,8 +100,8 @@ CPU execution is handled by `CpuBackend`:
 - `dot_general` uses the selected CPU provider (`cpu-faer`, `cpu-blas`, or
   optional `cpu-tblis` for supported contractions),
 - faer-backed work runs inside the `CpuContext` Rayon pool through
-  `CpuExecSession`, with `Par::Seq` for one-thread contexts and `Par::rayon(0)`
-  for multi-thread contexts,
+  `CpuExecSession`, with `Par::Seq` for one-thread contexts and explicit
+  `Par::rayon(n)` from the configured degree for multi-thread contexts,
 - BLAS/LAPACK and TBLIS provider threading remain provider-owned.
 
 `cpu-tblis` is additive to the faer/BLAS providers. `CpuBackendKind` still

@@ -86,7 +86,7 @@ pool before dispatching tensor-sized kernels.
 | Elementwise and analytic ops | `strided-kernel` map/zip kernels run under `CpuContext` and can use Rayon when the context has more than one thread. |
 | Reductions | `strided-kernel::reduce_axis` runs under `CpuContext` and can use Rayon when the context has more than one thread. |
 | View materialization, transpose/permute, broadcast, convert, and diagonal extraction | `strided-kernel` copy/map kernels run under `CpuContext` and can use Rayon for tensor-sized copies. |
-| `dot_general` through `cpu-faer` | faer receives `Par::Seq` for one-thread contexts and `Par::rayon(0)` inside the owned `CpuContext` pool for multi-thread contexts. |
+| `dot_general` through `cpu-faer` | faer receives `Par::Seq` for one-thread contexts and explicit `Par::rayon(n)` using the configured context degree for multi-thread contexts. |
 | GEMM and linalg through `cpu-blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
 | Supported `dot_general` contractions through `cpu-tblis` | TBLIS owns provider threading; unsupported TBLIS shapes fall back to the compiled faer/BLAS provider. |
 | Indexing, scatter/gather, slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside `CpuContext::install`, and source comments mark the intentional sequential path. |
