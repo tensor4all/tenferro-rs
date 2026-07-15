@@ -34,7 +34,9 @@ once during `CpuContext` construction, before the constructor returns. An
 execution changes that shared active owner under RAII; workers consult the
 shared state when a nested backend entry is attempted. Entry must not broadcast
 owner metadata to every worker because that makes empty warm execution scale
-with the pool and allocate per call.
+with the pool and adds mandatory per-entry allocations. Rayon may still perform
+occasional scheduler maintenance allocations; the backend does not promise that
+an unbounded sequence of calls remains allocation-free.
 
 This propagation contract covers Rayon workers owned by the active
 `CpuContext`. Ambient global Rayon workers are not part of a managed execution

@@ -10,6 +10,14 @@ fn cpu_sets_are_sorted_and_deduplicated() {
 }
 
 #[test]
+fn cpu_set_clones_share_the_immutable_cpu_domain() {
+    let original = cpu_set([2, 5, 8]);
+    let cloned = original.clone();
+
+    assert!(Arc::ptr_eq(&original.cpus, &cloned.cpus));
+}
+
+#[test]
 fn empty_cpu_sets_are_rejected() {
     assert_eq!(CpuSet::new([]), Err(CpuSetError::Empty));
 }
