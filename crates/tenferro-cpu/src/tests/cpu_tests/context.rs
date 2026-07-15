@@ -192,11 +192,18 @@ fn cpu_context_faer_policy_ignores_a_different_ambient_pool_size() {
 #[test]
 fn performance_notes_match_current_cpu_threading_contract() {
     let notes = include_str!("../../../../../docs/performance/tt-inner-product-overhead.md");
+    let repository_rules = include_str!("../../../../../REPOSITORY_RULES.md");
     assert!(
         !notes.contains("The faer backend is therefore run without a tenferro-owned Rayon pool")
             && notes.contains("maps multi-threaded execution to explicit `Par::rayon(n)`")
             && !notes.contains("The global-Rayon columns became the production policy"),
         "performance notes must describe the explicit CpuContext thread budget, not ambient global-Rayon policy"
+    );
+    assert!(
+        repository_rules.contains("explicit `Par::rayon(n)`")
+            && !repository_rules
+                .contains("Use `Par::Seq` for one-thread contexts and `Par::rayon(0)`"),
+        "repository rules must derive Faer parallelism from the configured CpuContext degree"
     );
 }
 

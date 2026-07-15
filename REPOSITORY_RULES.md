@@ -699,7 +699,9 @@ Tests follow implementation ownership.
 - For faer-backed CPU ops, `CpuContext` is the single source of truth for thread-pool policy.
 - Do not derive faer parallelism independently inside individual ops or helper functions.
 - Execute faer-backed work only inside `ctx.install(...)` so the owned rayon context is preserved.
-- Use `Par::Seq` for one-thread contexts and `Par::rayon(0)` for multi-thread contexts so faer follows the current `CpuContext`.
+- Use `Par::Seq` for one-thread contexts and explicit `Par::rayon(n)` from the
+  configured `CpuContext` degree for multi-thread contexts. Do not derive the
+  policy from an ambient Rayon pool during plan or session setup.
 - Tensor-sized strided CPU kernels that are not provider-owned must also run
   inside `CpuContext::install(...)`, so Rayon-backed `strided-kernel` work uses
   the backend's owned pool. BLAS/LAPACK provider-owned threading remains
