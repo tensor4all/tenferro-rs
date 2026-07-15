@@ -74,6 +74,16 @@ pub enum Error {
         dtype: crate::DType,
         backend: crate::BackendId,
     },
+    #[error(
+        "{backend} backend provider {provider} does not support {capability} for {op} with dtype {dtype:?}"
+    )]
+    UnsupportedCapability {
+        op: &'static str,
+        backend: crate::BackendId,
+        provider: &'static str,
+        dtype: crate::DType,
+        capability: &'static str,
+    },
     #[error("{op}: division by zero for dtype {dtype:?}")]
     DivisionByZero {
         op: &'static str,
@@ -134,6 +144,41 @@ impl Error {
         backend: crate::BackendId,
     ) -> Self {
         Self::UnsupportedOpDType { op, dtype, backend }
+    }
+
+    /// Construct a structured backend/provider capability error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{BackendId, DType, Error};
+    ///
+    /// let err = Error::unsupported_capability(
+    ///     "prepare_svd",
+    ///     BackendId::Cpu,
+    ///     "blas",
+    ///     DType::F64,
+    ///     "prepared compact SVD",
+    /// );
+    /// assert!(matches!(
+    ///     err,
+    ///     Error::UnsupportedCapability { provider: "blas", .. }
+    /// ));
+    /// ```
+    pub fn unsupported_capability(
+        op: &'static str,
+        backend: crate::BackendId,
+        provider: &'static str,
+        dtype: crate::DType,
+        capability: &'static str,
+    ) -> Self {
+        Self::UnsupportedCapability {
+            op,
+            backend,
+            provider,
+            dtype,
+            capability,
+        }
     }
 
     /// Construct a structured division-by-zero domain error.
