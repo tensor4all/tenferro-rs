@@ -9,8 +9,8 @@ use tenferro_tensor::{
 };
 
 use super::{
-    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, promote_dtypes, EighGauge,
-    LinalgExtensionOp, LinalgOp, QrGauge, SvdGauge, LINALG_EXTENSION_FAMILY_ID,
+    apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, canonical_svd_gauge_layout, promote_dtypes,
+    EighGauge, LinalgExtensionOp, LinalgOp, QrGauge, SvdGauge, LINALG_EXTENSION_FAMILY_ID,
 };
 
 #[test]
@@ -200,6 +200,166 @@ fn canonical_pivot_svd_gauge_removes_complex_pivot_phase() {
     assert!((vt[0].im - scale).abs() < 1.0e-12);
     assert!((vt[1].re + 1.0 / scale).abs() < 1.0e-12);
     assert!((vt[1].im - 7.0 / scale).abs() < 1.0e-12);
+}
+
+#[test]
+fn canonical_svd_gauge_rejects_batch_product_overflow() {
+    let error = canonical_svd_gauge_layout(1, 1, 1, &[usize::MAX, 2])
+        .expect_err("overflowing SVD batch shape should be rejected");
+
+    assert!(matches!(
+        error,
+        Error::InvalidConfig {
+            op: "tenferro-linalg.svd",
+            ..
+        }
+    ));
+    assert!(error.to_string().contains("canonical SVD batch"));
+}
+
+#[test]
+fn canonical_svd_gauge_rejects_u_batch_span_overflow() {
+    let error = canonical_svd_gauge_layout(usize::MAX, 2, 1, &[])
+        .expect_err("overflowing U batch span should be rejected");
+
+    assert!(matches!(
+        error,
+        Error::InvalidConfig {
+            op: "tenferro-linalg.svd",
+            ..
+        }
+    ));
+    assert!(error.to_string().contains("canonical SVD U batch"));
+}
+
+#[test]
+fn canonical_svd_gauge_rejects_vt_batch_span_overflow() {
+    let error = canonical_svd_gauge_layout(1, usize::MAX, 2, &[])
+        .expect_err("overflowing VT batch span should be rejected");
+
+    assert!(matches!(
+        error,
+        Error::InvalidConfig {
+            op: "tenferro-linalg.svd",
+            ..
+        }
+    ));
+    assert!(error.to_string().contains("canonical SVD VT batch"));
+}
+
+#[test]
+fn canonical_svd_gauge_rejects_u_storage_span_overflow() {
+    let error = canonical_svd_gauge_layout(usize::MAX, 1, 1, &[2])
+        .expect_err("overflowing U storage span should be rejected");
+
+    assert!(matches!(
+        error,
+        Error::InvalidConfig {
+            op: "tenferro-linalg.svd",
+            ..
+        }
+    ));
+    assert!(error.to_string().contains("canonical SVD U storage"));
+}
+
+#[test]
+fn canonical_svd_gauge_rejects_vt_storage_span_overflow() {
+    let error = canonical_svd_gauge_layout(1, 1, usize::MAX, &[2])
+        .expect_err("overflowing VT storage span should be rejected");
+
+    assert!(matches!(
+        error,
+        Error::InvalidConfig {
+            op: "tenferro-linalg.svd",
+            ..
+        }
+    ));
+    assert!(error.to_string().contains("canonical SVD VT storage"));
+}
+
+#[test]
+fn canonical_svd_gauge_rejects_short_u_storage() {
+    let layout = canonical_svd_gauge_layout(1, 1, 1, &[2]).unwrap();
+    let error = layout
+        .validate_storage(1, 2)
+        .expect_err("short U storage should be rejected before gauge indexing");
+
+    assert!(matches!(
+        error,
+        Error::InvalidConfig {
+            op: "tenferro-linalg.svd",
+            ..
+        }
+    ));
+    assert!(error
+        .to_string()
+        .contains("expected U storage length 2, got 1"));
+}
+
+#[test]
+fn canonical_pivot_svd_gauge_handles_batched_f32_and_c32_outputs() {
+    let mut real_outputs = vec![
+        Tensor::from_vec_col_major(vec![2, 1, 2], vec![-2.0_f32, 1.0, 0.5, -3.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![1, 2], vec![2.0_f32, 3.0]).unwrap(),
+        Tensor::from_vec_col_major(vec![1, 2, 2], vec![10.0_f32, 20.0, 30.0, 40.0]).unwrap(),
+    ];
+
+    apply_svd_gauge(SvdGauge::CanonicalPivot, &mut real_outputs).unwrap();
+
+    assert_eq!(
+        real_outputs[0].as_slice::<f32>().unwrap(),
+        &[2.0, -1.0, -0.5, 3.0]
+    );
+    assert_eq!(
+        real_outputs[2].as_slice::<f32>().unwrap(),
+        &[-10.0, -20.0, -30.0, -40.0]
+    );
+
+    let mut complex_outputs = vec![
+        Tensor::C32(
+            TypedTensor::from_vec_col_major(
+                vec![1, 1, 2],
+                vec![Complex32::new(1.0, 1.0), Complex32::new(0.0, -2.0)],
+            )
+            .unwrap(),
+        ),
+        Tensor::from_vec_col_major(vec![1, 2], vec![2.0_f32, 3.0]).unwrap(),
+        Tensor::C32(
+            TypedTensor::from_vec_col_major(
+                vec![1, 1, 2],
+                vec![Complex32::new(2.0, 0.0), Complex32::new(3.0, 0.0)],
+            )
+            .unwrap(),
+        ),
+    ];
+
+    apply_svd_gauge(SvdGauge::CanonicalPivot, &mut complex_outputs).unwrap();
+
+    let scale = 2.0_f32.sqrt();
+    let u = complex_outputs[0].as_slice::<Complex32>().unwrap();
+    assert!((u[0].re - scale).abs() < 1.0e-6);
+    assert!(u[0].im.abs() < 1.0e-6);
+    assert!((u[1].re - 2.0).abs() < 1.0e-6);
+    assert!(u[1].im.abs() < 1.0e-6);
+    let vt = complex_outputs[2].as_slice::<Complex32>().unwrap();
+    assert!((vt[0].re - scale).abs() < 1.0e-6);
+    assert!((vt[0].im - scale).abs() < 1.0e-6);
+    assert!(vt[1].re.abs() < 1.0e-6);
+    assert!((vt[1].im + 3.0).abs() < 1.0e-6);
+}
+
+#[test]
+fn canonical_pivot_svd_gauge_accepts_zero_batch() {
+    let mut outputs = vec![
+        Tensor::from_vec_col_major(vec![2, 1, 0], Vec::<f64>::new()).unwrap(),
+        Tensor::from_vec_col_major(vec![1, 0], Vec::<f64>::new()).unwrap(),
+        Tensor::from_vec_col_major(vec![1, 2, 0], Vec::<f64>::new()).unwrap(),
+    ];
+
+    apply_svd_gauge(SvdGauge::CanonicalPivot, &mut outputs).unwrap();
+
+    assert!(outputs[0].as_slice::<f64>().unwrap().is_empty());
+    assert!(outputs[2].as_slice::<f64>().unwrap().is_empty());
 }
 
 #[test]
