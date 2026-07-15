@@ -1,5 +1,5 @@
-use std::cell::Cell;
-use std::collections::{BTreeMap, VecDeque};
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -21,14 +21,19 @@ impl ResourceOwner {
 thread_local! {
     static THREAD_OWNER: ResourceOwner = ResourceOwner::fresh();
     static EXECUTION_OWNER: Cell<Option<ResourceOwner>> = const { Cell::new(None) };
-    static POOL_EXECUTION_OWNER: Cell<Option<ResourceOwner>> = const { Cell::new(None) };
+    static WORKER_EXECUTION_SCOPE: RefCell<Option<Arc<ExecutionScopeState>>> = const { RefCell::new(None) };
 }
 
 pub(crate) const BACKEND_REENTRY_PANIC: &str =
     "CpuBackend cannot be re-entered while another CPU backend execution is active on this thread or managed Rayon scope";
 
 pub(crate) fn inherited_or_new_execution_owner() -> ResourceOwner {
-    if POOL_EXECUTION_OWNER.with(Cell::get).is_some() {
+    if WORKER_EXECUTION_SCOPE.with(|scope| {
+        scope
+            .borrow()
+            .as_ref()
+            .is_some_and(|scope| scope.has_active_owner())
+    }) {
         panic!("{BACKEND_REENTRY_PANIC}");
     }
     if EXECUTION_OWNER.with(Cell::get).is_some() {
@@ -51,22 +56,78 @@ pub(crate) fn with_execution_owner<R>(owner: ResourceOwner, op: impl FnOnce() ->
     op()
 }
 
-pub(crate) fn set_pool_execution_owner(owner: Option<ResourceOwner>) {
-    POOL_EXECUTION_OWNER.set(owner);
+pub(crate) fn register_worker_execution_scope(scope: Arc<ExecutionScopeState>) {
+    WORKER_EXECUTION_SCOPE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        // INVARIANT: each owned Rayon worker is a dedicated thread whose start
+        // hook runs once; replacing a live scope would mix context ownership.
+        debug_assert!(slot.is_none());
+        *slot = Some(scope);
+    });
 }
 
-pub(crate) fn with_pool_execution_owner<R>(owner: ResourceOwner, op: impl FnOnce() -> R) -> R {
-    struct RestoreOwner(Option<ResourceOwner>);
+#[cfg(test)]
+pub(crate) fn worker_execution_scope_registered() -> bool {
+    WORKER_EXECUTION_SCOPE.with(|scope| scope.borrow().is_some())
+}
 
-    impl Drop for RestoreOwner {
-        fn drop(&mut self) {
-            POOL_EXECUTION_OWNER.set(self.0);
+#[derive(Debug, Default)]
+pub(crate) struct ExecutionScopeState {
+    active: Mutex<ExecutionOwnerState>,
+}
+
+#[derive(Debug, Default)]
+struct ExecutionOwnerState {
+    owner: Option<ResourceOwner>,
+    depth: usize,
+}
+
+impl ExecutionScopeState {
+    pub(crate) fn enter(&self, owner: ResourceOwner) -> ExecutionScopeGuard<'_> {
+        let mut active = self
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match active.owner {
+            None => {
+                active.owner = Some(owner);
+                active.depth = 1;
+            }
+            Some(current) if current == owner => active.depth += 1,
+            Some(current) => panic!(
+                "CPU execution owner invariant violated: active {current:?}, requested {owner:?}"
+            ),
         }
+        ExecutionScopeGuard { scope: self, owner }
     }
 
-    let previous = POOL_EXECUTION_OWNER.replace(Some(owner));
-    let _restore = RestoreOwner(previous);
-    op()
+    fn has_active_owner(&self) -> bool {
+        self.active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .owner
+            .is_some()
+    }
+}
+
+pub(crate) struct ExecutionScopeGuard<'a> {
+    scope: &'a ExecutionScopeState,
+    owner: ResourceOwner,
+}
+
+impl Drop for ExecutionScopeGuard<'_> {
+    fn drop(&mut self) {
+        let mut active = self
+            .scope
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        debug_assert_eq!(active.owner, Some(self.owner));
+        active.depth -= 1;
+        if active.depth == 0 {
+            active.owner = None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -108,6 +169,7 @@ struct Waiter {
 
 #[derive(Debug)]
 struct ActiveRequest {
+    id: u64,
     request: ResourceRequest,
     owner: ResourceOwner,
 }
@@ -116,7 +178,9 @@ struct ActiveRequest {
 struct ArbiterState {
     next_request_id: u64,
     waiters: VecDeque<Waiter>,
-    active: BTreeMap<u64, ActiveRequest>,
+    // INVARIANT: active admission only needs conflict scans and id removal. A
+    // retained Vec avoids the per-permit node allocation of a tree map.
+    active: Vec<ActiveRequest>,
 }
 
 #[derive(Debug, Default)]
@@ -231,10 +295,10 @@ impl ResourceArbiter {
                 return Err(ResourceArbiterError::StatePoisoned);
             };
             let request = &state.waiters[position].request;
-            let reentrant = state.active.values().any(|active| active.owner == owner);
+            let reentrant = state.active.iter().any(|active| active.owner == owner);
             let active_compatible = state
                 .active
-                .values()
+                .iter()
                 .all(|active| active.owner == owner || !active.request.conflicts_with(request));
             let older_compatible = reentrant
                 || state
@@ -246,13 +310,11 @@ impl ResourceArbiter {
                 let Some(waiter) = state.waiters.remove(position) else {
                     return Err(ResourceArbiterError::StatePoisoned);
                 };
-                state.active.insert(
+                state.active.push(ActiveRequest {
                     id,
-                    ActiveRequest {
-                        request: waiter.request,
-                        owner: waiter.owner,
-                    },
-                );
+                    request: waiter.request,
+                    owner: waiter.owner,
+                });
                 return Ok(ResourcePermit {
                     inner: Arc::clone(&self.inner),
                     id,
@@ -283,10 +345,10 @@ impl ResourceArbiter {
             .lock()
             .map_err(|_| ResourceArbiterError::StatePoisoned)?;
         let owner = request_owner();
-        let reentrant = state.active.values().any(|active| active.owner == owner);
+        let reentrant = state.active.iter().any(|active| active.owner == owner);
         let conflicts_with_active = state
             .active
-            .values()
+            .iter()
             .any(|active| active.owner != owner && active.request.conflicts_with(&request));
         let bypasses_waiter = !reentrant
             && state
@@ -301,7 +363,7 @@ impl ResourceArbiter {
             .next_request_id
             .checked_add(1)
             .ok_or(ResourceArbiterError::RequestIdExhausted)?;
-        state.active.insert(id, ActiveRequest { request, owner });
+        state.active.push(ActiveRequest { id, request, owner });
         Ok(Some(ResourcePermit {
             inner: Arc::clone(&self.inner),
             id,
@@ -371,7 +433,9 @@ impl Drop for ResourcePermit {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.active.remove(&self.id);
+        if let Some(position) = state.active.iter().position(|active| active.id == self.id) {
+            state.active.swap_remove(position);
+        }
         self.inner.changed.notify_all();
     }
 }

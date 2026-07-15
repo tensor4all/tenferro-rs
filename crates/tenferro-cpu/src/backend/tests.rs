@@ -243,8 +243,8 @@ fn direct_nested_independent_engine_is_rejected_in_a_managed_scope() {
 #[test]
 #[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn cross_pool_wait_cannot_misclassify_a_scheduled_sibling_as_direct_nesting() {
-    let outer = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
-    let middle = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+    let outer = CpuBackend::from_context(Arc::new(CpuContext::with_threads(2).unwrap()));
+    let middle = CpuBackend::from_context(Arc::new(CpuContext::with_threads(2).unwrap()));
     let sibling = outer.clone();
 
     let (_, sibling_outcome) = outer.install(move || {
@@ -364,7 +364,7 @@ fn shared_context_work_is_not_mistaken_for_backend_reentry() {
 
 #[test]
 #[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
-fn execution_owner_broadcast_is_cleared_after_panic() {
+fn shared_execution_scope_is_cleared_after_panic() {
     let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
 
     let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

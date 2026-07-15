@@ -2,10 +2,10 @@ use super::{select_worker_cpus, CpuContext, CpuContextError};
 #[cfg(target_os = "linux")]
 use crate::affinity::current_cpu;
 use crate::affinity::{CpuAffinityError, ThreadAffinity};
+use crate::arbiter::worker_execution_scope_registered;
 #[cfg(target_os = "linux")]
 use crate::process_cpu_affinity;
 use crate::{CpuId, CpuSet};
-#[cfg(target_os = "linux")]
 use rayon::prelude::*;
 #[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
@@ -13,6 +13,19 @@ use std::collections::BTreeSet;
 #[test]
 fn with_threads_rejects_zero() {
     assert!(CpuContext::with_threads(0).is_err());
+}
+
+#[test]
+fn context_constructor_registers_every_rayon_worker_execution_scope() {
+    for threads in [2, 4] {
+        let ctx = CpuContext::with_threads(threads).unwrap();
+        let registered = ctx
+            .pool
+            .as_ref()
+            .unwrap()
+            .broadcast(|_| worker_execution_scope_registered());
+        assert_eq!(registered, vec![true; threads]);
+    }
 }
 
 #[cfg(target_os = "linux")]
