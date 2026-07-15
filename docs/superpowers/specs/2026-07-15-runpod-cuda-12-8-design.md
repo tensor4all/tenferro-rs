@@ -37,4 +37,3 @@ repository-required local checks. The final acceptance test is a trusted
 post-merge RunPod run that records CUDA/NVRTC 12.8 or newer, completes the CUDA
 archive tests and OpenXLA PJRT tests, emits `RUNPOD_TENFERRO_GPU_TEST_OK`, and
 deletes the selected pod.
-
