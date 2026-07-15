@@ -22,6 +22,10 @@ compact SVD, with Faer as the first provider and no owned-output fallback.
 - Represent unsupported provider/dtype/layout/binding as structured capability
   errors. String-only backend failures were rejected because callers cannot
   reliably branch on diagnostic text.
+- Report provider-resource bytes without conflating the plan and workspace:
+  Faer's plan retains no heap buffer, workspace required bytes are logical
+  prepared sizes, and workspace retained bytes include actual vector capacity.
+  Shared context storage and inline object size are deliberately excluded.
 
 ## Verification Method
 

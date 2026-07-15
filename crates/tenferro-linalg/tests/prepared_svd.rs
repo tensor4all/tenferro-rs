@@ -680,6 +680,19 @@ fn prepared_svd_writes_compact_output_subviews_without_touching_guards() {
 
 #[test]
 fn prepared_svd_reports_compact_output_specs() {
+    fn debug_usize(debug: &str, field: &str) -> usize {
+        let marker = format!("{field}: ");
+        debug
+            .split_once(&marker)
+            .unwrap_or_else(|| panic!("missing {field}: {debug}"))
+            .1
+            .split([',', '}'])
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+
     let mut backend = CpuBackend::with_kind(CpuBackendKind::Faer).unwrap();
     let plan = backend
         .prepare_svd([3, 2], DType::C64, SvdOptions::default())
@@ -697,10 +710,13 @@ fn prepared_svd_reports_compact_output_specs() {
         "provider",
         "device",
         "context",
-        "scratch_bytes",
+        "plan_retained_bytes: 0",
+        "workspace_required_bytes",
     ] {
         assert!(plan_debug.contains(field), "missing {field}: {plan_debug}");
     }
+    assert_eq!(debug_usize(&plan_debug, "plan_retained_bytes"), 0);
+    let required_bytes = debug_usize(&plan_debug, "workspace_required_bytes");
     let workspace = plan.allocate_workspace(&mut backend).unwrap();
     let workspace_debug = format!("{workspace:?}");
     for field in [
@@ -710,13 +726,22 @@ fn prepared_svd_reports_compact_output_specs() {
         "provider",
         "device",
         "context",
-        "retained_bytes",
+        "workspace_required_bytes",
+        "workspace_retained_bytes",
     ] {
         assert!(
             workspace_debug.contains(field),
             "missing {field}: {workspace_debug}"
         );
     }
+    assert_eq!(
+        debug_usize(&workspace_debug, "workspace_required_bytes"),
+        required_bytes
+    );
+    assert!(
+        debug_usize(&workspace_debug, "workspace_retained_bytes") >= required_bytes,
+        "workspace retained fewer bytes than required: {workspace_debug}"
+    );
 }
 
 #[cfg(feature = "cpu-blas")]

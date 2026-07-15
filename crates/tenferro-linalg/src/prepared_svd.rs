@@ -357,7 +357,11 @@ impl fmt::Debug for PreparedSvd {
         #[cfg(feature = "cpu-faer")]
         debug
             .field("context", &self.binding)
-            .field("scratch_bytes", &self.provider.scratch_bytes());
+            .field("plan_retained_bytes", &self.provider.retained_bytes())
+            .field(
+                "workspace_required_bytes",
+                &self.provider.workspace_required_bytes(self.shape),
+            );
         debug.finish_non_exhaustive()
     }
 }
@@ -461,7 +465,7 @@ impl PreparedSvd {
 /// let mut backend = CpuBackend::with_kind(CpuBackendKind::Faer)?;
 /// let plan = backend.prepare_svd([2, 2], DType::F64, SvdOptions::default())?;
 /// let workspace = plan.allocate_workspace(&mut backend)?;
-/// assert!(format!("{workspace:?}").contains("retained_bytes"));
+/// assert!(format!("{workspace:?}").contains("workspace_retained_bytes"));
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct SvdWorkspace {
@@ -487,15 +491,17 @@ impl fmt::Debug for SvdWorkspace {
         #[cfg(feature = "cpu-faer")]
         debug
             .field("context", &self.binding)
-            .field("retained_bytes", &self.inner.retained_bytes());
+            .field("workspace_required_bytes", &self.inner.required_bytes())
+            .field("workspace_retained_bytes", &self.inner.retained_bytes());
         debug.finish_non_exhaustive()
     }
 }
 
 /// Backend capability for explicit prepared compact SVD execution.
 ///
-/// The default hooks return an explicit unsupported error. Implementations must
-/// not call an owned SVD or allocate replacement outputs as a fallback.
+/// Provider dispatch is sealed and required for every backend implementation.
+/// Unsupported implementations return an explicit capability error rather than
+/// calling an owned SVD or allocating replacement outputs as a fallback.
 ///
 /// # Examples
 ///

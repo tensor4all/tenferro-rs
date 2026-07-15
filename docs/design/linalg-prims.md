@@ -143,3 +143,11 @@ from one plan, while Rust's exclusive `&mut SvdWorkspace` prevents ordinary
 concurrent reuse of a single workspace. Validation failures are atomic for all
 destinations; a provider numerical failure after writes begin may leave partial
 output and is reported without an allocating rollback.
+
+Prepared-resource `Debug` output distinguishes ownership from sizing. The plan's
+`plan_retained_bytes` counts provider-private heap buffers owned by the plan
+(zero for Faer's inline `StackReq` metadata), while `workspace_required_bytes`
+is the logical byte requirement computed at preparation. A workspace reports
+that logical requirement separately from `workspace_retained_bytes`, which
+counts its actual scratch length and vector capacities. Shared execution-context
+storage and inline Rust object size are outside these provider-resource counts.

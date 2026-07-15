@@ -52,9 +52,17 @@ impl FaerPlan {
         Ok(req)
     }
 
-    pub(super) fn scratch_bytes(&self) -> usize {
+    pub(super) const fn retained_bytes(&self) -> usize {
+        // StackReq is inline metadata; tensor-sized storage belongs to SvdWorkspace.
+        0
+    }
+
+    pub(super) fn workspace_required_bytes(&self, shape: [usize; 2]) -> usize {
         match self {
-            Self::F32(req) | Self::F64(req) | Self::C32(req) | Self::C64(req) => req.size_bytes(),
+            Self::F32(req) => required_bytes::<f32, f32>(*req, shape, false),
+            Self::F64(req) => required_bytes::<f64, f64>(*req, shape, false),
+            Self::C32(req) => required_bytes::<Complex32, faer::c32>(*req, shape, true),
+            Self::C64(req) => required_bytes::<Complex64, faer::c64>(*req, shape, true),
         }
     }
 
@@ -83,6 +91,15 @@ pub(super) enum FaerWorkspace {
 }
 
 impl FaerWorkspace {
+    pub(super) fn required_bytes(&self) -> usize {
+        match self {
+            Self::F32(w) => w.required_bytes(),
+            Self::F64(w) => w.required_bytes(),
+            Self::C32(w) => w.required_bytes(),
+            Self::C64(w) => w.required_bytes(),
+        }
+    }
+
     pub(super) fn retained_bytes(&self) -> usize {
         match self {
             Self::F32(w) => w.retained_bytes(),
@@ -126,6 +143,25 @@ impl<T: Default + Clone, F: Default + Clone> FaerTypedWorkspace<T, F> {
             + self.singular.capacity() * size_of::<F>()
             + self.v.capacity() * size_of::<F>()
     }
+
+    fn required_bytes(&self) -> usize {
+        self.scratch.len()
+            + self.packed.len() * size_of::<T>()
+            + self.singular.len() * size_of::<F>()
+            + self.v.len() * size_of::<F>()
+    }
+}
+
+fn required_bytes<T, F>(req: StackReq, [m, n]: [usize; 2], stage_singular: bool) -> usize {
+    let k = m.min(n);
+    req.size_bytes()
+        .saturating_add(m.saturating_mul(n).saturating_mul(size_of::<T>()))
+        .saturating_add(
+            usize::from(stage_singular)
+                .saturating_mul(k)
+                .saturating_mul(size_of::<F>()),
+        )
+        .saturating_add(n.saturating_mul(k).saturating_mul(size_of::<F>()))
 }
 
 pub(super) fn execute_faer(
