@@ -175,9 +175,14 @@ fn float_max_min_kernels_propagate_nan_across_lanes_and_planes() {
         "fn nan_propagating_max<F: Float>",
         "fn nan_propagating_min<F: Float>",
         "fn plane_contains_nan<F: Float>",
+        "fn plane_propagate_nan<F: Float>",
     ] {
         assert!(helpers.contains(helper), "missing CubeCL helper {helper}");
     }
+    assert!(
+        helpers.contains("plane_sum(nan_or_zero)"),
+        "plane NaN propagation must carry an input NaN through the collective"
+    );
 
     let elementwise = kernel_source(&["elementwise.rs"]);
     assert!(elementwise.contains("nan_propagating_max::<F>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS])"));
@@ -204,6 +209,17 @@ fn float_max_min_kernels_propagate_nan_across_lanes_and_planes() {
             .count()
             >= 2,
         "plane max and min must aggregate a separate NaN flag across lanes"
+    );
+    assert!(
+        reductions
+            .match_indices("let propagated_nan = plane_propagate_nan::<F>(acc);")
+            .count()
+            >= 2,
+        "plane max and min must propagate an actual NaN lane value"
+    );
+    assert!(
+        !reductions.contains("F::new(f32::NAN)"),
+        "generic CubeCL kernels must not lower a host NaN literal into invalid CUDA source"
     );
 }
 

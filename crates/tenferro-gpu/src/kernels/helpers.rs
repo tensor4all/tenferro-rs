@@ -67,6 +67,15 @@ pub(crate) fn plane_contains_nan<F: Float>(value: F) -> bool {
     plane_sum(flag) > 0u32
 }
 
+// INVARIANT: The self-comparison is an intentional generic CubeCL NaN test;
+// `Float::is_nan` returns `WithScalar<bool>` instead of a scalar `bool` here.
+#[allow(clippy::eq_op)]
+#[cube]
+pub(crate) fn plane_propagate_nan<F: Float>(value: F) -> F {
+    let nan_or_zero = if value != value { value } else { F::new(0.0) };
+    plane_sum(nan_or_zero)
+}
+
 #[cube]
 pub(crate) fn zero_value<E: CubePrimitive>() -> E {
     E::cast_from(0u32)

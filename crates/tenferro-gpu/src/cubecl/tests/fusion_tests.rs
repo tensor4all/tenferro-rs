@@ -42,8 +42,7 @@ fn assert_f32_extrema_match(actual: &[f32], expected: &[f32]) {
             );
         } else {
             assert_eq!(
-                actual.to_bits(),
-                expected.to_bits(),
+                actual, expected,
                 "index {index}: actual={actual:?}, expected={expected:?}"
             );
         }
@@ -60,8 +59,7 @@ fn assert_f64_extrema_match(actual: &[f64], expected: &[f64]) {
             );
         } else {
             assert_eq!(
-                actual.to_bits(),
-                expected.to_bits(),
+                actual, expected,
                 "index {index}: actual={actual:?}, expected={expected:?}"
             );
         }

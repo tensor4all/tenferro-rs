@@ -8,8 +8,8 @@
 use cubecl::prelude::*;
 
 use crate::kernels::helpers::{
-    nan_propagating_max, nan_propagating_min, plane_contains_nan, wrapping_add, wrapping_mul,
-    wrapping_plane_prod, wrapping_plane_sum,
+    nan_propagating_max, nan_propagating_min, plane_contains_nan, plane_propagate_nan,
+    wrapping_add, wrapping_mul, wrapping_plane_prod, wrapping_plane_sum,
 };
 
 macro_rules! reduce_binary_kernel {
@@ -305,10 +305,11 @@ pub(crate) fn reduce_max_float_plane<F: Float>(
         }
 
         let contains_nan = plane_contains_nan::<F>(acc);
+        let propagated_nan = plane_propagate_nan::<F>(acc);
         let reduced = plane_max(acc);
         if UNIT_POS == 0 {
             output[output_offset] = if contains_nan {
-                F::new(f32::NAN)
+                propagated_nan
             } else {
                 reduced
             };
@@ -466,10 +467,11 @@ pub(crate) fn reduce_min_float_plane<F: Float>(
         }
 
         let contains_nan = plane_contains_nan::<F>(acc);
+        let propagated_nan = plane_propagate_nan::<F>(acc);
         let reduced = plane_min(acc);
         if UNIT_POS == 0 {
             output[output_offset] = if contains_nan {
-                F::new(f32::NAN)
+                propagated_nan
             } else {
                 reduced
             };
