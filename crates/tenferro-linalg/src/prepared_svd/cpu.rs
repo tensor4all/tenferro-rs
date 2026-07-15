@@ -307,6 +307,8 @@ fn validate_output(
             DESTINATION_CAPABILITY,
         ));
     }
+    // Why not duplicate writable-placement validation: prepared outputs are
+    // rank <= 2, so the shared read descriptor stays inside ShapeVec inline storage.
     validate_host_read(&output.as_read())
 }
 
@@ -388,6 +390,8 @@ fn read_region(read: &TensorRead<'_>) -> tenferro_tensor::Result<Option<ByteRegi
 
 #[cfg(feature = "cpu-faer")]
 fn write_region(write: &TensorWrite<'_>) -> tenferro_tensor::Result<Option<ByteRegion>> {
+    // Why not add a second writable-region walker: rank <= 2 descriptor clones
+    // stay inline, while this keeps one alias-analysis authority.
     read_region(&write.as_read())
 }
 
