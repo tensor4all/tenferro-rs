@@ -208,6 +208,43 @@ fn float_max_min_kernels_propagate_nan_across_lanes_and_planes() {
 }
 
 #[test]
+fn fused_float_max_min_codegen_propagates_nan_before_native_extrema() {
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("cubecl")
+            .join("fusion")
+            .join("codegen.rs"),
+    )
+    .expect("fusion codegen source should be readable");
+
+    assert!(
+        source.contains("fn emit_nan_propagating_extrema("),
+        "fusion codegen must centralize the NaN contract"
+    );
+    assert!(
+        source.contains("Comparison::IsNan"),
+        "fusion extrema must test both operands for NaN"
+    );
+    assert!(
+        source.contains("Operator::Select"),
+        "fusion extrema must select a NaN operand before the native extrema result"
+    );
+    assert!(
+        source.contains(
+            "ElementwiseFusionOp::Maximum => {\n            emit_nan_propagating_extrema("
+        ),
+        "fused maximum must use the NaN-propagating helper"
+    );
+    assert!(
+        source.contains(
+            "ElementwiseFusionOp::Minimum => {\n            emit_nan_propagating_extrema("
+        ),
+        "fused minimum must use the NaN-propagating helper"
+    );
+}
+
+#[test]
 fn scatter_kernels_are_not_single_thread_fallbacks() {
     let indexing_source = fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -20,6 +20,152 @@ fn add_mul_plan() -> ElementwiseFusionPlan {
     )
 }
 
+fn max_min_plan(dtype: crate::DType) -> ElementwiseFusionPlan {
+    ElementwiseFusionPlan::new(
+        dtype,
+        2,
+        vec![2, 3],
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Maximum, vec![0, 1]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Minimum, vec![0, 1]),
+        ],
+    )
+}
+
+fn assert_f32_extrema_match(actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+        if expected.is_nan() {
+            assert!(
+                actual.is_nan(),
+                "index {index}: expected NaN, got {actual:?}"
+            );
+        } else {
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "index {index}: actual={actual:?}, expected={expected:?}"
+            );
+        }
+    }
+}
+
+fn assert_f64_extrema_match(actual: &[f64], expected: &[f64]) {
+    assert_eq!(actual.len(), expected.len());
+    for (index, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+        if expected.is_nan() {
+            assert!(
+                actual.is_nan(),
+                "index {index}: expected NaN, got {actual:?}"
+            );
+        } else {
+            assert_eq!(
+                actual.to_bits(),
+                expected.to_bits(),
+                "index {index}: actual={actual:?}, expected={expected:?}"
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore]
+fn test_fused_f32_max_min_propagate_nan_in_both_operand_orders() {
+    let lhs = tensor_f32(
+        vec![7],
+        vec![
+            f32::NAN,
+            1.0,
+            f32::NAN,
+            3.0,
+            -0.0,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ],
+    );
+    let rhs = tensor_f32(
+        vec![7],
+        vec![
+            1.0,
+            f32::NAN,
+            f32::NAN,
+            2.0,
+            0.0,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+        ],
+    );
+
+    let mut cpu = cpu_backend();
+    let expected_maximum = cpu.maximum(&lhs, &rhs).unwrap();
+    let expected_minimum = cpu.minimum(&lhs, &rhs).unwrap();
+
+    let mut gpu = gpu_backend();
+    let gpu_lhs = upload(&gpu, &lhs);
+    let gpu_rhs = upload(&gpu, &rhs);
+    let outputs = gpu
+        .execute_elementwise_fusion(&[&gpu_lhs, &gpu_rhs], &max_min_plan(crate::DType::F32))
+        .unwrap()
+        .expect("f32 max/min fusion should succeed");
+
+    assert_eq!(outputs.len(), 2);
+    let maximum = download(&gpu, &outputs[0]);
+    let minimum = download(&gpu, &outputs[1]);
+    let maximum = maximum.as_slice::<f32>().unwrap();
+    let minimum = minimum.as_slice::<f32>().unwrap();
+    assert_f32_extrema_match(maximum, expected_maximum.as_slice::<f32>().unwrap());
+    assert_f32_extrema_match(minimum, expected_minimum.as_slice::<f32>().unwrap());
+}
+
+#[test]
+#[ignore]
+fn test_fused_f64_max_min_propagate_nan_in_both_operand_orders() {
+    let lhs = tensor_f64(
+        vec![7],
+        vec![
+            f64::NAN,
+            1.0,
+            f64::NAN,
+            3.0,
+            -0.0,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ],
+    );
+    let rhs = tensor_f64(
+        vec![7],
+        vec![
+            1.0,
+            f64::NAN,
+            f64::NAN,
+            2.0,
+            0.0,
+            f64::NEG_INFINITY,
+            f64::INFINITY,
+        ],
+    );
+
+    let mut cpu = cpu_backend();
+    let expected_maximum = cpu.maximum(&lhs, &rhs).unwrap();
+    let expected_minimum = cpu.minimum(&lhs, &rhs).unwrap();
+
+    let mut gpu = gpu_backend();
+    let gpu_lhs = upload(&gpu, &lhs);
+    let gpu_rhs = upload(&gpu, &rhs);
+    let outputs = gpu
+        .execute_elementwise_fusion(&[&gpu_lhs, &gpu_rhs], &max_min_plan(crate::DType::F64))
+        .unwrap()
+        .expect("f64 max/min fusion should succeed");
+
+    assert_eq!(outputs.len(), 2);
+    let maximum = download(&gpu, &outputs[0]);
+    let minimum = download(&gpu, &outputs[1]);
+    let maximum = maximum.as_slice::<f64>().unwrap();
+    let minimum = minimum.as_slice::<f64>().unwrap();
+    assert_f64_extrema_match(maximum, expected_maximum.as_slice::<f64>().unwrap());
+    assert_f64_extrema_match(minimum, expected_minimum.as_slice::<f64>().unwrap());
+}
+
 #[test]
 #[ignore]
 fn test_fused_add_mul_matches_cpu() {
