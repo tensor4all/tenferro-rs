@@ -6,8 +6,8 @@ This work log records the single-PR remediation of issues #1275, #1276, #1368,
 #1375, #1381, and #1385. All six reports were reconciled against
 `origin/main` at `50c6623d`; none had become stale or gained a narrowing comment
 before implementation. The final changes are split into issue-scoped commits,
-plus one downstream integration follow-up, so each contract can be reviewed or
-reverted independently.
+one downstream integration follow-up, and two independent-review follow-ups,
+so each contract can be reviewed or reverted independently.
 
 The batch deliberately treats the repository's API and numerical conventions
 as authoritative. In particular, #1276 is a clean break to the owned/read/write
@@ -37,9 +37,9 @@ the recorded `origin/main` commit.
 | Issue | Final classification | Implemented result | Close condition |
 | --- | --- | --- | --- |
 | #1375 | Auto Fix | `763b1246` prepares one checked SVD gauge layout containing batch count, per-batch spans, and total storage spans. Gauge traversal validates storage before indexing and uses checked ranges for f32/f64/c32/c64. | Overflow, malformed-storage, batched, zero-batch, source-contract, and workspace checks pass. Ready to close when the PR merges. |
-| #1368 | Auto Fix | `61f2cffa` routes CubeCL elementwise and unit/plane reductions through shared NaN-propagating max/min helpers, retaining native non-NaN signed-zero and infinity behavior. | Source contracts and host checks pass; the added ignored CUDA parity tests must pass in trusted RunPod CI before merge. |
+| #1368 | Auto Fix | `61f2cffa` routes CubeCL elementwise and unit/plane reductions through shared NaN-propagating max/min helpers. Independent review then found that fusion code generation still emitted native extrema directly; `889fbe46` applies the same contract to fused max/min with explicit `IsNan`/`Select` IR. Both changes retain native non-NaN signed-zero and infinity behavior. | Source contracts and host checks pass; the added ignored CUDA parity tests, including fused f32/f64 cases, must pass in trusted RunPod CI before merge. |
 | #1381 | Verify First, then Auto Fix | `61f2cffa` confines the bare CubeCL integer IR operators to named wrapping helpers with `INVARIANT` markers. Elementwise, broadcast multiply, negation, power/remainder internals, and unit/plane reductions call those helpers. | Source inventory and existing host checks pass; the added CUDA overflow tests must pass in trusted RunPod CI before merge. |
-| #1276 | Auto Fix / intentional API correction | `3f57b1cd` adds `TypedTensorWrite`, splits typed view inputs into `TypedTensorReadEinsumExt` and `TypedTensorReadEinsumIntoExt`, uses `_read` method names, and accepts owned or mutable-view outputs through `Into<TypedTensorWrite>`. Active design, spec, and guide text is migrated. | Public-surface, owned/view/output, error, doctest, and workspace checks pass. Ready to close when the PR merges. |
+| #1276 | Auto Fix / intentional API correction | `3f57b1cd` adds `TypedTensorWrite`, splits typed view inputs into `TypedTensorReadEinsumExt` and `TypedTensorReadEinsumIntoExt`, uses `_read` method names, and accepts owned or mutable-view outputs through `Into<TypedTensorWrite>`. Active design, spec, and guide text is migrated. `cefa3313` adds runnable examples to the new public traits, methods, and write adapters after independent review. | Public-surface, owned/view/output, error, doctest, and workspace checks pass. Ready to close when the PR merges. |
 | #1275 | Auto Fix / intentional API removal | `2b793176` removes production crate-root CPU operation reexports and per-call `with_local_pool` wrappers. Supported use goes through `CpuBackend` and backend traits; crate-private adapters remain only under `cfg(test)`. `bfa2db37` removes the downstream linalg test module's now-invalid, unused imports found by the release workspace gate. | Public-surface inventory, pool ownership, downstream compilation, docs, and workspace checks pass. Ready to close when the PR merges. |
 | #1385 | Auto Fix | `028e2668` borrows the installed pool directly, caches the environment-derived default with `OnceLock`, and borrows internal Faer/BLAS/TBLIS GEMM descriptors instead of cloning them in backend/session dispatch. | Pool restoration/panic, provider-feature, structural, benchmark, and workspace checks pass. Ready to close when the PR merges. |
 
@@ -69,9 +69,10 @@ the recorded `origin/main` commit.
 - #1375 adds executable overflow tests without attempting impossible
   near-`usize::MAX` allocations and a source contract forbidding raw gauge
   batch products/offsets.
-- #1368/#1381 add CUDA value tests for both float precisions and integer
-  overflow boundaries, plus a host-runnable source inventory covering every
-  affected kernel family.
+- #1368/#1381 add CUDA value tests for both float precisions, fused extrema,
+  and integer overflow boundaries, plus a host-runnable source inventory
+  covering every affected kernel family. The fused tests compare NaN in both
+  operand orders, signed zero, infinity, and ordinary values with CPU results.
 - #1276 adds public-surface tests, typed owned/read execution, owned output,
   strided mutable-view output, and `TypedTensorWrite` conversion coverage.
 - #1275 prevents production free-function reexports and `with_local_pool`
@@ -120,6 +121,12 @@ Targeted verification completed during implementation:
 - The #1385 Criterion before/after run above completed successfully.
 - Issue-focused linalg, GPU source-contract, tensor, einsum, CPU, public
   surface, doctest, and clippy checks passed before their commits.
+- Independent review found the missing fused #1368 path. Its regression was
+  first observed as a failing source-contract test, then fixed through shared
+  `IsNan`/`Select` code generation. The final GPU source-contract suite passed
+  7/7, and `cargo check -p tenferro-gpu --features cuda --tests` passed.
+- The independent-review documentation follow-up passed 73 einsum doctests
+  and 275 tensor doctests as part of the final release workspace gate.
 
 Repository-wide verification on the complete code batch also passed:
 
@@ -140,9 +147,9 @@ Repository-wide verification on the complete code batch also passed:
 - `cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D
   warnings`: passed.
 - `python3 scripts/repository-rules-review.py --base origin/main --head HEAD
-  --output-json /tmp/repository-rules-review-pre-worklog.json`: verdict
-  `pass`, with no findings on the complete code batch. The same review is run
-  again on the final work-log commit before PR creation.
+  --output-json /tmp/repository-rules-review-final-code.json`: verdict `pass`,
+  with no findings on the final code batch. The same review is run again on
+  the final work-log commit before PR creation.
 
 The trusted RunPod CUDA value tests are intentionally the remaining pre-merge
 gate rather than a local verification claim.
