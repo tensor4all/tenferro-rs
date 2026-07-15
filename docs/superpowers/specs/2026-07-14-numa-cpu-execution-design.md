@@ -144,7 +144,8 @@ After resolving placement and acquiring the engine permit, one session remains
 alive for the complete graph. The graph enters the selected Rayon pool once.
 Within that scope:
 
-- faer uses `Par::Seq` for a one-worker engine and `Par::rayon(0)` otherwise;
+- faer uses `Par::Seq` for a one-worker engine and explicit `Par::rayon(n)`
+  from the configured engine degree otherwise;
 - native elementwise, reduction, structural, and other Rayon-backed kernels use
   the same ambient pool;
 - Host and supported extension/FFI boundaries do not recreate the engine

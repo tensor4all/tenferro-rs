@@ -41,7 +41,8 @@ backend segment instead of one per instruction.
 by tenferro-owned multi-threaded CPU work. `CpuContext::install` runs the
 closure on that owned pool for multi-thread contexts and inline for one-thread
 contexts. faer-backed kernels use `Par::Seq` for one thread and
-`Par::rayon(0)` otherwise, so faer joins the already-entered `CpuContext` pool.
+explicit `Par::rayon(n)` otherwise, so policy construction cannot inherit an
+unrelated ambient Rayon degree before joining the `CpuContext` pool.
 
 ```rust
 impl TensorBackend for CpuBackend {
@@ -79,7 +80,7 @@ or calls the relevant cuTENSOR/cuSOLVER/cuBLAS wrapper against the backend's
 | CPU concept | CubeCL/CUDA concept |
 |---|---|
 | `CpuContext` (thread count and Rayon pool) | `CudaRuntime` (CUDA device/client) |
-| `Par::rayon(0)` / `Par::Seq` | CubeCL launch through the stored runtime |
+| explicit `Par::rayon(n)` / `Par::Seq` | CubeCL launch through the stored runtime |
 | `BufferPool` (host `Vec<T>`) | CubeCL device buffers plus upload/download helpers |
 | faer/rayon CPU work | kernel launch on stream |
 | per-step session setup overhead | per-kernel launch/runtime dispatch overhead |

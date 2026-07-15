@@ -97,9 +97,9 @@ multi-thread contexts.
 `CpuExecSession`, reusing the backend buffer pool and avoiding per-op session
 setup. Session execution enters `CpuContext::install`, so strided CPU kernels
 use the backend-owned Rayon pool when `strided-kernel/parallel` is enabled.
-faer-backed kernels receive `Par::Seq` for one thread or `Par::rayon(0)` for
-multi-threaded execution inside that pool. BLAS/LAPACK and TBLIS provider
-threading remain provider-owned.
+faer-backed kernels receive `Par::Seq` for one thread or explicit
+`Par::rayon(n)` from the configured context degree for multi-threaded execution
+inside that pool. BLAS/LAPACK and TBLIS provider threading remain provider-owned.
 
 ## CubeCL Backend
 

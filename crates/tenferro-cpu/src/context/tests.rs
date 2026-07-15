@@ -6,6 +6,7 @@ use crate::arbiter::worker_execution_scope_registered;
 #[cfg(target_os = "linux")]
 use crate::process_cpu_affinity;
 use crate::{CpuId, CpuSet};
+#[cfg(target_os = "linux")]
 use rayon::prelude::*;
 #[cfg(target_os = "linux")]
 use std::collections::BTreeSet;

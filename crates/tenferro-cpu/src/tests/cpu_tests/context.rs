@@ -194,9 +194,9 @@ fn performance_notes_match_current_cpu_threading_contract() {
     let notes = include_str!("../../../../../docs/performance/tt-inner-product-overhead.md");
     assert!(
         !notes.contains("The faer backend is therefore run without a tenferro-owned Rayon pool")
-            && !notes.contains("maps multi-threaded execution to `Par::rayon(n)`")
+            && notes.contains("maps multi-threaded execution to explicit `Par::rayon(n)`")
             && !notes.contains("The global-Rayon columns became the production policy"),
-        "performance notes must describe CpuContext::install plus Par::rayon(0), not the stale global-Rayon policy"
+        "performance notes must describe the explicit CpuContext thread budget, not ambient global-Rayon policy"
     );
 }
 
