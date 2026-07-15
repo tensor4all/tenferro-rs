@@ -165,10 +165,28 @@ fn cpu_context_faer_policy_is_seq_for_one_thread() {
 
 #[cfg(feature = "cpu-faer")]
 #[test]
-fn cpu_context_faer_policy_uses_current_context_pool_for_multithreaded_context() {
+fn cpu_context_faer_policy_matches_configured_workers_outside_pool() {
+    let ctx = CpuContext::with_threads(2).unwrap();
+    assert_eq!(ctx.faer_par().degree(), 2);
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn cpu_context_faer_policy_matches_configured_workers_inside_context_pool() {
     let ctx = CpuContext::with_threads(2).unwrap();
     let par = ctx.install(|| ctx.faer_par());
     assert_eq!(par.degree(), 2);
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn cpu_context_faer_policy_ignores_a_different_ambient_pool_size() {
+    let ctx = CpuContext::with_threads(2).unwrap();
+    let ambient = rayon::ThreadPoolBuilder::new()
+        .num_threads(3)
+        .build()
+        .unwrap();
+    assert_eq!(ambient.install(|| ctx.faer_par().degree()), 2);
 }
 
 #[test]
