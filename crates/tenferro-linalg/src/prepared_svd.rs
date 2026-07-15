@@ -361,7 +361,7 @@ impl fmt::Debug for PreparedSvd {
         #[cfg(feature = "cpu-faer")]
         debug
             .field("context", &self.binding)
-            .field("plan_retained_bytes", &self.provider.retained_bytes())
+            .field("plan_retained_bytes", &self.retained_bytes())
             .field(
                 "workspace_required_bytes",
                 &self.provider.workspace_required_bytes(self.shape),
@@ -371,6 +371,38 @@ impl fmt::Debug for PreparedSvd {
 }
 
 impl PreparedSvd {
+    /// Return the exact provider-private heap bytes currently retained by this plan.
+    ///
+    /// This read-only snapshot does not allocate or mutate the plan. It excludes
+    /// inline Rust object size, backend binding and identity-token metadata,
+    /// shared backend context, workspaces, and outputs. Values are provider
+    /// representations, so no ordering is promised across shapes, dtypes,
+    /// options, or providers.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let plan = backend.prepare_svd([3, 2], DType::F64, SvdOptions::default())?;
+    /// let plan_bytes = plan.retained_bytes();
+    /// assert_eq!(plan_bytes, plan.retained_bytes());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn retained_bytes(&self) -> usize {
+        #[cfg(feature = "cpu-faer")]
+        {
+            self.provider.retained_bytes()
+        }
+        #[cfg(not(feature = "cpu-faer"))]
+        {
+            0
+        }
+    }
+
     /// Return exact `U`, `S`, and `Vt` output metadata.
     ///
     /// # Examples
@@ -555,8 +587,43 @@ impl fmt::Debug for SvdWorkspace {
         debug
             .field("context", &self.binding)
             .field("workspace_required_bytes", &self.inner.required_bytes())
-            .field("workspace_retained_bytes", &self.inner.retained_bytes());
+            .field("workspace_retained_bytes", &self.retained_bytes());
         debug.finish_non_exhaustive()
+    }
+}
+
+impl SvdWorkspace {
+    /// Return the exact provider-private heap bytes currently retained by this workspace.
+    ///
+    /// This read-only snapshot does not allocate or mutate the workspace. It
+    /// includes provider scratch and staging capacities, but excludes inline
+    /// Rust object size, backend binding and identity-token metadata, shared
+    /// backend context, plans, and outputs. Values are provider representations,
+    /// so no ordering is promised across shapes, dtypes, options, or providers.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions};
+    /// use tenferro_tensor::DType;
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// let plan = backend.prepare_svd([3, 2], DType::F64, SvdOptions::default())?;
+    /// let workspace = plan.allocate_workspace(&mut backend)?;
+    /// let workspace_bytes = workspace.retained_bytes();
+    /// assert_eq!(workspace_bytes, workspace.retained_bytes());
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn retained_bytes(&self) -> usize {
+        #[cfg(feature = "cpu-faer")]
+        {
+            self.inner.retained_bytes()
+        }
+        #[cfg(not(feature = "cpu-faer"))]
+        {
+            0
+        }
     }
 }
 

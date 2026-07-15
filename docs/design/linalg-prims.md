@@ -185,4 +185,11 @@ Prepared-resource `Debug` output distinguishes ownership from sizing. The plan's
 is the logical byte requirement computed at preparation. A workspace reports
 that logical requirement separately from `workspace_retained_bytes`, which
 counts its actual scratch length and vector capacities. Shared execution-context
-storage and inline Rust object size are outside these provider-resource counts.
+storage, backend binding and identity-token metadata, and inline Rust object
+size are outside these provider-resource counts.
+
+`PreparedSvd::retained_bytes` and `SvdWorkspace::retained_bytes` expose those
+currently retained provider-private heap bytes without parsing `Debug`. They are
+read-only, allocation-free snapshots, not estimates of total process memory.
+Provider representation determines the value; callers must not infer monotonic
+ordering across shapes, dtypes, options, or providers.
