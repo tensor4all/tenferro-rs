@@ -69,10 +69,9 @@ env:
   CARGO_TERM_COLOR: always
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
-  # cudarc 0.19.x needs 12080 bindings; install CUDA_RUNTIME_VERSION toolkit when
-  # archiving so embedded PTX matches RunPod driver cap (nvidia-smi CUDA 12.4).
+  # Match the CUDA 12.8 cudarc bindings and CubeCL compiler API floor.
   CUDARC_CUDA_VERSION: "12080"
-  CUDA_RUNTIME_VERSION: "12.4"
+  CUDA_RUNTIME_VERSION: "12.8"
   ARCHIVE_WORKSPACE_ROOT: /home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
   CUTENSOR_VERSION: "2.6.0.4"
   JAX_CUDA12_PJRT_VERSION: "0.10.2"
@@ -1155,6 +1154,31 @@ jobs:
           echo "${cuda_path}/bin" >> "${GITHUB_PATH}"
           echo "LD_LIBRARY_PATH=${cuda_library_path}:$(dirname "${cutensor_path}"):${LD_LIBRARY_PATH:-}" >> "${GITHUB_ENV}"
           echo "TENFERRO_CUTENSOR_PATH=${cutensor_path}" >> "${GITHUB_ENV}"
+
+      - name: Verify loaded NVRTC version
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import ctypes
+          import os
+
+          nvrtc = ctypes.CDLL("libnvrtc.so")
+          major = ctypes.c_int()
+          minor = ctypes.c_int()
+          status = nvrtc.nvrtcVersion(ctypes.byref(major), ctypes.byref(minor))
+          if status != 0:
+              raise SystemExit(f"nvrtcVersion failed with status {status}")
+          loaded = (major.value, minor.value)
+          required = tuple(
+              int(part) for part in os.environ["CUDA_RUNTIME_VERSION"].split(".")
+          )
+          print(f"Loaded NVRTC version: {loaded[0]}.{loaded[1]}")
+          if loaded < required:
+              raise SystemExit(
+                  f"NVRTC {loaded[0]}.{loaded[1]} is older than required "
+                  f"CUDA {required[0]}.{required[1]}"
+              )
+          PY
 
       - name: Link archive build workspace path
         run: |

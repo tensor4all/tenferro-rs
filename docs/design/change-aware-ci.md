@@ -79,6 +79,12 @@ and commit identity, allowing equivalent automatic and recovery runs to reuse
 the hosted cache while still uploading a per-run artifact for the external
 runner.
 
+The archive toolkit and external-runner CUDA runtime must match the workspace
+`cudarc` CUDA binding floor. The current floor is CUDA 12.8, which is required
+for NVRTC compilation of Blackwell `sm_120`/`sm_120a` kernels. Before running
+GPU tests, the external runner queries the dynamically loaded NVRTC library,
+logs its version, and rejects a version older than the configured floor.
+
 ## Recovery
 
 Maintainers recover a PR by number with:
