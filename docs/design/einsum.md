@@ -2,9 +2,10 @@
 
 Einsum is a standard extension crate, not part of a root facade.
 The public user-facing paths live under `tenferro_einsum` as crate-root
-extension traits: `TensorEinsumExt`, `TypedTensorEinsumExt`, and
-`TensorReadEinsumExt` for concrete backend-explicit execution, their
-`*IntoExt` counterparts for preallocated output execution,
+extension traits: `TensorEinsumExt` and `TypedTensorEinsumExt` for owned
+concrete inputs, `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for
+borrowed inputs, and their `*IntoExt` counterparts for preallocated output
+execution,
 `GraphCompilerEinsumExt` for traced graph construction, `EagerEinsumExt` for
 autodiff eager execution, and tensor extension traits for `tensordot`
 contraction sugar. `ConcreteEinsumPlan` owns repeated concrete executions with
@@ -76,12 +77,13 @@ assert_eq!(c.shape(), &[2, 2]);
 ```
 
 `TensorEinsumExt` is the unsuffixed API for compact `Tensor` references.
-`TypedTensorEinsumExt` preserves a statically known scalar type and also
-accepts borrowed typed strided views.
-`TensorReadEinsumExt::einsum_read` accepts `TensorRead` values and therefore
-uses the repository-wide `_read` suffix convention. `TensorEinsumIntoExt`,
-`TypedTensorEinsumIntoExt`, and `TensorReadEinsumIntoExt` write into caller
-provided `TensorWrite` or typed tensor outputs; they validate output dtype and
+`TypedTensorEinsumExt` preserves a statically known scalar type for owned typed
+tensors. Borrowed typed strided views use
+`TypedTensorReadEinsumExt::einsum_read`; dtype-erased borrowed inputs use
+`TensorReadEinsumExt::einsum_read`. Both follow the repository-wide `_read`
+suffix convention. The matching `*IntoExt` traits write into caller-provided
+outputs. Typed output methods accept `TypedTensorWrite`, which represents an
+owned typed tensor or a mutable typed view. All paths validate output dtype and
 shape before any writes and never resize the destination.
 
 `ConcreteEinsumPlan` precomputes the contraction tree for fixed input metadata

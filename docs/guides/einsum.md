@@ -2,11 +2,11 @@
 
 `einsum` is a standard extension, not part of `tenferro` core. Add the
 `tenferro-einsum` crate and import its extension traits. Concrete tensor
-execution uses `TensorEinsumExt`, `TypedTensorEinsumExt`, and
-`TensorReadEinsumExt`; preallocated-output execution uses the matching
-`TensorEinsumIntoExt`, `TypedTensorEinsumIntoExt`, and
-`TensorReadEinsumIntoExt` traits; repeated-shape concrete workloads can use
-`ConcreteEinsumPlan`. Traced graph construction uses `GraphCompilerEinsumExt`;
+execution uses `TensorEinsumExt` and `TypedTensorEinsumExt` for owned inputs,
+and `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for borrowed inputs;
+preallocated-output execution uses the matching `*IntoExt` traits;
+repeated-shape concrete workloads can use `ConcreteEinsumPlan`. Traced graph
+construction uses `GraphCompilerEinsumExt`;
 autodiff eager execution uses `EagerEinsumExt`; `tensordot` contraction sugar
 uses tensor extension traits. Compiled traced execution also requires explicit
 runtime registration for einsum extension ops.
@@ -66,9 +66,12 @@ use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{
     TensorEinsumExt, TensorEinsumIntoExt, TypedTensorEinsumExt,
-    TypedTensorEinsumIntoExt,
+    TypedTensorEinsumIntoExt, TypedTensorReadEinsumIntoExt,
 };
-use tenferro_tensor::{Tensor, TensorWrite, TypedTensor, TypedTensorView};
+use tenferro_tensor::{
+    Tensor, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    TypedTensorWrite,
+};
 
 let lhs = Tensor::from_vec_col_major(
     vec![2, 3],
@@ -111,23 +114,29 @@ assert_eq!(
 
 let borrowed = TypedTensorView::from_slice([2, 2], [1, 2], 0, complex_lhs.as_slice()?)?;
 let borrowed_rhs = complex_rhs.as_view();
-let mut borrowed_out = TypedTensor::<Complex64>::from_vec_col_major(
-    vec![2, 1],
-    vec![Complex64::new(0.0, 0.0); 2],
+let mut borrowed_storage = [Complex64::new(0.0, 0.0); 4];
+let borrowed_out =
+    TypedTensorViewMut::from_slice([2, 1], [2, 4], 1, &mut borrowed_storage)?;
+[borrowed, borrowed_rhs].einsum_read_into(
+    "ij,jk->ik",
+    &mut backend,
+    TypedTensorWrite::from_view(borrowed_out),
 )?;
-[borrowed, borrowed_rhs].einsum_into("ij,jk->ik", &mut backend, &mut borrowed_out)?;
 assert_eq!(
-    borrowed_out.as_slice()?,
-    &[Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
+    [borrowed_storage[1], borrowed_storage[3]],
+    [Complex64::new(23.0, 2.0), Complex64::new(36.0, 3.0)],
 );
 # Ok::<(), tenferro_tensor::Error>(())
 ```
 
 ## TensorRead And Prepared Plans
 
-Use `TensorReadEinsumExt` when any input is a borrowed view. The `_read` suffix
-is reserved for this `TensorRead`-style API; compact owned `Tensor` inputs use
-the unsuffixed `einsum` method.
+Use `TensorReadEinsumExt` for dtype-erased borrowed inputs and
+`TypedTensorReadEinsumExt` for typed borrowed views. The `_read` suffix is
+reserved for these read-oriented APIs; compact owned tensor inputs use the
+unsuffixed `einsum` method. Typed `_into` methods accept `TypedTensorWrite`, so
+the destination can be either an owned `TypedTensor` or a
+`TypedTensorViewMut`.
 
 Use `ConcreteEinsumPlan` when the same subscripts, dtypes, and shapes are
 executed repeatedly. Preparing the plan parses and optimizes the contraction

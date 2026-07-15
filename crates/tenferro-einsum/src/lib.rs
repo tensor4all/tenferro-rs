@@ -13,8 +13,9 @@
 //! - **Tensordot sugar**: NumPy-style axis-pair contraction extension methods,
 //!   implemented as contraction sugar rather than as linear algebra APIs.
 //! - **Concrete execution**: backend-explicit [`TensorEinsumExt`],
-//!   [`TypedTensorEinsumExt`], [`TensorReadEinsumExt`], and
-//!   [`ConcreteEinsumPlan`] APIs for non-AD tensor values.
+//!   [`TypedTensorEinsumExt`], [`TensorReadEinsumExt`],
+//!   [`TypedTensorReadEinsumExt`], and [`ConcreteEinsumPlan`] APIs for non-AD
+//!   tensor values.
 //! - **Extension runtime**: traced einsum lowers to a registered tenferro
 //!   extension runtime, keeping core op definitions small.
 //! - **Tensor extension traits**: graph-building and immediate-execution
@@ -83,6 +84,7 @@ pub use cache::EINSUM_EXTENSION_FAMILY_ID;
 pub use concrete::{
     ConcreteEinsumPlan, TensorEinsumExt, TensorEinsumIntoExt, TensorReadEinsumExt,
     TensorReadEinsumIntoExt, TypedTensorEinsumExt, TypedTensorEinsumIntoExt,
+    TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt,
 };
 #[cfg(feature = "autodiff")]
 pub use eager_ad::{EagerEinsumExt, EagerTensorEinsumExt};

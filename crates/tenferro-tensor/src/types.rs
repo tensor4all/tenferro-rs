@@ -1926,6 +1926,9 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     fn tensor_view<'a>(view: TypedTensorView<'a, Self>) -> TensorView<'a>;
 
+    /// Wrap a typed mutable borrowed view as a dtype-erased [`TensorViewMut`].
+    fn tensor_view_mut<'a>(view: TypedTensorViewMut<'a, Self>) -> TensorViewMut<'a>;
+
     /// Mutably borrow a typed tensor as a dtype-erased [`TensorWrite`] view.
     ///
     /// This keeps the typed output borrowed instead of wrapping it in a
@@ -2011,6 +2014,10 @@ macro_rules! impl_tensor_scalar {
 
             fn tensor_view<'a>(view: TypedTensorView<'a, Self>) -> TensorView<'a> {
                 TensorView::$variant(view)
+            }
+
+            fn tensor_view_mut<'a>(view: TypedTensorViewMut<'a, Self>) -> TensorViewMut<'a> {
+                TensorViewMut::$variant(view)
             }
 
             fn tensor_write(tensor: &mut TypedTensor<Self>) -> TensorWrite<'_> {
@@ -2179,6 +2186,68 @@ pub enum TensorViewMut<'a> {
 pub enum TensorRead<'a> {
     Tensor(&'a Tensor),
     View(TensorView<'a>),
+}
+
+/// Mutable typed tensor output accepted by synchronous eager kernels.
+///
+/// `TypedTensorWrite` is the typed counterpart to [`TensorWrite`]. It accepts
+/// either an owned compact [`TypedTensor`] or an arbitrary-strided mutable
+/// [`TypedTensorViewMut`] without erasing the scalar type at the public API
+/// boundary.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_tensor::{TypedTensorViewMut, TypedTensorWrite};
+///
+/// let mut data = [0.0_f64, 1.0, 0.0, 2.0];
+/// let view = TypedTensorViewMut::from_slice([2], [2], 1, &mut data)?;
+/// let write = TypedTensorWrite::from_view(view).into_tensor_write();
+/// assert_eq!(write.shape(), &[2]);
+/// assert_eq!(write.strides()?, [2]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum TypedTensorWrite<'a, T> {
+    /// An owned compact typed tensor borrowed mutably for the write.
+    Tensor(&'a mut TypedTensor<T>),
+    /// An arbitrary-strided mutable typed tensor view.
+    View(TypedTensorViewMut<'a, T>),
+}
+
+impl<'a, T> TypedTensorWrite<'a, T> {
+    /// Create a writable target from an owned typed tensor.
+    pub fn from_tensor(tensor: &'a mut TypedTensor<T>) -> Self {
+        Self::Tensor(tensor)
+    }
+
+    /// Create a writable target from a mutable typed tensor view.
+    pub fn from_view(view: TypedTensorViewMut<'a, T>) -> Self {
+        Self::View(view)
+    }
+}
+
+impl<'a, T: TensorScalar> TypedTensorWrite<'a, T> {
+    /// Erase the scalar type while preserving the output layout.
+    pub fn into_tensor_write(self) -> TensorWrite<'a> {
+        match self {
+            Self::Tensor(tensor) => T::tensor_write(tensor),
+            Self::View(view) => TensorWrite::from_view(T::tensor_view_mut(view)),
+        }
+    }
+}
+
+impl<'a, T> From<&'a mut TypedTensor<T>> for TypedTensorWrite<'a, T> {
+    fn from(tensor: &'a mut TypedTensor<T>) -> Self {
+        Self::from_tensor(tensor)
+    }
+}
+
+impl<'a, T> From<TypedTensorViewMut<'a, T>> for TypedTensorWrite<'a, T> {
+    fn from(view: TypedTensorViewMut<'a, T>) -> Self {
+        Self::from_view(view)
+    }
 }
 
 /// Mutable tensor output accepted by synchronous eager kernels.

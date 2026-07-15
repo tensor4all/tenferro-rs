@@ -7,7 +7,7 @@ use crate::types::{
     DType, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Rank, StridedSliceSpec,
     Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank,
     TensorRead, TensorScalar, TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut,
+    TypedTensorView, TypedTensorViewMut, TypedTensorWrite,
 };
 use crate::{Error, SliceConfig};
 
@@ -1746,6 +1746,38 @@ fn tensor_write_wraps_owned_tensor_or_borrowed_mutable_view() {
         assert!(!write_view.is_col_major_contiguous().unwrap());
 
         write_view
+            .copy_from_tensor(&Tensor::from_vec_col_major(vec![2], vec![30.0_f64, 40.0]).unwrap())
+            .unwrap();
+    }
+    assert_eq!(data, [0.0, 30.0, 0.0, 40.0, 0.0]);
+}
+
+#[test]
+fn typed_tensor_write_wraps_owned_tensor_or_borrowed_mutable_view() {
+    let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap();
+    {
+        let typed_write = TypedTensorWrite::from_tensor(&mut tensor);
+        let mut write = typed_write.into_tensor_write();
+
+        assert_eq!(write.dtype(), DType::F64);
+        assert_eq!(write.shape(), &[2]);
+        write
+            .copy_from_tensor(&Tensor::from_vec_col_major(vec![2], vec![7.0_f64, 8.0]).unwrap())
+            .unwrap();
+    }
+    assert_eq!(tensor.as_slice().unwrap(), &[7.0, 8.0]);
+
+    let mut data = [0.0_f64, 10.0, 0.0, 20.0, 0.0];
+    {
+        let view = TypedTensorViewMut::from_slice([2], [2], 1, &mut data).unwrap();
+        let typed_write = TypedTensorWrite::from_view(view);
+        let mut write = typed_write.into_tensor_write();
+
+        assert_eq!(write.dtype(), DType::F64);
+        assert_eq!(write.shape(), &[2]);
+        assert_eq!(write.strides().unwrap(), [2]);
+        assert_eq!(write.offset(), 1);
+        write
             .copy_from_tensor(&Tensor::from_vec_col_major(vec![2], vec![30.0_f64, 40.0]).unwrap())
             .unwrap();
     }
