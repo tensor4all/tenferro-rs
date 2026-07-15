@@ -147,14 +147,14 @@ pub(super) fn execute_faer(
     }
 }
 
-// Boxing the view variant would make dispatch smaller but allocate on every warm call.
+// INVARIANT: variants stay inline because boxing a view would allocate on every warm call.
 #[allow(clippy::large_enum_variant)]
 enum PreparedRead<'a, T> {
     Tensor(&'a TypedTensor<T>),
     View(TypedTensorView<'a, T>),
 }
 
-// Output views stay inline because prepared execution must not allocate wrappers.
+// INVARIANT: output variants stay inline because boxing would violate allocation-free reuse.
 #[allow(clippy::large_enum_variant)]
 enum PreparedWrite<'a, T> {
     Tensor(&'a mut TypedTensor<T>),
@@ -259,6 +259,8 @@ trait PreparedSvdScalar<R>: Copy + Default + Send + Sync + 'static {
         k: usize,
         n: usize,
     ) -> tenferro_tensor::Result<()>;
+    // INVARIANT: raw regions and dimensions stay explicit so alias and layout contracts remain
+    // reviewable at the backend boundary; bundling them would hide the unsafe preconditions.
     #[allow(clippy::too_many_arguments)]
     fn run_svd(
         input: *const Self,
