@@ -822,7 +822,7 @@ fn apply_canonical_pivot_svd_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::R
     }
 }
 
-fn canonicalize_svd_gauge_f64(
+pub(crate) fn canonicalize_svd_gauge_f64(
     u: &mut [f64],
     vt: &mut [f64],
     m: usize,
@@ -851,7 +851,7 @@ fn canonicalize_svd_gauge_f64(
     Ok(())
 }
 
-fn canonicalize_svd_gauge_f32(
+pub(crate) fn canonicalize_svd_gauge_f32(
     u: &mut [f32],
     vt: &mut [f32],
     m: usize,
@@ -880,7 +880,7 @@ fn canonicalize_svd_gauge_f32(
     Ok(())
 }
 
-fn canonicalize_svd_gauge_c64(
+pub(crate) fn canonicalize_svd_gauge_c64(
     u: &mut [Complex64],
     vt: &mut [Complex64],
     m: usize,
@@ -913,7 +913,7 @@ fn canonicalize_svd_gauge_c64(
     Ok(())
 }
 
-fn canonicalize_svd_gauge_c32(
+pub(crate) fn canonicalize_svd_gauge_c32(
     u: &mut [Complex32],
     vt: &mut [Complex32],
     m: usize,

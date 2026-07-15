@@ -94,7 +94,7 @@ pub use affinity::{available_parallelism, process_cpu_affinity, process_cpu_affi
 pub use analytic::pow;
 pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
-    DotGeneralProvider,
+    CpuLinalgBinding, DotGeneralProvider,
 };
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;

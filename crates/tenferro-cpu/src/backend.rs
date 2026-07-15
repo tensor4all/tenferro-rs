@@ -651,6 +651,42 @@ pub struct CpuBackend {
     dot_general_provider: DotGeneralProvider,
 }
 
+/// Opaque binding token for operation-family prepared execution resources.
+///
+/// The token retains the coordinator and context allocations so identity cannot
+/// be recycled while a prepared plan is alive. Application code should not
+/// inspect or construct this interop type.
+///
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct CpuLinalgBinding {
+    shared: Arc<CpuBackendState>,
+    context: Arc<CpuContext>,
+    kind: CpuBackendKind,
+    threads: usize,
+}
+
+impl fmt::Debug for CpuLinalgBinding {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CpuLinalgBinding")
+            .field("kind", &self.kind)
+            .field("threads", &self.threads)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CpuLinalgBinding {
+    /// Return whether `backend` uses the exact retained provider resources.
+    ///
+    #[doc(hidden)]
+    pub fn matches(&self, backend: &CpuBackend) -> bool {
+        self.kind == backend.kind()
+            && self.threads == backend.num_threads()
+            && Arc::ptr_eq(&self.shared, &backend.shared)
+            && Arc::ptr_eq(&self.context, &backend.engine.context_arc())
+    }
+}
+
 fn resolve_discovered_topology(
     kind: CpuBackendKind,
     topology: Result<CpuTopology, CpuTopologyError>,
@@ -1506,6 +1542,23 @@ impl CpuBackend {
     #[doc(hidden)]
     pub fn linalg_context(&self) -> Arc<CpuContext> {
         self.engine.context_arc()
+    }
+
+    /// Retain the coordinator and execution-context identity used by
+    /// operation-family prepared plans.
+    ///
+    /// This is backend interop rather than application-facing identity. A
+    /// prepared plan uses both values so a clone sharing the same execution
+    /// resources is accepted while a separately constructed backend is not.
+    ///
+    #[doc(hidden)]
+    pub fn linalg_binding(&self) -> CpuLinalgBinding {
+        CpuLinalgBinding {
+            shared: Arc::clone(&self.shared),
+            context: self.engine.context_arc(),
+            kind: self.kind(),
+            threads: self.num_threads(),
+        }
     }
 
     // Selected when the Faer provider handles cached GEMM execution; some
