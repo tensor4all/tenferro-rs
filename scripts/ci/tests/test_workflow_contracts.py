@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -129,6 +130,27 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("TENFERRO_REF", key_line)
         self.assertIn("hashFiles(", key_line)
         self.assertIn("runpod_config.json", key_line)
+
+    def test_runpod_cuda_runtime_matches_cudarc_floor(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        cudarc = re.search(
+            r'^  CUDARC_CUDA_VERSION: "(\d+)"$', text, re.MULTILINE
+        )
+        runtime = re.search(
+            r'^  CUDA_RUNTIME_VERSION: "(\d+)\.(\d+)"$',
+            text,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(cudarc)
+        self.assertIsNotNone(runtime)
+        assert cudarc is not None
+        assert runtime is not None
+        encoded_runtime = (
+            int(runtime.group(1)) * 1000 + int(runtime.group(2)) * 10
+        )
+        self.assertEqual(int(cudarc.group(1)), encoded_runtime)
+        self.assertIn("nvrtc.nvrtcVersion", text)
+        self.assertIn("Loaded NVRTC version:", text)
 
     def test_manual_pr_recovery_is_authorized_and_head_stable(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
