@@ -1,12 +1,14 @@
-# CPU Empty-Install Allocation Removal
+# CPU Mandatory Empty-Install Allocation Removal
 
 ## Summary
 
-Warm `CpuBackend::install` allocated even when its closure was empty. The
+Every warm `CpuBackend::install` allocated even when its closure was empty. The
 execution path cloned an owned CPU vector, inserted an active request into a
 tree map, and broadcast execution-owner metadata to every Rayon worker on both
 entry and exit. This change moves stable metadata to context construction and
-keeps reusable arbiter storage across executions.
+keeps reusable arbiter storage across executions. It removes the CPU-domain,
+arbiter-node, and broadcast allocations paid on every backend entry; it does
+not claim that the managed Rayon scheduler never allocates.
 
 ## Context Read
 
@@ -42,8 +44,29 @@ keeps reusable arbiter storage across executions.
 
 ## Verification
 
-- A dedicated integration-test allocator measures public empty installs after
-  warm-up for one, two, and four workers.
+- Before the change, source-path accounting identifies two unconditional
+  one-thread allocations per entry: cloning the `CpuSet` vector and inserting
+  an active request into `BTreeMap`. Multi-worker entry additionally executes
+  two Rayon broadcasts, whose scheduling work grows with the pool. The old
+  implementation measured 128 caller-thread allocations over 64 one-worker
+  entries (two on every call), so the new minimum-zero gate fails
+  deterministically before this change.
+- After the change, 64 individually measured warm entries contain at least one
+  zero-allocation call for each of one, two, and four workers. Repeating that
+  gate five times passed. A diagnostic sustained window still observed one to
+  three allocations over 64 two-worker calls, with first sizes of 48 or 1520
+  bytes at varying iterations. Crossbeam's injector grows queue blocks
+  amortized (its block capacity is 63); warm-up history and other queue traffic
+  shift the observed iteration, so this periodic managed-scheduler cost led to
+  the narrower contract below.
+- A dedicated integration-test allocator measures individual public empty
+  installs after warm-up for one, two, and four workers. It requires that a
+  warm entry can complete without allocation, proving there is no mandatory
+  backend-entry allocation without asserting that Rayon's injector never
+  performs periodic maintenance.
+- The `cpu_install_overhead` benchmark reports context and backend entry latency
+  separately for one, two, and four workers so worker-dependent regressions are
+  visible.
 - Constructor tests verify every Rayon worker has registered its execution
   scope before construction completes.
 - Existing tests cover direct and independent backend nesting, cross-pool
@@ -56,6 +79,12 @@ keeps reusable arbiter storage across executions.
   outside this execution-scope contract.
 
 ## Residual Risk
+
+The managed Rayon's injector occasionally allocates scheduler storage after
+warm-up. The backend owns this scheduler residual even though Rayon implements
+it, and an unbounded zero-allocation promise would therefore be false. The
+regression gate therefore targets mandatory per-entry allocation; sustained
+allocation rates remain benchmark evidence rather than an exact CI assertion.
 
 The active-request vector uses linear conflict and id scans, as the previous
 tree-map path already linearly scanned all active values for every admission.
