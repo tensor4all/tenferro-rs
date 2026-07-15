@@ -426,6 +426,49 @@ fn graph_analysis_resolves_unregistered_multi_output_parent_on_demand() {
 }
 
 #[test]
+fn graph_analysis_scope_retains_registered_parent_metadata_it_borrows() {
+    let input = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+
+    let mut parent_builder = GraphBuilder::new();
+    parent_builder.add_parent(Arc::clone(&input.graph));
+    let parent_output = parent_builder.add_operation(
+        StdTensorOp::Neg,
+        vec![ValueRef::External(
+            input.graph.values()[input.val].key.clone(),
+        )],
+        OperationRole::Primary,
+    )[0];
+    parent_builder.set_outputs(vec![parent_output]);
+    let parent = Arc::new(parent_builder.build());
+    let parent_key = parent.values()[parent_output].key.clone();
+    let parent_analysis =
+        crate::metadata::register_scoped_graph_analysis(parent.as_ref(), []).unwrap();
+
+    let mut child_builder = GraphBuilder::new();
+    child_builder.add_parent(Arc::clone(&parent));
+    let child_output = child_builder.add_operation(
+        StdTensorOp::Neg,
+        vec![ValueRef::External(parent_key.clone())],
+        OperationRole::Primary,
+    )[0];
+    child_builder.set_outputs(vec![child_output]);
+    let child = child_builder.build();
+    let child_analysis = crate::metadata::register_scoped_graph_analysis(&child, []).unwrap();
+
+    drop(parent_analysis);
+
+    let retained = crate::metadata::registered_meta(&parent_key)
+        .expect("child analysis scope must retain metadata borrowed from its parent");
+    assert_eq!(retained.dtype, DType::F64);
+    assert_eq!(retained.bound_shape(), Some(vec![SymDim::from(3)]));
+    drop(child_analysis);
+    assert!(
+        crate::metadata::registered_meta(&parent_key).is_err(),
+        "dropping the final analysis scope must release the borrowed metadata"
+    );
+}
+
+#[test]
 fn parent_owner_index_is_built_once_for_many_parents_and_missing_inputs() {
     const PARENTS: usize = 8;
     let mut inputs = Vec::new();
