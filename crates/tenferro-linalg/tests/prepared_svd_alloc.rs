@@ -235,6 +235,34 @@ fn prepared_svd_complete_warm_calls_allocate_zero() {
 }
 
 #[test]
+fn prepared_svd_resource_accounting_reads_allocate_zero() {
+    let _serial = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+    let plan = backend
+        .prepare_svd([3, 2], DType::C64, SvdOptions::default())
+        .unwrap();
+    let workspace = plan.allocate_workspace(&mut backend).unwrap();
+
+    let expected_plan = std::hint::black_box(plan.retained_bytes());
+    let expected_workspace = std::hint::black_box(workspace.retained_bytes());
+    let allocations = measured_allocations(|| {
+        for _ in 0..128 {
+            assert_eq!(std::hint::black_box(plan.retained_bytes()), expected_plan);
+            assert_eq!(
+                std::hint::black_box(workspace.retained_bytes()),
+                expected_workspace
+            );
+        }
+    });
+
+    assert_eq!(expected_plan, 0);
+    assert!(expected_workspace > 0);
+    assert_eq!(allocations, 0, "resource accounting read allocations");
+}
+
+#[test]
 fn prepared_svd_session_repeated_single_worker_leaf_calls_allocate_zero() {
     let _serial = TEST_LOCK
         .lock()

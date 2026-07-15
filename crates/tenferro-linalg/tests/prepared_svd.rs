@@ -716,7 +716,11 @@ fn prepared_svd_reports_compact_output_specs() {
     ] {
         assert!(plan_debug.contains(field), "missing {field}: {plan_debug}");
     }
-    assert_eq!(debug_usize(&plan_debug, "plan_retained_bytes"), 0);
+    assert_eq!(plan.retained_bytes(), 0);
+    assert_eq!(
+        plan.retained_bytes(),
+        debug_usize(&plan_debug, "plan_retained_bytes")
+    );
     let required_bytes = debug_usize(&plan_debug, "workspace_required_bytes");
     let workspace = plan.allocate_workspace(&mut backend).unwrap();
     let workspace_debug = format!("{workspace:?}");
@@ -742,6 +746,11 @@ fn prepared_svd_reports_compact_output_specs() {
     assert!(
         debug_usize(&workspace_debug, "workspace_retained_bytes") >= required_bytes,
         "workspace retained fewer bytes than required: {workspace_debug}"
+    );
+    assert!(workspace.retained_bytes() > 0);
+    assert_eq!(
+        workspace.retained_bytes(),
+        debug_usize(&workspace_debug, "workspace_retained_bytes")
     );
 }
 
