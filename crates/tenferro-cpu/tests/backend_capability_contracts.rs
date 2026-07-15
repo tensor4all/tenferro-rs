@@ -107,3 +107,32 @@ fn gather_scatter_index_component_reuses_index_scratch() {
         "gather/scatter should carry reusable index scratch through index_component"
     );
 }
+
+#[test]
+fn cpu_public_ops_require_backend_owner() {
+    let lib_source = include_str!("../src/lib.rs");
+    for reexport in [
+        "pub use analytic::pow;",
+        "pub use elementwise::",
+        "pub use indexing::",
+        "pub use reduction::",
+        "pub use structural::",
+    ] {
+        assert!(
+            !lib_source.contains(reexport),
+            "resource-bypassing reexport remains: {reexport}"
+        );
+    }
+
+    for (module, source) in [
+        ("analytic", include_str!("../src/analytic.rs")),
+        ("elementwise", include_str!("../src/elementwise.rs")),
+        ("indexing", include_str!("../src/indexing.rs")),
+        ("structural", include_str!("../src/structural.rs")),
+    ] {
+        assert!(
+            !source.contains("fn with_local_pool"),
+            "{module} still constructs a throwaway BufferPool"
+        );
+    }
+}

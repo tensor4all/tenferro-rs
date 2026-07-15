@@ -167,7 +167,8 @@ macro_rules! impl_integer_pow_elem {
 impl_integer_pow_elem!(i32);
 impl_integer_pow_elem!(i64);
 
-fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
+#[cfg(test)]
+fn with_test_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     let mut buffers = BufferPool::new();
     f(&mut buffers)
 }
@@ -362,7 +363,7 @@ macro_rules! define_unary_analytic_dispatch {
     ($dispatch_fn:ident, $dispatch_with_pool_fn:ident, $dispatch_read_with_pool_fn:ident, $op_kind:ident, $elem_fn:ident) => {
         #[cfg(test)]
         pub(crate) fn $dispatch_fn(input: &Tensor) -> crate::Result<Tensor> {
-            with_local_pool(|buffers| $dispatch_with_pool_fn(buffers, input))
+            with_test_pool(|buffers| $dispatch_with_pool_fn(buffers, input))
         }
 
         pub(crate) fn $dispatch_with_pool_fn(
@@ -445,8 +446,9 @@ define_unary_analytic_dispatch!(
     log1p_elem
 );
 
-pub fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| pow_with_pool(buffers, lhs, rhs))
+#[cfg(test)]
+pub(crate) fn pow(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| pow_with_pool(buffers, lhs, rhs))
 }
 
 pub(crate) fn pow_with_pool(

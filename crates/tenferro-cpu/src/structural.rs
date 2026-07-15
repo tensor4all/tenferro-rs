@@ -15,7 +15,8 @@ use super::{
     typed_view, typed_view_from_view,
 };
 
-fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
+#[cfg(test)]
+fn with_test_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     let mut buffers = BufferPool::new();
     f(&mut buffers)
 }
@@ -180,8 +181,9 @@ where
     )
 }
 
-pub fn transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| transpose_with_pool(buffers, input, perm))
+#[cfg(test)]
+pub(crate) fn transpose(input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| transpose_with_pool(buffers, input, perm))
 }
 
 pub(crate) fn transpose_with_pool(
@@ -192,12 +194,17 @@ pub(crate) fn transpose_with_pool(
     dispatch_tensor_unary_result!(input, |t| typed_transpose_with_pool(buffers, t, perm))
 }
 
-pub fn reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
+pub(crate) fn reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
     dispatch_tensor_unary_result!(input, |t| typed_reshape(t, shape))
 }
 
-pub fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| broadcast_in_dim_with_pool(buffers, input, shape, dims))
+#[cfg(test)]
+pub(crate) fn broadcast_in_dim(
+    input: &Tensor,
+    shape: &[usize],
+    dims: &[usize],
+) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| broadcast_in_dim_with_pool(buffers, input, shape, dims))
 }
 
 pub(crate) fn broadcast_in_dim_with_pool(
@@ -232,10 +239,12 @@ pub(crate) fn broadcast_in_dim_with_pool(
 ///
 /// Returns an error when the requested conversion is outside tenferro's checked
 /// dtype-promotion lattice.
-pub fn convert(input: &Tensor, to: DType) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| convert_with_pool(buffers, input, to))
+#[cfg(test)]
+pub(crate) fn convert(input: &Tensor, to: DType) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| convert_with_pool(buffers, input, to))
 }
 
+#[cfg(test)]
 pub(crate) fn convert_with_pool(
     buffers: &mut BufferPool,
     input: &Tensor,
@@ -413,8 +422,13 @@ fn invalid_cast_value(message: String) -> crate::Error {
     }
 }
 
-pub fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| extract_diagonal_with_pool(buffers, input, axis_a, axis_b))
+#[cfg(test)]
+pub(crate) fn extract_diagonal(
+    input: &Tensor,
+    axis_a: usize,
+    axis_b: usize,
+) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| extract_diagonal_with_pool(buffers, input, axis_a, axis_b))
 }
 
 pub(crate) fn extract_diagonal_with_pool(
@@ -428,8 +442,13 @@ pub(crate) fn extract_diagonal_with_pool(
     ))
 }
 
-pub fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| embed_diagonal_with_pool(buffers, input, axis_a, axis_b))
+#[cfg(test)]
+pub(crate) fn embed_diagonal(
+    input: &Tensor,
+    axis_a: usize,
+    axis_b: usize,
+) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| embed_diagonal_with_pool(buffers, input, axis_a, axis_b))
 }
 
 pub(crate) fn embed_diagonal_with_pool(
@@ -448,8 +467,9 @@ pub(crate) fn embed_diagonal_with_pool(
     )
 }
 
-pub fn tril(input: &Tensor, k: i64) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| tril_with_pool(buffers, input, k))
+#[cfg(test)]
+pub(crate) fn tril(input: &Tensor, k: i64) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| tril_with_pool(buffers, input, k))
 }
 
 pub(crate) fn tril_with_pool(
@@ -464,8 +484,9 @@ pub(crate) fn tril_with_pool(
     )
 }
 
-pub fn triu(input: &Tensor, k: i64) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| triu_with_pool(buffers, input, k))
+#[cfg(test)]
+pub(crate) fn triu(input: &Tensor, k: i64) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| triu_with_pool(buffers, input, k))
 }
 
 pub(crate) fn triu_with_pool(

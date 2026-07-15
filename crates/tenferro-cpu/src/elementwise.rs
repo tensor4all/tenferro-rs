@@ -405,7 +405,8 @@ where
     complex_scalar_tensor(typed_view_from_view("add", input)?.get(&[]))
 }
 
-fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
+#[cfg(test)]
+fn with_test_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     let mut buffers = BufferPool::new();
     f(&mut buffers)
 }
@@ -424,8 +425,9 @@ fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| add_with_pool(buffers, lhs, rhs))
+#[cfg(test)]
+pub(crate) fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| add_with_pool(buffers, lhs, rhs))
 }
 
 pub(crate) fn add_with_pool(
@@ -598,8 +600,9 @@ pub(crate) fn add_read_with_pool(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, -2.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| sub_with_pool(buffers, lhs, rhs))
+#[cfg(test)]
+pub(crate) fn sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| sub_with_pool(buffers, lhs, rhs))
 }
 
 pub(crate) fn sub_with_pool(
@@ -772,8 +775,9 @@ pub(crate) fn sub_read_with_pool(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[8.0, 15.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| mul_with_pool(buffers, lhs, rhs))
+#[cfg(test)]
+pub(crate) fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| mul_with_pool(buffers, lhs, rhs))
 }
 
 fn binary_read_with_pool(
@@ -2170,8 +2174,9 @@ pub(crate) fn broadcast_multiply_value_with_pool(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 3.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| div_with_pool(buffers, lhs, rhs))
+#[cfg(test)]
+pub(crate) fn div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| div_with_pool(buffers, lhs, rhs))
 }
 
 pub(crate) fn div_with_pool(
@@ -2325,8 +2330,9 @@ pub(crate) fn div_read_with_pool(
 /// assert_eq!(out.as_slice::<i32>().unwrap(), &[1, -1]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn rem(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| rem_with_pool(buffers, lhs, rhs))
+#[cfg(test)]
+pub(crate) fn rem(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| rem_with_pool(buffers, lhs, rhs))
 }
 
 pub(crate) fn rem_with_pool(
@@ -2392,8 +2398,9 @@ pub(crate) fn rem_read_with_pool(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn neg(input: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| neg_with_pool(buffers, input))
+#[cfg(test)]
+pub(crate) fn neg(input: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| neg_with_pool(buffers, input))
 }
 
 pub(crate) fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
@@ -2474,8 +2481,9 @@ pub(crate) fn neg_read_with_pool(
 /// assert_eq!(out.as_slice::<Complex64>().unwrap(), &[Complex64::new(1.0, -2.0)]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn conj(input: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| conj_with_pool(buffers, input))
+#[cfg(test)]
+pub(crate) fn conj(input: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| conj_with_pool(buffers, input))
 }
 
 pub(crate) fn conj_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
@@ -2543,8 +2551,9 @@ pub(crate) fn conj_read_with_pool(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn abs(input: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| abs_with_pool(buffers, input))
+#[cfg(test)]
+pub(crate) fn abs(input: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| abs_with_pool(buffers, input))
 }
 
 pub(crate) fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
@@ -2614,8 +2623,9 @@ pub(crate) fn abs_read_with_pool(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[-1.0, 0.0, 1.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn sign(input: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| sign_with_pool(buffers, input))
+#[cfg(test)]
+pub(crate) fn sign(input: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| sign_with_pool(buffers, input))
 }
 
 pub(crate) fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
@@ -2696,8 +2706,9 @@ pub(crate) fn sign_read_with_pool(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0, 5.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| maximum_with_pool(buffers, lhs, rhs))
+#[cfg(test)]
+pub(crate) fn maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| maximum_with_pool(buffers, lhs, rhs))
 }
 
 pub(crate) fn maximum_with_pool(
@@ -2772,8 +2783,9 @@ pub(crate) fn maximum_read_with_pool(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 4.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| minimum_with_pool(buffers, lhs, rhs))
+#[cfg(test)]
+pub(crate) fn minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| minimum_with_pool(buffers, lhs, rhs))
 }
 
 pub(crate) fn minimum_with_pool(
@@ -2848,8 +2860,9 @@ pub(crate) fn minimum_read_with_pool(
 /// assert_eq!(out.as_slice::<bool>().unwrap(), &[false, true]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| compare_with_pool(buffers, lhs, rhs, dir))
+#[cfg(test)]
+pub(crate) fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| compare_with_pool(buffers, lhs, rhs, dir))
 }
 
 pub(crate) fn compare_with_pool(
@@ -2943,8 +2956,9 @@ pub(crate) fn compare_read_with_pool(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 4.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| select_with_pool(buffers, pred, on_true, on_false))
+#[cfg(test)]
+pub(crate) fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| select_with_pool(buffers, pred, on_true, on_false))
 }
 
 pub(crate) fn select_with_pool(
@@ -3051,8 +3065,9 @@ pub(crate) fn select_read_with_pool(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0, 2.0, 5.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| clamp_with_pool(buffers, input, lower, upper))
+#[cfg(test)]
+pub(crate) fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
+    with_test_pool(|buffers| clamp_with_pool(buffers, input, lower, upper))
 }
 
 pub(crate) fn clamp_with_pool(
