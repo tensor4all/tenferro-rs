@@ -241,7 +241,7 @@ fn direct_nested_independent_engine_is_rejected_in_a_managed_scope() {
 }
 
 #[test]
-#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
+#[cfg(feature = "cpu-faer")]
 fn cross_pool_wait_cannot_misclassify_a_scheduled_sibling_as_direct_nesting() {
     let outer = CpuBackend::from_context(Arc::new(CpuContext::with_threads(2).unwrap()));
     let middle = CpuBackend::from_context(Arc::new(CpuContext::with_threads(2).unwrap()));
