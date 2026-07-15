@@ -756,6 +756,45 @@ fn test_broadcast_multiply_scalar_operands_match_cpu() {
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
+fn test_broadcast_multiply_integer_overflow_matches_cpu_wrapping() {
+    if !gpu_available() {
+        eprintln!("skipping integer broadcast multiply parity test - no CUDA device found");
+        return;
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    for (scalar, vector) in [
+        (
+            tensor_i32(vec![], vec![i32::MAX]),
+            tensor_i32(vec![2], vec![2, -1]),
+        ),
+        (
+            tensor_i64(vec![], vec![i64::MAX]),
+            tensor_i64(vec![2], vec![2, -1]),
+        ),
+    ] {
+        let expected = cpu.mul(&scalar, &vector).unwrap();
+        let gpu_scalar = upload(&gpu, &scalar);
+        let gpu_vector = upload(&gpu, &vector);
+        let actual = gpu
+            .execute_broadcast_multiply(
+                TensorRead::from_tensor(&gpu_scalar),
+                &[2],
+                &[],
+                TensorRead::from_tensor(&gpu_vector),
+                &[2],
+                &[0],
+            )
+            .unwrap()
+            .expect("integer broadcast multiply should fuse");
+
+        assert_tensor_close(&download(&gpu, &actual), &expected, 0.0);
+    }
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
 fn test_log1p_small_x_f32_precision() {
     if !gpu_available() {
         eprintln!("skipping test_log1p_small_x_f32_precision — no CUDA device found");
@@ -864,6 +903,45 @@ fn test_cubecl_binary_float_elementwise_matches_cpu() {
     let gpu_out = gpu.pow(&gpu_base, &gpu_exp).unwrap();
     let actual = download(&gpu, &gpu_out);
     assert_tensor_close(&actual, &expected, 1e-12);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn test_cubecl_maximum_minimum_propagate_nan_independent_of_argument_order() {
+    if !gpu_available() {
+        eprintln!("skipping maximum/minimum NaN propagation parity test - no CUDA device found");
+        return;
+    }
+
+    let mut cpu = cpu_backend();
+    let mut gpu = gpu_backend();
+    for (lhs, rhs) in [
+        (
+            tensor_f32(vec![2], vec![f32::NAN, 1.0]),
+            tensor_f32(vec![2], vec![1.0, f32::NAN]),
+        ),
+        (
+            tensor_f64(vec![2], vec![f64::NAN, 1.0]),
+            tensor_f64(vec![2], vec![1.0, f64::NAN]),
+        ),
+    ] {
+        let gpu_lhs = upload(&gpu, &lhs);
+        let gpu_rhs = upload(&gpu, &rhs);
+        for (label, expected, actual) in [
+            (
+                "maximum",
+                cpu.maximum(&lhs, &rhs).unwrap(),
+                gpu.maximum(&gpu_lhs, &gpu_rhs).unwrap(),
+            ),
+            (
+                "minimum",
+                cpu.minimum(&lhs, &rhs).unwrap(),
+                gpu.minimum(&gpu_lhs, &gpu_rhs).unwrap(),
+            ),
+        ] {
+            assert_float_classes_and_zero_signs_match(label, &download(&gpu, &actual), &expected);
+        }
+    }
 }
 
 fn assert_float_classes_and_zero_signs_match(op: &str, actual: &Tensor, expected: &Tensor) {

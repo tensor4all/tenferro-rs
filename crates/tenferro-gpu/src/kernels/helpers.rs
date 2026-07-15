@@ -1,5 +1,72 @@
 use cubecl::prelude::*;
 
+// INVARIANT: CubeCL fixed-width Int arithmetic and integer plane collectives
+// lower to modulo-2^N operations for I32/I64 on the CUDA backend. Keep every
+// public integer data path routed through these named helpers so wrapping
+// semantics remain explicit and auditable if CubeCL codegen changes.
+#[cube]
+pub(crate) fn wrapping_add<I: Int>(lhs: I, rhs: I) -> I {
+    lhs + rhs
+}
+
+#[cube]
+pub(crate) fn wrapping_sub<I: Int>(lhs: I, rhs: I) -> I {
+    lhs - rhs
+}
+
+#[cube]
+pub(crate) fn wrapping_mul<I: Int>(lhs: I, rhs: I) -> I {
+    lhs * rhs
+}
+
+#[cube]
+pub(crate) fn wrapping_neg<I: Int>(value: I) -> I {
+    I::new(0) - value
+}
+
+#[cube]
+pub(crate) fn wrapping_plane_sum<I: Int>(value: I) -> I {
+    plane_sum(value)
+}
+
+#[cube]
+pub(crate) fn wrapping_plane_prod<I: Int>(value: I) -> I {
+    plane_prod(value)
+}
+
+// CubeCL's generic `is_nan` result uses `WithScalar<bool>`; the self-compare
+// keeps these scalar kernels generic over `F: Float`.
+#[allow(clippy::eq_op)]
+#[cube]
+pub(crate) fn nan_propagating_max<F: Float>(lhs: F, rhs: F) -> F {
+    if lhs != lhs {
+        lhs
+    } else if rhs != rhs {
+        rhs
+    } else {
+        lhs.max(rhs)
+    }
+}
+
+#[allow(clippy::eq_op)]
+#[cube]
+pub(crate) fn nan_propagating_min<F: Float>(lhs: F, rhs: F) -> F {
+    if lhs != lhs {
+        lhs
+    } else if rhs != rhs {
+        rhs
+    } else {
+        lhs.min(rhs)
+    }
+}
+
+#[allow(clippy::eq_op)]
+#[cube]
+pub(crate) fn plane_contains_nan<F: Float>(value: F) -> bool {
+    let flag: u32 = if value != value { 1u32 } else { 0u32 };
+    plane_sum(flag) > 0u32
+}
+
 #[cube]
 pub(crate) fn zero_value<E: CubePrimitive>() -> E {
     E::cast_from(0u32)

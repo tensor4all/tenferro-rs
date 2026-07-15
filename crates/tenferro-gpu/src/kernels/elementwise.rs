@@ -1,6 +1,9 @@
 use cubecl::prelude::*;
 
-use crate::kernels::helpers::{flat_to_tensor_index, multi_to_tensor_index};
+use crate::kernels::helpers::{
+    flat_to_tensor_index, multi_to_tensor_index, nan_propagating_max, nan_propagating_min,
+    wrapping_add, wrapping_mul, wrapping_neg, wrapping_sub,
+};
 
 pub(crate) const COMPARE_EQ: usize = 0;
 pub(crate) const COMPARE_LT: usize = 1;
@@ -27,19 +30,6 @@ macro_rules! binary_float_complex_kernel {
             lhs: &Array<C>,
             rhs: &Array<C>,
         ) {
-            if ABSOLUTE_POS < out.len() {
-                out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS] $op rhs[ABSOLUTE_POS];
-            }
-        }
-    };
-}
-
-macro_rules! binary_float_int_complex_kernel {
-    ($float_name:ident, $int_name:ident, $complex_name:ident, $op:tt) => {
-        binary_float_complex_kernel!($float_name, $complex_name, $op);
-
-        #[cube(launch_unchecked)]
-        pub fn $int_name<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
             if ABSOLUTE_POS < out.len() {
                 out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS] $op rhs[ABSOLUTE_POS];
             }
@@ -91,8 +81,23 @@ macro_rules! broadcast_multiply_kernel {
 }
 
 broadcast_multiply_kernel!(broadcast_multiply_float, Float);
-broadcast_multiply_kernel!(broadcast_multiply_int, Int);
 broadcast_multiply_kernel!(broadcast_multiply_complex, ComplexCore);
+
+#[cube(launch_unchecked)]
+pub fn broadcast_multiply_int<I: Int>(
+    out: &mut Tensor<I>,
+    lhs: &Tensor<I>,
+    rhs: &Tensor<I>,
+    #[comptime] lhs_dims: Sequence<usize>,
+    #[comptime] rhs_dims: Sequence<usize>,
+    #[comptime] output_rank: usize,
+) {
+    if ABSOLUTE_POS < out.len() {
+        let lhs_idx = broadcast_source_index(ABSOLUTE_POS, out, lhs, lhs_dims, output_rank);
+        let rhs_idx = broadcast_source_index(ABSOLUTE_POS, out, rhs, rhs_dims, output_rank);
+        out[ABSOLUTE_POS] = wrapping_mul::<I>(lhs[lhs_idx], rhs[rhs_idx]);
+    }
+}
 
 macro_rules! unary_float_kernel {
     ($name:ident, $method:ident) => {
@@ -125,10 +130,31 @@ macro_rules! unary_both_kernel {
     };
 }
 
-binary_float_int_complex_kernel!(add_float, add_int, add_complex, +);
-binary_float_int_complex_kernel!(sub_float, sub_int, sub_complex, -);
-binary_float_int_complex_kernel!(mul_float, mul_int, mul_complex, *);
+binary_float_complex_kernel!(add_float, add_complex, +);
+binary_float_complex_kernel!(sub_float, sub_complex, -);
+binary_float_complex_kernel!(mul_float, mul_complex, *);
 binary_float_complex_kernel!(div_float, div_complex, /);
+
+#[cube(launch_unchecked)]
+pub fn add_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = wrapping_add::<I>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS]);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn sub_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = wrapping_sub::<I>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS]);
+    }
+}
+
+#[cube(launch_unchecked)]
+pub fn mul_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
+    if ABSOLUTE_POS < out.len() {
+        out[ABSOLUTE_POS] = wrapping_mul::<I>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS]);
+    }
+}
 
 macro_rules! scalar_binary_float_kernel {
     ($name:ident, |$lhs:ident, $rhs:ident| $body:expr) => {
@@ -228,12 +254,12 @@ pub fn scalar_div_int_checked<I: Int>(
         let x = lhs[lhs_idx];
         let y = rhs[rhs_idx];
         let zero = I::new(0);
-        let minus_one = zero - I::new(1);
+        let minus_one = wrapping_sub::<I>(zero, I::new(1));
         if y == zero {
             err[0] = 1;
             out[ABSOLUTE_POS] = zero;
         } else if y == minus_one {
-            out[ABSOLUTE_POS] = zero - x;
+            out[ABSOLUTE_POS] = wrapping_neg::<I>(x);
         } else {
             out[ABSOLUTE_POS] = x / y;
         }
@@ -254,7 +280,7 @@ pub fn scalar_rem_int_checked<I: Int>(
         let x = lhs[lhs_idx];
         let y = rhs[rhs_idx];
         let zero = I::new(0);
-        let minus_one = zero - I::new(1);
+        let minus_one = wrapping_sub::<I>(zero, I::new(1));
         if y == zero {
             err[0] = 1;
             out[ABSOLUTE_POS] = zero;
@@ -262,7 +288,7 @@ pub fn scalar_rem_int_checked<I: Int>(
             out[ABSOLUTE_POS] = zero;
         } else {
             let quotient = x / y;
-            out[ABSOLUTE_POS] = x - quotient * y;
+            out[ABSOLUTE_POS] = wrapping_sub::<I>(x, wrapping_mul::<I>(quotient, y));
         }
     }
 }
@@ -278,12 +304,12 @@ pub fn div_int_checked<I: Int>(
         let x = lhs[ABSOLUTE_POS];
         let y = rhs[ABSOLUTE_POS];
         let zero = I::new(0);
-        let minus_one = zero - I::new(1);
+        let minus_one = wrapping_sub::<I>(zero, I::new(1));
         if y == zero {
             err[0] = 1;
             out[ABSOLUTE_POS] = zero;
         } else if y == minus_one {
-            out[ABSOLUTE_POS] = zero - x;
+            out[ABSOLUTE_POS] = wrapping_neg::<I>(x);
         } else {
             out[ABSOLUTE_POS] = x / y;
         }
@@ -315,7 +341,7 @@ pub fn rem_int_checked<I: Int>(
         let x = lhs[ABSOLUTE_POS];
         let y = rhs[ABSOLUTE_POS];
         let zero = I::new(0);
-        let minus_one = zero - I::new(1);
+        let minus_one = wrapping_sub::<I>(zero, I::new(1));
         if y == zero {
             err[0] = 1;
             out[ABSOLUTE_POS] = zero;
@@ -323,7 +349,7 @@ pub fn rem_int_checked<I: Int>(
             out[ABSOLUTE_POS] = zero;
         } else {
             let quotient = x / y;
-            out[ABSOLUTE_POS] = x - quotient * y;
+            out[ABSOLUTE_POS] = wrapping_sub::<I>(x, wrapping_mul::<I>(quotient, y));
         }
     }
 }
@@ -331,7 +357,7 @@ unary_both_kernel!(neg_float, neg_complex, |value| -value);
 #[cube(launch_unchecked)]
 pub fn neg_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
     if ABSOLUTE_POS < out.len() {
-        out[ABSOLUTE_POS] = I::new(0) - input[ABSOLUTE_POS];
+        out[ABSOLUTE_POS] = wrapping_neg::<I>(input[ABSOLUTE_POS]);
     }
 }
 unary_float_kernel!(exp_float, exp);
@@ -389,7 +415,11 @@ pub fn abs_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
     if ABSOLUTE_POS < out.len() {
         let value = input[ABSOLUTE_POS];
         let zero = I::new(0);
-        out[ABSOLUTE_POS] = if value < zero { zero - value } else { value };
+        out[ABSOLUTE_POS] = if value < zero {
+            wrapping_neg::<I>(value)
+        } else {
+            value
+        };
     }
 }
 
@@ -421,7 +451,7 @@ pub fn sign_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
         } else if value > zero {
             I::new(1)
         } else {
-            zero - I::new(1)
+            wrapping_sub::<I>(zero, I::new(1))
         };
     }
 }
@@ -429,7 +459,7 @@ pub fn sign_int<I: Int>(out: &mut Array<I>, input: &Array<I>) {
 #[cube(launch_unchecked)]
 pub fn maximum_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
-        out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS].max(rhs[ABSOLUTE_POS]);
+        out[ABSOLUTE_POS] = nan_propagating_max::<F>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS]);
     }
 }
 
@@ -445,7 +475,7 @@ pub fn maximum_int<I: Int>(out: &mut Array<I>, lhs: &Array<I>, rhs: &Array<I>) {
 #[cube(launch_unchecked)]
 pub fn minimum_float<F: Float>(out: &mut Array<F>, lhs: &Array<F>, rhs: &Array<F>) {
     if ABSOLUTE_POS < out.len() {
-        out[ABSOLUTE_POS] = lhs[ABSOLUTE_POS].min(rhs[ABSOLUTE_POS]);
+        out[ABSOLUTE_POS] = nan_propagating_min::<F>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS]);
     }
 }
 
@@ -485,13 +515,13 @@ pub fn pow_int_checked<I: Int>(
             let mut acc = one;
             while exp > zero {
                 let quotient = exp / two;
-                let remainder = exp - quotient * two;
+                let remainder = wrapping_sub::<I>(exp, wrapping_mul::<I>(quotient, two));
                 if remainder != zero {
-                    acc = acc * base;
+                    acc = wrapping_mul::<I>(acc, base);
                 }
                 exp = quotient;
                 if exp > zero {
-                    base = base * base;
+                    base = wrapping_mul::<I>(base, base);
                 }
             }
             out[ABSOLUTE_POS] = acc;
@@ -522,13 +552,13 @@ pub fn scalar_pow_int_checked<I: Int>(
             let mut acc = one;
             while exp > zero {
                 let quotient = exp / two;
-                let remainder = exp - quotient * two;
+                let remainder = wrapping_sub::<I>(exp, wrapping_mul::<I>(quotient, two));
                 if remainder != zero {
-                    acc = acc * base;
+                    acc = wrapping_mul::<I>(acc, base);
                 }
                 exp = quotient;
                 if exp > zero {
-                    base = base * base;
+                    base = wrapping_mul::<I>(base, base);
                 }
             }
             out[ABSOLUTE_POS] = acc;
