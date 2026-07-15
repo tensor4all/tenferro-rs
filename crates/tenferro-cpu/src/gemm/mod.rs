@@ -7,6 +7,7 @@ use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::default_placement;
 #[cfg(feature = "cpu-blas")]
 use crate::elementwise::typed_conj_with_pool;
+#[cfg(any(feature = "cpu-blas", feature = "cpu-faer"))]
 use crate::structural::typed_transpose_with_pool;
 #[cfg(feature = "cpu-blas")]
 use crate::ConjElem;
@@ -27,6 +28,8 @@ mod blas_gemm;
 mod faer_gemm;
 #[cfg(feature = "cpu-faer")]
 mod strided_dot;
+#[cfg(feature = "cpu-tblis-provider")]
+mod tblis_gemm;
 
 #[cfg(feature = "cpu-blas")]
 use blas_gemm::BlasGemm;
@@ -34,6 +37,8 @@ use blas_gemm::BlasGemm;
 use blas_gemm::BlasGemmBatch;
 #[cfg(feature = "cpu-faer")]
 use faer_gemm::FaerGemm;
+#[cfg(feature = "cpu-tblis-provider")]
+use tblis_gemm::TblisGemm;
 
 const OP: &str = "dot_general";
 
@@ -2609,6 +2614,298 @@ where
         Buffer::Host(out),
         default_placement(),
     )?))
+}
+
+#[cfg(feature = "cpu-tblis-provider")]
+pub(crate) fn dot_general_tblis_cached<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+) -> crate::Result<Option<TypedTensor<T>>>
+where
+    T: TblisGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
+{
+    typed_tblis_gemm(buffers, lhs, rhs, config, false, false)
+}
+
+#[cfg(feature = "cpu-tblis-provider")]
+pub(crate) fn dot_general_tblis_with_conj_cached<T>(
+    buffers: &mut BufferPool,
+    lhs: &TypedTensor<T>,
+    rhs: &TypedTensor<T>,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+) -> crate::Result<Option<TypedTensor<T>>>
+where
+    T: TblisGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
+{
+    typed_tblis_gemm(buffers, lhs, rhs, config, lhs_conj, rhs_conj)
+}
+
+#[cfg(feature = "cpu-tblis-provider")]
+pub(crate) fn dot_general_tblis_read_cached(
+    buffers: &mut BufferPool,
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &DotGeneralConfig,
+) -> crate::Result<Option<crate::Tensor>> {
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident, $wrap:ident) => {
+            match (&lhs, &rhs) {
+                (
+                    TensorRead::Tensor(crate::Tensor::$owned(a)),
+                    TensorRead::Tensor(crate::Tensor::$owned(b)),
+                ) => {
+                    return typed_tblis_gemm(buffers, a, b, config, false, false)
+                        .map(|result| result.map(crate::Tensor::$wrap));
+                }
+                (
+                    TensorRead::Tensor(crate::Tensor::$owned(a)),
+                    TensorRead::View(TensorView::$view(b)),
+                ) => {
+                    return typed_tblis_gemm(buffers, a, b, config, false, false)
+                        .map(|result| result.map(crate::Tensor::$wrap));
+                }
+                (
+                    TensorRead::View(TensorView::$view(a)),
+                    TensorRead::Tensor(crate::Tensor::$owned(b)),
+                ) => {
+                    return typed_tblis_gemm(buffers, a, b, config, false, false)
+                        .map(|result| result.map(crate::Tensor::$wrap));
+                }
+                (
+                    TensorRead::View(TensorView::$view(a)),
+                    TensorRead::View(TensorView::$view(b)),
+                ) => {
+                    return typed_tblis_gemm(buffers, a, b, config, false, false)
+                        .map(|result| result.map(crate::Tensor::$wrap));
+                }
+                _ => {}
+            }
+        };
+    }
+
+    dispatch!(F32, F32, F32);
+    dispatch!(F64, F64, F64);
+    dispatch!(C32, C32, C32);
+    dispatch!(C64, C64, C64);
+
+    if lhs.dtype() == rhs.dtype() {
+        Ok(None)
+    } else {
+        Err(Error::DTypeMismatch {
+            op: "dot_general",
+            lhs: lhs.dtype(),
+            rhs: rhs.dtype(),
+        })
+    }
+}
+
+#[cfg(feature = "cpu-tblis-provider")]
+// INVARIANT: this fast path mirrors dot-general read inputs plus accumulation
+// and output-write metadata for one TBLIS dispatch.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn dot_general_tblis_read_into_accum_cached(
+    lhs: TensorRead<'_>,
+    rhs: TensorRead<'_>,
+    config: &DotGeneralConfig,
+    accumulation: DotGeneralAccumulation,
+    out: &mut TensorWrite<'_>,
+) -> crate::Result<bool> {
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
+                (accumulation.alpha, accumulation.beta)
+            {
+                let execution = tblis_gemm::TblisExecution::new(
+                    alpha,
+                    beta,
+                    accumulation.lhs_conj,
+                    accumulation.rhs_conj,
+                );
+                match (&lhs, &rhs, &mut *out) {
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_tblis_accum_typed(a, b, config, &mut c, execution);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_tblis_accum_typed(a, b, config, &mut c, execution);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_tblis_accum_typed(a, b, config, &mut c, execution);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(c)),
+                    ) => {
+                        let mut c = c.as_view_mut();
+                        return dot_general_tblis_accum_typed(a, b, config, &mut c, execution);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_tblis_accum_typed(a, b, config, c, execution);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_tblis_accum_typed(a, b, config, c, execution);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::Tensor(crate::Tensor::$owned(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_tblis_accum_typed(a, b, config, c, execution);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(a)),
+                        TensorRead::View(TensorView::$view(b)),
+                        TensorWrite::View(TensorViewMut::$view(c)),
+                    ) => {
+                        return dot_general_tblis_accum_typed(a, b, config, c, execution);
+                    }
+                    _ => {}
+                }
+            }
+        };
+    }
+
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(false)
+}
+
+#[cfg(feature = "cpu-tblis-provider")]
+fn dot_general_tblis_accum_typed<L, R, T>(
+    lhs: &L,
+    rhs: &R,
+    config: &DotGeneralConfig,
+    out: &mut TypedTensorViewMut<'_, T>,
+    execution: tblis_gemm::TblisExecution<T>,
+) -> crate::Result<bool>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: TblisGemm + Copy + Clone + Zero + One + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
+    if !tblis_gemm::runtime_available()? {
+        return Ok(false);
+    }
+
+    let Some(plan) = tblis_gemm::plan(lhs, rhs, config, out.shape(), out.strides())? else {
+        return Ok(false);
+    };
+
+    let out_n = tblis_gemm::output_element_count(out.shape())?;
+    if out_n == 0 {
+        scale_empty_contract_output(out, execution.beta())?;
+        return Ok(true);
+    }
+
+    let Some(a_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(false);
+    };
+    let Some(b_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(false);
+    };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
+    if a_base < 0 || b_base < 0 {
+        return Ok(false);
+    }
+
+    // SAFETY: offsets are non-negative and the validated tensor layouts prove
+    // the logical positive-stride regions are addressable in their host buffers.
+    let a_ptr = unsafe { a_data.offset(a_base) };
+    // SAFETY: same proof as `a_ptr` for the rhs input.
+    let b_ptr = unsafe { b_data.offset(b_base) };
+    tblis_gemm::execute(plan, a_ptr, b_ptr, out, execution)?;
+    Ok(true)
+}
+
+#[cfg(feature = "cpu-tblis-provider")]
+fn typed_tblis_gemm<L, R, T>(
+    buffers: &mut BufferPool,
+    lhs: &L,
+    rhs: &R,
+    config: &DotGeneralConfig,
+    lhs_conj: bool,
+    rhs_conj: bool,
+) -> crate::Result<Option<TypedTensor<T>>>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: TblisGemm + PoolScalar + Copy + Clone + Zero + One + 'static,
+{
+    if !tblis_gemm::runtime_available()? {
+        return Ok(None);
+    }
+
+    let out_shape = tblis_gemm::output_shape(lhs, rhs, config)?;
+    let out_strides: SmallVec<[isize; 8]> = col_major_strides(&out_shape)?.into_iter().collect();
+    let Some(plan) = tblis_gemm::plan(lhs, rhs, config, &out_shape, &out_strides)? else {
+        return Ok(None);
+    };
+
+    let out_n = tblis_gemm::output_element_count(&out_shape)?;
+    let out = T::pool_acquire_zeroed(buffers, out_n);
+    let mut tensor = TypedTensor::from_buffer_col_major(
+        out_shape.into_vec(),
+        Buffer::Host(out),
+        default_placement(),
+    )?;
+    let mut out_view = tensor.as_view_mut();
+
+    let Some(a_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(None);
+    };
+    let Some(b_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Ok(None);
+    };
+    let a_base = lhs.offset();
+    let b_base = rhs.offset();
+    if a_base < 0 || b_base < 0 {
+        return Ok(None);
+    }
+
+    // SAFETY: offsets are non-negative and the validated tensor layouts prove
+    // the logical positive-stride regions are addressable in their host buffers.
+    let a_ptr = unsafe { a_data.offset(a_base) };
+    // SAFETY: same proof as `a_ptr` for the rhs input.
+    let b_ptr = unsafe { b_data.offset(b_base) };
+    tblis_gemm::execute(
+        plan,
+        a_ptr,
+        b_ptr,
+        &mut out_view,
+        tblis_gemm::TblisExecution::new(T::one(), T::zero(), lhs_conj, rhs_conj),
+    )?;
+
+    Ok(Some(tensor))
 }
 
 fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> isize {

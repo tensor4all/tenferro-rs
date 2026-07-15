@@ -70,8 +70,9 @@ See [Memory Order](memory-order.md).
 
 ## CPU Backend Feature Selection
 
-At least one CPU backend feature must be enabled. `cpu-faer` is the default,
-and `cpu-blas` can be enabled by itself or together with `cpu-faer`:
+At least one CPU fallback/linalg backend feature must be enabled. `cpu-faer`
+is the default, and `cpu-blas` can be enabled by itself or together with
+`cpu-faer`:
 
 ```toml
 [dependencies]
@@ -93,6 +94,11 @@ different dependencies, tenferro stops at compile time instead of linking an
 ambiguous BLAS/LAPACK provider set. Use `OPENBLAS_LIB_DIR` for non-standard
 OpenBLAS installs, and `MKLROOT` or `MKL_LIB_DIR` for non-standard MKL installs
 when the provider build scripts need a library path.
+
+`cpu-tblis` is an optional runtime-loaded `dot_general` contraction provider.
+It is additive to `cpu-faer`/`cpu-blas`; select the base provider with
+`CpuBackendKind` and opt into TBLIS attempts with `DotGeneralProvider`.
+Use `cpu-tblis-linked` when the build should link the bundled/source TBLIS path.
 
 `CpuBackend::new()` selects the compiled default provider: BLAS when `cpu-blas`
 is compiled, otherwise faer. Use `CpuBackend::with_kind(CpuBackendKind::Faer)`

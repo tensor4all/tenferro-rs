@@ -1,7 +1,13 @@
 use super::{select_worker_cpus, CpuContext, CpuContextError};
-use crate::affinity::{current_cpu, ThreadAffinity};
-use crate::{process_cpu_affinity, CpuId, CpuSet};
+#[cfg(target_os = "linux")]
+use crate::affinity::current_cpu;
+use crate::affinity::ThreadAffinity;
+#[cfg(target_os = "linux")]
+use crate::process_cpu_affinity;
+use crate::{CpuId, CpuSet};
+#[cfg(target_os = "linux")]
 use rayon::prelude::*;
+#[cfg(target_os = "linux")]
 use std::collections::BTreeSet;
 
 #[test]

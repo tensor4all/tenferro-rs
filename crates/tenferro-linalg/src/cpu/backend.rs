@@ -12,8 +12,8 @@ use tenferro_tensor::{
 impl LinalgBackend for CpuBackend {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("cholesky", input)?;
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "cholesky")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -38,7 +38,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("cholesky", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match input {
@@ -68,8 +68,8 @@ impl LinalgBackend for CpuBackend {
     ) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("triangular_solve", a)?;
         ensure_host_tensor("triangular_solve", b)?;
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "triangular_solve")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -126,7 +126,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("triangular_solve", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match (a, b) {
@@ -183,8 +183,8 @@ impl LinalgBackend for CpuBackend {
 
     fn lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("lu", input)?;
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "lu")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -205,7 +205,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("lu", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match input {
@@ -230,8 +230,8 @@ impl LinalgBackend for CpuBackend {
 
     fn lu_factor(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("lu_factor", input)?;
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "lu_factor")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -264,7 +264,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("lu_factor", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match input {
@@ -301,8 +301,8 @@ impl LinalgBackend for CpuBackend {
 
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("full_piv_lu", input)?;
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "full_piv_lu")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -323,7 +323,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("full_piv_lu", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match input {
@@ -368,8 +368,8 @@ impl LinalgBackend for CpuBackend {
             (b.clone(), None)
         };
 
-        let result = match self.kind() {
-            CpuBackendKind::Faer => {
+        let result = match linalg_provider_kind(self.kind(), "full_piv_lu_solve")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -414,7 +414,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("full_piv_lu_solve", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match (a, &rhs) {
@@ -453,8 +453,8 @@ impl LinalgBackend for CpuBackend {
 
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("svd", input)?;
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "svd")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -475,7 +475,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("svd", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match input {
@@ -500,8 +500,8 @@ impl LinalgBackend for CpuBackend {
 
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("svd_values", input)?;
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "svd_values")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -526,7 +526,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("svd_values", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match input {
@@ -547,7 +547,10 @@ impl LinalgBackend for CpuBackend {
 
     fn svd_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         #[cfg(feature = "cpu-faer")]
-        if matches!(self.kind(), CpuBackendKind::Faer) {
+        if matches!(
+            linalg_provider_kind(self.kind(), "svd")?,
+            CpuLinalgProvider::Faer
+        ) {
             // Fast-path: if the view is already host-resident and 2D with non-negative strides,
             // feed it directly to faer without materializing a contiguous copy.
             let can_skip_materialize = match &input {
@@ -603,8 +606,8 @@ impl LinalgBackend for CpuBackend {
 
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("qr", input)?;
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "qr")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -625,7 +628,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("qr", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match input {
@@ -650,7 +653,10 @@ impl LinalgBackend for CpuBackend {
 
     fn qr_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         #[cfg(feature = "cpu-faer")]
-        if matches!(self.kind(), CpuBackendKind::Faer) {
+        if matches!(
+            linalg_provider_kind(self.kind(), "qr")?,
+            CpuLinalgProvider::Faer
+        ) {
             // Fast-path: feed an already host-resident 2D non-negative-strided view directly to faer.
             let can_skip_materialize = match &input {
                 TensorView::F32(view) => linalg::faer::faer_strided_ok(view),
@@ -705,8 +711,8 @@ impl LinalgBackend for CpuBackend {
 
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("eigh", input)?;
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "eigh")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -727,7 +733,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("eigh", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match input {
@@ -752,7 +758,10 @@ impl LinalgBackend for CpuBackend {
 
     fn eigh_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         #[cfg(feature = "cpu-faer")]
-        if matches!(self.kind(), CpuBackendKind::Faer) {
+        if matches!(
+            linalg_provider_kind(self.kind(), "eigh")?,
+            CpuLinalgProvider::Faer
+        ) {
             // Fast-path: feed an already host-resident 2D non-negative-strided view directly to faer.
             // Complex eigenvalues are real; mirror the materialized `eigh` path by converting the
             // complex outputs (real eigenvalues, complex eigenvectors) to public tensors.
@@ -809,7 +818,10 @@ impl LinalgBackend for CpuBackend {
 
     fn cholesky_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Tensor> {
         #[cfg(feature = "cpu-faer")]
-        if matches!(self.kind(), CpuBackendKind::Faer) {
+        if matches!(
+            linalg_provider_kind(self.kind(), "cholesky")?,
+            CpuLinalgProvider::Faer
+        ) {
             let can_skip_materialize = match &input {
                 TensorView::F32(view) => linalg::faer::faer_strided_ok(view),
                 TensorView::F64(view) => linalg::faer::faer_strided_ok(view),
@@ -865,7 +877,10 @@ impl LinalgBackend for CpuBackend {
 
     fn lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         #[cfg(feature = "cpu-faer")]
-        if matches!(self.kind(), CpuBackendKind::Faer) {
+        if matches!(
+            linalg_provider_kind(self.kind(), "lu")?,
+            CpuLinalgProvider::Faer
+        ) {
             let can_skip_materialize = match &input {
                 TensorView::F32(view) => linalg::faer::faer_strided_ok(view),
                 TensorView::F64(view) => linalg::faer::faer_strided_ok(view),
@@ -917,7 +932,10 @@ impl LinalgBackend for CpuBackend {
 
     fn full_piv_lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         #[cfg(feature = "cpu-faer")]
-        if matches!(self.kind(), CpuBackendKind::Faer) {
+        if matches!(
+            linalg_provider_kind(self.kind(), "full_piv_lu")?,
+            CpuLinalgProvider::Faer
+        ) {
             let can_skip_materialize = match &input {
                 TensorView::F32(view) => linalg::faer::faer_strided_ok(view),
                 TensorView::F64(view) => linalg::faer::faer_strided_ok(view),
@@ -1006,8 +1024,8 @@ impl LinalgBackend for CpuBackend {
 
     fn eigh_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("eigh_values", input)?;
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "eigh_values")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -1032,7 +1050,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("eigh_values", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match input {
@@ -1059,8 +1077,8 @@ impl LinalgBackend for CpuBackend {
         ) {
             return Err(unsupported_dtype("eig", input.dtype()));
         }
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "eig")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -1071,7 +1089,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("eig", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| linalg::blas::eig(buffers, input))
@@ -1092,8 +1110,8 @@ impl LinalgBackend for CpuBackend {
         ) {
             return Err(unsupported_dtype("eig_values", input.dtype()));
         }
-        match self.kind() {
-            CpuBackendKind::Faer => {
+        match linalg_provider_kind(self.kind(), "eig_values")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -1106,7 +1124,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("eig_values", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| linalg::blas::eig_values(buffers, input))
@@ -1197,8 +1215,8 @@ impl LinalgBackend for CpuBackend {
             (b.clone(), None)
         };
 
-        let result = match self.kind() {
-            CpuBackendKind::Faer => {
+        let result = match linalg_provider_kind(self.kind(), "solve")? {
+            CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
                     let ctx = self.linalg_context();
@@ -1223,7 +1241,7 @@ impl LinalgBackend for CpuBackend {
                     Err(unsupported_provider("solve", self.kind()))
                 }
             }
-            CpuBackendKind::Blas => {
+            CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.with_linalg_pool(|buffers| match (a, &rhs) {
@@ -1254,6 +1272,22 @@ impl LinalgBackend for CpuBackend {
         } else {
             Ok(result)
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CpuLinalgProvider {
+    Faer,
+    Blas,
+}
+
+fn linalg_provider_kind(
+    kind: CpuBackendKind,
+    _op: &'static str,
+) -> tenferro_tensor::Result<CpuLinalgProvider> {
+    match kind {
+        CpuBackendKind::Faer => Ok(CpuLinalgProvider::Faer),
+        CpuBackendKind::Blas => Ok(CpuLinalgProvider::Blas),
     }
 }
 

@@ -1,5 +1,7 @@
 use super::*;
-use crate::{process_cpu_affinity, CpuSet, ResolvedCpuPlacement};
+#[cfg(target_os = "linux")]
+use crate::{process_cpu_affinity, CpuSet};
+use crate::{CpuId, ResolvedCpuPlacement};
 
 #[cfg(target_os = "linux")]
 #[test]
@@ -16,4 +18,33 @@ fn engine_caps_workers_to_its_cpu_domain_and_owns_resources() {
     let resources = engine.resources.lock().unwrap();
     assert_eq!(resources.buffers.max_retained_capacity_bytes(), 0);
     assert_eq!(resources.gemm_analysis_cache.capacity(), 1024);
+}
+
+#[test]
+fn engine_from_context_preserves_placement_context_and_resources() {
+    let placement = ResolvedCpuPlacement::AllAllowed {
+        cpus: crate::CpuSet::singleton(CpuId::new(0)),
+    };
+    let context = Arc::new(CpuContext::with_threads(1).unwrap());
+    let engine = CpuEngine::from_context(placement.clone(), Arc::clone(&context), 4096);
+
+    assert_eq!(engine.placement(), &placement);
+    assert_eq!(engine.context().num_threads(), 1);
+    assert!(Arc::ptr_eq(&engine.context_arc(), &context));
+    let resources = engine.resources.lock().unwrap();
+    assert_eq!(resources.buffers.max_retained_capacity_bytes(), 4096);
+    assert_eq!(resources.gemm_analysis_cache.capacity(), 1024);
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[test]
+fn engine_new_reports_unsupported_worker_affinity() {
+    let placement = ResolvedCpuPlacement::AllAllowed {
+        cpus: crate::CpuSet::singleton(CpuId::new(0)),
+    };
+
+    let error = CpuEngine::new(placement, 1, 0).unwrap_err();
+
+    assert!(matches!(error, CpuContextError::WorkerPinning { .. }));
+    assert!(error.to_string().contains("unsupported on this platform"));
 }

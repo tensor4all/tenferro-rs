@@ -179,6 +179,19 @@ When writing ASCII flow diagrams or box diagrams in documentation or design docs
 
 Use **workspace dependencies** for libraries shared across multiple crates. Define the dependency once in the workspace `Cargo.toml` under `[workspace.dependencies]`, then reference it with `dep.workspace = true` in each crate's `Cargo.toml`.
 
+### Crates.io Publication
+
+- Never publish a package that does not already exist on crates.io without the
+  user's explicit approval for that specific package. A general request to
+  finish a PR or release does not authorize publishing a new package, and
+  agents must never publish new packages automatically.
+- Before every `cargo publish`, inspect the packaged files and validate the
+  package metadata for the intended audience. This includes at least the name,
+  version, description, license, repository, homepage, documentation, README,
+  `rust-version`, keywords, categories, and `include`/`exclude` rules. Run the
+  appropriate `cargo package` checks before requesting or acting on publication
+  approval.
+
 ## Git Worktree Rules
 
 When using git worktrees for feature development, **always branch from the latest `main`** before starting implementation. Run `git fetch origin && git checkout -b <branch-name> origin/main` to ensure the branch is up-to-date. Never branch from a stale local state or from another feature branch unless explicitly intended.

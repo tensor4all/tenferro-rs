@@ -55,6 +55,21 @@ The public user-facing crates are `tenferro-tensor-core`, `tenferro-tensor`,
 `internal` in their name are
 implementation crates and should not be presented as user-facing API surfaces.
 
+### Non-workspace source-provider packages
+
+`third_party/t4a-tblis-src` is stored in this repository but is not a tenferro
+workspace crate. It is a self-contained, independently versioned source-build
+and native-link provider prepared for a separate crates.io release. The root
+workspace excludes it and consumes it through the neutral `tblis-src`
+dependency alias with a path-plus-exact-version requirement.
+
+`tenferro-cpu` always uses `tblis-ffi` for Rust declarations. Its
+`cpu-tblis-runtime` route enables the FFI crate's dynamic loader and does not
+depend on the source provider. Its `cpu-tblis-linked` route instead anchors
+`t4a-tblis-src` in the Rust crate graph with `build_from_source` and `static`,
+while leaving `tblis-ffi/dynamic_loading` disabled. This package is deployment
+glue, not a tenferro user-facing API surface or a new runtime layer.
+
 ## III. Layering
 
 ```text

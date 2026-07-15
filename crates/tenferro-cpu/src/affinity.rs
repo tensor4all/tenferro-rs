@@ -16,24 +16,17 @@ impl ThreadAffinity for SystemThreadAffinity {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(crate) fn current_cpu() -> Result<CpuId, String> {
-    #[cfg(target_os = "linux")]
-    {
-        unsafe extern "C" {
-            fn sched_getcpu() -> i32;
-        }
-        // SAFETY: `sched_getcpu` takes no arguments and returns the calling
-        // thread's current logical CPU or a negative error sentinel.
-        let cpu = unsafe { sched_getcpu() };
-        usize::try_from(cpu)
-            .map(CpuId::new)
-            .map_err(|_| std::io::Error::last_os_error().to_string())
+    unsafe extern "C" {
+        fn sched_getcpu() -> i32;
     }
-    #[cfg(not(target_os = "linux"))]
-    {
-        Err("current logical CPU discovery is unsupported on this platform".to_owned())
-    }
+    // SAFETY: `sched_getcpu` takes no arguments and returns the calling
+    // thread's current logical CPU or a negative error sentinel.
+    let cpu = unsafe { sched_getcpu() };
+    usize::try_from(cpu)
+        .map(CpuId::new)
+        .map_err(|_| std::io::Error::last_os_error().to_string())
 }
 
 fn set_current_thread_affinity(cpus: &CpuSet) -> Result<(), String> {

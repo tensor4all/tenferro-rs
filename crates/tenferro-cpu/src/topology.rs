@@ -1,4 +1,6 @@
-use std::{collections::BTreeSet, fmt};
+#[cfg(any(test, target_os = "linux"))]
+use std::collections::BTreeSet;
+use std::fmt;
 
 use thiserror::Error;
 
@@ -241,6 +243,7 @@ impl CpuSet {
         false
     }
 
+    #[cfg(any(test, target_os = "linux"))]
     fn intersection(&self, other: &Self) -> Option<Self> {
         let mut intersection = Vec::with_capacity(self.len().min(other.len()));
         let (mut left, mut right) = (0, 0);
@@ -367,12 +370,14 @@ pub enum CpuTopologyError {
     },
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub(crate) trait TopologySource {
     fn allowed_cpus(&self) -> Result<CpuSet, CpuTopologyError>;
 
     fn numa_node_cpu_lists(&self) -> Result<Option<Vec<(NumaNodeId, String)>>, CpuTopologyError>;
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub(crate) fn discover_from(source: &impl TopologySource) -> Result<CpuTopology, CpuTopologyError> {
     let allowed_cpus = source.allowed_cpus()?;
     let Some(node_cpu_lists) = source.numa_node_cpu_lists()? else {
@@ -385,6 +390,7 @@ pub(crate) fn discover_from(source: &impl TopologySource) -> Result<CpuTopology,
     CpuTopology::from_discovered(allowed_cpus, nodes)
 }
 
+#[cfg(any(test, target_os = "linux"))]
 pub(crate) fn parse_linux_cpu_list(input: &str) -> Result<CpuSet, CpuTopologyError> {
     const MAX_PARSED_CPUS: usize = 1 << 20;
 
@@ -551,6 +557,7 @@ impl CpuTopology {
         }
     }
 
+    #[cfg(any(test, target_os = "linux"))]
     pub(crate) fn from_discovered(
         allowed_cpus: CpuSet,
         nodes: impl IntoIterator<Item = (NumaNodeId, CpuSet)>,

@@ -1,5 +1,8 @@
 use std::time::Duration;
 
+#[cfg(feature = "cpu-tblis-linked")]
+use num_complex::{Complex32, Complex64};
+
 use super::*;
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -55,7 +58,7 @@ fn explicit_backend_kind_constructor_records_selection() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn placement_handle_clones_share_coordinator_engine_and_resources() {
     let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
     let mut placed = backend.for_placement(CpuPlacement::AllAllowed).unwrap();
@@ -81,11 +84,11 @@ fn placement_handle_clones_share_coordinator_engine_and_resources() {
 fn placement_capabilities_follow_public_backend_kind() {
     let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
     assert!(backend.supports_placement(CpuPlacement::Auto));
-    assert!(backend.supports_placement(CpuPlacement::AllAllowed));
     assert_eq!(
-        backend.topology().allowed_cpus(),
-        crate::process_cpu_affinity().as_ref().unwrap()
+        backend.supports_placement(CpuPlacement::AllAllowed),
+        cfg!(any(target_os = "linux", target_os = "android"))
     );
+    assert!(!backend.topology().allowed_cpus().is_empty());
 }
 
 #[test]
@@ -159,7 +162,7 @@ fn independently_constructed_backends_share_global_provider_exclusion() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn direct_nested_clone_install_is_rejected_in_a_managed_scope() {
     let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let nested = backend.clone();
@@ -179,7 +182,7 @@ fn direct_nested_clone_install_is_rejected_in_a_managed_scope() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn direct_nested_independent_engine_is_rejected_in_a_managed_scope() {
     let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let middle = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
@@ -199,7 +202,7 @@ fn direct_nested_independent_engine_is_rejected_in_a_managed_scope() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn cross_pool_wait_cannot_misclassify_a_scheduled_sibling_as_direct_nesting() {
     let outer = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
     let middle = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
@@ -227,7 +230,7 @@ fn cross_pool_wait_cannot_misclassify_a_scheduled_sibling_as_direct_nesting() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn stolen_rayon_child_task_backend_reentry_is_rejected() {
     let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let nested = outer.clone();
@@ -259,7 +262,7 @@ fn stolen_rayon_child_task_backend_reentry_is_rejected() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn parallel_rayon_sibling_backend_reentry_is_rejected() {
     let outer = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let first = outer.clone();
@@ -321,7 +324,7 @@ fn shared_context_work_is_not_mistaken_for_backend_reentry() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn execution_owner_broadcast_is_cleared_after_panic() {
     let backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
 
@@ -334,7 +337,7 @@ fn execution_owner_broadcast_is_cleared_after_panic() {
 }
 
 #[test]
-#[cfg(feature = "cpu-faer")]
+#[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn nested_clone_tensor_operation_is_rejected_in_a_managed_scope() {
     let mut backend = CpuBackend::with_threads_and_kind(2, CpuBackendKind::Faer).unwrap();
     let mut nested = backend.clone();
@@ -418,6 +421,253 @@ fn explicit_blas_backend_kind_constructor_records_selection() {
     let backend = CpuBackend::with_kind(CpuBackendKind::Blas).unwrap();
 
     assert_eq!(backend.kind(), CpuBackendKind::Blas);
+}
+
+#[test]
+fn explicit_dot_general_provider_records_selection() {
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+
+    assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
+    assert_eq!(backend.dot_general_provider(), DotGeneralProvider::Base);
+
+    backend.set_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
+    assert_eq!(
+        backend.dot_general_provider(),
+        DotGeneralProvider::TblisIfAvailable
+    );
+    assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
+}
+
+#[test]
+#[cfg(feature = "cpu-tblis-linked")]
+fn tblis_dot_general_matches_column_major_matmul() {
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    let out = backend.dot_general(&lhs, &rhs, &config).unwrap();
+
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[76.0, 100.0, 103.0, 136.0]);
+}
+
+#[test]
+#[cfg(feature = "cpu-tblis-linked")]
+fn tblis_dot_general_read_into_accum_applies_alpha_beta() {
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let accumulation = DotGeneralAccumulation {
+        lhs_conj: false,
+        rhs_conj: false,
+        alpha: tenferro_tensor::ContractionScalar::F64(2.0),
+        beta: tenferro_tensor::ContractionScalar::F64(3.0),
+    };
+
+    backend
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            accumulation,
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap();
+
+    assert_eq!(
+        out.as_slice::<f64>().unwrap(),
+        &[155.0, 203.0, 209.0, 275.0]
+    );
+}
+
+#[test]
+#[cfg(feature = "cpu-tblis-linked")]
+fn tblis_dot_general_supports_c64() {
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
+    let lhs = Tensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, -1.0),
+            Complex64::new(3.0, 0.5),
+            Complex64::new(-1.0, 2.0),
+        ],
+    )
+    .unwrap();
+    let rhs = Tensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(0.5, -1.0),
+            Complex64::new(4.0, 1.0),
+            Complex64::new(-2.0, 0.25),
+            Complex64::new(1.5, -3.0),
+        ],
+    )
+    .unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    let out = backend.dot_general(&lhs, &rhs, &config).unwrap();
+
+    assert_eq!(out.shape(), &[2, 2]);
+    assert_complex64_close(
+        out.as_slice::<Complex64>().unwrap(),
+        &[
+            Complex64::new(13.0, 4.5),
+            Complex64::new(-6.0, 4.5),
+            Complex64::new(3.75, -10.0),
+            Complex64::new(0.75, 8.5),
+        ],
+        1.0e-12,
+    );
+}
+
+#[test]
+#[cfg(feature = "cpu-tblis-linked")]
+fn tblis_dot_general_c32_conj_accum() {
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
+    let lhs = Tensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex32::new(1.0, 2.0),
+            Complex32::new(2.0, 0.5),
+            Complex32::new(3.0, -1.0),
+            Complex32::new(-1.0, 1.0),
+        ],
+    )
+    .unwrap();
+    let rhs = Tensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex32::new(0.5, 1.0),
+            Complex32::new(4.0, -1.0),
+            Complex32::new(-2.0, 0.25),
+            Complex32::new(1.5, 3.0),
+        ],
+    )
+    .unwrap();
+    let mut out =
+        Tensor::from_vec_col_major(vec![2, 2], vec![Complex32::new(1.0, -2.0); 4]).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let accumulation = DotGeneralAccumulation {
+        lhs_conj: true,
+        rhs_conj: false,
+        alpha: tenferro_tensor::ContractionScalar::C32(Complex32::new(2.0, -1.0)),
+        beta: tenferro_tensor::ContractionScalar::C32(Complex32::new(-1.0, 0.5)),
+    };
+
+    backend
+        .dot_general_read_into_accum(
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            accumulation,
+            TensorWrite::from_tensor(&mut out),
+        )
+        .unwrap();
+
+    assert_complex32_close(
+        out.as_slice::<Complex32>().unwrap(),
+        &[
+            Complex32::new(32.0, -11.0),
+            Complex32::new(-8.25, 3.5),
+            Complex32::new(14.75, 32.0),
+            Complex32::new(-7.75, -1.125),
+        ],
+        1.0e-5,
+    );
+}
+
+#[test]
+#[cfg(feature = "cpu-tblis-provider")]
+fn tblis_dot_general_falls_back_for_scalar_output_inner_product() {
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
+    let lhs = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![0],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    let out = backend.dot_general(&lhs, &rhs, &config).unwrap();
+
+    assert_eq!(out.shape(), &[] as &[usize]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[32.0]);
+}
+
+#[test]
+#[cfg(feature = "cpu-tblis-provider")]
+fn tblis_dot_general_falls_back_for_zero_size_matmul() {
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    backend.set_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
+    let lhs = Tensor::from_vec_col_major(vec![2, 0], Vec::<f64>::new()).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![0, 3], Vec::<f64>::new()).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    let out = backend.dot_general(&lhs, &rhs, &config).unwrap();
+
+    assert_eq!(out.shape(), &[2, 3]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0; 6]);
+}
+
+#[cfg(feature = "cpu-tblis-linked")]
+fn assert_complex64_close(actual: &[Complex64], expected: &[Complex64], tol: f64) {
+    assert_eq!(actual.len(), expected.len());
+    for (idx, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+        assert!(
+            (actual - expected).norm() <= tol,
+            "complex64 mismatch at {idx}: actual={actual:?} expected={expected:?}"
+        );
+    }
+}
+
+#[cfg(feature = "cpu-tblis-linked")]
+fn assert_complex32_close(actual: &[Complex32], expected: &[Complex32], tol: f32) {
+    assert_eq!(actual.len(), expected.len());
+    for (idx, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+        assert!(
+            (actual - expected).norm() <= tol,
+            "complex32 mismatch at {idx}: actual={actual:?} expected={expected:?}"
+        );
+    }
 }
 
 #[test]
@@ -676,4 +926,27 @@ fn unavailable_affinity_auto_placement_reuses_compatibility_engine() {
         CpuExecutionMode::Compatibility
     );
     assert_eq!(placed.context_id_for_test(), backend.context_id_for_test());
+}
+
+#[cfg(all(
+    feature = "cpu-faer",
+    not(any(target_os = "linux", target_os = "android"))
+))]
+#[test]
+fn explicit_managed_affinity_reports_engine_construction_error_when_unsupported() {
+    let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+
+    let error = backend
+        .for_placement_with_affinity(CpuPlacement::AllAllowed, true)
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        CpuPlacementError::EngineConstruction {
+            requested: CpuPlacement::AllAllowed,
+            backend: CpuBackendKind::Faer,
+            ..
+        }
+    ));
+    assert!(error.to_string().contains("unsupported on this platform"));
 }

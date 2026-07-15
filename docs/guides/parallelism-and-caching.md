@@ -15,7 +15,10 @@ parallelism contract.
 ## CPU Backend Provider
 
 At least one CPU provider feature must be compiled. `cpu-faer` is the default.
-`cpu-blas` can be compiled by itself or together with `cpu-faer`.
+`cpu-blas` can be compiled by itself or together with `cpu-faer`. `cpu-tblis`
+is an optional `dot_general` contraction provider; it is additive and still
+requires at least one of `cpu-faer` or `cpu-blas` for fallback and linalg
+coverage.
 `blas-openblas`, `blas-accelerate`, and `blas-mkl` are explicit BLAS/LAPACK
 source-provider features that also enable `cpu-blas`; enable at most one of
 them in a single resolved Cargo feature graph.
@@ -29,9 +32,12 @@ current binary:
 | `cpu-blas` only | BLAS/LAPACK |
 | `cpu-faer` and `cpu-blas` | BLAS/LAPACK |
 
-This is the default provider for that backend instance, not a dynamic fallback
-chain. If both providers are compiled, select a provider explicitly when a
-specific call path should use faer or BLAS. Explicit selection returns a
+This is the default provider for that backend instance. If multiple complete
+CPU providers are compiled, select `CpuBackendKind::Faer` or
+`CpuBackendKind::Blas` explicitly when a specific call path should use one of
+them. TBLIS is not a complete backend kind; opt into TBLIS `dot_general`
+attempts with `DotGeneralProvider::TblisIfAvailable` or require TBLIS with
+`DotGeneralProvider::TblisRequired`. Explicit base-provider selection returns a
 configuration error if the requested provider was not compiled into the binary:
 
 ```rust
@@ -66,6 +72,8 @@ RAYON_NUM_THREADS=4 cargo run --release
 For `cpu-faer`, tenferro passes the `CpuContext` thread count to faer-backed
 kernels. A one-thread context uses sequential faer execution; a multi-thread
 context uses faer's Rayon parallelism with the requested thread count.
+For `cpu-tblis`, TBLIS owns its internal threading policy; `CpuBackend` thread
+counts still apply to tenferro-owned CPU kernels and fallback paths.
 
 ## CPU Operation Parallelism
 
@@ -80,6 +88,7 @@ pool before dispatching tensor-sized kernels.
 | Materialized transpose/permute, broadcast, convert, and diagonal extraction | `strided-kernel` copy/map kernels run under `CpuContext` and can use Rayon for tensor-sized copies. |
 | `dot_general` through `cpu-faer` | faer receives `Par::Seq` for one-thread contexts and `Par::rayon(0)` inside the owned `CpuContext` pool for multi-thread contexts. |
 | GEMM and linalg through `cpu-blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
+| Supported `dot_general` contractions through `cpu-tblis` | TBLIS owns provider threading; unsupported TBLIS shapes fall back to the compiled faer/BLAS provider. |
 | Indexing, scatter/gather, slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside `CpuContext::install`, and source comments mark the intentional sequential path. |
 
 ## BLAS And LAPACK Threads
@@ -121,8 +130,9 @@ use tenferro_cpu::CpuBackend;
 let backend = CpuBackend::with_threads(1);
 ```
 
-For BLAS/LAPACK providers, apply the same rule to provider thread variables.
-For benchmarks, pin all relevant thread counts and report them with the result.
+For BLAS/LAPACK and TBLIS providers, apply the same rule to provider thread
+variables. For benchmarks, pin all relevant thread counts and report them with
+the result.
 
 ## Reuse Runtime State
 

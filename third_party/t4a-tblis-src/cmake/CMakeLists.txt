@@ -1,0 +1,54 @@
+# Derived from RESTGroup/tblis-rs `tblis-src` and modified by Tensor4All.
+# See LICENSE and NOTICE.md.
+
+cmake_minimum_required(VERSION 3.15)
+project(t4a-dep-tblis)
+
+include(ExternalProject)
+include(GNUInstallDirs)
+
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
+if(NOT TBLIS_SRC)
+    set(TBLIS_SRC https://github.com/MatthewsResearchGroup/tblis.git)
+endif()
+
+if(NOT TBLIS_VER)
+    set(TBLIS_VER eb719e718976572e0ab53975f4e0c799faeb35f2)
+endif()
+
+set(TBLIS_SOURCE_ARGS
+    GIT_REPOSITORY ${TBLIS_SRC}
+    GIT_TAG ${TBLIS_VER}
+    GIT_PROGRESS TRUE
+)
+
+if(TBLIS_SRC_IS_LOCAL_DIR)
+    set(TBLIS_SOURCE_ARGS SOURCE_DIR ${TBLIS_SRC})
+endif()
+
+set(TBLIS_PATCH_COMMAND "")
+if(TBLIS_FORCE_BUNDLED_BLIS)
+    set(TBLIS_PATCH_COMMAND
+        ${CMAKE_COMMAND}
+            -DTBLIS_SOURCE_DIR=<SOURCE_DIR>
+            -P ${CMAKE_CURRENT_LIST_DIR}/PatchBundledBlis.cmake
+    )
+endif()
+
+ExternalProject_Add(tblis
+    ${TBLIS_SOURCE_ARGS}
+    PREFIX ${PROJECT_BINARY_DIR}/deps
+    PATCH_COMMAND ${TBLIS_PATCH_COMMAND}
+    CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+        -DCMAKE_INSTALL_PREFIX:PATH=${PROJECT_BINARY_DIR}/deps
+        -DCMAKE_DISABLE_FIND_PACKAGE_BLIS=ON
+        -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+        -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE
+)
+
+install(DIRECTORY ${PROJECT_BINARY_DIR}/deps/${CMAKE_INSTALL_LIBDIR}/ DESTINATION ${CMAKE_INSTALL_LIBDIR})

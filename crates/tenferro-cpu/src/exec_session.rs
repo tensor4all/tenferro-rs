@@ -13,11 +13,11 @@ use tenferro_tensor::{
 };
 
 use super::backend::reclaim_typed;
-use super::CpuBackendKind;
 use super::{
     analytic, elementwise, gemm, indexing, materialize_tensor_read, reduction, structural,
     CpuContext,
 };
+use super::{CpuBackendKind, DotGeneralProvider};
 
 pub(crate) struct CpuExecSession<'a> {
     #[cfg_attr(feature = "cpu-blas", allow(dead_code))]
@@ -25,6 +25,7 @@ pub(crate) struct CpuExecSession<'a> {
     pub(crate) buffers: &'a mut BufferPool,
     pub(crate) gemm_analysis_cache: &'a mut gemm::GemmAnalysisCache,
     pub(crate) kind: CpuBackendKind,
+    pub(crate) dot_general_provider: DotGeneralProvider,
 }
 
 impl CpuExecSession<'_> {
@@ -211,6 +212,37 @@ impl TensorReduction for CpuExecSession<'_> {
     }
 }
 
+impl CpuExecSession<'_> {
+    fn with_base_dot_general_provider<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let saved = self.dot_general_provider;
+        self.dot_general_provider = DotGeneralProvider::Base;
+        let result = f(self);
+        self.dot_general_provider = saved;
+        result
+    }
+
+    #[cfg(feature = "cpu-tblis-provider")]
+    fn tblis_not_applicable<T>(
+        &self,
+        op: &'static str,
+        value: Option<T>,
+    ) -> crate::Result<Option<T>> {
+        if value.is_some() || self.dot_general_provider != DotGeneralProvider::TblisRequired {
+            return Ok(value);
+        }
+        Err(super::backend::tblis_required_not_applicable(op))
+    }
+
+    #[cfg(not(feature = "cpu-tblis-provider"))]
+    fn tblis_unavailable_for_required<T>(&self, op: &'static str) -> crate::Result<Option<T>> {
+        if self.dot_general_provider == DotGeneralProvider::TblisRequired {
+            Err(super::backend::tblis_required_unavailable(op))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
 impl TensorDot for CpuExecSession<'_> {
     // GEMM — dtype dispatch, pool + ctx
     fn dot_general(
@@ -228,6 +260,32 @@ impl TensorDot for CpuExecSession<'_> {
         rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
+        match self.dot_general_provider {
+            DotGeneralProvider::Base => {}
+            DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
+                #[cfg(feature = "cpu-tblis-provider")]
+                {
+                    let direct = gemm::dot_general_tblis_read_cached(
+                        self.buffers,
+                        lhs.clone(),
+                        rhs.clone(),
+                        config,
+                    )?;
+                    if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
+                        return Ok(result);
+                    }
+                }
+                #[cfg(not(feature = "cpu-tblis-provider"))]
+                {
+                    if let Some(result) =
+                        self.tblis_unavailable_for_required::<Tensor>("dot_general")?
+                    {
+                        return Ok(result);
+                    }
+                }
+            }
+        }
+
         let direct = match self.kind {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -277,7 +335,9 @@ impl TensorDot for CpuExecSession<'_> {
 
         let lhs = materialize_tensor_read("dot_general", lhs)?;
         let rhs = materialize_tensor_read("dot_general", rhs)?;
-        self.dot_general_cached(None, &lhs, &rhs, config)
+        self.with_base_dot_general_provider(|this| {
+            this.dot_general_cached(None, &lhs, &rhs, config)
+        })
     }
 
     fn dot_general_read_into(
@@ -330,6 +390,50 @@ impl SessionCachedDot for CpuExecSession<'_> {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
+        match self.dot_general_provider {
+            DotGeneralProvider::Base => {}
+            DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
+                #[cfg(feature = "cpu-tblis-provider")]
+                {
+                    let direct = match (lhs, rhs) {
+                        (Tensor::F32(a), Tensor::F32(b)) => {
+                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
+                                .map(|result| result.map(Tensor::F32))
+                        }
+                        (Tensor::F64(a), Tensor::F64(b)) => {
+                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
+                                .map(|result| result.map(Tensor::F64))
+                        }
+                        (Tensor::C32(a), Tensor::C32(b)) => {
+                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
+                                .map(|result| result.map(Tensor::C32))
+                        }
+                        (Tensor::C64(a), Tensor::C64(b)) => {
+                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
+                                .map(|result| result.map(Tensor::C64))
+                        }
+                        _ if lhs.dtype() == rhs.dtype() => Ok(None),
+                        _ => Err(crate::Error::DTypeMismatch {
+                            op: "dot_general",
+                            lhs: lhs.dtype(),
+                            rhs: rhs.dtype(),
+                        }),
+                    }?;
+                    if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
+                        return Ok(result);
+                    }
+                }
+                #[cfg(not(feature = "cpu-tblis-provider"))]
+                {
+                    if let Some(result) =
+                        self.tblis_unavailable_for_required::<Tensor>("dot_general")?
+                    {
+                        return Ok(result);
+                    }
+                }
+            }
+        }
+
         match self.kind {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -457,6 +561,77 @@ impl SessionCachedDot for CpuExecSession<'_> {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
+        match self.dot_general_provider {
+            DotGeneralProvider::Base => {}
+            DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
+                #[cfg(feature = "cpu-tblis-provider")]
+                {
+                    let direct = match (lhs, rhs) {
+                        (Tensor::F32(a), Tensor::F32(b)) => {
+                            gemm::dot_general_tblis_with_conj_cached(
+                                self.buffers,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(|result| result.map(Tensor::F32))
+                        }
+                        (Tensor::F64(a), Tensor::F64(b)) => {
+                            gemm::dot_general_tblis_with_conj_cached(
+                                self.buffers,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(|result| result.map(Tensor::F64))
+                        }
+                        (Tensor::C32(a), Tensor::C32(b)) => {
+                            gemm::dot_general_tblis_with_conj_cached(
+                                self.buffers,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(|result| result.map(Tensor::C32))
+                        }
+                        (Tensor::C64(a), Tensor::C64(b)) => {
+                            gemm::dot_general_tblis_with_conj_cached(
+                                self.buffers,
+                                a,
+                                b,
+                                config,
+                                lhs_conj,
+                                rhs_conj,
+                            )
+                            .map(|result| result.map(Tensor::C64))
+                        }
+                        _ if lhs.dtype() == rhs.dtype() => Ok(None),
+                        _ => Err(crate::Error::DTypeMismatch {
+                            op: "dot_general",
+                            lhs: lhs.dtype(),
+                            rhs: rhs.dtype(),
+                        }),
+                    }?;
+                    if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
+                        return Ok(result);
+                    }
+                }
+                #[cfg(not(feature = "cpu-tblis-provider"))]
+                {
+                    if let Some(result) =
+                        self.tblis_unavailable_for_required::<Tensor>("dot_general")?
+                    {
+                        return Ok(result);
+                    }
+                }
+            }
+        }
         match self.kind {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -617,6 +792,29 @@ impl SessionCachedDot for CpuExecSession<'_> {
         mut out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         validate_dot_general_accumulation(&lhs, &rhs, config, accumulation, &out, "dot_general")?;
+        match self.dot_general_provider {
+            DotGeneralProvider::Base => {}
+            DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
+                #[cfg(feature = "cpu-tblis-provider")]
+                {
+                    let direct = gemm::dot_general_tblis_read_into_accum_cached(
+                        lhs.clone(),
+                        rhs.clone(),
+                        config,
+                        accumulation,
+                        &mut out,
+                    )?;
+                    if direct {
+                        return Ok(());
+                    }
+                    self.tblis_not_applicable::<()>("dot_general", None)?;
+                }
+                #[cfg(not(feature = "cpu-tblis-provider"))]
+                {
+                    self.tblis_unavailable_for_required::<()>("dot_general")?;
+                }
+            }
+        }
         let direct = match self.kind {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -667,7 +865,9 @@ impl SessionCachedDot for CpuExecSession<'_> {
             return Ok(());
         }
 
-        dot_general_accum_via_temp(self, lhs, rhs, config, accumulation, out)
+        self.with_base_dot_general_provider(|this| {
+            dot_general_accum_via_temp(this, lhs, rhs, config, accumulation, out)
+        })
     }
 
     fn grouped_gemm_cached(
@@ -819,6 +1019,7 @@ mod tests {
             buffers: &mut buffers,
             gemm_analysis_cache: &mut gemm_analysis_cache,
             kind: CpuBackendKind::Blas,
+            dot_general_provider: DotGeneralProvider::Base,
         };
 
         assert!(rayon::current_thread_index().is_none());

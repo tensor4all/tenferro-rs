@@ -6,14 +6,16 @@ fn faer_resolves_auto_and_explicit_managed_placements() {
     let topology = two_node_fixture();
 
     assert!(matches!(
-        resolve_placement(CpuBackendKind::Faer, CpuPlacement::Auto, &topology).unwrap(),
+        resolve_placement_with_affinity(CpuBackendKind::Faer, CpuPlacement::Auto, &topology, true,)
+            .unwrap(),
         ResolvedCpuExecution::Managed(ResolvedCpuPlacement::AllAllowed { .. })
     ));
     assert!(matches!(
-        resolve_placement(
+        resolve_placement_with_affinity(
             CpuBackendKind::Faer,
             CpuPlacement::NumaNode(NumaNodeId::new(7)),
             &topology,
+            true,
         )
         .unwrap(),
         ResolvedCpuExecution::Managed(ResolvedCpuPlacement::NumaNode { id, .. })
@@ -46,10 +48,11 @@ fn explicit_external_provider_placement_never_falls_back() {
 fn explicit_unknown_node_is_an_error_without_fallback() {
     let topology = two_node_fixture();
     assert!(matches!(
-        resolve_placement(
+        resolve_placement_with_affinity(
             CpuBackendKind::Faer,
             CpuPlacement::NumaNode(NumaNodeId::new(9)),
             &topology,
+            true,
         ),
         Err(CpuPlacementError::UnknownNumaNode { node, .. })
             if node == NumaNodeId::new(9)
@@ -60,10 +63,11 @@ fn explicit_unknown_node_is_an_error_without_fallback() {
 fn explicit_node_requires_discovered_numa_domains() {
     let topology = CpuTopology::from_discovered(cpu_set([4, 5]), []).unwrap();
     assert!(matches!(
-        resolve_placement(
+        resolve_placement_with_affinity(
             CpuBackendKind::Faer,
             CpuPlacement::NumaNode(NumaNodeId::new(0)),
             &topology,
+            true,
         ),
         Err(CpuPlacementError::NumaDiscoveryUnavailable { .. })
     ));

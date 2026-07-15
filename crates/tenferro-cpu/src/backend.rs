@@ -184,6 +184,44 @@ pub enum CpuBackendKind {
     Blas,
 }
 
+/// Optional provider policy for `dot_general` contractions.
+///
+/// This is separate from [`CpuBackendKind`]: backend kind selects the complete
+/// base CPU provider, while this policy can opt contraction paths into TBLIS
+/// without changing non-contraction kernels or the fallback provider.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{CpuBackend, DotGeneralProvider};
+///
+/// let backend = CpuBackend::new().with_dot_general_provider(
+///     DotGeneralProvider::TblisIfAvailable,
+/// );
+/// assert_eq!(
+///     backend.dot_general_provider(),
+///     DotGeneralProvider::TblisIfAvailable
+/// );
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum DotGeneralProvider {
+    /// Use the selected base [`CpuBackendKind`] for all contractions.
+    #[default]
+    Base,
+    /// Try TBLIS first and fall back to the selected base provider when TBLIS
+    /// is unavailable or cannot safely build a plan.
+    TblisIfAvailable,
+    /// Require TBLIS. Unavailable TBLIS or unsupported contraction layouts are
+    /// reported as errors instead of falling back.
+    TblisRequired,
+}
+
+impl DotGeneralProvider {
+    fn tries_tblis(self) -> bool {
+        !matches!(self, Self::Base)
+    }
+}
+
 impl CpuBackendKind {
     /// Return the default compiled CPU provider.
     ///
@@ -481,6 +519,23 @@ fn ensure_cpu_backend_kind_available(kind: CpuBackendKind, op: &'static str) -> 
     }
 }
 
+#[cfg(not(feature = "cpu-tblis-provider"))]
+pub(crate) fn tblis_required_unavailable(op: &'static str) -> crate::Error {
+    crate::Error::InvalidConfig {
+        op,
+        message: "DotGeneralProvider::TblisRequired requires cpu-tblis or cpu-tblis-linked"
+            .to_string(),
+    }
+}
+
+#[cfg(feature = "cpu-tblis-provider")]
+pub(crate) fn tblis_required_not_applicable(op: &'static str) -> crate::Error {
+    crate::Error::InvalidConfig {
+        op,
+        message: "DotGeneralProvider::TblisRequired could not execute this contraction with TBLIS; the TBLIS runtime may be unavailable or the adapter could not build a safe plan".to_string(),
+    }
+}
+
 fn constructor_tensor_error(op: &'static str, error: crate::Error) -> CpuBackendError {
     CpuBackendError::Tensor(match error {
         crate::Error::InvalidConfig { message, .. } => crate::Error::InvalidConfig { op, message },
@@ -593,6 +648,7 @@ pub struct CpuBackend {
     requested: CpuPlacement,
     resolved: ResolvedCpuExecution,
     engine: Arc<CpuEngine>,
+    dot_general_provider: DotGeneralProvider,
 }
 
 fn resolve_discovered_topology(
@@ -610,6 +666,7 @@ impl fmt::Debug for CpuBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CpuBackend")
             .field("kind", &self.kind())
+            .field("dot_general_provider", &self.dot_general_provider)
             .field("requested_placement", &self.requested)
             .field("resolved_execution", &self.resolved)
             .field("engine_placement", &self.engine.placement())
@@ -628,7 +685,8 @@ impl CpuBackend {
     ) -> Result<Self, CpuPlacementError> {
         let topology = resolve_discovered_topology(kind, discover_cpu_topology())?;
         let resolved = resolve_placement(kind, CpuPlacement::Auto, &topology)?;
-        if !cfg!(any(target_os = "linux", target_os = "android")) {
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        {
             let context = CpuContext::with_threads(thread_budget).map_err(|error| {
                 CpuPlacementError::EngineConstruction {
                     requested: CpuPlacement::Auto,
@@ -636,44 +694,47 @@ impl CpuBackend {
                     message: error.to_string(),
                 }
             })?;
-            return Ok(Self::compatibility_with_topology(
+            Ok(Self::compatibility_with_topology(
                 Arc::new(context),
                 max_retained_capacity_bytes,
                 kind,
                 topology,
                 resolved,
-            ));
+            ))
         }
-        let engine_placement = ResolvedCpuPlacement::AllAllowed {
-            cpus: topology.allowed_cpus().clone(),
-        };
-        let engine = Arc::new(
-            CpuEngine::new(engine_placement, thread_budget, max_retained_capacity_bytes).map_err(
-                |error| CpuPlacementError::EngineConstruction {
-                    requested: CpuPlacement::Auto,
-                    backend: kind,
-                    message: error.to_string(),
-                },
-            )?,
-        );
-        let all_allowed = OnceLock::new();
-        let _ = all_allowed.set(Arc::clone(&engine));
-        Ok(Self {
-            shared: Arc::new(CpuBackendState {
-                topology,
-                node_engines: Mutex::new(BTreeMap::new()),
-                all_allowed,
-                all_allowed_build: Mutex::new(()),
-                base_engine: Arc::clone(&engine),
-                arbiter: ResourceArbiter::global(),
-                kind,
-                thread_budget,
-                buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
-            }),
-            requested: CpuPlacement::Auto,
-            resolved,
-            engine,
-        })
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            let engine_placement = ResolvedCpuPlacement::AllAllowed {
+                cpus: topology.allowed_cpus().clone(),
+            };
+            let engine = Arc::new(
+                CpuEngine::new(engine_placement, thread_budget, max_retained_capacity_bytes)
+                    .map_err(|error| CpuPlacementError::EngineConstruction {
+                        requested: CpuPlacement::Auto,
+                        backend: kind,
+                        message: error.to_string(),
+                    })?,
+            );
+            let all_allowed = OnceLock::new();
+            let _ = all_allowed.set(Arc::clone(&engine));
+            Ok(Self {
+                shared: Arc::new(CpuBackendState {
+                    topology,
+                    node_engines: Mutex::new(BTreeMap::new()),
+                    all_allowed,
+                    all_allowed_build: Mutex::new(()),
+                    base_engine: Arc::clone(&engine),
+                    arbiter: ResourceArbiter::global(),
+                    kind,
+                    thread_budget,
+                    buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
+                }),
+                requested: CpuPlacement::Auto,
+                resolved,
+                engine,
+                dot_general_provider: DotGeneralProvider::Base,
+            })
+        }
     }
 
     fn compatibility(
@@ -732,6 +793,7 @@ impl CpuBackend {
             requested: CpuPlacement::Auto,
             resolved,
             engine: base_engine,
+            dot_general_provider: DotGeneralProvider::Base,
         }
     }
 
@@ -975,6 +1037,7 @@ impl CpuBackend {
                 requested,
                 resolved,
                 engine: Arc::clone(&self.shared.base_engine),
+                dot_general_provider: self.dot_general_provider,
             });
         }
         let engine_placement = match &resolved {
@@ -1003,6 +1066,7 @@ impl CpuBackend {
             requested,
             resolved,
             engine,
+            dot_general_provider: self.dot_general_provider,
         })
     }
 
@@ -1097,7 +1161,11 @@ impl CpuBackend {
         }
     }
 
-    #[cfg(all(test, feature = "cpu-faer"))]
+    #[cfg(all(
+        test,
+        feature = "cpu-faer",
+        any(target_os = "linux", target_os = "android")
+    ))]
     fn coordinator_id_for_test(&self) -> usize {
         Arc::as_ptr(&self.shared) as usize
     }
@@ -1119,6 +1187,89 @@ impl CpuBackend {
     /// ```
     pub fn kind(&self) -> CpuBackendKind {
         self.shared.kind
+    }
+
+    /// Return the selected `dot_general` provider policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBackend, DotGeneralProvider};
+    ///
+    /// assert_eq!(
+    ///     CpuBackend::new().dot_general_provider(),
+    ///     DotGeneralProvider::Base
+    /// );
+    /// ```
+    pub fn dot_general_provider(&self) -> DotGeneralProvider {
+        self.dot_general_provider
+    }
+
+    /// Return this backend with a different `dot_general` provider policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBackend, DotGeneralProvider};
+    ///
+    /// let backend = CpuBackend::new().with_dot_general_provider(
+    ///     DotGeneralProvider::TblisIfAvailable,
+    /// );
+    /// assert_eq!(
+    ///     backend.dot_general_provider(),
+    ///     DotGeneralProvider::TblisIfAvailable
+    /// );
+    /// ```
+    pub fn with_dot_general_provider(mut self, provider: DotGeneralProvider) -> Self {
+        self.dot_general_provider = provider;
+        self
+    }
+
+    /// Update the `dot_general` provider policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBackend, DotGeneralProvider};
+    ///
+    /// let mut backend = CpuBackend::new();
+    /// backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
+    /// assert_eq!(
+    ///     backend.dot_general_provider(),
+    ///     DotGeneralProvider::TblisRequired
+    /// );
+    /// ```
+    pub fn set_dot_general_provider(&mut self, provider: DotGeneralProvider) {
+        self.dot_general_provider = provider;
+    }
+
+    fn with_base_dot_general_provider<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let saved = self.dot_general_provider;
+        self.dot_general_provider = DotGeneralProvider::Base;
+        let result = f(self);
+        self.dot_general_provider = saved;
+        result
+    }
+
+    #[cfg(feature = "cpu-tblis-provider")]
+    fn tblis_not_applicable<T>(
+        &self,
+        op: &'static str,
+        value: Option<T>,
+    ) -> crate::Result<Option<T>> {
+        if value.is_some() || self.dot_general_provider != DotGeneralProvider::TblisRequired {
+            return Ok(value);
+        }
+        Err(tblis_required_not_applicable(op))
+    }
+
+    #[cfg(not(feature = "cpu-tblis-provider"))]
+    fn tblis_unavailable_for_required<T>(&self, op: &'static str) -> crate::Result<Option<T>> {
+        if self.dot_general_provider == DotGeneralProvider::TblisRequired {
+            Err(tblis_required_unavailable(op))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Return the number of threads in this backend's CPU context.
@@ -1797,6 +1948,25 @@ impl TensorDot for CpuBackend {
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
         let mut cache = gemm::GemmAnalysisCache::default();
+        if self.dot_general_provider.tries_tblis() {
+            #[cfg(feature = "cpu-tblis-provider")]
+            {
+                let direct = self.run_with_pool_and_gemm_cache(&mut cache, |buffers, _cache| {
+                    gemm::dot_general_tblis_read_cached(buffers, lhs.clone(), rhs.clone(), config)
+                })?;
+                if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
+                    return Ok(result);
+                }
+            }
+            #[cfg(not(feature = "cpu-tblis-provider"))]
+            {
+                if let Some(result) =
+                    self.tblis_unavailable_for_required::<Tensor>("dot_general")?
+                {
+                    return Ok(result);
+                }
+            }
+        }
         let direct = match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -1845,7 +2015,9 @@ impl TensorDot for CpuBackend {
 
         let lhs = materialize_tensor_read("dot_general", lhs)?;
         let rhs = materialize_tensor_read("dot_general", rhs)?;
-        BackendCachedDot::dot_general_cached(self, &mut cache, None, &lhs, &rhs, config)
+        self.with_base_dot_general_provider(|this| {
+            BackendCachedDot::dot_general_cached(this, &mut cache, None, &lhs, &rhs, config)
+        })
     }
 
     fn dot_general_read_into(
@@ -1904,6 +2076,46 @@ impl BackendCachedDot for CpuBackend {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
+        if self.dot_general_provider.tries_tblis() {
+            #[cfg(feature = "cpu-tblis-provider")]
+            {
+                let direct = self.run_with_pool(|buffers| match (lhs, rhs) {
+                    (Tensor::F32(a), Tensor::F32(b)) => {
+                        gemm::dot_general_tblis_cached(buffers, a, b, config)
+                            .map(|result| result.map(Tensor::F32))
+                    }
+                    (Tensor::F64(a), Tensor::F64(b)) => {
+                        gemm::dot_general_tblis_cached(buffers, a, b, config)
+                            .map(|result| result.map(Tensor::F64))
+                    }
+                    (Tensor::C32(a), Tensor::C32(b)) => {
+                        gemm::dot_general_tblis_cached(buffers, a, b, config)
+                            .map(|result| result.map(Tensor::C32))
+                    }
+                    (Tensor::C64(a), Tensor::C64(b)) => {
+                        gemm::dot_general_tblis_cached(buffers, a, b, config)
+                            .map(|result| result.map(Tensor::C64))
+                    }
+                    _ if lhs.dtype() == rhs.dtype() => Ok(None),
+                    _ => Err(crate::Error::DTypeMismatch {
+                        op: "dot_general",
+                        lhs: lhs.dtype(),
+                        rhs: rhs.dtype(),
+                    }),
+                })?;
+                if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
+                    return Ok(result);
+                }
+            }
+            #[cfg(not(feature = "cpu-tblis-provider"))]
+            {
+                if let Some(result) =
+                    self.tblis_unavailable_for_required::<Tensor>("dot_general")?
+                {
+                    return Ok(result);
+                }
+            }
+        }
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -2009,6 +2221,46 @@ impl BackendCachedDot for CpuBackend {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
+        if self.dot_general_provider.tries_tblis() {
+            #[cfg(feature = "cpu-tblis-provider")]
+            {
+                let direct = self.run_with_pool(|buffers| match (lhs, rhs) {
+                    (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_tblis_with_conj_cached(
+                        buffers, a, b, config, lhs_conj, rhs_conj,
+                    )
+                    .map(|result| result.map(Tensor::F32)),
+                    (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_tblis_with_conj_cached(
+                        buffers, a, b, config, lhs_conj, rhs_conj,
+                    )
+                    .map(|result| result.map(Tensor::F64)),
+                    (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_tblis_with_conj_cached(
+                        buffers, a, b, config, lhs_conj, rhs_conj,
+                    )
+                    .map(|result| result.map(Tensor::C32)),
+                    (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_tblis_with_conj_cached(
+                        buffers, a, b, config, lhs_conj, rhs_conj,
+                    )
+                    .map(|result| result.map(Tensor::C64)),
+                    _ if lhs.dtype() == rhs.dtype() => Ok(None),
+                    _ => Err(crate::Error::DTypeMismatch {
+                        op: "dot_general",
+                        lhs: lhs.dtype(),
+                        rhs: rhs.dtype(),
+                    }),
+                })?;
+                if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
+                    return Ok(result);
+                }
+            }
+            #[cfg(not(feature = "cpu-tblis-provider"))]
+            {
+                if let Some(result) =
+                    self.tblis_unavailable_for_required::<Tensor>("dot_general")?
+                {
+                    return Ok(result);
+                }
+            }
+        }
         match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -2139,6 +2391,26 @@ impl BackendCachedDot for CpuBackend {
         mut out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         validate_dot_general_accumulation(&lhs, &rhs, config, accumulation, &out, "dot_general")?;
+        if self.dot_general_provider.tries_tblis() {
+            #[cfg(feature = "cpu-tblis-provider")]
+            {
+                let direct = gemm::dot_general_tblis_read_into_accum_cached(
+                    lhs.clone(),
+                    rhs.clone(),
+                    config,
+                    accumulation,
+                    &mut out,
+                )?;
+                if direct {
+                    return Ok(());
+                }
+                self.tblis_not_applicable::<()>("dot_general", None)?;
+            }
+            #[cfg(not(feature = "cpu-tblis-provider"))]
+            {
+                self.tblis_unavailable_for_required::<()>("dot_general")?;
+            }
+        }
         let direct = match self.kind() {
             CpuBackendKind::Faer => {
                 #[cfg(feature = "cpu-faer")]
@@ -2188,7 +2460,9 @@ impl BackendCachedDot for CpuBackend {
             return Ok(());
         }
 
-        dot_general_accum_via_temp(self, lhs, rhs, config, accumulation, out)
+        self.with_base_dot_general_provider(|this| {
+            dot_general_accum_via_temp(this, lhs, rhs, config, accumulation, out)
+        })
     }
 
     fn grouped_gemm_cached(
@@ -2313,6 +2587,7 @@ impl CpuBackend {
     ) -> R {
         let ctx = self.engine.context_arc();
         let kind = self.kind();
+        let dot_general_provider = self.dot_general_provider;
         let owner = inherited_or_new_execution_owner();
         let permit = self.acquire_execution_permit(owner);
         let run = || {
@@ -2325,6 +2600,7 @@ impl CpuBackend {
                     buffers: buffers.get_mut(),
                     gemm_analysis_cache: cache,
                     kind,
+                    dot_general_provider,
                 };
                 record_cpu_session_profile(
                     "with_backend_session_cached.session_construct",
