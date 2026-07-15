@@ -104,6 +104,20 @@ control plane against schema drift and deterministic request failures.
   of `runpod_client.py` cannot resolve its `scripts.ci` package import. The
   workflow now invokes the helper as a Python module and a source-contract test
   prohibits the broken direct invocation.
+- Post-fix trusted run 29375027798 exercised the new price-tier fallback. The
+  cost-preferred tier reported no capacity, the premium tier selected an NVIDIA
+  GeForce RTX 5090, and the runner started successfully. The CUDA archive then
+  ran 833 tests: 771 passed and 62 failed because the CUDA 12.4 NVRTC rejected
+  CubeCL's Blackwell `sm_120a` architecture with `invalid value for
+  --gpu-architecture`. Cleanup still succeeded and deleted pod
+  `i92a7kiz76t521` with HTTP 204. The workspace already pins cudarc to its CUDA
+  12.8 bindings and documents CUDA 12.8 as the current CubeCL API floor, so the
+  workflow now aligns both the archive toolkit and RunPod runtime with CUDA
+  12.8 and verifies the dynamically loaded NVRTC version before tests.
+- The CUDA 12.8 repair passed all 60 CI helper/source-contract tests,
+  actionlint 1.7.7, workspace rustdoc, rendered-site validation, formatting,
+  diff checks, and the committed-head repository-rules review. Independent
+  review found no remaining Critical, Important, or Minor findings.
 - Trusted PR recovery dry run targets only
   `runpod-gpu-test.yml --ref main -f pr_number=1379`.
 
@@ -117,6 +131,9 @@ branch workflow is intentionally prohibited.
 - RunPod may change its live schema or capacity between preflight and pod
   creation; schema mismatch fails early, while transient capacity remains a
   bounded retry.
+- RTX 5090 functional coverage remains contingent on a successful trusted CUDA
+  12.8 rerun. This CI control-plane repair does not by itself establish that
+  CubeCL's Blackwell-specific performance paths are fully optimized.
 - actionlint validates workflow structure and shell contracts but cannot model
   GitHub/RunPod external state.
 - The first cache population still pays full CUDA archive cost; content reuse
