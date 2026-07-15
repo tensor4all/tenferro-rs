@@ -1019,6 +1019,7 @@ mod tests {
             buffers: &mut buffers,
             gemm_analysis_cache: &mut gemm_analysis_cache,
             kind: CpuBackendKind::Blas,
+            dot_general_provider: DotGeneralProvider::Base,
         };
 
         assert!(rayon::current_thread_index().is_none());
