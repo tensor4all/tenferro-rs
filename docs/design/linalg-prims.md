@@ -106,3 +106,40 @@ The scalar side is intentionally split:
 
 That separation keeps public/high-level linalg APIs backend-generic without
 leaking CPU-specific scalar trait names.
+
+## Prepared Factorization Contract
+
+Prepared factorization is a separate public expert path; it does not change
+the convenient owned-output methods on `LinalgBackend`. An immutable plan
+binds the operation, shape, dtype, options, provider, placement, and execution
+context. A caller explicitly allocates one opaque mutable workspace per
+concurrency lane and supplies caller-owned destinations to `execute_into`.
+
+The first implementation is compact SVD through Faer. For an `m x n` input and
+`k = min(m, n)`, its exact outputs are `U: [m, k]`, `S: [k]`, and
+`Vt: [k, n]`. The workspace retains Faer scratch, signed-stride input packing,
+singular-value staging where required by the scalar ABI, and the `V` staging
+needed to produce public conjugate-transposed `Vt`.
+
+Execution follows these invariants:
+
+- validate backend/workspace identity, all metadata, layout, placement, and
+  conservative alias regions before the first output write;
+- return structured capability errors for unsupported provider, dtype,
+  placement, or layout instead of calling the owned API;
+- pass compatible borrowed inputs and compact destinations directly to the
+  provider, using only workspace-owned staging at documented boundaries;
+- apply gauge normalization in place; and
+- perform no Rust global-allocator calls after plan/workspace/output warm-up.
+
+`CpuLinalgBinding` is a narrow opaque interop contract owned by
+`tenferro-cpu`. It retains coordinator and context allocations so backend
+identity cannot suffer pointer reuse, but application code must not inspect or
+construct it. Provider-specific resources remain private to the implementation
+and never appear in the backend-neutral prepared API.
+
+The workspace is deliberately not `Clone`. Multiple workspaces may be created
+from one plan, while Rust's exclusive `&mut SvdWorkspace` prevents ordinary
+concurrent reuse of a single workspace. Validation failures are atomic for all
+destinations; a provider numerical failure after writes begin may leave partial
+output and is reported without an allocating rollback.
