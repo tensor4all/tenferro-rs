@@ -1,6 +1,7 @@
 #[cfg(any(test, target_os = "linux"))]
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -127,12 +128,14 @@ pub enum CpuSetError {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CpuSet {
-    cpus: Vec<CpuId>,
+    cpus: Arc<[CpuId]>,
 }
 
 impl CpuSet {
     pub(crate) fn singleton(cpu: CpuId) -> Self {
-        Self { cpus: vec![cpu] }
+        Self {
+            cpus: Arc::from([cpu]),
+        }
     }
 
     /// Construct a sorted and deduplicated CPU set.
@@ -153,7 +156,7 @@ impl CpuSet {
         if cpus.is_empty() {
             return Err(CpuSetError::Empty);
         }
-        Ok(Self { cpus })
+        Ok(Self { cpus: cpus.into() })
     }
 
     /// Return the number of logical CPUs in this set.
@@ -258,7 +261,9 @@ impl CpuSet {
                 }
             }
         }
-        (!intersection.is_empty()).then_some(Self { cpus: intersection })
+        (!intersection.is_empty()).then_some(Self {
+            cpus: intersection.into(),
+        })
     }
 }
 

@@ -1,19 +1,13 @@
 use std::env;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use thiserror::Error as ThisError;
 
 use crate::affinity::{SystemThreadAffinity, ThreadAffinity};
 use crate::arbiter::{
-    set_pool_execution_owner, with_execution_owner, with_pool_execution_owner, ResourceOwner,
+    register_worker_execution_scope, with_execution_owner, ExecutionScopeState, ResourceOwner,
 };
 use crate::{CpuId, CpuSet, Error, Result};
-
-#[derive(Debug, Default)]
-struct ExecutionOwnerState {
-    owner: Option<ResourceOwner>,
-    depth: usize,
-}
 
 /// Failure to construct a CPU context with pinned Rayon workers.
 ///
@@ -79,7 +73,7 @@ pub struct CpuContext {
     num_threads: usize,
     pool: Option<Arc<rayon::ThreadPool>>,
     pinned_cpus: Option<CpuSet>,
-    execution_owner: Arc<Mutex<ExecutionOwnerState>>,
+    execution_scope: Arc<ExecutionScopeState>,
 }
 
 impl CpuContext {
@@ -160,24 +154,36 @@ impl CpuContext {
                 message: "thread count must be at least 1".into(),
             });
         }
+        let execution_scope = Arc::new(ExecutionScopeState::default());
         let pool = if num_threads == 1 {
             None
         } else {
-            Some(Arc::new(
-                rayon::ThreadPoolBuilder::new()
-                    .num_threads(num_threads)
-                    .build()
-                    .map_err(|err| Error::InvalidConfig {
-                        op: "CpuContext::with_threads",
-                        message: format!("failed to build CPU thread pool: {err}"),
-                    })?,
-            ))
+            let (startup_tx, startup_rx) = std::sync::mpsc::channel();
+            let worker_scope = Arc::clone(&execution_scope);
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(num_threads)
+                .start_handler(move |_| {
+                    register_worker_execution_scope(Arc::clone(&worker_scope));
+                    let _ = startup_tx.send(());
+                })
+                .build()
+                .map_err(|err| Error::InvalidConfig {
+                    op: "CpuContext::with_threads",
+                    message: format!("failed to build CPU thread pool: {err}"),
+                })?;
+            for _ in 0..num_threads {
+                startup_rx.recv().map_err(|_| Error::InvalidConfig {
+                    op: "CpuContext::with_threads",
+                    message: "CPU worker exited before execution-scope registration".into(),
+                })?;
+            }
+            Some(Arc::new(pool))
         };
         Ok(Self {
             num_threads,
             pool,
             pinned_cpus: None,
-            execution_owner: Arc::new(Mutex::new(ExecutionOwnerState::default())),
+            execution_scope,
         })
     }
 
@@ -220,9 +226,11 @@ impl CpuContext {
             });
         }
 
+        let execution_scope = Arc::new(ExecutionScopeState::default());
         let assigned_cpus = Arc::new(select_worker_cpus(&cpus, num_threads));
         let (startup_tx, startup_rx) = std::sync::mpsc::channel();
         let pool_assigned_cpus = Arc::clone(&assigned_cpus);
+        let worker_scope = Arc::clone(&execution_scope);
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .spawn_handler(move |thread| {
@@ -230,9 +238,11 @@ impl CpuContext {
                 let cpu = pool_assigned_cpus[worker];
                 let startup_tx = startup_tx.clone();
                 let affinity = affinity.clone();
+                let worker_scope = Arc::clone(&worker_scope);
                 std::thread::Builder::new()
                     .name(format!("tenferro-cpu-{cpu}"))
                     .spawn(move || {
+                        register_worker_execution_scope(Arc::clone(&worker_scope));
                         let result = affinity.pin_current(cpu).and_then(|observed| {
                             (observed.len() == 1 && observed.contains(cpu))
                                 .then_some(())
@@ -269,7 +279,7 @@ impl CpuContext {
             num_threads,
             pool: Some(pool),
             pinned_cpus: Some(cpus),
-            execution_owner: Arc::new(Mutex::new(ExecutionOwnerState::default())),
+            execution_scope,
         })
     }
 
@@ -278,7 +288,7 @@ impl CpuContext {
             num_threads: 1,
             pool: None,
             pinned_cpus: None,
-            execution_owner: Arc::new(Mutex::new(ExecutionOwnerState::default())),
+            execution_scope: Arc::new(ExecutionScopeState::default()),
         }
     }
 
@@ -336,69 +346,10 @@ impl CpuContext {
         owner: ResourceOwner,
         op: impl FnOnce() -> R + Send,
     ) -> R {
-        let should_broadcast = {
-            let mut state = self
-                .execution_owner
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match state.owner {
-                None => {
-                    state.owner = Some(owner);
-                    state.depth = 1;
-                    true
-                }
-                Some(active) if active == owner => {
-                    state.depth += 1;
-                    false
-                }
-                Some(active) => panic!(
-                    "CPU execution owner invariant violated: active {active:?}, requested {owner:?}"
-                ),
-            }
-        };
-        if should_broadcast {
-            self.broadcast_execution_owner(Some(owner));
-        }
-
-        struct OwnerGuard<'a> {
-            context: &'a CpuContext,
-            owner: ResourceOwner,
-        }
-
-        impl Drop for OwnerGuard<'_> {
-            fn drop(&mut self) {
-                let should_clear = {
-                    let mut state = self
-                        .context
-                        .execution_owner
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    debug_assert_eq!(state.owner, Some(self.owner));
-                    state.depth -= 1;
-                    if state.depth == 0 {
-                        state.owner = None;
-                        true
-                    } else {
-                        false
-                    }
-                };
-                if should_clear {
-                    self.context.broadcast_execution_owner(None);
-                }
-            }
-        }
-
-        let _guard = OwnerGuard {
-            context: self,
-            owner,
-        };
-        self.install(|| with_pool_execution_owner(owner, || with_execution_owner(owner, op)))
-    }
-
-    fn broadcast_execution_owner(&self, owner: Option<ResourceOwner>) {
-        if let Some(pool) = &self.pool {
-            pool.broadcast(|_| set_pool_execution_owner(owner));
-        }
+        // Workers share this state from construction; broadcasting owner TLS
+        // here would only reintroduce per-entry scheduler work and allocation.
+        let _scope = self.execution_scope.enter(owner);
+        self.install(|| with_execution_owner(owner, op))
     }
 
     /// Return the faer parallelism policy for work run inside this context.

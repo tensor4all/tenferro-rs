@@ -29,6 +29,17 @@ task, and unrelated work submitted to the same active `CpuContext` are rejected
 before acquiring another permit. External-provider execution also rejects
 same-thread nesting.
 
+Each managed Rayon worker registers the engine's shared execution-scope state
+once during `CpuContext` construction, before the constructor returns. An
+execution changes that shared active owner under RAII; workers consult the
+shared state when a nested backend entry is attempted. Entry must not broadcast
+owner metadata to every worker because that makes empty warm execution scale
+with the pool and allocate per call.
+
+This propagation contract covers Rayon workers owned by the active
+`CpuContext`. Ambient global Rayon workers are not part of a managed execution
+scope; tests for child-task propagation must use an explicit owned context.
+
 This intentionally does not infer permission from an execution owner. During a
 cross-pool wait Rayon may schedule a parallel sibling on the same OS worker as
 the direct call chain, so thread-local identity cannot distinguish those cases.
