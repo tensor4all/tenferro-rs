@@ -1927,6 +1927,19 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     fn tensor_view<'a>(view: TypedTensorView<'a, Self>) -> TensorView<'a>;
 
     /// Wrap a typed mutable borrowed view as a dtype-erased [`TensorViewMut`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TensorScalar, TypedTensorViewMut};
+    ///
+    /// let mut data = [1.0_f64, 2.0];
+    /// let view = TypedTensorViewMut::from_col_major(&[2], &mut data)?;
+    /// let erased = f64::tensor_view_mut(view);
+    /// assert_eq!(erased.dtype(), DType::F64);
+    /// assert_eq!(erased.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn tensor_view_mut<'a>(view: TypedTensorViewMut<'a, Self>) -> TensorViewMut<'a>;
 
     /// Mutably borrow a typed tensor as a dtype-erased [`TensorWrite`] view.
@@ -2218,11 +2231,34 @@ pub enum TypedTensorWrite<'a, T> {
 
 impl<'a, T> TypedTensorWrite<'a, T> {
     /// Create a writable target from an owned typed tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{TypedTensor, TypedTensorWrite};
+    ///
+    /// let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![0.0])?;
+    /// let write = TypedTensorWrite::from_tensor(&mut tensor);
+    /// assert!(matches!(write, TypedTensorWrite::Tensor(_)));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn from_tensor(tensor: &'a mut TypedTensor<T>) -> Self {
         Self::Tensor(tensor)
     }
 
     /// Create a writable target from a mutable typed tensor view.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{TypedTensorViewMut, TypedTensorWrite};
+    ///
+    /// let mut data = [0.0_f64, 1.0];
+    /// let view = TypedTensorViewMut::from_col_major(&[2], &mut data)?;
+    /// let write = TypedTensorWrite::from_view(view);
+    /// assert!(matches!(write, TypedTensorWrite::View(_)));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn from_view(view: TypedTensorViewMut<'a, T>) -> Self {
         Self::View(view)
     }
@@ -2230,6 +2266,18 @@ impl<'a, T> TypedTensorWrite<'a, T> {
 
 impl<'a, T: TensorScalar> TypedTensorWrite<'a, T> {
     /// Erase the scalar type while preserving the output layout.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{DType, TypedTensor, TypedTensorWrite};
+    ///
+    /// let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0; 2])?;
+    /// let write = TypedTensorWrite::from_tensor(&mut tensor).into_tensor_write();
+    /// assert_eq!(write.dtype(), DType::F64);
+    /// assert_eq!(write.shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn into_tensor_write(self) -> TensorWrite<'a> {
         match self {
             Self::Tensor(tensor) => T::tensor_write(tensor),
