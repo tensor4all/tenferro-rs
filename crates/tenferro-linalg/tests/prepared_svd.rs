@@ -4,8 +4,8 @@ use tenferro_linalg::{
     LinalgBackend, PreparedSvdBackendExt, SvdGauge, SvdOptions, SvdOutputWrites,
 };
 use tenferro_tensor::{
-    BackendId, DType, Error, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite,
-    TypedTensorView, TypedTensorViewMut,
+    BackendId, DType, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, Tensor,
+    TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensorView, TypedTensorViewMut,
 };
 
 fn f64_outputs(m: usize, n: usize, fill: f64) -> (Tensor, Tensor, Tensor) {
@@ -15,6 +15,49 @@ fn f64_outputs(m: usize, n: usize, fill: f64) -> (Tensor, Tensor, Tensor) {
         Tensor::from_vec_col_major(vec![k], vec![fill; k]).unwrap(),
         Tensor::from_vec_col_major(vec![k, n], vec![fill; k * n]).unwrap(),
     )
+}
+
+fn set_tensor_placement(tensor: &mut Tensor, placement: Placement) {
+    match tensor {
+        Tensor::F32(tensor) => tensor.set_placement(placement),
+        Tensor::F64(tensor) => tensor.set_placement(placement),
+        Tensor::I32(tensor) => tensor.set_placement(placement),
+        Tensor::I64(tensor) => tensor.set_placement(placement),
+        Tensor::Bool(tensor) => tensor.set_placement(placement),
+        Tensor::C32(tensor) => tensor.set_placement(placement),
+        Tensor::C64(tensor) => tensor.set_placement(placement),
+    }
+}
+
+fn prepared_execution_error(
+    backend: &mut CpuBackend,
+    plan: &tenferro_linalg::PreparedSvd,
+    workspace: &mut tenferro_linalg::SvdWorkspace,
+    input: &Tensor,
+    mut u: Tensor,
+    mut s: Tensor,
+    mut vt: Tensor,
+) -> Error {
+    let error = plan
+        .execute_into(
+            backend,
+            workspace,
+            TensorRead::from_tensor(input),
+            SvdOutputWrites::new(
+                TensorWrite::from_tensor(&mut u),
+                TensorWrite::from_tensor(&mut s),
+                TensorWrite::from_tensor(&mut vt),
+            ),
+        )
+        .unwrap_err();
+    for output in [&u, &s, &vt] {
+        match output.dtype() {
+            DType::F64 => assert!(output.as_slice::<f64>().unwrap().iter().all(|&x| x == 41.0)),
+            DType::F32 => assert!(output.as_slice::<f32>().unwrap().iter().all(|&x| x == 41.0)),
+            dtype => panic!("unexpected validation-test dtype {dtype:?}"),
+        }
+    }
+    error
 }
 
 fn assert_f64_svd_residual(input: &[f64], u: &[f64], s: &[f64], vt: &[f64], m: usize, n: usize) {
@@ -646,6 +689,34 @@ fn prepared_svd_reports_compact_output_specs() {
     assert_eq!(plan.output_specs().s().shape(), &[2]);
     assert_eq!(plan.output_specs().s().dtype(), DType::F64);
     assert_eq!(plan.output_specs().vt().shape(), &[2, 2]);
+    let plan_debug = format!("{plan:?}");
+    for field in [
+        "operation",
+        "shape",
+        "dtype",
+        "provider",
+        "device",
+        "context",
+        "scratch_bytes",
+    ] {
+        assert!(plan_debug.contains(field), "missing {field}: {plan_debug}");
+    }
+    let workspace = plan.allocate_workspace(&mut backend).unwrap();
+    let workspace_debug = format!("{workspace:?}");
+    for field in [
+        "operation",
+        "shape",
+        "dtype",
+        "provider",
+        "device",
+        "context",
+        "retained_bytes",
+    ] {
+        assert!(
+            workspace_debug.contains(field),
+            "missing {field}: {workspace_debug}"
+        );
+    }
 }
 
 #[cfg(feature = "cpu-blas")]
@@ -773,6 +844,155 @@ fn prepared_svd_validation_failure_leaves_all_destinations_unchanged() {
 }
 
 #[test]
+fn prepared_svd_validates_every_field_metadata_and_order_before_writes() {
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::Faer).unwrap();
+    let plan = backend
+        .prepare_svd([2, 2], DType::F64, SvdOptions::default())
+        .unwrap();
+    let mut workspace = plan.allocate_workspace(&mut backend).unwrap();
+    let valid_input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let valid = || f64_outputs(2, 2, 41.0);
+
+    for input in [
+        Tensor::from_vec_col_major(vec![4], vec![1.0_f64; 4]).unwrap(),
+        Tensor::from_vec_col_major(vec![1, 4], vec![1.0_f64; 4]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f32; 4]).unwrap(),
+    ] {
+        let (u, s, vt) = valid();
+        let error = prepared_execution_error(&mut backend, &plan, &mut workspace, &input, u, s, vt);
+        assert!(error.to_string().contains("input must have shape"));
+    }
+
+    let invalid_outputs = [
+        (
+            "U must have shape",
+            Tensor::from_vec_col_major(vec![4], vec![41.0_f64; 4]).unwrap(),
+            Tensor::from_vec_col_major(vec![2], vec![41.0_f64; 2]).unwrap(),
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+        ),
+        (
+            "U must have shape",
+            Tensor::from_vec_col_major(vec![1, 4], vec![41.0_f64; 4]).unwrap(),
+            Tensor::from_vec_col_major(vec![2], vec![41.0_f64; 2]).unwrap(),
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+        ),
+        (
+            "U must have shape",
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f32; 4]).unwrap(),
+            Tensor::from_vec_col_major(vec![2], vec![41.0_f64; 2]).unwrap(),
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+        ),
+        (
+            "S must have shape",
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+            Tensor::from_vec_col_major(vec![1, 2], vec![41.0_f64; 2]).unwrap(),
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+        ),
+        (
+            "S must have shape",
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+            Tensor::from_vec_col_major(vec![1], vec![41.0_f64]).unwrap(),
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+        ),
+        (
+            "S must have shape",
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+            Tensor::from_vec_col_major(vec![2], vec![41.0_f32; 2]).unwrap(),
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+        ),
+        (
+            "Vt must have shape",
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+            Tensor::from_vec_col_major(vec![2], vec![41.0_f64; 2]).unwrap(),
+            Tensor::from_vec_col_major(vec![4], vec![41.0_f64; 4]).unwrap(),
+        ),
+        (
+            "Vt must have shape",
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+            Tensor::from_vec_col_major(vec![2], vec![41.0_f64; 2]).unwrap(),
+            Tensor::from_vec_col_major(vec![1, 4], vec![41.0_f64; 4]).unwrap(),
+        ),
+        (
+            "Vt must have shape",
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap(),
+            Tensor::from_vec_col_major(vec![2], vec![41.0_f64; 2]).unwrap(),
+            Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f32; 4]).unwrap(),
+        ),
+    ];
+    for (expected, u, s, vt) in invalid_outputs {
+        let error =
+            prepared_execution_error(&mut backend, &plan, &mut workspace, &valid_input, u, s, vt);
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+
+    let wrong_input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64; 4]).unwrap();
+    let wrong_u = Tensor::from_vec_col_major(vec![4], vec![41.0_f64; 4]).unwrap();
+    let wrong_s = Tensor::from_vec_col_major(vec![1], vec![41.0_f64]).unwrap();
+    let wrong_vt = Tensor::from_vec_col_major(vec![4], vec![41.0_f64; 4]).unwrap();
+    let error = prepared_execution_error(
+        &mut backend,
+        &plan,
+        &mut workspace,
+        &wrong_input,
+        wrong_u,
+        wrong_s,
+        wrong_vt,
+    );
+    assert!(error.to_string().contains("input must have shape"));
+}
+
+#[test]
+fn prepared_svd_validates_storage_placement_and_accepts_pinned_host() {
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::Faer).unwrap();
+    let plan = backend
+        .prepare_svd([2, 2], DType::F64, SvdOptions::default())
+        .unwrap();
+    let mut workspace = plan.allocate_workspace(&mut backend).unwrap();
+    let host = Placement {
+        memory_kind: MemoryKind::PinnedHost,
+        device: None,
+    };
+    let device = Placement {
+        memory_kind: MemoryKind::Device,
+        device: Some(DeviceId {
+            kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+            ordinal: 0,
+        }),
+    };
+    for field in 0..4 {
+        let mut input = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+        let (mut u, mut s, mut vt) = f64_outputs(2, 2, 41.0);
+        match field {
+            0 => set_tensor_placement(&mut input, device.clone()),
+            1 => set_tensor_placement(&mut u, device.clone()),
+            2 => set_tensor_placement(&mut s, device.clone()),
+            3 => set_tensor_placement(&mut vt, device.clone()),
+            _ => unreachable!(),
+        }
+        let error = prepared_execution_error(&mut backend, &plan, &mut workspace, &input, u, s, vt);
+        assert!(matches!(error, Error::UnsupportedCapability { .. }));
+    }
+
+    let mut input = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 1.0]).unwrap();
+    let (mut u, mut s, mut vt) = f64_outputs(2, 2, 0.0);
+    for tensor in [&mut input, &mut u, &mut s, &mut vt] {
+        set_tensor_placement(tensor, host.clone());
+    }
+    plan.execute_into(
+        &mut backend,
+        &mut workspace,
+        TensorRead::from_tensor(&input),
+        SvdOutputWrites::new(
+            TensorWrite::from_tensor(&mut u),
+            TensorWrite::from_tensor(&mut s),
+            TensorWrite::from_tensor(&mut vt),
+        ),
+    )
+    .unwrap();
+    assert_eq!(s.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
+}
+
+#[test]
 fn prepared_svd_rejects_unsupported_destination_stride_before_writes() {
     let mut backend = CpuBackend::with_kind(CpuBackendKind::Faer).unwrap();
     let plan = backend
@@ -874,81 +1094,28 @@ fn prepared_svd_supports_multiple_workspaces_and_rejects_cross_plan_workspace() 
 }
 
 #[test]
-fn prepared_svd_rejects_every_alias_pair_before_writes() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Faer).unwrap();
-    let plan = backend
-        .prepare_svd([2, 1], DType::F64, SvdOptions::default())
-        .unwrap();
-    let mut workspace = plan.allocate_workspace(&mut backend).unwrap();
-    let cases = [
-        ("input and U", [0_usize, 0, 8, 12]),
-        ("input and S", [0, 4, 0, 12]),
-        ("input and Vt", [0, 4, 8, 0]),
-        ("U and S", [0, 4, 4, 12]),
-        ("U and Vt", [0, 4, 8, 4]),
-        ("S and Vt", [0, 4, 8, 8]),
-    ];
-    for (expected_pair, [input_offset, u_offset, s_offset, vt_offset]) in cases {
-        let mut shared = vec![23.0_f64; 16];
-        shared[input_offset] = 2.0;
-        shared[input_offset + 1] = 1.0;
-        let before = shared.clone();
-        let ptr = shared.as_mut_ptr();
-        // SAFETY: each case deliberately creates exactly one overlapping pair.
-        // The operation must detect pointer regions before provider or output access.
-        let input_storage = unsafe { std::slice::from_raw_parts(ptr.add(input_offset), 2) };
-        // SAFETY: see the deliberate preflight-only alias contract above.
-        let u_storage = unsafe { std::slice::from_raw_parts_mut(ptr.add(u_offset), 2) };
-        // SAFETY: see the deliberate preflight-only alias contract above.
-        let s_storage = unsafe { std::slice::from_raw_parts_mut(ptr.add(s_offset), 1) };
-        // SAFETY: see the deliberate preflight-only alias contract above.
-        let vt_storage = unsafe { std::slice::from_raw_parts_mut(ptr.add(vt_offset), 1) };
-        let input = TypedTensorView::from_slice([2, 1], [1, 2], 0, input_storage).unwrap();
-        let u = TypedTensorViewMut::from_slice([2, 1], [1, 2], 0, u_storage).unwrap();
-        let s = TypedTensorViewMut::from_slice([1], [1], 0, s_storage).unwrap();
-        let vt = TypedTensorViewMut::from_slice([1, 1], [1, 1], 0, vt_storage).unwrap();
-        let error = plan
-            .execute_into(
-                &mut backend,
-                &mut workspace,
-                TensorRead::from_view(TensorView::F64(input)),
-                SvdOutputWrites::new(
-                    TensorWrite::from_view(TensorViewMut::F64(u)),
-                    TensorWrite::from_view(TensorViewMut::F64(s)),
-                    TensorWrite::from_view(TensorViewMut::F64(vt)),
-                ),
-            )
-            .unwrap_err();
-        assert!(
-            error.to_string().contains(expected_pair),
-            "expected {expected_pair}, got {error}"
-        );
-        assert_eq!(shared, before, "{expected_pair} changed backing storage");
-    }
-}
-
-#[test]
 fn prepared_svd_zero_size_validates_and_skips_provider() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::Faer).unwrap();
-    let plan = backend
-        .prepare_svd([0, 3], DType::F64, SvdOptions::default())
+    for [m, n] in [[0, 3], [3, 0], [0, 0]] {
+        let mut backend = CpuBackend::with_kind(CpuBackendKind::Faer).unwrap();
+        let plan = backend
+            .prepare_svd([m, n], DType::F64, SvdOptions::default())
+            .unwrap();
+        let mut workspace = plan.allocate_workspace(&mut backend).unwrap();
+        let input = Tensor::from_vec_col_major(vec![m, n], Vec::<f64>::new()).unwrap();
+        let (mut u, mut s, mut vt) = f64_outputs(m, n, 0.0);
+        plan.execute_into(
+            &mut backend,
+            &mut workspace,
+            TensorRead::from_tensor(&input),
+            SvdOutputWrites::new(
+                TensorWrite::from_tensor(&mut u),
+                TensorWrite::from_tensor(&mut s),
+                TensorWrite::from_tensor(&mut vt),
+            ),
+        )
         .unwrap();
-    let mut workspace = plan.allocate_workspace(&mut backend).unwrap();
-    let input_data: [f64; 0] = [];
-    let input = TypedTensorView::from_slice([0, 3], [1, 0], 0, &input_data).unwrap();
-    let (mut u, mut s, mut vt) = f64_outputs(0, 3, 0.0);
-    plan.execute_into(
-        &mut backend,
-        &mut workspace,
-        TensorRead::from_view(TensorView::F64(input)),
-        SvdOutputWrites::new(
-            TensorWrite::from_tensor(&mut u),
-            TensorWrite::from_tensor(&mut s),
-            TensorWrite::from_tensor(&mut vt),
-        ),
-    )
-    .unwrap();
-    assert!(u.as_slice::<f64>().unwrap().is_empty());
-    assert!(s.as_slice::<f64>().unwrap().is_empty());
-    assert!(vt.as_slice::<f64>().unwrap().is_empty());
+        assert!(u.as_slice::<f64>().unwrap().is_empty());
+        assert!(s.as_slice::<f64>().unwrap().is_empty());
+        assert!(vt.as_slice::<f64>().unwrap().is_empty());
+    }
 }

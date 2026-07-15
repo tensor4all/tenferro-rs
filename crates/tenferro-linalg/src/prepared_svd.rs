@@ -1,30 +1,41 @@
 use std::fmt;
+#[cfg(feature = "cpu-faer")]
 use std::mem::size_of;
+#[cfg(feature = "cpu-faer")]
 use std::sync::Arc;
 
+#[cfg(feature = "cpu-faer")]
 use faer::dyn_stack::{MemBuffer, MemStack, StackReq};
+#[cfg(feature = "cpu-faer")]
 use faer::{diag::DiagMut, MatMut, MatRef};
+#[cfg(feature = "cpu-faer")]
 use num_complex::{Complex32, Complex64};
-use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuLinalgBinding};
+#[cfg(feature = "cpu-faer")]
+use tenferro_cpu::CpuLinalgBinding;
+use tenferro_cpu::{CpuBackend, CpuBackendKind};
+#[cfg(feature = "cpu-faer")]
 use tenferro_tensor::{
-    validate::checked_shape_product, BackendId, DType, Error, MemoryKind, Placement, Tensor,
-    TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView,
-    TypedTensorViewMut,
+    validate::checked_shape_product, MemoryKind, Tensor, TensorView, TensorViewMut, TypedTensor,
+    TypedTensorView, TypedTensorViewMut,
 };
+use tenferro_tensor::{BackendId, DType, Error, Placement, TensorRead, TensorWrite};
 
+use crate::{backend::LinalgBackend, SvdOptions};
+#[cfg(feature = "cpu-faer")]
 use crate::{
-    backend::LinalgBackend,
     extension::{
         canonicalize_svd_gauge_c32, canonicalize_svd_gauge_c64, canonicalize_svd_gauge_f32,
         canonicalize_svd_gauge_f64, validate_derivative_eps,
     },
-    SvdGauge, SvdOptions,
+    SvdGauge,
 };
 
 const PREPARE_OP: &str = "prepare_svd";
 const EXECUTE_OP: &str = "PreparedSvd::execute_into";
 const PREPARED_CAPABILITY: &str = "prepared compact SVD";
+#[cfg(feature = "cpu-faer")]
 const BINDING_CAPABILITY: &str = "prepared SVD backend/context binding";
+#[cfg(feature = "cpu-faer")]
 const DESTINATION_CAPABILITY: &str = "compact column-major prepared SVD destination";
 
 /// Exact metadata for one prepared SVD output.
@@ -50,11 +61,35 @@ pub struct SvdOutputSpec {
 
 impl SvdOutputSpec {
     /// Return the exact output shape.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions};
+    /// # use tenferro_tensor::DType;
+    /// # let mut backend = CpuBackend::new();
+    /// # let plan = backend.prepare_svd([3, 2], DType::F64, SvdOptions::default())?;
+    /// assert_eq!(plan.output_specs().u().shape(), &[3, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn shape(&self) -> &[usize] {
         &self.shape
     }
 
     /// Return the exact output dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions};
+    /// # use tenferro_tensor::DType;
+    /// # let mut backend = CpuBackend::new();
+    /// # let plan = backend.prepare_svd([2, 2], DType::C64, SvdOptions::default())?;
+    /// assert_eq!(plan.output_specs().s().dtype(), DType::F64);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn dtype(&self) -> DType {
         self.dtype
     }
@@ -62,6 +97,18 @@ impl SvdOutputSpec {
     /// Return the default host placement expected for a newly allocated output.
     ///
     /// Pinned host destinations are also accepted by execution.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions};
+    /// # use tenferro_tensor::{DType, MemoryKind};
+    /// # let mut backend = CpuBackend::new();
+    /// # let plan = backend.prepare_svd([2, 2], DType::F64, SvdOptions::default())?;
+    /// assert_eq!(plan.output_specs().u().placement().memory_kind, MemoryKind::UnpinnedHost);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn placement(&self) -> &Placement {
         &self.placement
     }
@@ -92,16 +139,52 @@ pub struct SvdOutputSpecs {
 
 impl SvdOutputSpecs {
     /// Return the left-singular-vector output specification.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions};
+    /// # use tenferro_tensor::DType;
+    /// # let mut backend = CpuBackend::new();
+    /// # let plan = backend.prepare_svd([4, 2], DType::F64, SvdOptions::default())?;
+    /// assert_eq!(plan.output_specs().u().shape(), &[4, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn u(&self) -> &SvdOutputSpec {
         &self.u
     }
 
     /// Return the singular-value output specification.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions};
+    /// # use tenferro_tensor::DType;
+    /// # let mut backend = CpuBackend::new();
+    /// # let plan = backend.prepare_svd([4, 2], DType::F64, SvdOptions::default())?;
+    /// assert_eq!(plan.output_specs().s().shape(), &[2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn s(&self) -> &SvdOutputSpec {
         &self.s
     }
 
     /// Return the conjugate-transposed right-singular-vector output specification.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions};
+    /// # use tenferro_tensor::DType;
+    /// # let mut backend = CpuBackend::new();
+    /// # let plan = backend.prepare_svd([2, 4], DType::F64, SvdOptions::default())?;
+    /// assert_eq!(plan.output_specs().vt().shape(), &[2, 4]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn vt(&self) -> &SvdOutputSpec {
         &self.vt
     }
@@ -135,21 +218,77 @@ pub struct SvdOutputWrites<'a> {
 
 impl<'a> SvdOutputWrites<'a> {
     /// Bundle caller-owned `U`, `S`, and `Vt` destinations.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_linalg::SvdOutputWrites;
+    /// use tenferro_tensor::{Tensor, TensorWrite};
+    /// let mut u = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64])?;
+    /// let mut s = Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?;
+    /// let mut vt = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64])?;
+    /// let writes = SvdOutputWrites::new(
+    ///     TensorWrite::from_tensor(&mut u),
+    ///     TensorWrite::from_tensor(&mut s),
+    ///     TensorWrite::from_tensor(&mut vt),
+    /// );
+    /// assert_eq!(writes.s().shape(), &[1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn new(u: TensorWrite<'a>, s: TensorWrite<'a>, vt: TensorWrite<'a>) -> Self {
         Self { u, s, vt }
     }
 
     /// Inspect the `U` destination without mutating it.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_linalg::SvdOutputWrites;
+    /// # use tenferro_tensor::{Tensor, TensorWrite};
+    /// # let mut u = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2])?;
+    /// # let mut s = Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?;
+    /// # let mut vt = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64])?;
+    /// # let writes = SvdOutputWrites::new(TensorWrite::from_tensor(&mut u), TensorWrite::from_tensor(&mut s), TensorWrite::from_tensor(&mut vt));
+    /// assert_eq!(writes.u().shape(), &[2, 1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn u(&self) -> &TensorWrite<'a> {
         &self.u
     }
 
     /// Inspect the `S` destination without mutating it.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_linalg::SvdOutputWrites;
+    /// # use tenferro_tensor::{Tensor, TensorWrite};
+    /// # let mut u = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2])?;
+    /// # let mut s = Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?;
+    /// # let mut vt = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64])?;
+    /// # let writes = SvdOutputWrites::new(TensorWrite::from_tensor(&mut u), TensorWrite::from_tensor(&mut s), TensorWrite::from_tensor(&mut vt));
+    /// assert_eq!(writes.s().shape(), &[1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn s(&self) -> &TensorWrite<'a> {
         &self.s
     }
 
     /// Inspect the `Vt` destination without mutating it.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_linalg::SvdOutputWrites;
+    /// # use tenferro_tensor::{Tensor, TensorWrite};
+    /// # let mut u = Tensor::from_vec_col_major(vec![2, 1], vec![0.0_f64; 2])?;
+    /// # let mut s = Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?;
+    /// # let mut vt = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64])?;
+    /// # let writes = SvdOutputWrites::new(TensorWrite::from_tensor(&mut u), TensorWrite::from_tensor(&mut s), TensorWrite::from_tensor(&mut vt));
+    /// assert_eq!(writes.vt().shape(), &[1, 1]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn vt(&self) -> &TensorWrite<'a> {
         &self.vt
     }
@@ -197,30 +336,64 @@ pub struct PreparedSvd {
     dtype: DType,
     options: SvdOptions,
     specs: SvdOutputSpecs,
+    #[cfg(feature = "cpu-faer")]
     binding: CpuFaerBinding,
+    #[cfg(feature = "cpu-faer")]
     plan_token: Arc<()>,
+    #[cfg(feature = "cpu-faer")]
     provider: FaerPlan,
 }
 
 impl fmt::Debug for PreparedSvd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PreparedSvd")
+        let mut debug = f.debug_struct("PreparedSvd");
+        debug
+            .field("operation", &"compact_svd")
             .field("shape", &self.shape)
             .field("dtype", &self.dtype)
             .field("options", &self.options)
             .field("provider", &"faer")
-            .field("scratch_bytes", &self.provider.scratch_bytes())
-            .finish_non_exhaustive()
+            .field("device", &"cpu");
+        #[cfg(feature = "cpu-faer")]
+        debug
+            .field("context", &self.binding)
+            .field("scratch_bytes", &self.provider.scratch_bytes());
+        debug.finish_non_exhaustive()
     }
 }
 
 impl PreparedSvd {
     /// Return exact `U`, `S`, and `Vt` output metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions};
+    /// # use tenferro_tensor::DType;
+    /// # let mut backend = CpuBackend::new();
+    /// let plan = backend.prepare_svd([5, 3], DType::F64, SvdOptions::default())?;
+    /// assert_eq!(plan.output_specs().s().shape(), &[3]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn output_specs(&self) -> &SvdOutputSpecs {
         &self.specs
     }
 
     /// Allocate one opaque workspace bound to this plan and backend context.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use tenferro_cpu::CpuBackend;
+    /// # use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions};
+    /// # use tenferro_tensor::DType;
+    /// let mut backend = CpuBackend::new();
+    /// let plan = backend.prepare_svd([2, 2], DType::F64, SvdOptions::default())?;
+    /// let workspace = plan.allocate_workspace(&mut backend)?;
+    /// assert!(format!("{workspace:?}").contains("SvdWorkspace"));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn allocate_workspace<B: PreparedSvdBackendExt>(
         &self,
         backend: &mut B,
@@ -233,6 +406,33 @@ impl PreparedSvd {
     /// All metadata and overlap checks complete before the first output write.
     /// Once the provider call starts, a numerical provider failure may leave
     /// destinations partially overwritten.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions, SvdOutputWrites};
+    /// use tenferro_tensor::{DType, Tensor, TensorRead, TensorWrite};
+    /// let mut backend = CpuBackend::new();
+    /// let plan = backend.prepare_svd([1, 1], DType::F64, SvdOptions::default())?;
+    /// let mut workspace = plan.allocate_workspace(&mut backend)?;
+    /// let input = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64])?;
+    /// let mut u = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64])?;
+    /// let mut s = Tensor::from_vec_col_major(vec![1], vec![0.0_f64])?;
+    /// let mut vt = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64])?;
+    /// plan.execute_into(
+    ///     &mut backend,
+    ///     &mut workspace,
+    ///     TensorRead::from_tensor(&input),
+    ///     SvdOutputWrites::new(
+    ///         TensorWrite::from_tensor(&mut u),
+    ///         TensorWrite::from_tensor(&mut s),
+    ///         TensorWrite::from_tensor(&mut vt),
+    ///     ),
+    /// )?;
+    /// assert_eq!(s.as_slice::<f64>()?, &[2.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     pub fn execute_into<B: PreparedSvdBackendExt>(
         &self,
         backend: &mut B,
@@ -265,21 +465,30 @@ impl PreparedSvd {
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub struct SvdWorkspace {
+    #[cfg(feature = "cpu-faer")]
     binding: CpuFaerBinding,
     shape: [usize; 2],
     dtype: DType,
+    #[cfg(feature = "cpu-faer")]
     plan_token: Arc<()>,
+    #[cfg(feature = "cpu-faer")]
     inner: FaerWorkspace,
 }
 
 impl fmt::Debug for SvdWorkspace {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SvdWorkspace")
+        let mut debug = f.debug_struct("SvdWorkspace");
+        debug
+            .field("operation", &"compact_svd")
             .field("shape", &self.shape)
             .field("dtype", &self.dtype)
             .field("provider", &"faer")
-            .field("retained_bytes", &self.inner.retained_bytes())
-            .finish_non_exhaustive()
+            .field("device", &"cpu");
+        #[cfg(feature = "cpu-faer")]
+        debug
+            .field("context", &self.binding)
+            .field("retained_bytes", &self.inner.retained_bytes());
+        debug.finish_non_exhaustive()
     }
 }
 
@@ -302,6 +511,18 @@ impl fmt::Debug for SvdWorkspace {
 /// ```
 pub trait PreparedSvdBackendExt: private::PreparedSvdDispatch {
     /// Prepare compact SVD for one fixed rank-2 shape and dtype.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::{PreparedSvdBackendExt, SvdOptions};
+    /// use tenferro_tensor::DType;
+    /// let mut backend = CpuBackend::new();
+    /// let plan = backend.prepare_svd([3, 2], DType::F64, SvdOptions::default())?;
+    /// assert_eq!(plan.output_specs().u().shape(), &[3, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn prepare_svd(
         &mut self,
         shape: [usize; 2],
@@ -340,469 +561,11 @@ mod private {
     }
 }
 
-struct CpuFaerBinding {
-    resources: CpuLinalgBinding,
-}
-
-impl Clone for CpuFaerBinding {
-    fn clone(&self) -> Self {
-        Self {
-            resources: self.resources.clone(),
-        }
-    }
-}
-
-impl fmt::Debug for CpuFaerBinding {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.resources.fmt(f)
-    }
-}
-
-impl CpuFaerBinding {
-    fn capture(backend: &CpuBackend) -> Self {
-        Self {
-            resources: backend.linalg_binding(),
-        }
-    }
-
-    fn validate(&self, backend: &CpuBackend, dtype: DType) -> tenferro_tensor::Result<()> {
-        if !self.resources.matches(backend) || backend.kind() != CpuBackendKind::Faer {
-            return Err(Error::unsupported_capability(
-                EXECUTE_OP,
-                BackendId::Cpu,
-                cpu_provider_name(backend.kind()),
-                dtype,
-                BINDING_CAPABILITY,
-            ));
-        }
-        Ok(())
-    }
-}
+mod cpu;
+#[cfg(feature = "cpu-faer")]
+use cpu::CpuFaerBinding;
 
 #[cfg(feature = "cpu-faer")]
-impl private::PreparedSvdDispatch for CpuBackend {
-    fn prepare_svd_impl(
-        &mut self,
-        shape: [usize; 2],
-        dtype: DType,
-        options: SvdOptions,
-    ) -> tenferro_tensor::Result<PreparedSvd> {
-        validate_derivative_eps(PREPARE_OP, options.derivative_eps)?;
-        if self.kind() != CpuBackendKind::Faer {
-            return Err(Error::unsupported_capability(
-                PREPARE_OP,
-                BackendId::Cpu,
-                cpu_provider_name(self.kind()),
-                dtype,
-                PREPARED_CAPABILITY,
-            ));
-        }
-        checked_shape_product(PREPARE_OP, "matrix shape", &shape)?;
-        for &extent in &shape {
-            isize::try_from(extent).map_err(|_| Error::InvalidConfig {
-                op: PREPARE_OP,
-                message: format!("matrix extent {extent} does not fit in isize"),
-            })?;
-        }
-        let singular_dtype = real_dtype(dtype)?;
-        let provider = FaerPlan::new(dtype, shape, self.linalg_context().faer_par())?;
-        let k = shape[0].min(shape[1]);
-        let placement = Placement {
-            memory_kind: MemoryKind::UnpinnedHost,
-            device: None,
-        };
-        let specs = SvdOutputSpecs {
-            u: SvdOutputSpec {
-                shape: vec![shape[0], k],
-                dtype,
-                placement: placement.clone(),
-            },
-            s: SvdOutputSpec {
-                shape: vec![k],
-                dtype: singular_dtype,
-                placement: placement.clone(),
-            },
-            vt: SvdOutputSpec {
-                shape: vec![k, shape[1]],
-                dtype,
-                placement,
-            },
-        };
-        Ok(PreparedSvd {
-            shape,
-            dtype,
-            options,
-            specs,
-            binding: CpuFaerBinding::capture(self),
-            plan_token: Arc::new(()),
-            provider,
-        })
-    }
-
-    fn allocate_svd_workspace_impl(
-        &mut self,
-        plan: &PreparedSvd,
-    ) -> tenferro_tensor::Result<SvdWorkspace> {
-        plan.binding.validate(self, plan.dtype)?;
-        let inner = plan.provider.allocate(plan.shape)?;
-        Ok(SvdWorkspace {
-            binding: plan.binding.clone(),
-            shape: plan.shape,
-            dtype: plan.dtype,
-            plan_token: Arc::clone(&plan.plan_token),
-            inner,
-        })
-    }
-
-    fn execute_prepared_svd_into_impl(
-        &mut self,
-        plan: &PreparedSvd,
-        workspace: &mut SvdWorkspace,
-        input: TensorRead<'_>,
-        outputs: SvdOutputWrites<'_>,
-    ) -> tenferro_tensor::Result<()> {
-        plan.binding.validate(self, plan.dtype)?;
-        workspace.binding.validate(self, workspace.dtype)?;
-        if !workspace.binding.resources.matches(self)
-            || !plan.binding.resources.matches(self)
-            || workspace.shape != plan.shape
-            || workspace.dtype != plan.dtype
-            || !Arc::ptr_eq(&workspace.plan_token, &plan.plan_token)
-        {
-            return Err(Error::unsupported_capability(
-                EXECUTE_OP,
-                BackendId::Cpu,
-                cpu_provider_name(self.kind()),
-                plan.dtype,
-                BINDING_CAPABILITY,
-            ));
-        }
-        validate_execution(plan, &input, &outputs)?;
-        if plan.shape[0] == 0 || plan.shape[1] == 0 {
-            return Ok(());
-        }
-        let par = self.linalg_context().faer_par();
-        self.install(move || execute_faer(plan, &mut workspace.inner, par, input, outputs))
-    }
-}
-
-#[cfg(not(feature = "cpu-faer"))]
-impl private::PreparedSvdDispatch for CpuBackend {
-    fn prepare_svd_impl(
-        &mut self,
-        _shape: [usize; 2],
-        dtype: DType,
-        _options: SvdOptions,
-    ) -> tenferro_tensor::Result<PreparedSvd> {
-        Err(Error::unsupported_capability(
-            PREPARE_OP,
-            BackendId::Cpu,
-            cpu_provider_name(self.kind()),
-            dtype,
-            PREPARED_CAPABILITY,
-        ))
-    }
-
-    fn allocate_svd_workspace_impl(
-        &mut self,
-        plan: &PreparedSvd,
-    ) -> tenferro_tensor::Result<SvdWorkspace> {
-        Err(Error::unsupported_capability(
-            PREPARE_OP,
-            BackendId::Cpu,
-            cpu_provider_name(self.kind()),
-            plan.dtype,
-            PREPARED_CAPABILITY,
-        ))
-    }
-
-    fn execute_prepared_svd_into_impl(
-        &mut self,
-        plan: &PreparedSvd,
-        _workspace: &mut SvdWorkspace,
-        _input: TensorRead<'_>,
-        _outputs: SvdOutputWrites<'_>,
-    ) -> tenferro_tensor::Result<()> {
-        Err(Error::unsupported_capability(
-            EXECUTE_OP,
-            BackendId::Cpu,
-            cpu_provider_name(self.kind()),
-            plan.dtype,
-            PREPARED_CAPABILITY,
-        ))
-    }
-}
-
-fn real_dtype(dtype: DType) -> tenferro_tensor::Result<DType> {
-    match dtype {
-        DType::F32 | DType::C32 => Ok(DType::F32),
-        DType::F64 | DType::C64 => Ok(DType::F64),
-        _ => Err(Error::unsupported_capability(
-            PREPARE_OP,
-            BackendId::Cpu,
-            "faer",
-            dtype,
-            PREPARED_CAPABILITY,
-        )),
-    }
-}
-
-const fn cpu_provider_name(kind: CpuBackendKind) -> &'static str {
-    match kind {
-        CpuBackendKind::Faer => "faer",
-        CpuBackendKind::Blas => "blas",
-    }
-}
-
-fn validate_execution(
-    plan: &PreparedSvd,
-    input: &TensorRead<'_>,
-    outputs: &SvdOutputWrites<'_>,
-) -> tenferro_tensor::Result<()> {
-    if input.shape() != plan.shape || input.dtype() != plan.dtype {
-        return Err(Error::InvalidConfig {
-            op: EXECUTE_OP,
-            message: format!(
-                "input must have shape {:?} and dtype {:?}, got {:?} and {:?}",
-                plan.shape,
-                plan.dtype,
-                input.shape(),
-                input.dtype()
-            ),
-        });
-    }
-    validate_host_read(input)?;
-    validate_output(&outputs.u, &plan.specs.u, "U")?;
-    validate_output(&outputs.s, &plan.specs.s, "S")?;
-    validate_output(&outputs.vt, &plan.specs.vt, "Vt")?;
-
-    let input_region = read_region(input)?;
-    let u_region = write_region(&outputs.u)?;
-    let s_region = write_region(&outputs.s)?;
-    let vt_region = write_region(&outputs.vt)?;
-    for (lhs_name, lhs, rhs_name, rhs) in [
-        ("input", input_region, "U", u_region),
-        ("input", input_region, "S", s_region),
-        ("input", input_region, "Vt", vt_region),
-        ("U", u_region, "S", s_region),
-        ("U", u_region, "Vt", vt_region),
-        ("S", s_region, "Vt", vt_region),
-    ] {
-        if regions_overlap(lhs, rhs) {
-            return Err(Error::InvalidConfig {
-                op: EXECUTE_OP,
-                message: format!("{lhs_name} and {rhs_name} may overlap"),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn validate_output(
-    output: &TensorWrite<'_>,
-    spec: &SvdOutputSpec,
-    name: &str,
-) -> tenferro_tensor::Result<()> {
-    if output.shape() != spec.shape || output.dtype() != spec.dtype {
-        return Err(Error::InvalidConfig {
-            op: EXECUTE_OP,
-            message: format!(
-                "{name} must have shape {:?} and dtype {:?}, got {:?} and {:?}",
-                spec.shape,
-                spec.dtype,
-                output.shape(),
-                output.dtype()
-            ),
-        });
-    }
-    if !output.is_col_major_contiguous()? {
-        let _ = name;
-        return Err(Error::unsupported_capability(
-            EXECUTE_OP,
-            BackendId::Cpu,
-            "faer",
-            spec.dtype,
-            DESTINATION_CAPABILITY,
-        ));
-    }
-    validate_host_read(&output.as_read())
-}
-
-fn validate_host_read(read: &TensorRead<'_>) -> tenferro_tensor::Result<()> {
-    let placement = read_placement(read);
-    if placement.device.is_some()
-        || !matches!(
-            placement.memory_kind,
-            MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
-        )
-    {
-        return Err(Error::unsupported_capability(
-            EXECUTE_OP,
-            BackendId::Cpu,
-            "faer",
-            read.dtype(),
-            "host-resident prepared SVD storage",
-        ));
-    }
-    Ok(())
-}
-
-fn read_placement<'a>(read: &'a TensorRead<'_>) -> &'a Placement {
-    match read {
-        TensorRead::Tensor(tensor) => tensor.placement(),
-        TensorRead::View(view) => match view {
-            TensorView::F32(v) => v.placement(),
-            TensorView::F64(v) => v.placement(),
-            TensorView::I32(v) => v.placement(),
-            TensorView::I64(v) => v.placement(),
-            TensorView::Bool(v) => v.placement(),
-            TensorView::C32(v) => v.placement(),
-            TensorView::C64(v) => v.placement(),
-        },
-    }
-}
-
-#[derive(Clone, Copy)]
-struct ByteRegion {
-    start: usize,
-    end: usize,
-}
-
-fn regions_overlap(lhs: Option<ByteRegion>, rhs: Option<ByteRegion>) -> bool {
-    match (lhs, rhs) {
-        (Some(lhs), Some(rhs)) => lhs.start < rhs.end && rhs.start < lhs.end,
-        _ => false,
-    }
-}
-
-fn read_region(read: &TensorRead<'_>) -> tenferro_tensor::Result<Option<ByteRegion>> {
-    macro_rules! region {
-        ($value:expr, $ty:ty) => {
-            typed_read_region::<$ty>($value)
-        };
-    }
-    match read {
-        TensorRead::Tensor(Tensor::F32(t)) => region!(TypedReadRef::Tensor(t), f32),
-        TensorRead::Tensor(Tensor::F64(t)) => region!(TypedReadRef::Tensor(t), f64),
-        TensorRead::Tensor(Tensor::I32(t)) => region!(TypedReadRef::Tensor(t), i32),
-        TensorRead::Tensor(Tensor::I64(t)) => region!(TypedReadRef::Tensor(t), i64),
-        TensorRead::Tensor(Tensor::Bool(t)) => region!(TypedReadRef::Tensor(t), bool),
-        TensorRead::Tensor(Tensor::C32(t)) => region!(TypedReadRef::Tensor(t), Complex32),
-        TensorRead::Tensor(Tensor::C64(t)) => region!(TypedReadRef::Tensor(t), Complex64),
-        TensorRead::View(TensorView::F32(v)) => region!(TypedReadRef::View(v), f32),
-        TensorRead::View(TensorView::F64(v)) => region!(TypedReadRef::View(v), f64),
-        TensorRead::View(TensorView::I32(v)) => region!(TypedReadRef::View(v), i32),
-        TensorRead::View(TensorView::I64(v)) => region!(TypedReadRef::View(v), i64),
-        TensorRead::View(TensorView::Bool(v)) => region!(TypedReadRef::View(v), bool),
-        TensorRead::View(TensorView::C32(v)) => region!(TypedReadRef::View(v), Complex32),
-        TensorRead::View(TensorView::C64(v)) => region!(TypedReadRef::View(v), Complex64),
-    }
-}
-
-fn write_region(write: &TensorWrite<'_>) -> tenferro_tensor::Result<Option<ByteRegion>> {
-    read_region(&write.as_read())
-}
-
-enum TypedReadRef<'a, T> {
-    Tensor(&'a TypedTensor<T>),
-    View(&'a TypedTensorView<'a, T>),
-}
-
-fn typed_read_region<T: Clone + 'static>(
-    read: TypedReadRef<'_, T>,
-) -> tenferro_tensor::Result<Option<ByteRegion>> {
-    let (base, shape, strides, offset) = match read {
-        TypedReadRef::Tensor(tensor) => {
-            let data = tensor.host_data()?;
-            return byte_region(data.as_ptr(), 0, data.len(), size_of::<T>());
-        }
-        TypedReadRef::View(view) => (
-            view.host_storage()?.as_ptr(),
-            view.shape(),
-            view.strides(),
-            view.offset(),
-        ),
-    };
-    if shape.contains(&0) {
-        return Ok(None);
-    }
-    let mut min = offset;
-    let mut max = offset;
-    for (&extent, &stride) in shape.iter().zip(strides.iter()) {
-        let span = isize::try_from(extent - 1)
-            .ok()
-            .and_then(|extent| extent.checked_mul(stride))
-            .ok_or_else(|| Error::InvalidConfig {
-                op: EXECUTE_OP,
-                message: "input layout span overflows isize".to_owned(),
-            })?;
-        min = min
-            .checked_add(span.min(0))
-            .ok_or_else(|| Error::InvalidConfig {
-                op: EXECUTE_OP,
-                message: "input layout lower bound overflows isize".to_owned(),
-            })?;
-        max = max
-            .checked_add(span.max(0))
-            .ok_or_else(|| Error::InvalidConfig {
-                op: EXECUTE_OP,
-                message: "input layout upper bound overflows isize".to_owned(),
-            })?;
-    }
-    let start = usize::try_from(min).map_err(|_| Error::InvalidConfig {
-        op: EXECUTE_OP,
-        message: "input layout lower bound is negative".to_owned(),
-    })?;
-    let span = max
-        .checked_sub(min)
-        .and_then(|span| span.checked_add(1))
-        .ok_or_else(|| Error::InvalidConfig {
-            op: EXECUTE_OP,
-            message: "input layout range overflows isize".to_owned(),
-        })?;
-    let len = usize::try_from(span).map_err(|_| Error::InvalidConfig {
-        op: EXECUTE_OP,
-        message: "input layout range does not fit usize".to_owned(),
-    })?;
-    byte_region(base, start, len, size_of::<T>())
-}
-
-fn byte_region<T>(
-    base: *const T,
-    element_offset: usize,
-    element_len: usize,
-    element_size: usize,
-) -> tenferro_tensor::Result<Option<ByteRegion>> {
-    if element_len == 0 {
-        return Ok(None);
-    }
-    let byte_offset =
-        element_offset
-            .checked_mul(element_size)
-            .ok_or_else(|| Error::InvalidConfig {
-                op: EXECUTE_OP,
-                message: "storage byte offset overflows usize".to_owned(),
-            })?;
-    let byte_len = element_len
-        .checked_mul(element_size)
-        .ok_or_else(|| Error::InvalidConfig {
-            op: EXECUTE_OP,
-            message: "storage byte length overflows usize".to_owned(),
-        })?;
-    let start = (base as usize)
-        .checked_add(byte_offset)
-        .ok_or_else(|| Error::InvalidConfig {
-            op: EXECUTE_OP,
-            message: "storage address range overflows usize".to_owned(),
-        })?;
-    let end = start
-        .checked_add(byte_len)
-        .ok_or_else(|| Error::InvalidConfig {
-            op: EXECUTE_OP,
-            message: "storage address range overflows usize".to_owned(),
-        })?;
-    Ok(Some(ByteRegion { start, end }))
-}
-
 mod faer_impl;
+#[cfg(feature = "cpu-faer")]
 use faer_impl::{execute_faer, FaerPlan, FaerWorkspace};

@@ -301,8 +301,10 @@ macro_rules! impl_real_prepared_scalar {
                 par: faer::Par,
                 scratch: &mut MemBuffer,
             ) -> tenferro_tensor::Result<()> {
+                // INVARIANT: input pointer and signed strides describe the validated matrix span.
                 // SAFETY: prepared preflight validates all input/output layouts and aliasing.
                 let input = unsafe { MatRef::from_raw_parts(input, m, n, row_stride, col_stride) };
+                // INVARIANT: `u` is compact column-major and disjoint from every other region.
                 // SAFETY: `u` points to a compact, non-overlapping `m x k` destination.
                 let u = unsafe { MatMut::from_raw_parts_mut(u, m, k, 1, m as isize) };
                 let singular = DiagMut::from_slice_mut(singular_output);
@@ -375,11 +377,13 @@ macro_rules! impl_complex_prepared_scalar {
                 par: faer::Par,
                 scratch: &mut MemBuffer,
             ) -> tenferro_tensor::Result<()> {
+                // INVARIANT: the complex ABI assertions and validated strides remain fixed.
                 // SAFETY: compile-time layout assertions above prove compatible complex scalars;
                 // prepared preflight validates all input/output layouts and aliasing.
                 let input = unsafe {
                     MatRef::from_raw_parts(input.cast::<$faer>(), m, n, row_stride, col_stride)
                 };
+                // INVARIANT: `u` is compact column-major and disjoint from every other region.
                 // SAFETY: `u` points to a compact, non-overlapping `m x k` destination.
                 let u =
                     unsafe { MatMut::from_raw_parts_mut(u.cast::<$faer>(), m, k, 1, m as isize) };
