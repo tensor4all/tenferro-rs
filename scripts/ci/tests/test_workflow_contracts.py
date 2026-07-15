@@ -133,7 +133,8 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_runpod_cuda_runtime_matches_cudarc_floor(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
-        cudarc = re.search(
+        cargo = read("Cargo.toml")
+        workflow_cudarc = re.search(
             r'^  CUDARC_CUDA_VERSION: "(\d+)"$', text, re.MULTILINE
         )
         runtime = re.search(
@@ -141,16 +142,26 @@ class WorkflowContractTests(unittest.TestCase):
             text,
             re.MULTILINE,
         )
-        self.assertIsNotNone(cudarc)
+        cargo_cudarc = re.search(
+            r'^cudarc = \{[^\n]*features = \[[^\n]*"cuda-(\d+)"',
+            cargo,
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(workflow_cudarc)
         self.assertIsNotNone(runtime)
-        assert cudarc is not None
+        self.assertIsNotNone(cargo_cudarc)
+        assert workflow_cudarc is not None
         assert runtime is not None
+        assert cargo_cudarc is not None
         encoded_runtime = (
             int(runtime.group(1)) * 1000 + int(runtime.group(2)) * 10
         )
-        self.assertEqual(int(cudarc.group(1)), encoded_runtime)
+        self.assertEqual(int(workflow_cudarc.group(1)), encoded_runtime)
+        self.assertEqual(workflow_cudarc.group(1), cargo_cudarc.group(1))
         self.assertIn("nvrtc.nvrtcVersion", text)
         self.assertIn("Loaded NVRTC version:", text)
+        self.assertIn("if loaded < required:", text)
+        self.assertIn("is older than required", text)
 
     def test_manual_pr_recovery_is_authorized_and_head_stable(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
