@@ -9,8 +9,9 @@
 //! [`TypedTensorView`] is a borrowed typed view over an existing tensor buffer.
 //! It carries logical shape, arbitrary strides, and an offset, so metadata-only
 //! layout changes such as transposes, slices, and broadcasts can be represented
-//! without copying. A view can be materialized explicitly with
-//! [`TypedTensorView::to_contiguous`] when a compact owned tensor is required.
+//! without copying. Backend-aware code materializes and copies views through
+//! [`TensorViewCanonicalization`], preserving placement and backend execution
+//! policy.
 //!
 //! [`TensorRead`] is the dtype-erased borrowed input type used by eager kernels
 //! and backend dispatch. It can borrow either an owned [`Tensor`] or a

@@ -790,9 +790,9 @@ impl CudaBackend {
         Ok(output)
     }
 
-    fn copy_contiguous_to_view_typed<T, R>(
+    fn copy_view_to_view_typed<T, R>(
         &self,
-        src: &TypedTensor<T, R>,
+        src: &TypedTensorView<'_, T, R>,
         dst: &mut TypedTensorViewMut<'_, T, R>,
         op: &'static str,
     ) -> crate::Result<()>
@@ -800,7 +800,7 @@ impl CudaBackend {
         T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
         R: TensorRank,
     {
-        ensure_resident_on_runtime(self.runtime(), src, op)?;
+        ensure_view_resident_on_runtime(self.runtime(), src, op)?;
         ensure_view_mut_resident_on_runtime(self.runtime(), dst, op)?;
         if src.shape() != dst.shape() {
             return Err(crate::Error::InvalidConfig {
@@ -812,13 +812,40 @@ impl CudaBackend {
                 ),
             });
         }
+        let source_buffer = src.backend_buffer().ok_or_else(|| {
+            crate::Error::backend_failure(
+                op,
+                "CUDA backend expected a GPU source view; call upload_tensor() first",
+            )
+        })?;
+        if !src.is_col_major_contiguous()?
+            || src.offset() != 0
+            || source_buffer.len() != src.n_elements()
+        {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization"
+                    .to_string(),
+            });
+        }
+        let source_shape = R::shape_from_vec(src.shape().to_vec().into()).map_err(|err| {
+            crate::Error::InvalidConfig {
+                op,
+                message: format!("source rank mismatch: {err}"),
+            }
+        })?;
+        let source_tensor: TypedTensor<T, R> = TypedTensor::from_buffer_col_major(
+            source_shape,
+            Buffer::Backend(Arc::clone(source_buffer)),
+            src.placement().clone(),
+        )?;
         let len = src.n_elements();
         if len == 0 {
             return Ok(());
         }
         let strides = view_strides_i64(dst.strides(), op)?;
         let base_offset = view_offset_i64(dst.offset(), op)?;
-        let src_arg = typed_tensor_binding(src, op)?;
+        let src_arg = typed_tensor_binding(&source_tensor, op)?;
         let dst_arg = typed_view_mut_array_arg(dst, op)?;
         let rank = dst.shape().len();
         unsafe {
@@ -4827,16 +4854,12 @@ macro_rules! impl_cubecl_view_canonicalization {
                     self.to_contiguous_view_typed(view, "CudaBackend::to_contiguous")
                 }
 
-                fn copy_from_contiguous(
+                fn copy_into(
                     &mut self,
-                    src: &TypedTensor<$ty, R>,
+                    src: &TypedTensorView<'_, $ty, R>,
                     dst: &mut TypedTensorViewMut<'_, $ty, R>,
                 ) -> crate::Result<()> {
-                    self.copy_contiguous_to_view_typed(
-                        src,
-                        dst,
-                        "CudaBackend::copy_from_contiguous",
-                    )
+                    self.copy_view_to_view_typed(src, dst, "CudaBackend::copy_into")
                 }
             }
         )*
@@ -4859,13 +4882,13 @@ where
         ))
     }
 
-    fn copy_from_contiguous(
+    fn copy_into(
         &mut self,
-        _src: &TypedTensor<bool, R>,
+        _src: &TypedTensorView<'_, bool, R>,
         _dst: &mut TypedTensorViewMut<'_, bool, R>,
     ) -> crate::Result<()> {
         Err(unsupported_dtype(
-            "CudaBackend::copy_from_contiguous",
+            "CudaBackend::copy_into",
             crate::DType::Bool,
         ))
     }

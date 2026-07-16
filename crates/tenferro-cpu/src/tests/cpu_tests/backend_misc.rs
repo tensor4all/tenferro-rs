@@ -1,4 +1,96 @@
 use super::*;
+use tenferro_tensor::{
+    Buffer, BufferHandle, MemoryKind, Placement, TensorViewCanonicalization, TypedTensorView,
+    TypedTensorViewMut,
+};
+
+fn opaque_backend_placement() -> Placement {
+    Placement {
+        memory_kind: MemoryKind::Device,
+        device: None,
+    }
+}
+
+#[test]
+fn cpu_copy_into_copies_exactly_between_strided_host_views() {
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let src_data = [0_i32, 1, 2, 3, 4, 5, 6, 7];
+    let src = TypedTensorView::from_slice(vec![2, 2], vec![2, 4], 1, &src_data).unwrap();
+    let mut dst_data = [-1_i32; 8];
+    let mut dst = TypedTensorViewMut::from_slice(vec![2, 2], vec![3, 1], 1, &mut dst_data).unwrap();
+
+    backend.copy_into(&src, &mut dst).unwrap();
+
+    assert_eq!(dst_data, [-1, 1, 5, -1, 3, 7, -1, -1]);
+}
+
+#[test]
+fn cpu_copy_into_reports_shape_mismatch_with_canonical_op_name() {
+    let mut backend = CpuBackend::new();
+    let src = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]).unwrap();
+    let mut dst = TypedTensor::<i32>::from_vec_col_major(vec![3], vec![0, 0, 0]).unwrap();
+
+    let err = backend
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::ShapeMismatch {
+            op: "CpuBackend::copy_into",
+            lhs,
+            rhs,
+        } if lhs == vec![2] && rhs == vec![3]
+    ));
+}
+
+#[test]
+fn cpu_copy_into_rejects_backend_source_without_download() {
+    let mut backend = CpuBackend::new();
+    let src = TypedTensor::<f64>::from_buffer_col_major(
+        vec![2],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(9, 2))),
+        opaque_backend_placement(),
+    )
+    .unwrap();
+    let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
+
+    let err = backend
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::copy_into",
+            ref message,
+        } if message.contains("download")
+    ));
+}
+
+#[test]
+fn cpu_copy_into_rejects_backend_destination_without_download() {
+    let mut backend = CpuBackend::new();
+    let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    let mut dst = TypedTensor::<f64>::from_buffer_col_major(
+        vec![2],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(8, 2))),
+        opaque_backend_placement(),
+    )
+    .unwrap();
+
+    let err = backend
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::copy_into",
+            ref message,
+        } if message.contains("download")
+    ));
+}
 
 #[test]
 fn test_reclaim_buffer_returns_host_buffer_to_pool() {

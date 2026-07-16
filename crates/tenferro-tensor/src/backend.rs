@@ -2,7 +2,8 @@ use crate::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 use crate::types::{
-    Buffer, TensorRank, TensorView, TensorViewMut, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    Buffer, TensorRank, TensorScalar, TensorView, TensorViewMut, TypedTensor, TypedTensorView,
+    TypedTensorViewMut,
 };
 use crate::validate::validate_convert_dtype;
 use crate::{DType, RuntimeCacheControl, Tensor, TensorRead, TensorValue, TensorWrite};
@@ -2265,16 +2266,24 @@ pub trait TensorIndexing {
 /// ) -> tenferro_tensor::Result<TypedTensor<i32>> {
 ///     backend.to_contiguous(&tensor.as_view())
 /// }
+///
+/// fn copy_i32<B: TensorViewCanonicalization<i32, DynRank>>(
+///     backend: &mut B,
+///     src: &TypedTensor<i32>,
+///     dst: &mut TypedTensor<i32>,
+/// ) -> tenferro_tensor::Result<()> {
+///     backend.copy_into(&src.as_view(), &mut dst.as_view_mut())
+/// }
 /// ```
-pub trait TensorViewCanonicalization<T: Clone + 'static, R: TensorRank> {
+pub trait TensorViewCanonicalization<T: TensorScalar, R: TensorRank> {
     fn to_contiguous(
         &mut self,
         view: &TypedTensorView<'_, T, R>,
     ) -> crate::Result<TypedTensor<T, R>>;
 
-    fn copy_from_contiguous(
+    fn copy_into(
         &mut self,
-        src: &TypedTensor<T, R>,
+        src: &TypedTensorView<'_, T, R>,
         dst: &mut TypedTensorViewMut<'_, T, R>,
     ) -> crate::Result<()>;
 }

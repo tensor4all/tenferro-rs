@@ -10,6 +10,7 @@ use crate::{
 };
 use tenferro_tensor::{
     DType, Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView,
+    TypedTensorViewMut,
 };
 
 #[cfg(test)]
@@ -195,6 +196,46 @@ where
         crate::Buffer::Host(out.into_data()),
         view.placement().clone(),
     )
+}
+
+pub(crate) fn typed_copy_view_into<T, R>(
+    src: &TypedTensorView<'_, T, R>,
+    dst: &mut TypedTensorViewMut<'_, T, R>,
+    op: &'static str,
+) -> crate::Result<()>
+where
+    T: Copy + Send + Sync + 'static,
+    R: TensorRank,
+{
+    if src.shape() != dst.shape() {
+        return Err(crate::Error::ShapeMismatch {
+            op,
+            lhs: src.shape().to_vec(),
+            rhs: dst.shape().to_vec(),
+        });
+    }
+    if src.backend_buffer().is_some() || dst.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
+    }
+
+    let src_view: StridedView<'_, T, Identity> = StridedView::new(
+        src.host_storage()?,
+        src.shape(),
+        src.strides(),
+        src.offset(),
+    )
+    .map_err(|err| crate::Error::backend_failure(op, err))?;
+    let dst_shape = dst.shape().to_vec();
+    let dst_strides = dst.strides().to_vec();
+    let dst_offset = dst.offset();
+    let mut dst_view = StridedViewMut::new(
+        dst.host_storage_mut()?,
+        &dst_shape,
+        &dst_strides,
+        dst_offset,
+    )
+    .map_err(|err| crate::Error::backend_failure(op, err))?;
+    copy_into(&mut dst_view, &src_view).map_err(|err| crate::Error::backend_failure(op, err))
 }
 
 fn zeroed_tensor_from_pool<T>(

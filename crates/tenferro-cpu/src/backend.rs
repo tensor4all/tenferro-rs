@@ -19,8 +19,8 @@ use crate::{
     CpuTopologyError, NumaNodeId, ResolvedCpuPlacement,
 };
 use crate::{
-    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorValue, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut,
+    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorValue, TensorWrite,
+    TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::backend::{
     dot_general_accum_via_temp, grouped_gemm_via_sequential, validate_dot_general_accumulation,
@@ -2640,40 +2640,26 @@ impl TensorBuffer for CpuBackend {
 
 impl<T, R> TensorViewCanonicalization<T, R> for CpuBackend
 where
-    T: Clone + 'static,
+    T: TensorScalar + PoolScalar,
     R: TensorRank,
+    R::Shape: Send + Sync,
+    R::Strides: Send + Sync,
 {
     fn to_contiguous(
         &mut self,
         view: &TypedTensorView<'_, T, R>,
     ) -> crate::Result<TypedTensor<T, R>> {
-        if view.backend_buffer().is_some() {
-            return Err(crate::Error::backend_failure(
-                "CpuBackend::to_contiguous",
-                "CPU backend received a backend tensor view; download the tensor to host before CPU view canonicalization",
-            ));
-        }
-        view.to_contiguous()
+        self.install_with_pool(|buffers| {
+            structural::typed_materialize_view_with_pool(buffers, view, "CpuBackend::to_contiguous")
+        })
     }
 
-    fn copy_from_contiguous(
+    fn copy_into(
         &mut self,
-        src: &TypedTensor<T, R>,
+        src: &TypedTensorView<'_, T, R>,
         dst: &mut TypedTensorViewMut<'_, T, R>,
     ) -> crate::Result<()> {
-        if matches!(src.buffer(), Buffer::Backend(_)) {
-            return Err(crate::Error::backend_failure(
-                "CpuBackend::copy_from_contiguous",
-                "CPU backend received a backend source tensor; download the tensor to host before CPU view copy-back",
-            ));
-        }
-        if dst.backend_buffer().is_some() {
-            return Err(crate::Error::backend_failure(
-                "CpuBackend::copy_from_contiguous",
-                "CPU backend received a backend destination view; download the tensor to host before CPU view copy-back",
-            ));
-        }
-        dst.copy_from_contiguous(src)
+        self.install(|| structural::typed_copy_view_into(src, dst, "CpuBackend::copy_into"))
     }
 }
 
