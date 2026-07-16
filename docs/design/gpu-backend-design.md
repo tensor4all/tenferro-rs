@@ -328,6 +328,14 @@ Same-placement canonicalization is allowed: host views may be copied into host
 compact tensors, and GPU views may be copied into compact tensors on the same
 GPU provider. It is not a transfer mechanism.
 
+The object-safe CUDA runtime boundaries have deliberately narrower current
+contracts. `to_contiguous_read` canonicalizes numeric and complex CUDA reads on
+the active device; `Bool` is an explicit current limitation. `copy_read_into`
+requires a compact column-major source with offset zero covering its full
+allocation. Its destination may be an arbitrary valid non-overlapping CUDA
+view, but source and destination allocations must not alias. Both operations
+preserve CUDA residency and never stage tensor payloads through host memory.
+
 ```text
 use tenferro_gpu::{download_tensor, upload_tensor, CudaBackend};
 use tenferro_tensor::{Tensor, TensorBackend};

@@ -353,16 +353,19 @@ fn cubecl_runtime_materialization_and_copy_stay_device_owned_and_typed() {
             "CUDA TensorStructural must override {method}"
         );
     }
-    for variant in ["F32", "F64", "I32", "I64", "Bool", "C32", "C64"] {
-        assert!(
-            runtime_methods.contains(variant),
-            "CUDA runtime read/copy dispatch must account for {variant}"
-        );
-    }
     assert!(
-        runtime_methods.contains("TensorViewCanonicalization::to_contiguous")
-            && runtime_methods.contains("TensorViewCanonicalization::copy_into"),
-        "CUDA runtime read/copy methods must reuse same-device typed paths"
+        runtime_methods.contains("to_contiguous_view_typed")
+            && runtime_methods.contains("\"CudaBackend::to_contiguous_read\""),
+        "CUDA erased materialization must reuse the typed path with its own operation name"
+    );
+    assert!(
+        runtime_methods.contains("copy_view_to_view_typed")
+            && runtime_methods.contains("\"CudaBackend::copy_read_into\""),
+        "CUDA erased copy must reuse the typed path with its own operation name"
+    );
+    assert!(
+        runtime_methods.contains("unsupported_dtype") && runtime_methods.contains("DType::Bool"),
+        "CUDA Bool erased materialization/copy must remain explicit unsupported paths"
     );
     assert!(
         !runtime_methods.contains("download_tensor(")
@@ -381,6 +384,22 @@ fn cubecl_runtime_materialization_and_copy_stay_device_owned_and_typed() {
     assert!(copy_helper.contains("ensure_view_mut_resident_on_runtime"));
     assert!(copy_helper.contains("Arc::ptr_eq(source_buffer, destination_buffer)"));
     assert!(copy_helper.contains("compact source view covering its full allocation"));
+}
+
+#[test]
+fn cuda_runtime_materialization_limitations_are_documented() {
+    let design = repo_file("docs/design/gpu-backend-design.md");
+    let guide = repo_file("docs/guides/devices-and-gpu.md");
+
+    for document in [&design, &guide] {
+        let rendered_text = document.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(rendered_text.contains("to_contiguous_read"));
+        assert!(rendered_text.contains("copy_read_into"));
+        assert!(rendered_text.contains("offset zero"));
+        assert!(rendered_text.contains("full allocation"));
+        assert!(rendered_text.contains("Bool"));
+        assert!(rendered_text.contains("must not alias"));
+    }
 }
 
 #[test]

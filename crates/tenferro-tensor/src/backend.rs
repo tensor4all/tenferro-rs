@@ -1698,19 +1698,104 @@ pub trait TensorAnalytic {
 /// fn accepts_structural<B: TensorStructural>(_backend: &mut B) {}
 /// ```
 pub trait TensorStructural {
-    /// Materialize an owned tensor or borrowed view into compact storage owned
-    /// by this backend.
+    /// Materialize an owned tensor or borrowed view into fresh compact storage.
     ///
-    /// The conservative default clones owned compact tensors and rejects
-    /// borrowed views because materializing a view requires backend context.
+    /// The result has the input's shape and dtype, uses compact column-major
+    /// layout, and remains in the input's placement. This operation is a
+    /// same-placement canonicalization boundary, never an implicit host/device
+    /// transfer. The conservative default accepts only compact host-owned
+    /// tensors and clones them; it rejects views, backend buffers, and device
+    /// placement because only an owning backend can materialize those safely.
+    ///
+    /// Backend overrides may accept strided views. CUDA accepts numeric and
+    /// complex views on its active device, including arbitrary valid strides,
+    /// but currently reports an explicit unsupported-dtype error for `Bool`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Tensor, TensorRead, TensorStructural};
+    ///
+    /// struct HostDefaults;
+    /// impl TensorStructural for HostDefaults {
+    ///     fn transpose(&mut self, _: &Tensor, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn reshape(&mut self, _: &Tensor, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn broadcast_in_dim(&mut self, _: &Tensor, _: &[usize], _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn cast(&mut self, _: &Tensor, _: DType) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn extract_diagonal(&mut self, _: &Tensor, _: usize, _: usize) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn embed_diagonal(&mut self, _: &Tensor, _: usize, _: usize) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn tril(&mut self, _: &Tensor, _: i64) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn triu(&mut self, _: &Tensor, _: i64) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    /// }
+    ///
+    /// let input = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2])?;
+    /// let mut backend = HostDefaults;
+    /// let structural: &mut dyn TensorStructural = &mut backend;
+    /// let output = structural.to_contiguous_read(TensorRead::from_tensor(&input))?;
+    /// assert_eq!(output.shape(), &[2]);
+    /// assert_eq!(output.as_slice::<i32>()?, &[1, 2]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        Ok(read_tensor("to_contiguous_read", input)?.clone())
+        let input = read_tensor("to_contiguous_read", input)?;
+        if input.is_backend_buffer()
+            || !matches!(
+                input.placement().memory_kind,
+                crate::MemoryKind::PinnedHost | crate::MemoryKind::UnpinnedHost
+            )
+        {
+            return Err(crate::Error::backend_failure(
+                "to_contiguous_read",
+                "default materialization accepts only host-owned tensors; use the storage's owning backend",
+            ));
+        }
+        Ok(input.clone())
     }
 
-    /// Copy a readable tensor or view into caller-provided writable storage.
+    /// Overwrite caller-provided storage from a readable tensor or view.
     ///
-    /// Backends must override this method when they can preserve placement,
-    /// layout, and aliasing guarantees. The default never host-materializes.
+    /// Source and destination must have identical dtype and shape and belong to
+    /// the executing backend's placement. The destination is not resized, and
+    /// every logical destination element is overwritten without reading its old
+    /// value. Source and destination allocations must not alias. Implementations
+    /// must not materialize through host memory or perform an implicit transfer.
+    ///
+    /// CPU accepts arbitrary valid source and destination strides and performs
+    /// no tensor allocation. CUDA currently accepts only a compact column-major
+    /// source with offset zero covering its full allocation; CUDA destinations
+    /// may be arbitrary valid non-overlapping views. CUDA rejects aliased
+    /// allocations and currently reports an explicit unsupported-dtype error
+    /// for `Bool`. The conservative default is explicitly unsupported.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Tensor, TensorRead, TensorStructural, TensorWrite};
+    ///
+    /// struct ConservativeDefaults;
+    /// impl TensorStructural for ConservativeDefaults {
+    ///     fn transpose(&mut self, _: &Tensor, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn reshape(&mut self, _: &Tensor, _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn broadcast_in_dim(&mut self, _: &Tensor, _: &[usize], _: &[usize]) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn cast(&mut self, _: &Tensor, _: DType) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn extract_diagonal(&mut self, _: &Tensor, _: usize, _: usize) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn embed_diagonal(&mut self, _: &Tensor, _: usize, _: usize) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn tril(&mut self, _: &Tensor, _: i64) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    ///     fn triu(&mut self, _: &Tensor, _: i64) -> tenferro_tensor::Result<Tensor> { unimplemented!() }
+    /// }
+    ///
+    /// let src = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2])?;
+    /// let mut dst = Tensor::from_vec_col_major(vec![2], vec![0_i32, 0])?;
+    /// let mut backend = ConservativeDefaults;
+    /// let structural: &mut dyn TensorStructural = &mut backend;
+    /// let error = structural.copy_read_into(
+    ///     TensorRead::from_tensor(&src),
+    ///     TensorWrite::from_tensor(&mut dst),
+    /// ).unwrap_err();
+    /// assert!(error.to_string().contains("unsupported"));
+    /// assert_eq!(dst.as_slice::<i32>()?, &[0, 0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
     fn copy_read_into(&mut self, _src: TensorRead<'_>, _dst: TensorWrite<'_>) -> crate::Result<()> {
         Err(crate::Error::backend_failure(
             "copy_read_into",

@@ -179,7 +179,7 @@ fn view_canonicalization_uses_symmetric_copy_into_contract() {
 }
 
 #[test]
-fn structural_runtime_materialization_is_erased_and_object_safe_without_removing_local_apis() {
+fn structural_runtime_materialization_is_erased_without_removing_local_apis() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let backend = fs::read_to_string(crate_dir.join("src/backend.rs"))
         .expect("tenferro-tensor backend source must be readable");
@@ -203,11 +203,6 @@ fn structural_runtime_materialization_is_erased_and_object_safe_without_removing
             && structural.contains("dst: TensorWrite<'_>"),
         "runtime copy must use erased read/write values"
     );
-    assert!(
-        !structural.contains("where\n        Self: Sized"),
-        "runtime materialization methods must remain callable through dyn BackendSession"
-    );
-
     let types = fs::read_to_string(crate_dir.join("src/types.rs"))
         .expect("tenferro-tensor types source must be readable");
     assert!(types.contains("pub fn to_tensor(&self) -> crate::Result<Tensor>"));

@@ -634,6 +634,75 @@ fn cuda_runtime_copy_is_object_safe_and_updates_strided_destination() {
 }
 
 #[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_copy_rejects_noncompact_source_with_erased_operation_name() {
+    let mut gpu = gpu_backend();
+    let gpu_src = upload(&gpu, &tensor_i32(vec![2, 2], vec![1, 2, 3, 4]));
+    let mut gpu_dst = upload(&gpu, &tensor_i32(vec![2, 2], vec![0, 0, 0, 0]));
+    let Tensor::I32(src) = &gpu_src else {
+        panic!("expected i32 source");
+    };
+    let src_view = src.as_view().transpose_view([1, 0]).unwrap();
+
+    let err = gpu
+        .copy_read_into(
+            TensorRead::from_view(TensorView::I32(src_view)),
+            TensorWrite::from_tensor(&mut gpu_dst),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        Error::InvalidConfig {
+            op: "CudaBackend::copy_read_into",
+            message: "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization".into(),
+        }
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_bool_materialization_reports_intentional_erased_limitation() {
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &tensor_bool(vec![2], vec![true, false]));
+
+    let err = gpu
+        .to_contiguous_read(TensorRead::from_tensor(&gpu_input))
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        Error::BackendFailure {
+            op: "CudaBackend::to_contiguous_read",
+            message: "unsupported dtype Bool".into(),
+        }
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_bool_copy_reports_intentional_erased_limitation() {
+    let mut gpu = gpu_backend();
+    let gpu_src = upload(&gpu, &tensor_bool(vec![2], vec![true, false]));
+    let mut gpu_dst = upload(&gpu, &tensor_bool(vec![2], vec![false, false]));
+
+    let err = gpu
+        .copy_read_into(
+            TensorRead::from_tensor(&gpu_src),
+            TensorWrite::from_tensor(&mut gpu_dst),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        Error::BackendFailure {
+            op: "CudaBackend::copy_read_into",
+            message: "unsupported dtype Bool".into(),
+        }
+    );
+}
+
+#[test]
 #[ignore]
 fn cuda_to_contiguous_preserves_negative_stride_view() {
     let mut gpu = gpu_backend();

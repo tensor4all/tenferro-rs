@@ -1237,6 +1237,40 @@ fn structural_runtime_materialization_rejects_views_by_default() {
 }
 
 #[test]
+fn structural_runtime_materialization_rejects_foreign_backend_storage_by_default() {
+    let input = Tensor::F64(
+        TypedTensor::from_buffer_col_major(
+            vec![2],
+            crate::Buffer::Backend(std::sync::Arc::new(
+                crate::BufferHandle::<f64>::new_with_len(41, 2),
+            )),
+            crate::Placement {
+                memory_kind: crate::MemoryKind::Device,
+                device: Some(crate::DeviceId {
+                    kind: crate::DeviceKind::Gpu(crate::GpuBackendKind::Cuda),
+                    ordinal: 0,
+                }),
+            },
+        )
+        .unwrap(),
+    );
+    let mut backend = DefaultReadBackend::default();
+    let session: &mut dyn BackendSession = &mut backend;
+
+    let err = session
+        .to_contiguous_read(TensorRead::from_tensor(&input))
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure {
+            op: "to_contiguous_read",
+            ref message,
+        } if message.contains("host-owned") && message.contains("owning backend")
+    ));
+}
+
+#[test]
 fn structural_runtime_copy_is_explicitly_unsupported_by_default() {
     let src = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
     let mut dst = Tensor::from_vec_col_major(vec![2], vec![0_i32, 0]).unwrap();

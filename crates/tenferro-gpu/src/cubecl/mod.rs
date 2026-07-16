@@ -4051,7 +4051,8 @@ impl TensorStructural for CudaBackend {
         macro_rules! materialize {
             ($variant:ident, $view:expr) => {{
                 let view = $view;
-                TensorViewCanonicalization::to_contiguous(self, &view).map(Tensor::$variant)
+                self.to_contiguous_view_typed(&view, "CudaBackend::to_contiguous_read")
+                    .map(Tensor::$variant)
             }};
         }
 
@@ -4060,14 +4061,20 @@ impl TensorStructural for CudaBackend {
             TensorRead::Tensor(Tensor::F64(input)) => materialize!(F64, input.as_view()),
             TensorRead::Tensor(Tensor::I32(input)) => materialize!(I32, input.as_view()),
             TensorRead::Tensor(Tensor::I64(input)) => materialize!(I64, input.as_view()),
-            TensorRead::Tensor(Tensor::Bool(input)) => materialize!(Bool, input.as_view()),
+            TensorRead::Tensor(Tensor::Bool(_)) => Err(unsupported_dtype(
+                "CudaBackend::to_contiguous_read",
+                crate::DType::Bool,
+            )),
             TensorRead::Tensor(Tensor::C32(input)) => materialize!(C32, input.as_view()),
             TensorRead::Tensor(Tensor::C64(input)) => materialize!(C64, input.as_view()),
             TensorRead::View(TensorView::F32(input)) => materialize!(F32, input),
             TensorRead::View(TensorView::F64(input)) => materialize!(F64, input),
             TensorRead::View(TensorView::I32(input)) => materialize!(I32, input),
             TensorRead::View(TensorView::I64(input)) => materialize!(I64, input),
-            TensorRead::View(TensorView::Bool(input)) => materialize!(Bool, input),
+            TensorRead::View(TensorView::Bool(_)) => Err(unsupported_dtype(
+                "CudaBackend::to_contiguous_read",
+                crate::DType::Bool,
+            )),
             TensorRead::View(TensorView::C32(input)) => materialize!(C32, input),
             TensorRead::View(TensorView::C64(input)) => materialize!(C64, input),
         }
@@ -4082,11 +4089,27 @@ impl TensorStructural for CudaBackend {
                 match dst {
                     TensorWrite::Tensor(Tensor::$variant(dst)) => {
                         let mut dst = dst.as_view_mut();
-                        TensorViewCanonicalization::copy_into(self, &src, &mut dst)
+                        self.copy_view_to_view_typed(&src, &mut dst, "CudaBackend::copy_read_into")
                     }
                     TensorWrite::View(TensorViewMut::$variant(mut dst)) => {
-                        TensorViewCanonicalization::copy_into(self, &src, &mut dst)
+                        self.copy_view_to_view_typed(&src, &mut dst, "CudaBackend::copy_read_into")
                     }
+                    _ => Err(crate::Error::DTypeMismatch {
+                        op: "CudaBackend::copy_read_into",
+                        lhs: src_dtype,
+                        rhs: dst_dtype,
+                    }),
+                }
+            }};
+        }
+        macro_rules! reject_bool_source {
+            () => {{
+                match dst {
+                    TensorWrite::Tensor(Tensor::Bool(_))
+                    | TensorWrite::View(TensorViewMut::Bool(_)) => Err(unsupported_dtype(
+                        "CudaBackend::copy_read_into",
+                        crate::DType::Bool,
+                    )),
                     _ => Err(crate::Error::DTypeMismatch {
                         op: "CudaBackend::copy_read_into",
                         lhs: src_dtype,
@@ -4101,14 +4124,14 @@ impl TensorStructural for CudaBackend {
             TensorRead::Tensor(Tensor::F64(src)) => copy_source!(F64, src.as_view()),
             TensorRead::Tensor(Tensor::I32(src)) => copy_source!(I32, src.as_view()),
             TensorRead::Tensor(Tensor::I64(src)) => copy_source!(I64, src.as_view()),
-            TensorRead::Tensor(Tensor::Bool(src)) => copy_source!(Bool, src.as_view()),
+            TensorRead::Tensor(Tensor::Bool(_)) => reject_bool_source!(),
             TensorRead::Tensor(Tensor::C32(src)) => copy_source!(C32, src.as_view()),
             TensorRead::Tensor(Tensor::C64(src)) => copy_source!(C64, src.as_view()),
             TensorRead::View(TensorView::F32(src)) => copy_source!(F32, src),
             TensorRead::View(TensorView::F64(src)) => copy_source!(F64, src),
             TensorRead::View(TensorView::I32(src)) => copy_source!(I32, src),
             TensorRead::View(TensorView::I64(src)) => copy_source!(I64, src),
-            TensorRead::View(TensorView::Bool(src)) => copy_source!(Bool, src),
+            TensorRead::View(TensorView::Bool(_)) => reject_bool_source!(),
             TensorRead::View(TensorView::C32(src)) => copy_source!(C32, src),
             TensorRead::View(TensorView::C64(src)) => copy_source!(C64, src),
         }
