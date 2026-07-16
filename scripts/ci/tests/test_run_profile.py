@@ -106,6 +106,23 @@ class RunProfileTests(unittest.TestCase):
         self.assertIn('python3 scripts/ci/run_profile.py "${profile_args[@]}"', source)
         self.assertNotIn("cargo nextest run --workspace", source)
 
+    def test_create_pr_uses_local_gate_instead_of_release_suite(self) -> None:
+        source = (ROOT / "scripts" / "create-pr.sh").read_text()
+        self.assertIn("bash scripts/check-pr-fast.sh", source)
+        self.assertIn("--ci-profile local-gate", source)
+        self.assertIn("python3 scripts/repository-rules-review.py", source)
+        self.assertNotIn("cargo nextest run --workspace --release", source)
+        self.assertNotIn("cargo llvm-cov", source)
+
+    def test_remediation_workflow_uses_local_gate_before_pr(self) -> None:
+        source = (
+            ROOT / "ai" / "contribution-workflows" / "repository-remediation.md"
+        ).read_text()
+        self.assertIn("bash scripts/check-pr-fast.sh", source)
+        self.assertIn("--ci-profile local-gate", source)
+        self.assertNotIn("cargo test --workspace --release", source)
+        self.assertNotIn("cargo llvm-cov --workspace --release", source)
+
 
 if __name__ == "__main__":
     unittest.main()

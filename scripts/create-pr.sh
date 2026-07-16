@@ -47,13 +47,8 @@ ensure_body_file() {
     printf '## Summary\n\n'
     git log --format='- %s' "${BASE_BRANCH}..HEAD" 2>/dev/null || true
     printf '\n## Verification\n\n'
-    printf -- '- `cargo fmt --all --check`\n'
-    printf -- '- `cargo nextest run --workspace --release --no-fail-fast`\n'
-    printf -- '- `cargo test --doc --workspace --release`\n'
-    printf -- '- `cargo llvm-cov nextest --workspace --release --json --output-path coverage.json`\n'
-    printf -- '- `python3 scripts/check-coverage.py coverage.json`\n'
-    printf -- '- `cargo doc --workspace --no-deps`\n'
-    printf -- '- `python3 scripts/check-docs-site.py`\n'
+    printf -- '- `bash scripts/check-pr-fast.sh --coverage-reviewed --ci-profile local-gate`\n'
+    printf -- '- `python3 scripts/repository-rules-review.py --base origin/%s --head HEAD`\n' "$BASE_BRANCH"
     printf '\n## Documentation\n\n'
     printf -- '- Reviewed `README.md`, `docs/design/**`, `docs/api/index.md`, and public rustdoc for consistency.\n'
   } >"$BODY_FILE"
@@ -72,13 +67,14 @@ append_ai_attribution() {
 }
 
 run_required_checks() {
-  cargo fmt --all --check
-  cargo nextest run --workspace --release --no-fail-fast
-  cargo test --doc --workspace --release
-  cargo llvm-cov nextest --workspace --release --json --output-path coverage.json
-  python3 scripts/check-coverage.py coverage.json
-  cargo doc --workspace --no-deps
-  python3 scripts/check-docs-site.py
+  bash scripts/check-pr-fast.sh \
+    --base "origin/${BASE_BRANCH}" \
+    --coverage-reviewed \
+    --ci-profile local-gate
+  python3 scripts/repository-rules-review.py \
+    --base "origin/${BASE_BRANCH}" \
+    --head HEAD \
+    --output-json /tmp/repository-rules-review.json
 }
 
 while [[ $# -gt 0 ]]; do
@@ -137,7 +133,7 @@ require_clean_tree
 
 bash scripts/check-repo-settings.sh --quiet
 
-log "docs gate: review README.md, docs/design/**, docs/api/index.md, and public rustdoc before continuing"
+log "local PR gate: fast debug checks plus repository-rules review"
 run_required_checks
 
 if [[ -z "$TITLE" ]]; then
