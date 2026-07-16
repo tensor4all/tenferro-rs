@@ -263,6 +263,7 @@ pub(crate) fn copy_tensor_read_into(
 fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Tensor> {
     macro_rules! clone_host {
         ($variant:ident, $tensor:expr) => {{
+            structural::validate_cpu_host_placement(op, "source", $tensor.placement())?;
             typed_host_data(op, $tensor)?;
             Ok(Tensor::$variant($tensor.clone()))
         }};

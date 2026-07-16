@@ -51,6 +51,45 @@ fn cpu_runtime_materialization_dispatches_all_dtypes_with_backend_session_parity
 }
 
 #[test]
+fn cpu_runtime_materialization_rejects_owned_host_buffer_with_device_placement() {
+    let mut input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    input.set_placement(opaque_backend_placement());
+    let input = Tensor::F64(input);
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .to_contiguous_read(TensorRead::from_tensor(&input))
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::to_contiguous_read",
+            ref message,
+        } if message.contains("source host placement") && message.contains("Device")
+    ));
+}
+
+#[test]
+fn cpu_runtime_materialization_rejects_host_view_with_device_placement() {
+    let mut input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    input.set_placement(opaque_backend_placement());
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .to_contiguous_read(TensorRead::from_view(TensorView::F64(input.as_view())))
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::to_contiguous_read",
+            ref message,
+        } if message.contains("source host placement") && message.contains("Device")
+    ));
+}
+
+#[test]
 fn cpu_runtime_copy_dispatches_all_dtypes_with_backend_session_parity() {
     macro_rules! assert_copied {
         ($variant:ident, $ty:ty, $values:expr, $zeros:expr) => {{

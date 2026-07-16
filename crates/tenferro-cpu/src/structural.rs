@@ -179,6 +179,7 @@ where
     if view.backend_buffer().is_some() {
         return Err(cpu_backend_buffer_error(op));
     }
+    validate_cpu_host_placement(op, "source", view.placement())?;
     let src: StridedView<'_, T, Identity> = StridedView::new(
         view.host_storage()?,
         view.shape(),
@@ -249,7 +250,7 @@ where
     copy_into(&mut dst_view, &src_view).map_err(|err| crate::Error::backend_failure(op, err))
 }
 
-fn validate_cpu_host_placement(
+pub(crate) fn validate_cpu_host_placement(
     op: &'static str,
     role: &'static str,
     placement: &Placement,
@@ -263,7 +264,7 @@ fn validate_cpu_host_placement(
     Err(crate::Error::backend_failure(
         op,
         format!(
-            "CPU backend copy_into requires {role} host placement, got {:?}",
+            "CPU backend requires {role} host placement for {op}, got {:?}",
             placement.memory_kind
         ),
     ))
