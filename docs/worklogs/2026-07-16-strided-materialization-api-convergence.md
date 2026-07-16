@@ -92,6 +92,32 @@ rationale.
   `crates/tenferro-runtime/src/graph/executor/tests/preflight.rs`; Task 5 did
   not modify that file.
 
+## Backend-Owned Runtime Materialization
+
+- Added object-safe `to_contiguous_read` and `copy_read_into` operations to the
+  backend/session structural contract. CPU implementations enter the configured
+  `CpuContext` and reuse its persistent materialization pool; CUDA implementations
+  retain the same-device, no-hidden-transfer boundary.
+- Removed context-free tensor-sized movement from tensor/view metadata types,
+  including `to_contiguous`, `copy_from_contiguous`, view/value `to_tensor`, and
+  their serial materialization helpers. Metadata-only transforms and scalar
+  indexed access remain available.
+- Added `GraphExecutor::materialize_value` as the public graph-result boundary.
+  `EagerTensor::to_tensor` remains convenient because an eager tensor owns its
+  runtime context, but it now fast-paths compact values and enters that runtime's
+  backend session for lazy views.
+- Propagated the already-active backend session through runtime segment and
+  extension collection, AD concrete-read fallbacks, einsum fallbacks, and FFT
+  extension reads. Materialization therefore occurs before releasing the active
+  session and does not reacquire the backend lock recursively.
+- RED tests showed the missing graph API and showed that eager lazy-view
+  materialization bypassed backend dispatch. Recording backends now increment
+  inside their actual `to_contiguous_read` implementations: compact owned values
+  record zero calls and lazy views record exactly one.
+- Focused release tests passed for `tenferro-tensor`, `tenferro-runtime`,
+  `tenferro-ad`, `tenferro-einsum`, and `tenferro-fft`. Task 6 records the fresh
+  workspace-wide verification evidence.
+
 ## Remaining Risks And Follow-Up
 
 - This repository benchmark records representative behavior but does not make
@@ -99,6 +125,11 @@ rationale.
   suite remains the acceptance evidence for Apple M4 scaling and peer gaps.
 - Einsum remains an intentional ownership exception; future exceptions must
   meet the repository's issue, benchmark, and rationale gate.
+- Recording tests count backend materialization calls but do not separately
+  count session-entry depth. The reviewed implementation propagates one active
+  session through runtime/extension/FFT fallbacks and contains no nested backend
+  acquisition; a dedicated maximum-depth counter remains optional defense in
+  depth if these lock paths are refactored later.
 
 ## Task 5 Quality Follow-Up
 
