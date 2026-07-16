@@ -151,6 +151,7 @@ where
         view.offset(),
     )
     .map_err(|err| crate::Error::backend_failure(op, err))?;
+    // INVARIANT: validated equal-shaped copy_into overwrites every logical output element.
     // SAFETY: copy_into overwrites every logical output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, view.shape()) }?;
     copy_into(&mut out.view_mut(), &src).map_err(|err| crate::Error::backend_failure(op, err))?;
