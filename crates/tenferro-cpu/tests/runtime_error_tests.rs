@@ -318,7 +318,11 @@ fn cpu_reductions_use_common_empty_axes_validation_helpers() {
         ),
     ] {
         let section = source_section(reduction, start, end);
-        let call = format!("{helper}(\"{op}\",");
+        let call = if helper == "reduction_read_empty_axes_noop" {
+            format!("{helper}(buffers, \"{op}\",")
+        } else {
+            format!("{helper}(\"{op}\",")
+        };
         assert!(
             section.contains(&call),
             "{start} should route empty-axis handling through {helper}"

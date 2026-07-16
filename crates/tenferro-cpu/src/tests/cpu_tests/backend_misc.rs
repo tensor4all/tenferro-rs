@@ -612,7 +612,7 @@ fn cpu_view_materialization_uses_pool_aware_strided_copy() {
         .split_once("pub(crate) fn typed_materialize_view_with_pool")
         .unwrap()
         .1
-        .split_once("fn zeroed_tensor_from_pool")
+        .split_once("pub(crate) fn typed_copy_view_into")
         .unwrap()
         .0;
 
@@ -713,7 +713,7 @@ fn cpu_structural_read_transpose_explicit_stride_exact_output() {
 #[test]
 fn cpu_structural_read_reshape_explicit_stride_exact_output() {
     let mut backend = CpuBackend::new();
-    let storage = (0..10).map(|value| value as i32).collect::<Vec<_>>();
+    let storage = (0..10).collect::<Vec<i32>>();
     let view = tenferro_tensor::TypedTensorView::from_slice([2, 2], [3, -1], 5, &storage).unwrap();
 
     let output = backend
@@ -1807,14 +1807,20 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         TensorDot::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true).unwrap();
     assert_eq!(both_folded.as_slice::<f64>().unwrap(), &[6.0]);
 
-    let read_views = TensorDot::dot_general_read(
+    let read_views_err = TensorDot::dot_general_read(
         &mut backend,
         TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
         TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
         &config,
     )
-    .unwrap();
-    assert_eq!(read_views.as_slice::<f64>().unwrap(), &[6.0]);
+    .unwrap_err();
+    assert!(matches!(
+        read_views_err,
+        crate::Error::BackendFailure {
+            op: "to_contiguous_read",
+            ref message,
+        } if message.contains("borrowed tensor views")
+    ));
 
     let rhs_folded = BackendCachedDot::dot_general_with_conj_cached(
         &mut backend,
@@ -1863,14 +1869,20 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     )
     .unwrap();
     assert_eq!(exec_read_tensor.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_read_views = TensorDot::dot_general_read(
+    let exec_read_views_err = TensorDot::dot_general_read(
         &mut exec,
         TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
         TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
         &config,
     )
-    .unwrap();
-    assert_eq!(exec_read_views.as_slice::<f64>().unwrap(), &[6.0]);
+    .unwrap_err();
+    assert!(matches!(
+        exec_read_views_err,
+        crate::Error::BackendFailure {
+            op: "to_contiguous_read",
+            ref message,
+        } if message.contains("borrowed tensor views")
+    ));
     let exec_no_conj =
         TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, false, false).unwrap();
     assert_eq!(exec_no_conj.as_slice::<f64>().unwrap(), &[6.0]);

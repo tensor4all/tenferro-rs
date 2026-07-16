@@ -237,13 +237,17 @@ fn macro_literal_identifiers(tokens: &[String]) -> BTreeSet<String> {
         let Some(end) = token_tree_end(tokens, open) else {
             continue;
         };
-        identifiers.extend(tokens[open + 1..end].iter().filter_map(|token| {
-            (token
-                .as_bytes()
-                .first()
-                .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_'))
-            .then(|| token.clone())
-        }));
+        identifiers.extend(
+            tokens[open + 1..end]
+                .iter()
+                .filter(|token| {
+                    token
+                        .as_bytes()
+                        .first()
+                        .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
+                })
+                .cloned(),
+        );
     }
     identifiers
 }

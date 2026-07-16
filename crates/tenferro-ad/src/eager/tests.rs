@@ -20,7 +20,7 @@ use tenferro_ops::{ShapeExtent, ShapeGuardContext, SymDim, TensorMeta};
 use tenferro_runtime::ExtensionCacheLimits;
 use tenferro_runtime::{Error, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime};
 use tenferro_tensor::Tensor;
-use tenferro_tensor::{DType, DotGeneralConfig, TensorBackend};
+use tenferro_tensor::{DType, DotGeneralConfig, TensorBackend, TensorElementwise};
 use tenferro_tensor::{TensorFusion, TensorRead};
 use tidu::eager::BackwardExecutor;
 use tidu::{linearize, ADKey};
@@ -82,10 +82,19 @@ fn eager_runtime_synchronize_reports_poisoned_backend_lock() {
 
 #[test]
 fn eager_materialization_uses_backend() {
+    let mut cpu_backend = EagerBackend::cpu(CpuBackend::new());
+    assert!(format!("{cpu_backend:?}").contains("Cpu"));
+    cpu_backend.synchronize().unwrap();
+
     let materializations = Arc::new(AtomicUsize::new(0));
-    let ctx = Arc::new(EagerRuntime::from_backend(EagerBackend::recording_cpu(
-        Arc::clone(&materializations),
-    )));
+    let mut backend = EagerBackend::recording_cpu(Arc::clone(&materializations));
+    assert!(format!("{backend:?}").contains("Recording"));
+    backend.synchronize().unwrap();
+    let probe = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let sum = TensorElementwise::add(&mut backend, &probe, &probe).unwrap();
+    assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0]);
+    assert_eq!(materializations.load(Ordering::Relaxed), 0);
+    let ctx = Arc::new(EagerRuntime::from_backend(backend));
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
         Arc::clone(&ctx),

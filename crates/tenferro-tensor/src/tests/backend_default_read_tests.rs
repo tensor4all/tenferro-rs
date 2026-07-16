@@ -64,7 +64,7 @@ fn materialize_host_view<T: TensorScalar>(view: TypedTensorView<'_, T>) -> crate
     let mut data = Vec::with_capacity(shape.iter().product());
     let mut error = None;
     for_each_index_col_major(&shape, |index| match view.get(index) {
-        Some(value) => data.push(value.clone()),
+        Some(value) => data.push(*value),
         None => {
             error = Some(crate::Error::backend_failure(
                 "to_contiguous_read",
