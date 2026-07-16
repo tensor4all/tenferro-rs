@@ -175,3 +175,22 @@ rationale.
   a heavyweight parsing/compiler dependency.
 - Final focused verification passed for the exact keyed ownership contract,
   recursive public-surface/macro guard, and scanner fixture.
+
+## Final Verification
+
+- `cargo fmt --all --check`: passed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: passed.
+- `cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings`: passed.
+- `cargo test --workspace --release`: passed, including workspace doctests.
+- `cargo doc --workspace --no-deps`: passed.
+- `python3 scripts/check-docs-site.py`: passed for all 13 workspace library crates.
+- `cargo llvm-cov --no-clean --workspace --release --json ...` completed successfully;
+  `scripts/check-coverage.py` reported 159/159 files passing (3 excluded).
+- `cargo bench -p tenferro-cpu --bench view_materialization --no-run`: passed.
+- `cargo check -p tenferro-gpu --features webgpu`: passed.
+- `scripts/repository-rules-review.py --base origin/main --head HEAD`: pass with no findings.
+- `git diff --check origin/main...HEAD`: passed and the worktree was clean after the final commits.
+
+The repository benchmark is intentionally non-asserting. Comparative Apple M4
+measurements in the external `tenferro-benchmark` suite remain a separate
+follow-up and are not represented as evidence produced by this branch.
