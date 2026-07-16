@@ -3,8 +3,6 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -258,8 +256,6 @@ pub struct EagerRuntime {
     value_records: Mutex<HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>,
     value_ptr_records: Mutex<HashMap<usize, Weak<EagerTensorRecord>>>,
     ad_transform_cache: Arc<AdTransformCache>,
-    #[cfg(test)]
-    recorded_to_contiguous_reads: AtomicUsize,
 }
 
 impl fmt::Debug for EagerRuntime {
@@ -385,14 +381,7 @@ impl EagerRuntime {
             value_records: Mutex::new(HashMap::new()),
             value_ptr_records: Mutex::new(HashMap::new()),
             ad_transform_cache,
-            #[cfg(test)]
-            recorded_to_contiguous_reads: AtomicUsize::new(0),
         }
-    }
-
-    #[cfg(test)]
-    fn recorded_to_contiguous_reads(&self) -> usize {
-        self.recorded_to_contiguous_reads.load(Ordering::Relaxed)
     }
 
     /// Create a shared CPU eager execution context.
@@ -758,12 +747,7 @@ impl EagerRuntime {
 
         let mut backend = self.lock_backend()?;
         backend
-            .with_backend_session(|exec| {
-                #[cfg(test)]
-                self.recorded_to_contiguous_reads
-                    .fetch_add(1, Ordering::Relaxed);
-                exec.to_contiguous_read(value.tensor_read())
-            })
+            .with_backend_session(|exec| exec.to_contiguous_read(value.tensor_read()))
             .map_err(Error::from)
     }
 

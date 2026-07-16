@@ -2,7 +2,10 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::hash::Hasher;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 use computegraph::graph::{Graph, GraphBuilder};
@@ -79,7 +82,10 @@ fn eager_runtime_synchronize_reports_poisoned_backend_lock() {
 
 #[test]
 fn eager_materialization_uses_backend() {
-    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let materializations = Arc::new(AtomicUsize::new(0));
+    let ctx = Arc::new(EagerRuntime::from_backend(EagerBackend::recording_cpu(
+        Arc::clone(&materializations),
+    )));
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
         Arc::clone(&ctx),
@@ -88,12 +94,12 @@ fn eager_materialization_uses_backend() {
 
     let compact = x.to_tensor().unwrap();
     assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
-    assert_eq!(ctx.recorded_to_contiguous_reads(), 0);
+    assert_eq!(materializations.load(Ordering::Relaxed), 0);
 
     let view = x.transpose(&[1, 0]).unwrap();
     let compact = view.to_tensor().unwrap();
     assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
-    assert_eq!(ctx.recorded_to_contiguous_reads(), 1);
+    assert_eq!(materializations.load(Ordering::Relaxed), 1);
 }
 
 #[test]
