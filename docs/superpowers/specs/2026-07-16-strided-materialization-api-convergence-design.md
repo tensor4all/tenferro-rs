@@ -30,6 +30,14 @@ Public APIs with the same materialization semantics must converge on one
 backend-aware implementation. Tenferro will not retain a context-free serial
 fallback under an equivalent public name.
 
+This boundary is required even for host-only CPU data. Fast materialization is
+not only a choice of copy loop: it requires ownership of reusable memory
+buffers, uninitialized destinations that will be fully overwritten, the
+configured Rayon thread pool, nested-execution safety, and serial/parallel
+threshold policy. Those resources and policies belong to `CpuBackend` and
+`CpuContext`; a context-free tensor method would either bypass them or create a
+second hidden/global execution policy.
+
 Einsum is the explicit exception to the general CPU delegation rule. Tenferro
 keeps its optimized einsum/dot-general preparation and provider integration.
 New exceptions require an accepted issue, comparative benchmark evidence, and
@@ -133,6 +141,12 @@ by an existing `strided-rs` primitive, the bulk traversal must use that
 primitive. If the primitive is missing and the operation is generally useful,
 the preferred sequence is to add it to `strided-rs` first and then consume it
 from tenferro.
+
+Using a `strided-rs` function outside a backend execution scope does not satisfy
+this contract. CPU tensor-sized work must enter through the backend so the
+operation uses the backend's persistent `BufferPool` and configured
+`CpuContext`/Rayon policy. Public free functions or context-free methods must
+not allocate throwaway pools or run on Rayon's ambient global pool.
 
 ## Scope
 

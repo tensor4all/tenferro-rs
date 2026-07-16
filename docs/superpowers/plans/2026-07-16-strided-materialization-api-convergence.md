@@ -374,6 +374,14 @@ broadcast, map, zip-map, and axis reduction delegate to `strided-rs`; record
 einsum as the benchmark-backed exception. Require context-free materialization
 method names to be absent from `tenferro-tensor` source.
 
+The source contract must also require the rule rationale: CPU materialization
+enters through `CpuBackend` because high-performance execution needs its
+persistent `BufferPool`, fully-overwritten uninitialized output allocation,
+configured `CpuContext` Rayon pool, nested-execution safety, and
+serial/parallel threshold policy. Merely calling `strided-rs` from a
+context-free method or on Rayon's ambient global pool is explicitly
+non-compliant.
+
 - [ ] **Step 2: Verify RED**
 
 ```bash
@@ -386,7 +394,10 @@ Expected: FAIL until rules and removed-surface assertions are updated.
 
 Document the ownership table from the approved design, the backend-required
 materialization API, CPU threading/pool behavior, and the no-hidden-transfer
-contract. Remove examples using context-free `to_contiguous`/`to_tensor`.
+contract. Explain why CPU host copies still require backend ownership: memory
+reuse and thread policy are execution resources, not tensor metadata. Ban
+throwaway pools and ambient-global-Rayon execution for public tensor-sized CPU
+operations. Remove examples using context-free `to_contiguous`/`to_tensor`.
 
 - [ ] **Step 4: Add a non-asserting Criterion benchmark**
 
