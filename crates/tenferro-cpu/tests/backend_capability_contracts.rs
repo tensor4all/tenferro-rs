@@ -207,6 +207,43 @@ fn cpu_public_ops_require_backend_owner() {
 }
 
 #[test]
+fn strided_kernel_ownership_requires_backend_execution_resources() {
+    let rules = include_str!("../../../REPOSITORY_RULES.md");
+
+    for required in [
+        "CPU affine-strided copy, permutation, broadcast, map, zip-map, and axis reduction",
+        "delegate to `strided-rs`",
+        "Einsum is the benchmark-backed tenferro exception",
+        "persistent `BufferPool`",
+        "fully-overwritten uninitialized output",
+        "configured `CpuContext` Rayon pool",
+        "nested-execution safety",
+        "serial/parallel threshold",
+        "ambient global Rayon pool",
+        "throwaway pool",
+        "execution resources, not tensor metadata",
+    ] {
+        assert!(
+            rules.contains(required),
+            "REPOSITORY_RULES.md must contain ownership contract text: {required}"
+        );
+    }
+
+    let tensor_types = include_str!("../../tenferro-tensor/src/types.rs");
+    for forbidden in [
+        "pub fn to_contiguous(&self)",
+        "pub fn copy_from_contiguous",
+        "pub fn to_tensor(&self) -> crate::Result<Tensor>",
+        "fn materialize_typed_view_col_major",
+    ] {
+        assert!(
+            !tensor_types.contains(forbidden),
+            "context-free tensor materialization surface/helper remains: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn install_pool_has_no_placeholder_construction_or_gemm_descriptor_clones() {
     let backend_source = include_str!("../src/backend.rs");
     let buffer_pool_source = include_str!("../src/buffer_pool.rs");

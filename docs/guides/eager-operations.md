@@ -122,6 +122,33 @@ Owned tensors stay compact column-major. Metadata-only strided views live on
 storage may copy a view into compact storage on the same device, but they do
 not silently upload CPU tensors or download CUDA tensors.
 
+## Materializing metadata-only views
+
+View transforms such as transpose and slice only change layout metadata. When
+an owned compact tensor is required, materialize through the active backend so
+the copy uses that backend's memory pool and thread policy:
+
+```rust
+use tenferro_cpu::CpuBackend;
+use tenferro_tensor::{TensorViewCanonicalization, TypedTensor};
+
+let tensor = TypedTensor::<f64>::from_vec_col_major(
+    vec![2, 3],
+    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+).unwrap();
+let view = tensor.as_view().transpose_view([1, 0]).unwrap();
+let mut backend = CpuBackend::new();
+let compact = backend.to_contiguous(&view).unwrap();
+
+assert_eq!(compact.shape(), &[3, 2]);
+assert_eq!(compact.as_slice().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+```
+
+The same rule applies to caller-owned destinations through the backend
+canonicalization capability. Backend-neutral tensor and view types own layout
+metadata, not CPU memory reuse or Rayon configuration. Same-placement
+canonicalization never performs a hidden CPU/GPU transfer.
+
 ## Arithmetic
 
 ```rust

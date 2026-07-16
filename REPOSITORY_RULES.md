@@ -574,6 +574,11 @@ Tests follow implementation ownership.
 - No naive CPU loop fallbacks. CPU tensor kernels must use optimized
   implementations unless the operation is explicitly listed as an exception
   below.
+- CPU affine-strided copy, permutation, broadcast, map, zip-map, and axis reduction
+  delegate to `strided-rs`. Tenferro owns tensor semantics, validation, dtype
+  dispatch, placement checks, error translation, execution contexts, and
+  reusable output storage; it does not duplicate the tensor-sized affine
+  traversal.
 - Required CPU implementations by operation category:
 
   | Category | Required implementation |
@@ -584,6 +589,36 @@ Tests follow implementation ownership.
   | GEMM (`dot_general`) | faer (`cpu-faer`) or BLAS (`cpu-blas`) |
   | Linalg (`svd`, `qr`, `cholesky`, `eigh`, `solve`) | faer (`cpu-faer`) or LAPACK (`cpu-blas`) |
 
+- The ownership and overlap boundary is:
+
+  | Operation or responsibility | `strided-rs` owner | tenferro owner |
+  |---|---|---|
+  | Affine-strided copy and permutation | Bulk `copy_into` traversal and serial/parallel kernel selection | Shape, stride, offset, reachable-range, dtype, placement, and destination validation; backend-scoped allocation and error mapping |
+  | Broadcast | Zero-stride broadcast views and bulk copy/map traversal | Broadcast dimension semantics, output shape, placement, and allocation |
+  | Unary map and binary zip-map | Affine iteration, tiling, and parallel execution | Operation semantics, dtype dispatch/promotion, capability checks, and errors |
+  | Axis reduction | Per-axis strided reduction kernels | Multi-axis orchestration, axis validation, identities, dtype policy, and output wrapping |
+  | Gather/scatter and indirect indexing | No ownership until a suitable general primitive exists | Indirect-index semantics and current dedicated kernels |
+  | Einsum/dot-general | Reusable strided primitives may be consumed where they fit | Planning, optimized preparation, provider integration, and benchmark accountability |
+
+- Ownership priority is lower-layer first: when a CPU operation can be
+  expressed as metadata preparation followed by an existing `strided-rs`
+  primitive, tenferro must delegate the bulk traversal. If a generally useful
+  primitive is missing, add it to `strided-rs` first and then consume it from
+  tenferro. A tenferro-owned traversal is allowed only for semantics outside
+  the affine-strided primitive model or for an explicitly approved,
+  benchmark-backed exception. Einsum is the benchmark-backed tenferro exception;
+  new exceptions require an accepted issue, comparative benchmark evidence,
+  and a recorded ownership rationale.
+- Calling a `strided-rs` primitive is necessary but not sufficient. Public
+  tensor-sized CPU work must enter through `CpuBackend` and its configured
+  execution scope. High-performance materialization needs the backend's
+  persistent `BufferPool`, fully-overwritten uninitialized output allocation,
+  configured `CpuContext` Rayon pool, nested-execution safety, and
+  serial/parallel threshold policy. A context-free `strided-rs` call, a
+  throwaway pool, or Rayon's ambient global Rayon pool is non-compliant.
+  Memory reuse and thread policy are execution resources, not tensor metadata;
+  backend-neutral tensor/view types therefore expose metadata-only layout
+  transforms and do not own data-moving convenience methods.
 - Exceptions with dedicated implementations are `reshape` (metadata-only),
   `embed_diagonal`, index-dependent triangular masks (`tril`/`triu`), and
   indexing ops such as gather, scatter, slice, pad, concatenate, and reverse.
