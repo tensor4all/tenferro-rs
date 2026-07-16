@@ -1,3 +1,7 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     BackendSession, BackendSessionHost, TensorAnalytic, TensorBackend, TensorBuffer,
@@ -23,6 +27,160 @@ fn rust_function_body<'a>(source: &'a str, function: &str) -> Option<&'a str> {
         }
     }
     None
+}
+
+fn rust_tokens(source: &str) -> Vec<String> {
+    let bytes = source.as_bytes();
+    let mut tokens = Vec::new();
+    let mut cursor = 0usize;
+    while cursor < bytes.len() {
+        if let Some((content_start, hashes)) = raw_string_open(bytes, cursor) {
+            cursor = content_start;
+            while cursor < bytes.len() {
+                if bytes[cursor] == b'"'
+                    && bytes
+                        .get(cursor + 1..cursor + 1 + hashes)
+                        .is_some_and(|suffix| suffix.iter().all(|&byte| byte == b'#'))
+                {
+                    cursor += 1 + hashes;
+                    break;
+                }
+                cursor += 1;
+            }
+        } else if bytes[cursor..].starts_with(b"//") {
+            cursor += 2;
+            while cursor < bytes.len() && bytes[cursor] != b'\n' {
+                cursor += 1;
+            }
+        } else if bytes[cursor..].starts_with(b"/*") {
+            cursor += 2;
+            let mut depth = 1usize;
+            while cursor < bytes.len() && depth > 0 {
+                if bytes[cursor..].starts_with(b"/*") {
+                    depth += 1;
+                    cursor += 2;
+                } else if bytes[cursor..].starts_with(b"*/") {
+                    depth -= 1;
+                    cursor += 2;
+                } else {
+                    cursor += 1;
+                }
+            }
+        } else if bytes[cursor] == b'"' {
+            cursor += 1;
+            while cursor < bytes.len() {
+                if bytes[cursor] == b'\\' {
+                    cursor = (cursor + 2).min(bytes.len());
+                } else if bytes[cursor] == b'"' {
+                    cursor += 1;
+                    break;
+                } else {
+                    cursor += 1;
+                }
+            }
+        } else if bytes[cursor] == b'\''
+            && ((cursor + 2 < bytes.len() && bytes[cursor + 2] == b'\'')
+                || (cursor + 3 < bytes.len()
+                    && bytes[cursor + 1] == b'\\'
+                    && bytes[cursor + 3] == b'\''))
+        {
+            cursor += if bytes[cursor + 1] == b'\\' { 4 } else { 3 };
+        } else if bytes[cursor].is_ascii_alphabetic() || bytes[cursor] == b'_' {
+            let start = cursor;
+            cursor += 1;
+            while cursor < bytes.len()
+                && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+            {
+                cursor += 1;
+            }
+            tokens.push(source[start..cursor].to_string());
+        } else if bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        } else {
+            tokens.push(char::from(bytes[cursor]).to_string());
+            cursor += 1;
+        }
+    }
+    tokens
+}
+
+fn raw_string_open(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
+    let mut cursor = if bytes.get(start..start + 2) == Some(b"br") {
+        start + 2
+    } else if bytes.get(start) == Some(&b'r') {
+        start + 1
+    } else {
+        return None;
+    };
+    let hashes_start = cursor;
+    while bytes.get(cursor) == Some(&b'#') {
+        cursor += 1;
+    }
+    (bytes.get(cursor) == Some(&b'"')).then_some((cursor + 1, cursor - hashes_start))
+}
+
+fn function_names(tokens: &[String]) -> BTreeSet<String> {
+    tokens
+        .windows(2)
+        .filter(|window| window[0] == "fn")
+        .map(|window| window[1].clone())
+        .collect()
+}
+
+fn public_function_names(tokens: &[String]) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for (index, token) in tokens.iter().enumerate() {
+        if token != "pub" || tokens.get(index + 1).is_some_and(|next| next == "(") {
+            continue;
+        }
+        let mut cursor = index + 1;
+        while tokens.get(cursor).is_some_and(|modifier| {
+            matches!(modifier.as_str(), "async" | "const" | "unsafe" | "extern")
+        }) {
+            cursor += 1;
+        }
+        if tokens.get(cursor).is_some_and(|token| token == "fn") {
+            if let Some(name) = tokens.get(cursor + 1) {
+                names.insert(name.clone());
+            }
+        }
+    }
+    names
+}
+
+fn rust_source_files(root: &Path) -> Vec<PathBuf> {
+    fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(directory).expect("Rust source directory must be readable") {
+            let path = entry.expect("Rust source entry must be readable").path();
+            if path.is_dir() {
+                visit(&path, files);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                files.push(path);
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    visit(root, &mut files);
+    files.sort();
+    files
+}
+
+fn ownership_contract(rules: &str) -> BTreeMap<&str, &str> {
+    const BEGIN: &str = "<!-- TENFERRO_CPU_STRIDED_OWNERSHIP_CONTRACT_BEGIN -->";
+    const END: &str = "<!-- TENFERRO_CPU_STRIDED_OWNERSHIP_CONTRACT_END -->";
+    let block = rules
+        .split_once(BEGIN)
+        .expect("CPU strided ownership contract begin marker must exist")
+        .1
+        .split_once(END)
+        .expect("CPU strided ownership contract end marker must exist")
+        .0;
+    block
+        .lines()
+        .filter_map(|line| line.trim().split_once('='))
+        .map(|(key, value)| (key.trim(), value.trim()))
+        .collect()
 }
 
 fn accepts_backend_capabilities<B>()
@@ -209,38 +367,109 @@ fn cpu_public_ops_require_backend_owner() {
 #[test]
 fn strided_kernel_ownership_requires_backend_execution_resources() {
     let rules = include_str!("../../../REPOSITORY_RULES.md");
-
-    for required in [
-        "CPU affine-strided copy, permutation, broadcast, map, zip-map, and axis reduction",
-        "delegate to `strided-rs`",
-        "Einsum is the benchmark-backed tenferro exception",
-        "persistent `BufferPool`",
-        "fully-overwritten uninitialized output",
-        "configured `CpuContext` Rayon pool",
-        "nested-execution safety",
-        "serial/parallel threshold",
-        "ambient global Rayon pool",
-        "throwaway pool",
-        "execution resources, not tensor metadata",
+    let contract = ownership_contract(rules);
+    assert_eq!(
+        contract.get("schema"),
+        Some(&"tenferro.cpu-strided-ownership.v1")
+    );
+    assert_eq!(contract.get("affine-kernel-owner"), Some(&"strided-rs"));
+    assert_eq!(
+        contract.get("einsum-owner"),
+        Some(&"tenferro:benchmark-backed-exception")
+    );
+    assert_eq!(contract.get("execution-entry"), Some(&"CpuBackend"));
+    for vocabulary in [
+        "copy",
+        "permutation",
+        "broadcast",
+        "map",
+        "zip-map",
+        "axis-reduction",
+        "BufferPool",
+        "uninitialized-full-overwrite",
+        "CpuContext",
+        "Rayon",
+        "nested-execution",
+        "serial-parallel-threshold",
+        "context-free-strided-call",
+        "throwaway-pool",
+        "ambient-global-Rayon",
+        "execution-not-metadata",
     ] {
         assert!(
-            rules.contains(required),
-            "REPOSITORY_RULES.md must contain ownership contract text: {required}"
+            contract.values().any(|value| value.contains(vocabulary)),
+            "CPU strided ownership contract lacks essential vocabulary: {vocabulary}"
         );
     }
+}
 
-    let tensor_types = include_str!("../../tenferro-tensor/src/types.rs");
+#[test]
+fn tensor_public_surface_has_no_context_free_materialization_api() {
+    let tensor_source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tenferro-tensor/src");
+    let files = rust_source_files(&tensor_source_root);
+    assert!(
+        files.iter().any(|path| path.ends_with("backend.rs"))
+            && files.iter().any(|path| path.ends_with("types.rs")),
+        "source scan must cover the complete tenferro-tensor source tree"
+    );
+
+    let mut public_functions = BTreeMap::<String, Vec<PathBuf>>::new();
+    let mut all_functions = BTreeMap::<String, Vec<PathBuf>>::new();
+    for path in files {
+        let source = fs::read_to_string(&path).expect("Rust source file must be readable");
+        let tokens = rust_tokens(&source);
+        for name in public_function_names(&tokens) {
+            public_functions.entry(name).or_default().push(path.clone());
+        }
+        for name in function_names(&tokens) {
+            all_functions.entry(name).or_default().push(path.clone());
+        }
+    }
+
+    for forbidden in ["to_contiguous", "copy_from_contiguous", "to_tensor"] {
+        assert!(
+            !public_functions.contains_key(forbidden),
+            "context-free public materialization function `{forbidden}` remains in {:?}",
+            public_functions.get(forbidden)
+        );
+    }
     for forbidden in [
-        "pub fn to_contiguous(&self)",
-        "pub fn copy_from_contiguous",
-        "pub fn to_tensor(&self) -> crate::Result<Tensor>",
-        "fn materialize_typed_view_col_major",
+        "materialize_view_buffer_col_major",
+        "materialize_typed_view_col_major",
     ] {
         assert!(
-            !tensor_types.contains(forbidden),
-            "context-free tensor materialization surface/helper remains: {forbidden}"
+            !all_functions.contains_key(forbidden),
+            "context-free materialization helper `{forbidden}` remains in {:?}",
+            all_functions.get(forbidden)
         );
     }
+}
+
+#[test]
+fn rust_public_function_scan_is_format_and_literal_independent() {
+    let fixture = r####"
+        // pub fn to_tensor(&self) {}
+        const DECOY: &str = "pub fn to_contiguous(&self)";
+        const RAW_DECOY: &str = r###"pub fn copy_from_contiguous() { "still raw" }"###;
+        pub(crate) fn to_tensor() {}
+        pub
+        async
+        fn relocated_materializer() {}
+        fn private_helper() {}
+    "####;
+    let tokens = rust_tokens(fixture);
+    assert_eq!(
+        public_function_names(&tokens),
+        BTreeSet::from(["relocated_materializer".to_string()])
+    );
+    assert_eq!(
+        function_names(&tokens),
+        BTreeSet::from([
+            "private_helper".to_string(),
+            "relocated_materializer".to_string(),
+            "to_tensor".to_string(),
+        ])
+    );
 }
 
 #[test]

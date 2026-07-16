@@ -600,6 +600,21 @@ Tests follow implementation ownership.
   | Gather/scatter and indirect indexing | No ownership until a suitable general primitive exists | Indirect-index semantics and current dedicated kernels |
   | Einsum/dot-general | Reusable strided primitives may be consumed where they fit | Planning, optimized preparation, provider integration, and benchmark accountability |
 
+<!-- TENFERRO_CPU_STRIDED_OWNERSHIP_CONTRACT_BEGIN -->
+
+  ```text
+  schema = tenferro.cpu-strided-ownership.v1
+  affine-kernel-owner = strided-rs
+  affine-kernels = copy,permutation,broadcast,map,zip-map,axis-reduction
+  einsum-owner = tenferro:benchmark-backed-exception
+  execution-entry = CpuBackend
+  execution-resources = persistent-BufferPool,uninitialized-full-overwrite,CpuContext-Rayon,nested-execution,serial-parallel-threshold
+  noncompliant = context-free-strided-call,throwaway-pool,ambient-global-Rayon
+  resource-classification = memory-reuse-and-thread-policy:execution-not-metadata
+  ```
+
+<!-- TENFERRO_CPU_STRIDED_OWNERSHIP_CONTRACT_END -->
+
 - Ownership priority is lower-layer first: when a CPU operation can be
   expressed as metadata preparation followed by an existing `strided-rs`
   primitive, tenferro must delegate the bulk traversal. If a generally useful

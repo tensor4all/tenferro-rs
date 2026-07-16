@@ -99,3 +99,32 @@ rationale.
   suite remains the acceptance evidence for Apple M4 scaling and peer gaps.
 - Einsum remains an intentional ownership exception; future exceptions must
   meet the repository's issue, benchmark, and rationale gate.
+
+## Task 5 Quality Follow-Up
+
+- Replaced exact prose assertions with the versioned
+  `TENFERRO_CPU_STRIDED_OWNERSHIP_CONTRACT` key/value block. The source test
+  verifies stable owner/resource fields and only the vocabulary necessary to
+  preserve the policy; surrounding explanatory prose may be edited freely.
+- Replaced the single-file formatting-sensitive API check with a recursive scan
+  of every Rust file under `tenferro-tensor/src`. A small lexer discards line
+  comments, nested block comments, string literals, and character literals,
+  then identifies `pub fn` signatures independent of whitespace and modifiers.
+  It rejects the removed public method names wherever they relocate while
+  allowing backend trait methods (which have no inherent `pub fn` signature),
+  and rejects the named private serial helpers anywhere in the source tree.
+  A fixture guards formatting, comment/string decoys, restricted visibility,
+  public modifiers, and private-helper detection. Compile-fail coverage is not
+  used because standard integration tests cannot reliably depend on a missing
+  method.
+- Benchmark cases now retain canonical source shape, source strides, and
+  permutation. Exact expected offsets are computed directly from those inputs,
+  independently of the already-permuted view metadata used by the operation.
+- Pre-timing materialization is confined to `verify_case_once`; its checked
+  output is dropped when the helper returns, before Criterion begins timing the
+  allocation-inclusive operation.
+- Follow-up verification passed for the structured ownership test, the complete
+  recursive public-surface guard, its lexer fixture, and
+  `cargo bench -p tenferro-cpu --bench view_materialization --no-run`. Scoped
+  `rustfmt --check` and `git diff --check` also passed; no broader checks were
+  run while Task 4B shared-tree edits were active.

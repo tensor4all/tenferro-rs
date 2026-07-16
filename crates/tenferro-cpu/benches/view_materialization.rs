@@ -14,8 +14,9 @@ const TN_24D_SCATTERED_STRIDES: [isize; 24] = [
 struct MaterializationCase {
     name: &'static str,
     storage: Vec<f64>,
-    shape: Vec<usize>,
-    strides: Vec<isize>,
+    source_shape: Vec<usize>,
+    source_strides: Vec<isize>,
+    permutation: Option<Vec<usize>>,
     offset: isize,
 }
 
@@ -78,15 +79,12 @@ fn make_case(
 ) -> MaterializationCase {
     let storage_len = storage_len(&source_shape, &source_strides, 0);
     let storage = (0..storage_len).map(|index| index as f64).collect();
-    let (shape, strides) = perm.map_or_else(
-        || (source_shape.clone(), source_strides.clone()),
-        |perm| permute_layout(&source_shape, &source_strides, perm),
-    );
     MaterializationCase {
         name,
         storage,
-        shape,
-        strides,
+        source_shape,
+        source_strides,
+        permutation: perm.map(<[usize]>::to_vec),
         offset: 0,
     }
 }
@@ -128,33 +126,70 @@ fn build_case(spec: MaterializationSpec) -> MaterializationCase {
     }
 }
 
+fn output_shape(case: &MaterializationCase) -> Vec<usize> {
+    case.permutation.as_ref().map_or_else(
+        || case.source_shape.clone(),
+        |permutation| {
+            permutation
+                .iter()
+                .map(|&source_axis| case.source_shape[source_axis])
+                .collect()
+        },
+    )
+}
+
+fn expected_physical_offset(case: &MaterializationCase, output_index: &[usize]) -> isize {
+    output_index
+        .iter()
+        .enumerate()
+        .try_fold(case.offset, |position, (output_axis, &coordinate)| {
+            let source_axis = case
+                .permutation
+                .as_ref()
+                .map_or(output_axis, |permutation| permutation[output_axis]);
+            position.checked_add(
+                isize::try_from(coordinate)
+                    .expect("benchmark coordinate fits in isize")
+                    .checked_mul(case.source_strides[source_axis])
+                    .expect("benchmark physical offset fits in isize"),
+            )
+        })
+        .expect("benchmark physical offset fits in isize")
+}
+
 fn verify_exact_output(case: &MaterializationCase, output: &[f64]) {
-    let elements = case.shape.iter().product::<usize>();
+    let shape = output_shape(case);
+    let elements = shape.iter().product::<usize>();
     assert_eq!(output.len(), elements);
-    let mut index = vec![0usize; case.shape.len()];
+    let mut index = vec![0usize; shape.len()];
     for (logical_offset, &actual) in output.iter().enumerate() {
-        let physical_offset = index.iter().zip(&case.strides).try_fold(
-            case.offset,
-            |position, (&coordinate, &stride)| {
-                position.checked_add(
-                    isize::try_from(coordinate)
-                        .expect("benchmark coordinate fits in isize")
-                        .checked_mul(stride)
-                        .expect("benchmark physical offset fits in isize"),
-                )
-            },
-        );
-        let expected = physical_offset.expect("benchmark physical offset fits in isize") as f64;
+        let expected = expected_physical_offset(case, &index) as f64;
         assert_eq!(actual, expected, "logical offset {logical_offset}");
 
         for axis in 0..index.len() {
             index[axis] += 1;
-            if index[axis] < case.shape[axis] {
+            if index[axis] < shape[axis] {
                 break;
             }
             index[axis] = 0;
         }
     }
+}
+
+fn verify_case_once(
+    backend: &mut CpuBackend,
+    view: &TypedTensorView<'_, f64>,
+    case: &MaterializationCase,
+) {
+    let checked = backend
+        .to_contiguous(view)
+        .expect("pre-timing materialization succeeds");
+    verify_exact_output(
+        case,
+        checked
+            .as_slice()
+            .expect("CPU materialization returns host storage"),
+    );
 }
 
 fn bench_view_materialization(c: &mut Criterion) {
@@ -164,24 +199,22 @@ fn bench_view_materialization(c: &mut Criterion) {
 
         for spec in CASES {
             let case = build_case(spec);
+            let (view_shape, view_strides) = case.permutation.as_ref().map_or_else(
+                || (case.source_shape.clone(), case.source_strides.clone()),
+                |permutation| permute_layout(&case.source_shape, &case.source_strides, permutation),
+            );
             let view =
-                TypedTensorView::from_slice(&case.shape, &case.strides, case.offset, &case.storage)
+                TypedTensorView::from_slice(&view_shape, &view_strides, case.offset, &case.storage)
                     .expect("benchmark view layout is valid");
             let mut backend = CpuBackend::with_threads(threads)
                 .expect("benchmark CPU thread configuration is valid");
 
-            let checked = backend
-                .to_contiguous(&view)
-                .expect("pre-timing materialization succeeds");
-            verify_exact_output(
-                &case,
-                checked
-                    .as_slice()
-                    .expect("CPU materialization returns host storage"),
-            );
+            // The checked tensor is dropped when this helper returns, before
+            // Criterion starts measuring allocation-inclusive materialization.
+            verify_case_once(&mut backend, &view, &case);
 
             group.throughput(Throughput::Elements(
-                case.shape.iter().product::<usize>() as u64
+                view_shape.iter().product::<usize>() as u64
             ));
             group.bench_function(case.name, |b| {
                 b.iter(|| {
