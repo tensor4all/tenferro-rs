@@ -829,3 +829,49 @@ fn cuda_copy_into_rejects_destination_on_wrong_device() {
         } if message.contains("cuda:0") && message.contains("Cuda):1")
     ));
 }
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_copy_into_rejects_cloned_aliased_allocation() {
+    let mut gpu = gpu_backend();
+    let gpu_tensor = upload(&gpu, &tensor_i32(vec![2, 2], vec![1, 2, 3, 4]));
+    let Tensor::I32(src) = &gpu_tensor else {
+        panic!("expected i32 tensor");
+    };
+    let mut dst = src.clone();
+    let mut dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
+
+    let err = gpu.copy_into(&src.as_view(), &mut dst_view).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidConfig {
+            op: "CudaBackend::copy_into",
+            ref message,
+        } if message.contains("alias")
+    ));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_copy_into_reports_typed_shape_mismatch() {
+    let mut gpu = gpu_backend();
+    let gpu_src = upload(&gpu, &tensor_i32(vec![2], vec![1, 2]));
+    let mut gpu_dst = upload(&gpu, &tensor_i32(vec![3], vec![0, 0, 0]));
+    let (Tensor::I32(src), Tensor::I32(dst)) = (&gpu_src, &mut gpu_dst) else {
+        panic!("expected i32 tensors");
+    };
+
+    let err = gpu
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        Error::ShapeMismatch {
+            op: "CudaBackend::copy_into",
+            lhs: vec![2],
+            rhs: vec![3],
+        }
+    );
+}

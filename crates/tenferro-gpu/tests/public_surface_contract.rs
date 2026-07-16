@@ -294,6 +294,42 @@ fn cubecl_copy_into_validates_both_views_on_the_active_runtime() {
 }
 
 #[test]
+fn cubecl_copy_into_rejects_aliased_backend_allocations() {
+    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    let copy_body = cubecl_mod
+        .split_once("fn copy_view_to_view_typed")
+        .expect("CUDA copy-view helper must exist")
+        .1
+        .split_once("fn convert_float_to_float")
+        .expect("CUDA copy-view helper must precede conversion helpers")
+        .0;
+
+    assert!(
+        copy_body.contains("Arc::ptr_eq(source_buffer, destination_buffer)"),
+        "CUDA copy_into must reject source and destination views backed by the same allocation"
+    );
+}
+
+#[test]
+fn cubecl_copy_into_reports_typed_shape_mismatch() {
+    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    let copy_body = cubecl_mod
+        .split_once("fn copy_view_to_view_typed")
+        .expect("CUDA copy-view helper must exist")
+        .1
+        .split_once("fn convert_float_to_float")
+        .expect("CUDA copy-view helper must precede conversion helpers")
+        .0;
+
+    assert!(
+        copy_body.contains("crate::Error::ShapeMismatch")
+            && copy_body.contains("lhs: src.shape().to_vec()")
+            && copy_body.contains("rhs: dst.shape().to_vec()"),
+        "CUDA copy_into shape mismatch must use the shared typed error"
+    );
+}
+
+#[test]
 fn cubecl_gemm_contracting_element_product_is_checked() {
     let gemm = repo_file("crates/tenferro-gpu/src/cubecl/gemm.rs");
     assert!(

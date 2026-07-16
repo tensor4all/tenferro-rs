@@ -803,13 +803,10 @@ impl CudaBackend {
         ensure_view_resident_on_runtime(self.runtime(), src, op)?;
         ensure_view_mut_resident_on_runtime(self.runtime(), dst, op)?;
         if src.shape() != dst.shape() {
-            return Err(crate::Error::InvalidConfig {
+            return Err(crate::Error::ShapeMismatch {
                 op,
-                message: format!(
-                    "shape mismatch: source {:?} does not match destination {:?}",
-                    src.shape(),
-                    dst.shape()
-                ),
+                lhs: src.shape().to_vec(),
+                rhs: dst.shape().to_vec(),
             });
         }
         let source_buffer = src.backend_buffer().ok_or_else(|| {
@@ -818,6 +815,19 @@ impl CudaBackend {
                 "CUDA backend expected a GPU source view; call upload_tensor() first",
             )
         })?;
+        let destination_buffer = dst.backend_buffer().ok_or_else(|| {
+            crate::Error::backend_failure(
+                op,
+                "CUDA backend expected a GPU destination view; call upload_tensor() first",
+            )
+        })?;
+        if Arc::ptr_eq(source_buffer, destination_buffer) {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: "CUDA copy_into source and destination allocations must not alias"
+                    .to_string(),
+            });
+        }
         if !src.is_col_major_contiguous()?
             || src.offset() != 0
             || source_buffer.len() != src.n_elements()
@@ -850,9 +860,11 @@ impl CudaBackend {
         let rank = dst.shape().len();
         unsafe {
             // SAFETY: The source is an owned compact CubeCL tensor on this
-            // runtime. The destination view has validated reachable offsets
-            // and no overlap, and the launch domain covers each source element
-            // and destination logical coordinate exactly once.
+            // runtime. Allocation identity validation above proves source and
+            // destination do not alias. The destination view has validated
+            // reachable offsets and no internal overlap, and the launch domain
+            // covers each source element and destination logical coordinate
+            // exactly once.
             structural::contiguous_to_view_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
                 self.runtime().client(),
                 cube_count_for_len(len)?,

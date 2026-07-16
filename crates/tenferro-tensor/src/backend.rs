@@ -2252,6 +2252,19 @@ pub trait TensorIndexing {
 /// backends canonicalize GPU-resident views on the same device and reject host
 /// buffers with an upload hint.
 ///
+/// [`TensorViewCanonicalization::copy_into`] requires source and destination
+/// shapes, scalar dtypes, and placement families to match. The destination
+/// view must be internally non-overlapping, and source and destination backing
+/// allocations must not alias unless an implementation explicitly documents
+/// and supports that case. Implementations may reject layouts their native
+/// kernels cannot consume.
+///
+/// CUDA currently accepts only a compact column-major source view with offset
+/// zero that covers its full allocation; arbitrary-stride destinations remain
+/// supported. Canonicalization and copying are same-placement operations: they
+/// must not perform hidden host/device transfers or silently materialize an
+/// unsupported source layout.
+///
 /// This trait is intentionally separate from [`BackendSession`] so generic
 /// typed methods do not change the object-safety contract of `dyn BackendSession`.
 ///
