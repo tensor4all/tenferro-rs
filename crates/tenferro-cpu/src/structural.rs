@@ -141,13 +141,28 @@ fn host_view<'a, T: Copy>(
     }
 }
 
-fn copy_view_to_array<T: Copy + Clone + Send + Sync>(
+fn copy_view_to_array<T: Copy + Clone + Send + Sync + 'static>(
     op: &'static str,
     mut out: strided_kernel::StridedArray<T>,
     src: &StridedView<'_, T>,
+    placement: &tenferro_tensor::Placement,
 ) -> crate::Result<TypedTensor<T>> {
     copy_into(&mut out.view_mut(), src).map_err(|err| crate::Error::backend_failure(op, err))?;
-    Ok(tensor_from_array(out))
+    tensor_from_array_with_placement(op, out, placement)
+}
+
+fn tensor_from_array_with_placement<T: 'static>(
+    op: &'static str,
+    out: strided_kernel::StridedArray<T>,
+    placement: &tenferro_tensor::Placement,
+) -> crate::Result<TypedTensor<T>> {
+    let shape = out.dims().to_vec();
+    TypedTensor::from_buffer_col_major(
+        shape,
+        crate::Buffer::Host(out.into_data()),
+        placement.clone(),
+    )
+    .map_err(|err| crate::Error::backend_failure(op, err))
 }
 
 pub(crate) fn typed_materialize_view_with_pool<T, R>(
@@ -592,7 +607,7 @@ pub(crate) fn triu_with_pool(
 }
 
 #[cfg(test)]
-pub(crate) fn typed_transpose<T: Copy + Clone + Send + Sync>(
+pub(crate) fn typed_transpose<T: Copy + Clone + Send + Sync + 'static>(
     tensor: &TypedTensor<T>,
     perm: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
@@ -603,7 +618,7 @@ pub(crate) fn typed_transpose<T: Copy + Clone + Send + Sync>(
         .map_err(|err| crate::Error::backend_failure("transpose", err))?;
     // SAFETY: copy_into overwrites every output element.
     let out = unsafe { typed_array_uninit(permuted.dims()) };
-    copy_view_to_array("transpose", out, &permuted)
+    copy_view_to_array("transpose", out, &permuted, tensor.placement())
 }
 
 fn typed_transpose_view_impl<T, R>(
@@ -623,7 +638,7 @@ where
     checked_shape_product("transpose", "output shape", permuted.dims())?;
     // SAFETY: copy_into overwrites every output element.
     let out = make_out(permuted.dims())?;
-    copy_view_to_array("transpose", out, &permuted)
+    copy_view_to_array("transpose", out, &permuted, view.placement())
 }
 
 pub(crate) fn typed_transpose_with_pool<T>(
@@ -804,7 +819,7 @@ where
     let mut out = make_out(shape)?;
     copy_into(&mut out.view_mut(), &broadcast)
         .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
-    Ok(tensor_from_array(out))
+    tensor_from_array_with_placement("broadcast_in_dim", out, view.placement())
 }
 
 fn typed_convert_with_pool<S, T>(
