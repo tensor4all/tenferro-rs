@@ -1,4 +1,5 @@
 import io
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +11,33 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class RunProfileTests(unittest.TestCase):
+    def test_local_gate_uses_non_release_workspace_commands(self) -> None:
+        self.assertEqual(
+            commands_for("local-gate"),
+            (
+                "cargo nextest run --workspace --cargo-profile local-gate "
+                "--no-fail-fast",
+                "cargo test --doc --workspace --profile local-gate",
+            ),
+        )
+
+    def test_local_gate_cargo_profile_preserves_debug_checks(self) -> None:
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
+        self.assertEqual(
+            manifest["profile"]["local-gate"],
+            {
+                "inherits": "dev",
+                "opt-level": 0,
+                "debug": 0,
+                "debug-assertions": True,
+                "overflow-checks": True,
+                "incremental": False,
+            },
+        )
+
+    def test_hosted_full_profile_does_not_include_local_gate(self) -> None:
+        self.assertNotIn("local-gate", expand_profiles(["full"]))
+
     def test_workspace_blas_matches_ci_feature_contract(self) -> None:
         self.assertEqual(
             commands_for("workspace-blas"),
