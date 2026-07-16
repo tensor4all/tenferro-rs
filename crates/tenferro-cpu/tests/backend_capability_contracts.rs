@@ -183,6 +183,77 @@ fn ownership_contract(rules: &str) -> BTreeMap<&str, &str> {
         .collect()
 }
 
+fn contract_set<'a>(contract: &BTreeMap<&str, &'a str>, key: &str) -> BTreeSet<&'a str> {
+    contract
+        .get(key)
+        .unwrap_or_else(|| panic!("CPU strided ownership contract lacks field `{key}`"))
+        .split(',')
+        .collect()
+}
+
+fn token_tree_end(tokens: &[String], open: usize) -> Option<usize> {
+    let mut delimiters = Vec::new();
+    for (index, token) in tokens.iter().enumerate().skip(open) {
+        match token.as_str() {
+            "(" => delimiters.push(")"),
+            "[" => delimiters.push("]"),
+            "{" => delimiters.push("}"),
+            ")" | "]" | "}" => {
+                if delimiters.pop() != Some(token.as_str()) {
+                    return None;
+                }
+                if delimiters.is_empty() {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn macro_literal_identifiers(tokens: &[String]) -> BTreeSet<String> {
+    let mut identifiers = BTreeSet::new();
+    for index in 0..tokens.len() {
+        let open = if tokens
+            .get(index)
+            .is_some_and(|token| token == "macro_rules")
+            && tokens.get(index + 1).is_some_and(|token| token == "!")
+        {
+            (index + 2..tokens.len())
+                .find(|&candidate| matches!(tokens[candidate].as_str(), "(" | "[" | "{"))
+        } else if tokens.get(index + 1).is_some_and(|token| token == "!")
+            && tokens
+                .get(index + 2)
+                .is_some_and(|token| matches!(token.as_str(), "(" | "[" | "{"))
+        {
+            Some(index + 2)
+        } else {
+            None
+        };
+        let Some(open) = open else {
+            continue;
+        };
+        let Some(end) = token_tree_end(tokens, open) else {
+            continue;
+        };
+        identifiers.extend(tokens[open + 1..end].iter().filter_map(|token| {
+            (token
+                .as_bytes()
+                .first()
+                .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_'))
+            .then(|| token.clone())
+        }));
+    }
+    identifiers
+}
+
+fn contains_include_macro(tokens: &[String]) -> bool {
+    tokens
+        .windows(2)
+        .any(|window| window[0] == "include" && window[1] == "!")
+}
+
 fn accepts_backend_capabilities<B>()
 where
     B: TensorElementwise
@@ -378,29 +449,52 @@ fn strided_kernel_ownership_requires_backend_execution_resources() {
         Some(&"tenferro:benchmark-backed-exception")
     );
     assert_eq!(contract.get("execution-entry"), Some(&"CpuBackend"));
-    for vocabulary in [
-        "copy",
-        "permutation",
-        "broadcast",
-        "map",
-        "zip-map",
-        "axis-reduction",
-        "BufferPool",
-        "uninitialized-full-overwrite",
-        "CpuContext",
-        "Rayon",
-        "nested-execution",
-        "serial-parallel-threshold",
-        "context-free-strided-call",
-        "throwaway-pool",
-        "ambient-global-Rayon",
-        "execution-not-metadata",
-    ] {
-        assert!(
-            contract.values().any(|value| value.contains(vocabulary)),
-            "CPU strided ownership contract lacks essential vocabulary: {vocabulary}"
-        );
-    }
+    assert_eq!(
+        contract_set(&contract, "affine-kernels"),
+        BTreeSet::from([
+            "axis-reduction",
+            "broadcast",
+            "copy",
+            "map",
+            "permutation",
+            "zip-map",
+        ])
+    );
+    assert_eq!(
+        contract_set(&contract, "execution-resources"),
+        BTreeSet::from([
+            "CpuContext-Rayon",
+            "nested-execution",
+            "persistent-BufferPool",
+            "serial-parallel-threshold",
+            "uninitialized-full-overwrite",
+        ])
+    );
+    assert_eq!(
+        contract_set(&contract, "noncompliant"),
+        BTreeSet::from([
+            "ambient-global-Rayon",
+            "context-free-strided-call",
+            "throwaway-pool",
+        ])
+    );
+    assert_eq!(
+        contract.get("resource-classification"),
+        Some(&"memory-reuse-and-thread-policy:execution-not-metadata")
+    );
+    assert_eq!(
+        contract.keys().copied().collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "affine-kernel-owner",
+            "affine-kernels",
+            "einsum-owner",
+            "execution-entry",
+            "execution-resources",
+            "noncompliant",
+            "resource-classification",
+            "schema",
+        ])
+    );
 }
 
 #[test]
@@ -415,9 +509,31 @@ fn tensor_public_surface_has_no_context_free_materialization_api() {
 
     let mut public_functions = BTreeMap::<String, Vec<PathBuf>>::new();
     let mut all_functions = BTreeMap::<String, Vec<PathBuf>>::new();
+    let forbidden_identifiers = BTreeSet::from([
+        "copy_from_contiguous",
+        "materialize_typed_view_col_major",
+        "materialize_view_buffer_col_major",
+        "to_contiguous",
+        "to_tensor",
+    ]);
     for path in files {
         let source = fs::read_to_string(&path).expect("Rust source file must be readable");
         let tokens = rust_tokens(&source);
+        assert!(
+            !contains_include_macro(&tokens),
+            "`include!` can hide generated public API and is forbidden in tenferro-tensor source: {}",
+            path.display()
+        );
+        let forbidden_macro_identifiers = macro_literal_identifiers(&tokens)
+            .into_iter()
+            .filter(|identifier| forbidden_identifiers.contains(identifier.as_str()))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            forbidden_macro_identifiers.is_empty(),
+            "macro token stream in {} contains forbidden materialization identifiers: {:?}",
+            path.display(),
+            forbidden_macro_identifiers
+        );
         for name in public_function_names(&tokens) {
             public_functions.entry(name).or_default().push(path.clone());
         }
@@ -469,6 +585,18 @@ fn rust_public_function_scan_is_format_and_literal_independent() {
             "relocated_materializer".to_string(),
             "to_tensor".to_string(),
         ])
+    );
+
+    let generated_fixture = r#"
+        macro_rules! expose { ($name:ident) => { pub fn $name() {} } }
+        expose!(to_tensor);
+        include!("generated.rs");
+    "#;
+    let generated_tokens = rust_tokens(generated_fixture);
+    assert!(contains_include_macro(&generated_tokens));
+    assert!(
+        macro_literal_identifiers(&generated_tokens).contains("to_tensor"),
+        "literal forbidden identifiers in macro definitions/invocations must be visible"
     );
 }
 

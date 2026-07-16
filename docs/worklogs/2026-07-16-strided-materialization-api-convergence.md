@@ -128,3 +128,19 @@ rationale.
   `cargo bench -p tenferro-cpu --bench view_materialization --no-run`. Scoped
   `rustfmt --check` and `git diff --check` also passed; no broader checks were
   run while Task 4B shared-tree edits were active.
+- The final contract test compares each structured field under its own key:
+  scalar owner/classification values are exact, comma-delimited kernel,
+  execution-resource, and noncompliance fields are exact sets, and the field
+  key set itself is closed.
+- The recursive source guard rejects `include!` because included source would
+  evade repository-tree inspection. It also walks balanced token trees for
+  `macro_rules!` definitions and macro invocations and rejects literal forbidden
+  API/helper identifiers there, covering direct macro-generated names and
+  identifier metavariables supplied literally at invocation sites. This remains
+  intentionally lightweight: identifiers synthesized from fragments by
+  procedural/pasting macros cannot be reconstructed reliably without compiler
+  expansion. Banning `include!`, scanning literal macro tokens, and retaining
+  the ordinary public-signature scan provide the in-scope guard without adding
+  a heavyweight parsing/compiler dependency.
+- Final focused verification passed for the exact keyed ownership contract,
+  recursive public-surface/macro guard, and scanner fixture.
