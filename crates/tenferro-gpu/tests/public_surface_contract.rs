@@ -276,6 +276,24 @@ fn cubecl_structural_shape_arithmetic_is_checked() {
 }
 
 #[test]
+fn cubecl_copy_into_validates_both_views_on_the_active_runtime() {
+    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    let copy_body = cubecl_mod
+        .split_once("fn copy_view_to_view_typed")
+        .expect("CUDA copy-view helper must exist")
+        .1
+        .split_once("fn convert_float_to_float")
+        .expect("CUDA copy-view helper must precede conversion helpers")
+        .0;
+
+    assert!(
+        copy_body.contains("ensure_view_resident_on_runtime(self.runtime(), src, op)?;")
+            && copy_body.contains("ensure_view_mut_resident_on_runtime(self.runtime(), dst, op)?;"),
+        "CUDA copy_into must validate source and destination views against the active runtime"
+    );
+}
+
+#[test]
 fn cubecl_gemm_contracting_element_product_is_checked() {
     let gemm = repo_file("crates/tenferro-gpu/src/cubecl/gemm.rs");
     assert!(

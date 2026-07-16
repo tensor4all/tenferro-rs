@@ -1,5 +1,5 @@
 // Run with: cargo test --features cuda -- --ignored
-use crate::{DType, Error, MemoryKind, Tensor, TypedTensor};
+use crate::{DType, DeviceId, DeviceKind, Error, MemoryKind, Placement, Tensor, TypedTensor};
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
     GpuBackendKind, StridedSliceSpec, TensorIndexing, TensorStructural, TensorViewCanonicalization,
@@ -9,6 +9,24 @@ use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool, tensor_c32, tensor_c64,
     tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
 };
+
+fn with_cuda_ordinal<T: Clone + 'static>(
+    tensor: &TypedTensor<T>,
+    ordinal: usize,
+) -> TypedTensor<T> {
+    TypedTensor::from_buffer_col_major(
+        tensor.shape().to_vec(),
+        tensor.buffer().clone(),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal,
+            }),
+        },
+    )
+    .unwrap()
+}
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
@@ -757,5 +775,57 @@ fn cuda_copy_into_rejects_arbitrary_stride_source_without_materializing() {
             op: "CudaBackend::copy_into",
             ref message,
         } if message.contains("compact source view")
+    ));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_copy_into_rejects_source_on_wrong_device() {
+    let mut gpu = gpu_backend();
+    let src_host = tensor_i32(vec![2], vec![1, 2]);
+    let dst_host = tensor_i32(vec![2], vec![0, 0]);
+    let gpu_src = upload(&gpu, &src_host);
+    let mut gpu_dst = upload(&gpu, &dst_host);
+    let (Tensor::I32(src), Tensor::I32(dst)) = (&gpu_src, &mut gpu_dst) else {
+        panic!("expected i32 tensors");
+    };
+    let wrong_src = with_cuda_ordinal(src, 1);
+
+    let err = gpu
+        .copy_into(&wrong_src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CudaBackend::copy_into",
+            ref message,
+        } if message.contains("cuda:0") && message.contains("Cuda):1")
+    ));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_copy_into_rejects_destination_on_wrong_device() {
+    let mut gpu = gpu_backend();
+    let src_host = tensor_i32(vec![2], vec![1, 2]);
+    let dst_host = tensor_i32(vec![2], vec![0, 0]);
+    let gpu_src = upload(&gpu, &src_host);
+    let gpu_dst = upload(&gpu, &dst_host);
+    let (Tensor::I32(src), Tensor::I32(dst)) = (&gpu_src, &gpu_dst) else {
+        panic!("expected i32 tensors");
+    };
+    let mut wrong_dst = with_cuda_ordinal(dst, 1);
+
+    let err = gpu
+        .copy_into(&src.as_view(), &mut wrong_dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CudaBackend::copy_into",
+            ref message,
+        } if message.contains("cuda:0") && message.contains("Cuda):1")
     ));
 }

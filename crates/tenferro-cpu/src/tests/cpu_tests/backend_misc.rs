@@ -93,6 +93,46 @@ fn cpu_copy_into_rejects_backend_destination_without_download() {
 }
 
 #[test]
+fn cpu_copy_into_rejects_host_source_with_device_placement() {
+    let mut backend = CpuBackend::new();
+    let mut src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    src.set_placement(opaque_backend_placement());
+    let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
+
+    let err = backend
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::copy_into",
+            ref message,
+        } if message.contains("source") && message.contains("host placement")
+    ));
+}
+
+#[test]
+fn cpu_copy_into_rejects_host_destination_with_device_placement() {
+    let mut backend = CpuBackend::new();
+    let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
+    dst.set_placement(opaque_backend_placement());
+
+    let err = backend
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::copy_into",
+            ref message,
+        } if message.contains("destination") && message.contains("host placement")
+    ));
+}
+
+#[test]
 fn test_reclaim_buffer_returns_host_buffer_to_pool() {
     let mut backend = CpuBackend::new();
     assert_eq!(backend.buffer_pool_len(), 0);

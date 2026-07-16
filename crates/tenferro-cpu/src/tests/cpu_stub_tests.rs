@@ -55,7 +55,7 @@ fn cpu_backend_rejects_backend_view_without_download() {
 }
 
 #[test]
-fn cpu_backend_rejects_backend_copy_back_without_download() {
+fn cpu_backend_copy_into_rejects_backend_destination_without_download() {
     let mut backend = crate::CpuBackend::new();
     let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     let mut dst = TypedTensor::<f64>::from_buffer_col_major(
@@ -65,13 +65,13 @@ fn cpu_backend_rejects_backend_copy_back_without_download() {
     ).unwrap();
 
     let err = backend
-        .copy_from_contiguous(&src, &mut dst.as_view_mut())
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
         .unwrap_err();
 
     assert!(matches!(
         err,
         Error::BackendFailure {
-            op: "CpuBackend::copy_from_contiguous",
+            op: "CpuBackend::copy_into",
             ref message,
         } if message.contains("download")
     ));

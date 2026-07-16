@@ -9,8 +9,8 @@ use crate::{
     flat_to_multi,
 };
 use tenferro_tensor::{
-    DType, Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView,
-    TypedTensorViewMut,
+    DType, MemoryKind, Placement, Tensor, TensorRank, TensorRead, TensorView, TypedTensor,
+    TypedTensorView, TypedTensorViewMut,
 };
 
 #[cfg(test)]
@@ -217,6 +217,8 @@ where
     if src.backend_buffer().is_some() || dst.backend_buffer().is_some() {
         return Err(cpu_backend_buffer_error(op));
     }
+    validate_cpu_host_placement(op, "source", src.placement())?;
+    validate_cpu_host_placement(op, "destination", dst.placement())?;
 
     let src_view: StridedView<'_, T, Identity> = StridedView::new(
         src.host_storage()?,
@@ -236,6 +238,26 @@ where
     )
     .map_err(|err| crate::Error::backend_failure(op, err))?;
     copy_into(&mut dst_view, &src_view).map_err(|err| crate::Error::backend_failure(op, err))
+}
+
+fn validate_cpu_host_placement(
+    op: &'static str,
+    role: &'static str,
+    placement: &Placement,
+) -> crate::Result<()> {
+    if matches!(
+        placement.memory_kind,
+        MemoryKind::PinnedHost | MemoryKind::UnpinnedHost
+    ) {
+        return Ok(());
+    }
+    Err(crate::Error::backend_failure(
+        op,
+        format!(
+            "CPU backend copy_into requires {role} host placement, got {:?}",
+            placement.memory_kind
+        ),
+    ))
 }
 
 fn zeroed_tensor_from_pool<T>(
