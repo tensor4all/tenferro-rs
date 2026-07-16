@@ -3,7 +3,7 @@ use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, DType, DotGeneralConfig,
     GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
     TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorRead, TensorReduction, TensorStructural, TensorView, TypedTensor,
+    TensorRead, TensorReduction, TensorStructural, TensorView, TensorWrite, TypedTensor,
 };
 
 use crate::eager::{
@@ -78,6 +78,18 @@ impl TensorAnalytic for WrongDTypeBackend {
 }
 
 impl TensorStructural for WrongDTypeBackend {
+    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        CpuBackend::new().to_contiguous_read(input)
+    }
+
+    fn copy_read_into(
+        &mut self,
+        src: TensorRead<'_>,
+        dst: TensorWrite<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        CpuBackend::new().copy_read_into(src, dst)
+    }
+
     panic_backend_methods! {
         transpose(input: &Tensor, perm: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> tenferro_tensor::Result<Tensor>;

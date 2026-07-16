@@ -35,10 +35,10 @@ impl TensorValue<'_> {
         }
     }
 
-    fn into_tensor(self) -> Result<Tensor> {
+    fn into_tensor(self, exec: &mut dyn BackendSession) -> Result<Tensor> {
         match self {
             Self::Borrowed(tensor) => Ok(tensor.clone()),
-            Self::View(view) => view.to_tensor(),
+            Self::View(view) => exec.to_contiguous_read(TensorRead::from_view(view)),
             Self::Owned(tensor) => Ok(tensor),
         }
     }
@@ -216,10 +216,10 @@ impl LabeledTensor<'_> {
         self.tensor.tensor_read()
     }
 
-    fn tensor_cow(&self) -> Result<Cow<'_, Tensor>> {
+    fn tensor_cow(&self, exec: &mut dyn BackendSession) -> Result<Cow<'_, Tensor>> {
         match self.tensor() {
             Some(tensor) => Ok(Cow::Borrowed(tensor)),
-            None => Ok(Cow::Owned(self.tensor_read().to_tensor()?)),
+            None => Ok(Cow::Owned(exec.to_contiguous_read(self.tensor_read())?)),
         }
     }
 
@@ -359,7 +359,7 @@ fn reduce_tensor<'a>(
         .filter(|(axis, _)| !reduce_set.contains(axis))
         .map(|(_, label)| *label)
         .collect();
-    let operand_tensor = operand.tensor_cow()?;
+    let operand_tensor = operand.tensor_cow(exec)?;
     let tensor = exec.reduce_sum(&operand_tensor, &reduce_axes)?;
     operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
@@ -386,7 +386,7 @@ fn diagonalize_repeated<'a>(
             return Ok(operand);
         };
 
-        let operand_tensor = operand.tensor_cow()?;
+        let operand_tensor = operand.tensor_cow(exec)?;
         let tensor = exec.extract_diagonal(&operand_tensor, axis_a, axis_b)?;
         let mut labels = operand.labels.clone();
         labels.remove(axis_b);
@@ -418,7 +418,7 @@ fn embed_repeated<'a>(
             if output_count > current_count {
                 let axis_a = find_label_axis(&operand.labels, label)?;
                 let axis_b = axis_a + 1;
-                let operand_tensor = operand.tensor_cow()?;
+                let operand_tensor = operand.tensor_cow(exec)?;
                 let tensor = exec.embed_diagonal(&operand_tensor, axis_a, axis_b)?;
                 let mut labels = operand.labels.clone();
                 labels.insert(axis_b, label);
@@ -456,7 +456,7 @@ fn transpose_to_labels<'a>(
         return Ok(operand);
     }
 
-    let operand_tensor = operand.tensor_cow()?;
+    let operand_tensor = operand.tensor_cow(exec)?;
     let tensor = exec.transpose(&operand_tensor, &perm)?;
     operand.reclaim_if_owned(exec);
     Ok(LabeledTensor {
@@ -514,8 +514,8 @@ fn outer_product<'a>(
         ) {
             (Some(lhs_read), Some(rhs_read)) => exec.mul_read(lhs_read?, rhs_read?)?,
             _ => {
-                let lhs_input = lhs.tensor_cow()?;
-                let rhs_input = rhs.tensor_cow()?;
+                let lhs_input = lhs.tensor_cow(exec)?;
+                let rhs_input = rhs.tensor_cow(exec)?;
                 let lhs_tensor = exec.broadcast_in_dim(&lhs_input, &combined_shape, &lhs_dims)?;
                 let rhs_tensor = exec.broadcast_in_dim(&rhs_input, &combined_shape, &rhs_dims)?;
                 let tensor = exec.mul(&lhs_tensor, &rhs_tensor)?;
@@ -726,7 +726,7 @@ fn eager_einsum_exec_values<'a>(
         let reduced = reduce_tensor(exec, operand, &reduce_labels)?;
         let embedded = embed_repeated(exec, reduced, output_labels)?;
         let reordered = transpose_to_labels(exec, embedded, output_labels)?;
-        return reordered.tensor.into_tensor();
+        return reordered.tensor.into_tensor(exec);
     }
 
     for step_idx in 0..tree.step_count() {
@@ -770,7 +770,7 @@ fn eager_einsum_exec_values<'a>(
     let reordered = profile_eager_einsum_section("exec.final_transpose", || {
         transpose_to_labels(exec, reduced, output_labels)
     })?;
-    reordered.tensor.into_tensor()
+    reordered.tensor.into_tensor(exec)
 }
 
 /// Run a whole einsum contraction tree in one backend session.
@@ -820,7 +820,7 @@ pub(crate) fn eager_einsum_exec_read_into(
     exec: &mut dyn BackendSession,
     inputs: &[TensorRead<'_>],
     tree: &ContractionTree,
-    mut out: TensorWrite<'_>,
+    out: TensorWrite<'_>,
 ) -> Result<()> {
     record_eager_einsum_profile("exec_read_into.enter", Duration::ZERO);
     let subscripts = &tree.subscripts;
@@ -848,7 +848,7 @@ pub(crate) fn eager_einsum_exec_read_into(
     }
 
     let result = eager_einsum_exec_read(exec, inputs, tree)?;
-    out.copy_from_tensor(&result)
+    exec.copy_read_into(TensorRead::from_tensor(&result), out)
 }
 
 pub(crate) fn eager_einsum_exec_read_into_accum(
@@ -915,7 +915,7 @@ fn eager_einsum_exec_binary_read_fast(
         labels: subscripts.inputs[1].clone(),
     };
     execute_binary_dot_fast_plan(exec, lhs, rhs, plan, true)
-        .and_then(|result| result.tensor.into_tensor())
+        .and_then(|result| result.tensor.into_tensor(exec))
 }
 
 fn try_eager_einsum_binary_read_fast(

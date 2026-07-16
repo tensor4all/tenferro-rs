@@ -23,7 +23,6 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::ones_tensor;
-#[cfg(test)]
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{
     CacheStats, DType, Tensor, TensorBackend, TensorElementwise, TensorRead, TensorValue,
@@ -739,6 +738,17 @@ impl EagerRuntime {
     pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> Result<R> {
         let mut backend = self.lock_backend()?;
         Ok(f(&mut backend))
+    }
+
+    pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {
+        if let Some(tensor) = value.as_tensor_arc() {
+            return Ok(tensor.as_ref().clone());
+        }
+
+        let mut backend = self.lock_backend()?;
+        backend
+            .with_backend_session(|exec| exec.to_contiguous_read(value.tensor_read()))
+            .map_err(Error::from)
     }
 
     /// Block the current thread until backend work submitted by this eager runtime completes.
@@ -1738,7 +1748,7 @@ impl EagerTensor {
     /// standalone compact tensor. The operation is fallible because eager
     /// values may be backed by lazy or backend-resident storage.
     pub fn to_tensor(&self) -> Result<Tensor> {
-        self.value.to_tensor().map_err(Error::from)
+        self.ctx.materialize_value(self.value.as_ref())
     }
 
     pub(crate) fn materialized_arc(&self) -> Result<Arc<Tensor>> {
@@ -1751,7 +1761,7 @@ impl EagerTensor {
             return Ok(Arc::clone(tensor));
         }
 
-        let materialized = Arc::new(self.value.to_tensor().map_err(Error::from)?);
+        let materialized = Arc::new(self.ctx.materialize_value(self.value.as_ref())?);
         let _ = self.materialized_cache.set(Arc::clone(&materialized));
         self.ctx.try_register_value_record_ptr(&self._record)?;
         Ok(self

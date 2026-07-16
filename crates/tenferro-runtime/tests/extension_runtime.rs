@@ -13,8 +13,8 @@ use tenferro_runtime::{
     HostReferenceRuntime,
 };
 use tenferro_tensor::{
-    Buffer, BufferHandle, DType, MemoryKind, Placement, Tensor, TensorOwnedView, TensorRead,
-    TypedTensor,
+    BackendSessionHost, Buffer, BufferHandle, DType, MemoryKind, Placement, Tensor,
+    TensorOwnedView, TensorRead, TypedTensor,
 };
 
 #[derive(Clone, Debug)]
@@ -148,10 +148,13 @@ impl ExtensionRuntime<CpuBackend> for IdentityRuntime {
         inputs: &[TensorRead<'_>],
         ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let materialized_inputs: Vec<Tensor> = inputs
-            .iter()
-            .map(TensorRead::to_tensor)
-            .collect::<tenferro_tensor::Result<_>>()?;
+        let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
+            inputs
+                .iter()
+                .cloned()
+                .map(|input| exec.to_contiguous_read(input))
+                .collect::<tenferro_tensor::Result<Vec<_>>>()
+        })?;
         let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
         self.execute(op, &input_refs, ctx)
     }
@@ -185,10 +188,13 @@ impl ExtensionRuntime<CpuBackend> for WrongOutputCountRuntime {
         inputs: &[TensorRead<'_>],
         ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let materialized_inputs: Vec<Tensor> = inputs
-            .iter()
-            .map(TensorRead::to_tensor)
-            .collect::<tenferro_tensor::Result<_>>()?;
+        let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
+            inputs
+                .iter()
+                .cloned()
+                .map(|input| exec.to_contiguous_read(input))
+                .collect::<tenferro_tensor::Result<Vec<_>>>()
+        })?;
         let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
         self.execute(op, &input_refs, ctx)
     }
@@ -427,10 +433,13 @@ fn extension_executor_read_fallback_reports_backend_view_materialization_error_w
         .expect_err("backend view materialization should error");
     let message = err.to_string();
     assert!(
-        message.contains("backend buffers cannot be materialized"),
+        message.contains("CpuBackend::to_contiguous_read"),
         "{message}"
     );
-    assert!(message.contains("download explicitly first"), "{message}");
+    assert!(
+        message.contains("download to host before CPU execution"),
+        "{message}"
+    );
 }
 
 #[test]

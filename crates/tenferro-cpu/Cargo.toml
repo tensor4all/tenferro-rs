@@ -95,6 +95,10 @@ name = "cpu_install_overhead"
 harness = false
 
 [[bench]]
+name = "view_materialization"
+harness = false
+
+[[bench]]
 name = "openblas_direct_overhead"
 harness = false
 required-features = ["cpu-blas"]

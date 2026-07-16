@@ -55,7 +55,7 @@ fn cpu_backend_rejects_backend_view_without_download() {
 }
 
 #[test]
-fn cpu_backend_rejects_backend_copy_back_without_download() {
+fn cpu_backend_copy_into_rejects_backend_destination_without_download() {
     let mut backend = crate::CpuBackend::new();
     let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
     let mut dst = TypedTensor::<f64>::from_buffer_col_major(
@@ -65,13 +65,13 @@ fn cpu_backend_rejects_backend_copy_back_without_download() {
     ).unwrap();
 
     let err = backend
-        .copy_from_contiguous(&src, &mut dst.as_view_mut())
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
         .unwrap_err();
 
     assert!(matches!(
         err,
         Error::BackendFailure {
-            op: "CpuBackend::copy_from_contiguous",
+            op: "CpuBackend::copy_into",
             ref message,
         } if message.contains("download")
     ));
@@ -177,6 +177,7 @@ fn cpu_reduce_read_rejects_backend_views_without_download() {
 
 #[test]
 fn cpu_materialize_tensor_read_covers_host_tensor_and_view_dtypes() {
+    let mut buffers = crate::buffer_pool::BufferPool::new();
     let tensors = [
         Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap()),
         Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap()),
@@ -193,9 +194,12 @@ fn cpu_materialize_tensor_read_covers_host_tensor_and_view_dtypes() {
         ).unwrap()),
     ];
     for tensor in &tensors {
-        let materialized =
-            crate::materialize_tensor_read("dot_general", TensorRead::from_tensor(tensor))
-                .unwrap();
+        let materialized = crate::materialize_tensor_read(
+            &mut buffers,
+            "dot_general",
+            TensorRead::from_tensor(tensor),
+        )
+        .unwrap();
         assert_eq!(materialized.dtype(), tensor.dtype());
         assert_eq!(materialized.shape(), tensor.shape());
     }
@@ -219,9 +223,12 @@ fn cpu_materialize_tensor_read_covers_host_tensor_and_view_dtypes() {
     ];
     for view in views {
         let dtype = view.dtype();
-        let materialized =
-            crate::materialize_tensor_read("dot_general", TensorRead::from_view(view))
-                .unwrap();
+        let materialized = crate::materialize_tensor_read(
+            &mut buffers,
+            "dot_general",
+            TensorRead::from_view(view),
+        )
+        .unwrap();
         assert_eq!(materialized.dtype(), dtype);
         assert_eq!(materialized.shape(), &[1]);
     }

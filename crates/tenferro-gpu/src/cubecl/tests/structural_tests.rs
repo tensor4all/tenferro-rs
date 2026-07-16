@@ -1,14 +1,33 @@
 // Run with: cargo test --features cuda -- --ignored
-use crate::{DType, Error, MemoryKind, Tensor, TypedTensor};
+use crate::{DType, DeviceId, DeviceKind, Error, MemoryKind, Placement, Tensor, TypedTensor};
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    GpuBackendKind, StridedSliceSpec, TensorIndexing, TensorStructural, TensorViewCanonicalization,
+    BackendSession, GpuBackendKind, StridedSliceSpec, TensorIndexing, TensorRead, TensorStructural,
+    TensorView, TensorViewCanonicalization, TensorViewMut, TensorWrite,
 };
 
 use super::{
     assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool, tensor_c32, tensor_c64,
     tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
 };
+
+fn with_cuda_ordinal<T: Clone + 'static>(
+    tensor: &TypedTensor<T>,
+    ordinal: usize,
+) -> TypedTensor<T> {
+    TypedTensor::from_buffer_col_major(
+        tensor.shape().to_vec(),
+        tensor.buffer().clone(),
+        Placement {
+            memory_kind: MemoryKind::Device,
+            device: Some(DeviceId {
+                kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
+                ordinal,
+            }),
+        },
+    )
+    .unwrap()
+}
 
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
@@ -572,6 +591,118 @@ fn cuda_to_contiguous_keeps_tensor_on_cuda() {
 }
 
 #[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_materialization_is_object_safe_and_stays_on_device() {
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &tensor_i32(vec![2, 3], vec![1, 2, 3, 4, 5, 6]));
+    let Tensor::I32(input) = &gpu_input else {
+        panic!("expected i32 tensor");
+    };
+    let view = input.as_view().transpose_view([1, 0]).unwrap();
+    let exec: &mut dyn BackendSession = &mut gpu;
+
+    let output = exec
+        .to_contiguous_read(TensorRead::from_view(TensorView::I32(view)))
+        .unwrap();
+
+    assert_eq!(output.shape(), &[3, 2]);
+    assert_eq!(output.placement().memory_kind, MemoryKind::Device);
+    let actual = download(&gpu, &output);
+    assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 5, 2, 4, 6]);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_copy_is_object_safe_and_updates_strided_destination() {
+    let mut gpu = gpu_backend();
+    let gpu_src = upload(&gpu, &tensor_i32(vec![2, 2], vec![1, 2, 3, 4]));
+    let mut gpu_dst = upload(&gpu, &tensor_i32(vec![2, 2], vec![0, 0, 0, 0]));
+    let Tensor::I32(dst) = &mut gpu_dst else {
+        panic!("expected i32 destination");
+    };
+    let dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
+    let exec: &mut dyn BackendSession = &mut gpu;
+
+    exec.copy_read_into(
+        TensorRead::from_tensor(&gpu_src),
+        TensorWrite::from_view(TensorViewMut::I32(dst_view)),
+    )
+    .unwrap();
+
+    let actual = download(&gpu, &gpu_dst);
+    assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 2, 4]);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_copy_rejects_noncompact_source_with_erased_operation_name() {
+    let mut gpu = gpu_backend();
+    let gpu_src = upload(&gpu, &tensor_i32(vec![2, 2], vec![1, 2, 3, 4]));
+    let mut gpu_dst = upload(&gpu, &tensor_i32(vec![2, 2], vec![0, 0, 0, 0]));
+    let Tensor::I32(src) = &gpu_src else {
+        panic!("expected i32 source");
+    };
+    let src_view = src.as_view().transpose_view([1, 0]).unwrap();
+
+    let err = gpu
+        .copy_read_into(
+            TensorRead::from_view(TensorView::I32(src_view)),
+            TensorWrite::from_tensor(&mut gpu_dst),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        Error::InvalidConfig {
+            op: "CudaBackend::copy_read_into",
+            message: "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization".into(),
+        }
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_bool_materialization_reports_intentional_erased_limitation() {
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &tensor_bool(vec![2], vec![true, false]));
+
+    let err = gpu
+        .to_contiguous_read(TensorRead::from_tensor(&gpu_input))
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        Error::BackendFailure {
+            op: "CudaBackend::to_contiguous_read",
+            message: "unsupported dtype Bool".into(),
+        }
+    );
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_bool_copy_reports_intentional_erased_limitation() {
+    let mut gpu = gpu_backend();
+    let gpu_src = upload(&gpu, &tensor_bool(vec![2], vec![true, false]));
+    let mut gpu_dst = upload(&gpu, &tensor_bool(vec![2], vec![false, false]));
+
+    let err = gpu
+        .copy_read_into(
+            TensorRead::from_tensor(&gpu_src),
+            TensorWrite::from_tensor(&mut gpu_dst),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        Error::BackendFailure {
+            op: "CudaBackend::copy_read_into",
+            message: "unsupported dtype Bool".into(),
+        }
+    );
+}
+
+#[test]
 #[ignore]
 fn cuda_to_contiguous_preserves_negative_stride_view() {
     let mut gpu = gpu_backend();
@@ -668,7 +799,7 @@ fn cuda_to_contiguous_host_view_returns_upload_hint() {
 
 #[test]
 #[ignore]
-fn cuda_copy_from_contiguous_host_source_returns_upload_hint() {
+fn cuda_copy_into_host_source_returns_upload_hint() {
     let mut gpu = gpu_backend();
     let src = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]).unwrap();
     let dst_host = tensor_i32(vec![2], vec![0, 0]);
@@ -678,13 +809,13 @@ fn cuda_copy_from_contiguous_host_source_returns_upload_hint() {
     };
 
     let err = gpu
-        .copy_from_contiguous(&src, &mut dst.as_view_mut())
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
         .unwrap_err();
 
     assert!(matches!(
         err,
         Error::BackendFailure {
-            op: "CudaBackend::copy_from_contiguous",
+            op: "CudaBackend::copy_into",
             ref message,
         } if message.contains("upload_tensor()")
     ));
@@ -692,7 +823,7 @@ fn cuda_copy_from_contiguous_host_source_returns_upload_hint() {
 
 #[test]
 #[ignore]
-fn cuda_copy_from_contiguous_host_destination_returns_upload_hint() {
+fn cuda_copy_into_host_destination_returns_upload_hint() {
     let mut gpu = gpu_backend();
     let src_host = tensor_i32(vec![2], vec![1, 2]);
     let gpu_src = upload(&gpu, &src_host);
@@ -702,13 +833,13 @@ fn cuda_copy_from_contiguous_host_destination_returns_upload_hint() {
     let mut dst = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![0, 0]).unwrap();
 
     let err = gpu
-        .copy_from_contiguous(src, &mut dst.as_view_mut())
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
         .unwrap_err();
 
     assert!(matches!(
         err,
         Error::BackendFailure {
-            op: "CudaBackend::copy_from_contiguous",
+            op: "CudaBackend::copy_into",
             ref message,
         } if message.contains("upload_tensor()")
     ));
@@ -716,7 +847,7 @@ fn cuda_copy_from_contiguous_host_destination_returns_upload_hint() {
 
 #[test]
 #[ignore]
-fn cuda_copy_from_contiguous_updates_strided_view_on_cuda() {
+fn cuda_copy_into_updates_strided_view_on_cuda() {
     let mut gpu = gpu_backend();
     let dst_host = tensor_i32(vec![2, 2], vec![0, 0, 0, 0]);
     let src_host = tensor_i32(vec![2, 2], vec![1, 2, 3, 4]);
@@ -728,8 +859,132 @@ fn cuda_copy_from_contiguous_updates_strided_view_on_cuda() {
     };
     let mut dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
 
-    gpu.copy_from_contiguous(src, &mut dst_view).unwrap();
+    gpu.copy_into(&src.as_view(), &mut dst_view).unwrap();
 
     let actual = download(&gpu, &gpu_dst);
     assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 2, 4]);
+}
+
+#[test]
+#[ignore]
+fn cuda_copy_into_rejects_arbitrary_stride_source_without_materializing() {
+    let mut gpu = gpu_backend();
+    let src_host = tensor_i32(vec![2, 2], vec![1, 2, 3, 4]);
+    let dst_host = tensor_i32(vec![2, 2], vec![0, 0, 0, 0]);
+    let gpu_src = upload(&gpu, &src_host);
+    let mut gpu_dst = upload(&gpu, &dst_host);
+    let (Tensor::I32(src), Tensor::I32(dst)) = (&gpu_src, &mut gpu_dst) else {
+        panic!("expected i32 tensors");
+    };
+    let src_view = src.as_view().transpose_view([1, 0]).unwrap();
+
+    let err = gpu
+        .copy_into(&src_view, &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidConfig {
+            op: "CudaBackend::copy_into",
+            ref message,
+        } if message.contains("compact source view")
+    ));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_copy_into_rejects_source_on_wrong_device() {
+    let mut gpu = gpu_backend();
+    let src_host = tensor_i32(vec![2], vec![1, 2]);
+    let dst_host = tensor_i32(vec![2], vec![0, 0]);
+    let gpu_src = upload(&gpu, &src_host);
+    let mut gpu_dst = upload(&gpu, &dst_host);
+    let (Tensor::I32(src), Tensor::I32(dst)) = (&gpu_src, &mut gpu_dst) else {
+        panic!("expected i32 tensors");
+    };
+    let wrong_src = with_cuda_ordinal(src, 1);
+
+    let err = gpu
+        .copy_into(&wrong_src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CudaBackend::copy_into",
+            ref message,
+        } if message.contains("cuda:0") && message.contains("Cuda):1")
+    ));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_copy_into_rejects_destination_on_wrong_device() {
+    let mut gpu = gpu_backend();
+    let src_host = tensor_i32(vec![2], vec![1, 2]);
+    let dst_host = tensor_i32(vec![2], vec![0, 0]);
+    let gpu_src = upload(&gpu, &src_host);
+    let gpu_dst = upload(&gpu, &dst_host);
+    let (Tensor::I32(src), Tensor::I32(dst)) = (&gpu_src, &gpu_dst) else {
+        panic!("expected i32 tensors");
+    };
+    let mut wrong_dst = with_cuda_ordinal(dst, 1);
+
+    let err = gpu
+        .copy_into(&src.as_view(), &mut wrong_dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CudaBackend::copy_into",
+            ref message,
+        } if message.contains("cuda:0") && message.contains("Cuda):1")
+    ));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_copy_into_rejects_cloned_aliased_allocation() {
+    let mut gpu = gpu_backend();
+    let gpu_tensor = upload(&gpu, &tensor_i32(vec![2, 2], vec![1, 2, 3, 4]));
+    let Tensor::I32(src) = &gpu_tensor else {
+        panic!("expected i32 tensor");
+    };
+    let mut dst = src.clone();
+    let mut dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
+
+    let err = gpu.copy_into(&src.as_view(), &mut dst_view).unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::InvalidConfig {
+            op: "CudaBackend::copy_into",
+            ref message,
+        } if message.contains("alias")
+    ));
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_copy_into_reports_typed_shape_mismatch() {
+    let mut gpu = gpu_backend();
+    let gpu_src = upload(&gpu, &tensor_i32(vec![2], vec![1, 2]));
+    let mut gpu_dst = upload(&gpu, &tensor_i32(vec![3], vec![0, 0, 0]));
+    let (Tensor::I32(src), Tensor::I32(dst)) = (&gpu_src, &mut gpu_dst) else {
+        panic!("expected i32 tensors");
+    };
+
+    let err = gpu
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        Error::ShapeMismatch {
+            op: "CudaBackend::copy_into",
+            lhs: vec![2],
+            rhs: vec![3],
+        }
+    );
 }

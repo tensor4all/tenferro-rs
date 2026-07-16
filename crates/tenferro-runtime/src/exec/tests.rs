@@ -7,8 +7,8 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::{ShapeExtent, SymDim};
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
-    Tensor,
+    BackendSessionHost, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig,
+    ScatterConfig, SliceConfig, Tensor,
 };
 
 use super::dispatch::{
@@ -144,8 +144,11 @@ fn exec_instruction_single_output_metadata_stays_inline() {
 fn lazy_view_input_conversion_shares_live_owned_tensor() {
     let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let mut slots = vec![Some(ExecSlot::Owned(tensor))];
+    let mut backend = CpuBackend::new();
 
-    let value = tensor_value_for_lazy_view(&mut slots, 0, false).unwrap();
+    let value = backend
+        .with_backend_session(|exec| tensor_value_for_lazy_view(exec, &mut slots, 0, false))
+        .unwrap();
 
     let output = value.as_tensor_arc().unwrap();
     let stored = match slots[0].as_ref().unwrap() {
@@ -205,7 +208,10 @@ fn collect_outputs_rejects_out_of_range_slot_without_panicking() {
         Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap(),
     ))];
 
-    let err = collect_outputs_from(&program, &mut slots).unwrap_err();
+    let mut backend = CpuBackend::new();
+    let err = backend
+        .with_backend_session(|exec| collect_outputs_from(&program, &mut slots, exec))
+        .unwrap_err();
 
     let message = err.to_string();
     assert!(message.contains("output slot 3"), "{message}");

@@ -19,8 +19,8 @@ use crate::{
     CpuTopologyError, NumaNodeId, ResolvedCpuPlacement,
 };
 use crate::{
-    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorValue, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut,
+    Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorValue, TensorWrite,
+    TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::backend::{
     dot_general_accum_via_temp, grouped_gemm_via_sequential, validate_dot_general_accumulation,
@@ -38,8 +38,8 @@ use tenferro_tensor::{
 
 use super::exec_session::CpuExecSession;
 use super::{
-    analytic, elementwise, gemm, indexing, materialize_tensor_read, reduction, structural,
-    CpuContext,
+    analytic, copy_tensor_read_into, elementwise, gemm, indexing, materialize_tensor_read,
+    reduction, structural, CpuContext,
 };
 
 #[derive(Debug, Default, Clone)]
@@ -1800,17 +1800,22 @@ impl TensorAnalytic for CpuBackend {
 }
 
 impl TensorStructural for CpuBackend {
+    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.install_with_pool(|buffers| {
+            materialize_tensor_read(buffers, "CpuBackend::to_contiguous_read", input)
+        })
+    }
+
+    fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
+        self.install(|| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
+    }
+
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
         self.install_with_pool(|buffers| structural::transpose_with_pool(buffers, input, perm))
     }
 
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
-        if let Some(input) = input.as_tensor() {
-            return self.transpose(input, perm);
-        }
-
-        let input = materialize_tensor_read("transpose", input)?;
-        self.transpose(&input, perm)
+        self.install_with_pool(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
     }
 
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
@@ -1818,12 +1823,7 @@ impl TensorStructural for CpuBackend {
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        if let Some(input) = input.as_tensor() {
-            return self.reshape(input, shape);
-        }
-
-        let input = materialize_tensor_read("reshape", input)?;
-        self.reshape(&input, shape)
+        self.install_with_pool(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
     }
 
     fn broadcast_in_dim(
@@ -1843,12 +1843,9 @@ impl TensorStructural for CpuBackend {
         shape: &[usize],
         dims: &[usize],
     ) -> crate::Result<Tensor> {
-        if let Some(input) = input.as_tensor() {
-            return self.broadcast_in_dim(input, shape, dims);
-        }
-
-        let input = materialize_tensor_read("broadcast_in_dim", input)?;
-        self.broadcast_in_dim(&input, shape, dims)
+        self.install_with_pool(|buffers| {
+            structural::broadcast_in_dim_read_with_pool(buffers, input, shape, dims)
+        })
     }
 
     fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
@@ -1892,7 +1889,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_sum_read(input, axes))
+        self.install_with_pool(|buffers| reduction::reduce_sum_read(buffers, input, axes))
     }
 
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
@@ -1900,7 +1897,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_prod_read(input, axes))
+        self.install_with_pool(|buffers| reduction::reduce_prod_read(buffers, input, axes))
     }
 
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
@@ -1908,7 +1905,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_max_read(input, axes))
+        self.install_with_pool(|buffers| reduction::reduce_max_read(buffers, input, axes))
     }
 
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
@@ -1916,7 +1913,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_min_read(input, axes))
+        self.install_with_pool(|buffers| reduction::reduce_min_read(buffers, input, axes))
     }
 }
 
@@ -1996,8 +1993,12 @@ impl TensorDot for CpuBackend {
             return Ok(result);
         }
 
-        let lhs = materialize_tensor_read("dot_general", lhs)?;
-        let rhs = materialize_tensor_read("dot_general", rhs)?;
+        let (lhs, rhs) = self.install_with_pool(|buffers| {
+            Ok::<_, crate::Error>((
+                materialize_tensor_read(buffers, "dot_general", lhs)?,
+                materialize_tensor_read(buffers, "dot_general", rhs)?,
+            ))
+        })?;
         self.with_base_dot_general_provider(|this| {
             BackendCachedDot::dot_general_cached(this, &mut cache, None, &lhs, &rhs, config)
         })
@@ -2649,40 +2650,26 @@ impl TensorBuffer for CpuBackend {
 
 impl<T, R> TensorViewCanonicalization<T, R> for CpuBackend
 where
-    T: Clone + 'static,
+    T: TensorScalar + PoolScalar,
     R: TensorRank,
+    R::Shape: Send + Sync,
+    R::Strides: Send + Sync,
 {
     fn to_contiguous(
         &mut self,
         view: &TypedTensorView<'_, T, R>,
     ) -> crate::Result<TypedTensor<T, R>> {
-        if view.backend_buffer().is_some() {
-            return Err(crate::Error::backend_failure(
-                "CpuBackend::to_contiguous",
-                "CPU backend received a backend tensor view; download the tensor to host before CPU view canonicalization",
-            ));
-        }
-        view.to_contiguous()
+        self.install_with_pool(|buffers| {
+            structural::typed_materialize_view_with_pool(buffers, view, "CpuBackend::to_contiguous")
+        })
     }
 
-    fn copy_from_contiguous(
+    fn copy_into(
         &mut self,
-        src: &TypedTensor<T, R>,
+        src: &TypedTensorView<'_, T, R>,
         dst: &mut TypedTensorViewMut<'_, T, R>,
     ) -> crate::Result<()> {
-        if matches!(src.buffer(), Buffer::Backend(_)) {
-            return Err(crate::Error::backend_failure(
-                "CpuBackend::copy_from_contiguous",
-                "CPU backend received a backend source tensor; download the tensor to host before CPU view copy-back",
-            ));
-        }
-        if dst.backend_buffer().is_some() {
-            return Err(crate::Error::backend_failure(
-                "CpuBackend::copy_from_contiguous",
-                "CPU backend received a backend destination view; download the tensor to host before CPU view copy-back",
-            ));
-        }
-        dst.copy_from_contiguous(src)
+        self.install(|| structural::typed_copy_view_into(src, dst, "CpuBackend::copy_into"))
     }
 }
 

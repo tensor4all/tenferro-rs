@@ -85,11 +85,48 @@ pool before dispatching tensor-sized kernels.
 | --- | --- |
 | Elementwise and analytic ops | `strided-kernel` map/zip kernels run under `CpuContext` and can use Rayon when the context has more than one thread. |
 | Reductions | `strided-kernel::reduce_axis` runs under `CpuContext` and can use Rayon when the context has more than one thread. |
-| Materialized transpose/permute, broadcast, convert, and diagonal extraction | `strided-kernel` copy/map kernels run under `CpuContext` and can use Rayon for tensor-sized copies. |
+| View materialization, transpose/permute, broadcast, convert, and diagonal extraction | `strided-kernel` copy/map kernels run under `CpuContext` and can use Rayon for tensor-sized copies. |
 | `dot_general` through `cpu-faer` | faer receives `Par::Seq` for one-thread contexts and `Par::rayon(0)` inside the owned `CpuContext` pool for multi-thread contexts. |
 | GEMM and linalg through `cpu-blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
 | Supported `dot_general` contractions through `cpu-tblis` | TBLIS owns provider threading; unsupported TBLIS shapes fall back to the compiled faer/BLAS provider. |
 | Indexing, scatter/gather, slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside `CpuContext::install`, and source comments mark the intentional sequential path. |
+
+CPU affine-strided copy, permutation, broadcast, map, zip-map, and axis
+reduction delegate to `strided-rs`, while tenferro supplies operation semantics,
+validation, dtype and placement checks, error translation, and execution
+resources. Einsum/dot-general is the benchmark-backed tenferro exception:
+tenferro owns its planning, optimized preparation, and provider integration.
+
+Even a host-to-host materialization must enter through `CpuBackend`. The
+backend owns a persistent buffer pool, can allocate an uninitialized output
+when the copy fully overwrites it, and runs the kernel in the configured
+`CpuContext` Rayon pool. That scope also preserves nested-execution safety and
+the kernel's serial/parallel threshold. A context-free copy, a temporary buffer
+pool, or Rayon's ambient global pool would create a second memory and threading
+policy. Memory reuse and thread policy are execution resources, not tensor
+metadata.
+
+Use the backend-owned canonicalization operation when a metadata-only view must
+become compact:
+
+```rust
+use tenferro_cpu::CpuBackend;
+use tenferro_tensor::{TensorViewCanonicalization, TypedTensor};
+
+let tensor = TypedTensor::<f64>::from_vec_col_major(
+    vec![2, 3],
+    vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+).unwrap();
+let transposed = tensor.as_view().transpose_view([1, 0]).unwrap();
+let mut backend = CpuBackend::with_threads(4).unwrap();
+let compact = backend.to_contiguous(&transposed).unwrap();
+
+assert_eq!(compact.shape(), &[3, 2]);
+assert_eq!(compact.as_slice().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+```
+
+Canonicalization preserves placement; it does not silently upload host data or
+download device data.
 
 ## BLAS And LAPACK Threads
 

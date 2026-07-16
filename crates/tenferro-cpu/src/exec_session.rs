@@ -14,8 +14,8 @@ use tenferro_tensor::{
 
 use super::backend::reclaim_typed;
 use super::{
-    analytic, elementwise, gemm, indexing, materialize_tensor_read, reduction, structural,
-    CpuContext,
+    analytic, copy_tensor_read_into, elementwise, gemm, indexing, materialize_tensor_read,
+    reduction, structural, CpuContext,
 };
 use super::{CpuBackendKind, DotGeneralProvider};
 
@@ -140,26 +140,24 @@ impl TensorAnalytic for CpuExecSession<'_> {
 
 impl TensorStructural for CpuExecSession<'_> {
     // Structural
+    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.run_native(|buffers| {
+            materialize_tensor_read(buffers, "CpuBackend::to_contiguous_read", input)
+        })
+    }
+
+    fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
+        self.run_native(|_| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
+    }
+
     delegate_with_pool!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose_with_pool);
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| {
-            if let Some(input) = input.as_tensor() {
-                return structural::transpose_with_pool(buffers, input, perm);
-            }
-            let input = materialize_tensor_read("transpose", input)?;
-            structural::transpose_with_pool(buffers, &input, perm)
-        })
+        self.run_native(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
     }
 
     delegate!(reshape(input: &Tensor, shape: &[usize]) => structural::reshape(input, shape));
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|_| {
-            if let Some(input) = input.as_tensor() {
-                return structural::reshape(input, shape);
-            }
-            let input = materialize_tensor_read("reshape", input)?;
-            structural::reshape(&input, shape)
-        })
+        self.run_native(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
     }
 
     delegate_with_pool!(broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) => structural::broadcast_in_dim_with_pool);
@@ -170,11 +168,7 @@ impl TensorStructural for CpuExecSession<'_> {
         dims: &[usize],
     ) -> crate::Result<Tensor> {
         self.run_native(|buffers| {
-            if let Some(input) = input.as_tensor() {
-                return structural::broadcast_in_dim_with_pool(buffers, input, shape, dims);
-            }
-            let input = materialize_tensor_read("broadcast_in_dim", input)?;
-            structural::broadcast_in_dim_with_pool(buffers, &input, shape, dims)
+            structural::broadcast_in_dim_read_with_pool(buffers, input, shape, dims)
         })
     }
 
@@ -190,25 +184,25 @@ impl TensorReduction for CpuExecSession<'_> {
     delegate!(reduce_sum(input: &Tensor, axes: &[usize]) => reduction::reduce_sum(input, axes));
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|_| reduction::reduce_sum_read(input, axes))
+        self.run_native(|buffers| reduction::reduce_sum_read(buffers, input, axes))
     }
 
     delegate!(reduce_prod(input: &Tensor, axes: &[usize]) => reduction::reduce_prod(input, axes));
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|_| reduction::reduce_prod_read(input, axes))
+        self.run_native(|buffers| reduction::reduce_prod_read(buffers, input, axes))
     }
 
     delegate!(reduce_max(input: &Tensor, axes: &[usize]) => reduction::reduce_max(input, axes));
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|_| reduction::reduce_max_read(input, axes))
+        self.run_native(|buffers| reduction::reduce_max_read(buffers, input, axes))
     }
 
     delegate!(reduce_min(input: &Tensor, axes: &[usize]) => reduction::reduce_min(input, axes));
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|_| reduction::reduce_min_read(input, axes))
+        self.run_native(|buffers| reduction::reduce_min_read(buffers, input, axes))
     }
 }
 
@@ -329,8 +323,12 @@ impl TensorDot for CpuExecSession<'_> {
             return Ok(result);
         }
 
-        let lhs = materialize_tensor_read("dot_general", lhs)?;
-        let rhs = materialize_tensor_read("dot_general", rhs)?;
+        let (lhs, rhs) = self.run_native(|buffers| {
+            Ok::<_, crate::Error>((
+                materialize_tensor_read(buffers, "dot_general", lhs)?,
+                materialize_tensor_read(buffers, "dot_general", rhs)?,
+            ))
+        })?;
         self.with_base_dot_general_provider(|this| {
             this.dot_general_cached(None, &lhs, &rhs, config)
         })

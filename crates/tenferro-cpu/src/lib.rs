@@ -205,18 +205,65 @@ pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
 }
 
 pub(crate) fn materialize_tensor_read(
+    buffers: &mut BufferPool,
     op: &'static str,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     match input {
         TensorRead::Tensor(tensor) => clone_host_tensor_read(op, tensor),
-        TensorRead::View(view) => materialize_tensor_view(op, view),
+        TensorRead::View(view) => materialize_tensor_view(buffers, op, view),
+    }
+}
+
+pub(crate) fn copy_tensor_read_into(
+    op: &'static str,
+    src: TensorRead<'_>,
+    dst: TensorWrite<'_>,
+) -> crate::Result<()> {
+    let src_dtype = src.dtype();
+    let dst_dtype = dst.dtype();
+    macro_rules! copy_source {
+        ($variant:ident, $src:expr) => {{
+            let src = $src;
+            match dst {
+                TensorWrite::Tensor(Tensor::$variant(dst)) => {
+                    let mut dst = dst.as_view_mut();
+                    structural::typed_copy_view_into(&src, &mut dst, op)
+                }
+                TensorWrite::View(TensorViewMut::$variant(mut dst)) => {
+                    structural::typed_copy_view_into(&src, &mut dst, op)
+                }
+                _ => Err(crate::Error::DTypeMismatch {
+                    op,
+                    lhs: src_dtype,
+                    rhs: dst_dtype,
+                }),
+            }
+        }};
+    }
+
+    match src {
+        TensorRead::Tensor(Tensor::F32(src)) => copy_source!(F32, src.as_view()),
+        TensorRead::Tensor(Tensor::F64(src)) => copy_source!(F64, src.as_view()),
+        TensorRead::Tensor(Tensor::I32(src)) => copy_source!(I32, src.as_view()),
+        TensorRead::Tensor(Tensor::I64(src)) => copy_source!(I64, src.as_view()),
+        TensorRead::Tensor(Tensor::Bool(src)) => copy_source!(Bool, src.as_view()),
+        TensorRead::Tensor(Tensor::C32(src)) => copy_source!(C32, src.as_view()),
+        TensorRead::Tensor(Tensor::C64(src)) => copy_source!(C64, src.as_view()),
+        TensorRead::View(TensorView::F32(src)) => copy_source!(F32, src),
+        TensorRead::View(TensorView::F64(src)) => copy_source!(F64, src),
+        TensorRead::View(TensorView::I32(src)) => copy_source!(I32, src),
+        TensorRead::View(TensorView::I64(src)) => copy_source!(I64, src),
+        TensorRead::View(TensorView::Bool(src)) => copy_source!(Bool, src),
+        TensorRead::View(TensorView::C32(src)) => copy_source!(C32, src),
+        TensorRead::View(TensorView::C64(src)) => copy_source!(C64, src),
     }
 }
 
 fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Tensor> {
     macro_rules! clone_host {
         ($variant:ident, $tensor:expr) => {{
+            structural::validate_cpu_host_placement(op, "source", $tensor.placement())?;
             typed_host_data(op, $tensor)?;
             Ok(Tensor::$variant($tensor.clone()))
         }};
@@ -233,13 +280,16 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Te
     }
 }
 
-fn materialize_tensor_view(op: &'static str, view: TensorView<'_>) -> crate::Result<Tensor> {
+fn materialize_tensor_view(
+    buffers: &mut BufferPool,
+    op: &'static str,
+    view: TensorView<'_>,
+) -> crate::Result<Tensor> {
     macro_rules! materialize {
         ($variant:ident, $view:expr) => {{
-            if $view.backend_buffer().is_some() {
-                return Err(cpu_backend_buffer_error(op));
-            }
-            Ok(Tensor::$variant($view.to_contiguous()?))
+            Ok(Tensor::$variant(
+                structural::typed_materialize_view_with_pool(buffers, &$view, op)?,
+            ))
         }};
     }
 

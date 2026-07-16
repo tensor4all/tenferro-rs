@@ -2,7 +2,10 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::hash::Hasher;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 use computegraph::graph::{Graph, GraphBuilder};
@@ -17,8 +20,9 @@ use tenferro_ops::{ShapeExtent, ShapeGuardContext, SymDim, TensorMeta};
 use tenferro_runtime::ExtensionCacheLimits;
 use tenferro_runtime::{Error, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime};
 use tenferro_tensor::Tensor;
-use tenferro_tensor::{DType, DotGeneralConfig, TensorBackend};
-use tenferro_tensor::{TensorFusion, TensorRead};
+use tenferro_tensor::TypedTensorView;
+use tenferro_tensor::{DType, DotGeneralConfig, TensorBackend, TensorElementwise};
+use tenferro_tensor::{TensorFusion, TensorRead, TensorStructural, TensorView, TensorWrite};
 use tidu::eager::BackwardExecutor;
 use tidu::{linearize, ADKey};
 
@@ -75,6 +79,58 @@ fn eager_runtime_synchronize_reports_poisoned_backend_lock() {
         err,
         Error::Internal(ref message) if message.contains("backend lock poisoned")
     ));
+}
+
+#[test]
+fn eager_materialization_uses_backend() {
+    let mut cpu_backend = EagerBackend::cpu(CpuBackend::new());
+    assert!(format!("{cpu_backend:?}").contains("Cpu"));
+    cpu_backend.synchronize().unwrap();
+
+    let materializations = Arc::new(AtomicUsize::new(0));
+    let mut backend = EagerBackend::recording_cpu(Arc::clone(&materializations));
+    assert!(format!("{backend:?}").contains("Recording"));
+    backend.synchronize().unwrap();
+    let probe = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let sum = TensorElementwise::add(&mut backend, &probe, &probe).unwrap();
+    assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0]);
+    assert_eq!(materializations.load(Ordering::Relaxed), 0);
+
+    let view_data = [1.0_f64, 2.0, 3.0, 4.0];
+    let view = TensorView::F64(
+        TypedTensorView::from_col_major(&[2, 2], &view_data)
+            .unwrap()
+            .transpose_view([1, 0])
+            .unwrap(),
+    );
+    let direct =
+        TensorStructural::to_contiguous_read(&mut backend, TensorRead::from_view(view)).unwrap();
+    assert_eq!(direct.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+    assert_eq!(materializations.swap(0, Ordering::Relaxed), 1);
+
+    let mut destination = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
+    TensorStructural::copy_read_into(
+        &mut backend,
+        TensorRead::from_tensor(&probe),
+        TensorWrite::from_tensor(&mut destination),
+    )
+    .unwrap();
+    assert_eq!(destination.as_slice::<f64>().unwrap(), &[2.0]);
+    let ctx = Arc::new(EagerRuntime::from_backend(backend));
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+
+    let compact = x.to_tensor().unwrap();
+    assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(materializations.load(Ordering::Relaxed), 0);
+
+    let view = x.transpose(&[1, 0]).unwrap();
+    let compact = view.to_tensor().unwrap();
+    assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+    assert_eq!(materializations.load(Ordering::Relaxed), 1);
 }
 
 #[test]
@@ -298,10 +354,13 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for ReadPathFallbackRuntime
         inputs: &[TensorRead<'_>],
         ctx: &mut ExtensionExecutionContext<'_, B>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let materialized_inputs: Vec<Tensor> = inputs
-            .iter()
-            .map(TensorRead::to_tensor)
-            .collect::<tenferro_tensor::Result<_>>()?;
+        let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
+            inputs
+                .iter()
+                .cloned()
+                .map(|input| exec.to_contiguous_read(input))
+                .collect::<tenferro_tensor::Result<Vec<_>>>()
+        })?;
         let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
         self.execute(op, &input_refs, ctx)
     }

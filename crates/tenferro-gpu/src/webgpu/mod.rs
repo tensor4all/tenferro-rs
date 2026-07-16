@@ -10,7 +10,7 @@ use crate::{
     DType, DeviceId, DeviceKind, DotGeneralConfig, Error, GatherConfig, GpuBackendKind, MemoryKind,
     PadConfig, Placement, ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend,
     TensorBuffer, TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
-    TensorReduction, TensorStructural, TypedTensor,
+    TensorRead, TensorReduction, TensorStructural, TensorWrite, TypedTensor,
 };
 
 const DEFAULT_CUBE_DIM_X: u32 = 256;
@@ -519,6 +519,14 @@ impl TensorAnalytic for WebGpuBackend {
 }
 
 impl TensorStructural for WebGpuBackend {
+    fn to_contiguous_read(&mut self, _input: TensorRead<'_>) -> crate::Result<Tensor> {
+        unsupported!("WebGpuBackend::to_contiguous_read")
+    }
+
+    fn copy_read_into(&mut self, _src: TensorRead<'_>, _dst: TensorWrite<'_>) -> crate::Result<()> {
+        unsupported!("WebGpuBackend::copy_read_into")
+    }
+
     fn transpose(&mut self, _input: &Tensor, _perm: &[usize]) -> crate::Result<Tensor> {
         unsupported!("webgpu_transpose")
     }

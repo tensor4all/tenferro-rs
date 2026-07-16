@@ -1,4 +1,359 @@
 use super::*;
+use tenferro_tensor::{
+    Buffer, BufferHandle, MemoryKind, Placement, TensorViewCanonicalization, TypedTensorView,
+    TypedTensorViewMut,
+};
+
+fn opaque_backend_placement() -> Placement {
+    Placement {
+        memory_kind: MemoryKind::Device,
+        device: None,
+    }
+}
+
+#[test]
+fn cpu_runtime_materialization_dispatches_all_dtypes_with_backend_session_parity() {
+    macro_rules! assert_materialized {
+        ($variant:ident, $ty:ty, $values:expr) => {{
+            let values: [$ty; 2] = $values;
+            let view = TensorView::$variant(
+                TypedTensorView::from_slice(vec![2], vec![-1], 1, &values).unwrap(),
+            );
+            let read = TensorRead::from_view(view);
+            let mut backend = CpuBackend::with_threads(2).unwrap();
+
+            let direct = backend.to_contiguous_read(read.clone()).unwrap();
+            let session = backend
+                .with_backend_session(|exec| exec.to_contiguous_read(read))
+                .unwrap();
+
+            let expected = [values[1], values[0]];
+            assert_eq!(direct.as_slice::<$ty>().unwrap(), &expected);
+            assert_eq!(session.as_slice::<$ty>().unwrap(), &expected);
+        }};
+    }
+
+    assert_materialized!(F32, f32, [1.25, -2.5]);
+    assert_materialized!(F64, f64, [3.5, -4.75]);
+    assert_materialized!(I32, i32, [5, -6]);
+    assert_materialized!(I64, i64, [7, -8]);
+    assert_materialized!(Bool, bool, [true, false]);
+    assert_materialized!(
+        C32,
+        Complex32,
+        [Complex32::new(1.0, -2.0), Complex32::new(-3.0, 4.0)]
+    );
+    assert_materialized!(
+        C64,
+        Complex64,
+        [Complex64::new(5.0, -6.0), Complex64::new(-7.0, 8.0)]
+    );
+}
+
+#[test]
+fn cpu_runtime_materialization_rejects_owned_host_buffer_with_device_placement() {
+    let mut input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    input.set_placement(opaque_backend_placement());
+    let input = Tensor::F64(input);
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .to_contiguous_read(TensorRead::from_tensor(&input))
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::to_contiguous_read",
+            ref message,
+        } if message.contains("source host placement") && message.contains("Device")
+    ));
+}
+
+#[test]
+fn cpu_runtime_materialization_rejects_host_view_with_device_placement() {
+    let mut input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    input.set_placement(opaque_backend_placement());
+    let mut backend = CpuBackend::new();
+
+    let err = backend
+        .to_contiguous_read(TensorRead::from_view(TensorView::F64(input.as_view())))
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::to_contiguous_read",
+            ref message,
+        } if message.contains("source host placement") && message.contains("Device")
+    ));
+}
+
+#[test]
+fn cpu_runtime_copy_dispatches_all_dtypes_with_backend_session_parity() {
+    macro_rules! assert_copied {
+        ($variant:ident, $ty:ty, $values:expr, $zeros:expr) => {{
+            let values: Vec<$ty> = $values;
+            let src =
+                Tensor::$variant(TypedTensor::from_vec_col_major(vec![2], values.clone()).unwrap());
+            let mut direct_dst =
+                Tensor::$variant(TypedTensor::from_vec_col_major(vec![2], $zeros).unwrap());
+            let mut session_dst =
+                Tensor::$variant(TypedTensor::from_vec_col_major(vec![2], $zeros).unwrap());
+            let mut backend = CpuBackend::with_threads(2).unwrap();
+
+            backend
+                .copy_read_into(
+                    TensorRead::from_tensor(&src),
+                    TensorWrite::from_tensor(&mut direct_dst),
+                )
+                .unwrap();
+            backend
+                .with_backend_session(|exec| {
+                    exec.copy_read_into(
+                        TensorRead::from_tensor(&src),
+                        TensorWrite::from_tensor(&mut session_dst),
+                    )
+                })
+                .unwrap();
+
+            assert_eq!(direct_dst.as_slice::<$ty>().unwrap(), values.as_slice());
+            assert_eq!(session_dst.as_slice::<$ty>().unwrap(), values.as_slice());
+        }};
+    }
+
+    assert_copied!(F32, f32, vec![1.25, -2.5], vec![0.0; 2]);
+    assert_copied!(F64, f64, vec![3.5, -4.75], vec![0.0; 2]);
+    assert_copied!(I32, i32, vec![5, -6], vec![0; 2]);
+    assert_copied!(I64, i64, vec![7, -8], vec![0; 2]);
+    assert_copied!(Bool, bool, vec![true, false], vec![false; 2]);
+    assert_copied!(
+        C32,
+        Complex32,
+        vec![Complex32::new(1.0, -2.0), Complex32::new(-3.0, 4.0)],
+        vec![Complex32::new(0.0, 0.0); 2]
+    );
+    assert_copied!(
+        C64,
+        Complex64,
+        vec![Complex64::new(5.0, -6.0), Complex64::new(-7.0, 8.0)],
+        vec![Complex64::new(0.0, 0.0); 2]
+    );
+}
+
+#[test]
+fn cpu_runtime_copy_handles_strided_source_and_destination_without_allocation() {
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    backend.reclaim_buffer(Tensor::I32(
+        TypedTensor::from_vec_col_major(vec![4], vec![0_i32; 4]).unwrap(),
+    ));
+    let retained_before = backend.buffer_pool_len();
+    let src_data = [0_i32, 1, 2, 3, 4, 5, 6, 7];
+    let src = TypedTensorView::from_slice(vec![2, 2], vec![2, 4], 1, &src_data).unwrap();
+    let mut dst_data = [-1_i32; 8];
+    let dst = TypedTensorViewMut::from_slice(vec![2, 2], vec![3, 1], 1, &mut dst_data).unwrap();
+
+    backend
+        .copy_read_into(
+            TensorRead::from_view(TensorView::I32(src)),
+            TensorWrite::from_view(TensorViewMut::I32(dst)),
+        )
+        .unwrap();
+
+    assert_eq!(dst_data, [-1, 1, 5, -1, 3, 7, -1, -1]);
+    assert_eq!(backend.buffer_pool_len(), retained_before);
+}
+
+#[test]
+fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
+    let mut backend = CpuBackend::new();
+
+    let src = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
+    let mut wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]).unwrap();
+    assert!(matches!(
+        backend.copy_read_into(
+            TensorRead::from_tensor(&src),
+            TensorWrite::from_tensor(&mut wrong_dtype),
+        ),
+        Err(Error::DTypeMismatch {
+            op: "CpuBackend::copy_read_into",
+            ..
+        })
+    ));
+
+    let mut wrong_shape = Tensor::from_vec_col_major(vec![3], vec![0_i32; 3]).unwrap();
+    assert!(matches!(
+        backend.copy_read_into(
+            TensorRead::from_tensor(&src),
+            TensorWrite::from_tensor(&mut wrong_shape),
+        ),
+        Err(Error::ShapeMismatch {
+            op: "CpuBackend::copy_read_into",
+            ..
+        })
+    ));
+
+    let mut misplaced = Tensor::from_vec_col_major(vec![2], vec![0_i32; 2]).unwrap();
+    match &mut misplaced {
+        Tensor::I32(tensor) => tensor.set_placement(opaque_backend_placement()),
+        _ => unreachable!(),
+    }
+    assert!(matches!(
+        backend.copy_read_into(
+            TensorRead::from_tensor(&src),
+            TensorWrite::from_tensor(&mut misplaced),
+        ),
+        Err(Error::BackendFailure {
+            op: "CpuBackend::copy_read_into",
+            ref message,
+        }) if message.contains("destination") && message.contains("host placement")
+    ));
+
+    let shared = Arc::new(BufferHandle::<f64>::new_with_len(91, 2));
+    let placement = opaque_backend_placement();
+    let aliased_src = Tensor::F64(
+        TypedTensor::from_buffer_col_major(
+            vec![2],
+            Buffer::Backend(shared.clone()),
+            placement.clone(),
+        )
+        .unwrap(),
+    );
+    let mut aliased_dst = Tensor::F64(
+        TypedTensor::from_buffer_col_major(vec![2], Buffer::Backend(shared), placement).unwrap(),
+    );
+    assert!(matches!(
+        backend.copy_read_into(
+            TensorRead::from_tensor(&aliased_src),
+            TensorWrite::from_tensor(&mut aliased_dst),
+        ),
+        Err(Error::InvalidConfig {
+            op: "CpuBackend::copy_read_into",
+            ref message,
+        }) if message.contains("alias")
+    ));
+}
+
+#[test]
+fn cpu_copy_into_copies_exactly_between_strided_host_views() {
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let src_data = [0_i32, 1, 2, 3, 4, 5, 6, 7];
+    let src = TypedTensorView::from_slice(vec![2, 2], vec![2, 4], 1, &src_data).unwrap();
+    let mut dst_data = [-1_i32; 8];
+    let mut dst = TypedTensorViewMut::from_slice(vec![2, 2], vec![3, 1], 1, &mut dst_data).unwrap();
+
+    backend.copy_into(&src, &mut dst).unwrap();
+
+    assert_eq!(dst_data, [-1, 1, 5, -1, 3, 7, -1, -1]);
+}
+
+#[test]
+fn cpu_copy_into_reports_shape_mismatch_with_canonical_op_name() {
+    let mut backend = CpuBackend::new();
+    let src = TypedTensor::<i32>::from_vec_col_major(vec![2], vec![1, 2]).unwrap();
+    let mut dst = TypedTensor::<i32>::from_vec_col_major(vec![3], vec![0, 0, 0]).unwrap();
+
+    let err = backend
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::ShapeMismatch {
+            op: "CpuBackend::copy_into",
+            lhs,
+            rhs,
+        } if lhs == vec![2] && rhs == vec![3]
+    ));
+}
+
+#[test]
+fn cpu_copy_into_rejects_backend_source_without_download() {
+    let mut backend = CpuBackend::new();
+    let src = TypedTensor::<f64>::from_buffer_col_major(
+        vec![2],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(9, 2))),
+        opaque_backend_placement(),
+    )
+    .unwrap();
+    let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
+
+    let err = backend
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::copy_into",
+            ref message,
+        } if message.contains("download")
+    ));
+}
+
+#[test]
+fn cpu_copy_into_rejects_backend_destination_without_download() {
+    let mut backend = CpuBackend::new();
+    let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    let mut dst = TypedTensor::<f64>::from_buffer_col_major(
+        vec![2],
+        Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(8, 2))),
+        opaque_backend_placement(),
+    )
+    .unwrap();
+
+    let err = backend
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::copy_into",
+            ref message,
+        } if message.contains("download")
+    ));
+}
+
+#[test]
+fn cpu_copy_into_rejects_host_source_with_device_placement() {
+    let mut backend = CpuBackend::new();
+    let mut src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    src.set_placement(opaque_backend_placement());
+    let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
+
+    let err = backend
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::copy_into",
+            ref message,
+        } if message.contains("source") && message.contains("host placement")
+    ));
+}
+
+#[test]
+fn cpu_copy_into_rejects_host_destination_with_device_placement() {
+    let mut backend = CpuBackend::new();
+    let src = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    let mut dst = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![0.0, 0.0]).unwrap();
+    dst.set_placement(opaque_backend_placement());
+
+    let err = backend
+        .copy_into(&src.as_view(), &mut dst.as_view_mut())
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        Error::BackendFailure {
+            op: "CpuBackend::copy_into",
+            ref message,
+        } if message.contains("destination") && message.contains("host placement")
+    ));
+}
 
 #[test]
 fn test_reclaim_buffer_returns_host_buffer_to_pool() {
@@ -186,6 +541,7 @@ fn test_cpu_elementwise_fusion_broadcasts_mapped_unit_axes() {
 
 #[test]
 fn test_materialize_tensor_read_covers_host_tensor_and_view_variants() {
+    let mut buffers = crate::buffer_pool::BufferPool::new();
     let tensors = [
         Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap()),
         Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap()),
@@ -201,37 +557,622 @@ fn test_materialize_tensor_read_covers_host_tensor_and_view_variants() {
     ];
 
     for tensor in &tensors {
-        let materialized =
-            crate::materialize_tensor_read("dot_general", TensorRead::from_tensor(tensor)).unwrap();
+        let materialized = crate::materialize_tensor_read(
+            &mut buffers,
+            "dot_general",
+            TensorRead::from_tensor(tensor),
+        )
+        .unwrap();
         assert_eq!(materialized.dtype(), tensor.dtype());
         assert_eq!(materialized.shape(), tensor.shape());
     }
 
-    let shape = [1usize];
-    let f32s = [1.0_f32];
-    let f64s = [1.0_f64];
-    let i32s = [1_i32];
-    let i64s = [1_i64];
-    let bools = [true];
-    let c32s = [Complex32::new(1.0, 0.0)];
-    let c64s = [Complex64::new(1.0, 0.0)];
-    let views = [
-        TensorView::f32(&shape, &f32s).unwrap(),
-        TensorView::f64(&shape, &f64s).unwrap(),
-        TensorView::i32(&shape, &i32s).unwrap(),
-        TensorView::i64(&shape, &i64s).unwrap(),
-        TensorView::bool(&shape, &bools).unwrap(),
-        TensorView::c32(&shape, &c32s).unwrap(),
-        TensorView::c64(&shape, &c64s).unwrap(),
-    ];
-
-    for view in views {
-        let dtype = view.dtype();
-        let materialized =
-            crate::materialize_tensor_read("dot_general", TensorRead::from_view(view)).unwrap();
-        assert_eq!(materialized.dtype(), dtype);
-        assert_eq!(materialized.shape(), &[1]);
+    macro_rules! assert_materialized_view {
+        ($view:expr, $ty:ty, $expected:expr) => {{
+            let materialized = crate::materialize_tensor_read(
+                &mut buffers,
+                "dot_general",
+                TensorRead::from_view($view),
+            )
+            .unwrap();
+            assert_eq!(materialized.shape(), &[2]);
+            assert_eq!(materialized.as_slice::<$ty>().unwrap(), $expected);
+        }};
     }
+
+    let shape = [2usize];
+    let f32s = [1.25_f32, -2.5];
+    let f64s = [3.5_f64, -4.75];
+    let i32s = [5_i32, -6];
+    let i64s = [7_i64, -8];
+    let bools = [true, false];
+    let c32s = [Complex32::new(1.0, -2.0), Complex32::new(-3.0, 4.0)];
+    let c64s = [Complex64::new(5.0, -6.0), Complex64::new(-7.0, 8.0)];
+    assert_materialized_view!(TensorView::f32(&shape, &f32s).unwrap(), f32, &f32s);
+    assert_materialized_view!(TensorView::f64(&shape, &f64s).unwrap(), f64, &f64s);
+    assert_materialized_view!(TensorView::i32(&shape, &i32s).unwrap(), i32, &i32s);
+    assert_materialized_view!(TensorView::i64(&shape, &i64s).unwrap(), i64, &i64s);
+    assert_materialized_view!(TensorView::bool(&shape, &bools).unwrap(), bool, &bools);
+    assert_materialized_view!(TensorView::c32(&shape, &c32s).unwrap(), Complex32, &c32s);
+    assert_materialized_view!(TensorView::c64(&shape, &c64s).unwrap(), Complex64, &c64s);
+}
+
+#[test]
+fn cpu_view_materialization_uses_pool_aware_strided_copy() {
+    let cpu_lib = include_str!("../../lib.rs");
+    let dispatcher = cpu_lib
+        .split_once("fn materialize_tensor_view")
+        .unwrap()
+        .1
+        .split_once("#[cfg(test)]")
+        .unwrap()
+        .0;
+    let structural = include_str!("../../structural.rs");
+    let helper = structural
+        .split_once("pub(crate) fn typed_materialize_view_with_pool")
+        .unwrap()
+        .1
+        .split_once("pub(crate) fn typed_copy_view_into")
+        .unwrap()
+        .0;
+
+    assert!(
+        dispatcher.contains("structural::typed_materialize_view_with_pool"),
+        "CPU TensorView materialization must dispatch through the pool-aware strided helper"
+    );
+    assert!(
+        !dispatcher.contains("to_contiguous"),
+        "CPU TensorView materialization must not bypass the CPU pool with TypedTensorView::to_contiguous"
+    );
+    assert!(helper.contains("StridedView::new"));
+    assert!(helper.contains("copy_into("));
+    assert!(helper.contains("typed_array_uninit_from_pool"));
+    assert!(helper.contains("// SAFETY:"));
+    assert!(
+        helper.contains(
+            "// INVARIANT: validated equal-shaped copy_into overwrites every logical output element."
+        ),
+        "full-overwrite pooled allocation requires the repository invariant marker"
+    );
+    for forbidden in [
+        "for ",
+        "flat_to_multi",
+        "to_contiguous",
+        "materialize_view_buffer_col_major",
+        "zeroed_tensor_from_pool",
+        "filled_tensor_from_pool",
+        "TypedTensor::zeros",
+        "vec![",
+    ] {
+        assert!(
+            !helper.contains(forbidden),
+            "typed materialization helper must not contain `{forbidden}`"
+        );
+    }
+}
+
+#[test]
+fn cpu_view_materialization_preserves_transposed_and_scattered_values() {
+    let mut backend = CpuBackend::new();
+
+    let transposed_storage = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let transposed = tenferro_tensor::TypedTensorView::from_col_major(&[2, 3], &transposed_storage)
+        .unwrap()
+        .transpose_view([1, 0])
+        .unwrap();
+    let transposed = backend
+        .reshape_read(TensorRead::from_view(TensorView::F64(transposed)), &[3, 2])
+        .unwrap();
+    assert_eq!(transposed.shape(), &[3, 2]);
+    assert_eq!(
+        transposed.as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
+
+    let scattered_storage = (0..20).map(|value| value as f64 * 10.0).collect::<Vec<_>>();
+    let mut scattered_shape = vec![1; 24];
+    scattered_shape[0] = 2;
+    scattered_shape[11] = 2;
+    let mut scattered_strides = vec![19; 24];
+    scattered_strides[0] = 3;
+    scattered_strides[11] = 11;
+    let scattered = tenferro_tensor::TypedTensorView::from_slice(
+        scattered_shape,
+        scattered_strides,
+        2,
+        &scattered_storage,
+    )
+    .unwrap();
+    let scattered = backend
+        .reshape_read(TensorRead::from_view(TensorView::F64(scattered)), &[4])
+        .unwrap();
+    assert_eq!(scattered.shape(), &[4]);
+    assert_eq!(
+        scattered.as_slice::<f64>().unwrap(),
+        &[20.0, 50.0, 130.0, 160.0]
+    );
+}
+
+#[test]
+fn cpu_structural_read_transpose_explicit_stride_exact_output() {
+    let mut backend = CpuBackend::new();
+    let storage = (0..16).map(|value| value as f64 * 10.0).collect::<Vec<_>>();
+    let view = tenferro_tensor::TypedTensorView::from_slice([2, 3], [2, 5], 1, &storage).unwrap();
+
+    let output = backend
+        .transpose_read(TensorRead::from_view(TensorView::F64(view)), &[1, 0])
+        .unwrap();
+
+    assert_eq!(output.shape(), &[3, 2]);
+    assert_eq!(
+        output.as_slice::<f64>().unwrap(),
+        &[10.0, 60.0, 110.0, 30.0, 80.0, 130.0]
+    );
+}
+
+#[test]
+fn cpu_structural_read_reshape_explicit_stride_exact_output() {
+    let mut backend = CpuBackend::new();
+    let storage = (0..10).collect::<Vec<i32>>();
+    let view = tenferro_tensor::TypedTensorView::from_slice([2, 2], [3, -1], 5, &storage).unwrap();
+
+    let output = backend
+        .reshape_read(TensorRead::from_view(TensorView::I32(view)), &[4])
+        .unwrap();
+
+    assert_eq!(output.shape(), &[4]);
+    assert_eq!(output.as_slice::<i32>().unwrap(), &[5, 8, 4, 7]);
+}
+
+#[test]
+fn cpu_structural_read_broadcast_in_dim_explicit_stride_exact_output() {
+    let mut backend = CpuBackend::new();
+    let storage = [0_i64, 10, 20, 30, 40];
+    let view = tenferro_tensor::TypedTensorView::from_slice([2, 1], [-2, 7], 4, &storage).unwrap();
+
+    let output = backend
+        .broadcast_in_dim_read(
+            TensorRead::from_view(TensorView::I64(view)),
+            &[2, 3],
+            &[0, 1],
+        )
+        .unwrap();
+
+    assert_eq!(output.shape(), &[2, 3]);
+    assert_eq!(output.as_slice::<i64>().unwrap(), &[40, 20, 40, 20, 40, 20]);
+}
+
+#[test]
+fn cpu_structural_read_direct_helpers_preserve_view_placement() {
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+    let mut input = TypedTensor::<i64>::from_vec_col_major(vec![2], vec![9, 13]).unwrap();
+    input.set_placement(tenferro_tensor::Placement {
+        memory_kind: tenferro_tensor::MemoryKind::PinnedHost,
+        device: None,
+    });
+
+    let transpose = crate::structural::transpose_read_with_pool(
+        &mut buffers,
+        TensorRead::from_view(TensorView::I64(input.as_view())),
+        &[0],
+    )
+    .unwrap();
+    let reshape = crate::structural::reshape_read_with_pool(
+        &mut buffers,
+        TensorRead::from_view(TensorView::I64(input.as_view())),
+        &[1, 2],
+    )
+    .unwrap();
+    let broadcast = crate::structural::broadcast_in_dim_read_with_pool(
+        &mut buffers,
+        TensorRead::from_view(TensorView::I64(input.as_view())),
+        &[2, 2],
+        &[0],
+    )
+    .unwrap();
+
+    for output in [transpose, reshape, broadcast] {
+        assert_eq!(
+            output.placement().memory_kind,
+            tenferro_tensor::MemoryKind::PinnedHost
+        );
+        assert_eq!(output.placement().device, None);
+    }
+}
+
+#[test]
+fn cpu_structural_read_direct_helpers_cover_all_dtypes() {
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+
+    macro_rules! assert_dtype_dispatch {
+        ($variant:ident, $dtype:expr, $storage:expr) => {{
+            let storage = $storage;
+            let view = tenferro_tensor::TypedTensorView::from_slice([2], [1], 0, &storage).unwrap();
+            let transpose = crate::structural::transpose_read_with_pool(
+                &mut buffers,
+                TensorRead::from_view(TensorView::$variant(view)),
+                &[0],
+            )
+            .unwrap();
+
+            let view = tenferro_tensor::TypedTensorView::from_slice([2], [1], 0, &storage).unwrap();
+            let reshape = crate::structural::reshape_read_with_pool(
+                &mut buffers,
+                TensorRead::from_view(TensorView::$variant(view)),
+                &[1, 2],
+            )
+            .unwrap();
+
+            let view = tenferro_tensor::TypedTensorView::from_slice([2], [1], 0, &storage).unwrap();
+            let broadcast = crate::structural::broadcast_in_dim_read_with_pool(
+                &mut buffers,
+                TensorRead::from_view(TensorView::$variant(view)),
+                &[2, 2],
+                &[0],
+            )
+            .unwrap();
+
+            assert_eq!(transpose.dtype(), $dtype);
+            assert_eq!(reshape.dtype(), $dtype);
+            assert_eq!(broadcast.dtype(), $dtype);
+        }};
+    }
+
+    assert_dtype_dispatch!(F32, DType::F32, [1.0_f32, 2.0]);
+    assert_dtype_dispatch!(F64, DType::F64, [1.0_f64, 2.0]);
+    assert_dtype_dispatch!(I32, DType::I32, [1_i32, 2]);
+    assert_dtype_dispatch!(I64, DType::I64, [1_i64, 2]);
+    assert_dtype_dispatch!(Bool, DType::Bool, [true, false]);
+    assert_dtype_dispatch!(
+        C32,
+        DType::C32,
+        [Complex32::new(1.0, 2.0), Complex32::new(3.0, 4.0)]
+    );
+    assert_dtype_dispatch!(
+        C64,
+        DType::C64,
+        [Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)]
+    );
+}
+
+#[test]
+fn cpu_structural_read_direct_helpers_cover_zero_stride_empty_and_rank_zero() {
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+
+    let repeated_storage = [7_i32, 11];
+    let repeated =
+        tenferro_tensor::TypedTensorView::from_slice([2, 3], [1, 0], 0, &repeated_storage).unwrap();
+    let repeated = crate::structural::transpose_read_with_pool(
+        &mut buffers,
+        TensorRead::from_view(TensorView::I32(repeated)),
+        &[1, 0],
+    )
+    .unwrap();
+    assert_eq!(repeated.shape(), &[3, 2]);
+    assert_eq!(repeated.as_slice::<i32>().unwrap(), &[7, 7, 7, 11, 11, 11]);
+
+    let empty_storage: [f64; 0] = [];
+    let empty =
+        tenferro_tensor::TypedTensorView::from_slice([0, 3], [5, -2], 0, &empty_storage).unwrap();
+    let empty = crate::structural::broadcast_in_dim_read_with_pool(
+        &mut buffers,
+        TensorRead::from_view(TensorView::F64(empty)),
+        &[0, 3, 2],
+        &[0, 1],
+    )
+    .unwrap();
+    assert_eq!(empty.shape(), &[0, 3, 2]);
+    assert_eq!(empty.as_slice::<f64>().unwrap(), &[]);
+
+    let scalar_storage = [42.5_f64];
+    let scalar = tenferro_tensor::TypedTensorView::from_slice([], [], 0, &scalar_storage).unwrap();
+    let scalar = crate::structural::reshape_read_with_pool(
+        &mut buffers,
+        TensorRead::from_view(TensorView::F64(scalar)),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(scalar.shape(), &[]);
+    assert_eq!(scalar.as_slice::<f64>().unwrap(), &[42.5]);
+}
+
+#[test]
+fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+    let input = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap());
+
+    let owned_transpose =
+        crate::structural::transpose_with_pool(&mut buffers, &input, &[1]).unwrap_err();
+    let view_transpose = crate::structural::transpose_read_with_pool(
+        &mut buffers,
+        TensorRead::from_view(TensorView::F64(match &input {
+            Tensor::F64(input) => input.as_view(),
+            _ => unreachable!(),
+        })),
+        &[1],
+    )
+    .unwrap_err();
+    assert_eq!(view_transpose, owned_transpose);
+
+    let owned_reshape = crate::structural::reshape(&input, &[3]).unwrap_err();
+    let view_reshape = crate::structural::reshape_read_with_pool(
+        &mut buffers,
+        TensorRead::from_view(TensorView::F64(match &input {
+            Tensor::F64(input) => input.as_view(),
+            _ => unreachable!(),
+        })),
+        &[3],
+    )
+    .unwrap_err();
+    assert_eq!(view_reshape, owned_reshape);
+
+    let owned_broadcast =
+        crate::structural::broadcast_in_dim_with_pool(&mut buffers, &input, &[3], &[0])
+            .unwrap_err();
+    let view_broadcast = crate::structural::broadcast_in_dim_read_with_pool(
+        &mut buffers,
+        TensorRead::from_view(TensorView::F64(match &input {
+            Tensor::F64(input) => input.as_view(),
+            _ => unreachable!(),
+        })),
+        &[3],
+        &[0],
+    )
+    .unwrap_err();
+    assert_eq!(view_broadcast, owned_broadcast);
+}
+
+#[test]
+fn cpu_structural_read_empty_pathological_layout_returns_typed_errors_without_panicking() {
+    let empty_storage: [f64; 0] = [];
+
+    let transpose = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let mut buffers = crate::buffer_pool::BufferPool::new();
+        let view = tenferro_tensor::TypedTensorView::from_slice(
+            [0, usize::MAX],
+            [0, 0],
+            0,
+            &empty_storage,
+        )
+        .unwrap();
+        crate::structural::transpose_read_with_pool(
+            &mut buffers,
+            TensorRead::from_view(TensorView::F64(view)),
+            &[0, 1],
+        )
+    }));
+    let transpose = transpose
+        .expect("transpose_read must not panic")
+        .unwrap_err();
+    assert!(matches!(
+        transpose,
+        crate::Error::BackendFailure {
+            op: "transpose",
+            ref message,
+        } if message.contains("overflow")
+    ));
+
+    let broadcast = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let mut buffers = crate::buffer_pool::BufferPool::new();
+        let view =
+            tenferro_tensor::TypedTensorView::from_slice([0], [0], 0, &empty_storage).unwrap();
+        crate::structural::broadcast_in_dim_read_with_pool(
+            &mut buffers,
+            TensorRead::from_view(TensorView::F64(view)),
+            &[0, usize::MAX],
+            &[0],
+        )
+    }));
+    let broadcast = broadcast
+        .expect("broadcast_in_dim_read must not panic")
+        .unwrap_err();
+    assert!(matches!(
+        broadcast,
+        crate::Error::BackendFailure {
+            op: "broadcast_in_dim",
+            ref message,
+        } if message.contains("overflow")
+    ));
+}
+
+#[test]
+fn cpu_structural_read_backend_and_exec_session_outputs_match() {
+    let storage = [0.0_f64, 10.0, 20.0, 30.0, 40.0, 50.0];
+    let mut backend = CpuBackend::new();
+
+    let backend_outputs = {
+        let transpose_view =
+            tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
+        let reshape_view =
+            tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
+        let broadcast_view =
+            tenferro_tensor::TypedTensorView::from_slice([2, 1], [2, 0], 1, &storage).unwrap();
+        [
+            backend
+                .transpose_read(
+                    TensorRead::from_view(TensorView::F64(transpose_view)),
+                    &[1, 0],
+                )
+                .unwrap(),
+            backend
+                .reshape_read(TensorRead::from_view(TensorView::F64(reshape_view)), &[4])
+                .unwrap(),
+            backend
+                .broadcast_in_dim_read(
+                    TensorRead::from_view(TensorView::F64(broadcast_view)),
+                    &[2, 3],
+                    &[0, 1],
+                )
+                .unwrap(),
+        ]
+    };
+
+    let session_outputs = backend.with_backend_session(|session| {
+        let transpose_view =
+            tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
+        let reshape_view =
+            tenferro_tensor::TypedTensorView::from_slice([2, 2], [2, -1], 3, &storage).unwrap();
+        let broadcast_view =
+            tenferro_tensor::TypedTensorView::from_slice([2, 1], [2, 0], 1, &storage).unwrap();
+        [
+            session
+                .transpose_read(
+                    TensorRead::from_view(TensorView::F64(transpose_view)),
+                    &[1, 0],
+                )
+                .unwrap(),
+            session
+                .reshape_read(TensorRead::from_view(TensorView::F64(reshape_view)), &[4])
+                .unwrap(),
+            session
+                .broadcast_in_dim_read(
+                    TensorRead::from_view(TensorView::F64(broadcast_view)),
+                    &[2, 3],
+                    &[0, 1],
+                )
+                .unwrap(),
+        ]
+    });
+
+    for (backend_output, session_output) in backend_outputs.iter().zip(&session_outputs) {
+        assert_eq!(backend_output.shape(), session_output.shape());
+        assert_eq!(
+            backend_output.as_slice::<f64>().unwrap(),
+            session_output.as_slice::<f64>().unwrap()
+        );
+    }
+}
+
+#[test]
+fn cpu_view_materialization_handles_negative_and_zero_strides() {
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+
+    let reversed_storage = [0_i32, 10, 20, 30, 40, 50];
+    let reversed =
+        tenferro_tensor::TypedTensorView::from_slice([3], [-2], 5, &reversed_storage).unwrap();
+    let reversed = crate::structural::typed_materialize_view_with_pool(
+        &mut buffers,
+        &reversed,
+        "negative_stride_materialize",
+    )
+    .unwrap();
+    assert_eq!(reversed.as_slice().unwrap(), &[50, 30, 10]);
+
+    let broadcast_storage = [7_i32, 11];
+    let broadcast =
+        tenferro_tensor::TypedTensorView::from_slice([2, 3], [1, 0], 0, &broadcast_storage)
+            .unwrap();
+    let broadcast = crate::structural::typed_materialize_view_with_pool(
+        &mut buffers,
+        &broadcast,
+        "zero_stride_materialize",
+    )
+    .unwrap();
+    assert_eq!(broadcast.shape(), &[2, 3]);
+    assert_eq!(broadcast.as_slice().unwrap(), &[7, 11, 7, 11, 7, 11]);
+}
+
+#[test]
+fn cpu_view_materialization_handles_empty_and_rank_zero_views() {
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+
+    let empty_storage: [f64; 0] = [];
+    let empty = tenferro_tensor::TypedTensorView::from_col_major(&[0, 3], &empty_storage).unwrap();
+    let empty = crate::structural::typed_materialize_view_with_pool(
+        &mut buffers,
+        &empty,
+        "empty_materialize",
+    )
+    .unwrap();
+    assert_eq!(empty.shape(), &[0, 3]);
+    assert_eq!(empty.as_slice().unwrap(), &[]);
+
+    let scalar_storage = [42.5_f64];
+    let scalar = tenferro_tensor::TypedTensorView::from_col_major(&[], &scalar_storage).unwrap();
+    let scalar = crate::structural::typed_materialize_view_with_pool(
+        &mut buffers,
+        &scalar,
+        "rank_zero_materialize",
+    )
+    .unwrap();
+    assert_eq!(scalar.shape(), &[]);
+    assert_eq!(scalar.as_slice().unwrap(), &[42.5]);
+}
+
+#[test]
+fn cpu_view_materialization_preserves_static_rank_and_placement() {
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+    let storage = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let ranked =
+        tenferro_tensor::TypedTensorView::<_, tenferro_tensor::Rank<2>>::from_slice_ranked(
+            [3, 2],
+            [2, 1],
+            0,
+            &storage,
+        )
+        .unwrap();
+    let ranked: TypedTensor<f64, tenferro_tensor::Rank<2>> =
+        crate::structural::typed_materialize_view_with_pool(
+            &mut buffers,
+            &ranked,
+            "static_rank_materialize",
+        )
+        .unwrap();
+    assert_eq!(ranked.shape(), &[3, 2]);
+    assert_eq!(ranked.as_slice().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+
+    let mut placed = TypedTensor::<i64>::from_vec_col_major(vec![2], vec![9_i64, 13]).unwrap();
+    placed.set_placement(tenferro_tensor::Placement {
+        memory_kind: tenferro_tensor::MemoryKind::PinnedHost,
+        device: None,
+    });
+    let placed = crate::structural::typed_materialize_view_with_pool(
+        &mut buffers,
+        &placed.as_view(),
+        "placement_materialize",
+    )
+    .unwrap();
+    assert_eq!(
+        placed.placement().memory_kind,
+        tenferro_tensor::MemoryKind::PinnedHost
+    );
+    assert_eq!(placed.as_slice().unwrap(), &[9, 13]);
+}
+
+#[test]
+fn cpu_view_materialization_rejects_backend_buffer_with_caller_operation_name() {
+    let backend_tensor = TypedTensor::<f64>::from_buffer_col_major(
+        vec![2],
+        tenferro_tensor::Buffer::Backend(Arc::new(
+            tenferro_tensor::BufferHandle::<f64>::new_with_len(17, 2),
+        )),
+        tenferro_tensor::Placement {
+            memory_kind: tenferro_tensor::MemoryKind::Device,
+            device: Some(tenferro_tensor::DeviceId {
+                kind: tenferro_tensor::DeviceKind::Gpu(tenferro_tensor::GpuBackendKind::Cuda),
+                ordinal: 0,
+            }),
+        },
+    )
+    .unwrap();
+    let view = backend_tensor
+        .backend_region_view(vec![2], vec![1], 0)
+        .unwrap();
+    let mut buffers = crate::buffer_pool::BufferPool::new();
+    let error = crate::structural::typed_materialize_view_with_pool(
+        &mut buffers,
+        &view,
+        "review_materialize_op",
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::Error::BackendFailure {
+            op: "review_materialize_op",
+            ref message,
+        } if message.contains("download to host")
+    ));
 }
 
 #[test]
@@ -866,14 +1807,20 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         TensorDot::dot_general_with_conj(&mut backend, &lhs, &rhs, &config, true, true).unwrap();
     assert_eq!(both_folded.as_slice::<f64>().unwrap(), &[6.0]);
 
-    let read_views = TensorDot::dot_general_read(
+    let read_views_err = TensorDot::dot_general_read(
         &mut backend,
         TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
         TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
         &config,
     )
-    .unwrap();
-    assert_eq!(read_views.as_slice::<f64>().unwrap(), &[6.0]);
+    .unwrap_err();
+    assert!(matches!(
+        read_views_err,
+        crate::Error::BackendFailure {
+            op: "to_contiguous_read",
+            ref message,
+        } if message.contains("borrowed tensor views")
+    ));
 
     let rhs_folded = BackendCachedDot::dot_general_with_conj_cached(
         &mut backend,
@@ -922,14 +1869,20 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     )
     .unwrap();
     assert_eq!(exec_read_tensor.as_slice::<f64>().unwrap(), &[6.0]);
-    let exec_read_views = TensorDot::dot_general_read(
+    let exec_read_views_err = TensorDot::dot_general_read(
         &mut exec,
         TensorRead::from_view(TensorView::f64(&one_shape, &lhs_data).unwrap()),
         TensorRead::from_view(TensorView::f64(&one_shape, &rhs_data).unwrap()),
         &config,
     )
-    .unwrap();
-    assert_eq!(exec_read_views.as_slice::<f64>().unwrap(), &[6.0]);
+    .unwrap_err();
+    assert!(matches!(
+        exec_read_views_err,
+        crate::Error::BackendFailure {
+            op: "to_contiguous_read",
+            ref message,
+        } if message.contains("borrowed tensor views")
+    ));
     let exec_no_conj =
         TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, false, false).unwrap();
     assert_eq!(exec_no_conj.as_slice::<f64>().unwrap(), &[6.0]);

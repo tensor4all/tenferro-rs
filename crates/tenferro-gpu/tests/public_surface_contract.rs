@@ -235,6 +235,20 @@ fn webgpu_provider_keeps_runtime_transfer_and_gemm_boundaries_split() {
 }
 
 #[test]
+fn webgpu_materialization_does_not_inherit_host_defaults() {
+    let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
+    for (method, op) in [
+        ("fn to_contiguous_read", "WebGpuBackend::to_contiguous_read"),
+        ("fn copy_read_into", "WebGpuBackend::copy_read_into"),
+    ] {
+        assert!(
+            webgpu_mod.contains(method) && webgpu_mod.contains(op),
+            "WebGPU must explicitly reject {method} instead of inheriting host defaults"
+        );
+    }
+}
+
+#[test]
 fn cubecl_output_allocations_use_checked_shape_products() {
     let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
     assert!(
@@ -272,6 +286,133 @@ fn cubecl_structural_shape_arithmetic_is_checked() {
             !cubecl_mod.contains(banned),
             "CubeCL structural path must not use unchecked shape arithmetic: found {banned}"
         );
+    }
+}
+
+#[test]
+fn cubecl_copy_into_validates_both_views_on_the_active_runtime() {
+    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    let copy_body = cubecl_mod
+        .split_once("fn copy_view_to_view_typed")
+        .expect("CUDA copy-view helper must exist")
+        .1
+        .split_once("fn convert_float_to_float")
+        .expect("CUDA copy-view helper must precede conversion helpers")
+        .0;
+
+    assert!(
+        copy_body.contains("ensure_view_resident_on_runtime(self.runtime(), src, op)?;")
+            && copy_body.contains("ensure_view_mut_resident_on_runtime(self.runtime(), dst, op)?;"),
+        "CUDA copy_into must validate source and destination views against the active runtime"
+    );
+}
+
+#[test]
+fn cubecl_copy_into_rejects_aliased_backend_allocations() {
+    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    let copy_body = cubecl_mod
+        .split_once("fn copy_view_to_view_typed")
+        .expect("CUDA copy-view helper must exist")
+        .1
+        .split_once("fn convert_float_to_float")
+        .expect("CUDA copy-view helper must precede conversion helpers")
+        .0;
+
+    assert!(
+        copy_body.contains("Arc::ptr_eq(source_buffer, destination_buffer)"),
+        "CUDA copy_into must reject source and destination views backed by the same allocation"
+    );
+}
+
+#[test]
+fn cubecl_copy_into_reports_typed_shape_mismatch() {
+    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    let copy_body = cubecl_mod
+        .split_once("fn copy_view_to_view_typed")
+        .expect("CUDA copy-view helper must exist")
+        .1
+        .split_once("fn convert_float_to_float")
+        .expect("CUDA copy-view helper must precede conversion helpers")
+        .0;
+
+    assert!(
+        copy_body.contains("crate::Error::ShapeMismatch")
+            && copy_body.contains("lhs: src.shape().to_vec()")
+            && copy_body.contains("rhs: dst.shape().to_vec()"),
+        "CUDA copy_into shape mismatch must use the shared typed error"
+    );
+}
+
+#[test]
+fn cubecl_runtime_materialization_and_copy_stay_device_owned_and_typed() {
+    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    let structural = cubecl_mod
+        .split_once("impl TensorStructural for CudaBackend")
+        .expect("CUDA structural implementation must exist")
+        .1
+        .split_once("impl TensorReduction for CudaBackend")
+        .expect("CUDA structural implementation must precede reductions")
+        .0;
+    let runtime_methods = structural
+        .split_once("fn to_contiguous_read(")
+        .expect("CUDA runtime materialization override must exist")
+        .1
+        .split_once("fn transpose(")
+        .expect("CUDA runtime methods must precede transpose")
+        .0;
+
+    for method in ["fn to_contiguous_read(", "fn copy_read_into("] {
+        assert!(
+            structural.contains(method),
+            "CUDA TensorStructural must override {method}"
+        );
+    }
+    assert!(
+        runtime_methods.contains("to_contiguous_view_typed")
+            && runtime_methods.contains("\"CudaBackend::to_contiguous_read\""),
+        "CUDA erased materialization must reuse the typed path with its own operation name"
+    );
+    assert!(
+        runtime_methods.contains("copy_view_to_view_typed")
+            && runtime_methods.contains("\"CudaBackend::copy_read_into\""),
+        "CUDA erased copy must reuse the typed path with its own operation name"
+    );
+    assert!(
+        runtime_methods.contains("unsupported_dtype") && runtime_methods.contains("DType::Bool"),
+        "CUDA Bool erased materialization/copy must remain explicit unsupported paths"
+    );
+    assert!(
+        !runtime_methods.contains("download_tensor(")
+            && !runtime_methods.contains("upload_tensor("),
+        "CUDA runtime materialization/copy must not transfer payloads through host memory"
+    );
+
+    let copy_helper = cubecl_mod
+        .split_once("fn copy_view_to_view_typed")
+        .expect("CUDA copy-view helper must exist")
+        .1
+        .split_once("fn convert_float_to_float")
+        .expect("CUDA copy-view helper must precede conversion helpers")
+        .0;
+    assert!(copy_helper.contains("ensure_view_resident_on_runtime"));
+    assert!(copy_helper.contains("ensure_view_mut_resident_on_runtime"));
+    assert!(copy_helper.contains("Arc::ptr_eq(source_buffer, destination_buffer)"));
+    assert!(copy_helper.contains("compact source view covering its full allocation"));
+}
+
+#[test]
+fn cuda_runtime_materialization_limitations_are_documented() {
+    let design = repo_file("docs/design/gpu-backend-design.md");
+    let guide = repo_file("docs/guides/devices-and-gpu.md");
+
+    for document in [&design, &guide] {
+        let rendered_text = document.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(rendered_text.contains("to_contiguous_read"));
+        assert!(rendered_text.contains("copy_read_into"));
+        assert!(rendered_text.contains("offset zero"));
+        assert!(rendered_text.contains("full allocation"));
+        assert!(rendered_text.contains("Bool"));
+        assert!(rendered_text.contains("must not alias"));
     }
 }
 

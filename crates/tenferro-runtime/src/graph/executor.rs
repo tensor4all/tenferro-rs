@@ -98,6 +98,34 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         &self.backend
     }
 
+    /// Materialize an executor value as a compact tensor on its current placement.
+    ///
+    /// Compact owned values are cloned without backend dispatch. Lazy views are
+    /// canonicalized by this executor's active backend session, preserving its
+    /// allocation, threading, and device-placement policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::GraphExecutor;
+    /// use tenferro_tensor::{Tensor, TensorValue};
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    /// let value = TensorValue::from_tensor(tensor).transpose_view([1, 0]).unwrap();
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    /// let compact = executor.materialize_value(&value).unwrap();
+    /// assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+    /// ```
+    pub fn materialize_value(&mut self, value: &TensorValue) -> Result<Tensor> {
+        if let Some(tensor) = value.as_tensor_arc() {
+            return Ok(tensor.as_ref().clone());
+        }
+        self.backend
+            .with_backend_session(|exec| exec.to_contiguous_read(value.tensor_read()))
+            .map_err(Error::from)
+    }
+
     /// Return output tensors to the executor backend's reusable buffer pool.
     ///
     /// This is useful for tight benchmark or serving loops that consume an
@@ -244,7 +272,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// assert!(matches!(&value, TensorValue::View(_)));
     /// assert_eq!(value.shape(), &[3, 2]);
     /// assert_eq!(
-    ///     value.to_tensor().unwrap().as_slice::<f64>().unwrap(),
+    ///     executor.materialize_value(&value).unwrap().as_slice::<f64>().unwrap(),
     ///     &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
     /// );
     /// ```
@@ -346,7 +374,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///
     /// let value = executor.run_value_with_inputs(&program, &[(&x, &bound)]).unwrap();
     /// assert!(matches!(&value, TensorValue::View(_)));
-    /// assert_eq!(value.to_tensor().unwrap().as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+    /// assert_eq!(executor.materialize_value(&value).unwrap().as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
     pub fn run_value_with_inputs(
         &mut self,
@@ -684,7 +712,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///
     /// let value = executor.run_value(&program).unwrap();
     /// assert!(matches!(&value, TensorValue::View(_)));
-    /// assert_eq!(value.to_tensor().unwrap().shape(), &[2, 2]);
+    /// assert_eq!(executor.materialize_value(&value).unwrap().shape(), &[2, 2]);
     /// ```
     pub fn eval_exec_ir_non_consuming_values(
         &mut self,

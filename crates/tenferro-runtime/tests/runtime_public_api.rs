@@ -367,7 +367,11 @@ fn graph_executor_can_return_final_transpose_as_lazy_value() {
         TensorValue::Tensor(_) => panic!("final transpose should stay as a lazy owned view"),
     }
     assert_eq!(
-        values[0].to_tensor().unwrap().as_slice::<f64>().unwrap(),
+        executor
+            .materialize_value(&values[0])
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
         &[2.0, 6.0, 10.0, 4.0, 8.0, 12.0]
     );
 }

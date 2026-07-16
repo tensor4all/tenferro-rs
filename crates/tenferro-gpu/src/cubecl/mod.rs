@@ -110,7 +110,8 @@ use crate::kernels::reduce::{self as cubecl_reduce, ReduceStrategy};
 use crate::kernels::{diagonal, elementwise, indexing, structural};
 use crate::{
     Buffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor, TensorRank,
-    TensorViewCanonicalization, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    TensorView, TensorViewCanonicalization, TensorViewMut, TypedTensor, TypedTensorView,
+    TypedTensorViewMut,
 };
 
 mod capability;
@@ -790,9 +791,9 @@ impl CudaBackend {
         Ok(output)
     }
 
-    fn copy_contiguous_to_view_typed<T, R>(
+    fn copy_view_to_view_typed<T, R>(
         &self,
-        src: &TypedTensor<T, R>,
+        src: &TypedTensorView<'_, T, R>,
         dst: &mut TypedTensorViewMut<'_, T, R>,
         op: &'static str,
     ) -> crate::Result<()>
@@ -800,32 +801,71 @@ impl CudaBackend {
         T: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
         R: TensorRank,
     {
-        ensure_resident_on_runtime(self.runtime(), src, op)?;
+        ensure_view_resident_on_runtime(self.runtime(), src, op)?;
         ensure_view_mut_resident_on_runtime(self.runtime(), dst, op)?;
         if src.shape() != dst.shape() {
-            return Err(crate::Error::InvalidConfig {
+            return Err(crate::Error::ShapeMismatch {
                 op,
-                message: format!(
-                    "shape mismatch: source {:?} does not match destination {:?}",
-                    src.shape(),
-                    dst.shape()
-                ),
+                lhs: src.shape().to_vec(),
+                rhs: dst.shape().to_vec(),
             });
         }
+        let source_buffer = src.backend_buffer().ok_or_else(|| {
+            crate::Error::backend_failure(
+                op,
+                "CUDA backend expected a GPU source view; call upload_tensor() first",
+            )
+        })?;
+        let destination_buffer = dst.backend_buffer().ok_or_else(|| {
+            crate::Error::backend_failure(
+                op,
+                "CUDA backend expected a GPU destination view; call upload_tensor() first",
+            )
+        })?;
+        if Arc::ptr_eq(source_buffer, destination_buffer) {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: "CUDA copy_into source and destination allocations must not alias"
+                    .to_string(),
+            });
+        }
+        if !src.is_col_major_contiguous()?
+            || src.offset() != 0
+            || source_buffer.len() != src.n_elements()
+        {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization"
+                    .to_string(),
+            });
+        }
+        let source_shape = R::shape_from_vec(src.shape().to_vec().into()).map_err(|err| {
+            crate::Error::InvalidConfig {
+                op,
+                message: format!("source rank mismatch: {err}"),
+            }
+        })?;
+        let source_tensor: TypedTensor<T, R> = TypedTensor::from_buffer_col_major(
+            source_shape,
+            Buffer::Backend(Arc::clone(source_buffer)),
+            src.placement().clone(),
+        )?;
         let len = src.n_elements();
         if len == 0 {
             return Ok(());
         }
         let strides = view_strides_i64(dst.strides(), op)?;
         let base_offset = view_offset_i64(dst.offset(), op)?;
-        let src_arg = typed_tensor_binding(src, op)?;
+        let src_arg = typed_tensor_binding(&source_tensor, op)?;
         let dst_arg = typed_view_mut_array_arg(dst, op)?;
         let rank = dst.shape().len();
         unsafe {
             // SAFETY: The source is an owned compact CubeCL tensor on this
-            // runtime. The destination view has validated reachable offsets
-            // and no overlap, and the launch domain covers each source element
-            // and destination logical coordinate exactly once.
+            // runtime. Allocation identity validation above proves source and
+            // destination do not alias. The destination view has validated
+            // reachable offsets and no internal overlap, and the launch domain
+            // covers each source element and destination logical coordinate
+            // exactly once.
             structural::contiguous_to_view_kernel::launch_unchecked::<T, CubeclCudaRuntime>(
                 self.runtime().client(),
                 cube_count_for_len(len)?,
@@ -4007,6 +4047,96 @@ impl TensorAnalytic for CudaBackend {
 }
 
 impl TensorStructural for CudaBackend {
+    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        macro_rules! materialize {
+            ($variant:ident, $view:expr) => {{
+                let view = $view;
+                self.to_contiguous_view_typed(&view, "CudaBackend::to_contiguous_read")
+                    .map(Tensor::$variant)
+            }};
+        }
+
+        match input {
+            TensorRead::Tensor(Tensor::F32(input)) => materialize!(F32, input.as_view()),
+            TensorRead::Tensor(Tensor::F64(input)) => materialize!(F64, input.as_view()),
+            TensorRead::Tensor(Tensor::I32(input)) => materialize!(I32, input.as_view()),
+            TensorRead::Tensor(Tensor::I64(input)) => materialize!(I64, input.as_view()),
+            TensorRead::Tensor(Tensor::Bool(_)) => Err(unsupported_dtype(
+                "CudaBackend::to_contiguous_read",
+                crate::DType::Bool,
+            )),
+            TensorRead::Tensor(Tensor::C32(input)) => materialize!(C32, input.as_view()),
+            TensorRead::Tensor(Tensor::C64(input)) => materialize!(C64, input.as_view()),
+            TensorRead::View(TensorView::F32(input)) => materialize!(F32, input),
+            TensorRead::View(TensorView::F64(input)) => materialize!(F64, input),
+            TensorRead::View(TensorView::I32(input)) => materialize!(I32, input),
+            TensorRead::View(TensorView::I64(input)) => materialize!(I64, input),
+            TensorRead::View(TensorView::Bool(_)) => Err(unsupported_dtype(
+                "CudaBackend::to_contiguous_read",
+                crate::DType::Bool,
+            )),
+            TensorRead::View(TensorView::C32(input)) => materialize!(C32, input),
+            TensorRead::View(TensorView::C64(input)) => materialize!(C64, input),
+        }
+    }
+
+    fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
+        let src_dtype = src.dtype();
+        let dst_dtype = dst.dtype();
+        macro_rules! copy_source {
+            ($variant:ident, $src:expr) => {{
+                let src = $src;
+                match dst {
+                    TensorWrite::Tensor(Tensor::$variant(dst)) => {
+                        let mut dst = dst.as_view_mut();
+                        self.copy_view_to_view_typed(&src, &mut dst, "CudaBackend::copy_read_into")
+                    }
+                    TensorWrite::View(TensorViewMut::$variant(mut dst)) => {
+                        self.copy_view_to_view_typed(&src, &mut dst, "CudaBackend::copy_read_into")
+                    }
+                    _ => Err(crate::Error::DTypeMismatch {
+                        op: "CudaBackend::copy_read_into",
+                        lhs: src_dtype,
+                        rhs: dst_dtype,
+                    }),
+                }
+            }};
+        }
+        macro_rules! reject_bool_source {
+            () => {{
+                match dst {
+                    TensorWrite::Tensor(Tensor::Bool(_))
+                    | TensorWrite::View(TensorViewMut::Bool(_)) => Err(unsupported_dtype(
+                        "CudaBackend::copy_read_into",
+                        crate::DType::Bool,
+                    )),
+                    _ => Err(crate::Error::DTypeMismatch {
+                        op: "CudaBackend::copy_read_into",
+                        lhs: src_dtype,
+                        rhs: dst_dtype,
+                    }),
+                }
+            }};
+        }
+
+        match src {
+            TensorRead::Tensor(Tensor::F32(src)) => copy_source!(F32, src.as_view()),
+            TensorRead::Tensor(Tensor::F64(src)) => copy_source!(F64, src.as_view()),
+            TensorRead::Tensor(Tensor::I32(src)) => copy_source!(I32, src.as_view()),
+            TensorRead::Tensor(Tensor::I64(src)) => copy_source!(I64, src.as_view()),
+            TensorRead::Tensor(Tensor::Bool(_)) => reject_bool_source!(),
+            TensorRead::Tensor(Tensor::C32(src)) => copy_source!(C32, src.as_view()),
+            TensorRead::Tensor(Tensor::C64(src)) => copy_source!(C64, src.as_view()),
+            TensorRead::View(TensorView::F32(src)) => copy_source!(F32, src),
+            TensorRead::View(TensorView::F64(src)) => copy_source!(F64, src),
+            TensorRead::View(TensorView::I32(src)) => copy_source!(I32, src),
+            TensorRead::View(TensorView::I64(src)) => copy_source!(I64, src),
+            TensorRead::View(TensorView::Bool(_)) => reject_bool_source!(),
+            TensorRead::View(TensorView::C32(src)) => copy_source!(C32, src),
+            TensorRead::View(TensorView::C64(src)) => copy_source!(C64, src),
+        }
+    }
+
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
         match input {
             Tensor::F32(t) => self.transpose_typed(t, perm).map(Tensor::F32),
@@ -4827,16 +4957,12 @@ macro_rules! impl_cubecl_view_canonicalization {
                     self.to_contiguous_view_typed(view, "CudaBackend::to_contiguous")
                 }
 
-                fn copy_from_contiguous(
+                fn copy_into(
                     &mut self,
-                    src: &TypedTensor<$ty, R>,
+                    src: &TypedTensorView<'_, $ty, R>,
                     dst: &mut TypedTensorViewMut<'_, $ty, R>,
                 ) -> crate::Result<()> {
-                    self.copy_contiguous_to_view_typed(
-                        src,
-                        dst,
-                        "CudaBackend::copy_from_contiguous",
-                    )
+                    self.copy_view_to_view_typed(src, dst, "CudaBackend::copy_into")
                 }
             }
         )*
@@ -4859,13 +4985,13 @@ where
         ))
     }
 
-    fn copy_from_contiguous(
+    fn copy_into(
         &mut self,
-        _src: &TypedTensor<bool, R>,
+        _src: &TypedTensorView<'_, bool, R>,
         _dst: &mut TypedTensorViewMut<'_, bool, R>,
     ) -> crate::Result<()> {
         Err(unsupported_dtype(
-            "CudaBackend::copy_from_contiguous",
+            "CudaBackend::copy_into",
             crate::DType::Bool,
         ))
     }
