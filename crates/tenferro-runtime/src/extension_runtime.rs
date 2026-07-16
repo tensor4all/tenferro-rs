@@ -221,10 +221,13 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for HostReferenceRuntime<B>
         inputs: &[TensorRead<'_>],
         ctx: &mut ExtensionExecutionContext<'_, B>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let materialized_inputs: Vec<Tensor> = inputs
-            .iter()
-            .map(TensorRead::to_tensor)
-            .collect::<tenferro_tensor::Result<_>>()?;
+        let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
+            inputs
+                .iter()
+                .cloned()
+                .map(|input| exec.to_contiguous_read(input))
+                .collect::<tenferro_tensor::Result<Vec<_>>>()
+        })?;
         let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
         self.execute(op, &input_refs, ctx)
     }

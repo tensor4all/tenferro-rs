@@ -78,6 +78,25 @@ fn eager_runtime_synchronize_reports_poisoned_backend_lock() {
 }
 
 #[test]
+fn eager_materialization_uses_backend() {
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+
+    let compact = x.to_tensor().unwrap();
+    assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(ctx.recorded_to_contiguous_reads(), 0);
+
+    let view = x.transpose(&[1, 0]).unwrap();
+    let compact = view.to_tensor().unwrap();
+    assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+    assert_eq!(ctx.recorded_to_contiguous_reads(), 1);
+}
+
+#[test]
 fn eager_runtime_register_extension_reports_poisoned_executor_lock() {
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -298,10 +317,13 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for ReadPathFallbackRuntime
         inputs: &[TensorRead<'_>],
         ctx: &mut ExtensionExecutionContext<'_, B>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let materialized_inputs: Vec<Tensor> = inputs
-            .iter()
-            .map(TensorRead::to_tensor)
-            .collect::<tenferro_tensor::Result<_>>()?;
+        let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
+            inputs
+                .iter()
+                .cloned()
+                .map(|input| exec.to_contiguous_read(input))
+                .collect::<tenferro_tensor::Result<Vec<_>>>()
+        })?;
         let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
         self.execute(op, &input_refs, ctx)
     }

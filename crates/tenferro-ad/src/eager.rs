@@ -3,6 +3,8 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -23,7 +25,6 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::ones_tensor;
-#[cfg(test)]
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{
     CacheStats, DType, Tensor, TensorBackend, TensorElementwise, TensorRead, TensorValue,
@@ -257,6 +258,8 @@ pub struct EagerRuntime {
     value_records: Mutex<HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>,
     value_ptr_records: Mutex<HashMap<usize, Weak<EagerTensorRecord>>>,
     ad_transform_cache: Arc<AdTransformCache>,
+    #[cfg(test)]
+    recorded_to_contiguous_reads: AtomicUsize,
 }
 
 impl fmt::Debug for EagerRuntime {
@@ -382,7 +385,14 @@ impl EagerRuntime {
             value_records: Mutex::new(HashMap::new()),
             value_ptr_records: Mutex::new(HashMap::new()),
             ad_transform_cache,
+            #[cfg(test)]
+            recorded_to_contiguous_reads: AtomicUsize::new(0),
         }
+    }
+
+    #[cfg(test)]
+    fn recorded_to_contiguous_reads(&self) -> usize {
+        self.recorded_to_contiguous_reads.load(Ordering::Relaxed)
     }
 
     /// Create a shared CPU eager execution context.
@@ -739,6 +749,22 @@ impl EagerRuntime {
     pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> Result<R> {
         let mut backend = self.lock_backend()?;
         Ok(f(&mut backend))
+    }
+
+    pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {
+        if let Some(tensor) = value.as_tensor_arc() {
+            return Ok(tensor.as_ref().clone());
+        }
+
+        let mut backend = self.lock_backend()?;
+        backend
+            .with_backend_session(|exec| {
+                #[cfg(test)]
+                self.recorded_to_contiguous_reads
+                    .fetch_add(1, Ordering::Relaxed);
+                exec.to_contiguous_read(value.tensor_read())
+            })
+            .map_err(Error::from)
     }
 
     /// Block the current thread until backend work submitted by this eager runtime completes.
@@ -1738,7 +1764,7 @@ impl EagerTensor {
     /// standalone compact tensor. The operation is fallible because eager
     /// values may be backed by lazy or backend-resident storage.
     pub fn to_tensor(&self) -> Result<Tensor> {
-        self.value.to_tensor().map_err(Error::from)
+        self.ctx.materialize_value(self.value.as_ref())
     }
 
     pub(crate) fn materialized_arc(&self) -> Result<Arc<Tensor>> {
@@ -1751,7 +1777,7 @@ impl EagerTensor {
             return Ok(Arc::clone(tensor));
         }
 
-        let materialized = Arc::new(self.value.to_tensor().map_err(Error::from)?);
+        let materialized = Arc::new(self.ctx.materialize_value(self.value.as_ref())?);
         let _ = self.materialized_cache.set(Arc::clone(&materialized));
         self.ctx.try_register_value_record_ptr(&self._record)?;
         Ok(self

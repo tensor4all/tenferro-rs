@@ -30,8 +30,13 @@ fn tensor_value_view_paths_materialize_and_read() {
     let view_value = TensorValue::View(view);
     assert!(view_value.as_tensor().is_none());
     assert_eq!(view_value.tensor_read().shape(), &[2]);
+    let mut backend = CpuBackend::new();
     assert_eq!(
-        view_value.into_tensor().unwrap().as_slice::<f64>().unwrap(),
+        backend
+            .with_backend_session(|exec| view_value.into_tensor(exec))
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
         &[3.0, 4.0]
     );
 }
@@ -58,7 +63,9 @@ fn generic_outer_product_with_views_uses_broadcast_path() {
         .with_backend_session(|exec| binary_contract(exec, lhs, rhs, &[0, 1], true))
         .unwrap();
     let labels = result.labels;
-    let tensor = result.tensor.into_tensor().unwrap();
+    let tensor = ctx
+        .with_backend_session(|exec| result.tensor.into_tensor(exec))
+        .unwrap();
 
     assert_eq!(labels, vec![0, 1]);
     assert_eq!(tensor.shape(), &[2, 3]);
@@ -87,7 +94,7 @@ fn generic_outer_product_uses_broadcast_views_without_materialized_broadcast_ops
     };
 
     let result = binary_contract(&mut backend, lhs, rhs, &[0, 1], true).unwrap();
-    let tensor = result.tensor.into_tensor().unwrap();
+    let tensor = result.tensor.into_tensor(&mut backend).unwrap();
 
     assert_eq!(result.labels, vec![0, 1]);
     assert_eq!(tensor.shape(), &[2, 3]);
@@ -116,7 +123,7 @@ fn generic_outer_product_uses_target_order_without_final_transpose() {
     };
 
     let result = binary_contract(&mut backend, lhs, rhs, &[1, 0], true).unwrap();
-    let tensor = result.tensor.into_tensor().unwrap();
+    let tensor = result.tensor.into_tensor(&mut backend).unwrap();
 
     assert_eq!(result.labels, vec![1, 0]);
     assert_eq!(tensor.shape(), &[3, 2]);
@@ -144,7 +151,9 @@ fn generic_binary_contract_reduces_then_builds_dot_config() {
         .with_backend_session(|exec| binary_contract(exec, lhs, rhs, &[0, 2], false))
         .unwrap();
     let labels = result.labels;
-    let tensor = result.tensor.into_tensor().unwrap();
+    let tensor = ctx
+        .with_backend_session(|exec| result.tensor.into_tensor(exec))
+        .unwrap();
 
     assert_eq!(labels, vec![0, 2]);
     assert_eq!(tensor.shape(), &[2, 5]);

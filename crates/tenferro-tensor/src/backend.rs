@@ -1305,7 +1305,7 @@ impl ElementwiseFusionInst {
 ///
 /// fn accepts_elementwise<B: TensorElementwise>(_backend: &mut B) {}
 /// ```
-pub trait TensorElementwise {
+pub trait TensorElementwise: TensorStructural {
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
 
     /// Elementwise addition accepting either owned tensors or borrowed views.
@@ -1378,10 +1378,10 @@ pub trait TensorElementwise {
         &mut self,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
-        mut out: TensorWrite<'_>,
+        out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         let result = self.add_read(lhs, rhs)?;
-        out.copy_from_tensor(&result)
+        self.copy_read_into(TensorRead::from_tensor(&result), out)
     }
 
     fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -1419,10 +1419,10 @@ pub trait TensorElementwise {
         &mut self,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
-        mut out: TensorWrite<'_>,
+        out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         let result = self.sub_read(lhs, rhs)?;
-        out.copy_from_tensor(&result)
+        self.copy_read_into(TensorRead::from_tensor(&result), out)
     }
 
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -1444,10 +1444,10 @@ pub trait TensorElementwise {
         &mut self,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
-        mut out: TensorWrite<'_>,
+        out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         let result = self.mul_read(lhs, rhs)?;
-        out.copy_from_tensor(&result)
+        self.copy_read_into(TensorRead::from_tensor(&result), out)
     }
 
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor>;
@@ -1461,13 +1461,9 @@ pub trait TensorElementwise {
     }
 
     /// Overwrite caller-provided output with elementwise negation from a read.
-    fn neg_read_into(
-        &mut self,
-        input: TensorRead<'_>,
-        mut out: TensorWrite<'_>,
-    ) -> crate::Result<()> {
+    fn neg_read_into(&mut self, input: TensorRead<'_>, out: TensorWrite<'_>) -> crate::Result<()> {
         let result = self.neg_read(input)?;
-        out.copy_from_tensor(&result)
+        self.copy_read_into(TensorRead::from_tensor(&result), out)
     }
 
     fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor>;
@@ -1481,13 +1477,9 @@ pub trait TensorElementwise {
     }
 
     /// Overwrite caller-provided output with elementwise conjugation from a read.
-    fn conj_read_into(
-        &mut self,
-        input: TensorRead<'_>,
-        mut out: TensorWrite<'_>,
-    ) -> crate::Result<()> {
+    fn conj_read_into(&mut self, input: TensorRead<'_>, out: TensorWrite<'_>) -> crate::Result<()> {
         let result = self.conj_read(input)?;
-        out.copy_from_tensor(&result)
+        self.copy_read_into(TensorRead::from_tensor(&result), out)
     }
 
     fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
@@ -1509,10 +1501,10 @@ pub trait TensorElementwise {
         &mut self,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
-        mut out: TensorWrite<'_>,
+        out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         let result = self.div_read(lhs, rhs)?;
-        out.copy_from_tensor(&result)
+        self.copy_read_into(TensorRead::from_tensor(&result), out)
     }
 
     /// Elementwise remainder.
@@ -2031,8 +2023,8 @@ pub trait TensorDot: TensorElementwise {
         match (lhs.as_tensor(), rhs.as_tensor()) {
             (Some(lhs), Some(rhs)) => self.dot_general(lhs, rhs, config),
             _ => {
-                let lhs = lhs.to_tensor()?;
-                let rhs = rhs.to_tensor()?;
+                let lhs = self.to_contiguous_read(lhs)?;
+                let rhs = self.to_contiguous_read(rhs)?;
                 self.dot_general(&lhs, &rhs, config)
             }
         }
@@ -2118,14 +2110,14 @@ pub trait TensorDot: TensorElementwise {
         let lhs_ref = if let Some(tensor) = lhs.as_tensor() {
             tensor
         } else {
-            lhs_tmp = lhs.to_tensor()?;
+            lhs_tmp = self.to_contiguous_read(lhs)?;
             &lhs_tmp
         };
         let rhs_tmp;
         let rhs_ref = if let Some(tensor) = rhs.as_tensor() {
             tensor
         } else {
-            rhs_tmp = rhs.to_tensor()?;
+            rhs_tmp = self.to_contiguous_read(rhs)?;
             &rhs_tmp
         };
         self.dot_general_with_conj(lhs_ref, rhs_ref, config, lhs_conj, rhs_conj)
@@ -2198,8 +2190,8 @@ pub trait SessionCachedDot: TensorDot {
         match (lhs.as_tensor(), rhs.as_tensor()) {
             (Some(lhs), Some(rhs)) => self.dot_general_cached(cache_slot, lhs, rhs, config),
             _ => {
-                let lhs = lhs.to_tensor()?;
-                let rhs = rhs.to_tensor()?;
+                let lhs = self.to_contiguous_read(lhs)?;
+                let rhs = self.to_contiguous_read(rhs)?;
                 self.dot_general_cached(cache_slot, &lhs, &rhs, config)
             }
         }
@@ -2240,14 +2232,14 @@ pub trait SessionCachedDot: TensorDot {
         let lhs_ref = if let Some(tensor) = lhs.as_tensor() {
             tensor
         } else {
-            lhs_tmp = lhs.to_tensor()?;
+            lhs_tmp = self.to_contiguous_read(lhs)?;
             &lhs_tmp
         };
         let rhs_tmp;
         let rhs_ref = if let Some(tensor) = rhs.as_tensor() {
             tensor
         } else {
-            rhs_tmp = rhs.to_tensor()?;
+            rhs_tmp = self.to_contiguous_read(rhs)?;
             &rhs_tmp
         };
         self.dot_general_with_conj_cached(cache_slot, lhs_ref, rhs_ref, config, lhs_conj, rhs_conj)
@@ -2535,8 +2527,8 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
         match (lhs.as_tensor(), rhs.as_tensor()) {
             (Some(lhs), Some(rhs)) => self.dot_general_cached(cache, cache_slot, lhs, rhs, config),
             _ => {
-                let lhs = lhs.to_tensor()?;
-                let rhs = rhs.to_tensor()?;
+                let lhs = self.to_contiguous_read(lhs)?;
+                let rhs = self.to_contiguous_read(rhs)?;
                 self.dot_general_cached(cache, cache_slot, &lhs, &rhs, config)
             }
         }
@@ -2579,14 +2571,14 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
         let lhs_ref = if let Some(tensor) = lhs.as_tensor() {
             tensor
         } else {
-            lhs_tmp = lhs.to_tensor()?;
+            lhs_tmp = self.to_contiguous_read(lhs)?;
             &lhs_tmp
         };
         let rhs_tmp;
         let rhs_ref = if let Some(tensor) = rhs.as_tensor() {
             tensor
         } else {
-            rhs_tmp = rhs.to_tensor()?;
+            rhs_tmp = self.to_contiguous_read(rhs)?;
             &rhs_tmp
         };
         self.dot_general_with_conj_cached(

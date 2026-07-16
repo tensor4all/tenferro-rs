@@ -4,12 +4,11 @@ use crate::{
     ContractionScalar, DType, DotGeneralAccumulation, DotGeneralConfig, GatherConfig, PadConfig,
     ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
-    TensorReduction, TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut,
+    TensorReduction, TensorScalar, TensorStructural, TensorView, TensorViewMut, TensorWrite,
+    TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
 use num_complex::{Complex32, Complex64};
 
-#[derive(Default)]
 struct DefaultReadBackend {
     calls: Vec<&'static str>,
     dot_result: Option<Tensor>,
@@ -17,10 +16,87 @@ struct DefaultReadBackend {
     gather_config: Option<GatherConfig>,
     reshape_shapes: Vec<Vec<usize>>,
     concatenate_axis: Option<usize>,
+    structural_runtime_enabled: bool,
+}
+
+impl Default for DefaultReadBackend {
+    fn default() -> Self {
+        Self {
+            calls: Vec::new(),
+            dot_result: None,
+            gather_indices: None,
+            gather_config: None,
+            reshape_shapes: Vec::new(),
+            concatenate_axis: None,
+            structural_runtime_enabled: true,
+        }
+    }
 }
 
 fn marker() -> Tensor {
     Tensor::from_vec_col_major(vec![1], vec![42.0_f64]).unwrap()
+}
+
+fn for_each_index_col_major(shape: &[usize], mut visit: impl FnMut(&[usize])) {
+    if shape.contains(&0) {
+        return;
+    }
+    let mut index = vec![0; shape.len()];
+    loop {
+        visit(&index);
+        let Some(axis) = (0..shape.len()).find(|&axis| {
+            index[axis] += 1;
+            if index[axis] < shape[axis] {
+                true
+            } else {
+                index[axis] = 0;
+                false
+            }
+        }) else {
+            break;
+        };
+        let _ = axis;
+    }
+}
+
+fn materialize_host_view<T: TensorScalar>(view: TypedTensorView<'_, T>) -> crate::Result<Tensor> {
+    let shape = view.shape().to_vec();
+    let mut data = Vec::with_capacity(shape.iter().product());
+    let mut error = None;
+    for_each_index_col_major(&shape, |index| match view.get(index) {
+        Some(value) => data.push(value.clone()),
+        None => {
+            error = Some(crate::Error::backend_failure(
+                "to_contiguous_read",
+                "test backend could not read a host view element",
+            ))
+        }
+    });
+    if let Some(error) = error {
+        return Err(error);
+    }
+    Tensor::from_vec_col_major(shape, data)
+}
+
+fn copy_host_view<T: TensorScalar>(
+    src: &TypedTensor<T>,
+    mut dst: TypedTensorViewMut<'_, T>,
+) -> crate::Result<()> {
+    let shape = src.shape().to_vec();
+    let mut error = None;
+    for_each_index_col_major(&shape, |index| {
+        let value = src.get(index).cloned();
+        match (value, dst.get_mut(index)) {
+            (Ok(value), Some(slot)) => *slot = value,
+            _ => {
+                error = Some(crate::Error::backend_failure(
+                    "copy_read_into",
+                    "test backend could not copy a host view element",
+                ));
+            }
+        }
+    });
+    error.map_or(Ok(()), Err)
 }
 
 impl TensorElementwise for DefaultReadBackend {
@@ -158,6 +234,82 @@ impl TensorAnalytic for DefaultReadBackend {
 }
 
 impl TensorStructural for DefaultReadBackend {
+    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        if !self.structural_runtime_enabled {
+            let TensorRead::Tensor(tensor) = input else {
+                return Err(crate::Error::backend_failure(
+                    "to_contiguous_read",
+                    "backend does not accept borrowed tensor views at this execution boundary",
+                ));
+            };
+            if tensor.is_backend_buffer()
+                || !matches!(
+                    tensor.placement().memory_kind,
+                    crate::MemoryKind::PinnedHost | crate::MemoryKind::UnpinnedHost
+                )
+            {
+                return Err(crate::Error::backend_failure(
+                    "to_contiguous_read",
+                    "default materialization accepts only host-owned tensors; use the storage's owning backend",
+                ));
+            }
+            return Ok(tensor.clone());
+        }
+        match input {
+            TensorRead::Tensor(tensor) => Ok(tensor.clone()),
+            TensorRead::View(TensorView::F32(view)) => materialize_host_view(view),
+            TensorRead::View(TensorView::F64(view)) => materialize_host_view(view),
+            TensorRead::View(TensorView::I32(view)) => materialize_host_view(view),
+            TensorRead::View(TensorView::I64(view)) => materialize_host_view(view),
+            TensorRead::View(TensorView::Bool(view)) => materialize_host_view(view),
+            TensorRead::View(TensorView::C32(view)) => materialize_host_view(view),
+            TensorRead::View(TensorView::C64(view)) => materialize_host_view(view),
+        }
+    }
+
+    fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
+        if !self.structural_runtime_enabled {
+            return Err(crate::Error::backend_failure(
+                "copy_read_into",
+                "backend-owned runtime copy is unsupported by this backend",
+            ));
+        }
+        if src.dtype() != dst.dtype() {
+            return Err(crate::Error::DTypeMismatch {
+                op: "copy_read_into",
+                lhs: src.dtype(),
+                rhs: dst.dtype(),
+            });
+        }
+        if src.shape() != dst.shape() {
+            return Err(crate::Error::ShapeMismatch {
+                op: "copy_read_into",
+                lhs: src.shape().to_vec(),
+                rhs: dst.shape().to_vec(),
+            });
+        }
+        let src = self.to_contiguous_read(src)?;
+        macro_rules! copy_typed {
+            ($src:expr, $dst:expr, $variant:ident) => {
+                match $dst {
+                    TensorWrite::Tensor(dst) => *dst = Tensor::$variant($src),
+                    TensorWrite::View(TensorViewMut::$variant(dst)) => copy_host_view(&$src, dst)?,
+                    _ => unreachable!("dtype was validated before copy dispatch"),
+                }
+            };
+        }
+        match src {
+            Tensor::F32(src) => copy_typed!(src, dst, F32),
+            Tensor::F64(src) => copy_typed!(src, dst, F64),
+            Tensor::I32(src) => copy_typed!(src, dst, I32),
+            Tensor::I64(src) => copy_typed!(src, dst, I64),
+            Tensor::Bool(src) => copy_typed!(src, dst, Bool),
+            Tensor::C32(src) => copy_typed!(src, dst, C32),
+            Tensor::C64(src) => copy_typed!(src, dst, C64),
+        }
+        Ok(())
+    }
+
     fn transpose(&mut self, _input: &Tensor, _perm: &[usize]) -> crate::Result<Tensor> {
         self.calls.push("transpose");
         Ok(marker())
@@ -1205,7 +1357,10 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
 #[test]
 fn structural_runtime_materialization_is_object_safe_and_clones_owned_input_by_default() {
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let mut backend = DefaultReadBackend::default();
+    let mut backend = DefaultReadBackend {
+        structural_runtime_enabled: false,
+        ..Default::default()
+    };
     let session: &mut dyn BackendSession = &mut backend;
 
     let output = session
@@ -1220,7 +1375,10 @@ fn structural_runtime_materialization_is_object_safe_and_clones_owned_input_by_d
 fn structural_runtime_materialization_rejects_views_by_default() {
     let data = [1.0_f64, 2.0];
     let view = TensorView::f64(&[2], &data).unwrap();
-    let mut backend = DefaultReadBackend::default();
+    let mut backend = DefaultReadBackend {
+        structural_runtime_enabled: false,
+        ..Default::default()
+    };
     let session: &mut dyn BackendSession = &mut backend;
 
     let err = session
@@ -1254,7 +1412,10 @@ fn structural_runtime_materialization_rejects_foreign_backend_storage_by_default
         )
         .unwrap(),
     );
-    let mut backend = DefaultReadBackend::default();
+    let mut backend = DefaultReadBackend {
+        structural_runtime_enabled: false,
+        ..Default::default()
+    };
     let session: &mut dyn BackendSession = &mut backend;
 
     let err = session
@@ -1274,7 +1435,10 @@ fn structural_runtime_materialization_rejects_foreign_backend_storage_by_default
 fn structural_runtime_copy_is_explicitly_unsupported_by_default() {
     let src = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
     let mut dst = Tensor::from_vec_col_major(vec![2], vec![0_i32, 0]).unwrap();
-    let mut backend = DefaultReadBackend::default();
+    let mut backend = DefaultReadBackend {
+        structural_runtime_enabled: false,
+        ..Default::default()
+    };
     let session: &mut dyn BackendSession = &mut backend;
 
     let err = session

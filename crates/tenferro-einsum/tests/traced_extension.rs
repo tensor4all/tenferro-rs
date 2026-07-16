@@ -88,7 +88,11 @@ fn traced_einsum_final_permutation_can_return_lazy_value() {
         TensorValue::Tensor(_) => panic!("final einsum permutation should stay as a lazy view"),
     }
     assert_eq!(
-        values[0].to_tensor().unwrap().as_slice::<f64>().unwrap(),
+        executor
+            .materialize_value(&values[0])
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
         &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
     );
 }

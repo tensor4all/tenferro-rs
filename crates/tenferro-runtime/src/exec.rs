@@ -164,19 +164,26 @@ impl<'a> ExecSlot<'a> {
         }
     }
 
-    pub(crate) fn into_tensor(self) -> Result<Tensor> {
+    pub(crate) fn into_tensor(self, exec: &mut dyn BackendSession) -> Result<Tensor> {
         match self {
             Self::Owned(tensor) => Ok(tensor),
-            Self::Value(value) => Ok(value.to_tensor()?),
-            Self::Read(read) => Ok(read.to_tensor()?),
+            Self::Value(TensorValue::Tensor(tensor)) => Ok(tensor.as_ref().clone()),
+            Self::Value(TensorValue::View(view)) => {
+                Ok(exec.to_contiguous_read(view.tensor_read())?)
+            }
+            Self::Read(TensorRead::Tensor(tensor)) => Ok(tensor.clone()),
+            Self::Read(read @ TensorRead::View(_)) => Ok(exec.to_contiguous_read(read)?),
         }
     }
 
-    pub(crate) fn into_value(self) -> Result<TensorValue> {
+    pub(crate) fn into_value(self, exec: &mut dyn BackendSession) -> Result<TensorValue> {
         match self {
             Self::Owned(tensor) => Ok(TensorValue::from_tensor(tensor)),
             Self::Value(value) => Ok(value),
-            Self::Read(read) => Ok(TensorValue::from_tensor(read.to_tensor()?)),
+            Self::Read(TensorRead::Tensor(tensor)) => Ok(TensorValue::from_tensor(tensor.clone())),
+            Self::Read(read @ TensorRead::View(_)) => {
+                Ok(TensorValue::from_tensor(exec.to_contiguous_read(read)?))
+            }
         }
     }
 }
@@ -410,13 +417,14 @@ pub(crate) fn initialize_exec_slots_in<'input>(
 pub(crate) fn collect_outputs_from<'input>(
     program: &ExecProgram,
     slots: &mut [Option<ExecSlot<'input>>],
+    exec: &mut dyn BackendSession,
 ) -> Result<Vec<Tensor>> {
     program
         .output_slots
         .iter()
         .map(|&slot| {
             let value = take_slot(slots, slot, "output", "collect_outputs_from")?;
-            value.into_tensor()
+            value.into_tensor(exec)
         })
         .collect()
 }
@@ -424,13 +432,14 @@ pub(crate) fn collect_outputs_from<'input>(
 pub(crate) fn collect_output_values_from<'input>(
     program: &ExecProgram,
     slots: &mut [Option<ExecSlot<'input>>],
+    exec: &mut dyn BackendSession,
 ) -> Result<Vec<TensorValue>> {
     program
         .output_slots
         .iter()
         .map(|&slot| {
             let value = take_slot(slots, slot, "output", "collect_output_values_from")?;
-            value.into_value()
+            value.into_value(exec)
         })
         .collect()
 }
@@ -457,6 +466,7 @@ pub(crate) fn terminal_output_slots(program: &ExecProgram) -> Vec<bool> {
 }
 
 pub(crate) fn try_execute_terminal_value_instruction<'input>(
+    exec: &mut dyn BackendSession,
     slots: &mut [Option<ExecSlot<'input>>],
     inst: &ExecInstruction,
     terminal_slots: &[bool],
@@ -477,14 +487,14 @@ pub(crate) fn try_execute_terminal_value_instruction<'input>(
         ExecOp::Transpose { perm } => {
             let input_slot = inst.input_slots[0];
             let consume_input = inst.last_use.first().copied().unwrap_or(false);
-            let input = tensor_value_for_lazy_view(slots, input_slot, consume_input)?;
+            let input = tensor_value_for_lazy_view(exec, slots, input_slot, consume_input)?;
             input.transpose_view(perm).map_err(Error::TensorRuntime)?
         }
         ExecOp::Reshape { shape } => {
             let input_slot = inst.input_slots[0];
             let consume_input = inst.last_use.first().copied().unwrap_or(false);
             let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
-            let input = tensor_value_for_lazy_view(slots, input_slot, consume_input)?;
+            let input = tensor_value_for_lazy_view(exec, slots, input_slot, consume_input)?;
             match input.reshape_view(&shape) {
                 Ok(value) => value,
                 Err(_) => {
@@ -499,7 +509,7 @@ pub(crate) fn try_execute_terminal_value_instruction<'input>(
             let input_slot = inst.input_slots[0];
             let consume_input = inst.last_use.first().copied().unwrap_or(false);
             let shape = resolve_tensor_shape_exprs(slots, &inst.input_slots, shape)?;
-            let input = tensor_value_for_lazy_view(slots, input_slot, consume_input)?;
+            let input = tensor_value_for_lazy_view(exec, slots, input_slot, consume_input)?;
             input
                 .broadcast_in_dim_view(&shape, dims)
                 .map_err(Error::TensorRuntime)?
@@ -507,7 +517,7 @@ pub(crate) fn try_execute_terminal_value_instruction<'input>(
         ExecOp::Slice(config) => {
             let input_slot = inst.input_slots[0];
             let consume_input = inst.last_use.first().copied().unwrap_or(false);
-            let input = tensor_value_for_lazy_view(slots, input_slot, consume_input)?;
+            let input = tensor_value_for_lazy_view(exec, slots, input_slot, consume_input)?;
             input.slice_view(config).map_err(Error::TensorRuntime)?
         }
         _ => return Ok(false),
@@ -517,13 +527,14 @@ pub(crate) fn try_execute_terminal_value_instruction<'input>(
 }
 
 fn tensor_value_for_lazy_view<'input>(
+    exec: &mut dyn BackendSession,
     slots: &mut [Option<ExecSlot<'input>>],
     slot: usize,
     consume: bool,
 ) -> Result<TensorValue> {
     if consume {
         let value = take_slot(slots, slot, "input", "tensor_value_for_lazy_view")?;
-        return value.into_value();
+        return value.into_value(exec);
     }
 
     let slot = checked_slot_index(slot, slots.len(), "input", "tensor_value_for_lazy_view")?;
@@ -540,7 +551,7 @@ fn tensor_value_for_lazy_view<'input>(
             Ok(output)
         }
         Some(ExecSlot::Read(read)) => {
-            let output = TensorValue::from_tensor(read.to_tensor()?);
+            let output = TensorValue::from_tensor(exec.to_contiguous_read(read.clone())?);
             slots[slot] = Some(ExecSlot::Read(read));
             Ok(output)
         }
@@ -692,7 +703,7 @@ pub(crate) fn eval_exec_ir_unsegmented_slots_with_cache_and_workspace<
             reclaim_last_use_inputs_backend(slots, inst, backend);
         }
 
-        collect_outputs_from(program, slots)
+        backend.with_backend_session(|exec| collect_outputs_from(program, slots, exec))
     })();
     slots.clear();
     result
@@ -715,7 +726,9 @@ pub(crate) fn eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace<
         let terminal_slots = terminal_output_slots(program);
 
         for (inst_idx, inst) in program.instructions.iter().enumerate() {
-            if try_execute_terminal_value_instruction(slots, inst, &terminal_slots)? {
+            if backend.with_backend_session(|exec| {
+                try_execute_terminal_value_instruction(exec, slots, inst, &terminal_slots)
+            })? {
                 // Already handled as a metadata-only TensorValue.
             } else if is_host_instruction(inst) {
                 execute_host_instruction(backend, slots, inst)?;
@@ -737,7 +750,7 @@ pub(crate) fn eval_exec_ir_unsegmented_slot_values_with_cache_and_workspace<
             reclaim_last_use_inputs_backend(slots, inst, backend);
         }
 
-        collect_output_values_from(program, slots)
+        backend.with_backend_session(|exec| collect_output_values_from(program, slots, exec))
     })();
     slots.clear();
     result
@@ -761,7 +774,7 @@ pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: Tensor
         validate_exec_program(program, "single-session executor")?;
         initialize_exec_slots_in(program, inputs, slots)?;
 
-        backend.with_backend_session_cached(backend_cache, |exec| -> Result<()> {
+        backend.with_backend_session_cached(backend_cache, |exec| {
             for (inst_idx, inst) in program.instructions.iter().enumerate() {
                 if is_host_instruction(inst) {
                     execute_host_instruction_exec(exec, slots, inst)?;
@@ -773,10 +786,8 @@ pub(crate) fn eval_exec_ir_single_session_slots_with_workspace<'input, B: Tensor
                 }
                 reclaim_last_use_inputs_exec(slots, inst, exec);
             }
-            Ok(())
-        })?;
-
-        collect_outputs_from(program, slots)
+            collect_outputs_from(program, slots, exec)
+        })
     })();
     slots.clear();
     result

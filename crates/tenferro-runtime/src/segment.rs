@@ -287,7 +287,7 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
             }
         }
 
-        collect_outputs_from(program, slots)
+        backend.with_backend_session(|exec| collect_outputs_from(program, slots, exec))
     })();
     slots.clear();
     result
@@ -354,7 +354,9 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
                     inst_idx += instructions.len();
                 }
                 Segment::Ffi(inst) => {
-                    if try_execute_terminal_value_instruction(slots, inst, &terminal_slots)? {
+                    if backend.with_backend_session(|exec| {
+                        try_execute_terminal_value_instruction(exec, slots, inst, &terminal_slots)
+                    })? {
                         // Already handled as a metadata-only TensorValue.
                     } else {
                         execute_ffi_instruction_cached(
@@ -371,7 +373,9 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
                     inst_idx += 1;
                 }
                 Segment::Host(inst) => {
-                    if try_execute_terminal_value_instruction(slots, inst, &terminal_slots)? {
+                    if backend.with_backend_session(|exec| {
+                        try_execute_terminal_value_instruction(exec, slots, inst, &terminal_slots)
+                    })? {
                         // Already handled as a metadata-only TensorValue.
                     } else {
                         execute_host_instruction(backend, slots, inst)?;
@@ -382,7 +386,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
             }
         }
 
-        collect_output_values_from(program, slots)
+        backend.with_backend_session(|exec| collect_output_values_from(program, slots, exec))
     })();
     slots.clear();
     result
@@ -399,7 +403,7 @@ fn eval_exec_segmented_single_session_slots_with_workspace<'input, B: TensorBack
         initialize_exec_slots_in(program, inputs, slots)?;
         let segments = segment_exec_program(program);
 
-        backend.with_backend_session_cached(backend_cache, |exec| -> Result<()> {
+        backend.with_backend_session_cached(backend_cache, |exec| {
             let mut inst_idx = 0usize;
             for segment in &segments {
                 match segment {
@@ -430,10 +434,8 @@ fn eval_exec_segmented_single_session_slots_with_workspace<'input, B: TensorBack
                     Segment::Ffi(_) | Segment::Host(_) => 1,
                 };
             }
-            Ok(())
-        })?;
-
-        collect_outputs_from(program, slots)
+            collect_outputs_from(program, slots, exec)
+        })
     })();
     slots.clear();
     result
@@ -451,7 +453,7 @@ fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: Tens
         let terminal_slots = terminal_output_slots(program);
         let segments = segment_exec_program(program);
 
-        backend.with_backend_session_cached(backend_cache, |exec| -> Result<()> {
+        backend.with_backend_session_cached(backend_cache, |exec| {
             let mut inst_idx = 0usize;
             for segment in &segments {
                 match segment {
@@ -470,13 +472,23 @@ fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: Tens
                         &terminal_slots,
                     )?,
                     Segment::Ffi(inst) => {
-                        if !try_execute_terminal_value_instruction(slots, inst, &terminal_slots)? {
+                        if !try_execute_terminal_value_instruction(
+                            exec,
+                            slots,
+                            inst,
+                            &terminal_slots,
+                        )? {
                             execute_ffi_instruction_exec(exec, slots, inst, Some(inst_idx))?;
                         }
                         reclaim_last_use_inputs_exec(slots, inst, exec);
                     }
                     Segment::Host(inst) => {
-                        if !try_execute_terminal_value_instruction(slots, inst, &terminal_slots)? {
+                        if !try_execute_terminal_value_instruction(
+                            exec,
+                            slots,
+                            inst,
+                            &terminal_slots,
+                        )? {
                             execute_host_instruction_exec(exec, slots, inst)?;
                         }
                         reclaim_last_use_inputs_exec(slots, inst, exec);
@@ -487,10 +499,8 @@ fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: Tens
                     Segment::Ffi(_) | Segment::Host(_) => 1,
                 };
             }
-            Ok(())
-        })?;
-
-        collect_output_values_from(program, slots)
+            collect_output_values_from(program, slots, exec)
+        })
     })();
     slots.clear();
     result
@@ -608,7 +618,7 @@ fn execute_fused_value_segment(
     }
 
     for inst in instructions {
-        if !try_execute_terminal_value_instruction(slots, inst, terminal_slots)? {
+        if !try_execute_terminal_value_instruction(exec, slots, inst, terminal_slots)? {
             let result = execute_backend_op(exec, slots, inst)?;
             slots[inst.output_slots[0]] = Some(ExecSlot::Owned(result));
         }

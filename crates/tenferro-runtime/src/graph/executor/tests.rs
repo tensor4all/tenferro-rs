@@ -7,7 +7,7 @@ use std::sync::{
 
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::{dim_expr::DimExpr, ext_op::ExtensionOp, ShapeRelation, SymDim};
-use tenferro_tensor::{DType, Tensor, TensorRead, TensorValue, TypedTensor};
+use tenferro_tensor::{BackendSessionHost, DType, Tensor, TensorRead, TensorValue, TypedTensor};
 
 use super::GraphExecutor;
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
@@ -81,10 +81,12 @@ impl ExtensionRuntime<CpuBackend> for CountedIdentityRuntime {
         &self,
         _op: &dyn ExtensionOp,
         inputs: &[TensorRead<'_>],
-        _ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
+        ctx: &mut ExtensionExecutionContext<'_, CpuBackend>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         self.calls.fetch_add(1, Ordering::Relaxed);
-        Ok(vec![inputs[0].to_tensor()?])
+        Ok(vec![ctx.backend_mut().with_backend_session(|exec| {
+            exec.to_contiguous_read(inputs[0].clone())
+        })?])
     }
 }
 

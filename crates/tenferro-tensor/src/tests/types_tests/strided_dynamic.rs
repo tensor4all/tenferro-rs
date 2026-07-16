@@ -9,10 +9,7 @@ fn tensor_view_covers_all_dtype_variants() {
             let view = TensorView::$variant(typed);
             assert_eq!(view.dtype(), $dtype);
             assert_eq!(view.shape(), &[2, 2]);
-            assert_eq!(
-                view.to_tensor().unwrap().as_slice::<$ty>().unwrap(),
-                &[$a, $c, $b, $d]
-            );
+            assert_eq!(view.strides(), &[2, 1]);
         }};
     }
 
@@ -61,13 +58,10 @@ fn typed_tensor_view_mut_covers_all_dtype_variants() {
             assert_eq!(view.strides(), &[2, 1]);
             assert_eq!(view.offset(), 0);
             *view.get_mut(&[1, 1]).unwrap() = $replacement;
-            assert_eq!(
-                materialize_typed_view_col_major(&view.as_read_only(), "test")
-                    .unwrap()
-                    .as_slice()
-                    .unwrap(),
-                &[$a, $c, $b, $replacement]
-            );
+            assert_eq!(view.get(&[0, 0]), Some(&$a));
+            assert_eq!(view.get(&[1, 0]), Some(&$c));
+            assert_eq!(view.get(&[0, 1]), Some(&$b));
+            assert_eq!(view.get(&[1, 1]), Some(&$replacement));
             let read = TensorView::$variant(view.as_read_only());
             assert_eq!(read.dtype(), $dtype);
         }};
@@ -126,13 +120,10 @@ fn typed_tensor_view_mut_multi_slice_covers_all_dtype_variants() {
                 *lhs.get_mut(&[1]).unwrap() = $left;
                 *rhs.get_mut(&[0]).unwrap() = $right;
             }
-            assert_eq!(
-                materialize_typed_view_col_major(&view.as_read_only(), "test")
-                    .unwrap()
-                    .as_slice()
-                    .unwrap(),
-                &[$a, $left, $right, $d]
-            );
+            assert_eq!(view.get(&[0]), Some(&$a));
+            assert_eq!(view.get(&[1]), Some(&$left));
+            assert_eq!(view.get(&[2]), Some(&$right));
+            assert_eq!(view.get(&[3]), Some(&$d));
         }};
     }
 

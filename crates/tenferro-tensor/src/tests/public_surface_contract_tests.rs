@@ -11,9 +11,12 @@ struct CopyContractBackend;
 impl TensorViewCanonicalization<i32, DynRank> for CopyContractBackend {
     fn to_contiguous(
         &mut self,
-        view: &TypedTensorView<'_, i32>,
+        _view: &TypedTensorView<'_, i32>,
     ) -> crate::Result<TypedTensor<i32>> {
-        view.to_contiguous()
+        Err(crate::Error::backend_failure(
+            "test",
+            "materialization is not exercised by this copy contract test",
+        ))
     }
 
     fn copy_into(
@@ -179,7 +182,7 @@ fn view_canonicalization_uses_symmetric_copy_into_contract() {
 }
 
 #[test]
-fn structural_runtime_materialization_is_erased_without_removing_local_apis() {
+fn structural_runtime_materialization_is_erased_and_context_free_copies_are_removed() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let backend = fs::read_to_string(crate_dir.join("src/backend.rs"))
         .expect("tenferro-tensor backend source must be readable");
@@ -205,6 +208,16 @@ fn structural_runtime_materialization_is_erased_without_removing_local_apis() {
     );
     let types = fs::read_to_string(crate_dir.join("src/types.rs"))
         .expect("tenferro-tensor types source must be readable");
-    assert!(types.contains("pub fn to_tensor(&self) -> crate::Result<Tensor>"));
-    assert!(types.contains("pub fn to_contiguous(&self)"));
+    for removed in [
+        "pub fn to_contiguous(&self)",
+        "pub fn copy_from_contiguous(",
+        "pub fn to_tensor(&self) -> crate::Result<Tensor>",
+        "materialize_view_buffer_col_major",
+        "materialize_typed_view_col_major",
+    ] {
+        assert!(
+            !types.contains(removed),
+            "context-free tensor movement must be absent: {removed}"
+        );
+    }
 }

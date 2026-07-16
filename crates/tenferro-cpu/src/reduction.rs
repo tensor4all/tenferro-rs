@@ -4,6 +4,8 @@ use num_traits::{Float, One, Zero};
 use strided_kernel::reduce_axis;
 
 use super::{typed_host_data, typed_view, typed_view_from_view};
+use crate::buffer_pool::BufferPool;
+use crate::materialize_tensor_read;
 use tenferro_tensor::{Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView};
 
 fn validate_axes(op: &'static str, axes: &[usize], rank: usize) -> crate::Result<()> {
@@ -72,6 +74,7 @@ fn reduction_empty_axes_noop(
 }
 
 fn reduction_read_empty_axes_noop(
+    buffers: &mut BufferPool,
     op: &'static str,
     input: &TensorRead<'_>,
     axes: &[usize],
@@ -81,15 +84,7 @@ fn reduction_read_empty_axes_noop(
         return Ok(None);
     }
 
-    match input.clone() {
-        TensorRead::Tensor(input) => {
-            ensure_host_tensor(op, input)?;
-            // INVARIANT: empty-axis reduction is semantic identity, but the
-            // `_read` API returns an owned tensor even for borrowed input.
-            Ok(Some(input.clone()))
-        }
-        TensorRead::View(input) => Ok(Some(view_to_contiguous_tensor(input)?)),
-    }
+    materialize_tensor_read(buffers, op, input.clone()).map(Some)
 }
 
 fn nan_propagating_max<T: Float>(a: T, b: T) -> T {
@@ -169,8 +164,12 @@ pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     }
 }
 
-pub(crate) fn reduce_sum_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-    if let Some(output) = reduction_read_empty_axes_noop("reduce_sum", &input, axes)? {
+pub(crate) fn reduce_sum_read(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    axes: &[usize],
+) -> crate::Result<Tensor> {
+    if let Some(output) = reduction_read_empty_axes_noop(buffers, "reduce_sum", &input, axes)? {
         return Ok(output);
     }
 
@@ -253,8 +252,12 @@ pub fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     }
 }
 
-pub(crate) fn reduce_prod_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-    if let Some(output) = reduction_read_empty_axes_noop("reduce_prod", &input, axes)? {
+pub(crate) fn reduce_prod_read(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    axes: &[usize],
+) -> crate::Result<Tensor> {
+    if let Some(output) = reduction_read_empty_axes_noop(buffers, "reduce_prod", &input, axes)? {
         return Ok(output);
     }
 
@@ -335,8 +338,12 @@ pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     }
 }
 
-pub(crate) fn reduce_max_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-    if let Some(output) = reduction_read_empty_axes_noop("reduce_max", &input, axes)? {
+pub(crate) fn reduce_max_read(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    axes: &[usize],
+) -> crate::Result<Tensor> {
+    if let Some(output) = reduction_read_empty_axes_noop(buffers, "reduce_max", &input, axes)? {
         return Ok(output);
     }
 
@@ -413,8 +420,12 @@ pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     }
 }
 
-pub(crate) fn reduce_min_read(input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-    if let Some(output) = reduction_read_empty_axes_noop("reduce_min", &input, axes)? {
+pub(crate) fn reduce_min_read(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    axes: &[usize],
+) -> crate::Result<Tensor> {
+    if let Some(output) = reduction_read_empty_axes_noop(buffers, "reduce_min", &input, axes)? {
         return Ok(output);
     }
 
@@ -538,7 +549,10 @@ where
 {
     validate_reduced_axes_nonempty(label, input.shape(), axes)?;
     if axes.is_empty() {
-        return view_to_dyn_contiguous(input);
+        return Err(crate::Error::backend_failure(
+            label,
+            "empty-axis view reductions require backend-owned materialization",
+        ));
     }
 
     let output_shape: Vec<usize> = input
@@ -552,7 +566,10 @@ where
     let mut sorted_axes = axes.to_vec();
     sorted_axes.sort_unstable_by(|a, b| b.cmp(a));
     let Some((&first_axis, remaining_axes)) = sorted_axes.split_first() else {
-        return view_to_dyn_contiguous(input);
+        return Err(crate::Error::backend_failure(
+            label,
+            "empty-axis view reductions require backend-owned materialization",
+        ));
     };
 
     let input_view = typed_view_from_view(label, input)?;
@@ -565,28 +582,6 @@ where
     }
 
     TypedTensor::from_vec_col_major(output_shape, current.into_data())
-}
-
-fn view_to_dyn_contiguous<T, R>(input: &TypedTensorView<'_, T, R>) -> crate::Result<TypedTensor<T>>
-where
-    T: Clone + 'static,
-    R: TensorRank,
-{
-    let compact = input.to_contiguous()?;
-    let (shape, data) = compact.into_vec_col_major()?;
-    TypedTensor::from_vec_col_major(shape, data)
-}
-
-fn view_to_contiguous_tensor(input: TensorView<'_>) -> crate::Result<Tensor> {
-    match input {
-        TensorView::F32(t) => Ok(Tensor::F32(view_to_dyn_contiguous(&t)?)),
-        TensorView::F64(t) => Ok(Tensor::F64(view_to_dyn_contiguous(&t)?)),
-        TensorView::I32(t) => Ok(Tensor::I32(view_to_dyn_contiguous(&t)?)),
-        TensorView::I64(t) => Ok(Tensor::I64(view_to_dyn_contiguous(&t)?)),
-        TensorView::Bool(t) => Ok(Tensor::Bool(view_to_dyn_contiguous(&t)?)),
-        TensorView::C32(t) => Ok(Tensor::C32(view_to_dyn_contiguous(&t)?)),
-        TensorView::C64(t) => Ok(Tensor::C64(view_to_dyn_contiguous(&t)?)),
-    }
 }
 
 pub fn typed_reduce_sum<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>

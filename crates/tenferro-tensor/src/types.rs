@@ -425,9 +425,10 @@ impl<T: 'static> TensorBufferRefMut<'_, T> {
 /// stride-compatible, and [`transpose_view`](TypedTensorView::transpose_view)
 /// update only metadata and do not copy storage.
 ///
-/// Use [`TypedTensorView::to_contiguous`] when a compact owned
-/// [`TypedTensor`] is required. Use [`TypedTensorView::as_slice`] only when the
-/// current view is contiguous in the requested layout.
+/// Materialize through [`TensorStructural::to_contiguous_read`](crate::TensorStructural::to_contiguous_read)
+/// on the active backend session when a compact owned [`TypedTensor`] is
+/// required. Use [`TypedTensorView::as_slice`] only when the current view is
+/// contiguous in the requested layout.
 ///
 /// # Examples
 ///
@@ -827,41 +828,6 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         contiguous_layout_slice(self.layout(), data, "TypedTensorView::as_slice")
     }
 
-    /// Materialize this view as compact column-major host tensor storage.
-    ///
-    /// This is an explicit same-placement copy boundary. Host placement
-    /// metadata is preserved on the materialized tensor. Backend buffers return
-    /// an error here instead of being downloaded implicitly; backend-specific
-    /// compacting paths must stay on that backend.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::{Rank, TypedTensor};
-    ///
-    /// let tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]).unwrap();
-    /// let transposed = tensor.as_view().transpose_view([1, 0])?;
-    /// let compact = transposed.to_contiguous()?;
-    /// assert_eq!(compact.as_slice()?, &[1, 3, 2, 4]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn to_contiguous(&self) -> crate::Result<TypedTensor<T, R>>
-    where
-        T: Clone,
-    {
-        let op = "TypedTensorView::to_contiguous";
-        let data = materialize_view_buffer_col_major(
-            self.shape(),
-            self.strides(),
-            self.offset(),
-            &self.buffer,
-            op,
-        )?;
-        let shape = R::shape_from_vec(self.shape().to_vec().into())
-            .map_err(|err| tensor_layout_error(op, err))?;
-        TypedTensor::from_buffer_col_major(shape, Buffer::Host(data), self.placement.clone())
-    }
-
     /// Return a metadata-only axis permutation.
     ///
     /// # Examples
@@ -1188,8 +1154,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// Mutably borrow the host storage backing this view.
     ///
     /// This exposes the entire backing host allocation, not just the logical
-    /// slice covered by this view. Use [`TypedTensorViewMut::copy_from_contiguous`]
-    /// or element accessors when mutating the logical region instead.
+    /// slice covered by this view. Prefer scalar element accessors when mutating
+    /// a logical region; tensor-sized copies belong to an active backend.
     ///
     /// # Examples
     ///
@@ -1408,85 +1374,6 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
             TensorBufferRefMut::Host(data) => data.get_mut(offset),
             TensorBufferRefMut::Backend(_) => None,
         }
-    }
-
-    /// Copy compact column-major host tensor values into this mutable view.
-    ///
-    /// This is an explicit copy-back boundary. Backend source or destination
-    /// buffers return an error instead of transferring data implicitly.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::{Rank, TypedTensor};
-    ///
-    /// let mut tensor = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![0, 0, 0, 0]).unwrap();
-    /// let src = TypedTensor::<i32, Rank<2>>::from_vec_col_major([2, 2], vec![1, 2, 3, 4]).unwrap();
-    /// tensor.as_view_mut().transpose_view([1, 0])?.copy_from_contiguous(&src)?;
-    /// assert_eq!(tensor.as_slice()?, &[1, 3, 2, 4]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn copy_from_contiguous(&mut self, src: &TypedTensor<T, R>) -> crate::Result<()>
-    where
-        T: Clone,
-    {
-        let op = "TypedTensorViewMut::copy_from_contiguous";
-        if self.shape() != src.shape() {
-            return Err(crate::Error::InvalidConfig {
-                op,
-                message: format!(
-                    "shape mismatch: destination {:?} does not match source {:?}",
-                    self.shape(),
-                    src.shape()
-                ),
-            });
-        }
-
-        let src_data = match &src.buffer {
-            Buffer::Host(data) => contiguous_layout_slice(src.layout(), data, op)?,
-            Buffer::Backend(_) => {
-                return Err(crate::Error::backend_failure(
-                    op,
-                    "source backend buffer cannot be copied through host memory; download explicitly first",
-                ))
-            }
-        };
-
-        let shape = self.shape().to_vec();
-        let strides = self.strides().to_vec();
-        let offset = self.offset();
-        let dst_data = match &mut self.buffer {
-            TensorBufferRefMut::Host(data) => data,
-            TensorBufferRefMut::Backend(_) => {
-                return Err(crate::Error::backend_failure(
-                    op,
-                    "destination backend buffer cannot be updated through host memory; download explicitly first",
-                ))
-            }
-        };
-
-        let mut src_iter = src_data.iter();
-        for_each_layout_offset_col_major(&shape, &strides, offset, op, |offset| {
-            let value = src_iter.next().ok_or_else(|| crate::Error::InvalidConfig {
-                op,
-                message: "source tensor ended before destination view".to_string(),
-            })?;
-            let dst = dst_data
-                .get_mut(offset)
-                .ok_or_else(|| crate::Error::InvalidConfig {
-                    op,
-                    message: "destination view offset is outside host buffer".to_string(),
-                })?;
-            *dst = value.clone();
-            Ok(())
-        })?;
-        if src_iter.next().is_some() {
-            return Err(crate::Error::InvalidConfig {
-                op,
-                message: "source tensor has elements remaining after destination copy".to_string(),
-            });
-        }
-        Ok(())
     }
 
     /// Borrow this mutable view as a read-only view.
@@ -2324,8 +2211,8 @@ pub enum TensorWrite<'a> {
 /// Owned lazy tensor view over a shared base tensor.
 ///
 /// This stores only ownership of the base allocation plus logical layout
-/// metadata. Borrow it as [`TensorRead`] for kernels that understand strides,
-/// or materialize it explicitly with [`TensorOwnedView::to_tensor`].
+/// metadata. Borrow it as [`TensorRead`] and materialize it through an active
+/// backend session when compact storage is required.
 #[derive(Clone, Debug)]
 pub struct TensorOwnedView {
     base: Arc<Tensor>,
@@ -2389,27 +2276,6 @@ impl TensorOwnedView {
 
     pub fn tensor_read(&self) -> TensorRead<'_> {
         TensorRead::from_view(self.tensor_view())
-    }
-
-    /// Materialize this owned view into an owned compact tensor.
-    ///
-    /// This returns an explicit error for backend-backed views because no
-    /// backend context is available for an implicit download.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use std::sync::Arc;
-    /// use tenferro_tensor::{Tensor, TensorOwnedView};
-    ///
-    /// let base = Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
-    /// let view = TensorOwnedView::from_tensor(base);
-    /// let tensor = view.to_tensor()?;
-    /// assert_eq!(tensor.shape(), &[2]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn to_tensor(&self) -> crate::Result<Tensor> {
-        self.tensor_view().to_tensor()
     }
 
     pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
@@ -2543,31 +2409,6 @@ impl TensorValue {
         match self {
             Self::Tensor(tensor) => TensorRead::from_tensor(tensor.as_ref()),
             Self::View(view) => view.tensor_read(),
-        }
-    }
-
-    /// Materialize this tensor value into an owned compact tensor.
-    ///
-    /// Compact tensor values are cloned. Lazy host views are materialized.
-    /// Backend-backed views return an explicit error instead of panicking.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::{Tensor, TensorValue};
-    ///
-    /// let value = TensorValue::from_tensor(Tensor::from_vec_col_major(
-    ///     vec![2],
-    ///     vec![1.0_f64, 2.0],
-    /// ).unwrap());
-    /// let tensor = value.to_tensor()?;
-    /// assert_eq!(tensor.shape(), &[2]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn to_tensor(&self) -> crate::Result<Tensor> {
-        match self {
-            Self::Tensor(tensor) => Ok(tensor.as_ref().clone()),
-            Self::View(view) => view.to_tensor(),
         }
     }
 
@@ -3004,50 +2845,6 @@ impl<'a> TensorView<'a> {
             "TensorView::assert_col_major_contiguous",
         )
     }
-
-    /// Materialize this host view into an owned tensor.
-    ///
-    /// This method has no backend context and does not download backend
-    /// buffers. Use a backend-specific `TensorViewCanonicalization` method or
-    /// an explicit device transfer before materializing backend views on the
-    /// host.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::{DType, TensorView};
-    ///
-    /// let data = [1.0_f64, 2.0];
-    /// let view = TensorView::f64(&[2], &data)?;
-    /// let tensor = view.to_tensor()?;
-    /// assert_eq!(tensor.dtype(), DType::F64);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn to_tensor(&self) -> crate::Result<Tensor> {
-        match self {
-            Self::F32(t) => {
-                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::F32)
-            }
-            Self::F64(t) => {
-                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::F64)
-            }
-            Self::I32(t) => {
-                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::I32)
-            }
-            Self::I64(t) => {
-                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::I64)
-            }
-            Self::Bool(t) => {
-                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::Bool)
-            }
-            Self::C32(t) => {
-                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::C32)
-            }
-            Self::C64(t) => {
-                materialize_typed_view_col_major(t, "TensorView::to_tensor").map(Tensor::C64)
-            }
-        }
-    }
 }
 
 impl<'a> TensorViewMut<'a> {
@@ -3153,10 +2950,6 @@ impl<'a> TensorViewMut<'a> {
             Self::C64(t) => TensorView::C64(t.as_read_only()),
         }
     }
-
-    pub fn copy_from_tensor(&mut self, src: &Tensor) -> crate::Result<()> {
-        copy_tensor_to_view_mut(self, src, "TensorViewMut::copy_from_tensor")
-    }
 }
 
 impl<'a> TensorRead<'a> {
@@ -3233,31 +3026,6 @@ impl<'a> TensorRead<'a> {
         match self {
             Self::Tensor(tensor) => Some(*tensor),
             Self::View(_) => None,
-        }
-    }
-
-    /// Convert an owned tensor reference or host view into an owned tensor.
-    ///
-    /// This method clones owned tensor inputs and materializes host views. It
-    /// has no backend context and does not download backend buffers. Use a
-    /// backend-specific `TensorViewCanonicalization` method or an explicit
-    /// device transfer before materializing backend views on the host.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_tensor::{TensorRead, TensorView};
-    ///
-    /// let data = [1_i32, 2, 3];
-    /// let read = TensorRead::from_view(TensorView::i32(&[3], &data)?);
-    /// let tensor = read.to_tensor()?;
-    /// assert_eq!(tensor.shape(), &[3]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
-    /// ```
-    pub fn to_tensor(&self) -> crate::Result<Tensor> {
-        match self {
-            Self::Tensor(tensor) => Ok((*tensor).clone()),
-            Self::View(view) => view.to_tensor(),
         }
     }
 }
@@ -3354,13 +3122,6 @@ impl<'a> TensorWrite<'a> {
             self.offset(),
             "TensorWrite::assert_col_major_contiguous",
         )
-    }
-
-    pub fn copy_from_tensor(&mut self, src: &Tensor) -> crate::Result<()> {
-        match self {
-            Self::Tensor(dst) => copy_tensor_to_tensor(dst, src, "TensorWrite::copy_from_tensor"),
-            Self::View(view) => copy_tensor_to_view_mut(view, src, "TensorWrite::copy_from_tensor"),
-        }
     }
 }
 
@@ -3492,80 +3253,6 @@ fn assert_layout_col_major_contiguous(
     }
 }
 
-fn validate_tensor_copy_target(
-    dst_dtype: DType,
-    dst_shape: &[usize],
-    src: &Tensor,
-    op: &'static str,
-) -> crate::Result<()> {
-    if dst_dtype != src.dtype() {
-        return Err(crate::Error::DTypeMismatch {
-            op,
-            lhs: dst_dtype,
-            rhs: src.dtype(),
-        });
-    }
-    if dst_shape != src.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op,
-            lhs: dst_shape.to_vec(),
-            rhs: src.shape().to_vec(),
-        });
-    }
-    Ok(())
-}
-
-fn copy_tensor_to_tensor(dst: &mut Tensor, src: &Tensor, op: &'static str) -> crate::Result<()> {
-    validate_tensor_copy_target(dst.dtype(), dst.shape(), src, op)?;
-    macro_rules! copy_variant {
-        ($variant:ident) => {
-            if let (Tensor::$variant(dst), Tensor::$variant(src)) = (&mut *dst, src) {
-                dst.host_data_mut()?.clone_from_slice(src.host_data()?);
-                return Ok(());
-            }
-        };
-    }
-    copy_variant!(F32);
-    copy_variant!(F64);
-    copy_variant!(I32);
-    copy_variant!(I64);
-    copy_variant!(Bool);
-    copy_variant!(C32);
-    copy_variant!(C64);
-    Err(crate::Error::DTypeMismatch {
-        op,
-        lhs: dst.dtype(),
-        rhs: src.dtype(),
-    })
-}
-
-fn copy_tensor_to_view_mut(
-    dst: &mut TensorViewMut<'_>,
-    src: &Tensor,
-    op: &'static str,
-) -> crate::Result<()> {
-    validate_tensor_copy_target(dst.dtype(), dst.shape(), src, op)?;
-    macro_rules! copy_variant {
-        ($variant:ident) => {
-            if let (TensorViewMut::$variant(dst), Tensor::$variant(src)) = (&mut *dst, src) {
-                return dst.copy_from_contiguous(src);
-            }
-        };
-    }
-    copy_variant!(F32);
-    copy_variant!(F64);
-    copy_variant!(I32);
-    copy_variant!(I64);
-    copy_variant!(Bool);
-    copy_variant!(C32);
-    copy_variant!(C64);
-    Err(crate::Error::DTypeMismatch {
-        op,
-        lhs: dst.dtype(),
-        rhs: src.dtype(),
-    })
-}
-
 fn try_shape_product(shape: &[usize], op: &'static str) -> crate::Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim)
@@ -3660,95 +3347,6 @@ fn checked_view_offset(
     }
 
     usize::try_from(offset).ok()
-}
-
-fn for_each_layout_offset_col_major(
-    shape: &[usize],
-    strides: &[isize],
-    base_offset: isize,
-    op: &'static str,
-    mut f: impl FnMut(usize) -> crate::Result<()>,
-) -> crate::Result<()> {
-    if shape.len() != strides.len() {
-        return Err(crate::Error::InvalidConfig {
-            op,
-            message: format!(
-                "shape rank {} does not match stride rank {}",
-                shape.len(),
-                strides.len()
-            ),
-        });
-    }
-
-    if shape.contains(&0) {
-        return Ok(());
-    }
-
-    let mut offset = base_offset;
-    if shape.is_empty() {
-        let offset = usize::try_from(offset).map_err(|_| crate::Error::InvalidConfig {
-            op,
-            message: "view offset is negative".to_string(),
-        })?;
-        return f(offset);
-    }
-
-    let mut index = vec![0usize; shape.len()];
-    loop {
-        let physical = usize::try_from(offset).map_err(|_| crate::Error::InvalidConfig {
-            op,
-            message: "view offset is negative".to_string(),
-        })?;
-        f(physical)?;
-
-        let mut advance_axis = None;
-        for axis in 0..shape.len() {
-            let next_index =
-                index[axis]
-                    .checked_add(1)
-                    .ok_or_else(|| crate::Error::InvalidConfig {
-                        op,
-                        message: "logical index overflows".to_string(),
-                    })?;
-            if next_index < shape[axis] {
-                advance_axis = Some((axis, next_index));
-                break;
-            }
-        }
-
-        let Some((advance_axis, next_index)) = advance_axis else {
-            return Ok(());
-        };
-
-        for axis in 0..advance_axis {
-            let steps = isize::try_from(index[axis]).map_err(|_| crate::Error::InvalidConfig {
-                op,
-                message: "logical index does not fit in isize".to_string(),
-            })?;
-            let rewind =
-                strides[axis]
-                    .checked_mul(steps)
-                    .ok_or_else(|| crate::Error::InvalidConfig {
-                        op,
-                        message: "stride rewind overflows".to_string(),
-                    })?;
-            offset = offset
-                .checked_sub(rewind)
-                .ok_or_else(|| crate::Error::InvalidConfig {
-                    op,
-                    message: "view offset rewind overflows".to_string(),
-                })?;
-            index[axis] = 0;
-        }
-
-        offset = offset.checked_add(strides[advance_axis]).ok_or_else(|| {
-            crate::Error::InvalidConfig {
-                op,
-                message: "view offset overflows".to_string(),
-            }
-        })?;
-        index[advance_axis] = next_index;
-    }
 }
 
 fn reachable_layout_span(
@@ -3887,36 +3485,6 @@ fn contiguous_layout_slice<'a, T, R: TensorRank>(
             op,
             message: "contiguous view range is outside host buffer".to_string(),
         })
-}
-
-fn materialize_view_buffer_col_major<T: Clone>(
-    shape: &[usize],
-    strides: &[isize],
-    offset: isize,
-    buffer: &TensorBufferRef<'_, T>,
-    op: &'static str,
-) -> crate::Result<Vec<T>> {
-    let source = match buffer {
-        TensorBufferRef::Host(data) => *data,
-        TensorBufferRef::Backend(_) => return Err(crate::Error::backend_failure(
-            op,
-            "backend buffers cannot be materialized through host memory; download explicitly first",
-        )),
-    };
-
-    let n_elements = checked_view_element_count(shape, op)?;
-    let mut out = Vec::with_capacity(n_elements);
-    for_each_layout_offset_col_major(shape, strides, offset, op, |physical| {
-        let value = source
-            .get(physical)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op,
-                message: "view offset is outside host buffer".to_string(),
-            })?;
-        out.push(value.clone());
-        Ok(())
-    })?;
-    Ok(out)
 }
 
 fn relaxed_col_major_contiguous(
@@ -4100,20 +3668,6 @@ fn slice_axis_specs(
     let mut slices = vec![StridedSliceSpec::all(); rank];
     slices[axis] = slice;
     Ok(slices)
-}
-
-pub(crate) fn materialize_typed_view_col_major<T: Clone + 'static, R: TensorRank>(
-    view: &TypedTensorView<'_, T, R>,
-    op: &'static str,
-) -> crate::Result<TypedTensor<T>> {
-    let data = materialize_view_buffer_col_major(
-        view.shape(),
-        view.strides(),
-        view.offset(),
-        &view.buffer,
-        op,
-    )?;
-    TypedTensor::from_vec_col_major(view.shape().to_vec(), data)
 }
 
 pub(crate) fn default_placement() -> Placement {

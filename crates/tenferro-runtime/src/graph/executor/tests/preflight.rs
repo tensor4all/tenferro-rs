@@ -26,6 +26,8 @@ struct CountingBackend {
     dispatches: Arc<AtomicUsize>,
     session_entries: Arc<AtomicUsize>,
     session_depth: Arc<AtomicUsize>,
+    materializations: Arc<AtomicUsize>,
+    materializer: tenferro_cpu::CpuBackend,
 }
 
 macro_rules! unreachable_backend_methods {
@@ -91,6 +93,11 @@ impl TensorAnalytic for CountingBackend {
 }
 
 impl TensorStructural for CountingBackend {
+    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        self.materializations.fetch_add(1, Ordering::Relaxed);
+        self.materializer.to_contiguous_read(input)
+    }
+
     unreachable_backend_methods! {
         transpose(input: &Tensor, perm: &[usize]) -> tenferro_tensor::Result<Tensor>;
         reshape(input: &Tensor, shape: &[usize]) -> tenferro_tensor::Result<Tensor>;
@@ -165,6 +172,7 @@ fn counting_backend() -> (
     let dispatches = Arc::new(AtomicUsize::new(0));
     let session_entries = Arc::new(AtomicUsize::new(0));
     let session_depth = Arc::new(AtomicUsize::new(0));
+    let materializations = Arc::new(AtomicUsize::new(0));
     (
         CountingBackend {
             uploads: uploads.clone(),
@@ -172,11 +180,31 @@ fn counting_backend() -> (
             dispatches: dispatches.clone(),
             session_entries: session_entries.clone(),
             session_depth,
+            materializations,
+            materializer: tenferro_cpu::CpuBackend::new(),
         },
         uploads,
         dispatches,
         session_entries,
     )
+}
+
+#[test]
+fn runtime_materialization_uses_backend() {
+    let (backend, _, _, _) = counting_backend();
+    let materializations = Arc::clone(&backend.materializations);
+    let mut executor = GraphExecutor::new(backend);
+    let tensor = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+
+    let owned = tenferro_tensor::TensorValue::from_tensor(tensor);
+    let compact = executor.materialize_value(&owned).unwrap();
+    assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(materializations.load(Ordering::Relaxed), 0);
+
+    let view = owned.transpose_view([1, 0]).unwrap();
+    let compact = executor.materialize_value(&view).unwrap();
+    assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+    assert_eq!(materializations.load(Ordering::Relaxed), 1);
 }
 
 #[test]
@@ -192,6 +220,8 @@ fn host_native_and_session_ffi_share_one_backend_session() {
         dispatches: dispatches.clone(),
         session_entries: session_entries.clone(),
         session_depth,
+        materializations: Arc::new(AtomicUsize::new(0)),
+        materializer: tenferro_cpu::CpuBackend::new(),
     };
     let program = ExecProgram {
         instructions: vec![

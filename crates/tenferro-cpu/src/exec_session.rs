@@ -184,25 +184,25 @@ impl TensorReduction for CpuExecSession<'_> {
     delegate!(reduce_sum(input: &Tensor, axes: &[usize]) => reduction::reduce_sum(input, axes));
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|_| reduction::reduce_sum_read(input, axes))
+        self.run_native(|buffers| reduction::reduce_sum_read(buffers, input, axes))
     }
 
     delegate!(reduce_prod(input: &Tensor, axes: &[usize]) => reduction::reduce_prod(input, axes));
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|_| reduction::reduce_prod_read(input, axes))
+        self.run_native(|buffers| reduction::reduce_prod_read(buffers, input, axes))
     }
 
     delegate!(reduce_max(input: &Tensor, axes: &[usize]) => reduction::reduce_max(input, axes));
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|_| reduction::reduce_max_read(input, axes))
+        self.run_native(|buffers| reduction::reduce_max_read(buffers, input, axes))
     }
 
     delegate!(reduce_min(input: &Tensor, axes: &[usize]) => reduction::reduce_min(input, axes));
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|_| reduction::reduce_min_read(input, axes))
+        self.run_native(|buffers| reduction::reduce_min_read(buffers, input, axes))
     }
 }
 

@@ -260,7 +260,7 @@ fn segmented_value_dispatch_preserves_terminal_lazy_broadcast_multiply_view() {
         "terminal broadcast-multiply segment should preserve a lazy output view"
     );
 
-    let output = outputs.pop().unwrap().to_tensor().unwrap();
+    let output = executor.materialize_value(&outputs.pop().unwrap()).unwrap();
     assert_eq!(output.shape(), &[2, 2, 4, 3]);
     let Tensor::F64(output) = output else {
         panic!("expected f64 output")

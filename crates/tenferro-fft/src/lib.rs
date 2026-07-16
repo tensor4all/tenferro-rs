@@ -661,8 +661,10 @@ fn execute_concrete_fft_read_op<B: TensorBackend>(
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
     let op = concrete_fft_op(op_name, kind, input.shape(), n, axis, norm)?;
-    let materialized = input.to_tensor()?;
-    execute_concrete_fft_op(&materialized, &op, backend)
+    backend.with_backend_session(|exec| {
+        let materialized = exec.to_contiguous_read(input.clone())?;
+        single_fft_output(execute_host_fft_op(&op, &[&materialized])?)
+    })
 }
 
 fn single_fft_output(mut outputs: Vec<Tensor>) -> tenferro_tensor::Result<Tensor> {
@@ -1108,13 +1110,15 @@ fn execute_fft_extension_reads<B: TensorBackend + 'static>(
     inputs: &[TensorRead<'_>],
     ctx: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let _ = ctx;
     // rustfft consumes compact host tensors; materialization is explicit so
     // backend-backed views produce a normal error instead of an implicit path.
-    let materialized_inputs: Vec<Tensor> = inputs
-        .iter()
-        .map(TensorRead::to_tensor)
-        .collect::<tenferro_tensor::Result<_>>()?;
+    let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
+        inputs
+            .iter()
+            .cloned()
+            .map(|input| exec.to_contiguous_read(input))
+            .collect::<tenferro_tensor::Result<Vec<_>>>()
+    })?;
     let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
     execute_host_fft_op(op, &input_refs)
 }

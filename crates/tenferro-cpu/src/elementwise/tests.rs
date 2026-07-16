@@ -316,7 +316,8 @@ fn broadcast_multiply_handles_scalar_full_output_pairs() {
     )
     .unwrap()
     .expect("complex scalar broadcast multiply should materialize");
-    let complex_tensor = complex_value.to_tensor().unwrap();
+    let complex_tensor =
+        crate::materialize_tensor_read(&mut buffers, "test", complex_value.tensor_read()).unwrap();
     let complex_data = complex_tensor.as_slice::<Complex<f64>>().unwrap();
     assert_c64_close(complex_data[0], c64(3.5, -0.5));
     assert_c64_close(complex_data[1], c64(-0.75, 4.75));
@@ -345,7 +346,7 @@ fn lazy_outer_product_lhs_prefix_preserves_logical_output_order() {
     assert_eq!(out.shape, vec![2, 3, 4]);
     assert_ne!(out.strides, col_major_strides(&out.shape).unwrap());
     let value = lazy_outer_product_value(Tensor::F64(out.base), out.shape, out.strides).unwrap();
-    let tensor = value.to_tensor().unwrap();
+    let tensor = crate::materialize_tensor_read(&mut buffers, "test", value.tensor_read()).unwrap();
     let expected: Vec<f64> = (0..4)
         .flat_map(|k| {
             (0..3).flat_map(move |j| (0..2).map(move |i| lhs_data[i * 3 + j] * rhs_data[k]))
@@ -378,7 +379,7 @@ fn lazy_outer_product_rhs_prefix_preserves_logical_output_order() {
     assert_eq!(out.shape, vec![4, 2, 3]);
     assert_ne!(out.strides, col_major_strides(&out.shape).unwrap());
     let value = lazy_outer_product_value(Tensor::F64(out.base), out.shape, out.strides).unwrap();
-    let tensor = value.to_tensor().unwrap();
+    let tensor = crate::materialize_tensor_read(&mut buffers, "test", value.tensor_read()).unwrap();
     let expected: Vec<f64> = (0..3)
         .flat_map(|j| {
             (0..2).flat_map(move |i| (0..4).map(move |k| rhs_data[k] * lhs_data[i * 3 + j]))
@@ -1026,7 +1027,12 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     .unwrap()
     .expect("non-canonical f32 outer product should stay lazy");
     assert!(matches!(value_f32, TensorValue::View(_)));
-    assert_eq!(value_f32.to_tensor().unwrap().shape(), &lhs_shape);
+    assert_eq!(
+        crate::materialize_tensor_read(&mut buffers, "test", value_f32.tensor_read())
+            .unwrap()
+            .shape(),
+        &lhs_shape
+    );
 
     let lhs_i32_data = [1_i32, 2, 3, 4, 5, 6];
     let rhs_i32_data = [2_i32, 3, 4, 5];
@@ -1127,7 +1133,10 @@ fn broadcast_multiply_read_and_value_cover_dtypes_and_error_paths() {
     .expect("same-shape multiply should materialize");
     assert!(matches!(materialized, TensorValue::Tensor(_)));
     assert_eq!(
-        materialized.to_tensor().unwrap().as_slice::<i64>().unwrap(),
+        crate::materialize_tensor_read(&mut buffers, "test", materialized.tensor_read())
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
         &[8, 15]
     );
 
