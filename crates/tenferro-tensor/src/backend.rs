@@ -1698,6 +1698,26 @@ pub trait TensorAnalytic {
 /// fn accepts_structural<B: TensorStructural>(_backend: &mut B) {}
 /// ```
 pub trait TensorStructural {
+    /// Materialize an owned tensor or borrowed view into compact storage owned
+    /// by this backend.
+    ///
+    /// The conservative default clones owned compact tensors and rejects
+    /// borrowed views because materializing a view requires backend context.
+    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        Ok(read_tensor("to_contiguous_read", input)?.clone())
+    }
+
+    /// Copy a readable tensor or view into caller-provided writable storage.
+    ///
+    /// Backends must override this method when they can preserve placement,
+    /// layout, and aliasing guarantees. The default never host-materializes.
+    fn copy_read_into(&mut self, _src: TensorRead<'_>, _dst: TensorWrite<'_>) -> crate::Result<()> {
+        Err(crate::Error::backend_failure(
+            "copy_read_into",
+            "backend-owned runtime copy is unsupported by this backend",
+        ))
+    }
+
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
         self.transpose(read_tensor("transpose", input)?, perm)

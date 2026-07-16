@@ -177,3 +177,39 @@ fn view_canonicalization_uses_symmetric_copy_into_contract() {
     )
     .unwrap();
 }
+
+#[test]
+fn structural_runtime_materialization_is_erased_and_object_safe_without_removing_local_apis() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let backend = fs::read_to_string(crate_dir.join("src/backend.rs"))
+        .expect("tenferro-tensor backend source must be readable");
+    let structural = backend
+        .split_once("pub trait TensorStructural")
+        .expect("TensorStructural trait must exist")
+        .1
+        .split_once("/// Reduction operations.")
+        .expect("TensorStructural must precede TensorReduction")
+        .0;
+
+    assert!(
+        structural.contains(
+            "fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor>"
+        ),
+        "runtime materialization must use the erased TensorRead/Tensor result surface"
+    );
+    assert!(
+        structural.contains("fn copy_read_into(")
+            && structural.contains("src: TensorRead<'_>")
+            && structural.contains("dst: TensorWrite<'_>"),
+        "runtime copy must use erased read/write values"
+    );
+    assert!(
+        !structural.contains("where\n        Self: Sized"),
+        "runtime materialization methods must remain callable through dyn BackendSession"
+    );
+
+    let types = fs::read_to_string(crate_dir.join("src/types.rs"))
+        .expect("tenferro-tensor types source must be readable");
+    assert!(types.contains("pub fn to_tensor(&self) -> crate::Result<Tensor>"));
+    assert!(types.contains("pub fn to_contiguous(&self)"));
+}

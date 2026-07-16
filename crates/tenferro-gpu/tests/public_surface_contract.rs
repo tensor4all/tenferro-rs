@@ -330,6 +330,60 @@ fn cubecl_copy_into_reports_typed_shape_mismatch() {
 }
 
 #[test]
+fn cubecl_runtime_materialization_and_copy_stay_device_owned_and_typed() {
+    let cubecl_mod = repo_file("crates/tenferro-gpu/src/cubecl/mod.rs");
+    let structural = cubecl_mod
+        .split_once("impl TensorStructural for CudaBackend")
+        .expect("CUDA structural implementation must exist")
+        .1
+        .split_once("impl TensorReduction for CudaBackend")
+        .expect("CUDA structural implementation must precede reductions")
+        .0;
+    let runtime_methods = structural
+        .split_once("fn to_contiguous_read(")
+        .expect("CUDA runtime materialization override must exist")
+        .1
+        .split_once("fn transpose(")
+        .expect("CUDA runtime methods must precede transpose")
+        .0;
+
+    for method in ["fn to_contiguous_read(", "fn copy_read_into("] {
+        assert!(
+            structural.contains(method),
+            "CUDA TensorStructural must override {method}"
+        );
+    }
+    for variant in ["F32", "F64", "I32", "I64", "Bool", "C32", "C64"] {
+        assert!(
+            runtime_methods.contains(variant),
+            "CUDA runtime read/copy dispatch must account for {variant}"
+        );
+    }
+    assert!(
+        runtime_methods.contains("TensorViewCanonicalization::to_contiguous")
+            && runtime_methods.contains("TensorViewCanonicalization::copy_into"),
+        "CUDA runtime read/copy methods must reuse same-device typed paths"
+    );
+    assert!(
+        !runtime_methods.contains("download_tensor(")
+            && !runtime_methods.contains("upload_tensor("),
+        "CUDA runtime materialization/copy must not transfer payloads through host memory"
+    );
+
+    let copy_helper = cubecl_mod
+        .split_once("fn copy_view_to_view_typed")
+        .expect("CUDA copy-view helper must exist")
+        .1
+        .split_once("fn convert_float_to_float")
+        .expect("CUDA copy-view helper must precede conversion helpers")
+        .0;
+    assert!(copy_helper.contains("ensure_view_resident_on_runtime"));
+    assert!(copy_helper.contains("ensure_view_mut_resident_on_runtime"));
+    assert!(copy_helper.contains("Arc::ptr_eq(source_buffer, destination_buffer)"));
+    assert!(copy_helper.contains("compact source view covering its full allocation"));
+}
+
+#[test]
 fn cubecl_gemm_contracting_element_product_is_checked() {
     let gemm = repo_file("crates/tenferro-gpu/src/cubecl/gemm.rs");
     assert!(

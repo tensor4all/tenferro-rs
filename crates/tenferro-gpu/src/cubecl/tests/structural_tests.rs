@@ -2,7 +2,8 @@
 use crate::{DType, DeviceId, DeviceKind, Error, MemoryKind, Placement, Tensor, TypedTensor};
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    GpuBackendKind, StridedSliceSpec, TensorIndexing, TensorStructural, TensorViewCanonicalization,
+    BackendSession, GpuBackendKind, StridedSliceSpec, TensorIndexing, TensorRead, TensorStructural,
+    TensorView, TensorViewCanonicalization, TensorViewMut, TensorWrite,
 };
 
 use super::{
@@ -587,6 +588,49 @@ fn cuda_to_contiguous_keeps_tensor_on_cuda() {
     ));
     let actual = download(&gpu, &Tensor::I32(compact));
     assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 5, 2, 4, 6]);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_materialization_is_object_safe_and_stays_on_device() {
+    let mut gpu = gpu_backend();
+    let gpu_input = upload(&gpu, &tensor_i32(vec![2, 3], vec![1, 2, 3, 4, 5, 6]));
+    let Tensor::I32(input) = &gpu_input else {
+        panic!("expected i32 tensor");
+    };
+    let view = input.as_view().transpose_view([1, 0]).unwrap();
+    let exec: &mut dyn BackendSession = &mut gpu;
+
+    let output = exec
+        .to_contiguous_read(TensorRead::from_view(TensorView::I32(view)))
+        .unwrap();
+
+    assert_eq!(output.shape(), &[3, 2]);
+    assert_eq!(output.placement().memory_kind, MemoryKind::Device);
+    let actual = download(&gpu, &output);
+    assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 5, 2, 4, 6]);
+}
+
+#[test]
+#[ignore = "requires CUDA 12.8+ GPU"]
+fn cuda_runtime_copy_is_object_safe_and_updates_strided_destination() {
+    let mut gpu = gpu_backend();
+    let gpu_src = upload(&gpu, &tensor_i32(vec![2, 2], vec![1, 2, 3, 4]));
+    let mut gpu_dst = upload(&gpu, &tensor_i32(vec![2, 2], vec![0, 0, 0, 0]));
+    let Tensor::I32(dst) = &mut gpu_dst else {
+        panic!("expected i32 destination");
+    };
+    let dst_view = dst.as_view_mut().transpose_view([1, 0]).unwrap();
+    let exec: &mut dyn BackendSession = &mut gpu;
+
+    exec.copy_read_into(
+        TensorRead::from_tensor(&gpu_src),
+        TensorWrite::from_view(TensorViewMut::I32(dst_view)),
+    )
+    .unwrap();
+
+    let actual = download(&gpu, &gpu_dst);
+    assert_eq!(actual.as_slice::<i32>().unwrap(), &[1, 3, 2, 4]);
 }
 
 #[test]

@@ -1,11 +1,11 @@
 use crate::{
     backend::{validate_grouped_gemm, GroupedGemmConfig, GroupedGemmJob},
-    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, CompareDir, ContractionScalar,
-    DType, DotGeneralAccumulation, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
-    SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
-    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction,
-    TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView,
-    TypedTensorViewMut,
+    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir,
+    ContractionScalar, DType, DotGeneralAccumulation, DotGeneralConfig, GatherConfig, PadConfig,
+    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
+    TensorReduction, TensorStructural, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    TypedTensorView, TypedTensorViewMut,
 };
 use num_complex::{Complex32, Complex64};
 
@@ -1200,4 +1200,62 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
 
     let axis_err = Tensor::stack(&[&a], 2, &mut backend).unwrap_err();
     assert!(axis_err.to_string().contains("axis 2"));
+}
+
+#[test]
+fn structural_runtime_materialization_is_object_safe_and_clones_owned_input_by_default() {
+    let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let mut backend = DefaultReadBackend::default();
+    let session: &mut dyn BackendSession = &mut backend;
+
+    let output = session
+        .to_contiguous_read(TensorRead::from_tensor(&input))
+        .unwrap();
+
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+    assert_eq!(input.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+}
+
+#[test]
+fn structural_runtime_materialization_rejects_views_by_default() {
+    let data = [1.0_f64, 2.0];
+    let view = TensorView::f64(&[2], &data).unwrap();
+    let mut backend = DefaultReadBackend::default();
+    let session: &mut dyn BackendSession = &mut backend;
+
+    let err = session
+        .to_contiguous_read(TensorRead::from_view(view))
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure {
+            op: "to_contiguous_read",
+            ref message,
+        } if message.contains("borrowed tensor views")
+    ));
+}
+
+#[test]
+fn structural_runtime_copy_is_explicitly_unsupported_by_default() {
+    let src = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
+    let mut dst = Tensor::from_vec_col_major(vec![2], vec![0_i32, 0]).unwrap();
+    let mut backend = DefaultReadBackend::default();
+    let session: &mut dyn BackendSession = &mut backend;
+
+    let err = session
+        .copy_read_into(
+            TensorRead::from_tensor(&src),
+            TensorWrite::from_tensor(&mut dst),
+        )
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        crate::Error::BackendFailure {
+            op: "copy_read_into",
+            ref message,
+        } if message.contains("unsupported")
+    ));
+    assert_eq!(dst.as_slice::<i32>().unwrap(), &[0, 0]);
 }

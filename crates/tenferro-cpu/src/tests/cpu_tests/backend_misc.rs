@@ -12,6 +12,190 @@ fn opaque_backend_placement() -> Placement {
 }
 
 #[test]
+fn cpu_runtime_materialization_dispatches_all_dtypes_with_backend_session_parity() {
+    macro_rules! assert_materialized {
+        ($variant:ident, $ty:ty, $values:expr) => {{
+            let values: [$ty; 2] = $values;
+            let view = TensorView::$variant(
+                TypedTensorView::from_slice(vec![2], vec![-1], 1, &values).unwrap(),
+            );
+            let read = TensorRead::from_view(view);
+            let mut backend = CpuBackend::with_threads(2).unwrap();
+
+            let direct = backend.to_contiguous_read(read.clone()).unwrap();
+            let session = backend
+                .with_backend_session(|exec| exec.to_contiguous_read(read))
+                .unwrap();
+
+            let expected = [values[1], values[0]];
+            assert_eq!(direct.as_slice::<$ty>().unwrap(), &expected);
+            assert_eq!(session.as_slice::<$ty>().unwrap(), &expected);
+        }};
+    }
+
+    assert_materialized!(F32, f32, [1.25, -2.5]);
+    assert_materialized!(F64, f64, [3.5, -4.75]);
+    assert_materialized!(I32, i32, [5, -6]);
+    assert_materialized!(I64, i64, [7, -8]);
+    assert_materialized!(Bool, bool, [true, false]);
+    assert_materialized!(
+        C32,
+        Complex32,
+        [Complex32::new(1.0, -2.0), Complex32::new(-3.0, 4.0)]
+    );
+    assert_materialized!(
+        C64,
+        Complex64,
+        [Complex64::new(5.0, -6.0), Complex64::new(-7.0, 8.0)]
+    );
+}
+
+#[test]
+fn cpu_runtime_copy_dispatches_all_dtypes_with_backend_session_parity() {
+    macro_rules! assert_copied {
+        ($variant:ident, $ty:ty, $values:expr, $zeros:expr) => {{
+            let values: Vec<$ty> = $values;
+            let src =
+                Tensor::$variant(TypedTensor::from_vec_col_major(vec![2], values.clone()).unwrap());
+            let mut direct_dst =
+                Tensor::$variant(TypedTensor::from_vec_col_major(vec![2], $zeros).unwrap());
+            let mut session_dst =
+                Tensor::$variant(TypedTensor::from_vec_col_major(vec![2], $zeros).unwrap());
+            let mut backend = CpuBackend::with_threads(2).unwrap();
+
+            backend
+                .copy_read_into(
+                    TensorRead::from_tensor(&src),
+                    TensorWrite::from_tensor(&mut direct_dst),
+                )
+                .unwrap();
+            backend
+                .with_backend_session(|exec| {
+                    exec.copy_read_into(
+                        TensorRead::from_tensor(&src),
+                        TensorWrite::from_tensor(&mut session_dst),
+                    )
+                })
+                .unwrap();
+
+            assert_eq!(direct_dst.as_slice::<$ty>().unwrap(), values.as_slice());
+            assert_eq!(session_dst.as_slice::<$ty>().unwrap(), values.as_slice());
+        }};
+    }
+
+    assert_copied!(F32, f32, vec![1.25, -2.5], vec![0.0; 2]);
+    assert_copied!(F64, f64, vec![3.5, -4.75], vec![0.0; 2]);
+    assert_copied!(I32, i32, vec![5, -6], vec![0; 2]);
+    assert_copied!(I64, i64, vec![7, -8], vec![0; 2]);
+    assert_copied!(Bool, bool, vec![true, false], vec![false; 2]);
+    assert_copied!(
+        C32,
+        Complex32,
+        vec![Complex32::new(1.0, -2.0), Complex32::new(-3.0, 4.0)],
+        vec![Complex32::new(0.0, 0.0); 2]
+    );
+    assert_copied!(
+        C64,
+        Complex64,
+        vec![Complex64::new(5.0, -6.0), Complex64::new(-7.0, 8.0)],
+        vec![Complex64::new(0.0, 0.0); 2]
+    );
+}
+
+#[test]
+fn cpu_runtime_copy_handles_strided_source_and_destination_without_allocation() {
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    backend.reclaim_buffer(Tensor::I32(
+        TypedTensor::from_vec_col_major(vec![4], vec![0_i32; 4]).unwrap(),
+    ));
+    let retained_before = backend.buffer_pool_len();
+    let src_data = [0_i32, 1, 2, 3, 4, 5, 6, 7];
+    let src = TypedTensorView::from_slice(vec![2, 2], vec![2, 4], 1, &src_data).unwrap();
+    let mut dst_data = [-1_i32; 8];
+    let dst = TypedTensorViewMut::from_slice(vec![2, 2], vec![3, 1], 1, &mut dst_data).unwrap();
+
+    backend
+        .copy_read_into(
+            TensorRead::from_view(TensorView::I32(src)),
+            TensorWrite::from_view(TensorViewMut::I32(dst)),
+        )
+        .unwrap();
+
+    assert_eq!(dst_data, [-1, 1, 5, -1, 3, 7, -1, -1]);
+    assert_eq!(backend.buffer_pool_len(), retained_before);
+}
+
+#[test]
+fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
+    let mut backend = CpuBackend::new();
+
+    let src = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2]).unwrap();
+    let mut wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![0_i64, 0]).unwrap();
+    assert!(matches!(
+        backend.copy_read_into(
+            TensorRead::from_tensor(&src),
+            TensorWrite::from_tensor(&mut wrong_dtype),
+        ),
+        Err(Error::DTypeMismatch {
+            op: "CpuBackend::copy_read_into",
+            ..
+        })
+    ));
+
+    let mut wrong_shape = Tensor::from_vec_col_major(vec![3], vec![0_i32; 3]).unwrap();
+    assert!(matches!(
+        backend.copy_read_into(
+            TensorRead::from_tensor(&src),
+            TensorWrite::from_tensor(&mut wrong_shape),
+        ),
+        Err(Error::ShapeMismatch {
+            op: "CpuBackend::copy_read_into",
+            ..
+        })
+    ));
+
+    let mut misplaced = Tensor::from_vec_col_major(vec![2], vec![0_i32; 2]).unwrap();
+    match &mut misplaced {
+        Tensor::I32(tensor) => tensor.set_placement(opaque_backend_placement()),
+        _ => unreachable!(),
+    }
+    assert!(matches!(
+        backend.copy_read_into(
+            TensorRead::from_tensor(&src),
+            TensorWrite::from_tensor(&mut misplaced),
+        ),
+        Err(Error::BackendFailure {
+            op: "CpuBackend::copy_read_into",
+            ref message,
+        }) if message.contains("destination") && message.contains("host placement")
+    ));
+
+    let shared = Arc::new(BufferHandle::<f64>::new_with_len(91, 2));
+    let placement = opaque_backend_placement();
+    let aliased_src = Tensor::F64(
+        TypedTensor::from_buffer_col_major(
+            vec![2],
+            Buffer::Backend(shared.clone()),
+            placement.clone(),
+        )
+        .unwrap(),
+    );
+    let mut aliased_dst = Tensor::F64(
+        TypedTensor::from_buffer_col_major(vec![2], Buffer::Backend(shared), placement).unwrap(),
+    );
+    assert!(matches!(
+        backend.copy_read_into(
+            TensorRead::from_tensor(&aliased_src),
+            TensorWrite::from_tensor(&mut aliased_dst),
+        ),
+        Err(Error::InvalidConfig {
+            op: "CpuBackend::copy_read_into",
+            ref message,
+        }) if message.contains("alias")
+    ));
+}
+
+#[test]
 fn cpu_copy_into_copies_exactly_between_strided_host_views() {
     let mut backend = CpuBackend::with_threads(2).unwrap();
     let src_data = [0_i32, 1, 2, 3, 4, 5, 6, 7];

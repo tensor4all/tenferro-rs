@@ -14,8 +14,8 @@ use tenferro_tensor::{
 
 use super::backend::reclaim_typed;
 use super::{
-    analytic, elementwise, gemm, indexing, materialize_tensor_read, reduction, structural,
-    CpuContext,
+    analytic, copy_tensor_read_into, elementwise, gemm, indexing, materialize_tensor_read,
+    reduction, structural, CpuContext,
 };
 use super::{CpuBackendKind, DotGeneralProvider};
 
@@ -140,6 +140,16 @@ impl TensorAnalytic for CpuExecSession<'_> {
 
 impl TensorStructural for CpuExecSession<'_> {
     // Structural
+    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        self.run_native(|buffers| {
+            materialize_tensor_read(buffers, "CpuBackend::to_contiguous_read", input)
+        })
+    }
+
+    fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
+        self.run_native(|_| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
+    }
+
     delegate_with_pool!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose_with_pool);
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
         self.run_native(|buffers| structural::transpose_read_with_pool(buffers, input, perm))

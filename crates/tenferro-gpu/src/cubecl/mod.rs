@@ -110,7 +110,8 @@ use crate::kernels::reduce::{self as cubecl_reduce, ReduceStrategy};
 use crate::kernels::{diagonal, elementwise, indexing, structural};
 use crate::{
     Buffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, Tensor, TensorRank,
-    TensorViewCanonicalization, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    TensorView, TensorViewCanonicalization, TensorViewMut, TypedTensor, TypedTensorView,
+    TypedTensorViewMut,
 };
 
 mod capability;
@@ -4046,6 +4047,73 @@ impl TensorAnalytic for CudaBackend {
 }
 
 impl TensorStructural for CudaBackend {
+    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
+        macro_rules! materialize {
+            ($variant:ident, $view:expr) => {{
+                let view = $view;
+                TensorViewCanonicalization::to_contiguous(self, &view).map(Tensor::$variant)
+            }};
+        }
+
+        match input {
+            TensorRead::Tensor(Tensor::F32(input)) => materialize!(F32, input.as_view()),
+            TensorRead::Tensor(Tensor::F64(input)) => materialize!(F64, input.as_view()),
+            TensorRead::Tensor(Tensor::I32(input)) => materialize!(I32, input.as_view()),
+            TensorRead::Tensor(Tensor::I64(input)) => materialize!(I64, input.as_view()),
+            TensorRead::Tensor(Tensor::Bool(input)) => materialize!(Bool, input.as_view()),
+            TensorRead::Tensor(Tensor::C32(input)) => materialize!(C32, input.as_view()),
+            TensorRead::Tensor(Tensor::C64(input)) => materialize!(C64, input.as_view()),
+            TensorRead::View(TensorView::F32(input)) => materialize!(F32, input),
+            TensorRead::View(TensorView::F64(input)) => materialize!(F64, input),
+            TensorRead::View(TensorView::I32(input)) => materialize!(I32, input),
+            TensorRead::View(TensorView::I64(input)) => materialize!(I64, input),
+            TensorRead::View(TensorView::Bool(input)) => materialize!(Bool, input),
+            TensorRead::View(TensorView::C32(input)) => materialize!(C32, input),
+            TensorRead::View(TensorView::C64(input)) => materialize!(C64, input),
+        }
+    }
+
+    fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
+        let src_dtype = src.dtype();
+        let dst_dtype = dst.dtype();
+        macro_rules! copy_source {
+            ($variant:ident, $src:expr) => {{
+                let src = $src;
+                match dst {
+                    TensorWrite::Tensor(Tensor::$variant(dst)) => {
+                        let mut dst = dst.as_view_mut();
+                        TensorViewCanonicalization::copy_into(self, &src, &mut dst)
+                    }
+                    TensorWrite::View(TensorViewMut::$variant(mut dst)) => {
+                        TensorViewCanonicalization::copy_into(self, &src, &mut dst)
+                    }
+                    _ => Err(crate::Error::DTypeMismatch {
+                        op: "CudaBackend::copy_read_into",
+                        lhs: src_dtype,
+                        rhs: dst_dtype,
+                    }),
+                }
+            }};
+        }
+
+        match src {
+            TensorRead::Tensor(Tensor::F32(src)) => copy_source!(F32, src.as_view()),
+            TensorRead::Tensor(Tensor::F64(src)) => copy_source!(F64, src.as_view()),
+            TensorRead::Tensor(Tensor::I32(src)) => copy_source!(I32, src.as_view()),
+            TensorRead::Tensor(Tensor::I64(src)) => copy_source!(I64, src.as_view()),
+            TensorRead::Tensor(Tensor::Bool(src)) => copy_source!(Bool, src.as_view()),
+            TensorRead::Tensor(Tensor::C32(src)) => copy_source!(C32, src.as_view()),
+            TensorRead::Tensor(Tensor::C64(src)) => copy_source!(C64, src.as_view()),
+            TensorRead::View(TensorView::F32(src)) => copy_source!(F32, src),
+            TensorRead::View(TensorView::F64(src)) => copy_source!(F64, src),
+            TensorRead::View(TensorView::I32(src)) => copy_source!(I32, src),
+            TensorRead::View(TensorView::I64(src)) => copy_source!(I64, src),
+            TensorRead::View(TensorView::Bool(src)) => copy_source!(Bool, src),
+            TensorRead::View(TensorView::C32(src)) => copy_source!(C32, src),
+            TensorRead::View(TensorView::C64(src)) => copy_source!(C64, src),
+        }
+    }
+
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
         match input {
             Tensor::F32(t) => self.transpose_typed(t, perm).map(Tensor::F32),

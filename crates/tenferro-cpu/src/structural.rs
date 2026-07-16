@@ -1,5 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
+use std::sync::Arc;
 use strided_kernel::{
     col_major_strides, copy_into, map_into, Identity, StridedView, StridedViewMut,
 };
@@ -213,6 +214,14 @@ where
             lhs: src.shape().to_vec(),
             rhs: dst.shape().to_vec(),
         });
+    }
+    if let (Some(src_buffer), Some(dst_buffer)) = (src.backend_buffer(), dst.backend_buffer()) {
+        if Arc::ptr_eq(src_buffer, dst_buffer) {
+            return Err(crate::Error::InvalidConfig {
+                op,
+                message: "CPU copy source and destination allocations must not alias".into(),
+            });
+        }
     }
     if src.backend_buffer().is_some() || dst.backend_buffer().is_some() {
         return Err(cpu_backend_buffer_error(op));
