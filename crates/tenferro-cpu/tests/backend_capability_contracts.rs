@@ -107,3 +107,51 @@ fn gather_scatter_index_component_reuses_index_scratch() {
         "gather/scatter should carry reusable index scratch through index_component"
     );
 }
+
+#[test]
+fn cpu_public_ops_require_backend_owner() {
+    let lib_source = include_str!("../src/lib.rs");
+    for reexport in [
+        "pub use analytic::pow;",
+        "pub use elementwise::",
+        "pub use indexing::",
+        "pub use reduction::",
+        "pub use structural::",
+    ] {
+        assert!(
+            !lib_source.contains(reexport),
+            "resource-bypassing reexport remains: {reexport}"
+        );
+    }
+
+    for (module, source) in [
+        ("analytic", include_str!("../src/analytic.rs")),
+        ("elementwise", include_str!("../src/elementwise.rs")),
+        ("indexing", include_str!("../src/indexing.rs")),
+        ("structural", include_str!("../src/structural.rs")),
+    ] {
+        assert!(
+            !source.contains("fn with_local_pool"),
+            "{module} still constructs a throwaway BufferPool"
+        );
+    }
+}
+
+#[test]
+fn install_pool_has_no_placeholder_construction_or_gemm_descriptor_clones() {
+    let backend_source = include_str!("../src/backend.rs");
+    let buffer_pool_source = include_str!("../src/buffer_pool.rs");
+    let gemm_source = include_str!("../src/gemm/mod.rs");
+    let exec_session_source = include_str!("../src/exec_session.rs");
+
+    assert!(!backend_source.contains("std::mem::take(target)"));
+    assert!(backend_source.contains("buffers: &'a mut BufferPool"));
+    assert!(buffer_pool_source.contains("OnceLock"));
+    assert!(buffer_pool_source.contains("parse_default_max_retained_capacity_bytes"));
+    assert!(gemm_source.contains("lhs: &TensorRead<'_>"));
+    assert!(gemm_source.contains("rhs: &TensorRead<'_>"));
+    assert!(!backend_source.contains("lhs.clone()"));
+    assert!(!backend_source.contains("rhs.clone()"));
+    assert!(!exec_session_source.contains("lhs.clone()"));
+    assert!(!exec_session_source.contains("rhs.clone()"));
+}

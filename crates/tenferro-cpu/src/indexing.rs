@@ -111,7 +111,8 @@ macro_rules! dispatch_same_dtype_without_bool_result {
     };
 }
 
-fn with_local_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
+#[cfg(test)]
+fn with_test_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
     let mut buffers = BufferPool::new();
     f(&mut buffers)
 }
@@ -160,12 +161,13 @@ where
     Ok(out)
 }
 
-pub fn gather(
+#[cfg(test)]
+pub(crate) fn gather(
     operand: &Tensor,
     start_indices: &Tensor,
     config: &GatherConfig,
 ) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| gather_with_pool(buffers, operand, start_indices, config))
+    with_test_pool(|buffers| gather_with_pool(buffers, operand, start_indices, config))
 }
 
 pub(crate) fn gather_with_pool(
@@ -183,13 +185,14 @@ pub(crate) fn gather_with_pool(
     ))
 }
 
-pub fn scatter(
+#[cfg(test)]
+pub(crate) fn scatter(
     operand: &Tensor,
     scatter_indices: &Tensor,
     updates: &Tensor,
     config: &ScatterConfig,
 ) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| scatter_with_pool(buffers, operand, scatter_indices, updates, config))
+    with_test_pool(|buffers| scatter_with_pool(buffers, operand, scatter_indices, updates, config))
 }
 
 pub(crate) fn scatter_with_pool(
@@ -217,12 +220,13 @@ pub(crate) fn try_slice_with_pool(
     dispatch_tensor_unary_result!(input, |t| typed_slice(buffers, t, config))
 }
 
-pub fn dynamic_slice(
+#[cfg(test)]
+pub(crate) fn dynamic_slice(
     input: &Tensor,
     starts: &Tensor,
     slice_sizes: &[usize],
 ) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| dynamic_slice_with_pool(buffers, input, starts, slice_sizes))
+    with_test_pool(|buffers| dynamic_slice_with_pool(buffers, input, starts, slice_sizes))
 }
 
 pub(crate) fn dynamic_slice_with_pool(
@@ -259,12 +263,13 @@ pub(crate) fn dynamic_slice_with_pool(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[0.0, 0.0, 0.0, 3.0, 4.0]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
-pub fn dynamic_update_slice(
+#[cfg(test)]
+pub(crate) fn dynamic_update_slice(
     operand: &Tensor,
     update: &Tensor,
     starts: &Tensor,
 ) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| dynamic_update_slice_with_pool(buffers, operand, update, starts))
+    with_test_pool(|buffers| dynamic_update_slice_with_pool(buffers, operand, update, starts))
 }
 
 pub(crate) fn dynamic_update_slice_with_pool(
@@ -279,12 +284,14 @@ pub(crate) fn dynamic_update_slice_with_pool(
     })
 }
 
-pub fn pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
+#[cfg(test)]
+pub(crate) fn pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
     try_pad(input, config)
 }
 
+#[cfg(test)]
 fn try_pad(input: &Tensor, config: &PadConfig) -> crate::Result<Tensor> {
-    with_local_pool(|buffers| try_pad_with_pool(buffers, input, config))
+    with_test_pool(|buffers| try_pad_with_pool(buffers, input, config))
 }
 
 pub(crate) fn try_pad_with_pool(

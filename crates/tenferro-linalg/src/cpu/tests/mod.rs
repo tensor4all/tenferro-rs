@@ -11,12 +11,7 @@ use super::linalg::faer_linalg;
 use crate::LinalgBackend;
 #[cfg(feature = "cpu-faer")]
 use tenferro_cpu::linalg_interop::BufferPool;
-use tenferro_cpu::{
-    abs, add, broadcast_in_dim, clamp, compare, conj, div, dynamic_slice, dynamic_update_slice,
-    embed_diagonal, extract_diagonal, gather, maximum, minimum, mul, neg, pad, reduce_max,
-    reduce_min, reduce_prod, reduce_sum, reshape, scatter, select, sign, transpose, tril, triu,
-    CpuBackend, CpuContext,
-};
+use tenferro_cpu::{CpuBackend, CpuContext};
 use tenferro_tensor::backend::TensorBackend;
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,

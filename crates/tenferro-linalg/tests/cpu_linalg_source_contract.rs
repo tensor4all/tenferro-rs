@@ -87,6 +87,15 @@ fn cpu_faer_linalg_source() -> String {
     .unwrap_or_else(|err| panic!("faer linalg source should be readable: {err}"))
 }
 
+fn linalg_extension_source() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("extension.rs"),
+    )
+    .unwrap_or_else(|err| panic!("linalg extension source should be readable: {err}"))
+}
+
 #[test]
 fn cpu_linalg_allocation_helpers_remain_fallible_and_checked() {
     let faer = cpu_faer_linalg_source();
@@ -392,6 +401,31 @@ fn linalg_batched_helpers_use_checked_products_and_slice_ranges() {
     assert!(
         !lu_factor.contains("batch * matrix_len") && !lu_factor.contains("start + matrix_len"),
         "faer LU factor batching must use checked_slice_range for batch windows"
+    );
+}
+
+#[test]
+fn canonical_svd_gauge_uses_checked_layout_without_raw_batch_offsets() {
+    let source = linalg_extension_source();
+    let gauge = source_section(
+        &source,
+        "fn apply_canonical_pivot_svd_gauge",
+        "fn require_matrix_meta",
+    );
+
+    for needle in [
+        ".iter().product::<usize>()",
+        "batch * m * k",
+        "batch * k * n",
+    ] {
+        assert!(
+            !gauge.contains(needle),
+            "canonical SVD gauge must use its checked layout instead of {needle}"
+        );
+    }
+    assert!(
+        gauge.contains("canonical_svd_gauge_layout(") && gauge.contains("validate_storage("),
+        "canonical SVD gauge should prepare and validate one checked layout"
     );
 }
 

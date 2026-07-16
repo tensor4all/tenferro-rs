@@ -65,13 +65,15 @@ The default stratum is internal.
    otherwise they use methods.
 3. Multi-output linalg and decomposition ops are tensor extension-trait methods.
 4. Einsum is exposed through extension traits owned by `tenferro-einsum`:
-   `TensorEinsumExt`, `TypedTensorEinsumExt`, and `TensorReadEinsumExt` for
-   concrete input slices/arrays; `TensorEinsumIntoExt`,
-   `TypedTensorEinsumIntoExt`, and `TensorReadEinsumIntoExt` for
+   `TensorEinsumExt` and `TypedTensorEinsumExt` for owned concrete input
+   slices/arrays, and `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for
+   borrowed-view inputs; `TensorEinsumIntoExt`, `TypedTensorEinsumIntoExt`,
+   `TensorReadEinsumIntoExt`, and `TypedTensorReadEinsumIntoExt` for
    preallocated-output concrete execution; `ConcreteEinsumPlan` for repeated
    concrete executions with fixed input metadata; `GraphCompilerEinsumExt` for
    traced graph construction; and `EagerEinsumExt` for autodiff eager input
-   slices/arrays.
+   slices/arrays. Typed preallocated outputs use `TypedTensorWrite` so both
+   owned typed tensors and mutable typed views are accepted.
 5. Standard operation families are first-class crates, not modules under a
    broad facade.
 

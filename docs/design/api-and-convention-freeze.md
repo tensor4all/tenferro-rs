@@ -130,8 +130,9 @@ Release APIs should follow these naming and shape rules.
   otherwise they use methods.
 - Multi-output linalg and decomposition ops are tensor extension-trait methods.
 - Einsum is owned by `tenferro-einsum` through crate-root extension traits:
-  concrete input slices/arrays use `TensorEinsumExt`, `TypedTensorEinsumExt`,
-  and `TensorReadEinsumExt`; repeated concrete executions use
+  concrete owned input slices/arrays use `TensorEinsumExt` and
+  `TypedTensorEinsumExt`, while borrowed inputs use `TensorReadEinsumExt` and
+  `TypedTensorReadEinsumExt`; repeated concrete executions use
   `ConcreteEinsumPlan`; traced graph construction uses
   `GraphCompilerEinsumExt`; autodiff eager inputs use `EagerEinsumExt`.
 - Traced tensor methods do not use a `traced_` prefix.

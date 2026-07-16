@@ -779,41 +779,21 @@ fn apply_canonical_pivot_svd_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::R
             ),
         });
     }
-    let batch_count = u_shape[2..].iter().product::<usize>();
+    let layout = canonical_svd_gauge_layout(m, k, n, &u_shape[2..])?;
 
     match (u, vt) {
-        (Tensor::F64(u), Tensor::F64(vt)) => canonicalize_svd_gauge_f64(
-            u.host_data_mut()?,
-            vt.host_data_mut()?,
-            m,
-            k,
-            n,
-            batch_count,
-        ),
-        (Tensor::F32(u), Tensor::F32(vt)) => canonicalize_svd_gauge_f32(
-            u.host_data_mut()?,
-            vt.host_data_mut()?,
-            m,
-            k,
-            n,
-            batch_count,
-        ),
-        (Tensor::C64(u), Tensor::C64(vt)) => canonicalize_svd_gauge_c64(
-            u.host_data_mut()?,
-            vt.host_data_mut()?,
-            m,
-            k,
-            n,
-            batch_count,
-        ),
-        (Tensor::C32(u), Tensor::C32(vt)) => canonicalize_svd_gauge_c32(
-            u.host_data_mut()?,
-            vt.host_data_mut()?,
-            m,
-            k,
-            n,
-            batch_count,
-        ),
+        (Tensor::F64(u), Tensor::F64(vt)) => {
+            canonicalize_svd_gauge_f64(u.host_data_mut()?, vt.host_data_mut()?, layout)
+        }
+        (Tensor::F32(u), Tensor::F32(vt)) => {
+            canonicalize_svd_gauge_f32(u.host_data_mut()?, vt.host_data_mut()?, layout)
+        }
+        (Tensor::C64(u), Tensor::C64(vt)) => {
+            canonicalize_svd_gauge_c64(u.host_data_mut()?, vt.host_data_mut()?, layout)
+        }
+        (Tensor::C32(u), Tensor::C32(vt)) => {
+            canonicalize_svd_gauge_c32(u.host_data_mut()?, vt.host_data_mut()?, layout)
+        }
         (u, vt) => Err(Error::DTypeMismatch {
             op: "tenferro-linalg.svd",
             lhs: u.dtype(),
@@ -822,28 +802,105 @@ fn apply_canonical_pivot_svd_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::R
     }
 }
 
-fn canonicalize_svd_gauge_f64(
-    u: &mut [f64],
-    vt: &mut [f64],
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CanonicalSvdGaugeLayout {
+    m: usize,
+    k: usize,
+    batch_count: usize,
+    u_batch_len: usize,
+    vt_batch_len: usize,
+    u_len: usize,
+    vt_len: usize,
+}
+
+impl CanonicalSvdGaugeLayout {
+    fn validate_storage(self, u_len: usize, vt_len: usize) -> tenferro_tensor::Result<()> {
+        if u_len != self.u_len {
+            return Err(Error::InvalidConfig {
+                op: "tenferro-linalg.svd",
+                message: format!(
+                    "canonical SVD gauge expected U storage length {}, got {u_len}",
+                    self.u_len
+                ),
+            });
+        }
+        if vt_len != self.vt_len {
+            return Err(Error::InvalidConfig {
+                op: "tenferro-linalg.svd",
+                message: format!(
+                    "canonical SVD gauge expected VT storage length {}, got {vt_len}",
+                    self.vt_len
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn canonical_svd_gauge_layout(
     m: usize,
     k: usize,
     n: usize,
-    batch_count: usize,
+    batch_shape: &[usize],
+) -> tenferro_tensor::Result<CanonicalSvdGaugeLayout> {
+    let batch_count = tenferro_tensor::validate::checked_shape_product(
+        "tenferro-linalg.svd",
+        "canonical SVD batch",
+        batch_shape,
+    )?;
+    let u_batch_len = tenferro_tensor::validate::checked_shape_product(
+        "tenferro-linalg.svd",
+        "canonical SVD U batch",
+        &[m, k],
+    )?;
+    let vt_batch_len = tenferro_tensor::validate::checked_shape_product(
+        "tenferro-linalg.svd",
+        "canonical SVD VT batch",
+        &[k, n],
+    )?;
+    let u_len = tenferro_tensor::validate::checked_shape_product(
+        "tenferro-linalg.svd",
+        "canonical SVD U storage",
+        &[u_batch_len, batch_count],
+    )?;
+    let vt_len = tenferro_tensor::validate::checked_shape_product(
+        "tenferro-linalg.svd",
+        "canonical SVD VT storage",
+        &[vt_batch_len, batch_count],
+    )?;
+    Ok(CanonicalSvdGaugeLayout {
+        m,
+        k,
+        batch_count,
+        u_batch_len,
+        vt_batch_len,
+        u_len,
+        vt_len,
+    })
+}
+
+fn canonicalize_svd_gauge_f64(
+    u: &mut [f64],
+    vt: &mut [f64],
+    layout: CanonicalSvdGaugeLayout,
 ) -> tenferro_tensor::Result<()> {
-    for batch in 0..batch_count {
-        let u_batch = batch * m * k;
-        let vt_batch = batch * k * n;
-        for col in 0..k {
-            let pivot = max_abs_pivot_f64(u, u_batch, m, col);
-            let pivot_value = u[u_batch + pivot + m * col];
+    layout.validate_storage(u.len(), vt.len())?;
+    if layout.batch_count == 0 || layout.u_batch_len == 0 || layout.vt_batch_len == 0 {
+        return Ok(());
+    }
+    for (u_batch, vt_batch) in u
+        .chunks_exact_mut(layout.u_batch_len)
+        .zip(vt.chunks_exact_mut(layout.vt_batch_len))
+    {
+        for (col, u_column) in u_batch.chunks_exact_mut(layout.m).enumerate() {
+            let pivot = max_abs_pivot_f64(u_column);
+            let pivot_value = u_column[pivot];
             if pivot_value < 0.0 {
-                for row in 0..m {
-                    let offset = u_batch + row + m * col;
-                    u[offset] = -u[offset];
+                for value in u_column {
+                    *value = -*value;
                 }
-                for vt_col in 0..n {
-                    let offset = vt_batch + col + k * vt_col;
-                    vt[offset] = -vt[offset];
+                for vt_column in vt_batch.chunks_exact_mut(layout.k) {
+                    vt_column[col] = -vt_column[col];
                 }
             }
         }
@@ -854,25 +911,25 @@ fn canonicalize_svd_gauge_f64(
 fn canonicalize_svd_gauge_f32(
     u: &mut [f32],
     vt: &mut [f32],
-    m: usize,
-    k: usize,
-    n: usize,
-    batch_count: usize,
+    layout: CanonicalSvdGaugeLayout,
 ) -> tenferro_tensor::Result<()> {
-    for batch in 0..batch_count {
-        let u_batch = batch * m * k;
-        let vt_batch = batch * k * n;
-        for col in 0..k {
-            let pivot = max_abs_pivot_f32(u, u_batch, m, col);
-            let pivot_value = u[u_batch + pivot + m * col];
+    layout.validate_storage(u.len(), vt.len())?;
+    if layout.batch_count == 0 || layout.u_batch_len == 0 || layout.vt_batch_len == 0 {
+        return Ok(());
+    }
+    for (u_batch, vt_batch) in u
+        .chunks_exact_mut(layout.u_batch_len)
+        .zip(vt.chunks_exact_mut(layout.vt_batch_len))
+    {
+        for (col, u_column) in u_batch.chunks_exact_mut(layout.m).enumerate() {
+            let pivot = max_abs_pivot_f32(u_column);
+            let pivot_value = u_column[pivot];
             if pivot_value < 0.0 {
-                for row in 0..m {
-                    let offset = u_batch + row + m * col;
-                    u[offset] = -u[offset];
+                for value in u_column {
+                    *value = -*value;
                 }
-                for vt_col in 0..n {
-                    let offset = vt_batch + col + k * vt_col;
-                    vt[offset] = -vt[offset];
+                for vt_column in vt_batch.chunks_exact_mut(layout.k) {
+                    vt_column[col] = -vt_column[col];
                 }
             }
         }
@@ -883,30 +940,30 @@ fn canonicalize_svd_gauge_f32(
 fn canonicalize_svd_gauge_c64(
     u: &mut [Complex64],
     vt: &mut [Complex64],
-    m: usize,
-    k: usize,
-    n: usize,
-    batch_count: usize,
+    layout: CanonicalSvdGaugeLayout,
 ) -> tenferro_tensor::Result<()> {
-    for batch in 0..batch_count {
-        let u_batch = batch * m * k;
-        let vt_batch = batch * k * n;
-        for col in 0..k {
-            let pivot = max_abs_pivot_c64(u, u_batch, m, col);
-            let pivot_value = u[u_batch + pivot + m * col];
+    layout.validate_storage(u.len(), vt.len())?;
+    if layout.batch_count == 0 || layout.u_batch_len == 0 || layout.vt_batch_len == 0 {
+        return Ok(());
+    }
+    for (u_batch, vt_batch) in u
+        .chunks_exact_mut(layout.u_batch_len)
+        .zip(vt.chunks_exact_mut(layout.vt_batch_len))
+    {
+        for (col, u_column) in u_batch.chunks_exact_mut(layout.m).enumerate() {
+            let pivot = max_abs_pivot_c64(u_column);
+            let pivot_value = u_column[pivot];
             let pivot_norm = pivot_value.norm();
             if pivot_norm == 0.0 {
                 continue;
             }
             let phase = pivot_value.conj() / pivot_norm;
             let vt_phase = phase.conj();
-            for row in 0..m {
-                let offset = u_batch + row + m * col;
-                u[offset] *= phase;
+            for value in u_column {
+                *value *= phase;
             }
-            for vt_col in 0..n {
-                let offset = vt_batch + col + k * vt_col;
-                vt[offset] *= vt_phase;
+            for vt_column in vt_batch.chunks_exact_mut(layout.k) {
+                vt_column[col] *= vt_phase;
             }
         }
     }
@@ -916,41 +973,41 @@ fn canonicalize_svd_gauge_c64(
 fn canonicalize_svd_gauge_c32(
     u: &mut [Complex32],
     vt: &mut [Complex32],
-    m: usize,
-    k: usize,
-    n: usize,
-    batch_count: usize,
+    layout: CanonicalSvdGaugeLayout,
 ) -> tenferro_tensor::Result<()> {
-    for batch in 0..batch_count {
-        let u_batch = batch * m * k;
-        let vt_batch = batch * k * n;
-        for col in 0..k {
-            let pivot = max_abs_pivot_c32(u, u_batch, m, col);
-            let pivot_value = u[u_batch + pivot + m * col];
+    layout.validate_storage(u.len(), vt.len())?;
+    if layout.batch_count == 0 || layout.u_batch_len == 0 || layout.vt_batch_len == 0 {
+        return Ok(());
+    }
+    for (u_batch, vt_batch) in u
+        .chunks_exact_mut(layout.u_batch_len)
+        .zip(vt.chunks_exact_mut(layout.vt_batch_len))
+    {
+        for (col, u_column) in u_batch.chunks_exact_mut(layout.m).enumerate() {
+            let pivot = max_abs_pivot_c32(u_column);
+            let pivot_value = u_column[pivot];
             let pivot_norm = pivot_value.norm();
             if pivot_norm == 0.0 {
                 continue;
             }
             let phase = pivot_value.conj() / pivot_norm;
             let vt_phase = phase.conj();
-            for row in 0..m {
-                let offset = u_batch + row + m * col;
-                u[offset] *= phase;
+            for value in u_column {
+                *value *= phase;
             }
-            for vt_col in 0..n {
-                let offset = vt_batch + col + k * vt_col;
-                vt[offset] *= vt_phase;
+            for vt_column in vt_batch.chunks_exact_mut(layout.k) {
+                vt_column[col] *= vt_phase;
             }
         }
     }
     Ok(())
 }
 
-fn max_abs_pivot_f64(u: &[f64], u_batch: usize, m: usize, col: usize) -> usize {
+fn max_abs_pivot_f64(u_column: &[f64]) -> usize {
     let mut pivot = 0;
-    let mut pivot_abs = u[u_batch + m * col].abs();
-    for row in 1..m {
-        let candidate_abs = u[u_batch + row + m * col].abs();
+    let mut pivot_abs = u_column[0].abs();
+    for (row, value) in u_column.iter().enumerate().skip(1) {
+        let candidate_abs = value.abs();
         if candidate_abs > pivot_abs {
             pivot = row;
             pivot_abs = candidate_abs;
@@ -959,11 +1016,11 @@ fn max_abs_pivot_f64(u: &[f64], u_batch: usize, m: usize, col: usize) -> usize {
     pivot
 }
 
-fn max_abs_pivot_f32(u: &[f32], u_batch: usize, m: usize, col: usize) -> usize {
+fn max_abs_pivot_f32(u_column: &[f32]) -> usize {
     let mut pivot = 0;
-    let mut pivot_abs = u[u_batch + m * col].abs();
-    for row in 1..m {
-        let candidate_abs = u[u_batch + row + m * col].abs();
+    let mut pivot_abs = u_column[0].abs();
+    for (row, value) in u_column.iter().enumerate().skip(1) {
+        let candidate_abs = value.abs();
         if candidate_abs > pivot_abs {
             pivot = row;
             pivot_abs = candidate_abs;
@@ -972,11 +1029,11 @@ fn max_abs_pivot_f32(u: &[f32], u_batch: usize, m: usize, col: usize) -> usize {
     pivot
 }
 
-fn max_abs_pivot_c64(u: &[Complex64], u_batch: usize, m: usize, col: usize) -> usize {
+fn max_abs_pivot_c64(u_column: &[Complex64]) -> usize {
     let mut pivot = 0;
-    let mut pivot_abs = u[u_batch + m * col].norm_sqr();
-    for row in 1..m {
-        let candidate_abs = u[u_batch + row + m * col].norm_sqr();
+    let mut pivot_abs = u_column[0].norm_sqr();
+    for (row, value) in u_column.iter().enumerate().skip(1) {
+        let candidate_abs = value.norm_sqr();
         if candidate_abs > pivot_abs {
             pivot = row;
             pivot_abs = candidate_abs;
@@ -985,11 +1042,11 @@ fn max_abs_pivot_c64(u: &[Complex64], u_batch: usize, m: usize, col: usize) -> u
     pivot
 }
 
-fn max_abs_pivot_c32(u: &[Complex32], u_batch: usize, m: usize, col: usize) -> usize {
+fn max_abs_pivot_c32(u_column: &[Complex32]) -> usize {
     let mut pivot = 0;
-    let mut pivot_abs = u[u_batch + m * col].norm_sqr();
-    for row in 1..m {
-        let candidate_abs = u[u_batch + row + m * col].norm_sqr();
+    let mut pivot_abs = u_column[0].norm_sqr();
+    for (row, value) in u_column.iter().enumerate().skip(1) {
+        let candidate_abs = value.norm_sqr();
         if candidate_abs > pivot_abs {
             pivot = row;
             pivot_abs = candidate_abs;

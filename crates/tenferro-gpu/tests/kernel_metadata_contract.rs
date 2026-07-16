@@ -1,5 +1,20 @@
 use std::{fs, path::Path};
 
+fn kernel_source(path: &[&str]) -> String {
+    let mut source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("kernels");
+    for component in path {
+        source.push(component);
+    }
+    fs::read_to_string(&source).unwrap_or_else(|err| {
+        panic!(
+            "kernel source {} should be readable: {err}",
+            source.display()
+        )
+    })
+}
+
 fn scatter_kernel_names(source: &str) -> Vec<&str> {
     const PREFIX: &str = "pub fn scatter_";
 
@@ -99,6 +114,149 @@ fn reduction_kernels_do_not_hide_unbounded_axis_work_in_one_worker() {
         violations.is_empty(),
         "CubeCL reductions must not route Auto to a per-output worker with unbounded serial axis work; use a parallel reduction strategy or an explicitly bounded fallback:\n{}",
         violations.join("\n")
+    );
+}
+
+#[test]
+fn integer_kernels_route_user_arithmetic_through_wrapping_helpers() {
+    let helpers = kernel_source(&["helpers.rs"]);
+    for helper in [
+        "fn wrapping_add<I: Int>",
+        "fn wrapping_sub<I: Int>",
+        "fn wrapping_mul<I: Int>",
+        "fn wrapping_neg<I: Int>",
+        "fn wrapping_plane_sum<I: Int>",
+        "fn wrapping_plane_prod<I: Int>",
+    ] {
+        assert!(helpers.contains(helper), "missing CubeCL helper {helper}");
+    }
+    assert!(
+        helpers.contains("INVARIANT: CubeCL fixed-width Int arithmetic"),
+        "wrapping helpers must document the CubeCL codegen proof"
+    );
+
+    let elementwise = kernel_source(&["elementwise.rs"]);
+    for call in [
+        "wrapping_add::<I>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS])",
+        "wrapping_sub::<I>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS])",
+        "wrapping_mul::<I>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS])",
+        "wrapping_mul::<I>(lhs[lhs_idx], rhs[rhs_idx])",
+        "wrapping_neg::<I>(input[ABSOLUTE_POS])",
+        "wrapping_neg::<I>(value)",
+        "wrapping_sub::<I>(x, wrapping_mul::<I>(quotient, y))",
+        "wrapping_sub::<I>(exp, wrapping_mul::<I>(quotient, two))",
+        "wrapping_mul::<I>(acc, base)",
+        "wrapping_mul::<I>(base, base)",
+    ] {
+        assert!(
+            elementwise.contains(call),
+            "integer elementwise kernel must use {call}"
+        );
+    }
+
+    let reductions = kernel_source(&["reduce", "kernels.rs"]);
+    for invocation in [
+        "reduce_wrapping_int_kernel!(reduce_sum_int, wrapping_add);",
+        "reduce_wrapping_int_kernel!(reduce_prod_int, wrapping_mul);",
+        "reduce_wrapping_int_plane_kernel!(reduce_sum_int_plane, wrapping_add, wrapping_plane_sum);",
+        "reduce_wrapping_int_plane_kernel!(reduce_prod_int_plane, wrapping_mul, wrapping_plane_prod);",
+    ] {
+        assert!(
+            reductions.contains(invocation),
+            "integer reduction must use {invocation}"
+        );
+    }
+}
+
+#[test]
+fn float_max_min_kernels_propagate_nan_across_lanes_and_planes() {
+    let helpers = kernel_source(&["helpers.rs"]);
+    for helper in [
+        "fn nan_propagating_max<F: Float>",
+        "fn nan_propagating_min<F: Float>",
+        "fn plane_contains_nan<F: Float>",
+        "fn plane_propagate_nan<F: Float>",
+    ] {
+        assert!(helpers.contains(helper), "missing CubeCL helper {helper}");
+    }
+    assert!(
+        helpers.contains("plane_sum(nan_or_zero)"),
+        "plane NaN propagation must carry an input NaN through the collective"
+    );
+
+    let elementwise = kernel_source(&["elementwise.rs"]);
+    assert!(elementwise.contains("nan_propagating_max::<F>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS])"));
+    assert!(elementwise.contains("nan_propagating_min::<F>(lhs[ABSOLUTE_POS], rhs[ABSOLUTE_POS])"));
+
+    let reductions = kernel_source(&["reduce", "kernels.rs"]);
+    assert!(
+        reductions
+            .match_indices("nan_propagating_max::<F>(acc, input[input_offset])")
+            .count()
+            >= 2,
+        "unit and plane max reductions must both propagate NaN within each lane"
+    );
+    assert!(
+        reductions
+            .match_indices("nan_propagating_min::<F>(acc, input[input_offset])")
+            .count()
+            >= 2,
+        "unit and plane min reductions must both propagate NaN within each lane"
+    );
+    assert!(
+        reductions
+            .match_indices("let contains_nan = plane_contains_nan::<F>(acc);")
+            .count()
+            >= 2,
+        "plane max and min must aggregate a separate NaN flag across lanes"
+    );
+    assert!(
+        reductions
+            .match_indices("let propagated_nan = plane_propagate_nan::<F>(acc);")
+            .count()
+            >= 2,
+        "plane max and min must propagate an actual NaN lane value"
+    );
+    assert!(
+        !reductions.contains("F::new(f32::NAN)"),
+        "generic CubeCL kernels must not lower a host NaN literal into invalid CUDA source"
+    );
+}
+
+#[test]
+fn fused_float_max_min_codegen_propagates_nan_before_native_extrema() {
+    let source = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("cubecl")
+            .join("fusion")
+            .join("codegen.rs"),
+    )
+    .expect("fusion codegen source should be readable");
+
+    assert!(
+        source.contains("fn emit_nan_propagating_extrema("),
+        "fusion codegen must centralize the NaN contract"
+    );
+    assert!(
+        source.contains("Comparison::IsNan"),
+        "fusion extrema must test both operands for NaN"
+    );
+    assert!(
+        source.contains("Operator::Select"),
+        "fusion extrema must select a NaN operand before the native extrema result"
+    );
+    assert!(
+        source.contains(
+            "ElementwiseFusionOp::Maximum => {\n            emit_nan_propagating_extrema("
+        ),
+        "fused maximum must use the NaN-propagating helper"
+    );
+    assert!(
+        source.contains(
+            "ElementwiseFusionOp::Minimum => {\n            emit_nan_propagating_extrema("
+        ),
+        "fused minimum must use the NaN-propagating helper"
     );
 }
 

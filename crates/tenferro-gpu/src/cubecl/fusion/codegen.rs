@@ -1,7 +1,7 @@
 use cubecl::ir::{
     Arithmetic, BinaryOperator, Branch, Builtin, ClampOperator, Comparison, ElemType, If,
-    IndexAssignOperator, IndexOperator, Instruction, ManagedVariable, Metadata, Operator, Type,
-    UnaryOperator, Variable,
+    IndexAssignOperator, IndexOperator, Instruction, ManagedVariable, Metadata, Operator, Select,
+    Type, UnaryOperator, Variable,
 };
 use cubecl::prelude::{
     AddressType, CubeDim, CubeElement, CubePrimitive, KernelBuilder, KernelDefinition,
@@ -125,10 +125,10 @@ where
         }
         ElementwiseFusionOp::Abs => emit_unary_arithmetic(scope, &inputs[0], Arithmetic::Abs),
         ElementwiseFusionOp::Maximum => {
-            emit_binary_arithmetic(scope, &inputs[0], &inputs[1], Arithmetic::Max)
+            emit_nan_propagating_extrema(scope, &inputs[0], &inputs[1], Arithmetic::Max)
         }
         ElementwiseFusionOp::Minimum => {
-            emit_binary_arithmetic(scope, &inputs[0], &inputs[1], Arithmetic::Min)
+            emit_nan_propagating_extrema(scope, &inputs[0], &inputs[1], Arithmetic::Min)
         }
         ElementwiseFusionOp::Clamp => emit_clamp(scope, &inputs[0], &inputs[1], &inputs[2]),
         ElementwiseFusionOp::Exp => emit_unary_arithmetic(scope, &inputs[0], Arithmetic::Exp),
@@ -172,6 +172,51 @@ fn emit_binary_arithmetic(
     let rhs = rhs.clone().consume();
     let out = scope.create_local(lhs.ty);
     scope.register(Instruction::new(op(BinaryOperator { lhs, rhs }), *out));
+    out
+}
+
+fn emit_nan_propagating_extrema(
+    scope: &mut cubecl::prelude::Scope,
+    lhs: &ManagedVariable,
+    rhs: &ManagedVariable,
+    op: fn(BinaryOperator) -> Arithmetic,
+) -> ManagedVariable {
+    let extrema = emit_binary_arithmetic(scope, lhs, rhs, op);
+    let rhs_is_nan = emit_unary_comparison(scope, rhs, Comparison::IsNan);
+    let rhs_or_extrema = emit_select(scope, &rhs_is_nan, rhs, &extrema);
+    let lhs_is_nan = emit_unary_comparison(scope, lhs, Comparison::IsNan);
+    emit_select(scope, &lhs_is_nan, lhs, &rhs_or_extrema)
+}
+
+fn emit_unary_comparison(
+    scope: &mut cubecl::prelude::Scope,
+    input: &ManagedVariable,
+    op: fn(UnaryOperator) -> Comparison,
+) -> ManagedVariable {
+    let input = input.clone().consume();
+    let out = scope.create_local(Type::scalar(ElemType::Bool));
+    scope.register(Instruction::new(op(UnaryOperator { input }), *out));
+    out
+}
+
+fn emit_select(
+    scope: &mut cubecl::prelude::Scope,
+    condition: &ManagedVariable,
+    then: &ManagedVariable,
+    or_else: &ManagedVariable,
+) -> ManagedVariable {
+    let condition = condition.clone().consume();
+    let then = then.clone().consume();
+    let or_else = or_else.clone().consume();
+    let out = scope.create_local(then.ty);
+    scope.register(Instruction::new(
+        Operator::Select(Select {
+            cond: condition,
+            then,
+            or_else,
+        }),
+        *out,
+    ));
     out
 }
 

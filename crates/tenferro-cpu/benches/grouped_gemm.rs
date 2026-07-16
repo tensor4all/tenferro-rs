@@ -3,7 +3,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, ContractionScalar, DotGeneralAccumulation,
-    DotGeneralConfig, Tensor, TensorDot, TensorRead, TensorWrite,
+    DotGeneralConfig, Tensor, TensorDot, TensorRead, TensorView, TensorWrite,
 };
 
 #[derive(Clone)]
@@ -41,28 +41,70 @@ fn fixture_from_shapes(shapes: &[(usize, usize, usize)]) -> GroupedFixture {
     }
 }
 
-fn run_grouped(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor {
-    let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
-    let mut out = fixture.out.clone();
-    let config = GroupedGemmConfig::new(
+fn grouped_config(fixture: &GroupedFixture, beta: f64) -> GroupedGemmConfig<'_> {
+    GroupedGemmConfig::new(
         &fixture.jobs,
         DotGeneralAccumulation {
             lhs_conj: false,
             rhs_conj: false,
             alpha: ContractionScalar::F64(1.0),
-            beta: ContractionScalar::F64(1.0),
+            beta: ContractionScalar::F64(beta),
         },
-    );
+    )
+}
+
+fn run_grouped_into(
+    backend: &mut CpuBackend,
+    cache: &mut <CpuBackend as BackendRuntimeCache>::RuntimeCache,
+    fixture: &GroupedFixture,
+    config: &GroupedGemmConfig<'_>,
+    out: &mut Tensor,
+) {
     BackendCachedDot::grouped_gemm_cached(
         backend,
-        &mut cache,
+        cache,
         Some(0),
         TensorRead::from_tensor(&fixture.lhs),
         TensorRead::from_tensor(&fixture.rhs),
-        &config,
-        TensorWrite::from_tensor(&mut out),
+        config,
+        TensorWrite::from_tensor(out),
     )
     .unwrap();
+}
+
+fn f64_view(tensor: &Tensor) -> TensorView<'_> {
+    match tensor {
+        Tensor::F64(tensor) => TensorView::F64(tensor.as_view()),
+        _ => unreachable!("grouped GEMM benchmark fixtures are F64"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_grouped_views_into(
+    backend: &mut CpuBackend,
+    cache: &mut <CpuBackend as BackendRuntimeCache>::RuntimeCache,
+    lhs: &TensorView<'_>,
+    rhs: &TensorView<'_>,
+    config: &GroupedGemmConfig<'_>,
+    out: &mut Tensor,
+) {
+    BackendCachedDot::grouped_gemm_cached(
+        backend,
+        cache,
+        Some(0),
+        TensorRead::from_view(lhs.clone()),
+        TensorRead::from_view(rhs.clone()),
+        config,
+        TensorWrite::from_tensor(out),
+    )
+    .unwrap();
+}
+
+fn run_grouped(backend: &mut CpuBackend, fixture: &GroupedFixture) -> Tensor {
+    let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
+    let mut out = fixture.out.clone();
+    let config = grouped_config(fixture, 1.0);
+    run_grouped_into(backend, &mut cache, fixture, &config, &mut out);
     out
 }
 
@@ -152,5 +194,42 @@ fn bench_grouped_gemm(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_grouped_gemm);
+fn bench_grouped_gemm_steady_state(c: &mut Criterion) {
+    const PROFILE_WARMUP_ITERATIONS: usize = 2_000;
+    const CALLS_PER_ITERATION: usize = 6;
+
+    let fixture = fixture_from_shapes(&[(4, 4, 4); 8]);
+    let config = grouped_config(&fixture, 0.0);
+    let lhs = f64_view(&fixture.lhs);
+    let rhs = f64_view(&fixture.rhs);
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
+    let mut out = fixture.out.clone();
+
+    // Match the steady-state profile that motivated issue #1385: warm the
+    // backend, then issue six small grouped-GEMM calls per measured iteration.
+    for _ in 0..PROFILE_WARMUP_ITERATIONS {
+        for _ in 0..CALLS_PER_ITERATION {
+            run_grouped_views_into(&mut backend, &mut cache, &lhs, &rhs, &config, &mut out);
+        }
+    }
+
+    c.bench_function("grouped_gemm/steady_state/six_calls_8x4x4", |b| {
+        b.iter(|| {
+            for _ in 0..CALLS_PER_ITERATION {
+                run_grouped_views_into(
+                    black_box(&mut backend),
+                    black_box(&mut cache),
+                    black_box(&lhs),
+                    black_box(&rhs),
+                    black_box(&config),
+                    black_box(&mut out),
+                );
+            }
+            black_box(out.as_slice::<f64>().unwrap()[0]);
+        });
+    });
+}
+
+criterion_group!(benches, bench_grouped_gemm, bench_grouped_gemm_steady_state);
 criterion_main!(benches);

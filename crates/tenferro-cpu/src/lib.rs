@@ -3,7 +3,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_cpu::{add, CpuBackend};
+//! use tenferro_cpu::CpuBackend;
 //! use tenferro_tensor::{Tensor, TensorBackend, TensorElementwise};
 //!
 //! let mut backend = CpuBackend::new();
@@ -11,8 +11,6 @@
 //! let b = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0])?;
 //! let c = backend.add(&a, &b)?;
 //! assert_eq!(c.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
-//! let direct = add(&a, &b)?;
-//! assert_eq!(direct.shape(), &[2]);
 //! # Ok::<(), tenferro_tensor::Error>(())
 //! ```
 
@@ -91,7 +89,6 @@ extern crate lapack_src as _;
 extern crate tblis_src as _;
 
 pub use affinity::{available_parallelism, process_cpu_affinity, process_cpu_affinity_count};
-pub use analytic::pow;
 pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
     DotGeneralProvider,
@@ -99,18 +96,27 @@ pub use backend::{
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 pub use context::{CpuContext, CpuContextError};
-pub use elementwise::{
-    abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, rem, select, sign, sub,
-};
-pub use indexing::{dynamic_slice, dynamic_update_slice, gather, pad, scatter};
 pub use placement::{CpuPlacement, CpuPlacementError, ResolvedCpuPlacement};
-pub use reduction::{reduce_max, reduce_min, reduce_prod, reduce_sum};
-pub use structural::{
-    broadcast_in_dim, convert, embed_diagonal, extract_diagonal, reshape, transpose, tril, triu,
-};
 pub use topology::{
     discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
     NumaNodeId,
+};
+
+// Unit tests exercise the pool-aware kernels through the former convenience
+// names without restoring those names to the production crate surface.
+#[cfg(test)]
+pub(crate) use analytic::pow;
+#[cfg(test)]
+pub(crate) use elementwise::{
+    abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, rem, select, sign, sub,
+};
+#[cfg(test)]
+pub(crate) use indexing::{dynamic_slice, dynamic_update_slice, gather, pad, scatter};
+#[cfg(test)]
+pub(crate) use reduction::{reduce_max, reduce_min, reduce_prod, reduce_sum};
+#[cfg(test)]
+pub(crate) use structural::{
+    broadcast_in_dim, embed_diagonal, extract_diagonal, reshape, transpose, tril, triu,
 };
 
 /// Owner-scoped CPU scratch-pool API for operation-family crates.

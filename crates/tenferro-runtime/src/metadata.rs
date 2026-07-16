@@ -285,11 +285,10 @@ fn graph_analysis_registrations(
 ) -> Result<GraphAnalysisRegistrations> {
     let seeded: Vec<_> = seeded.into_iter().collect();
     // Start from just the seeded inputs. External keys not in `seeded` are
-    // resolved on demand via a single-key lookup against the global
-    // registry — crucially, we do NOT clone the entire global map. The
-    // global registry grows monotonically across a process, so a full-map
-    // snapshot per graph construction is quadratic in the total number
-    // of registered ops and dominated oracle_replay runtime.
+    // resolved on demand via a single-key lookup against the global registry
+    // and added to this analysis's scoped registrations. This acquires only
+    // metadata the graph actually borrows instead of cloning the entire map,
+    // while keeping the returned scope independent of the original owner.
     let mut known: HashMap<ValueKey<StdTensorOp>, TensorMeta> = seeded.iter().cloned().collect();
 
     let mut registrations = seeded;
@@ -342,18 +341,21 @@ fn append_graph_metadata_registrations(
         }
 
         if !collect_constraints {
-            let mut all_outputs_registered = true;
+            let mut registered_outputs = Vec::with_capacity(op_node.outputs.len());
             for &output_id in &op_node.outputs {
                 let key = graph.values()[output_id].key.clone();
                 let Some(meta) =
                     lookup_global_metadata(&key).map_err(|err| metadata_error(err.to_string()))?
                 else {
-                    all_outputs_registered = false;
                     break;
                 };
-                known.insert(key, meta);
+                registered_outputs.push((key, meta));
             }
-            if all_outputs_registered {
+            if registered_outputs.len() == op_node.outputs.len() {
+                for (key, meta) in registered_outputs {
+                    known.insert(key.clone(), meta.clone());
+                    registrations.push((key, meta));
+                }
                 continue;
             }
         }
@@ -377,6 +379,7 @@ fn append_graph_metadata_registrations(
                 lookup_global_metadata(key).map_err(|err| metadata_error(err.to_string()))?
             {
                 known.insert(key.clone(), meta.clone());
+                registrations.push((key.clone(), meta.clone()));
                 input_metas.push(meta);
                 continue;
             }

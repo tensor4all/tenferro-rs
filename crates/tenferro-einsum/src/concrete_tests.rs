@@ -2,12 +2,13 @@ use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     ContractionScalar, DType, DotGeneralAccumulation, Tensor, TensorRead, TensorView,
-    TensorViewMut, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut,
+    TensorViewMut, TensorWrite, TypedTensor, TypedTensorView, TypedTensorViewMut, TypedTensorWrite,
 };
 
 use crate::{
     parse_einsum_subscripts, ConcreteEinsumPlan, TensorEinsumExt, TensorEinsumIntoExt,
     TensorReadEinsumExt, TensorReadEinsumIntoExt, TypedTensorEinsumExt, TypedTensorEinsumIntoExt,
+    TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt,
 };
 
 fn assert_f64_tensor(tensor: &Tensor, shape: &[usize], expected: &[f64]) {
@@ -117,7 +118,7 @@ fn public_typed_tensor_einsum_ext_accepts_slice_and_integer_subscripts() {
 }
 
 #[test]
-fn public_typed_tensor_einsum_ext_accepts_borrowed_strided_complex_views() {
+fn public_typed_tensor_read_einsum_ext_accepts_borrowed_strided_complex_views() {
     let mut backend = CpuBackend::new();
     let matrix_data = [
         Complex64::new(1.0, 0.0),
@@ -139,10 +140,10 @@ fn public_typed_tensor_einsum_ext_accepts_borrowed_strided_complex_views() {
             .unwrap();
 
     let result = [matrix_view.clone(), vector_view.clone()]
-        .einsum("ij,j->i", &mut backend)
+        .einsum_read("ij,j->i", &mut backend)
         .unwrap();
     [matrix_view, vector_view]
-        .einsum_into("ij,j->i", &mut backend, &mut out)
+        .einsum_read_into("ij,j->i", &mut backend, &mut out)
         .unwrap();
 
     assert_eq!(
@@ -224,6 +225,23 @@ fn public_einsum_into_writes_dynamic_typed_and_read_outputs() {
         .einsum_into("ij,jk->ik", &mut backend, &mut typed_out)
         .unwrap();
     assert_eq!(typed_out.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+
+    let mut typed_strided_data = [-1.0_f64; 8];
+    {
+        let out_view =
+            TypedTensorViewMut::from_slice([2, 2], [1, 3], 1, &mut typed_strided_data).unwrap();
+        [&typed_lhs, &typed_rhs]
+            .einsum_into(
+                "ij,jk->ik",
+                &mut backend,
+                TypedTensorWrite::from_view(out_view),
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        typed_strided_data,
+        [-1.0, 22.0, 28.0, -1.0, 49.0, 64.0, -1.0, -1.0]
+    );
 
     let mut strided_data = [-1.0_f64; 8];
     {
@@ -436,6 +454,22 @@ fn concrete_einsum_plan_execute_typed_and_read_into_outputs() {
     plan.execute_typed_into([&lhs, &rhs], &mut backend, &mut typed_out)
         .unwrap();
     assert_eq!(typed_out.as_slice().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
+
+    let mut typed_strided_data = [-1.0_f64; 8];
+    {
+        let out_view =
+            TypedTensorViewMut::from_slice([2, 2], [1, 3], 1, &mut typed_strided_data).unwrap();
+        plan.execute_typed_into(
+            [&lhs, &rhs],
+            &mut backend,
+            TypedTensorWrite::from_view(out_view),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        typed_strided_data,
+        [-1.0, 22.0, 28.0, -1.0, 49.0, 64.0, -1.0, -1.0]
+    );
 
     let lhs_erased = Tensor::from(lhs.clone());
     let rhs_erased = Tensor::from(rhs.clone());

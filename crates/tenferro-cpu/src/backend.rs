@@ -129,35 +129,25 @@ fn maybe_print_cpu_session_profile() {
 }
 
 struct BufferPoolLoan<'a> {
-    target: &'a mut BufferPool,
-    buffers: Option<BufferPool>,
+    buffers: &'a mut BufferPool,
 }
 
 impl<'a> BufferPoolLoan<'a> {
-    fn new(target: &'a mut BufferPool) -> Self {
-        Self {
-            buffers: Some(std::mem::take(target)),
-            target,
-        }
+    fn new(buffers: &'a mut BufferPool) -> Self {
+        Self { buffers }
     }
 
     fn get_mut(&mut self) -> &mut BufferPool {
         self.buffers
-            .as_mut()
-            .expect("buffer pool loan already restored")
     }
 }
 
 impl Drop for BufferPoolLoan<'_> {
     fn drop(&mut self) {
-        if let Some(buffers) = self.buffers.take() {
-            let mut buffers = buffers;
-            if thread::panicking() {
-                buffers.replenish_in_flight_retained();
-            } else {
-                buffers.clear_in_flight_retained();
-            }
-            *self.target = buffers;
+        if thread::panicking() {
+            self.buffers.replenish_in_flight_retained();
+        } else {
+            self.buffers.clear_in_flight_retained();
         }
     }
 }
@@ -1952,7 +1942,7 @@ impl TensorDot for CpuBackend {
             #[cfg(feature = "cpu-tblis-provider")]
             {
                 let direct = self.run_with_pool_and_gemm_cache(&mut cache, |buffers, _cache| {
-                    gemm::dot_general_tblis_read_cached(buffers, lhs.clone(), rhs.clone(), config)
+                    gemm::dot_general_tblis_read_cached(buffers, &lhs, &rhs, config)
                 })?;
                 if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
                     return Ok(result);
@@ -1978,8 +1968,8 @@ impl TensorDot for CpuBackend {
                             cache,
                             None,
                             ctx.as_ref(),
-                            lhs.clone(),
-                            rhs.clone(),
+                            &lhs,
+                            &rhs,
                             config,
                         )
                     })?
@@ -1993,14 +1983,7 @@ impl TensorDot for CpuBackend {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.run_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
-                        gemm::dot_general_blas_read_cached(
-                            buffers,
-                            cache,
-                            None,
-                            lhs.clone(),
-                            rhs.clone(),
-                            config,
-                        )
+                        gemm::dot_general_blas_read_cached(buffers, cache, None, &lhs, &rhs, config)
                     })?
                 }
                 #[cfg(not(feature = "cpu-blas"))]
@@ -2395,8 +2378,8 @@ impl BackendCachedDot for CpuBackend {
             #[cfg(feature = "cpu-tblis-provider")]
             {
                 let direct = gemm::dot_general_tblis_read_into_accum_cached(
-                    lhs.clone(),
-                    rhs.clone(),
+                    &lhs,
+                    &rhs,
                     config,
                     accumulation,
                     &mut out,
@@ -2421,8 +2404,8 @@ impl BackendCachedDot for CpuBackend {
                             cache,
                             cache_slot,
                             ctx.as_ref(),
-                            lhs.clone(),
-                            rhs.clone(),
+                            &lhs,
+                            &rhs,
                             config,
                             accumulation,
                             &mut out,
@@ -2442,8 +2425,8 @@ impl BackendCachedDot for CpuBackend {
                             buffers,
                             cache,
                             cache_slot,
-                            lhs.clone(),
-                            rhs.clone(),
+                            &lhs,
+                            &rhs,
                             config,
                             accumulation,
                             &mut out,
@@ -2481,13 +2464,7 @@ impl BackendCachedDot for CpuBackend {
                 {
                     let ctx = self.engine.context_arc();
                     self.install_with_pool(|_buffers| {
-                        gemm::grouped_gemm_faer_cached(
-                            ctx.as_ref(),
-                            lhs.clone(),
-                            rhs.clone(),
-                            config,
-                            &mut out,
-                        )
+                        gemm::grouped_gemm_faer_cached(ctx.as_ref(), &lhs, &rhs, config, &mut out)
                     })?
                 }
                 #[cfg(not(feature = "cpu-faer"))]
@@ -2499,7 +2476,7 @@ impl BackendCachedDot for CpuBackend {
                 #[cfg(feature = "cpu-blas")]
                 {
                     self.run_with_pool(|_buffers| {
-                        gemm::grouped_gemm_blas_cached(lhs.clone(), rhs.clone(), config, &mut out)
+                        gemm::grouped_gemm_blas_cached(&lhs, &rhs, config, &mut out)
                     })?
                 }
                 #[cfg(not(feature = "cpu-blas"))]
