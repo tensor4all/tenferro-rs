@@ -1,12 +1,16 @@
 use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
-use strided_kernel::{col_major_strides, copy_into, map_into, Identity, StridedView};
+use strided_kernel::{
+    col_major_strides, copy_into, map_into, Identity, StridedView, StridedViewMut,
+};
 
 use crate::{
     buffer_pool::{BufferPool, PoolScalar},
     flat_to_multi,
 };
-use tenferro_tensor::{DType, Tensor, TensorRank, TypedTensor, TypedTensorView};
+use tenferro_tensor::{
+    DType, Tensor, TensorRank, TensorRead, TensorView, TypedTensor, TypedTensorView,
+};
 
 #[cfg(test)]
 use super::typed_array_uninit;
@@ -91,6 +95,20 @@ macro_rules! dispatch_tensor_unary_result {
             Tensor::Bool($tensor) => Ok(Tensor::Bool($body?)),
             Tensor::C32($tensor) => Ok(Tensor::C32($body?)),
             Tensor::C64($tensor) => Ok(Tensor::C64($body?)),
+        }
+    };
+}
+
+macro_rules! dispatch_tensor_view_unary_result {
+    ($input:expr, |$view:ident| $body:expr) => {
+        match $input {
+            TensorView::F32($view) => Ok(Tensor::F32($body?)),
+            TensorView::F64($view) => Ok(Tensor::F64($body?)),
+            TensorView::I32($view) => Ok(Tensor::I32($body?)),
+            TensorView::I64($view) => Ok(Tensor::I64($body?)),
+            TensorView::Bool($view) => Ok(Tensor::Bool($body?)),
+            TensorView::C32($view) => Ok(Tensor::C32($body?)),
+            TensorView::C64($view) => Ok(Tensor::C64($body?)),
         }
     };
 }
@@ -226,8 +244,34 @@ pub(crate) fn transpose_with_pool(
     dispatch_tensor_unary_result!(input, |t| typed_transpose_with_pool(buffers, t, perm))
 }
 
+pub(crate) fn transpose_read_with_pool(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    perm: &[usize],
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => transpose_with_pool(buffers, input, perm),
+        TensorRead::View(input) => dispatch_tensor_view_unary_result!(input, |view| {
+            typed_transpose_view_with_pool(buffers, &view, perm)
+        }),
+    }
+}
+
 pub(crate) fn reshape(input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
     dispatch_tensor_unary_result!(input, |t| typed_reshape(t, shape))
+}
+
+pub(crate) fn reshape_read_with_pool(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    shape: &[usize],
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => reshape(input, shape),
+        TensorRead::View(input) => dispatch_tensor_view_unary_result!(input, |view| {
+            typed_reshape_view_with_pool(buffers, &view, shape)
+        }),
+    }
 }
 
 #[cfg(test)]
@@ -248,6 +292,20 @@ pub(crate) fn broadcast_in_dim_with_pool(
     dispatch_tensor_unary_result!(input, |t| typed_broadcast_in_dim_with_pool(
         buffers, t, shape, dims
     ))
+}
+
+pub(crate) fn broadcast_in_dim_read_with_pool(
+    buffers: &mut BufferPool,
+    input: TensorRead<'_>,
+    shape: &[usize],
+    dims: &[usize],
+) -> crate::Result<Tensor> {
+    match input {
+        TensorRead::Tensor(input) => broadcast_in_dim_with_pool(buffers, input, shape, dims),
+        TensorRead::View(input) => dispatch_tensor_view_unary_result!(input, |view| {
+            typed_broadcast_in_dim_view_with_pool(buffers, &view, shape, dims)
+        }),
+    }
 }
 
 /// Convert a tensor to another dtype using checked dtype conversion.
@@ -589,6 +647,7 @@ where
     R: TensorRank,
 {
     typed_transpose_view_impl(view, perm, |shape| unsafe {
+        // INVARIANT: validated transpose copy overwrites every pooled output element.
         // SAFETY: transpose materialization copies every output element before returning.
         typed_array_uninit_from_pool(buffers, shape)
     })
@@ -614,13 +673,49 @@ pub fn typed_reshape<T: Clone + 'static>(
     )
 }
 
+pub(crate) fn typed_reshape_view_with_pool<T, R>(
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T, R>,
+    shape: &[usize],
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + 'static,
+    R: TensorRank,
+{
+    let old_n = checked_shape_product("reshape", "input shape", view.shape())?;
+    let new_n = checked_shape_product("reshape", "output shape", shape)?;
+    if old_n != new_n {
+        return Err(crate::Error::ShapeMismatch {
+            op: "reshape",
+            lhs: view.shape().to_vec(),
+            rhs: shape.to_vec(),
+        });
+    }
+
+    let src = typed_view_from_view("reshape", view)?;
+    // INVARIANT: equal element counts let the source-shaped copy target fully overwrite the
+    // pooled compact output before the same storage is attached to `shape`.
+    // SAFETY: copy_into overwrites every pooled output element before returning.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
+    let copy_strides = col_major_strides(view.shape());
+    let mut copy_target = StridedViewMut::new(out.data_mut(), view.shape(), &copy_strides, 0)
+        .map_err(|err| crate::Error::backend_failure("reshape", err))?;
+    copy_into(&mut copy_target, &src)
+        .map_err(|err| crate::Error::backend_failure("reshape", err))?;
+    TypedTensor::from_buffer_col_major(
+        shape.to_vec(),
+        crate::Buffer::Host(out.into_data()),
+        view.placement().clone(),
+    )
+}
+
 #[cfg(test)]
-pub(crate) fn typed_broadcast_in_dim<T: Copy + Clone + Send + Sync>(
+pub(crate) fn typed_broadcast_in_dim<T: Copy + Clone + Send + Sync + 'static>(
     tensor: &TypedTensor<T>,
     shape: &[usize],
     dims: &[usize],
 ) -> crate::Result<TypedTensor<T>> {
-    typed_broadcast_in_dim_impl(tensor, shape, dims, |shape| unsafe {
+    typed_broadcast_in_dim_view_impl(&tensor.as_view(), shape, dims, |shape| unsafe {
         // SAFETY: broadcast materialization writes every output element before returning.
         Ok(typed_array_uninit(shape))
     })
@@ -633,28 +728,42 @@ pub(crate) fn typed_broadcast_in_dim_with_pool<T>(
     dims: &[usize],
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + PoolScalar,
+    T: Copy + Clone + PoolScalar + 'static,
 {
-    typed_broadcast_in_dim_impl(tensor, shape, dims, |shape| unsafe {
+    typed_broadcast_in_dim_view_with_pool(buffers, &tensor.as_view(), shape, dims)
+}
+
+pub(crate) fn typed_broadcast_in_dim_view_with_pool<T, R>(
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T, R>,
+    shape: &[usize],
+    dims: &[usize],
+) -> crate::Result<TypedTensor<T>>
+where
+    T: Copy + Clone + PoolScalar + 'static,
+    R: TensorRank,
+{
+    typed_broadcast_in_dim_view_impl(view, shape, dims, |shape| unsafe {
+        // INVARIANT: validated broadcast copy overwrites every pooled output element.
         // SAFETY: broadcast materialization writes every output element before returning.
         typed_array_uninit_from_pool(buffers, shape)
     })
 }
 
-fn typed_broadcast_in_dim_impl<T>(
-    tensor: &TypedTensor<T>,
+fn typed_broadcast_in_dim_view_impl<T, R>(
+    view: &TypedTensorView<'_, T, R>,
     shape: &[usize],
     dims: &[usize],
     make_out: impl FnOnce(&[usize]) -> crate::Result<strided_kernel::StridedArray<T>>,
 ) -> crate::Result<TypedTensor<T>>
 where
-    T: Copy + Clone + Send + Sync,
+    T: Copy + Clone + Send + Sync + 'static,
+    R: TensorRank,
 {
-    validate_rank("broadcast_in_dim", tensor.shape().len(), dims.len())?;
+    validate_rank("broadcast_in_dim", view.shape().len(), dims.len())?;
     let mut seen = vec![false; shape.len()];
     let mut base_dims = vec![1usize; shape.len()];
     let mut base_strides = vec![0isize; shape.len()];
-    let source_strides = col_major_strides(tensor.shape());
     for (src_axis, &dst_axis) in dims.iter().enumerate() {
         validate_axis("broadcast_in_dim", dst_axis, shape.len())?;
         if seen[dst_axis] {
@@ -665,25 +774,28 @@ where
             });
         }
         seen[dst_axis] = true;
-        let source_dim = tensor.shape()[src_axis];
+        let source_dim = view.shape()[src_axis];
         let target_dim = shape[dst_axis];
         if source_dim != target_dim && source_dim != 1 {
             return Err(crate::Error::ShapeMismatch {
                 op: "broadcast_in_dim",
-                lhs: tensor.shape().to_vec(),
+                lhs: view.shape().to_vec(),
                 rhs: shape.to_vec(),
             });
         }
         base_dims[dst_axis] = source_dim;
-        base_strides[dst_axis] = source_strides[src_axis];
+        base_strides[dst_axis] = view.strides()[src_axis];
     }
-    let base: StridedView<'_, T, Identity> = match tensor.buffer() {
-        crate::Buffer::Host(data) => {
-            StridedView::new(data.as_slice(), &base_dims, &base_strides, 0)
-                .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?
-        }
-        crate::Buffer::Backend(_) => return Err(cpu_backend_buffer_error("broadcast_in_dim")),
-    };
+    if view.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error("broadcast_in_dim"));
+    }
+    let base: StridedView<'_, T, Identity> = StridedView::new(
+        view.host_storage()?,
+        &base_dims,
+        &base_strides,
+        view.offset(),
+    )
+    .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
     let broadcast: StridedView<'_, T, Identity> = base
         .broadcast(shape)
         .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;

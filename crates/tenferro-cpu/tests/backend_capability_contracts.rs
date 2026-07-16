@@ -5,6 +5,26 @@ use tenferro_tensor::{
     TensorReduction, TensorStructural,
 };
 
+fn rust_function_body<'a>(source: &'a str, function: &str) -> Option<&'a str> {
+    let signature = format!("fn {function}(");
+    let function_start = source.find(&signature)?;
+    let body_start = function_start + source[function_start..].find('{')?;
+    let mut depth = 0usize;
+    for (offset, character) in source[body_start..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&source[body_start..=body_start + offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 fn accepts_backend_capabilities<B>()
 where
     B: TensorElementwise
@@ -68,6 +88,55 @@ fn read_elementwise_and_analytic_paths_do_not_materialize_views() {
         !analytic_source.contains("materialize_tensor_read"),
         "analytic read paths must dispatch over TensorRead views directly"
     );
+}
+
+#[test]
+fn structural_read_paths_dispatch_directly_to_typed_view_helpers() {
+    let backend_source = include_str!("../src/backend.rs");
+    let session_source = include_str!("../src/exec_session.rs");
+    let structural_source = include_str!("../src/structural.rs");
+
+    for (surface, source) in [
+        ("CpuBackend", backend_source),
+        ("CpuExecSession", session_source),
+    ] {
+        let structural_impl = source
+            .split_once(&format!("impl TensorStructural for {surface}"))
+            .expect("TensorStructural implementation must exist")
+            .1;
+        for (operation, helper) in [
+            ("transpose_read", "transpose_read_with_pool"),
+            ("reshape_read", "reshape_read_with_pool"),
+            ("broadcast_in_dim_read", "broadcast_in_dim_read_with_pool"),
+        ] {
+            let implementation = rust_function_body(structural_impl, operation)
+                .unwrap_or_else(|| panic!("{surface}::{operation} must be implemented"));
+            assert!(
+                !implementation.contains("materialize_tensor_read"),
+                "{surface}::{operation} must not materialize an intermediate input"
+            );
+            assert!(
+                implementation.contains(&format!("structural::{helper}")),
+                "{surface}::{operation} must dispatch to structural::{helper}"
+            );
+        }
+    }
+
+    for (read_helper, typed_view_helper) in [
+        ("transpose_read_with_pool", "typed_transpose_view_with_pool"),
+        ("reshape_read_with_pool", "typed_reshape_view_with_pool"),
+        (
+            "broadcast_in_dim_read_with_pool",
+            "typed_broadcast_in_dim_view_with_pool",
+        ),
+    ] {
+        let implementation = rust_function_body(structural_source, read_helper)
+            .unwrap_or_else(|| panic!("structural::{read_helper} must own dtype dispatch"));
+        assert!(
+            implementation.contains(typed_view_helper),
+            "structural::{read_helper} must dispatch to {typed_view_helper}"
+        );
+    }
 }
 
 #[test]

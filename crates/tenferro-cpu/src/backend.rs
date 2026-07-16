@@ -1805,13 +1805,7 @@ impl TensorStructural for CpuBackend {
     }
 
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
-        if let Some(input) = input.as_tensor() {
-            return self.transpose(input, perm);
-        }
-
-        let input =
-            self.install_with_pool(|buffers| materialize_tensor_read(buffers, "transpose", input))?;
-        self.transpose(&input, perm)
+        self.install_with_pool(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
     }
 
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
@@ -1819,13 +1813,7 @@ impl TensorStructural for CpuBackend {
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        if let Some(input) = input.as_tensor() {
-            return self.reshape(input, shape);
-        }
-
-        let input =
-            self.install_with_pool(|buffers| materialize_tensor_read(buffers, "reshape", input))?;
-        self.reshape(&input, shape)
+        self.install_with_pool(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
     }
 
     fn broadcast_in_dim(
@@ -1845,14 +1833,9 @@ impl TensorStructural for CpuBackend {
         shape: &[usize],
         dims: &[usize],
     ) -> crate::Result<Tensor> {
-        if let Some(input) = input.as_tensor() {
-            return self.broadcast_in_dim(input, shape, dims);
-        }
-
-        let input = self.install_with_pool(|buffers| {
-            materialize_tensor_read(buffers, "broadcast_in_dim", input)
-        })?;
-        self.broadcast_in_dim(&input, shape, dims)
+        self.install_with_pool(|buffers| {
+            structural::broadcast_in_dim_read_with_pool(buffers, input, shape, dims)
+        })
     }
 
     fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {

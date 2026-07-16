@@ -339,6 +339,55 @@ fn cpu_view_materialization_preserves_transposed_and_scattered_values() {
 }
 
 #[test]
+fn cpu_structural_read_transpose_explicit_stride_exact_output() {
+    let mut backend = CpuBackend::new();
+    let storage = (0..16).map(|value| value as f64 * 10.0).collect::<Vec<_>>();
+    let view = tenferro_tensor::TypedTensorView::from_slice([2, 3], [2, 5], 1, &storage).unwrap();
+
+    let output = backend
+        .transpose_read(TensorRead::from_view(TensorView::F64(view)), &[1, 0])
+        .unwrap();
+
+    assert_eq!(output.shape(), &[3, 2]);
+    assert_eq!(
+        output.as_slice::<f64>().unwrap(),
+        &[10.0, 60.0, 110.0, 30.0, 80.0, 130.0]
+    );
+}
+
+#[test]
+fn cpu_structural_read_reshape_explicit_stride_exact_output() {
+    let mut backend = CpuBackend::new();
+    let storage = (0..10).map(|value| value as i32).collect::<Vec<_>>();
+    let view = tenferro_tensor::TypedTensorView::from_slice([2, 2], [3, -1], 5, &storage).unwrap();
+
+    let output = backend
+        .reshape_read(TensorRead::from_view(TensorView::I32(view)), &[4])
+        .unwrap();
+
+    assert_eq!(output.shape(), &[4]);
+    assert_eq!(output.as_slice::<i32>().unwrap(), &[5, 8, 4, 7]);
+}
+
+#[test]
+fn cpu_structural_read_broadcast_in_dim_explicit_stride_exact_output() {
+    let mut backend = CpuBackend::new();
+    let storage = [0_i64, 10, 20, 30, 40];
+    let view = tenferro_tensor::TypedTensorView::from_slice([2, 1], [-2, 7], 4, &storage).unwrap();
+
+    let output = backend
+        .broadcast_in_dim_read(
+            TensorRead::from_view(TensorView::I64(view)),
+            &[2, 3],
+            &[0, 1],
+        )
+        .unwrap();
+
+    assert_eq!(output.shape(), &[2, 3]);
+    assert_eq!(output.as_slice::<i64>().unwrap(), &[40, 20, 40, 20, 40, 20]);
+}
+
+#[test]
 fn cpu_view_materialization_handles_negative_and_zero_strides() {
     let mut buffers = crate::buffer_pool::BufferPool::new();
 

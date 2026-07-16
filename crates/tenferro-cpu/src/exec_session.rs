@@ -142,24 +142,12 @@ impl TensorStructural for CpuExecSession<'_> {
     // Structural
     delegate_with_pool!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose_with_pool);
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| {
-            if let Some(input) = input.as_tensor() {
-                return structural::transpose_with_pool(buffers, input, perm);
-            }
-            let input = materialize_tensor_read(buffers, "transpose", input)?;
-            structural::transpose_with_pool(buffers, &input, perm)
-        })
+        self.run_native(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
     }
 
     delegate!(reshape(input: &Tensor, shape: &[usize]) => structural::reshape(input, shape));
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| {
-            if let Some(input) = input.as_tensor() {
-                return structural::reshape(input, shape);
-            }
-            let input = materialize_tensor_read(buffers, "reshape", input)?;
-            structural::reshape(&input, shape)
-        })
+        self.run_native(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
     }
 
     delegate_with_pool!(broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) => structural::broadcast_in_dim_with_pool);
@@ -170,11 +158,7 @@ impl TensorStructural for CpuExecSession<'_> {
         dims: &[usize],
     ) -> crate::Result<Tensor> {
         self.run_native(|buffers| {
-            if let Some(input) = input.as_tensor() {
-                return structural::broadcast_in_dim_with_pool(buffers, input, shape, dims);
-            }
-            let input = materialize_tensor_read(buffers, "broadcast_in_dim", input)?;
-            structural::broadcast_in_dim_with_pool(buffers, &input, shape, dims)
+            structural::broadcast_in_dim_read_with_pool(buffers, input, shape, dims)
         })
     }
 
