@@ -1809,7 +1809,8 @@ impl TensorStructural for CpuBackend {
             return self.transpose(input, perm);
         }
 
-        let input = materialize_tensor_read("transpose", input)?;
+        let input =
+            self.install_with_pool(|buffers| materialize_tensor_read(buffers, "transpose", input))?;
         self.transpose(&input, perm)
     }
 
@@ -1822,7 +1823,8 @@ impl TensorStructural for CpuBackend {
             return self.reshape(input, shape);
         }
 
-        let input = materialize_tensor_read("reshape", input)?;
+        let input =
+            self.install_with_pool(|buffers| materialize_tensor_read(buffers, "reshape", input))?;
         self.reshape(&input, shape)
     }
 
@@ -1847,7 +1849,9 @@ impl TensorStructural for CpuBackend {
             return self.broadcast_in_dim(input, shape, dims);
         }
 
-        let input = materialize_tensor_read("broadcast_in_dim", input)?;
+        let input = self.install_with_pool(|buffers| {
+            materialize_tensor_read(buffers, "broadcast_in_dim", input)
+        })?;
         self.broadcast_in_dim(&input, shape, dims)
     }
 
@@ -1996,8 +2000,12 @@ impl TensorDot for CpuBackend {
             return Ok(result);
         }
 
-        let lhs = materialize_tensor_read("dot_general", lhs)?;
-        let rhs = materialize_tensor_read("dot_general", rhs)?;
+        let (lhs, rhs) = self.install_with_pool(|buffers| {
+            Ok::<_, crate::Error>((
+                materialize_tensor_read(buffers, "dot_general", lhs)?,
+                materialize_tensor_read(buffers, "dot_general", rhs)?,
+            ))
+        })?;
         self.with_base_dot_general_provider(|this| {
             BackendCachedDot::dot_general_cached(this, &mut cache, None, &lhs, &rhs, config)
         })

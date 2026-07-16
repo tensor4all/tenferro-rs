@@ -146,18 +146,18 @@ impl TensorStructural for CpuExecSession<'_> {
             if let Some(input) = input.as_tensor() {
                 return structural::transpose_with_pool(buffers, input, perm);
             }
-            let input = materialize_tensor_read("transpose", input)?;
+            let input = materialize_tensor_read(buffers, "transpose", input)?;
             structural::transpose_with_pool(buffers, &input, perm)
         })
     }
 
     delegate!(reshape(input: &Tensor, shape: &[usize]) => structural::reshape(input, shape));
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|_| {
+        self.run_native(|buffers| {
             if let Some(input) = input.as_tensor() {
                 return structural::reshape(input, shape);
             }
-            let input = materialize_tensor_read("reshape", input)?;
+            let input = materialize_tensor_read(buffers, "reshape", input)?;
             structural::reshape(&input, shape)
         })
     }
@@ -173,7 +173,7 @@ impl TensorStructural for CpuExecSession<'_> {
             if let Some(input) = input.as_tensor() {
                 return structural::broadcast_in_dim_with_pool(buffers, input, shape, dims);
             }
-            let input = materialize_tensor_read("broadcast_in_dim", input)?;
+            let input = materialize_tensor_read(buffers, "broadcast_in_dim", input)?;
             structural::broadcast_in_dim_with_pool(buffers, &input, shape, dims)
         })
     }
@@ -329,8 +329,12 @@ impl TensorDot for CpuExecSession<'_> {
             return Ok(result);
         }
 
-        let lhs = materialize_tensor_read("dot_general", lhs)?;
-        let rhs = materialize_tensor_read("dot_general", rhs)?;
+        let (lhs, rhs) = self.run_native(|buffers| {
+            Ok::<_, crate::Error>((
+                materialize_tensor_read(buffers, "dot_general", lhs)?,
+                materialize_tensor_read(buffers, "dot_general", rhs)?,
+            ))
+        })?;
         self.with_base_dot_general_provider(|this| {
             this.dot_general_cached(None, &lhs, &rhs, config)
         })

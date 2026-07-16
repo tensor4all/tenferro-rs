@@ -186,6 +186,7 @@ fn test_cpu_elementwise_fusion_broadcasts_mapped_unit_axes() {
 
 #[test]
 fn test_materialize_tensor_read_covers_host_tensor_and_view_variants() {
+    let mut buffers = crate::buffer_pool::BufferPool::new();
     let tensors = [
         Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap()),
         Tensor::F64(TypedTensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap()),
@@ -201,8 +202,12 @@ fn test_materialize_tensor_read_covers_host_tensor_and_view_variants() {
     ];
 
     for tensor in &tensors {
-        let materialized =
-            crate::materialize_tensor_read("dot_general", TensorRead::from_tensor(tensor)).unwrap();
+        let materialized = crate::materialize_tensor_read(
+            &mut buffers,
+            "dot_general",
+            TensorRead::from_tensor(tensor),
+        )
+        .unwrap();
         assert_eq!(materialized.dtype(), tensor.dtype());
         assert_eq!(materialized.shape(), tensor.shape());
     }
@@ -227,11 +232,78 @@ fn test_materialize_tensor_read_covers_host_tensor_and_view_variants() {
 
     for view in views {
         let dtype = view.dtype();
-        let materialized =
-            crate::materialize_tensor_read("dot_general", TensorRead::from_view(view)).unwrap();
+        let materialized = crate::materialize_tensor_read(
+            &mut buffers,
+            "dot_general",
+            TensorRead::from_view(view),
+        )
+        .unwrap();
         assert_eq!(materialized.dtype(), dtype);
         assert_eq!(materialized.shape(), &[1]);
     }
+}
+
+#[test]
+fn cpu_view_materialization_uses_pool_aware_strided_copy() {
+    let cpu_lib = include_str!("../../lib.rs");
+    let materializer = cpu_lib
+        .split_once("fn materialize_tensor_view")
+        .unwrap()
+        .1
+        .split_once("#[cfg(test)]")
+        .unwrap()
+        .0;
+
+    assert!(
+        materializer.contains("structural::typed_materialize_view_with_pool"),
+        "CPU TensorView materialization must dispatch through the pool-aware strided helper"
+    );
+    assert!(
+        !materializer.contains("to_contiguous"),
+        "CPU TensorView materialization must not bypass the CPU pool with TypedTensorView::to_contiguous"
+    );
+}
+
+#[test]
+fn cpu_view_materialization_preserves_transposed_and_scattered_values() {
+    let mut backend = CpuBackend::new();
+
+    let transposed_storage = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let transposed = tenferro_tensor::TypedTensorView::from_col_major(&[2, 3], &transposed_storage)
+        .unwrap()
+        .transpose_view([1, 0])
+        .unwrap();
+    let transposed = backend
+        .reshape_read(TensorRead::from_view(TensorView::F64(transposed)), &[3, 2])
+        .unwrap();
+    assert_eq!(transposed.shape(), &[3, 2]);
+    assert_eq!(
+        transposed.as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
+
+    let scattered_storage = (0..20).map(|value| value as f64 * 10.0).collect::<Vec<_>>();
+    let mut scattered_shape = vec![1; 24];
+    scattered_shape[0] = 2;
+    scattered_shape[11] = 2;
+    let mut scattered_strides = vec![19; 24];
+    scattered_strides[0] = 3;
+    scattered_strides[11] = 11;
+    let scattered = tenferro_tensor::TypedTensorView::from_slice(
+        scattered_shape,
+        scattered_strides,
+        2,
+        &scattered_storage,
+    )
+    .unwrap();
+    let scattered = backend
+        .reshape_read(TensorRead::from_view(TensorView::F64(scattered)), &[4])
+        .unwrap();
+    assert_eq!(scattered.shape(), &[4]);
+    assert_eq!(
+        scattered.as_slice::<f64>().unwrap(),
+        &[20.0, 50.0, 130.0, 160.0]
+    );
 }
 
 #[test]

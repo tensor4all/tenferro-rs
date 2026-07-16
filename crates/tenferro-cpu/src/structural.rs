@@ -132,6 +132,37 @@ fn copy_view_to_array<T: Copy + Clone + Send + Sync>(
     Ok(tensor_from_array(out))
 }
 
+pub(crate) fn typed_materialize_view_with_pool<T, R>(
+    buffers: &mut BufferPool,
+    view: &TypedTensorView<'_, T, R>,
+    op: &'static str,
+) -> crate::Result<TypedTensor<T, R>>
+where
+    T: Copy + Clone + PoolScalar + 'static,
+    R: TensorRank,
+{
+    if view.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
+    }
+    let src: StridedView<'_, T, Identity> = StridedView::new(
+        view.host_storage()?,
+        view.shape(),
+        view.strides(),
+        view.offset(),
+    )
+    .map_err(|err| crate::Error::backend_failure(op, err))?;
+    // SAFETY: copy_into overwrites every logical output element.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, view.shape()) }?;
+    copy_into(&mut out.view_mut(), &src).map_err(|err| crate::Error::backend_failure(op, err))?;
+    let shape = R::shape_from_vec(view.shape().to_vec().into())
+        .map_err(|err| crate::Error::backend_failure(op, err))?;
+    TypedTensor::from_buffer_col_major(
+        shape,
+        crate::Buffer::Host(out.into_data()),
+        view.placement().clone(),
+    )
+}
+
 fn zeroed_tensor_from_pool<T>(
     buffers: &mut BufferPool,
     op: &'static str,

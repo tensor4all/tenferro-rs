@@ -205,12 +205,13 @@ pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
 }
 
 pub(crate) fn materialize_tensor_read(
+    buffers: &mut BufferPool,
     op: &'static str,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
     match input {
         TensorRead::Tensor(tensor) => clone_host_tensor_read(op, tensor),
-        TensorRead::View(view) => materialize_tensor_view(op, view),
+        TensorRead::View(view) => materialize_tensor_view(buffers, op, view),
     }
 }
 
@@ -233,13 +234,16 @@ fn clone_host_tensor_read(op: &'static str, tensor: &Tensor) -> crate::Result<Te
     }
 }
 
-fn materialize_tensor_view(op: &'static str, view: TensorView<'_>) -> crate::Result<Tensor> {
+fn materialize_tensor_view(
+    buffers: &mut BufferPool,
+    op: &'static str,
+    view: TensorView<'_>,
+) -> crate::Result<Tensor> {
     macro_rules! materialize {
         ($variant:ident, $view:expr) => {{
-            if $view.backend_buffer().is_some() {
-                return Err(cpu_backend_buffer_error(op));
-            }
-            Ok(Tensor::$variant($view.to_contiguous()?))
+            Ok(Tensor::$variant(
+                structural::typed_materialize_view_with_pool(buffers, &$view, op)?,
+            ))
         }};
     }
 
