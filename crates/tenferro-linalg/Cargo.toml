@@ -99,3 +99,8 @@ criterion.workspace = true
 name = "lu_ad_breakdown"
 harness = false
 required-features = ["autodiff"]
+
+[[bench]]
+name = "prepared_svd"
+harness = false
+required-features = ["cpu-faer"]

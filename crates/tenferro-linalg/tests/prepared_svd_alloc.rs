@@ -1,0 +1,571 @@
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+use num_complex::Complex64;
+use tenferro_cpu::{CpuBackend, CpuBackendKind};
+use tenferro_linalg::{
+    PreparedFactorizationBackendExt, PreparedFactorizationSession, PreparedSvd,
+    PreparedSvdBackendExt, SvdOptions, SvdOutputWrites, SvdWorkspace,
+};
+use tenferro_tensor::{
+    DType, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensorView,
+    TypedTensorViewMut,
+};
+
+struct CountingAllocator;
+
+static ACTIVE: AtomicBool = AtomicBool::new(false);
+static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if ACTIVE.load(Ordering::Relaxed) {
+            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+        // SAFETY: forwarding the allocator contract unchanged to `System`.
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: `ptr` and `layout` came from the forwarded `System` allocation.
+        unsafe { System.dealloc(ptr, layout) }
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if ACTIVE.load(Ordering::Relaxed) {
+            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        }
+        // SAFETY: forwarding the allocator contract unchanged to `System`.
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
+
+fn measured_allocations(run: impl FnOnce()) -> usize {
+    ALLOCATIONS.store(0, Ordering::SeqCst);
+    ACTIVE.store(true, Ordering::SeqCst);
+    run();
+    ACTIVE.store(false, Ordering::SeqCst);
+    ALLOCATIONS.load(Ordering::SeqCst)
+}
+
+fn execute_leaf(
+    session: &mut PreparedFactorizationSession<'_>,
+    plan: &PreparedSvd,
+    workspace: &mut SvdWorkspace,
+    input: TensorRead<'_>,
+    u: &mut Tensor,
+    s: &mut Tensor,
+    vt: &mut Tensor,
+) {
+    plan.execute_into_session(
+        session,
+        workspace,
+        input,
+        SvdOutputWrites::new(
+            TensorWrite::from_tensor(u),
+            TensorWrite::from_tensor(s),
+            TensorWrite::from_tensor(vt),
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn prepared_svd_complete_warm_calls_allocate_zero() {
+    let _serial = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+
+    let input =
+        Tensor::from_vec_col_major(vec![3, 2], vec![3.0_f64, 1.0, -2.0, 4.0, -1.0, 2.0]).unwrap();
+    let plan = backend
+        .prepare_svd([3, 2], DType::F64, SvdOptions::default())
+        .unwrap();
+    let mut workspace = plan.allocate_workspace(&mut backend).unwrap();
+    let mut u = Tensor::from_vec_col_major(vec![3, 2], vec![0.0_f64; 6]).unwrap();
+    let mut s = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+    let mut vt = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4]).unwrap();
+    plan.execute_into(
+        &mut backend,
+        &mut workspace,
+        TensorRead::from_tensor(&input),
+        SvdOutputWrites::new(
+            TensorWrite::from_tensor(&mut u),
+            TensorWrite::from_tensor(&mut s),
+            TensorWrite::from_tensor(&mut vt),
+        ),
+    )
+    .unwrap();
+    let contiguous = measured_allocations(|| {
+        plan.execute_into(
+            &mut backend,
+            &mut workspace,
+            TensorRead::from_tensor(&input),
+            SvdOutputWrites::new(
+                TensorWrite::from_tensor(&mut u),
+                TensorWrite::from_tensor(&mut s),
+                TensorWrite::from_tensor(&mut vt),
+            ),
+        )
+        .unwrap();
+    });
+    assert_eq!(contiguous, 0, "contiguous F64 warm allocations");
+
+    let mut positive_storage = vec![0.0_f64; 13];
+    let mut negative_storage = vec![0.0_f64; 13];
+    for col in 0..2 {
+        for row in 0..3 {
+            let value = 1.0 + row as f64 + 2.0 * col as f64;
+            positive_storage[1 + 2 * row + 7 * col] = value;
+            negative_storage[5 - 2 * row + 7 * col] = value;
+        }
+    }
+    let positive_prime = TypedTensorView::from_slice([3, 2], [2, 7], 1, &positive_storage).unwrap();
+    plan.execute_into(
+        &mut backend,
+        &mut workspace,
+        TensorRead::from_view(TensorView::F64(positive_prime)),
+        SvdOutputWrites::new(
+            TensorWrite::from_tensor(&mut u),
+            TensorWrite::from_tensor(&mut s),
+            TensorWrite::from_tensor(&mut vt),
+        ),
+    )
+    .unwrap();
+    let positive = TypedTensorView::from_slice([3, 2], [2, 7], 1, &positive_storage).unwrap();
+    let positive_allocations = measured_allocations(|| {
+        plan.execute_into(
+            &mut backend,
+            &mut workspace,
+            TensorRead::from_view(TensorView::F64(positive)),
+            SvdOutputWrites::new(
+                TensorWrite::from_tensor(&mut u),
+                TensorWrite::from_tensor(&mut s),
+                TensorWrite::from_tensor(&mut vt),
+            ),
+        )
+        .unwrap();
+    });
+    assert_eq!(
+        positive_allocations, 0,
+        "positive-stride F64 warm allocations"
+    );
+
+    let negative_prime =
+        TypedTensorView::from_slice([3, 2], [-2, 7], 5, &negative_storage).unwrap();
+    plan.execute_into(
+        &mut backend,
+        &mut workspace,
+        TensorRead::from_view(TensorView::F64(negative_prime)),
+        SvdOutputWrites::new(
+            TensorWrite::from_tensor(&mut u),
+            TensorWrite::from_tensor(&mut s),
+            TensorWrite::from_tensor(&mut vt),
+        ),
+    )
+    .unwrap();
+    let negative = TypedTensorView::from_slice([3, 2], [-2, 7], 5, &negative_storage).unwrap();
+    let negative_allocations = measured_allocations(|| {
+        plan.execute_into(
+            &mut backend,
+            &mut workspace,
+            TensorRead::from_view(TensorView::F64(negative)),
+            SvdOutputWrites::new(
+                TensorWrite::from_tensor(&mut u),
+                TensorWrite::from_tensor(&mut s),
+                TensorWrite::from_tensor(&mut vt),
+            ),
+        )
+        .unwrap();
+    });
+    assert_eq!(
+        negative_allocations, 0,
+        "negative-stride F64 warm allocations"
+    );
+
+    let complex_input = Tensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(2.0, 1.0),
+            Complex64::new(-1.0, 0.5),
+            Complex64::new(3.0, -2.0),
+            Complex64::new(0.25, 1.5),
+        ],
+    )
+    .unwrap();
+    let complex_plan = backend
+        .prepare_svd([2, 2], DType::C64, SvdOptions::default())
+        .unwrap();
+    let mut complex_workspace = complex_plan.allocate_workspace(&mut backend).unwrap();
+    let mut complex_u =
+        Tensor::from_vec_col_major(vec![2, 2], vec![Complex64::default(); 4]).unwrap();
+    let mut complex_s = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+    let mut complex_vt =
+        Tensor::from_vec_col_major(vec![2, 2], vec![Complex64::default(); 4]).unwrap();
+    complex_plan
+        .execute_into(
+            &mut backend,
+            &mut complex_workspace,
+            TensorRead::from_tensor(&complex_input),
+            SvdOutputWrites::new(
+                TensorWrite::from_tensor(&mut complex_u),
+                TensorWrite::from_tensor(&mut complex_s),
+                TensorWrite::from_tensor(&mut complex_vt),
+            ),
+        )
+        .unwrap();
+    let complex_allocations = measured_allocations(|| {
+        complex_plan
+            .execute_into(
+                &mut backend,
+                &mut complex_workspace,
+                TensorRead::from_tensor(&complex_input),
+                SvdOutputWrites::new(
+                    TensorWrite::from_tensor(&mut complex_u),
+                    TensorWrite::from_tensor(&mut complex_s),
+                    TensorWrite::from_tensor(&mut complex_vt),
+                ),
+            )
+            .unwrap();
+    });
+    assert_eq!(complex_allocations, 0, "contiguous C64 warm allocations");
+}
+
+#[test]
+fn prepared_svd_resource_accounting_reads_allocate_zero() {
+    let _serial = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+    let plan = backend
+        .prepare_svd([3, 2], DType::C64, SvdOptions::default())
+        .unwrap();
+    let workspace = plan.allocate_workspace(&mut backend).unwrap();
+
+    let expected_plan = std::hint::black_box(plan.retained_bytes());
+    let expected_workspace = std::hint::black_box(workspace.retained_bytes());
+    let allocations = measured_allocations(|| {
+        for _ in 0..128 {
+            assert_eq!(std::hint::black_box(plan.retained_bytes()), expected_plan);
+            assert_eq!(
+                std::hint::black_box(workspace.retained_bytes()),
+                expected_workspace
+            );
+        }
+    });
+
+    assert_eq!(expected_plan, 0);
+    assert!(expected_workspace > 0);
+    assert_eq!(allocations, 0, "resource accounting read allocations");
+}
+
+#[test]
+fn prepared_svd_session_repeated_single_worker_leaf_calls_allocate_zero() {
+    let _serial = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_session_leaf_allocations();
+}
+
+#[test]
+fn prepared_svd_session_subview_destinations_allocate_zero_without_workspace_growth() {
+    let _serial = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    for shape in [[4, 2], [2, 4]] {
+        assert_f64_subview_destination_allocations(shape);
+        assert_c64_subview_destination_allocations(shape);
+    }
+}
+
+fn assert_f64_subview_destination_allocations([m, n]: [usize; 2]) {
+    let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+    let input = Tensor::from_vec_col_major(
+        vec![m, n],
+        (0..m * n).map(|index| 1.0 + index as f64 / 3.0).collect(),
+    )
+    .unwrap();
+    let plan = backend
+        .prepare_svd([m, n], DType::F64, SvdOptions::default())
+        .unwrap();
+    let mut workspace = plan.allocate_workspace(&mut backend).unwrap();
+    let k = m.min(n);
+    let mut u_storage = vec![vec![0.0_f64; m * k + 4]; 65];
+    let mut s_storage = vec![vec![0.0_f64; k + 4]; 65];
+    let mut vt_storage = vec![vec![0.0_f64; k * n + 4]; 65];
+    let mut writes = u_storage
+        .iter_mut()
+        .zip(&mut s_storage)
+        .zip(&mut vt_storage)
+        .map(|((u, s), vt)| {
+            SvdOutputWrites::new(
+                TensorWrite::from_view(TensorViewMut::F64(
+                    TypedTensorViewMut::from_slice([m, k], [1, m as isize], 2, u).unwrap(),
+                )),
+                TensorWrite::from_view(TensorViewMut::F64(
+                    TypedTensorViewMut::from_slice([k], [1], 2, s).unwrap(),
+                )),
+                TensorWrite::from_view(TensorViewMut::F64(
+                    TypedTensorViewMut::from_slice([k, n], [1, k as isize], 2, vt).unwrap(),
+                )),
+            )
+        })
+        .collect::<Vec<_>>();
+    let retained_before = workspace.retained_bytes();
+
+    backend.with_prepared_factorization_session(|session| {
+        plan.execute_into_session(
+            session,
+            &mut workspace,
+            TensorRead::from_tensor(&input),
+            writes.pop().unwrap(),
+        )
+        .unwrap();
+        let allocations = measured_allocations(|| {
+            for outputs in writes.drain(..) {
+                plan.execute_into_session(
+                    session,
+                    &mut workspace,
+                    TensorRead::from_tensor(&input),
+                    outputs,
+                )
+                .unwrap();
+            }
+        });
+        assert_eq!(
+            allocations, 0,
+            "F64 {m}x{n} caller-owned subview destination allocations"
+        );
+    });
+    assert_eq!(workspace.retained_bytes(), retained_before);
+}
+
+fn assert_c64_subview_destination_allocations([m, n]: [usize; 2]) {
+    let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+    let input = Tensor::from_vec_col_major(
+        vec![m, n],
+        (0..m * n)
+            .map(|index| Complex64::new(1.0 + index as f64 / 3.0, 0.25 + index as f64 / 7.0))
+            .collect(),
+    )
+    .unwrap();
+    let plan = backend
+        .prepare_svd([m, n], DType::C64, SvdOptions::default())
+        .unwrap();
+    let mut workspace = plan.allocate_workspace(&mut backend).unwrap();
+    let k = m.min(n);
+    let mut u_storage = vec![vec![Complex64::default(); m * k + 4]; 65];
+    let mut s_storage = vec![vec![0.0_f64; k + 4]; 65];
+    let mut vt_storage = vec![vec![Complex64::default(); k * n + 4]; 65];
+    let mut writes = u_storage
+        .iter_mut()
+        .zip(&mut s_storage)
+        .zip(&mut vt_storage)
+        .map(|((u, s), vt)| {
+            SvdOutputWrites::new(
+                TensorWrite::from_view(TensorViewMut::C64(
+                    TypedTensorViewMut::from_slice([m, k], [1, m as isize], 2, u).unwrap(),
+                )),
+                TensorWrite::from_view(TensorViewMut::F64(
+                    TypedTensorViewMut::from_slice([k], [1], 2, s).unwrap(),
+                )),
+                TensorWrite::from_view(TensorViewMut::C64(
+                    TypedTensorViewMut::from_slice([k, n], [1, k as isize], 2, vt).unwrap(),
+                )),
+            )
+        })
+        .collect::<Vec<_>>();
+    let retained_before = workspace.retained_bytes();
+
+    backend.with_prepared_factorization_session(|session| {
+        plan.execute_into_session(
+            session,
+            &mut workspace,
+            TensorRead::from_tensor(&input),
+            writes.pop().unwrap(),
+        )
+        .unwrap();
+        let allocations = measured_allocations(|| {
+            for outputs in writes.drain(..) {
+                plan.execute_into_session(
+                    session,
+                    &mut workspace,
+                    TensorRead::from_tensor(&input),
+                    outputs,
+                )
+                .unwrap();
+            }
+        });
+        assert_eq!(
+            allocations, 0,
+            "C64 {m}x{n} caller-owned subview destination allocations"
+        );
+    });
+    assert_eq!(workspace.retained_bytes(), retained_before);
+}
+
+fn assert_session_leaf_allocations() {
+    let mut backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+
+    let f64_input =
+        Tensor::from_vec_col_major(vec![3, 2], vec![3.0_f64, 1.0, -2.0, 4.0, -1.0, 2.0]).unwrap();
+    let mut f64_strided_storage = vec![0.0_f64; 13];
+    for col in 0..2 {
+        for row in 0..3 {
+            f64_strided_storage[1 + 2 * row + 7 * col] = 1.0 + row as f64 + 2.0 * col as f64;
+        }
+    }
+    let f64_plan = backend
+        .prepare_svd([3, 2], DType::F64, SvdOptions::default())
+        .unwrap();
+    let mut f64_workspace = f64_plan.allocate_workspace(&mut backend).unwrap();
+    let mut f64_u = Tensor::from_vec_col_major(vec![3, 2], vec![0.0_f64; 6]).unwrap();
+    let mut f64_s = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+    let mut f64_vt = Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4]).unwrap();
+
+    let c64_input = Tensor::from_vec_col_major(
+        vec![2, 2],
+        vec![
+            Complex64::new(2.0, 1.0),
+            Complex64::new(-1.0, 0.5),
+            Complex64::new(3.0, -2.0),
+            Complex64::new(0.25, 1.5),
+        ],
+    )
+    .unwrap();
+    let mut c64_strided_storage = vec![Complex64::default(); 9];
+    for col in 0..2 {
+        for row in 0..2 {
+            c64_strided_storage[1 + 2 * row + 5 * col] =
+                Complex64::new(1.0 + row as f64, 0.5 + col as f64);
+        }
+    }
+    let c64_plan = backend
+        .prepare_svd([2, 2], DType::C64, SvdOptions::default())
+        .unwrap();
+    let mut c64_workspace = c64_plan.allocate_workspace(&mut backend).unwrap();
+    let mut c64_u = Tensor::from_vec_col_major(vec![2, 2], vec![Complex64::default(); 4]).unwrap();
+    let mut c64_s = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+    let mut c64_vt = Tensor::from_vec_col_major(vec![2, 2], vec![Complex64::default(); 4]).unwrap();
+
+    // Dynamic-rank views own shape/stride metadata. Construct input handles
+    // before measurement so the counter covers factorization leaves only.
+    let mut f64_strided_reads = (0..129)
+        .map(|_| {
+            let view =
+                TypedTensorView::from_slice([3, 2], [2, 7], 1, &f64_strided_storage).unwrap();
+            TensorRead::from_view(TensorView::F64(view))
+        })
+        .collect::<Vec<_>>();
+    let mut c64_strided_reads = (0..129)
+        .map(|_| {
+            let view =
+                TypedTensorView::from_slice([2, 2], [2, 5], 1, &c64_strided_storage).unwrap();
+            TensorRead::from_view(TensorView::C64(view))
+        })
+        .collect::<Vec<_>>();
+
+    backend.with_prepared_factorization_session(|session| {
+        execute_leaf(
+            session,
+            &f64_plan,
+            &mut f64_workspace,
+            TensorRead::from_tensor(&f64_input),
+            &mut f64_u,
+            &mut f64_s,
+            &mut f64_vt,
+        );
+        execute_leaf(
+            session,
+            &f64_plan,
+            &mut f64_workspace,
+            f64_strided_reads.pop().unwrap(),
+            &mut f64_u,
+            &mut f64_s,
+            &mut f64_vt,
+        );
+        execute_leaf(
+            session,
+            &c64_plan,
+            &mut c64_workspace,
+            TensorRead::from_tensor(&c64_input),
+            &mut c64_u,
+            &mut c64_s,
+            &mut c64_vt,
+        );
+        execute_leaf(
+            session,
+            &c64_plan,
+            &mut c64_workspace,
+            c64_strided_reads.pop().unwrap(),
+            &mut c64_u,
+            &mut c64_s,
+            &mut c64_vt,
+        );
+
+        let f64_contiguous = measured_allocations(|| {
+            for _ in 0..128 {
+                execute_leaf(
+                    session,
+                    &f64_plan,
+                    &mut f64_workspace,
+                    TensorRead::from_tensor(&f64_input),
+                    &mut f64_u,
+                    &mut f64_s,
+                    &mut f64_vt,
+                );
+            }
+        });
+        let f64_strided = measured_allocations(|| {
+            for input in f64_strided_reads.drain(..) {
+                execute_leaf(
+                    session,
+                    &f64_plan,
+                    &mut f64_workspace,
+                    input,
+                    &mut f64_u,
+                    &mut f64_s,
+                    &mut f64_vt,
+                );
+            }
+        });
+        let c64_contiguous = measured_allocations(|| {
+            for _ in 0..128 {
+                execute_leaf(
+                    session,
+                    &c64_plan,
+                    &mut c64_workspace,
+                    TensorRead::from_tensor(&c64_input),
+                    &mut c64_u,
+                    &mut c64_s,
+                    &mut c64_vt,
+                );
+            }
+        });
+        let c64_strided = measured_allocations(|| {
+            for input in c64_strided_reads.drain(..) {
+                execute_leaf(
+                    session,
+                    &c64_plan,
+                    &mut c64_workspace,
+                    input,
+                    &mut c64_u,
+                    &mut c64_s,
+                    &mut c64_vt,
+                );
+            }
+        });
+        assert_eq!(
+            [f64_contiguous, f64_strided, c64_contiguous, c64_strided],
+            [0; 4],
+            "single-worker prepared factorization session leaf allocations: [F64 contiguous, F64 strided, C64 contiguous, C64 strided]"
+        );
+    });
+}
