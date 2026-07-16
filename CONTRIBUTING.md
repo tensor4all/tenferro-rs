@@ -107,20 +107,28 @@ prefer these profiles over copying command lists into local scripts.
 ### Optional developer-local sccache
 
 Developers who use multiple worktrees can share compatible compiler outputs
-through a local sccache:
+for non-incremental workspace-wide gates through a local sccache. Keep the
+wrapper scoped to the gate command:
 
 ```bash
-export RUSTC_WRAPPER=sccache
-export SCCACHE_DIR="$HOME/.cache/tensor4all/sccache"
-export SCCACHE_CACHE_SIZE=20G
-sccache --show-stats
+RUSTC_WRAPPER=sccache \
+SCCACHE_DIR="$HOME/.cache/tensor4all/sccache" \
+SCCACHE_CACHE_SIZE=20G \
+  bash scripts/check-pr-fast.sh \
+    --coverage-reviewed \
+    --ci-profile local-gate
+
+SCCACHE_DIR="$HOME/.cache/tensor4all/sccache" sccache --show-stats
 ```
 
 This is an optional local optimization. Do not configure a shared remote cache,
-and do not rely on cache hits for correctness. Ordinary focused debug builds
-may continue to use Cargo incremental compilation; `local-gate` disables
-incremental compilation so sccache can cache eligible crate compilations across
-worktrees. Disable sccache when measuring clean-build performance.
+and do not rely on cache hits for correctness. Ordinary focused local
+development, including AI-assisted edit-test loops, should use Cargo
+incremental compilation through the default dev/test profiles. Do not set
+`RUSTC_WRAPPER=sccache` globally for those loops. The `local-gate` profile
+disables incremental compilation so sccache can cache eligible crate
+compilations across worktrees. Disable sccache when measuring clean-build
+performance.
 
 Pull-request CI classifies a diff conservatively as code, docs-only, or
 CI-only. Docs-only changes run documentation validation. CI-only changes run

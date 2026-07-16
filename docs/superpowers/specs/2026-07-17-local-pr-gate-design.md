@@ -49,13 +49,20 @@ coverage, BLAS/backend variants, documentation builds, and GPU validation.
 
 ## Local sccache policy
 
-Before a workspace-wide local Rust build, agents check whether `sccache` is
-available and enabled. If not, they recommend the documented developer-local
-setup once. Agents do not install software, edit global Cargo configuration,
-or enable a remote cache without explicit approval.
+Ordinary focused local development, including AI-assisted edit-test loops,
+uses Cargo incremental compilation through the default dev/test profiles.
+Agents do not recommend or enable `sccache` solely for these loops and do not
+disable incremental compilation in the default profiles.
+
+Before a non-incremental `local-gate` run or a workspace-wide build whose
+outputs should be reused across worktrees, agents check whether `sccache` is
+available and enabled for that command. If not, they recommend the documented
+developer-local setup once. Agents do not install software, edit global Cargo
+configuration, or enable a remote cache without explicit approval.
 
 Each developer owns an independent local cache. The repository does not define
-or recommend a shared remote sccache. Correctness checks must work on a cache
+or recommend a shared remote sccache. The wrapper is command-scoped rather than
+a global local-development default. Correctness checks must work on a cache
 miss, and clean-build measurements must disable sccache and state their cache
 condition.
 

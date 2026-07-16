@@ -123,6 +123,25 @@ class RunProfileTests(unittest.TestCase):
         self.assertNotIn("cargo test --workspace --release", source)
         self.assertNotIn("cargo llvm-cov --workspace --release", source)
 
+    def test_sccache_policy_preserves_incremental_ai_development(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text()
+        contributing = (ROOT / "CONTRIBUTING.md").read_text()
+        design = (
+            ROOT
+            / "docs"
+            / "superpowers"
+            / "specs"
+            / "2026-07-17-local-pr-gate-design.md"
+        ).read_text()
+
+        for source in (agents, contributing, design):
+            self.assertIn("AI-assisted edit-test loops", source)
+            self.assertRegex(source, r"Cargo\s+incremental compilation")
+
+        self.assertNotIn(
+            "Before the first workspace-wide local Rust build", agents
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

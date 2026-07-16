@@ -235,12 +235,19 @@ Additionally, verify the following before pushing:
 
 ### Local Rust Build Acceleration
 
-Before the first workspace-wide local Rust build in a session, check whether
-`sccache` is installed and whether `RUSTC_WRAPPER` enables it. If either is
-missing, recommend the developer-local setup in `CONTRIBUTING.md` once.
+Ordinary focused local development, including AI-assisted edit-test loops,
+should use Cargo incremental compilation through the default dev/test
+profiles. Do not recommend or enable `sccache` solely for these loops.
+
+Before a non-incremental `local-gate` run or a workspace-wide build whose
+outputs should be reused across worktrees, check whether `sccache` is installed
+and enabled for that command. If either is missing, recommend the
+developer-local setup in `CONTRIBUTING.md` once.
 
 - Do not install sccache or edit global Cargo configuration without explicit
   user approval.
+- Do not disable incremental compilation in the default dev/test profiles or
+  set `RUSTC_WRAPPER=sccache` globally as a general local-development default.
 - Use developer-local cache only. Do not introduce or recommend a shared remote
   sccache.
 - Correctness checks and PR gates must work on a cache miss.
