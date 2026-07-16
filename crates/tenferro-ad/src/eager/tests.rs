@@ -20,8 +20,9 @@ use tenferro_ops::{ShapeExtent, ShapeGuardContext, SymDim, TensorMeta};
 use tenferro_runtime::ExtensionCacheLimits;
 use tenferro_runtime::{Error, ExtensionExecutionContext, ExtensionExecutor, ExtensionRuntime};
 use tenferro_tensor::Tensor;
+use tenferro_tensor::TypedTensorView;
 use tenferro_tensor::{DType, DotGeneralConfig, TensorBackend, TensorElementwise};
-use tenferro_tensor::{TensorFusion, TensorRead};
+use tenferro_tensor::{TensorFusion, TensorRead, TensorStructural, TensorView, TensorWrite};
 use tidu::eager::BackwardExecutor;
 use tidu::{linearize, ADKey};
 
@@ -94,6 +95,27 @@ fn eager_materialization_uses_backend() {
     let sum = TensorElementwise::add(&mut backend, &probe, &probe).unwrap();
     assert_eq!(sum.as_slice::<f64>().unwrap(), &[4.0]);
     assert_eq!(materializations.load(Ordering::Relaxed), 0);
+
+    let view_data = [1.0_f64, 2.0, 3.0, 4.0];
+    let view = TensorView::F64(
+        TypedTensorView::from_col_major(&[2, 2], &view_data)
+            .unwrap()
+            .transpose_view([1, 0])
+            .unwrap(),
+    );
+    let direct =
+        TensorStructural::to_contiguous_read(&mut backend, TensorRead::from_view(view)).unwrap();
+    assert_eq!(direct.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+    assert_eq!(materializations.swap(0, Ordering::Relaxed), 1);
+
+    let mut destination = Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap();
+    TensorStructural::copy_read_into(
+        &mut backend,
+        TensorRead::from_tensor(&probe),
+        TensorWrite::from_tensor(&mut destination),
+    )
+    .unwrap();
+    assert_eq!(destination.as_slice::<f64>().unwrap(), &[2.0]);
     let ctx = Arc::new(EagerRuntime::from_backend(backend));
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),

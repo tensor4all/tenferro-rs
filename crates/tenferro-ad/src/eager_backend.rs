@@ -14,7 +14,7 @@ use tenferro_tensor::{
     DotGeneralConfig, GatherConfig, PadConfig, Result as TensorResult, ScatterConfig, SliceConfig,
     Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer, TensorDot,
     TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
-    TensorValue,
+    TensorValue, TensorWrite,
 };
 
 pub enum EagerBackend {
@@ -154,6 +154,10 @@ impl TensorStructural for RecordingBackend {
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
         self.materializations.fetch_add(1, Ordering::Relaxed);
         self.inner.to_contiguous_read(input)
+    }
+
+    fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> TensorResult<()> {
+        self.inner.copy_read_into(src, dst)
     }
 
     delegate_recording_backend_methods! {
@@ -298,6 +302,8 @@ impl TensorAnalytic for EagerBackend {
 
 impl TensorStructural for EagerBackend {
     delegate_tensor_backend_methods! {
+        fn to_contiguous_read(input: TensorRead<'_>) -> TensorResult<Tensor>;
+        fn copy_read_into(src: TensorRead<'_>, dst: TensorWrite<'_>) -> TensorResult<()>;
         fn transpose(input: &Tensor, perm: &[usize]) -> TensorResult<Tensor>;
         fn reshape(input: &Tensor, shape: &[usize]) -> TensorResult<Tensor>;
         fn reshape_read(input: TensorRead<'_>, shape: &[usize]) -> TensorResult<Tensor>;

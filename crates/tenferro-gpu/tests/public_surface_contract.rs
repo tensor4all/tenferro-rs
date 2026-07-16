@@ -235,6 +235,20 @@ fn webgpu_provider_keeps_runtime_transfer_and_gemm_boundaries_split() {
 }
 
 #[test]
+fn webgpu_materialization_does_not_inherit_host_defaults() {
+    let webgpu_mod = repo_file("crates/tenferro-gpu/src/webgpu/mod.rs");
+    for (method, op) in [
+        ("fn to_contiguous_read", "WebGpuBackend::to_contiguous_read"),
+        ("fn copy_read_into", "WebGpuBackend::copy_read_into"),
+    ] {
+        assert!(
+            webgpu_mod.contains(method) && webgpu_mod.contains(op),
+            "WebGPU must explicitly reject {method} instead of inheriting host defaults"
+        );
+    }
+}
+
+#[test]
 fn cubecl_output_allocations_use_checked_shape_products() {
     let dispatch = repo_file("crates/tenferro-gpu/src/cubecl/dispatch.rs");
     assert!(
