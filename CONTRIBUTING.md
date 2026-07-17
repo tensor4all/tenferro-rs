@@ -74,19 +74,26 @@ discussion in an issue first.
 
 ## Local PR gate and hosted CI profiles
 
-Before opening or updating a pull request, run the non-release local gate:
+For code changes, run the non-release local gate with at least one focused test:
 
 ```bash
 bash scripts/check-pr-fast.sh \
   --coverage-reviewed \
-  --ci-profile local-gate
+  --test 'cargo test -p tenferro-tensor checked_convert_follows_dtype_promotion_lattice'
 ```
 
-The `local-gate` profile uses non-optimized debug semantics with debug
-assertions and overflow checks enabled. It omits debug symbols and incremental
-state to keep workspace-wide validation bounded and compatible with sccache.
-Hosted CI remains responsible for release tests, coverage, backend variants,
-documentation builds, and GPU validation. Run release locally when validating
+The default dev/test profiles use `opt-level=0`, `debug=0`, and
+`incremental=true`, with debug assertions and overflow checks enabled. Enable
+debug symbols for one command with `CARGO_PROFILE_DEV_DEBUG=1` or
+`CARGO_PROFILE_TEST_DEBUG=1` when using a debugger.
+
+For documentation-only changes, run `bash scripts/check-pr-fast.sh`; it does not
+compile Rust or require a coverage acknowledgement. CI-only changes require a
+focused CI helper command through `--test`.
+
+Hosted CI remains responsible for complete workspace tests, coverage, backend
+variants, documentation builds, GPU validation, and clean builds with
+incremental compilation disabled. Run release locally when validating
 performance, a release-only failure, unsafe or optimization-sensitive behavior,
 or an explicit maintainer request.
 
@@ -99,24 +106,22 @@ python3 scripts/ci/run_profile.py workspace-blas
 python3 scripts/ci/run_profile.py docs
 ```
 
-`full` expands every hosted profile once and intentionally excludes
-`local-gate`. Use `--dry-run` to inspect commands without executing them.
+`full` expands every hosted profile once. Use `--dry-run` to inspect commands
+without executing them.
 `scripts/check-pr-fast.sh` accepts repeatable `--ci-profile NAME` options;
 prefer these profiles over copying command lists into local scripts.
 
 ### Optional developer-local sccache
 
-Developers who use multiple worktrees can share compatible compiler outputs
-for non-incremental workspace-wide gates through a local sccache. Keep the
-wrapper scoped to the gate command:
+Developers who explicitly run non-incremental workspace-wide builds across
+multiple worktrees may share compatible compiler outputs through a local
+sccache. Keep the wrapper scoped to that explicit command:
 
 ```bash
 RUSTC_WRAPPER=sccache \
 SCCACHE_DIR="$HOME/.cache/tensor4all/sccache" \
 SCCACHE_CACHE_SIZE=20G \
-  bash scripts/check-pr-fast.sh \
-    --coverage-reviewed \
-    --ci-profile local-gate
+  CARGO_INCREMENTAL=0 cargo test --workspace
 
 SCCACHE_DIR="$HOME/.cache/tensor4all/sccache" sccache --show-stats
 ```
@@ -125,10 +130,8 @@ This is an optional local optimization. Do not configure a shared remote cache,
 and do not rely on cache hits for correctness. Ordinary focused local
 development, including AI-assisted edit-test loops, should use Cargo
 incremental compilation through the default dev/test profiles. Do not set
-`RUSTC_WRAPPER=sccache` globally for those loops. The `local-gate` profile
-disables incremental compilation so sccache can cache eligible crate
-compilations across worktrees. Disable sccache when measuring clean-build
-performance.
+`RUSTC_WRAPPER=sccache` globally for those loops. Disable sccache when measuring
+clean-build performance.
 
 Pull-request CI classifies a diff conservatively as code, docs-only, or
 CI-only. Docs-only changes run documentation validation. CI-only changes run

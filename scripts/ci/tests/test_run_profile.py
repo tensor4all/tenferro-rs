@@ -112,12 +112,13 @@ class RunProfileTests(unittest.TestCase):
         self.assertNotIn("cargo nextest run --workspace --release", source)
         self.assertNotIn("cargo llvm-cov", source)
 
-    def test_remediation_workflow_uses_local_gate_before_pr(self) -> None:
+    def test_remediation_workflow_uses_focused_tests_before_pr(self) -> None:
         source = (
             ROOT / "ai" / "contribution-workflows" / "repository-remediation.md"
         ).read_text()
         self.assertIn("bash scripts/check-pr-fast.sh", source)
-        self.assertIn("--ci-profile local-gate", source)
+        self.assertIn("--test 'cargo test -p tenferro-tensor", source)
+        self.assertNotIn("--ci-profile local-gate", source)
         self.assertNotIn("cargo test --workspace --release", source)
         self.assertNotIn("cargo llvm-cov --workspace --release", source)
 
@@ -139,6 +140,27 @@ class RunProfileTests(unittest.TestCase):
         self.assertNotIn(
             "Before the first workspace-wide local Rust build", agents
         )
+
+    def test_policy_assigns_comprehensive_validation_to_hosted_ci(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text()
+        contributing = (ROOT / "CONTRIBUTING.md").read_text()
+        old_design = (
+            ROOT
+            / "docs"
+            / "superpowers"
+            / "specs"
+            / "2026-07-17-local-pr-gate-design.md"
+        ).read_text()
+
+        for source in (agents, contributing):
+            self.assertIn("incremental=true", source)
+            self.assertIn("documentation-only", source)
+            self.assertIn("focused", source)
+            self.assertIn("Hosted CI", source)
+            self.assertNotIn("--ci-profile local-gate", source)
+
+        self.assertIn("Superseded", old_design)
+        self.assertIn("2026-07-17-lightweight-local-pr-gate-design.md", old_design)
 
 
 if __name__ == "__main__":
