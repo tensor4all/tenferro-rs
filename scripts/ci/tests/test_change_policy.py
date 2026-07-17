@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -92,7 +93,102 @@ class ChangePolicyTests(unittest.TestCase):
             self.assertEqual(values["classification"], "docs-only")
             self.assertEqual(values["run_docs"], "true")
             self.assertEqual(values["run_rust"], "false")
-            self.assertIn("README.md", values["reason"])
+        self.assertIn("README.md", values["reason"])
+
+
+class LocalGateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temp_dir.name)
+        (self.repo / "scripts" / "ci").mkdir(parents=True)
+        shutil.copy2(ROOT / "scripts" / "check-pr-fast.sh", self.repo / "scripts")
+        shutil.copy2(
+            ROOT / "scripts" / "ci" / "change_policy.py",
+            self.repo / "scripts" / "ci",
+        )
+        bin_dir = self.repo / "bin"
+        bin_dir.mkdir()
+        cargo = bin_dir / "cargo"
+        cargo.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$*\" >> \"$CARGO_MARKER\"\n"
+        )
+        cargo.chmod(0o755)
+        subprocess.run(["git", "init", "-b", "test-branch"], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=self.repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=self.repo,
+            check=True,
+        )
+        (self.repo / "README.md").write_text("baseline\n")
+        subprocess.run(["git", "add", "."], cwd=self.repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "baseline"],
+            cwd=self.repo,
+            check=True,
+            capture_output=True,
+        )
+        self.marker = self.repo / "cargo-calls"
+        self.env = os.environ | {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "CARGO_MARKER": str(self.marker),
+        }
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def run_gate(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                "bash",
+                "scripts/check-pr-fast.sh",
+                "--base",
+                "HEAD",
+                "--no-fetch",
+                "--skip-doc-snippets",
+                *args,
+            ],
+            cwd=self.repo,
+            env=self.env,
+            capture_output=True,
+            text=True,
+        )
+
+    def write_change(self, path: str) -> None:
+        target = self.repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("changed\n")
+
+    def test_code_change_requires_a_focused_command(self) -> None:
+        self.write_change("src/lib.rs")
+        result = self.run_gate("--coverage-reviewed")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("focused verification command required", result.stderr)
+
+    def test_code_change_runs_focused_command_incrementally(self) -> None:
+        self.write_change("src/lib.rs")
+        result = self.run_gate("--coverage-reviewed", "--test", "true")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("classification: code", result.stdout)
+        self.assertTrue(self.marker.exists(), "code changes should run cargo fmt")
+
+    def test_docs_only_change_skips_cargo_and_coverage_acknowledgement(self) -> None:
+        self.write_change("docs/guide.md")
+        result = self.run_gate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("classification: docs-only", result.stdout)
+        self.assertFalse(self.marker.exists(), "docs-only must not invoke Cargo")
+
+    def test_ci_only_change_requires_a_focused_command(self) -> None:
+        self.write_change("scripts/ci/example.py")
+        result = self.run_gate()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("focused verification command required", result.stderr)
 
 
 if __name__ == "__main__":
