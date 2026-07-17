@@ -1,8 +1,39 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor_core::{
-    col_major_strides, DType, DynRank, Error, HostTensor, HostTensorView, Rank, SliceSpec, Tensor,
-    TensorLayout, TensorRank, TensorRef, TensorScalar,
+    col_major_strides, DType, DynRank, ErrorKind, HostTensor, HostTensorView, Rank, ShapeMismatch,
+    SliceSpec, Tensor, TensorLayout, TensorRank, TensorRef, TensorScalar, ValidationError,
+    ValidationKind,
 };
+
+#[test]
+fn shape_mismatch_keeps_machine_readable_payload() {
+    let err: ValidationError = ShapeMismatch::IncompatibleShapes {
+        lhs: tenferro_tensor_core::ShapeVec::from_vec(vec![2, 3]),
+        rhs: tenferro_tensor_core::ShapeVec::from_vec(vec![2, 4]),
+    }
+    .into();
+
+    assert_eq!(err.kind(), ValidationKind::ShapeMismatch);
+    assert!(matches!(
+        err,
+        ValidationError::ShapeMismatch(ref mismatch)
+            if matches!(mismatch.as_ref(), ShapeMismatch::IncompatibleShapes {
+                ref lhs,
+                ref rhs,
+            } if lhs.as_slice() == [2, 3] && rhs.as_slice() == [2, 4])
+    ));
+
+    let source = std::error::Error::source(&err).expect("shape mismatch source");
+    assert!(source.downcast_ref::<Box<ShapeMismatch>>().is_some());
+}
+
+#[test]
+fn public_error_kind_can_classify_validation() {
+    assert_eq!(
+        ErrorKind::Validation(ValidationKind::RankMismatch),
+        ErrorKind::Validation(ValidationKind::RankMismatch)
+    );
+}
 
 #[test]
 fn host_tensor_uses_host_specific_public_name() {
@@ -64,7 +95,7 @@ fn static_rank_rejects_wrong_shape_length() {
     let err = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3, 4].into()).unwrap_err();
     assert!(matches!(
         err,
-        Error::RankMismatch {
+        ValidationError::RankMismatch {
             expected: 2,
             actual: 3
         }
@@ -76,7 +107,7 @@ fn static_rank_rejects_wrong_stride_length() {
     let err = <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2, 3].into()).unwrap_err();
     assert!(matches!(
         err,
-        Error::RankMismatch {
+        ValidationError::RankMismatch {
             expected: 2,
             actual: 3
         }
@@ -147,7 +178,7 @@ fn reshape_view_as_requires_compact_layout() {
 
     let non_compact = TensorLayout::<Rank<2>>::from_parts([2, 3], [2, 1], 0, 6).unwrap();
     let err = non_compact.reshape_view_as::<Rank<1>>([6], 6).unwrap_err();
-    assert!(matches!(err, Error::NonContiguousViewAsSlice));
+    assert!(matches!(err, ValidationError::NonContiguousViewAsSlice));
 }
 
 #[test]
@@ -163,7 +194,7 @@ fn slice_view_rejects_zero_step_with_exact_error() {
             4,
         )
         .unwrap_err();
-    assert!(matches!(err, Error::InvalidSliceStep { step: 0 }));
+    assert!(matches!(err, ValidationError::InvalidSliceStep { step: 0 }));
 }
 
 #[test]
@@ -181,7 +212,7 @@ fn slice_view_rejects_invalid_normalized_bounds_with_exact_error() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::InvalidSliceBounds {
+        ValidationError::InvalidSliceBounds {
             start: 3,
             end: -6,
             axis_len: 4
@@ -205,7 +236,7 @@ fn dynamic_layout_rejects_shape_stride_rank_mismatch() {
         TensorLayout::<DynRank>::from_parts(vec![2, 3].into(), vec![1].into(), 0, 6).unwrap_err();
     assert!(matches!(
         err,
-        Error::RankMismatch {
+        ValidationError::RankMismatch {
             expected: 2,
             actual: 1
         }
@@ -232,7 +263,7 @@ fn non_compact_layout_reports_false() {
 #[test]
 fn compact_layout_reports_stride_overflow() {
     let err = TensorLayout::<Rank<2>>::compact([usize::MAX, 2]).unwrap_err();
-    assert!(matches!(err, Error::IntegerOverflow));
+    assert!(matches!(err, ValidationError::IntegerOverflow));
 }
 
 #[test]
@@ -245,7 +276,7 @@ fn layout_rejects_non_empty_broadcast_shape_product_overflow() {
         1,
     )
     .unwrap_err();
-    assert!(matches!(err, Error::IntegerOverflow));
+    assert!(matches!(err, ValidationError::IntegerOverflow));
 }
 
 #[test]
@@ -312,7 +343,7 @@ fn layout_reports_overflow_for_unreachable_offset_arithmetic() {
     assert!(matches!(
         TensorLayout::<DynRank>::from_parts(vec![3].into(), vec![isize::MAX].into(), 0, 3)
             .unwrap_err(),
-        Error::IntegerOverflow
+        ValidationError::IntegerOverflow
     ));
 }
 
@@ -321,7 +352,7 @@ fn mutable_layout_rejects_zero_stride_broadcast() {
     let layout = TensorLayout::<DynRank>::from_parts(vec![2].into(), vec![0].into(), 0, 1).unwrap();
     assert!(matches!(
         layout.validate_mutable_no_overlap(),
-        Err(Error::OverlappingMutableLayout)
+        Err(ValidationError::OverlappingMutableLayout)
     ));
 }
 
@@ -331,7 +362,7 @@ fn mutable_layout_rejects_overlapping_strides() {
         TensorLayout::<DynRank>::from_parts(vec![2, 2].into(), vec![1, 1].into(), 0, 4).unwrap();
     assert!(matches!(
         layout.validate_mutable_no_overlap(),
-        Err(Error::OverlappingMutableLayout)
+        Err(ValidationError::OverlappingMutableLayout)
     ));
 }
 
@@ -368,7 +399,7 @@ fn mutable_layout_rejects_large_ambiguous_layout_without_exact_fallback() {
             .unwrap();
     assert!(matches!(
         layout.validate_mutable_no_overlap(),
-        Err(Error::OverlappingMutableLayout)
+        Err(ValidationError::OverlappingMutableLayout)
     ));
 }
 
@@ -377,7 +408,7 @@ fn layout_rejects_huge_non_empty_zero_stride_before_product_overflow() {
     let huge_extent = isize::MAX as usize + 1;
     assert!(matches!(
         TensorLayout::<DynRank>::from_parts(vec![huge_extent, 3].into(), vec![0, 1].into(), 0, 3),
-        Err(Error::IntegerOverflow)
+        Err(ValidationError::IntegerOverflow)
     ));
 }
 
@@ -390,7 +421,7 @@ fn constructs_contiguous_col_major_and_validates_count() {
     let err = HostTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64]).unwrap_err();
     assert!(matches!(
         err,
-        Error::ShapeDataLengthMismatch {
+        ValidationError::ShapeDataLengthMismatch {
             expected: 4,
             actual: 1
         }
@@ -419,7 +450,7 @@ fn reshape_view_requires_compact_col_major_but_allows_nonzero_offset() {
 
     let non_contiguous = HostTensorView::from_slice(vec![2, 2], vec![1, 3], 0, &data).unwrap();
     let err = non_contiguous.reshape_view(vec![4]).unwrap_err();
-    assert!(matches!(err, Error::NonContiguousViewAsSlice));
+    assert!(matches!(err, ValidationError::NonContiguousViewAsSlice));
 }
 
 #[test]
@@ -431,7 +462,10 @@ fn transpose_view_only_reorders_metadata() {
     assert_eq!(view.offset(), 0);
     assert!(matches!(
         tensor.as_view().transpose_view(&[0, 0]).unwrap_err(),
-        Error::DuplicateAxis { axis: 0 }
+        ValidationError::DuplicateAxis {
+            axis: 0,
+            role: "permutation",
+        }
     ));
 }
 
@@ -474,7 +508,7 @@ fn invalid_slice_steps_and_negative_bounds_are_rejected() {
                 step: 0
             }])
             .unwrap_err(),
-        Error::InvalidSliceStep { step: 0 }
+        ValidationError::InvalidSliceStep { step: 0 }
     ));
     assert!(matches!(
         tensor
@@ -485,7 +519,7 @@ fn invalid_slice_steps_and_negative_bounds_are_rejected() {
                 step: 1
             }])
             .unwrap_err(),
-        Error::InvalidSliceBounds { .. }
+        ValidationError::InvalidSliceBounds { .. }
     ));
 }
 
@@ -494,11 +528,11 @@ fn view_bounds_are_validated_eagerly_with_checked_arithmetic() {
     let data = [1_i32, 2, 3];
     assert!(matches!(
         HostTensorView::from_slice(vec![4], vec![1], 0, &data).unwrap_err(),
-        Error::ViewOutOfBounds
+        ValidationError::ViewOutOfBounds
     ));
     assert!(matches!(
         HostTensorView::from_slice(vec![usize::MAX, 2], vec![1, 2], 0, &data).unwrap_err(),
-        Error::IntegerOverflow
+        ValidationError::IntegerOverflow
     ));
 
     let reversed = HostTensorView::from_slice(vec![3], vec![-1], 2, &data).unwrap();
@@ -507,7 +541,7 @@ fn view_bounds_are_validated_eagerly_with_checked_arithmetic() {
     assert_eq!(reversed.offset(), 2);
     assert!(matches!(
         HostTensorView::from_slice(vec![3], vec![-1], 1, &data).unwrap_err(),
-        Error::ViewOutOfBounds
+        ValidationError::ViewOutOfBounds
     ));
 }
 
@@ -520,7 +554,7 @@ fn empty_view_offsets_may_point_one_past_the_borrowed_slice() {
 
     assert!(matches!(
         HostTensorView::from_slice(vec![0], vec![1], 4, &data).unwrap_err(),
-        Error::ViewOutOfBounds
+        ValidationError::ViewOutOfBounds
     ));
 }
 
@@ -572,7 +606,7 @@ fn as_slice_accepts_nonzero_offset_and_rejects_non_contiguous_views() {
     let non_contiguous = HostTensorView::from_slice(vec![2], vec![2], 0, &data).unwrap();
     assert!(matches!(
         non_contiguous.as_slice().unwrap_err(),
-        Error::NonContiguousViewAsSlice
+        ValidationError::NonContiguousViewAsSlice
     ));
 }
 
@@ -583,7 +617,7 @@ fn dynamic_tensor_and_view_report_dtype_mismatch() {
     assert_eq!(tensor.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     assert!(matches!(
         tensor.as_slice::<f32>().unwrap_err(),
-        Error::DTypeMismatch {
+        ValidationError::DTypeMismatch {
             expected: DType::F32,
             actual: DType::F64
         }
@@ -600,7 +634,7 @@ fn tensor_scalar_into_tensor_rejects_shape_data_length_mismatch() {
 
     assert!(matches!(
         err,
-        Error::ShapeDataLengthMismatch {
+        ValidationError::ShapeDataLengthMismatch {
             expected: 6,
             actual: 2
         }
@@ -627,7 +661,8 @@ fn typed_owned_accessors_and_exports_cover_success_and_errors() {
     assert_eq!(reshaped.shape(), &[1, 2]);
     assert!(matches!(
         tensor.into_reshaped(vec![3]).unwrap_err(),
-        Error::ReshapeElementCountMismatch { from: 2, to: 3 }
+        ValidationError::ShapeMismatch(ref mismatch)
+            if matches!(mismatch.as_ref(), ShapeMismatch::ReshapeElementCount { from: 2, to: 3 })
     ));
 
     let (shape, data) = reshaped.into_vec_col_major();
@@ -695,7 +730,7 @@ fn dynamic_tensor_mutation_and_owned_exports_validate_dtype() {
     assert_eq!(tensor.as_slice::<f64>().unwrap(), &[5.0, 2.0]);
     assert!(matches!(
         tensor.as_mut_slice::<f32>().unwrap_err(),
-        Error::DTypeMismatch {
+        ValidationError::DTypeMismatch {
             expected: DType::F32,
             actual: DType::F64
         }
@@ -708,7 +743,7 @@ fn dynamic_tensor_mutation_and_owned_exports_validate_dtype() {
     let tensor = Tensor::from_vec_col_major(vec![1], vec![1_i32]).unwrap();
     assert!(matches!(
         tensor.into_vec_col_major::<i64>().unwrap_err(),
-        Error::DTypeMismatch {
+        ValidationError::DTypeMismatch {
             expected: DType::I64,
             actual: DType::I32
         }
@@ -747,7 +782,7 @@ fn view_validation_reports_rank_permutation_and_slice_errors() {
     let data = [1_i32, 2, 3, 4];
     assert!(matches!(
         HostTensorView::from_slice(vec![2], vec![1, 2], 0, &data).unwrap_err(),
-        Error::RankMismatch {
+        ValidationError::RankMismatch {
             expected: 1,
             actual: 2
         }
@@ -758,18 +793,19 @@ fn view_validation_reports_rank_permutation_and_slice_errors() {
     assert!(view.is_compact_col_major().unwrap());
     assert!(matches!(
         view.transpose_view(&[0]).unwrap_err(),
-        Error::InvalidPermutationLength {
+        ValidationError::InvalidPermutationLength {
             expected: 2,
             actual: 1
         }
     ));
     assert!(matches!(
         view.transpose_view(&[0, 2]).unwrap_err(),
-        Error::AxisOutOfBounds { axis: 2, rank: 2 }
+        ValidationError::AxisOutOfBounds { axis: 2, rank: 2 }
     ));
     assert!(matches!(
         view.reshape_view(vec![3]).unwrap_err(),
-        Error::ReshapeElementCountMismatch { from: 4, to: 3 }
+        ValidationError::ShapeMismatch(ref mismatch)
+            if matches!(mismatch.as_ref(), ShapeMismatch::ReshapeElementCount { from: 4, to: 3 })
     ));
     assert!(matches!(
         view.slice_view(&[SliceSpec {
@@ -778,7 +814,7 @@ fn view_validation_reports_rank_permutation_and_slice_errors() {
             step: 1
         }])
         .unwrap_err(),
-        Error::RankMismatch {
+        ValidationError::RankMismatch {
             expected: 2,
             actual: 1
         }
@@ -797,7 +833,7 @@ fn view_validation_reports_rank_permutation_and_slice_errors() {
             },
         ])
         .unwrap_err(),
-        Error::InvalidSliceBounds {
+        ValidationError::InvalidSliceBounds {
             start: 0,
             end: 3,
             axis_len: 2

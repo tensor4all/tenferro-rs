@@ -3281,24 +3281,29 @@ fn try_compact_layout<R: TensorRank>(
     TensorLayout::compact(shape.into()).map_err(|err| tensor_layout_error(op, err))
 }
 
-fn tensor_layout_error(op: &'static str, err: tenferro_tensor_core::Error) -> crate::Error {
+fn tensor_layout_error(
+    op: &'static str,
+    err: tenferro_tensor_core::ValidationError,
+) -> crate::Error {
     match err {
-        tenferro_tensor_core::Error::RankMismatch { expected, actual } => {
+        tenferro_tensor_core::ValidationError::RankMismatch { expected, actual } => {
             crate::Error::RankMismatch {
                 op,
                 expected,
                 actual,
             }
         }
-        tenferro_tensor_core::Error::AxisOutOfBounds { axis, rank } => {
+        tenferro_tensor_core::ValidationError::AxisOutOfBounds { axis, rank } => {
             crate::Error::AxisOutOfBounds { op, axis, rank }
         }
-        tenferro_tensor_core::Error::DuplicateAxis { axis } => crate::Error::DuplicateAxis {
-            op,
-            axis,
-            role: "permutation",
-        },
-        tenferro_tensor_core::Error::InvalidPermutationLength { expected, actual } => {
+        tenferro_tensor_core::ValidationError::DuplicateAxis { axis, .. } => {
+            crate::Error::DuplicateAxis {
+                op,
+                axis,
+                role: "permutation",
+            }
+        }
+        tenferro_tensor_core::ValidationError::InvalidPermutationLength { expected, actual } => {
             crate::Error::RankMismatch {
                 op,
                 expected,
@@ -3535,7 +3540,7 @@ fn reshape_layout_dyn<R: TensorRank>(
             if from != to {
                 return Err(tensor_layout_error(
                     op,
-                    tenferro_tensor_core::Error::ReshapeElementCountMismatch { from, to },
+                    tenferro_tensor_core::ShapeMismatch::ReshapeElementCount { from, to }.into(),
                 ));
             }
             TensorLayout::<DynRank>::compact(shape.to_vec().into())

@@ -455,7 +455,7 @@ fn typed_tensor_static_rank_shape_conversion_reports_rank_mismatch() {
 
     assert!(matches!(
         err,
-        tenferro_tensor_core::Error::RankMismatch {
+        tenferro_tensor_core::ValidationError::RankMismatch {
             expected: 2,
             actual: 3
         }

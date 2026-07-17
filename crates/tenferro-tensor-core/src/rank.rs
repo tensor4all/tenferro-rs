@@ -1,4 +1,4 @@
-use crate::{Error, Result, ShapeVec, StrideVec};
+use crate::{Result, ShapeVec, StrideVec, ValidationError};
 use std::fmt::Debug;
 
 /// Rank contract for tensor metadata shapes and strides.
@@ -10,7 +10,7 @@ use std::fmt::Debug;
 ///
 /// let shape = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3].into())?;
 /// assert_eq!(shape.as_ref(), &[2, 3]);
-/// # Ok::<(), tenferro_tensor_core::Error>(())
+/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
 /// ```
 pub trait TensorRank: private::Sealed + Clone + Copy + Debug + Eq + Send + Sync + 'static {
     /// Static rank when known at compile time.
@@ -58,8 +58,13 @@ pub trait TensorRank: private::Sealed + Clone + Copy + Debug + Eq + Send + Sync 
     ///
     /// let shape = <Rank<1> as TensorRank>::shape_from_vec(vec![4].into())?;
     /// assert_eq!(shape.as_ref(), &[4]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::RankMismatch`] when the shape length does
+    /// not equal the compile-time rank.
     fn shape_from_vec(shape: ShapeVec) -> Result<Self::Shape>;
 
     /// Convert this rank's shape representation into a dynamic shape vector.
@@ -71,7 +76,7 @@ pub trait TensorRank: private::Sealed + Clone + Copy + Debug + Eq + Send + Sync 
     ///
     /// let shape = <Rank<2> as TensorRank>::shape_from_vec(vec![2, 3].into())?;
     /// assert_eq!(<Rank<2> as TensorRank>::shape_into_vec(shape).as_slice(), &[2, 3]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     fn shape_into_vec(shape: Self::Shape) -> ShapeVec;
 
@@ -84,8 +89,13 @@ pub trait TensorRank: private::Sealed + Clone + Copy + Debug + Eq + Send + Sync 
     ///
     /// let strides = <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2].into())?;
     /// assert_eq!(strides.as_ref(), &[1, 2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::RankMismatch`] when the stride length does
+    /// not equal the compile-time rank.
     fn strides_from_vec(strides: StrideVec) -> Result<Self::Strides>;
 
     /// Convert this rank's stride representation into a dynamic stride vector.
@@ -97,7 +107,7 @@ pub trait TensorRank: private::Sealed + Clone + Copy + Debug + Eq + Send + Sync 
     ///
     /// let strides = <Rank<2> as TensorRank>::strides_from_vec(vec![1, 2].into())?;
     /// assert_eq!(<Rank<2> as TensorRank>::strides_into_vec(strides).as_slice(), &[1, 2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     fn strides_into_vec(strides: Self::Strides) -> StrideVec;
 }
@@ -160,7 +170,7 @@ impl<const N: usize> TensorRank for Rank<N> {
         shape
             .into_vec()
             .try_into()
-            .map_err(|_| Error::RankMismatch {
+            .map_err(|_| ValidationError::RankMismatch {
                 expected: N,
                 actual,
             })
@@ -175,7 +185,7 @@ impl<const N: usize> TensorRank for Rank<N> {
         strides
             .into_vec()
             .try_into()
-            .map_err(|_| Error::RankMismatch {
+            .map_err(|_| ValidationError::RankMismatch {
                 expected: N,
                 actual,
             })
