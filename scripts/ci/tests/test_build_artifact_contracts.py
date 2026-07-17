@@ -58,5 +58,17 @@ class BuildArtifactContracts(unittest.TestCase):
 
         self.assertFalse(dependencies["strided-einsum2"]["default-features"])
 
+    def test_linalg_provider_dependencies_are_isolated(self) -> None:
+        manifest = tomllib.loads(
+            (ROOT / "crates" / "tenferro-linalg" / "Cargo.toml").read_text()
+        )
+        features = manifest["features"]
+        dependencies = manifest["dependencies"]
+
+        self.assertIn("dep:faer", features["cpu-faer"])
+        self.assertIn("dep:lapack", features["cpu-blas"])
+        self.assertTrue(dependencies["faer"]["optional"])
+        self.assertTrue(dependencies["lapack"]["optional"])
+
 if __name__ == "__main__":
     unittest.main()

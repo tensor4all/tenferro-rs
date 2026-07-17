@@ -20,11 +20,13 @@ autodiff = [
     "tenferro-internal-ops/autodiff",
 ]
 cpu-faer = [
+    "dep:faer",
     "tenferro-ad?/cpu-faer",
     "tenferro-cpu/cpu-faer",
 ]
 cpu-blas = [
     "dep:cblas-sys",
+    "dep:lapack",
     "tenferro-ad?/cpu-blas",
     "tenferro-cpu/cpu-blas",
 ]
@@ -86,8 +88,8 @@ cubecl = { workspace = true, optional = true }
 cubecl-cuda = { workspace = true, optional = true }
 cubecl-runtime = { workspace = true, optional = true }
 cudarc = { workspace = true, optional = true }
-faer.workspace = true
-lapack.workspace = true
+faer = { workspace = true, optional = true }
+lapack = { workspace = true, optional = true }
 lapack-inject = { workspace = true, optional = true }
 libloading = { workspace = true, optional = true }
 num-complex.workspace = true
