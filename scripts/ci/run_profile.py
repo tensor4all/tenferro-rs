@@ -28,8 +28,8 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "--features cpu-blas",
     ),
     "blas-inject": (
-        "cargo test -p tenferro-cpu --test inject_tests --release "
-        '--no-default-features --features "cpu-blas,provider-inject"',
+        "cargo test -p tenferro-cpu --release --no-default-features "
+        '--features "cpu-blas,provider-inject" --test integration inject_tests',
     ),
     "extensions": (
         "cargo test --manifest-path ext/tropical/Cargo.toml --release "

@@ -41,6 +41,21 @@ env CARGO_TARGET_DIR=<fresh> CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 \
   RUSTC_WRAPPER= /usr/bin/time cargo test --workspace --release --no-run
 ```
 
+Workspace normal-debug command:
+
+```bash
+env CARGO_TARGET_DIR=<fresh> CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 \
+  RUSTC_WRAPPER= /usr/bin/time cargo test --workspace --no-run
+```
+
+Workspace `debug=0` profile-probe command:
+
+```bash
+env CARGO_TARGET_DIR=<fresh> CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 \
+  CARGO_PROFILE_TEST_DEBUG=0 RUSTC_WRAPPER= \
+  /usr/bin/time cargo test --workspace --no-run
+```
+
 Controlled downstream command (`--release` omitted for debug):
 
 ```bash

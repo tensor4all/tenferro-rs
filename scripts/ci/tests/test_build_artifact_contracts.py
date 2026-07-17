@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import tomllib
 import unittest
 from pathlib import Path
@@ -36,6 +37,32 @@ class BuildArtifactContracts(unittest.TestCase):
                     path.name for path in (crate_root / "tests").glob("*.rs")
                 )
                 self.assertEqual(top_level_sources, ["integration.rs"])
+
+                harness = (crate_root / "tests" / "integration.rs").read_text()
+                included_paths = set(re.findall(r'#\[path = "([^"]+)"\]', harness))
+                suite_root = crate_root / "tests" / "integration"
+                expected_paths = {
+                    path.relative_to(crate_root / "tests").as_posix()
+                    for path in suite_root.glob("*.rs")
+                }
+                expected_paths.update(
+                    path.relative_to(crate_root / "tests").as_posix()
+                    for path in suite_root.glob("*/mod.rs")
+                )
+                self.assertEqual(included_paths, expected_paths)
+
+    def test_ci_does_not_select_removed_integration_targets(self) -> None:
+        operational_files = (
+            ROOT / "scripts" / "ci" / "run_profile.py",
+            ROOT / ".github" / "workflows" / "CI_gpu.yml",
+            ROOT / ".github" / "workflows" / "runpod-gpu-test.yml",
+        )
+        removed_selectors = ("--test inject_tests", "--test pjrt_execution")
+        for path in operational_files:
+            contents = path.read_text()
+            with self.subTest(path=path.relative_to(ROOT)):
+                for selector in removed_selectors:
+                    self.assertNotIn(selector, contents)
 
     def test_workspace_faer_dependency_disables_broad_defaults(self) -> None:
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
@@ -74,7 +101,7 @@ class BuildArtifactContracts(unittest.TestCase):
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
         dependencies = manifest["workspace"]["dependencies"]
 
-        revision = "072cf82387ae099ce1d23efe6c0cbc68e231d9d2"
+        revision = "3dc6c870af4ee576c75f1b4aa354313f1fb330c0"
         for name in (
             "cubecl",
             "cubecl-cuda",
