@@ -114,28 +114,36 @@ impl CpuContext {
     ///     .unwrap_or_else(|_| CpuContext::with_threads(1).unwrap());
     /// assert!(ctx.num_threads() >= 1);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuContextError`] when `RAYON_NUM_THREADS` is malformed or
+    /// requests an invalid worker count.
     pub fn try_from_env() -> Result<Self> {
         match env::var("RAYON_NUM_THREADS") {
             Ok(value) => {
-                let num_threads = value.parse::<usize>().map_err(|err| Error::InvalidConfig {
-                    op: "CpuContext::try_from_env",
-                    message: format!("invalid RAYON_NUM_THREADS value {value:?}: {err}"),
+                let num_threads = value.parse::<usize>().map_err(|err| {
+                    Error::invalid_argument(
+                        "CpuContext::try_from_env",
+                        "configuration",
+                        format!("invalid RAYON_NUM_THREADS value {value:?}: {err}"),
+                    )
                 })?;
                 Self::with_threads(num_threads).map_err(|err| match err {
-                    Error::InvalidConfig { message, .. } => Error::InvalidConfig {
-                        op: "CpuContext::try_from_env",
-                        message: format!("invalid RAYON_NUM_THREADS value {value:?}: {message}"),
-                    },
+                    Error::Validation { source, .. } => {
+                        Error::validation("CpuContext::try_from_env", source)
+                    }
                     err => err,
                 })
             }
             Err(env::VarError::NotPresent) => {
                 Self::with_threads(super::affinity::available_parallelism())
             }
-            Err(err) => Err(Error::InvalidConfig {
-                op: "CpuContext::try_from_env",
-                message: format!("failed to read RAYON_NUM_THREADS: {err}"),
-            }),
+            Err(err) => Err(Error::invalid_argument(
+                "CpuContext::try_from_env",
+                "configuration",
+                format!("failed to read RAYON_NUM_THREADS: {err}"),
+            )),
         }
     }
 
@@ -155,10 +163,11 @@ impl CpuContext {
     /// Returns an error when `num_threads` is zero or Rayon rejects the pool.
     pub fn with_threads(num_threads: usize) -> Result<Self> {
         if num_threads == 0 {
-            return Err(Error::InvalidConfig {
-                op: "CpuContext::with_threads",
-                message: "thread count must be at least 1".into(),
-            });
+            return Err(Error::invalid_argument(
+                "CpuContext::with_threads",
+                "configuration",
+                "thread count must be at least 1",
+            ));
         }
         let pool = if num_threads == 1 {
             None
@@ -167,9 +176,12 @@ impl CpuContext {
                 rayon::ThreadPoolBuilder::new()
                     .num_threads(num_threads)
                     .build()
-                    .map_err(|err| Error::InvalidConfig {
-                        op: "CpuContext::with_threads",
-                        message: format!("failed to build CPU thread pool: {err}"),
+                    .map_err(|err| {
+                        Error::invalid_argument(
+                            "CpuContext::with_threads",
+                            "configuration",
+                            format!("failed to build CPU thread pool: {err}"),
+                        )
                     })?,
             ))
         };
@@ -198,6 +210,12 @@ impl CpuContext {
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuContextError::InvalidThreadCount`] for zero workers,
+    /// [`CpuContextError::TooManyWorkers`] when the request exceeds the CPU
+    /// set, or an affinity error when workers cannot be pinned.
     pub fn with_pinned_cpus(
         cpus: CpuSet,
         num_threads: usize,

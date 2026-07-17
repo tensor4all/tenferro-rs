@@ -83,6 +83,93 @@ pub enum Error {
 }
 
 impl Error {
+    /// Construct an incompatible-shapes validation error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Error;
+    ///
+    /// let error = Error::shape_mismatch("add", [2, 3], [2, 4]);
+    /// assert!(matches!(error, Error::Validation { .. }));
+    /// ```
+    pub fn shape_mismatch(
+        op: &'static str,
+        lhs: impl Into<Vec<usize>>,
+        rhs: impl Into<Vec<usize>>,
+    ) -> Self {
+        Self::validation(
+            op,
+            tenferro_tensor_core::ShapeMismatch::IncompatibleShapes {
+                lhs: tenferro_tensor_core::ShapeVec::from_vec(lhs.into()),
+                rhs: tenferro_tensor_core::ShapeVec::from_vec(rhs.into()),
+            }
+            .into(),
+        )
+    }
+
+    /// Construct a rank-mismatch validation error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Error;
+    ///
+    /// let error = Error::rank_mismatch("transpose", 2, 3);
+    /// assert!(matches!(error, Error::Validation { .. }));
+    /// ```
+    pub fn rank_mismatch(op: &'static str, expected: usize, actual: usize) -> Self {
+        Self::validation(op, ValidationError::RankMismatch { expected, actual })
+    }
+
+    /// Construct an axis-out-of-bounds validation error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Error;
+    ///
+    /// let error = Error::axis_out_of_bounds("sum", 2, 2);
+    /// assert!(matches!(error, Error::Validation { .. }));
+    /// ```
+    pub fn axis_out_of_bounds(op: &'static str, axis: usize, rank: usize) -> Self {
+        Self::validation(op, ValidationError::AxisOutOfBounds { axis, rank })
+    }
+
+    /// Construct a duplicate-axis validation error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::Error;
+    ///
+    /// let error = Error::duplicate_axis("transpose", 1, "permutation");
+    /// assert!(matches!(error, Error::Validation { .. }));
+    /// ```
+    pub fn duplicate_axis(op: &'static str, axis: usize, role: &'static str) -> Self {
+        Self::validation(op, ValidationError::DuplicateAxis { axis, role })
+    }
+
+    /// Construct a dtype-mismatch validation error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Error};
+    ///
+    /// let error = Error::dtype_mismatch("add", DType::F32, DType::F64);
+    /// assert!(matches!(error, Error::Validation { .. }));
+    /// ```
+    pub fn dtype_mismatch(op: &'static str, expected: crate::DType, actual: crate::DType) -> Self {
+        Self::validation(
+            op,
+            ValidationError::DTypeMismatch {
+                expected: crate::core_dtype(expected),
+                actual: crate::core_dtype(actual),
+            },
+        )
+    }
+
     /// Wrap shared tensor validation with the operation that requested it.
     ///
     /// # Examples

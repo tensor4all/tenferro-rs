@@ -407,11 +407,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                                 .map(|result| result.map(Tensor::C64))
                         }
                         _ if lhs.dtype() == rhs.dtype() => Ok(None),
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }?;
                     if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
                         return Ok(result);
@@ -473,11 +473,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                             config,
                         )
                         .map(Tensor::C64),
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }
                 }
                 #[cfg(not(feature = "cpu-faer"))]
@@ -528,11 +528,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                             config,
                         )
                         .map(Tensor::C64),
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }
                 }
                 #[cfg(not(feature = "cpu-blas"))]
@@ -606,11 +606,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                             .map(|result| result.map(Tensor::C64))
                         }
                         _ if lhs.dtype() == rhs.dtype() => Ok(None),
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }?;
                     if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
                         return Ok(result);
@@ -687,11 +687,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                             )
                             .map(Tensor::C64)
                         }
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }
                 }
                 #[cfg(not(feature = "cpu-faer"))]
@@ -758,11 +758,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                             )
                             .map(Tensor::C64)
                         }
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }
                 }
                 #[cfg(not(feature = "cpu-blas"))]

@@ -14,7 +14,7 @@ fn typed_concatenate_rejects_empty_typed_inputs_without_panicking() {
     assert!(result.is_ok(), "empty typed concatenate should return Err");
     assert!(matches!(
         result.unwrap().unwrap_err(),
-        Error::InvalidConfig {
+        Error::Validation {
             op: "concatenate",
             ..
         }
@@ -39,7 +39,7 @@ fn index_component_rejects_mismatched_scratch_len_without_panicking() {
     );
     assert!(matches!(
         result.unwrap().unwrap_err(),
-        Error::InvalidConfig { op: "gather", .. }
+        Error::Validation { op: "gather", .. }
     ));
 }
 

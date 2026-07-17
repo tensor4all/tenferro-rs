@@ -17,7 +17,7 @@ use rayon::prelude::*;
 use tenferro_tensor::backend::GroupedGemmConfig;
 use tenferro_tensor::{
     col_major_strides, Buffer, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut,
+    TypedTensorView, TypedTensorViewMut, ValidationError,
 };
 use tenferro_tensor::{CacheStats, RuntimeCacheControl};
 use tenferro_tensor::{ContractionScalar, DotGeneralAccumulation, DotGeneralConfig};
@@ -369,10 +369,10 @@ fn validate_axis_list(
     let mut seen: SmallVec<[bool; 8]> = smallvec::smallvec![false; rank];
     for &axis in axes {
         if axis >= rank {
-            return Err(Error::AxisOutOfBounds { op, axis, rank });
+            return Err(Error::axis_out_of_bounds(op, axis, rank));
         }
         if seen[axis] {
-            return Err(Error::DuplicateAxis { op, axis, role });
+            return Err(Error::duplicate_axis(op, axis, role));
         }
         seen[axis] = true;
     }
@@ -388,12 +388,14 @@ fn validate_role_disjoint(
 ) -> crate::Result<()> {
     for &axis in first_axes {
         if second_axes.contains(&axis) {
-            return Err(Error::AxisRoleConflict {
+            return Err(Error::validation(
                 op,
-                axis,
-                first_role,
-                second_role,
-            });
+                ValidationError::AxisRoleConflict {
+                    axis,
+                    first_role,
+                    second_role,
+                },
+            ));
         }
     }
     Ok(())
@@ -408,16 +410,18 @@ where
     let rhs_shape = rhs.shape();
 
     if config.lhs_contracting_dims.len() != config.rhs_contracting_dims.len() {
-        return Err(Error::InvalidConfig {
-            op: OP,
-            message: "lhs/rhs contracting dim counts differ".into(),
-        });
+        return Err(Error::invalid_argument(
+            OP,
+            "configuration",
+            "lhs/rhs contracting dim counts differ",
+        ));
     }
     if config.lhs_batch_dims.len() != config.rhs_batch_dims.len() {
-        return Err(Error::InvalidConfig {
-            op: OP,
-            message: "lhs/rhs batch dim counts differ".into(),
-        });
+        return Err(Error::invalid_argument(
+            OP,
+            "configuration",
+            "lhs/rhs batch dim counts differ",
+        ));
     }
 
     let lhs_rank = lhs_shape.len();
@@ -457,24 +461,26 @@ where
         .zip(&config.rhs_contracting_dims)
     {
         if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
-            return Err(Error::InvalidConfig {
-                op: OP,
-                message: format!(
+            return Err(Error::invalid_argument(
+                OP,
+                "configuration",
+                format!(
                     "contracting dim size mismatch: lhs axis {lhs_axis}={} rhs axis {rhs_axis}={}",
                     lhs_shape[lhs_axis], rhs_shape[rhs_axis]
                 ),
-            });
+            ));
         }
     }
     for (&lhs_axis, &rhs_axis) in config.lhs_batch_dims.iter().zip(&config.rhs_batch_dims) {
         if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
-            return Err(Error::InvalidConfig {
-                op: OP,
-                message: format!(
+            return Err(Error::invalid_argument(
+                OP,
+                "configuration",
+                format!(
                     "batch dim size mismatch: lhs axis {lhs_axis}={} rhs axis {rhs_axis}={}",
                     lhs_shape[lhs_axis], rhs_shape[rhs_axis]
                 ),
-            });
+            ));
         }
     }
 
@@ -507,40 +513,51 @@ fn try_fuse_dims(shapes: &[usize], strides: &[isize]) -> Result<Option<(usize, i
             return Ok(None);
         }
         let shape = dim_to_isize(shape, "try_fuse_dims")?;
-        expected = stride
-            .checked_mul(shape)
-            .ok_or_else(|| Error::InvalidConfig {
-                op: OP,
-                message: format!("fused stride overflows isize: stride={stride} shape={shape}"),
-            })?;
+        expected = stride.checked_mul(shape).ok_or_else(|| {
+            Error::invalid_argument(
+                OP,
+                "configuration",
+                format!("fused stride overflows isize: stride={stride} shape={shape}"),
+            )
+        })?;
     }
-    let fused = checked_product(shapes).ok_or_else(|| Error::InvalidConfig {
-        op: OP,
-        message: format!("fused dimension product overflows usize for shape {shapes:?}"),
+    let fused = checked_product(shapes).ok_or_else(|| {
+        Error::invalid_argument(
+            OP,
+            "configuration",
+            format!("fused dimension product overflows usize for shape {shapes:?}"),
+        )
     })?;
     Ok(Some((fused, base_stride)))
 }
 
 fn checked_batch_offset(batch: usize, stride: isize) -> Result<isize> {
-    let batch_isize = isize::try_from(batch).map_err(|_| Error::InvalidConfig {
-        op: OP,
-        message: format!("batch index {batch} does not fit in isize"),
+    let batch_isize = isize::try_from(batch).map_err(|_| {
+        Error::invalid_argument(
+            OP,
+            "configuration",
+            format!("batch index {batch} does not fit in isize"),
+        )
     })?;
-    batch_isize
-        .checked_mul(stride)
-        .ok_or_else(|| Error::InvalidConfig {
-            op: OP,
-            message: format!("batch offset overflows isize: batch={batch} stride={stride}"),
-        })
+    batch_isize.checked_mul(stride).ok_or_else(|| {
+        Error::invalid_argument(
+            OP,
+            "configuration",
+            format!("batch offset overflows isize: batch={batch} stride={stride}"),
+        )
+    })
 }
 
 fn checked_view_batch_offset(base: isize, batch: usize, stride: isize) -> Result<isize> {
     base.checked_add(checked_batch_offset(batch, stride)?)
-        .ok_or_else(|| Error::InvalidConfig {
-            op: OP,
-            message: format!(
-                "view batch offset overflows isize: base={base} batch={batch} stride={stride}"
-            ),
+        .ok_or_else(|| {
+            Error::invalid_argument(
+                OP,
+                "configuration",
+                format!(
+                    "view batch offset overflows isize: base={base} batch={batch} stride={stride}"
+                ),
+            )
         })
 }
 
@@ -553,15 +570,21 @@ fn output_gemm_strides(
 ) -> crate::Result<Option<(isize, isize, isize)>> {
     let nm = lhs_rank
         .checked_sub(config.lhs_contracting_dims.len() + config.lhs_batch_dims.len())
-        .ok_or_else(|| Error::InvalidConfig {
-            op: OP,
-            message: "lhs free rank underflow while analyzing output strides".into(),
+        .ok_or_else(|| {
+            Error::invalid_argument(
+                OP,
+                "configuration",
+                "lhs free rank underflow while analyzing output strides",
+            )
         })?;
     let nn = rhs_rank
         .checked_sub(config.rhs_contracting_dims.len() + config.rhs_batch_dims.len())
-        .ok_or_else(|| Error::InvalidConfig {
-            op: OP,
-            message: "rhs free rank underflow while analyzing output strides".into(),
+        .ok_or_else(|| {
+            Error::invalid_argument(
+                OP,
+                "configuration",
+                "rhs free rank underflow while analyzing output strides",
+            )
         })?;
     let nb = config.lhs_batch_dims.len();
     if out_shape.len() != nm + nn + nb || out_strides.len() != out_shape.len() {
@@ -601,9 +624,12 @@ where
     })?;
     for linear in 0..element_count {
         let indices = flat_to_multi_for_shape(&shape, linear);
-        let output = out.get_mut(&indices).ok_or_else(|| Error::InvalidConfig {
-            op: OP,
-            message: format!("output index {indices:?} is outside accumulation target"),
+        let output = out.get_mut(&indices).ok_or_else(|| {
+            Error::invalid_argument(
+                OP,
+                "configuration",
+                format!("output index {indices:?} is outside accumulation target"),
+            )
         })?;
         // INVARIANT: beta == 0 follows GEMM semantics and overwrites the
         // destination with zero without reading its previous value.
@@ -630,22 +656,30 @@ fn flat_to_multi_for_shape(shape: &[usize], mut linear: usize) -> SmallVec<[usiz
 }
 
 fn dim_to_isize(dim: usize, context: &'static str) -> Result<isize> {
-    isize::try_from(dim).map_err(|_| Error::InvalidConfig {
-        op: OP,
-        message: format!("{context}: dimension {dim} does not fit in isize"),
+    isize::try_from(dim).map_err(|_| {
+        Error::invalid_argument(
+            OP,
+            "configuration",
+            format!("{context}: dimension {dim} does not fit in isize"),
+        )
     })
 }
 
 fn add_job_offset(base: isize, offset: usize, role: &'static str) -> Result<isize> {
-    let offset = isize::try_from(offset).map_err(|_| Error::InvalidConfig {
-        op: "grouped_gemm",
-        message: format!("{role} offset {offset} does not fit in isize"),
+    let offset = isize::try_from(offset).map_err(|_| {
+        Error::invalid_argument(
+            "grouped_gemm",
+            "configuration",
+            format!("{role} offset {offset} does not fit in isize"),
+        )
     })?;
-    base.checked_add(offset)
-        .ok_or_else(|| Error::InvalidConfig {
-            op: "grouped_gemm",
-            message: format!("{role} offset overflows isize: base={base} offset={offset}"),
-        })
+    base.checked_add(offset).ok_or_else(|| {
+        Error::invalid_argument(
+            "grouped_gemm",
+            "configuration",
+            format!("{role} offset overflows isize: base={base} offset={offset}"),
+        )
+    })
 }
 
 fn scale_grouped_empty_output<T>(
@@ -662,9 +696,12 @@ where
     }
     let beta_is_zero = beta == T::zero();
     for col in 0..cols {
-        let col_offset = col.checked_mul(rows).ok_or_else(|| Error::InvalidConfig {
-            op: "grouped_gemm",
-            message: format!("output column offset overflows usize: col={col} rows={rows}"),
+        let col_offset = col.checked_mul(rows).ok_or_else(|| {
+            Error::invalid_argument(
+                "grouped_gemm",
+                "configuration",
+                format!("output column offset overflows usize: col={col} rows={rows}"),
+            )
         })?;
         for row in 0..rows {
             let offset = col_offset + row;
@@ -1105,11 +1142,11 @@ pub(crate) fn dot_general_faer_read_cached(
     if lhs.dtype() == rhs.dtype() {
         Ok(None)
     } else {
-        Err(Error::DTypeMismatch {
-            op: "dot_general",
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        })
+        Err(Error::dtype_mismatch(
+            "dot_general",
+            lhs.dtype(),
+            rhs.dtype(),
+        ))
     }
 }
 
@@ -1984,11 +2021,11 @@ pub(crate) fn dot_general_blas_read_cached(
     if lhs.dtype() == rhs.dtype() {
         Ok(None)
     } else {
-        Err(Error::DTypeMismatch {
-            op: "dot_general",
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        })
+        Err(Error::dtype_mismatch(
+            "dot_general",
+            lhs.dtype(),
+            rhs.dtype(),
+        ))
     }
 }
 
@@ -2695,11 +2732,11 @@ pub(crate) fn dot_general_tblis_read_cached(
     if lhs.dtype() == rhs.dtype() {
         Ok(None)
     } else {
-        Err(Error::DTypeMismatch {
-            op: "dot_general",
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        })
+        Err(Error::dtype_mismatch(
+            "dot_general",
+            lhs.dtype(),
+            rhs.dtype(),
+        ))
     }
 }
 

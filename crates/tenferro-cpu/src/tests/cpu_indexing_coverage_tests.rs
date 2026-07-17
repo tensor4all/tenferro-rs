@@ -37,28 +37,28 @@ fn diagonal_scatter_config() -> ScatterConfig {
 fn expect_invalid_config(result: crate::Result<Tensor>, op: &'static str) {
     assert!(matches!(
         result,
-        Err(crate::Error::InvalidConfig { op: actual, .. }) if actual == op
+        Err(crate::Error::Validation { op: actual, .. }) if actual == op
     ));
 }
 
 fn expect_rank_mismatch(result: crate::Result<Tensor>, op: &'static str) {
     assert!(matches!(
         result,
-        Err(crate::Error::RankMismatch { op: actual, .. }) if actual == op
+        Err(crate::Error::Validation { op: actual, source: tenferro_tensor::ValidationError::RankMismatch { .. } }) if actual == op
     ));
 }
 
 fn expect_axis_oob(result: crate::Result<Tensor>, op: &'static str) {
     assert!(matches!(
         result,
-        Err(crate::Error::AxisOutOfBounds { op: actual, .. }) if actual == op
+        Err(crate::Error::Validation { op: actual, source: tenferro_tensor::ValidationError::AxisOutOfBounds { .. } }) if actual == op
     ));
 }
 
 fn expect_duplicate_axis(result: crate::Result<Tensor>, op: &'static str) {
     assert!(matches!(
         result,
-        Err(crate::Error::DuplicateAxis { op: actual, .. }) if actual == op
+        Err(crate::Error::Validation { op: actual, source: tenferro_tensor::ValidationError::DuplicateAxis { .. } }) if actual == op
     ));
 }
 
@@ -217,7 +217,10 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
             &Tensor::F64(TypedTensor::zeros(vec![2]).unwrap()),
             &diagonal_scatter_config(),
         ),
-        Err(crate::Error::DTypeMismatch { op: "scatter", .. })
+        Err(crate::Error::Validation {
+            op: "scatter",
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
     ));
 
     let slice_cfg = SliceConfig {
@@ -712,9 +715,9 @@ fn cpu_exec_session_covers_dot_errors_and_reclaim_dispatch() {
         };
         assert!(matches!(
             exec.dot_general(&f64_vec, &f32_vec, &dot_cfg),
-            Err(crate::Error::DTypeMismatch {
+            Err(crate::Error::Validation {
                 op: "dot_general",
-                ..
+                source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
             })
         ));
 

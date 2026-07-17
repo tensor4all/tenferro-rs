@@ -375,9 +375,11 @@ fn test_pow_rank_zero_read_views_and_domain_contracts() {
     ] {
         assert!(matches!(
             pow(&base, &exponent),
-            Err(Error::NegativeIntegerExponent {
+            Err(Error::Extension {
                 op: "pow",
-                dtype: DType::I64
+                family: "cpu",
+                kind: tenferro_tensor::ErrorKind::NumericalFailure,
+                ..
             })
         ));
     }
@@ -436,18 +438,22 @@ fn test_integer_div_rem_pow_domain_errors_are_structured() {
     let err = div(&lhs, &zero_rhs).unwrap_err();
     assert!(matches!(
         err,
-        Error::DivisionByZero {
+        Error::Extension {
             op: "div",
-            dtype: DType::I32
+            family: "cpu",
+            kind: tenferro_tensor::ErrorKind::NumericalFailure,
+            ..
         }
     ));
 
     let err = rem(&lhs, &zero_rhs).unwrap_err();
     assert!(matches!(
         err,
-        Error::DivisionByZero {
+        Error::Extension {
             op: "rem",
-            dtype: DType::I32
+            family: "cpu",
+            kind: tenferro_tensor::ErrorKind::NumericalFailure,
+            ..
         }
     ));
 
@@ -456,9 +462,11 @@ fn test_integer_div_rem_pow_domain_errors_are_structured() {
     let err = pow(&base, &exp).unwrap_err();
     assert!(matches!(
         err,
-        Error::NegativeIntegerExponent {
+        Error::Extension {
             op: "pow",
-            dtype: DType::I32
+            family: "cpu",
+            kind: tenferro_tensor::ErrorKind::NumericalFailure,
+            ..
         }
     ));
 }
@@ -521,7 +529,7 @@ fn float_div_rem_preserve_ieee_special_values() {
     assert!(f64_rem[4].is_nan());
     assert_eq!(f64_rem[5].to_bits(), (-0.0_f64).to_bits());
 
-    for (zero_rhs, expected_dtype) in [
+    for (zero_rhs, _expected_dtype) in [
         (
             Tensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap(),
             DType::I32,
@@ -538,11 +546,21 @@ fn float_div_rem_preserve_ieee_special_values() {
         };
         assert!(matches!(
             div(&lhs, &zero_rhs),
-            Err(Error::DivisionByZero { op: "div", dtype }) if dtype == expected_dtype
+            Err(Error::Extension {
+                op: "div",
+                family: "cpu",
+                kind: tenferro_tensor::ErrorKind::NumericalFailure,
+                ..
+            })
         ));
         assert!(matches!(
             rem(&lhs, &zero_rhs),
-            Err(Error::DivisionByZero { op: "rem", dtype }) if dtype == expected_dtype
+            Err(Error::Extension {
+                op: "rem",
+                family: "cpu",
+                kind: tenferro_tensor::ErrorKind::NumericalFailure,
+                ..
+            })
         ));
     }
 }
@@ -929,10 +947,9 @@ fn test_reverse_axis_out_of_bounds_returns_error() {
 
     assert!(matches!(
         err,
-        crate::Error::AxisOutOfBounds {
+        crate::Error::Validation {
             op: "reverse",
-            axis: 1,
-            rank: 1,
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: 1, rank: 1 },
         }
     ));
 }
@@ -952,7 +969,7 @@ fn test_gather_rejects_fractional_float_indices() {
 
     assert!(matches!(
         err,
-        crate::Error::InvalidConfig {
+        crate::Error::Validation {
             op: "index_tensor",
             ..
         }
@@ -975,7 +992,7 @@ fn test_gather_rejects_complex_indices() {
 
     assert!(matches!(
         err,
-        crate::Error::InvalidConfig {
+        crate::Error::Validation {
             op: "index_tensor",
             ..
         }
@@ -992,7 +1009,7 @@ fn test_dynamic_slice_rejects_oversized_window() {
 
     assert!(matches!(
         err,
-        crate::Error::InvalidConfig {
+        crate::Error::Validation {
             op: "dynamic_slice",
             ..
         }
@@ -1015,7 +1032,7 @@ fn test_large_float_index_outside_exact_integer_range_returns_error() {
 
     assert!(matches!(
         err,
-        crate::Error::InvalidConfig {
+        crate::Error::Validation {
             op: "index_tensor",
             ..
         }
@@ -1038,10 +1055,7 @@ fn test_invalid_slice_config_returns_error() {
             },
         )
         .unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::RankMismatch { op: "slice", .. }
-    ));
+    assert!(matches!(err, crate::Error::Validation { op: "slice", .. }));
 }
 
 #[test]
@@ -1059,7 +1073,7 @@ fn test_invalid_pad_config_returns_error() {
             },
         )
         .unwrap_err();
-    assert!(matches!(err, crate::Error::RankMismatch { op: "pad", .. }));
+    assert!(matches!(err, crate::Error::Validation { op: "pad", .. }));
 }
 
 #[test]
@@ -1080,10 +1094,7 @@ fn test_gather_rejects_malformed_offset_dims() {
     let err = backend
         .gather(&operand, &start_indices, &config)
         .unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::AxisOutOfBounds { op: "gather", .. }
-    ));
+    assert!(matches!(err, crate::Error::Validation { op: "gather", .. }));
 }
 
 #[test]
@@ -1106,10 +1117,9 @@ fn test_scatter_rejects_update_window_dim_out_of_bounds() {
         .unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::AxisOutOfBounds {
+        crate::Error::Validation {
             op: "scatter",
-            axis: 3,
-            ..
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: 3, .. },
         }
     ));
 }
@@ -1133,8 +1143,8 @@ fn test_scatter_rejects_too_many_update_window_dims() {
         .unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::InvalidConfig { op: "scatter", ref message }
-        if message.contains("exceeds update rank")
+        crate::Error::Validation { op: "scatter", source }
+        if source.to_string().contains("exceeds update rank")
     ));
 }
 

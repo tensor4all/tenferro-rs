@@ -453,10 +453,10 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
     let err = backend.cast(&f64_bad, DType::I32).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::InvalidConfig {
+        crate::Error::Validation {
             op: "cast",
-            ref message,
-        } if message.contains("finite") || message.contains("out of i32 range")
+            source,
+        } if source.to_string().contains("finite") || source.to_string().contains("out of i32 range")
     ));
 
     let f32_bad =
@@ -464,10 +464,10 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
     let err = backend.cast(&f32_bad, DType::I64).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::InvalidConfig {
+        crate::Error::Validation {
             op: "cast",
-            ref message,
-        } if message.contains("out of i64 range")
+            source,
+        } if source.to_string().contains("out of i64 range")
     ));
 
     let c64_bad = Tensor::C64(
@@ -476,10 +476,10 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
     let err = backend.cast(&c64_bad, DType::I64).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::InvalidConfig {
+        crate::Error::Validation {
             op: "cast",
-            ref message,
-        } if message.contains("finite")
+            source,
+        } if source.to_string().contains("finite")
     ));
 }
 
@@ -676,9 +676,9 @@ fn test_backend_dot_general_f32_c32_and_dtype_mismatch() {
     let err = backend.dot_general(&f64_t, &f32_t, &config).unwrap_err();
     assert!(matches!(
         err,
-        crate::Error::DTypeMismatch {
+        crate::Error::Validation {
             op: "dot_general",
-            ..
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         }
     ));
 }

@@ -175,9 +175,9 @@ fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
             TensorRead::from_tensor(&src),
             TensorWrite::from_tensor(&mut wrong_dtype),
         ),
-        Err(Error::DTypeMismatch {
+        Err(Error::Validation {
             op: "CpuBackend::copy_read_into",
-            ..
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         })
     ));
 
@@ -187,9 +187,9 @@ fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
             TensorRead::from_tensor(&src),
             TensorWrite::from_tensor(&mut wrong_shape),
         ),
-        Err(Error::ShapeMismatch {
+        Err(Error::Validation {
             op: "CpuBackend::copy_read_into",
-            ..
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         })
     ));
 
@@ -227,10 +227,10 @@ fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
             TensorRead::from_tensor(&aliased_src),
             TensorWrite::from_tensor(&mut aliased_dst),
         ),
-        Err(Error::InvalidConfig {
+        Err(Error::Validation {
             op: "CpuBackend::copy_read_into",
-            ref message,
-        }) if message.contains("alias")
+            source,
+        }) if source.to_string().contains("alias")
     ));
 }
 
@@ -259,11 +259,10 @@ fn cpu_copy_into_reports_shape_mismatch_with_canonical_op_name() {
 
     assert!(matches!(
         err,
-        Error::ShapeMismatch {
+        Error::Validation {
             op: "CpuBackend::copy_into",
-            lhs,
-            rhs,
-        } if lhs == vec![2] && rhs == vec![3]
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        }
     ));
 }
 
@@ -892,7 +891,8 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
         &[1],
     )
     .unwrap_err();
-    assert_eq!(view_transpose, owned_transpose);
+    assert_eq!(view_transpose.kind(), owned_transpose.kind());
+    assert_eq!(view_transpose.to_string(), owned_transpose.to_string());
 
     let owned_reshape = crate::structural::reshape(&input, &[3]).unwrap_err();
     let view_reshape = crate::structural::reshape_read_with_pool(
@@ -904,7 +904,8 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
         &[3],
     )
     .unwrap_err();
-    assert_eq!(view_reshape, owned_reshape);
+    assert_eq!(view_reshape.kind(), owned_reshape.kind());
+    assert_eq!(view_reshape.to_string(), owned_reshape.to_string());
 
     let owned_broadcast =
         crate::structural::broadcast_in_dim_with_pool(&mut buffers, &input, &[3], &[0])
@@ -919,7 +920,8 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
         &[0],
     )
     .unwrap_err();
-    assert_eq!(view_broadcast, owned_broadcast);
+    assert_eq!(view_broadcast.kind(), owned_broadcast.kind());
+    assert_eq!(view_broadcast.to_string(), owned_broadcast.to_string());
 }
 
 #[test]
@@ -946,10 +948,10 @@ fn cpu_structural_read_empty_pathological_layout_returns_typed_errors_without_pa
         .unwrap_err();
     assert!(matches!(
         transpose,
-        crate::Error::BackendFailure {
+        crate::Error::BackendSource {
             op: "transpose",
-            ref message,
-        } if message.contains("overflow")
+            ref source,
+        } if source.to_string().contains("overflow")
     ));
 
     let broadcast = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -968,10 +970,10 @@ fn cpu_structural_read_empty_pathological_layout_returns_typed_errors_without_pa
         .unwrap_err();
     assert!(matches!(
         broadcast,
-        crate::Error::BackendFailure {
+        crate::Error::BackendSource {
             op: "broadcast_in_dim",
-            ref message,
-        } if message.contains("overflow")
+            ref source,
+        } if source.to_string().contains("overflow")
     ));
 }
 
@@ -1991,24 +1993,24 @@ fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
     );
     assert!(matches!(
         maximum(&a, &b),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Validation {
             op: "maximum",
-            ref message,
-        }) if message.contains("total order")
+            source,
+        }) if source.to_string().contains("total order")
     ));
     assert!(matches!(
         minimum(&a, &b),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Validation {
             op: "minimum",
-            ref message,
-        }) if message.contains("total order")
+            source,
+        }) if source.to_string().contains("total order")
     ));
     assert!(matches!(
         compare(&a, &b, &CompareDir::Ge),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Validation {
             op: "compare",
-            ref message,
-        }) if message.contains("total order")
+            source,
+        }) if source.to_string().contains("total order")
     ));
     let pred = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, true]).unwrap());
     assert_c64_close(
@@ -2017,10 +2019,10 @@ fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
     );
     assert!(matches!(
         clamp(&a, &b, &a),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Validation {
             op: "clamp",
-            ref message,
-        }) if message.contains("total order")
+            source,
+        }) if source.to_string().contains("total order")
     ));
 }
 
@@ -2089,10 +2091,10 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
     let int_tensor = Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap();
     assert!(matches!(
         crate::analytic::exp(&int_tensor),
-        Err(crate::Error::UnsupportedOpDType {
+        Err(crate::Error::UnsupportedDTypeConversion {
             op: "exp",
-            dtype: DType::I64,
-            backend: tenferro_tensor::BackendId::Cpu,
+            from: DType::I64,
+            ..
         })
     ));
     assert!(matches!(
@@ -2100,10 +2102,10 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
             &mut crate::buffer_pool::BufferPool::new(),
             TensorRead::from_tensor(&int_tensor),
         ),
-        Err(crate::Error::UnsupportedOpDType {
+        Err(crate::Error::UnsupportedDTypeConversion {
             op: "exp",
-            dtype: DType::I64,
-            backend: tenferro_tensor::BackendId::Cpu,
+            from: DType::I64,
+            ..
         })
     ));
     assert!(crate::analytic::pow(&real, &base).is_err());

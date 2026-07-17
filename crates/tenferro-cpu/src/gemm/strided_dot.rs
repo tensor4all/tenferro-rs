@@ -18,8 +18,11 @@ pub(super) fn test_dispatch_count() -> usize {
     DISPATCH_COUNT.load(Ordering::SeqCst)
 }
 
-fn map_strided_error(err: impl std::fmt::Display) -> Error {
-    Error::backend_failure("dot_general", err)
+fn map_strided_error<E>(err: E) -> Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    Error::backend_source("dot_general", err)
 }
 
 fn to_strided_config(config: &TensorDotGeneralConfig) -> strided_einsum2::DotGeneralConfig<'_> {
@@ -124,11 +127,11 @@ where
         .expected_output_shape(lhs.shape(), rhs.shape())
         .map_err(map_strided_error)?;
     if out.shape() != out_shape.as_slice() {
-        return Err(Error::ShapeMismatch {
-            op: "dot_general",
-            lhs: out.shape().to_vec(),
-            rhs: out_shape,
-        });
+        return Err(Error::shape_mismatch(
+            "dot_general",
+            out.shape().to_vec(),
+            out_shape,
+        ));
     }
 
     let out_shape = out.shape().to_vec();

@@ -277,21 +277,26 @@ where
 {
     ensure_runtime_available()?;
     if out.offset() < 0 {
-        return Err(Error::InvalidConfig {
-            op: OP,
-            message: "TBLIS output offset must be non-negative".into(),
-        });
+        return Err(Error::invalid_argument(
+            OP,
+            "configuration",
+            "TBLIS output offset must be non-negative".into(),
+        ));
     }
-    let out_offset = usize::try_from(out.offset()).map_err(|_| Error::InvalidConfig {
-        op: OP,
-        message: "TBLIS output offset does not fit in usize".into(),
+    let out_offset = usize::try_from(out.offset()).map_err(|_| {
+        Error::invalid_argument(
+            OP,
+            "configuration",
+            "TBLIS output offset does not fit in usize".into(),
+        )
     })?;
     let out_storage = out.host_storage_mut()?;
     if out_offset > out_storage.len() {
-        return Err(Error::InvalidConfig {
-            op: OP,
-            message: "TBLIS output offset is outside host storage".into(),
-        });
+        return Err(Error::invalid_argument(
+            OP,
+            "configuration",
+            "TBLIS output offset is outside host storage".into(),
+        ));
     }
     let out_ptr = out_storage.as_mut_ptr();
 
@@ -300,9 +305,12 @@ where
         conj: c_int::from(execution.lhs_conj),
         scalar: T::scalar(execution.alpha),
         data: lhs_ptr.cast_mut() as *mut c_void,
-        ndim: c_int::try_from(plan.lhs_len.len()).map_err(|_| Error::InvalidConfig {
-            op: OP,
-            message: "TBLIS lhs rank exceeds c_int range".into(),
+        ndim: c_int::try_from(plan.lhs_len.len()).map_err(|_| {
+            Error::invalid_argument(
+                OP,
+                "configuration",
+                "TBLIS lhs rank exceeds c_int range".into(),
+            )
         })?,
         len: plan.lhs_len.as_mut_ptr(),
         stride: plan.lhs_stride.as_mut_ptr(),
@@ -312,9 +320,12 @@ where
         conj: c_int::from(execution.rhs_conj),
         scalar: T::scalar(T::one()),
         data: rhs_ptr.cast_mut() as *mut c_void,
-        ndim: c_int::try_from(plan.rhs_len.len()).map_err(|_| Error::InvalidConfig {
-            op: OP,
-            message: "TBLIS rhs rank exceeds c_int range".into(),
+        ndim: c_int::try_from(plan.rhs_len.len()).map_err(|_| {
+            Error::invalid_argument(
+                OP,
+                "configuration",
+                "TBLIS rhs rank exceeds c_int range".into(),
+            )
         })?,
         len: plan.rhs_len.as_mut_ptr(),
         stride: plan.rhs_stride.as_mut_ptr(),
@@ -324,9 +335,12 @@ where
         conj: 0,
         scalar: T::scalar(execution.beta),
         data: out_ptr.wrapping_add(out_offset) as *mut c_void,
-        ndim: c_int::try_from(plan.out_len.len()).map_err(|_| Error::InvalidConfig {
-            op: OP,
-            message: "TBLIS output rank exceeds c_int range".into(),
+        ndim: c_int::try_from(plan.out_len.len()).map_err(|_| {
+            Error::invalid_argument(
+                OP,
+                "configuration",
+                "TBLIS output rank exceeds c_int range".into(),
+            )
         })?,
         len: plan.out_len.as_mut_ptr(),
         stride: plan.out_stride.as_mut_ptr(),
@@ -355,10 +369,11 @@ where
 
 fn ensure_runtime_available() -> Result<()> {
     if !runtime_available()? {
-        return Err(Error::InvalidConfig {
-            op: OP,
-            message: "TBLIS runtime library is unavailable".into(),
-        });
+        return Err(Error::invalid_argument(
+            OP,
+            "configuration",
+            "TBLIS runtime library is unavailable".into(),
+        ));
     }
     Ok(())
 }
@@ -402,9 +417,12 @@ fn free_dims(rank: usize, contracting: &[usize], batch: &[usize]) -> SmallVec<[u
 fn dims_to_tblis(dims: &[usize]) -> Result<SmallVec<[len_type; 8]>> {
     dims.iter()
         .map(|&dim| {
-            len_type::try_from(dim).map_err(|_| Error::InvalidConfig {
-                op: OP,
-                message: format!("TBLIS dimension {dim} exceeds len_type range"),
+            len_type::try_from(dim).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "configuration",
+                    format!("TBLIS dimension {dim} exceeds len_type range"),
+                )
             })
         })
         .collect()
@@ -414,9 +432,12 @@ fn strides_to_tblis(strides: &[isize]) -> Result<SmallVec<[stride_type; 8]>> {
     strides
         .iter()
         .map(|&stride| {
-            stride_type::try_from(stride).map_err(|_| Error::InvalidConfig {
-                op: OP,
-                message: format!("TBLIS stride {stride} exceeds stride_type range"),
+            stride_type::try_from(stride).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "configuration",
+                    format!("TBLIS stride {stride} exceeds stride_type range"),
+                )
             })
         })
         .collect()

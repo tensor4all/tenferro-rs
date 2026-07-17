@@ -214,7 +214,7 @@ where
     // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view(op, input)?, f)
-        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -231,7 +231,7 @@ where
     // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view_from_view(op, input)?, f)
-        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -276,10 +276,11 @@ fn require_cpu_capability(
     if supported {
         Ok(())
     } else {
-        Err(crate::Error::unsupported_op_dtype(
+        Err(crate::Error::unsupported_dtype_conversion(
             op,
             dtype,
-            BackendId::Cpu,
+            dtype,
+            format!("CPU backend does not support this operation for {dtype:?}"),
         ))
     }
 }
@@ -293,7 +294,7 @@ where
     T: Copy + Send + Sync,
 {
     reduce(view, pred, |lhs, rhs| lhs || rhs, false)
-        .map_err(|err| crate::Error::backend_failure(op, err))
+        .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 fn ensure_nonnegative_integer_exponents<T>(
@@ -304,7 +305,7 @@ where
     T: IntegerPowElem,
 {
     if strided_view_contains(op, rhs, |value| value.is_negative_exponent())? {
-        return Err(crate::Error::negative_integer_exponent(op, T::dtype()));
+        return Err(crate::cpu_negative_integer_exponent(op, T::dtype()));
     }
     Ok(())
 }
@@ -327,11 +328,11 @@ where
     } else if rhs.shape().is_empty() {
         lhs.shape()
     } else {
-        return Err(crate::Error::ShapeMismatch {
+        return Err(crate::Error::shape_mismatch(
             op,
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        });
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ));
     };
     // SAFETY: the selected map kernel overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, output_shape) }?;
@@ -342,19 +343,19 @@ where
             &typed_view_from_view(op, rhs)?,
             |x, y| x.pow_elem(y),
         )
-        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, lhs)?.get(&[]);
         map_into(&mut out.view_mut(), &typed_view_from_view(op, rhs)?, |x| {
             scalar.pow_elem(x)
         })
-        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     } else {
         let scalar = typed_view_from_view(op, rhs)?.get(&[]);
         map_into(&mut out.view_mut(), &typed_view_from_view(op, lhs)?, |x| {
             x.pow_elem(scalar)
         })
-        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     }
     Ok(tensor_from_array(out))
 }
@@ -467,11 +468,11 @@ pub(crate) fn pow_with_pool(
         }
         (Tensor::C32(a), Tensor::C32(b)) => Ok(Tensor::C32(typed_pow_with_pool(buffers, a, b)?)),
         (Tensor::C64(a), Tensor::C64(b)) => Ok(Tensor::C64(typed_pow_with_pool(buffers, a, b)?)),
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "pow",
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        }),
+        _ => Err(crate::Error::dtype_mismatch(
+            "pow",
+            lhs.dtype(),
+            rhs.dtype(),
+        )),
     }
 }
 
@@ -501,11 +502,7 @@ pub(crate) fn pow_read_with_pool(
         (AnalyticReadView::C64(a), AnalyticReadView::C64(b)) => Ok(Tensor::C64(
             typed_pow_view_with_pool("pow", buffers, &a, &b)?,
         )),
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "pow",
-            lhs: lhs_dtype,
-            rhs: rhs_dtype,
-        }),
+        _ => Err(crate::Error::dtype_mismatch("pow", lhs_dtype, rhs_dtype)),
     }
 }
 
@@ -524,11 +521,11 @@ where
     } else if rhs.shape().is_empty() {
         lhs.shape()
     } else {
-        return Err(crate::Error::ShapeMismatch {
-            op: "pow",
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "pow",
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ));
     };
     // SAFETY: the selected map kernel overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, output_shape) }?;
@@ -539,19 +536,19 @@ where
             &typed_view("pow", rhs)?,
             |x, y| x.pow_elem(y),
         )
-        .map_err(|err| crate::Error::backend_failure("pow", err))?;
+        .map_err(|err| crate::Error::backend_source("pow", err))?;
     } else if lhs.shape().is_empty() {
         let scalar = typed_view("pow", lhs)?.get(&[]);
         map_into(&mut out.view_mut(), &typed_view("pow", rhs)?, |x| {
             scalar.pow_elem(x)
         })
-        .map_err(|err| crate::Error::backend_failure("pow", err))?;
+        .map_err(|err| crate::Error::backend_source("pow", err))?;
     } else {
         let scalar = typed_view("pow", rhs)?.get(&[]);
         map_into(&mut out.view_mut(), &typed_view("pow", lhs)?, |x| {
             x.pow_elem(scalar)
         })
-        .map_err(|err| crate::Error::backend_failure("pow", err))?;
+        .map_err(|err| crate::Error::backend_source("pow", err))?;
     }
     Ok(tensor_from_array(out))
 }

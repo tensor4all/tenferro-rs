@@ -12,14 +12,10 @@ fn validate_axes(op: &'static str, axes: &[usize], rank: usize) -> crate::Result
     let mut seen = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
-            return Err(crate::Error::AxisOutOfBounds { op, axis, rank });
+            return Err(crate::Error::axis_out_of_bounds(op, axis, rank));
         }
         if seen[axis] {
-            return Err(crate::Error::DuplicateAxis {
-                op,
-                axis,
-                role: "axes",
-            });
+            return Err(crate::Error::duplicate_axis(op, axis, "axes"));
         }
         seen[axis] = true;
     }
@@ -53,10 +49,11 @@ fn validate_reduced_axes_nonempty(
     validate_axes(op, axes, shape.len())?;
     for &axis in axes {
         if shape[axis] == 0 {
-            return Err(crate::Error::InvalidConfig {
+            return Err(crate::Error::invalid_argument(
                 op,
-                message: format!("cannot reduce over zero-length axis {axis}"),
-            });
+                "configuration",
+                format!("cannot reduce over zero-length axis {axis}"),
+            ));
         }
     }
     Ok(())
@@ -523,11 +520,11 @@ where
 
     let input_view = typed_view(label, input)?;
     let mut current = reduce_axis(&input_view, first_axis, map_fn, reduce_fn, init)
-        .map_err(|err| crate::Error::backend_failure(label, err))?;
+        .map_err(|err| crate::Error::backend_source(label, err))?;
 
     for &axis in remaining_axes {
         current = reduce_axis(&current.view(), axis, map_fn, reduce_fn, init)
-            .map_err(|err| crate::Error::backend_failure(label, err))?;
+            .map_err(|err| crate::Error::backend_source(label, err))?;
     }
 
     TypedTensor::from_vec_col_major(output_shape, current.into_data())
@@ -574,11 +571,11 @@ where
 
     let input_view = typed_view_from_view(label, input)?;
     let mut current = reduce_axis(&input_view, first_axis, map_fn, reduce_fn, init)
-        .map_err(|err| crate::Error::backend_failure(label, err))?;
+        .map_err(|err| crate::Error::backend_source(label, err))?;
 
     for &axis in remaining_axes {
         current = reduce_axis(&current.view(), axis, map_fn, reduce_fn, init)
-            .map_err(|err| crate::Error::backend_failure(label, err))?;
+            .map_err(|err| crate::Error::backend_source(label, err))?;
     }
 
     TypedTensor::from_vec_col_major(output_shape, current.into_data())

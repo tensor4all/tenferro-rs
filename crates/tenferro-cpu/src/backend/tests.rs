@@ -682,7 +682,7 @@ fn with_threads_and_kind_records_selection_and_validates_threads() {
     };
     assert!(matches!(
         err,
-        CpuBackendError::Tensor(crate::Error::InvalidConfig {
+        CpuBackendError::Tensor(crate::Error::Validation {
             op: "CpuBackend::with_threads_and_kind",
             ..
         })
@@ -698,7 +698,7 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
     };
     assert!(matches!(
         err,
-        CpuBackendError::Tensor(crate::Error::InvalidConfig {
+        CpuBackendError::Tensor(crate::Error::Validation {
             op: "CpuBackend::with_kind",
             ..
         })
@@ -738,7 +738,7 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
         let err = result.unwrap_err();
         assert!(matches!(
             err,
-            crate::Error::InvalidConfig {
+            crate::Error::Validation {
                 op: "dot_general",
                 ..
             }
@@ -849,9 +849,9 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
     let dot_error = backend.dot_general_cached(&mut cache, Some(0), &lhs, &rhs, &config);
     assert!(matches!(
         dot_error,
-        Err(crate::Error::DTypeMismatch {
+        Err(crate::Error::Validation {
             op: "dot_general",
-            ..
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         })
     ));
 
@@ -859,9 +859,9 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
         backend.dot_general_with_conj_cached(&mut cache, Some(1), &lhs, &rhs, &config, true, false);
     assert!(matches!(
         dot_conj_error,
-        Err(crate::Error::DTypeMismatch {
+        Err(crate::Error::Validation {
             op: "dot_general",
-            ..
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         })
     ));
 }
@@ -872,7 +872,7 @@ fn with_threads_rejects_invalid_thread_count() {
     let error = result.unwrap_err();
     assert!(matches!(
         error,
-        CpuBackendError::Tensor(crate::Error::InvalidConfig {
+        CpuBackendError::Tensor(crate::Error::Validation {
             op: "CpuBackend::with_threads",
             ..
         })

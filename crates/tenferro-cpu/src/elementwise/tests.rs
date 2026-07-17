@@ -29,10 +29,12 @@ fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
     let dtype_mismatch = ElementwiseFusionPlan::new(DType::F64, 1, vec![0], Vec::new());
     assert!(matches!(
         validate_elementwise_fusion_inputs(&[&input], &dtype_mismatch),
-        Err(crate::Error::DTypeMismatch {
+        Err(crate::Error::Validation {
             op: ELEMENTWISE_FUSION_OP,
-            lhs: DType::F32,
-            rhs: DType::F64,
+            source: tenferro_tensor::ValidationError::DTypeMismatch {
+                expected: _,
+                actual: _,
+            },
         })
     ));
 
@@ -61,7 +63,7 @@ fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
     assert!(reject_complex_ordered_dtypes("maximum", &[DType::F32]).is_ok());
     assert!(matches!(
         reject_complex_ordered_dtypes("maximum", &[DType::C64]),
-        Err(crate::Error::InvalidConfig { op: "maximum", .. })
+        Err(crate::Error::Validation { op: "maximum", .. })
     ));
 }
 
@@ -410,14 +412,14 @@ fn assert_c64_close(actual: Complex<f64>, expected: Complex<f64>) {
 fn assert_shape_mismatch<T>(result: crate::Result<T>, op: &'static str) {
     assert!(matches!(
         result,
-        Err(crate::Error::ShapeMismatch { op: actual, .. }) if actual == op
+        Err(crate::Error::Validation { op: actual, .. }) if actual == op
     ));
 }
 
 fn assert_dtype_mismatch<T>(result: crate::Result<T>, op: &'static str) {
     assert!(matches!(
         result,
-        Err(crate::Error::DTypeMismatch { op: actual, .. }) if actual == op
+        Err(crate::Error::Validation { op: actual, .. }) if actual == op
     ));
 }
 
@@ -431,10 +433,10 @@ fn assert_backend_failure<T>(result: crate::Result<T>, op: &'static str) {
 fn assert_invalid_config_contains<T>(result: crate::Result<T>, op: &'static str, expected: &str) {
     assert!(matches!(
         result,
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Validation {
             op: actual,
-            ref message,
-        }) if actual == op && message.contains(expected)
+            source,
+        }) if actual == op && source.to_string().contains(expected)
     ));
 }
 

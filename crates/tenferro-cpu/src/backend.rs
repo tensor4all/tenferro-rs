@@ -287,7 +287,7 @@ pub enum CpuExecutionMode {
 /// let error = CpuBackend::with_threads(0).unwrap_err();
 /// assert!(matches!(error, CpuBackendError::Tensor(_)));
 /// ```
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum CpuBackendError {
     /// CPU context configuration or provider selection failed.
     #[error(transparent)]
@@ -332,7 +332,7 @@ impl From<CpuBackendError> for crate::Error {
     fn from(error: CpuBackendError) -> Self {
         match error {
             CpuBackendError::Tensor(error) => error,
-            CpuBackendError::Placement { op, source } => Self::backend_failure(op, source),
+            CpuBackendError::Placement { op, source } => Self::backend_source(op, source),
         }
     }
 }
@@ -487,10 +487,11 @@ fn ensure_cpu_backend_kind_available(kind: CpuBackendKind, op: &'static str) -> 
             }
             #[cfg(not(feature = "cpu-faer"))]
             {
-                Err(crate::Error::InvalidConfig {
+                Err(crate::Error::invalid_argument(
                     op,
-                    message: "CpuBackendKind::Faer requires the cpu-faer feature".to_string(),
-                })
+                    "configuration",
+                    "CpuBackendKind::Faer requires the cpu-faer feature".to_string(),
+                ))
             }
         }
         CpuBackendKind::Blas => {
@@ -500,10 +501,11 @@ fn ensure_cpu_backend_kind_available(kind: CpuBackendKind, op: &'static str) -> 
             }
             #[cfg(not(feature = "cpu-blas"))]
             {
-                Err(crate::Error::InvalidConfig {
+                Err(crate::Error::invalid_argument(
                     op,
-                    message: "CpuBackendKind::Blas requires the cpu-blas feature".to_string(),
-                })
+                    "configuration",
+                    "CpuBackendKind::Blas requires the cpu-blas feature".to_string(),
+                ))
             }
         }
     }
@@ -511,24 +513,21 @@ fn ensure_cpu_backend_kind_available(kind: CpuBackendKind, op: &'static str) -> 
 
 #[cfg(not(feature = "cpu-tblis-provider"))]
 pub(crate) fn tblis_required_unavailable(op: &'static str) -> crate::Error {
-    crate::Error::InvalidConfig {
+    crate::Error::invalid_argument(
         op,
-        message: "DotGeneralProvider::TblisRequired requires cpu-tblis or cpu-tblis-linked"
-            .to_string(),
-    }
+        "configuration",
+        "DotGeneralProvider::TblisRequired requires cpu-tblis or cpu-tblis-linked".to_string(),
+    )
 }
 
 #[cfg(feature = "cpu-tblis-provider")]
 pub(crate) fn tblis_required_not_applicable(op: &'static str) -> crate::Error {
-    crate::Error::InvalidConfig {
-        op,
-        message: "DotGeneralProvider::TblisRequired could not execute this contraction with TBLIS; the TBLIS runtime may be unavailable or the adapter could not build a safe plan".to_string(),
-    }
+    crate::Error::invalid_argument(op, "configuration", "DotGeneralProvider::TblisRequired could not execute this contraction with TBLIS; the TBLIS runtime may be unavailable or the adapter could not build a safe plan".to_string())
 }
 
 fn constructor_tensor_error(op: &'static str, error: crate::Error) -> CpuBackendError {
     CpuBackendError::Tensor(match error {
-        crate::Error::InvalidConfig { message, .. } => crate::Error::InvalidConfig { op, message },
+        crate::Error::Validation { source, .. } => crate::Error::validation(op, source),
         crate::Error::BackendFailure { message, .. } => crate::Error::backend_failure(op, message),
         error => error,
     })
@@ -538,10 +537,11 @@ fn constructor_tensor_error(op: &'static str, error: crate::Error) -> CpuBackend
 // direct call site for one provider.
 #[allow(dead_code)]
 pub(super) fn unavailable_cpu_backend_kind(kind: CpuBackendKind, op: &'static str) -> crate::Error {
-    crate::Error::InvalidConfig {
+    crate::Error::invalid_argument(
         op,
-        message: format!("CPU backend kind {} is not compiled in", kind.name()),
-    }
+        "configuration",
+        format!("CPU backend kind {} is not compiled in", kind.name()),
+    )
 }
 
 struct CpuBackendState {
@@ -1003,6 +1003,11 @@ impl CpuBackend {
     /// }
     /// # Ok::<(), tenferro_cpu::CpuPlacementError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuPlacementError`] when the requested placement is not
+    /// available for this backend or its affinity cannot be configured.
     pub fn for_placement(&self, requested: CpuPlacement) -> Result<Self, CpuPlacementError> {
         self.for_placement_with_affinity(
             requested,
@@ -2081,11 +2086,11 @@ impl BackendCachedDot for CpuBackend {
                             .map(|result| result.map(Tensor::C64))
                     }
                     _ if lhs.dtype() == rhs.dtype() => Ok(None),
-                    _ => Err(crate::Error::DTypeMismatch {
-                        op: "dot_general",
-                        lhs: lhs.dtype(),
-                        rhs: rhs.dtype(),
-                    }),
+                    _ => Err(crate::Error::dtype_mismatch(
+                        "dot_general",
+                        lhs.dtype(),
+                        rhs.dtype(),
+                    )),
                 })?;
                 if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
                     return Ok(result);
@@ -2147,11 +2152,11 @@ impl BackendCachedDot for CpuBackend {
                                 config,
                             )
                             .map(Tensor::C64),
-                            _ => Err(crate::Error::DTypeMismatch {
-                                op: "dot_general",
-                                lhs: lhs.dtype(),
-                                rhs: rhs.dtype(),
-                            }),
+                            _ => Err(crate::Error::dtype_mismatch(
+                                "dot_general",
+                                lhs.dtype(),
+                                rhs.dtype(),
+                            )),
                         }
                     })
                 }
@@ -2180,11 +2185,11 @@ impl BackendCachedDot for CpuBackend {
                             gemm::dot_general_blas_cached(buffers, cache, cache_slot, a, b, config)
                                 .map(Tensor::C64)
                         }
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     })
                 }
                 #[cfg(not(feature = "cpu-blas"))]
@@ -2226,11 +2231,11 @@ impl BackendCachedDot for CpuBackend {
                     )
                     .map(|result| result.map(Tensor::C64)),
                     _ if lhs.dtype() == rhs.dtype() => Ok(None),
-                    _ => Err(crate::Error::DTypeMismatch {
-                        op: "dot_general",
-                        lhs: lhs.dtype(),
-                        rhs: rhs.dtype(),
-                    }),
+                    _ => Err(crate::Error::dtype_mismatch(
+                        "dot_general",
+                        lhs.dtype(),
+                        rhs.dtype(),
+                    )),
                 })?;
                 if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
                     return Ok(result);
@@ -2308,11 +2313,11 @@ impl BackendCachedDot for CpuBackend {
                                 )
                                 .map(Tensor::C64)
                             }
-                            _ => Err(crate::Error::DTypeMismatch {
-                                op: "dot_general",
-                                lhs: lhs.dtype(),
-                                rhs: rhs.dtype(),
-                            }),
+                            _ => Err(crate::Error::dtype_mismatch(
+                                "dot_general",
+                                lhs.dtype(),
+                                rhs.dtype(),
+                            )),
                         }
                     })
                 }
@@ -2349,11 +2354,11 @@ impl BackendCachedDot for CpuBackend {
                             )
                             .map(Tensor::C64)
                         }
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     })
                 }
                 #[cfg(not(feature = "cpu-blas"))]

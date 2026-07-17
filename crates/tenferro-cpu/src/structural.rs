@@ -29,29 +29,21 @@ fn with_test_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
 
 fn validate_rank(op: &'static str, expected: usize, actual: usize) -> crate::Result<()> {
     if expected != actual {
-        return Err(crate::Error::RankMismatch {
-            op,
-            expected,
-            actual,
-        });
+        return Err(crate::Error::rank_mismatch(op, expected, actual));
     }
     Ok(())
 }
 
 fn validate_axis(op: &'static str, axis: usize, rank: usize) -> crate::Result<()> {
     if axis >= rank {
-        return Err(crate::Error::AxisOutOfBounds { op, axis, rank });
+        return Err(crate::Error::axis_out_of_bounds(op, axis, rank));
     }
     Ok(())
 }
 
 fn validate_axes_distinct(op: &'static str, axis_a: usize, axis_b: usize) -> crate::Result<()> {
     if axis_a == axis_b {
-        return Err(crate::Error::DuplicateAxis {
-            op,
-            axis: axis_a,
-            role: "axes",
-        });
+        return Err(crate::Error::duplicate_axis(op, axis_a, "axes"));
     }
     Ok(())
 }
@@ -62,11 +54,13 @@ fn checked_shape_product(
     shape: &[usize],
 ) -> crate::Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim)
-            .ok_or_else(|| crate::Error::InvalidConfig {
+        acc.checked_mul(dim).ok_or_else(|| {
+            crate::Error::invalid_argument(
                 op,
-                message: format!("{role} element count overflows usize"),
-            })
+                "configuration",
+                format!("{role} element count overflows usize"),
+            )
+        })
     })
 }
 
@@ -76,11 +70,7 @@ fn validate_permutation(op: &'static str, perm: &[usize], rank: usize) -> crate:
     for &axis in perm {
         validate_axis(op, axis, rank)?;
         if seen[axis] {
-            return Err(crate::Error::DuplicateAxis {
-                op,
-                axis,
-                role: "perm",
-            });
+            return Err(crate::Error::duplicate_axis(op, axis, "perm"));
         }
         seen[axis] = true;
     }
@@ -137,7 +127,7 @@ fn host_view<'a, T: Copy>(
         crate::Buffer::Host(data) => {
             let strides = col_major_strides(tensor.shape());
             StridedView::new(data.as_slice(), tensor.shape(), &strides, 0)
-                .map_err(|err| crate::Error::backend_failure(op, err))
+                .map_err(|err| crate::Error::backend_source(op, err))
         }
         crate::Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
     }
@@ -149,7 +139,7 @@ fn copy_view_to_array<T: Copy + Clone + Send + Sync + 'static>(
     src: &StridedView<'_, T>,
     placement: &tenferro_tensor::Placement,
 ) -> crate::Result<TypedTensor<T>> {
-    copy_into(&mut out.view_mut(), src).map_err(|err| crate::Error::backend_failure(op, err))?;
+    copy_into(&mut out.view_mut(), src).map_err(|err| crate::Error::backend_source(op, err))?;
     tensor_from_array_with_placement(op, out, placement)
 }
 
@@ -164,7 +154,7 @@ fn tensor_from_array_with_placement<T: 'static>(
         crate::Buffer::Host(out.into_data()),
         placement.clone(),
     )
-    .map_err(|err| crate::Error::backend_failure(op, err))
+    .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 pub(crate) fn typed_materialize_view_with_pool<T, R>(
@@ -186,13 +176,13 @@ where
         view.strides(),
         view.offset(),
     )
-    .map_err(|err| crate::Error::backend_failure(op, err))?;
+    .map_err(|err| crate::Error::backend_source(op, err))?;
     // INVARIANT: validated equal-shaped copy_into overwrites every logical output element.
     // SAFETY: copy_into overwrites every logical output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, view.shape()) }?;
-    copy_into(&mut out.view_mut(), &src).map_err(|err| crate::Error::backend_failure(op, err))?;
+    copy_into(&mut out.view_mut(), &src).map_err(|err| crate::Error::backend_source(op, err))?;
     let shape = R::shape_from_vec(view.shape().to_vec().into())
-        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     TypedTensor::from_buffer_col_major(
         shape,
         crate::Buffer::Host(out.into_data()),
@@ -210,18 +200,19 @@ where
     R: TensorRank,
 {
     if src.shape() != dst.shape() {
-        return Err(crate::Error::ShapeMismatch {
+        return Err(crate::Error::shape_mismatch(
             op,
-            lhs: src.shape().to_vec(),
-            rhs: dst.shape().to_vec(),
-        });
+            src.shape().to_vec(),
+            dst.shape().to_vec(),
+        ));
     }
     if let (Some(src_buffer), Some(dst_buffer)) = (src.backend_buffer(), dst.backend_buffer()) {
         if Arc::ptr_eq(src_buffer, dst_buffer) {
-            return Err(crate::Error::InvalidConfig {
+            return Err(crate::Error::invalid_argument(
                 op,
-                message: "CPU copy source and destination allocations must not alias".into(),
-            });
+                "configuration",
+                "CPU copy source and destination allocations must not alias",
+            ));
         }
     }
     if src.backend_buffer().is_some() || dst.backend_buffer().is_some() {
@@ -236,7 +227,7 @@ where
         src.strides(),
         src.offset(),
     )
-    .map_err(|err| crate::Error::backend_failure(op, err))?;
+    .map_err(|err| crate::Error::backend_source(op, err))?;
     let dst_shape = dst.shape().to_vec();
     let dst_strides = dst.strides().to_vec();
     let dst_offset = dst.offset();
@@ -246,8 +237,8 @@ where
         &dst_strides,
         dst_offset,
     )
-    .map_err(|err| crate::Error::backend_failure(op, err))?;
-    copy_into(&mut dst_view, &src_view).map_err(|err| crate::Error::backend_failure(op, err))
+    .map_err(|err| crate::Error::backend_source(op, err))?;
+    copy_into(&mut dst_view, &src_view).map_err(|err| crate::Error::backend_source(op, err))
 }
 
 pub(crate) fn validate_cpu_host_placement(
@@ -594,10 +585,7 @@ fn validate_real_cast_to_i64(value: f64) -> crate::Result<()> {
 }
 
 fn invalid_cast_value(message: String) -> crate::Error {
-    crate::Error::InvalidConfig {
-        op: "cast",
-        message,
-    }
+    crate::Error::invalid_argument("cast", "configuration", message)
 }
 
 #[cfg(test)]
@@ -688,7 +676,7 @@ pub(crate) fn typed_transpose<T: Copy + Clone + Send + Sync + 'static>(
     let src = host_view("transpose", tensor)?;
     let permuted = src
         .permute(perm)
-        .map_err(|err| crate::Error::backend_failure("transpose", err))?;
+        .map_err(|err| crate::Error::backend_source("transpose", err))?;
     // SAFETY: copy_into overwrites every output element.
     let out = unsafe { typed_array_uninit(permuted.dims()) };
     copy_view_to_array("transpose", out, &permuted, tensor.placement())
@@ -707,7 +695,7 @@ where
     let src = typed_view_from_view("transpose", view)?;
     let permuted = src
         .permute(perm)
-        .map_err(|err| crate::Error::backend_failure("transpose", err))?;
+        .map_err(|err| crate::Error::backend_source("transpose", err))?;
     checked_shape_product("transpose", "output shape", permuted.dims())?;
     // SAFETY: copy_into overwrites every output element.
     let out = make_out(permuted.dims())?;
@@ -748,11 +736,11 @@ pub fn typed_reshape<T: Clone + 'static>(
     let old_n = checked_shape_product("reshape", "input shape", tensor.shape())?;
     let new_n = checked_shape_product("reshape", "output shape", shape)?;
     if old_n != new_n {
-        return Err(crate::Error::ShapeMismatch {
-            op: "reshape",
-            lhs: tensor.shape().to_vec(),
-            rhs: shape.to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "reshape",
+            tensor.shape().to_vec(),
+            shape.to_vec(),
+        ));
     }
     TypedTensor::from_buffer_col_major(
         shape.to_vec(),
@@ -773,11 +761,11 @@ where
     let old_n = checked_shape_product("reshape", "input shape", view.shape())?;
     let new_n = checked_shape_product("reshape", "output shape", shape)?;
     if old_n != new_n {
-        return Err(crate::Error::ShapeMismatch {
-            op: "reshape",
-            lhs: view.shape().to_vec(),
-            rhs: shape.to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "reshape",
+            view.shape().to_vec(),
+            shape.to_vec(),
+        ));
     }
 
     let src = typed_view_from_view("reshape", view)?;
@@ -787,9 +775,9 @@ where
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
     let copy_strides = col_major_strides(view.shape());
     let mut copy_target = StridedViewMut::new(out.data_mut(), view.shape(), &copy_strides, 0)
-        .map_err(|err| crate::Error::backend_failure("reshape", err))?;
+        .map_err(|err| crate::Error::backend_source("reshape", err))?;
     copy_into(&mut copy_target, &src)
-        .map_err(|err| crate::Error::backend_failure("reshape", err))?;
+        .map_err(|err| crate::Error::backend_source("reshape", err))?;
     TypedTensor::from_buffer_col_major(
         shape.to_vec(),
         crate::Buffer::Host(out.into_data()),
@@ -855,21 +843,21 @@ where
     for (src_axis, &dst_axis) in dims.iter().enumerate() {
         validate_axis("broadcast_in_dim", dst_axis, shape.len())?;
         if seen[dst_axis] {
-            return Err(crate::Error::DuplicateAxis {
-                op: "broadcast_in_dim",
-                axis: dst_axis,
-                role: "dims",
-            });
+            return Err(crate::Error::duplicate_axis(
+                "broadcast_in_dim",
+                dst_axis,
+                "dims",
+            ));
         }
         seen[dst_axis] = true;
         let source_dim = view.shape()[src_axis];
         let target_dim = shape[dst_axis];
         if source_dim != target_dim && source_dim != 1 {
-            return Err(crate::Error::ShapeMismatch {
-                op: "broadcast_in_dim",
-                lhs: view.shape().to_vec(),
-                rhs: shape.to_vec(),
-            });
+            return Err(crate::Error::shape_mismatch(
+                "broadcast_in_dim",
+                view.shape().to_vec(),
+                shape.to_vec(),
+            ));
         }
         base_dims[dst_axis] = source_dim;
         base_strides[dst_axis] = view.strides()[src_axis];
@@ -883,15 +871,15 @@ where
         &base_strides,
         view.offset(),
     )
-    .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
+    .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     let broadcast: StridedView<'_, T, Identity> = base
         .broadcast(shape)
-        .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
+        .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     checked_shape_product("broadcast_in_dim", "output shape", shape)?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = make_out(shape)?;
     copy_into(&mut out.view_mut(), &broadcast)
-        .map_err(|err| crate::Error::backend_failure("broadcast_in_dim", err))?;
+        .map_err(|err| crate::Error::backend_source("broadcast_in_dim", err))?;
     tensor_from_array_with_placement("broadcast_in_dim", out, view.placement())
 }
 
@@ -907,7 +895,7 @@ where
     // SAFETY: map_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, tensor.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view("convert", tensor)?, f)
-        .map_err(|err| crate::Error::backend_failure("convert", err))?;
+        .map_err(|err| crate::Error::backend_source("convert", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -923,11 +911,11 @@ pub(crate) fn typed_extract_diagonal<T: Copy + Clone + Send + Sync>(
 
     let diag = host_view("extract_diagonal", tensor)?
         .diagonal_view(&[(axis_a, axis_b)])
-        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit(diag.dims()) };
     copy_into(&mut out.view_mut(), &diag)
-        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -946,11 +934,11 @@ where
 
     let diag = host_view("extract_diagonal", tensor)?
         .diagonal_view(&[(axis_a, axis_b)])
-        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     // SAFETY: copy_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, diag.dims()) }?;
     copy_into(&mut out.view_mut(), &diag)
-        .map_err(|err| crate::Error::backend_failure("extract_diagonal", err))?;
+        .map_err(|err| crate::Error::backend_source("extract_diagonal", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -988,11 +976,11 @@ where
 {
     validate_axis("embed_diagonal", axis_a, tensor.shape().len())?;
     if axis_b > tensor.shape().len() {
-        return Err(crate::Error::AxisOutOfBounds {
-            op: "embed_diagonal",
-            axis: axis_b,
-            rank: tensor.shape().len(),
-        });
+        return Err(crate::Error::axis_out_of_bounds(
+            "embed_diagonal",
+            axis_b,
+            tensor.shape().len(),
+        ));
     }
 
     let n = tensor.shape()[axis_a];
@@ -1080,11 +1068,7 @@ fn typed_triangular_mask<T: Copy + Zero + Clone>(
 ) -> crate::Result<TypedTensor<T>> {
     let op = if upper { "triu" } else { "tril" };
     if tensor.shape().len() < 2 {
-        return Err(crate::Error::RankMismatch {
-            op,
-            expected: 2,
-            actual: tensor.shape().len(),
-        });
+        return Err(crate::Error::rank_mismatch(op, 2, tensor.shape().len()));
     }
 
     let rows = tensor.shape()[0];
@@ -1134,11 +1118,7 @@ where
 {
     let op = if upper { "triu" } else { "tril" };
     if tensor.shape().len() < 2 {
-        return Err(crate::Error::RankMismatch {
-            op,
-            expected: 2,
-            actual: tensor.shape().len(),
-        });
+        return Err(crate::Error::rank_mismatch(op, 2, tensor.shape().len()));
     }
 
     let rows = tensor.shape()[0];
@@ -1183,18 +1163,21 @@ fn checked_triangular_extent(
     cols: usize,
 ) -> crate::Result<(usize, usize)> {
     let batch_count = shape[2..].iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim)
-            .ok_or_else(|| crate::Error::InvalidConfig {
+        acc.checked_mul(dim).ok_or_else(|| {
+            crate::Error::invalid_argument(
                 op,
-                message: format!("batch extent overflows usize: {acc} * {dim}"),
-            })
+                "configuration",
+                format!("batch extent overflows usize: {acc} * {dim}"),
+            )
+        })
     })?;
-    let block_size = rows
-        .checked_mul(cols)
-        .ok_or_else(|| crate::Error::InvalidConfig {
+    let block_size = rows.checked_mul(cols).ok_or_else(|| {
+        crate::Error::invalid_argument(
             op,
-            message: format!("matrix block size overflows usize: {rows} * {cols}"),
-        })?;
+            "configuration",
+            format!("matrix block size overflows usize: {rows} * {cols}"),
+        )
+    })?;
     Ok((batch_count, block_size))
 }
 
@@ -1206,22 +1189,27 @@ fn checked_triangular_offset(
     rows: usize,
     row_idx: usize,
 ) -> crate::Result<usize> {
-    let base = batch_idx
-        .checked_mul(block_size)
-        .ok_or_else(|| crate::Error::InvalidConfig {
+    let base = batch_idx.checked_mul(block_size).ok_or_else(|| {
+        crate::Error::invalid_argument(
             op,
-            message: format!("batch offset overflows usize: {batch_idx} * {block_size}"),
-        })?;
-    let col_offset = col
-        .checked_mul(rows)
-        .ok_or_else(|| crate::Error::InvalidConfig {
+            "configuration",
+            format!("batch offset overflows usize: {batch_idx} * {block_size}"),
+        )
+    })?;
+    let col_offset = col.checked_mul(rows).ok_or_else(|| {
+        crate::Error::invalid_argument(
             op,
-            message: format!("column offset overflows usize: {col} * {rows}"),
-        })?;
+            "configuration",
+            format!("column offset overflows usize: {col} * {rows}"),
+        )
+    })?;
     base.checked_add(col_offset)
         .and_then(|offset| offset.checked_add(row_idx))
-        .ok_or_else(|| crate::Error::InvalidConfig {
-            op,
-            message: "triangular mask offset overflows usize".to_string(),
+        .ok_or_else(|| {
+            crate::Error::invalid_argument(
+                op,
+                "configuration",
+                "triangular mask offset overflows usize".to_string(),
+            )
         })
 }

@@ -6,7 +6,7 @@ use tenferro_tensor::{
     Buffer, BufferHandle, DeviceId, DeviceKind, DotGeneralConfig, Error, GpuBackendKind,
     MemoryKind, PadConfig, Placement, ScatterConfig, SliceConfig, Tensor, TensorAnalytic,
     TensorDeviceTransfer, TensorDot, TensorElementwise, TensorIndexing, TensorStructural,
-    TypedTensor,
+    TypedTensor, ValidationError,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -339,7 +339,7 @@ fn cpu_backend_with_threads_rejects_zero_without_panicking() {
 
     assert!(matches!(
         err,
-        tenferro_cpu::CpuBackendError::Tensor(Error::InvalidConfig {
+        tenferro_cpu::CpuBackendError::Tensor(Error::Validation {
             op: "CpuBackend::with_threads",
             ..
         })
@@ -367,10 +367,9 @@ fn dot_general_rejects_out_of_bounds_contracting_dim() {
 
     assert!(matches!(
         err,
-        Error::AxisOutOfBounds {
+        Error::Validation {
             op: "dot_general",
-            axis: 2,
-            rank: 2,
+            source: ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
         }
     ));
 }
@@ -385,11 +384,10 @@ fn add_rejects_shape_mismatch() {
 
     assert!(matches!(
         err,
-        Error::ShapeMismatch {
+        Error::Validation {
             op: "add",
-            lhs,
-            rhs,
-        } if lhs == vec![2] && rhs == vec![3]
+            source: ValidationError::ShapeMismatch(_),
+        }
     ));
 }
 
@@ -423,16 +421,7 @@ fn transpose_returns_error_instead_of_panicking() {
         Error::BackendFailure {
             op: "transpose",
             ..
-        } | Error::InvalidConfig {
-            op: "transpose",
-            ..
-        } | Error::RankMismatch {
-            op: "transpose",
-            ..
-        } | Error::AxisOutOfBounds {
-            op: "transpose",
-            ..
-        } | Error::DuplicateAxis {
+        } | Error::Validation {
             op: "transpose",
             ..
         }
@@ -450,9 +439,7 @@ fn reshape_returns_error_instead_of_panicking() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure { op: "reshape", .. }
-            | Error::InvalidConfig { op: "reshape", .. }
-            | Error::ShapeMismatch { op: "reshape", .. }
+        Error::BackendFailure { op: "reshape", .. } | Error::Validation { op: "reshape", .. }
     ));
 }
 
@@ -468,7 +455,7 @@ fn pow_returns_error_on_shape_mismatch_instead_of_panicking() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::ShapeMismatch { op: "pow", .. } | Error::BackendFailure { op: "pow", .. }
+        Error::Validation { op: "pow", .. } | Error::BackendFailure { op: "pow", .. }
     ));
 }
 
@@ -488,10 +475,7 @@ fn slice_returns_error_instead_of_panicking() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure { op: "slice", .. }
-            | Error::InvalidConfig { op: "slice", .. }
-            | Error::RankMismatch { op: "slice", .. }
-            | Error::AxisOutOfBounds { op: "slice", .. }
+        Error::BackendFailure { op: "slice", .. } | Error::Validation { op: "slice", .. }
     ));
 }
 
@@ -511,9 +495,7 @@ fn pad_returns_error_instead_of_panicking() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure { op: "pad", .. }
-            | Error::InvalidConfig { op: "pad", .. }
-            | Error::RankMismatch { op: "pad", .. }
+        Error::BackendFailure { op: "pad", .. } | Error::Validation { op: "pad", .. }
     ));
 }
 
@@ -528,7 +510,7 @@ fn concatenate_returns_error_on_empty_inputs() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "concatenate",
             ..
         }
@@ -550,9 +532,9 @@ fn concatenate_returns_error_on_dtype_mismatch() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::DTypeMismatch {
+        Error::Validation {
             op: "concatenate",
-            ..
+            source: ValidationError::DTypeMismatch { .. },
         }
     ));
 }
@@ -572,9 +554,9 @@ fn concatenate_returns_error_on_rank_mismatch() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::RankMismatch {
+        Error::Validation {
             op: "concatenate",
-            ..
+            source: ValidationError::RankMismatch { .. },
         }
     ));
 }
@@ -594,9 +576,9 @@ fn concatenate_returns_error_on_axis_out_of_bounds() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::AxisOutOfBounds {
+        Error::Validation {
             op: "concatenate",
-            ..
+            source: ValidationError::AxisOutOfBounds { .. },
         }
     ));
 }
@@ -619,9 +601,9 @@ fn concatenate_returns_error_on_shape_mismatch() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::ShapeMismatch {
+        Error::Validation {
             op: "concatenate",
-            ..
+            source: ValidationError::ShapeMismatch(_),
         }
     ));
 }
