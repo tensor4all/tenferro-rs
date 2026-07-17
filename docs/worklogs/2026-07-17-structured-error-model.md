@@ -44,8 +44,9 @@ compilation, or execution.
 - `89d3ab42`: CUDA structured errors, including typed unsupported-dtype source.
 - `1a9b8b4f`: runtime and default-feature extension migration.
 
-Further checkpoints will record the linalg, optional extension, audit, and
-release-gate work below.
+The linalg, optional extension, audit, and release-gate verification is
+recorded below; implementation commits will be added after the final staged
+diff review.
 
 ## Verification notes
 
@@ -61,8 +62,179 @@ faer AllAllowed placement should resolve: ManagedAffinityUnavailable {
 ```
 
 This is an environment limitation, not a passing claim for the complete
-all-target command. The exact optional WebGPU dependency evidence will be
-recorded after the isolated clean-`origin/main` comparison.
+all-target command. The isolated clean-`origin/main` WebGPU comparison is
+recorded below.
+
+## Public API documentation audit
+
+The runtime audit initially reported 149 public `Result` APIs without a
+usable concrete `# Errors` contract. Each runtime section was reviewed at the
+operation boundary rather than filled with a category-only sentence. The
+sections name the observable validation payloads (`ShapeMismatch`,
+`RankMismatch`, `AxisOutOfBounds`, `DuplicateAxis`, `DTypeMismatch`, and
+`InvalidArgument`), operation-level unsupported cases, numerical failures,
+typed backend/extension sources, and runtime-state failures where those paths
+are reachable. Traced operations additionally describe which checks happen at
+graph build and which symbolic constraints or bound indices can fail at
+compile/execution, under a separate `# Deferred errors` heading.
+
+The repository gate is `scripts/check-public-error-docs.py`. It audits public
+functions and public trait methods returning `Result`, understands both
+`///` and proc-macro `#[doc = ...]` documentation, rejects a missing or
+category-only `# Errors` section, and requires a `# Deferred errors` section
+when a traced API documents deferred validation. Its unit tests are in
+`scripts/test-check-public-error-docs.py`; CI runs the unit test, the complete
+workspace audit, and the audit of lines changed from the event base. The
+Clippy job also explicitly denies both
+`clippy::missing_errors_doc` and `clippy::missing_panics_doc` for the workspace,
+`ext/tropical`, and `ext/sparse`. This makes future public `Result` APIs fail
+the source audit/CI instead of relying on a long-lived lint allowlist.
+
+## Boundary mapping audit
+
+The implementation was audited by source owner and failure meaning, not by
+call-site compilation alone:
+
+- Tensor-core owns the shared validation vocabulary. `ShapeMismatch` is boxed
+  at the outer tensor boundary to keep error values below the large-error lint
+  threshold while preserving `matches!`, `source()`, and
+  `ShapeMismatch::... .into()` ergonomics.
+- Operation-level unsupported dtypes use `UnsupportedDType { op, dtype }` and
+  a typed CUDA/WebGPU/linalg source. `UnsupportedDTypeConversion` is reserved
+  for a real input-to-target conversion or cast; no operation-only rejection
+  is represented as `from == to`.
+- Singularity, non-convergence, zero divisors, and negative integer powers are
+  numerical failures with local typed sources. CUDA/cuTENSOR/cuSOLVER/LAPACK
+  status and workspace failures retain typed provider sources and are backend
+  failures. CPU placement discovery, unavailable managed affinity, and
+  unknown NUMA nodes are runtime-state failures; unsupported external affinity
+  is an unsupported extension condition, not a backend catch-all.
+- Typed file, stream, serialization, and dynamic-library failures use the I/O
+  classification. Missing/uninitialized/poisoned registry, executor, cache,
+  device, and buffer state uses runtime-state. `BackendFailure(String)` is
+  retained only for boundaries that genuinely expose no typed source and for
+  explicit test injection; production typed boundaries use `backend_source` or
+  an extension source. The AD adapter necessarily converts the typed runtime
+  error to the external `tidu::ADRuleError` message-only type at that foreign
+  API boundary, while retaining the typed runtime error in deferred errors.
+
+## Optional feature and dependency evidence
+
+These checks passed with the structured model:
+
+```text
+cargo check -p tenferro-cpu --no-default-features --features cpu-blas --all-targets --message-format=short
+cargo check -p tenferro-linalg --no-default-features --features cpu-blas --all-targets
+cargo clippy -p tenferro-linalg --no-default-features --features cpu-blas --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+cargo check -p tenferro-runtime --no-default-features --features cpu-blas --all-targets --message-format=short
+cargo check -p tenferro-gpu --no-default-features --features 'cuda cpu-faer' --all-targets --message-format=short
+cargo check -p tenferro-xla --no-default-features --features pjrt --all-targets --message-format=short
+cargo clippy --manifest-path ext/sparse/Cargo.toml --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+```
+
+The correct CUDA feature check includes `cpu-faer`; the intentionally
+incomplete command
+`cargo check -p tenferro-gpu --no-default-features --features cuda --all-targets`
+fails at the repository's required CPU-fallback `compile_error!`, so it is not
+used as a feature-support claim.
+
+WebGPU remains unavailable for a pre-existing dependency-resolution reason.
+To prove that it was not introduced here, an isolated clean worktree at
+`/private/tmp/tenferro-origin-main-webgpu-1784299674-45394` was checked at
+clean `origin/main` commit `1ec2062e` with the exact command:
+
+```text
+cargo check -p tenferro-gpu --features webgpu --all-targets --message-format=short
+```
+
+Its first causal errors were `TensorBinding<_>` versus
+`TensorBinding<WgpuRuntime>`, followed by `cubecl_ir::StorageType` and type
+mismatches (12 errors). The current branch's
+`cargo check -p tenferro-gpu --no-default-features --features 'webgpu cpu-faer' --all-targets --message-format=short`
+reproduces the same CubeCL binding/storage mismatch (18 diagnostics, with the
+same first error family). The clean main resolution uses direct CubeCL commit
+`b9e8f0f3...`, cubek commit `7d9e382...`, and CubeCL dependency
+`6424d9da...`; this PR does not alter those revisions.
+
+The documented CUDA ignored-test command was not run because this macOS host
+has no `/usr/local/cuda-12.8` toolkit or NVIDIA runtime:
+
+```text
+CUBECL_DEBUG_LOG=0 CUDA_PATH=/usr/local/cuda-12.8 LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH cargo test -p tenferro-gpu --features cuda -- --ignored
+```
+
+The full CPU all-target command is likewise not claimed as passing because
+the local Faer `AllAllowed` affinity test returns the
+`ManagedAffinityUnavailable` runtime-state error shown above. The focused CPU
+library/integration commands pass. The docs-site checker passes under
+Python 3.11 and 3.12; the host default `python3` is 3.9.6 and exits with the
+checker’s explicit “Python 3.11+ is required” diagnostic.
+
+The first post-migration `cargo test --workspace --release` also exposed two
+environment-sensitive test/documentation issues during verification. The
+XLA PJRT execution test could race the `pjrt_env` tests: both ran in one test
+binary, but each used a different static mutex while `pjrt_env` temporarily
+set `TENFERRO_PJRT_PLUGIN=/definitely/missing/pjrt.so`. The execution test then
+observed that temporary value and unwrapped a deliberate `PluginLoad` error.
+The fix is a shared parent-module lock used by both modules; the full
+`cargo test -p tenferro-xla --features pjrt --test integration --release`
+command passes with all 36 tests.
+
+The same release run found two einsum doctests whose trailing `Ok::<...>`
+annotations still named the removed AD error type after the einsum API became
+crate-local. The examples now return `tenferro_einsum::Error`; the exact
+`cargo test -p tenferro-einsum --doc --release` gate passes all 78 doctests.
+
+The next workspace release run found one remaining stale doctest in
+`tenferro_tensor::validate::DiagonalError`: the example constructed the
+non-batched `SingularOrNonFinite` variant with the removed `batch` field. The
+example now uses the current `{ index }` payload, and
+`cargo test -p tenferro-tensor --doc --release` passes all 284 doctests.
+
+The complete release gate was then rerun exactly as
+`cargo test --workspace --release`; it exited successfully. The resulting
+workspace run included the XLA integration suite (36 tests), runtime doctests
+(238), and tensor doctests (284), with no failed tests or doctests. Coverage
+was collected with
+`cargo llvm-cov --workspace --release --json --output-path coverage.json` and
+passed `python3.11 scripts/check-coverage.py coverage.json` for 163/163 files
+(three excluded by policy).
+
+The remaining static gates also passed: `cargo fmt --all --check`,
+`git diff --check`, `cargo doc --workspace --no-deps`, full and
+`--changed-from origin/main` public-error documentation audits, the audit's
+eight unit tests, docs consistency tests, repository-rule review tests, the
+workspace strict Clippy command, and strict Clippy for both nested extension
+manifests. The public-error audit reported `public-error-docs-ok` in both
+modes; no `result_large_err` or documentation allowlist was added.
+
+The current WebGPU feature check was rerun as
+`cargo check -p tenferro-gpu --no-default-features --features 'webgpu cpu-faer' --all-targets --message-format=short` and still exits 101 with 18 diagnostics. Its first errors remain the CubeCL `TensorBinding`, `StorageType`, and `Type` mismatches recorded above; this is the same dependency mismatch proven on clean `origin/main`, not a structured-error change.
+
+The hardware-independent CUDA feature test command
+`cargo test -p tenferro-gpu --no-default-features --features 'cuda cpu-faer' --all-targets`
+passes 38 tests and explicitly skips 108 GPU-dependent tests. The exact CUDA
+`-- --ignored` command remains unrun because the host lacks the required
+toolkit/runtime. The two optional CPU-BLAS test commands were rerun and still
+fail before tests at the arm64 linker with missing BLAS/LAPACK symbols; their
+`cargo check` and strict Clippy gates pass.
+
+The optional BLAS test commands were attempted but are not claimed as
+passing on this macOS arm64 host:
+
+```text
+cargo test -p tenferro-linalg --no-default-features --features cpu-blas --all-targets
+cargo test -p tenferro-runtime --no-default-features --features cpu-blas --all-targets
+```
+
+Both fail during linking, before tests run. The first causal linker symbols
+are `_cblas_ctrsm`, `_cblas_dtrsm`, `_cblas_strsm`, `_cblas_ztrsm`, and
+LAPACK symbols such as `_cgetrf_`/`_dgetrf_`; the runtime command additionally
+reports `_cblas_cgemm`/`_cblas_dgemm`/`_cblas_sgemm`/`_cblas_zgemm`. No matching
+arm64 BLAS/LAPACK provider is configured in this environment. The same
+features do pass `cargo check` and strict lints. CUDA-feature non-ignored
+tests compile and pass, while the CUDA tests marked `ignored` remain
+hardware-dependent and were not run.
 
 ## Residual risks
 

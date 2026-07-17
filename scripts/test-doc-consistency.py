@@ -84,6 +84,16 @@ def test_docs_ci_runs_docs_script_tests() -> None:
     )
 
 
+def test_ci_enforces_public_error_docs_and_extension_clippy() -> None:
+    text = read(".github/workflows/ci.yml")
+
+    assert "scripts/check-public-error-docs.py" in text
+    assert "-D clippy::missing_errors_doc" in text
+    assert "-D clippy::missing_panics_doc" in text
+    assert "cargo clippy --manifest-path ext/tropical/Cargo.toml" in text
+    assert "cargo clippy --manifest-path ext/sparse/Cargo.toml" in text
+
+
 def test_review_bot_workflow_exists() -> None:
     text = read(".github/workflows/review_bot.yml")
 
@@ -298,6 +308,7 @@ def main() -> int:
         test_architecture_svg_lists_cpu_crate_xla_boundary_and_background,
         test_agents_layer_diagram_lists_cpu_crate,
         test_docs_ci_runs_docs_script_tests,
+        test_ci_enforces_public_error_docs_and_extension_clippy,
         test_review_bot_workflow_exists,
         test_repo_settings_requires_repository_rules_review,
         test_gpu_ci_waits_for_review_bot_gate_before_cuda_work,

@@ -127,7 +127,8 @@ rules from `tensor4all-agent-rules`.
 - Public validation APIs must return crate error types, not `String` or `&str`
   errors. If a caller needs to translate into another layer's error type, it
   should do so explicitly while preserving the original typed validation error
-  in the message or source path.
+  in the `source()` chain; render it as text only at the final display,
+  logging, serialization, or message-only external-protocol boundary.
 - Validation helpers for operation configs should return typed prepared
   metadata when downstream code will otherwise repeat indexing, rank-minus-one,
   shape-product, or dimension-role calculations. Prefer passing a validated
@@ -503,16 +504,16 @@ Tests follow implementation ownership.
 - User code must explicitly upload CPU tensors before CUDA backend execution
   and explicitly download CUDA tensors before CPU-only execution or host value
   inspection.
-- A GPU backend op receiving a CPU tensor must return
-  `Error::BackendFailure` with a diagnostic that says the op expected a GPU
-  tensor and points users to `upload_tensor()`.
+- A GPU backend op receiving a CPU tensor must return a runtime-state error
+  with a diagnostic that says the op expected a GPU tensor and points users to
+  `upload_tensor()`.
 - A `Result`-returning CPU backend op receiving a backend/GPU buffer must
-  return `Error::BackendFailure` where the buffer is detected at the CPU
-  backend boundary. The diagnostic should say to download the tensor to host
-  before CPU execution.
+  return a runtime-state error where the buffer is detected at the CPU backend
+  boundary. The diagnostic should say to download the tensor to host before
+  CPU execution.
 - Direct host-inspection APIs such as `TypedTensor::host_data()` and
   `TypedTensor::host_data_mut()` return `Result` and must report backend
-  buffers as typed backend failures. Any infallible host-inspection API that
+  buffers as runtime-state failures. Any infallible host-inspection API that
   returns a borrowed slice instead of `Result` must document an explicit panic
   boundary before it is exposed.
 - Execution pipeline internals may handle placement for documented cases:
@@ -765,8 +766,34 @@ Tests follow implementation ownership.
   device transfer behavior. Any change to those conventions must update that
   document in the same PR.
 - CUDA `eig` (non-symmetric eigenvalue decomposition, LAPACK `dgeev`) is not
-  provided by cuSOLVER. `CudaBackend::eig` returns `BackendFailure`; users
+  provided by cuSOLVER. `CudaBackend::eig` returns `Unsupported`; users
   must explicitly download to CPU and compute via `CpuBackend::eig`.
+
+### Structured Error Classification
+
+- Validation facts use the shared typed vocabulary for shape, rank, axis, dtype,
+  configuration, and invalid arguments. Eager and traced paths must report the
+  same validation kind and payload for the same known input; `ErrorPhase` is a
+  separate graph-build, compile, or execution axis.
+- Unsupported operations and operation-specific unsupported dtypes use the
+  `Unsupported` category. A crate that owns a richer reason retains a typed
+  local source; `UnsupportedDTypeConversion` is reserved for an actual
+  from-dtype to to-dtype conversion.
+- Singularities, non-convergence, division by zero, and other numeric-domain
+  failures use `NumericalFailure` and retain the owning crate's typed source.
+- Typed backend/kernel errors use a source-preserving backend wrapper. The
+  text-only `BackendFailure` category is reserved for vendor/backend status
+  text when no typed source or more specific category exists.
+- Typed file, stream, serialization, and dynamic-library failures use `Io` and
+  retain their source. Missing, uninitialized, poisoned, or otherwise invalid
+  executor, cache, device, and buffer state uses `RuntimeState`, retaining a
+  typed source when one exists. Impossible internal invariants remain
+  `Internal`; these categories must not be used as catch-alls for known input
+  validation.
+- Public error conversion must preserve the `source()` chain across crate
+  boundaries. Converting a typed error to `String` is permitted only for
+  display/logging, vendor/FFI arguments, final serialization, or an explicit
+  message-only external protocol boundary.
 
 ## Documentation Policy
 
@@ -838,6 +865,23 @@ Tests follow implementation ownership.
 - Examples that call CPU or GPU backend operations should bind the backend to a
   local variable and reuse it for related operations instead of chaining
   `Backend::new().op(...)` beyond a single trivial construction example.
+
+### Public Result Error Documentation Gate
+
+- Every public function, inherent method, and public-trait method returning a
+  `Result` must document a `# Errors` section. The section must name the
+  concrete error variants or failure conditions the caller can observe; a
+  generic “returns an error on failure” sentence is insufficient.
+- Documentation for traced or symbolic APIs must describe validation deferred
+  to compile or execution and identify the applicable `ErrorPhase` when that
+  behavior is part of the contract. Intentional panics use `# Panics`; deferred
+  symbolic checks use `# Deferred errors`.
+- `scripts/check-public-error-docs.py` audits the full Rust workspace and the
+  Rust files changed by a PR and is a required CI gate. For traced APIs, prose
+  that promises validation at compile/execution or after input binding must
+  also be under `# Deferred errors`. Keep the audit enabled without `clippy`
+  or source-level allowlists; add the concrete documentation at the API source
+  instead.
 
 ## Generic Over Scalar Type
 
