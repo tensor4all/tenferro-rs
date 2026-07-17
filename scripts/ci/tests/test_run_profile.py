@@ -117,6 +117,14 @@ class RunProfileTests(unittest.TestCase):
         self.assertNotIn("cargo nextest run --workspace --release", source)
         self.assertNotIn("cargo llvm-cov", source)
 
+    def test_create_pr_pushes_the_named_branch_not_its_base_upstream(self) -> None:
+        source = (ROOT / "scripts" / "create-pr.sh").read_text()
+        self.assertIn('git push -u origin "$current_branch"', source)
+        self.assertNotIn(
+            "git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}'",
+            source,
+        )
+
     def test_remediation_workflow_uses_focused_tests_before_pr(self) -> None:
         source = (
             ROOT / "ai" / "contribution-workflows" / "repository-remediation.md"

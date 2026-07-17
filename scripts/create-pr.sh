@@ -164,11 +164,7 @@ fi
 ensure_body_file
 append_ai_attribution
 
-if git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then
-  git push
-else
-  git push -u origin "$current_branch"
-fi
+git push -u origin "$current_branch"
 
 create_args=(pr create --base "$BASE_BRANCH" --title "$TITLE" --body-file "$BODY_FILE")
 if [[ "$DRAFT" -eq 1 ]]; then
