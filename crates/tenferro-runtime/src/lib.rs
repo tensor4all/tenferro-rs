@@ -55,7 +55,7 @@ pub mod traced;
 mod typed_tensor;
 
 pub use compiler::{CompilerOptions, OptimizerConfig};
-pub use error::{ContextId, Error, Result, ShapeConstraintEvalError};
+pub use error::{ContextId, Error, ErrorPhase, Result, ShapeConstraintEvalError};
 pub use extension_cache::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
 };

@@ -166,9 +166,7 @@ fn exec_accessors_reject_bad_input_slot_index_without_panicking() {
 
     let err = get(&slots, &[], 0).unwrap_err();
 
-    let message = err.to_string();
-    assert!(message.contains("invalid compiled graph"), "{message}");
-    assert!(message.contains("input index 0"), "{message}");
+    assert!(matches!(err, crate::Error::Internal(message) if message.contains("input index 0")));
 }
 
 #[test]

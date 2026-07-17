@@ -1,7 +1,8 @@
 use num_complex::Complex64;
 use std::sync::Arc;
 
-use crate::{DType, DotGeneralConfig, Error, TracedTensor};
+use crate::{DType, DotGeneralConfig, Error, ErrorPhase, TracedTensor};
+use tenferro_tensor::{ShapeMismatch, ValidationError};
 
 #[test]
 fn traced_binary_reuses_input_map_when_rhs_is_already_present() {
@@ -61,11 +62,14 @@ fn dot_general_returns_error_for_invalid_config() {
         panic!("invalid dim config should be a typed runtime error");
     };
 
-    let message = err.to_string();
-    assert!(
-        message.contains("lhs_contracting_dim 2 out of bounds"),
-        "{message}"
-    );
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -170,26 +174,40 @@ fn broadcast_in_dim_rejects_invalid_dimension_mappings() {
     let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
 
     let rank_mismatch = x.broadcast_in_dim(&[2, 3, 4], &[0]).unwrap_err();
-    assert!(
-        rank_mismatch
-            .to_string()
-            .contains("dims length 1 must match input rank 2"),
-        "{rank_mismatch}"
-    );
+    assert!(matches!(
+        &rank_mismatch,
+        Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::RankMismatch {
+                expected: 2,
+                actual: 1,
+            },
+            ..
+        }
+    ));
 
     let out_of_bounds = x.broadcast_in_dim(&[2, 3, 4], &[0, 3]).unwrap_err();
-    assert!(
-        out_of_bounds
-            .to_string()
-            .contains("broadcast dim 3 out of bounds for output rank 3"),
-        "{out_of_bounds}"
-    );
+    assert!(matches!(
+        &out_of_bounds,
+        Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::AxisOutOfBounds { axis: 3, rank: 3 },
+            ..
+        }
+    ));
 
     let duplicate = x.broadcast_in_dim(&[2, 3, 4], &[1, 1]).unwrap_err();
-    assert!(
-        duplicate.to_string().contains("duplicate broadcast dim 1"),
-        "{duplicate}"
-    );
+    assert!(matches!(
+        &duplicate,
+        Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::DuplicateAxis {
+                axis: 1,
+                role: "broadcast",
+            },
+            ..
+        }
+    ));
 
     let valid = x.broadcast_in_dim(&[2, 3, 4], &[0, 1]).unwrap();
     assert_eq!(valid.rank, 3);
@@ -203,11 +221,16 @@ fn reshape_rejects_concrete_element_count_mismatch_at_graph_build() {
     let err = x.reshape(&[3]).unwrap_err();
 
     assert!(matches!(
-        err,
-        Error::InvalidGraphBuild {
+        &err,
+        Error::Validation {
             op: "TracedTensor::reshape",
-            ..
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::ShapeMismatch(source),
         }
+        if matches!(
+            source.as_ref(),
+            ShapeMismatch::ReshapeElementCount { from: 4, to: 3 }
+        )
     ));
     assert!(err.to_string().contains("element-count mismatch"), "{err}");
 }

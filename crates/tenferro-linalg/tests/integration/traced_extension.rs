@@ -399,10 +399,12 @@ fn traced_inv_rejects_rank_less_than_two_without_panicking() {
 
     assert!(matches!(
         err,
-        Error::TensorRuntime(TensorError::RankMismatch {
+        Error::TensorRuntime(TensorError::Validation {
             op: "inv",
-            expected: 2,
-            actual: 0,
+            source: tenferro_tensor::ValidationError::RankMismatch {
+                expected: 2,
+                actual: 0,
+            },
         })
     ));
 }
@@ -415,10 +417,12 @@ fn assert_linalg_rank_mismatch<T>(name: &str, result: tenferro_runtime::Result<T
     assert!(
         matches!(
             err,
-            Error::TensorRuntime(TensorError::RankMismatch {
-                expected: 2,
-                actual: got,
-                ..
+            Error::TensorRuntime(TensorError::Validation {
+                op: _,
+                source: tenferro_tensor::ValidationError::RankMismatch {
+                    expected: 2,
+                    actual: got,
+                },
             }) if got == actual
         ),
         "expected rank mismatch for {name}, got {err:?}"
@@ -477,10 +481,9 @@ fn traced_norm_rejects_out_of_range_axis_without_panicking() {
 
     assert!(matches!(
         err,
-        Error::TensorRuntime(TensorError::AxisOutOfBounds {
+        Error::TensorRuntime(TensorError::Validation {
             op: "norm",
-            axis: 5,
-            rank: 1,
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: 5, rank: 1 },
         })
     ));
 }

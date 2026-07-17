@@ -74,14 +74,17 @@ fn broadcast_to(
 fn broadcast_error(op: &'static str, err: BroadcastError) -> Error {
     match err {
         BroadcastError::IncompatibleBinary { lhs, rhs } => {
-            tenferro_tensor::Error::ShapeMismatch { op, lhs, rhs }.into()
+            tenferro_tensor::Error::shape_mismatch(op, lhs, rhs).into()
         }
         BroadcastError::IncompatibleInput { input, output }
-        | BroadcastError::RankTooLarge { input, output } => tenferro_tensor::Error::InvalidConfig {
-            op,
-            message: format!("cannot broadcast shape {input:?} to {output:?}"),
+        | BroadcastError::RankTooLarge { input, output } => {
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "shape",
+                format!("cannot broadcast shape {input:?} to {output:?}"),
+            )
+            .into()
         }
-        .into(),
     }
 }
 
@@ -363,28 +366,15 @@ impl EagerTensor {
         let lhs_shape = self.shape();
         let rhs_shape = other.shape();
         if lhs_shape.len() != 2 {
-            return Err(tenferro_tensor::Error::RankMismatch {
-                op: "matmul",
-                expected: 2,
-                actual: lhs_shape.len(),
-            }
-            .into());
+            return Err(tenferro_tensor::Error::rank_mismatch("matmul", 2, lhs_shape.len()).into());
         }
         if rhs_shape.len() != 2 {
-            return Err(tenferro_tensor::Error::RankMismatch {
-                op: "matmul",
-                expected: 2,
-                actual: rhs_shape.len(),
-            }
-            .into());
+            return Err(tenferro_tensor::Error::rank_mismatch("matmul", 2, rhs_shape.len()).into());
         }
         if lhs_shape[1] != rhs_shape[0] {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "matmul",
-                lhs: lhs_shape.to_vec(),
-                rhs: rhs_shape.to_vec(),
-            }
-            .into());
+            return Err(
+                tenferro_tensor::Error::shape_mismatch("matmul", lhs_shape, rhs_shape).into(),
+            );
         }
         self.dot_general(
             other,
@@ -1011,33 +1001,30 @@ fn validate_eager_axes(op: &'static str, rank: usize, axes: &[usize]) -> Result<
 }
 
 fn validate_eager_dot_general_config(
-    op: &'static str,
+    _op: &'static str,
     config: &DotGeneralConfig,
     lhs_rank: usize,
     rhs_rank: usize,
 ) -> Result<()> {
     config
         .validate_dims_with_ranks(lhs_rank, rhs_rank)
-        .map_err(|err| {
-            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-                op,
-                message: err.to_string(),
-            })
-        })
+        .map_err(Error::TensorRuntime)
 }
 
 fn empty_nary_input_error(op: &StdTensorOp) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-        op: eager_validation_op_name(op),
-        message: "operation requires at least one input tensor".to_string(),
-    })
+    Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+        eager_validation_op_name(op),
+        "inputs",
+        "operation requires at least one input tensor",
+    ))
 }
 
 fn wrong_nary_input_count_error(op: &StdTensorOp, expected: usize, actual: usize) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-        op: eager_validation_op_name(op),
-        message: format!("operation expects {expected} inputs, got {actual}"),
-    })
+    Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+        eager_validation_op_name(op),
+        "inputs",
+        format!("operation expects {expected} inputs, got {actual}"),
+    ))
 }
 
 fn eager_validation_op_name(op: &StdTensorOp) -> &'static str {

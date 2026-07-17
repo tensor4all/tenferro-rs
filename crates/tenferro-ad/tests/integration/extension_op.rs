@@ -420,10 +420,11 @@ impl ExtensionOp for TestSwap {
         let lhs_dtype = ctx.input_dtype(0)?;
         let rhs_dtype = ctx.input_dtype(1)?;
         if lhs_dtype != rhs_dtype {
-            return Err(tenferro_tensor::Error::InvalidConfig {
-                op: self.family_id(),
-                message: "TestSwap expects matching dtypes".into(),
-            });
+            return Err(tenferro_tensor::Error::invalid_argument(
+                self.family_id(),
+                "dtype",
+                "TestSwap expects matching dtypes",
+            ));
         }
         Ok(vec![
             (rhs_dtype, ctx.input_shape(1)?.to_vec()),

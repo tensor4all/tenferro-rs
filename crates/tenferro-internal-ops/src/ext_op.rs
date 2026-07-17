@@ -116,30 +116,32 @@ pub fn invoke_extension_shape_inference(
 ) -> tenferro_tensor::Result<ExtensionShapeInference> {
     let expected_inputs = op.input_count();
     if input_dtypes.len() != expected_inputs || input_shapes.len() != expected_inputs {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "extension",
-            message: format!(
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "extension",
+            "input metadata",
+            format!(
                 "family_id={:?}: infer_output_meta expects {expected_inputs} input metadata entries, got {} dtypes and {} shapes",
                 op.family_id(),
                 input_dtypes.len(),
                 input_shapes.len()
             ),
-        });
+        ));
     }
 
     let mut ctx =
         ExtensionShapeContext::new_for_inference(op.family_id(), input_dtypes, input_shapes);
     let output_metas = op.infer_output_meta(&mut ctx)?;
     if output_metas.len() != op.output_count() {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "extension",
-            message: format!(
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "extension",
+            "output metadata",
+            format!(
                 "family_id={:?}: infer_output_meta produced {} output metadata entries; op declared {} outputs",
                 op.family_id(),
                 output_metas.len(),
                 op.output_count()
             ),
-        });
+        ));
     }
 
     Ok(ExtensionShapeInference {

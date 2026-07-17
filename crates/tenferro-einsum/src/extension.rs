@@ -228,14 +228,11 @@ impl ExtensionOp for EinsumExtensionOp {
         let mut label_dims: HashMap<u32, SymDim> = HashMap::new();
         for (labels, shape) in self.subscripts.inputs.iter().zip(input_shapes.iter()) {
             if labels.len() != shape.len() {
-                return Err(TensorError::InvalidConfig {
-                    op: "einsum",
-                    message: format!(
-                        "subscript rank {} does not match input rank {}",
-                        labels.len(),
-                        shape.len()
-                    ),
-                });
+                return Err(TensorError::rank_mismatch(
+                    "einsum",
+                    labels.len(),
+                    shape.len(),
+                ));
             }
             for (&label, dim) in labels.iter().zip(shape.iter()) {
                 if let Some(existing) = label_dims.get(&label) {
@@ -254,20 +251,20 @@ impl ExtensionOp for EinsumExtensionOp {
                 .iter()
                 .map(|label| label_dims.get(label).cloned())
                 .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| TensorError::InvalidConfig {
-                    op: "einsum",
-                    message: "output labels must be present in input metadata".into(),
+                .ok_or_else(|| {
+                    TensorError::invalid_argument(
+                        "einsum",
+                        "output labels",
+                        "must be present in input metadata",
+                    )
                 })?,
         };
         if output_shape.len() != self.subscripts.output.len() {
-            return Err(TensorError::InvalidConfig {
-                op: "einsum",
-                message: format!(
-                    "output rank {} does not match subscript rank {}",
-                    output_shape.len(),
-                    self.subscripts.output.len()
-                ),
-            });
+            return Err(TensorError::rank_mismatch(
+                "einsum",
+                self.subscripts.output.len(),
+                output_shape.len(),
+            ));
         }
         Ok(vec![(
             promote_dtypes(input_dtypes.iter().copied()),
@@ -934,10 +931,11 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
     ctx: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     if inputs.is_empty() {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "einsum_extension",
-            message: "einsum requires at least one input tensor".into(),
-        });
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "einsum_extension",
+            "inputs",
+            "einsum requires at least one input tensor",
+        ));
     }
 
     let shapes: Vec<Vec<usize>> = inputs
@@ -1008,7 +1006,7 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         program_inputs,
         &mut cached.backend_cache,
     )
-    .map_err(|err| tenferro_tensor::Error::backend_failure("einsum_extension", err.to_string()))?;
+    .map_err(|err| tenferro_tensor::Error::backend_source("einsum_extension", err))?;
     if outputs.len() != 1 {
         return Err(tenferro_tensor::Error::backend_failure(
             "einsum_extension",
@@ -1038,10 +1036,11 @@ fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
     }
 
     if inputs.is_empty() {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "einsum_extension",
-            message: "einsum requires at least one input tensor".into(),
-        });
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "einsum_extension",
+            "inputs",
+            "einsum requires at least one input tensor",
+        ));
     }
 
     let shapes: Vec<Vec<usize>> = inputs.iter().map(|input| input.shape().to_vec()).collect();
@@ -1270,7 +1269,7 @@ fn build_runtime_exec_program<B: TensorBackend>(
         &input_shapes,
         compiler_options,
     )
-    .map_err(|err| tenferro_tensor::Error::backend_failure("einsum_extension", err.to_string()))?;
+    .map_err(|err| tenferro_tensor::Error::backend_source("einsum_extension", err))?;
     Ok(CachedRuntimeExecProgram {
         key_data,
         program,

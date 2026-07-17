@@ -167,10 +167,9 @@ fn dynamic_truncate_invalid_axis_returns_tensor_runtime_error() {
 
     assert!(matches!(
         err,
-        tenferro_runtime::Error::TensorRuntime(tenferro_tensor::Error::AxisOutOfBounds {
+        tenferro_runtime::Error::TensorRuntime(tenferro_tensor::Error::Validation {
             op: "DynamicTruncate",
-            axis: 1,
-            rank: 1,
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: 1, rank: 1 },
         })
     ));
 }
@@ -189,10 +188,9 @@ fn pad_to_match_rejects_reference_axis_out_of_bounds_without_panicking() {
 
     assert!(matches!(
         err,
-        tenferro_runtime::Error::TensorRuntime(tenferro_tensor::Error::AxisOutOfBounds {
+        tenferro_runtime::Error::TensorRuntime(tenferro_tensor::Error::Validation {
             op: "PadToMatch",
-            axis: 0,
-            rank: 0,
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: 0, rank: 0 },
         })
     ));
 }

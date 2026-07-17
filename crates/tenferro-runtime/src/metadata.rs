@@ -15,6 +15,7 @@ use tenferro_ops::sym_dim::SymDim;
 use tenferro_tensor::DType;
 use tenferro_tensor::Tensor;
 
+use crate::error::BoxError;
 use crate::shape_constraint::{ScopedShapeConstraint, ShapeConstraintScope};
 use crate::shape_infer::{
     infer_extension_output_meta_with_constraints, infer_output_dtype, infer_output_extents,
@@ -130,19 +131,18 @@ pub fn register_scoped_value_metadata(
     key: ValueKey<StdTensorOp>,
     meta: TensorMeta,
 ) -> Result<GlobalMetadataScope> {
-    register_scoped_global_metadata_batch([(key, meta)])
-        .map_err(|err| metadata_error(err.to_string()))
+    register_scoped_global_metadata_batch([(key, meta)]).map_err(metadata_source)
 }
 
 pub fn register_scoped_metadata_batch(
     entries: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> Result<GlobalMetadataScope> {
-    register_scoped_global_metadata_batch(entries).map_err(|err| metadata_error(err.to_string()))
+    register_scoped_global_metadata_batch(entries).map_err(metadata_source)
 }
 
 pub fn registered_meta(key: &ValueKey<StdTensorOp>) -> Result<TensorMeta> {
     lookup_global_metadata(key)
-        .map_err(|err| metadata_error(err.to_string()))?
+        .map_err(metadata_source)?
         .ok_or_else(|| metadata_error(format!("missing registered metadata for {:?}", key)))
 }
 
@@ -200,8 +200,8 @@ pub fn register_scoped_graph_analysis(
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> Result<RegisteredGraphAnalysis> {
     let analysis = graph_analysis_registrations(graph, None, seeded)?;
-    let metadata = register_scoped_global_metadata_batch(analysis.metadata)
-        .map_err(|err| metadata_error(err.to_string()))?;
+    let metadata =
+        register_scoped_global_metadata_batch(analysis.metadata).map_err(metadata_source)?;
     Ok(RegisteredGraphAnalysis {
         metadata,
         constraints: ShapeConstraintScope::new(analysis.constraints),
@@ -216,7 +216,7 @@ pub fn register_scoped_live_graph_metadata(
     register_scoped_global_metadata_batch(
         graph_analysis_registrations(graph, Some(live_values), seeded)?.metadata,
     )
-    .map_err(|err| metadata_error(err.to_string()))
+    .map_err(metadata_source)
 }
 
 pub fn metadata_scopes_with_new<'a>(
@@ -344,9 +344,7 @@ fn append_graph_metadata_registrations(
             let mut registered_outputs = Vec::with_capacity(op_node.outputs.len());
             for &output_id in &op_node.outputs {
                 let key = graph.values()[output_id].key.clone();
-                let Some(meta) =
-                    lookup_global_metadata(&key).map_err(|err| metadata_error(err.to_string()))?
-                else {
+                let Some(meta) = lookup_global_metadata(&key).map_err(metadata_source)? else {
                     break;
                 };
                 registered_outputs.push((key, meta));
@@ -375,9 +373,7 @@ fn append_graph_metadata_registrations(
                 input_metas.push(meta);
                 continue;
             }
-            if let Some(meta) =
-                lookup_global_metadata(key).map_err(|err| metadata_error(err.to_string()))?
-            {
+            if let Some(meta) = lookup_global_metadata(key).map_err(metadata_source)? {
                 known.insert(key.clone(), meta.clone());
                 registrations.push((key.clone(), meta.clone()));
                 input_metas.push(meta);
@@ -523,7 +519,14 @@ fn resolved_bound_shapes(input_metas: &[TensorMeta]) -> Result<Vec<Vec<SymDim>>>
 }
 
 fn metadata_error(message: impl Into<String>) -> Error {
-    Error::InvalidCompiledGraph {
-        message: format!("metadata registration: {}", message.into()),
+    Error::Internal(format!("metadata registration: {}", message.into()))
+}
+
+fn metadata_source<E>(error: E) -> Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    Error::Metadata {
+        source: Box::new(error) as BoxError,
     }
 }

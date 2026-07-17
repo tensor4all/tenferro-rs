@@ -520,19 +520,21 @@ impl ExtensionOp for FftOp {
         let input_dtype = ctx.input_dtype(0)?;
         let input_shape = ctx.input_shape(0)?;
         if self.axis >= input_shape.len() {
-            return Err(tenferro_tensor::Error::AxisOutOfBounds {
-                op: "tenferro-fft",
-                axis: self.axis,
-                rank: input_shape.len(),
-            });
+            return Err(tenferro_tensor::Error::axis_out_of_bounds(
+                "tenferro-fft",
+                self.axis,
+                input_shape.len(),
+            ));
         }
 
         let mut out_shape = input_shape.to_vec();
         let output_dtype = match self.kind {
             FftKind::C2C { .. } => {
                 if !matches!(input_dtype, DType::C32 | DType::C64) {
-                    return Err(tenferro_tensor::Error::backend_failure(
+                    return Err(tenferro_tensor::Error::unsupported_dtype_conversion(
                         "tenferro-fft",
+                        input_dtype,
+                        input_dtype,
                         format!("unsupported dtype {input_dtype:?} for complex FFT"),
                     ));
                 }
@@ -545,8 +547,10 @@ impl ExtensionOp for FftOp {
                     DType::F32 => DType::C32,
                     DType::F64 => DType::C64,
                     _ => {
-                        return Err(tenferro_tensor::Error::backend_failure(
+                        return Err(tenferro_tensor::Error::unsupported_dtype_conversion(
                             "tenferro-fft",
+                            input_dtype,
+                            input_dtype,
                             format!("unsupported dtype {input_dtype:?} for real FFT"),
                         ));
                     }
@@ -558,8 +562,10 @@ impl ExtensionOp for FftOp {
                     DType::C32 => DType::F32,
                     DType::C64 => DType::F64,
                     _ => {
-                        return Err(tenferro_tensor::Error::backend_failure(
+                        return Err(tenferro_tensor::Error::unsupported_dtype_conversion(
                             "tenferro-fft",
+                            input_dtype,
+                            input_dtype,
                             format!("unsupported dtype {input_dtype:?} for inverse real FFT"),
                         ));
                     }
@@ -587,10 +593,11 @@ impl HostReference for FftOp {
 
 fn execute_host_fft_op(op: &FftOp, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
     if inputs.len() != 1 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "tenferro-fft",
-            message: format!("expected 1 input, got {}", inputs.len()),
-        });
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "tenferro-fft",
+            "inputs",
+            format!("expected 1 input, got {}", inputs.len()),
+        ));
     }
     validate_host_fft_input(fft_op_name(op.kind), inputs[0])?;
 
@@ -628,15 +635,15 @@ fn execute_host_fft_op(op: &FftOp, inputs: &[&Tensor]) -> tenferro_tensor::Resul
             execute_c2r(input, op.axis, op.n, op.norm)?,
         )?),
         (kind, other) => {
-            return Err(tenferro_tensor::Error::DTypeMismatch {
-                op: match kind {
+            return Err(tenferro_tensor::Error::dtype_mismatch(
+                match kind {
                     FftKind::C2C { .. } => "fft",
                     FftKind::R2C { .. } => "rfft",
                     FftKind::C2R => "irfft",
                 },
-                lhs: expected_dtype_for(kind),
-                rhs: other.dtype(),
-            });
+                expected_dtype_for(kind),
+                other.dtype(),
+            ));
         }
     };
     Ok(vec![output])
@@ -669,10 +676,11 @@ fn execute_concrete_fft_read_op<B: TensorBackend>(
 
 fn single_fft_output(mut outputs: Vec<Tensor>) -> tenferro_tensor::Result<Tensor> {
     if outputs.len() != 1 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "tenferro-fft",
-            message: format!("expected 1 FFT output, got {}", outputs.len()),
-        });
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "tenferro-fft",
+            "outputs",
+            format!("expected 1 FFT output, got {}", outputs.len()),
+        ));
     }
     Ok(outputs.remove(0))
 }
@@ -791,10 +799,7 @@ fn tensor_fft_config_error(
     op: &'static str,
     message: impl std::fmt::Display,
 ) -> tenferro_tensor::Error {
-    tenferro_tensor::Error::InvalidConfig {
-        op,
-        message: message.to_string(),
-    }
+    tenferro_tensor::Error::invalid_argument(op, "configuration", message.to_string())
 }
 
 fn tensor_placement(input: &Tensor) -> &Placement {
@@ -1381,10 +1386,11 @@ fn validate_resolved_transform_len(
 }
 
 fn fft_config_error(op: &'static str, message: impl std::fmt::Display) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+    Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
         op,
-        message: message.to_string(),
-    })
+        "configuration",
+        message.to_string(),
+    ))
 }
 
 fn transform_len_dim(n: Option<usize>, input_dim: &SymDim) -> SymDim {
@@ -1458,10 +1464,11 @@ fn output_shape_c2r(
         None => default_c2r_output_len(input_len)?,
     };
     if len == 0 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "irfft",
-            message: "output length must be positive".to_string(),
-        });
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "irfft",
+            "output length",
+            "must be positive",
+        ));
     }
     validate_c2r_spectrum_len(input_len, len)?;
     let mut out_shape = shape.to_vec();
@@ -1473,10 +1480,11 @@ fn output_dim_c2r(input_dim: &SymDim, n: Option<usize>) -> tenferro_tensor::Resu
     match (input_dim.constant_value(), n) {
         (Some(input_len), Some(output_len)) => {
             if output_len == 0 {
-                return Err(tenferro_tensor::Error::InvalidConfig {
-                    op: "irfft",
-                    message: "output length must be positive".to_string(),
-                });
+                return Err(tenferro_tensor::Error::invalid_argument(
+                    "irfft",
+                    "output length",
+                    "must be positive",
+                ));
             }
             validate_c2r_spectrum_len(input_len, output_len)?;
             Ok(SymDim::from(output_len))
@@ -1484,10 +1492,11 @@ fn output_dim_c2r(input_dim: &SymDim, n: Option<usize>) -> tenferro_tensor::Resu
         (Some(input_len), None) => Ok(SymDim::from(default_c2r_output_len(input_len)?)),
         (None, Some(output_len)) => {
             if output_len == 0 {
-                return Err(tenferro_tensor::Error::InvalidConfig {
-                    op: "irfft",
-                    message: "output length must be positive".to_string(),
-                });
+                return Err(tenferro_tensor::Error::invalid_argument(
+                    "irfft",
+                    "output length",
+                    "must be positive",
+                ));
             }
             Ok(SymDim::from(output_len))
         }
@@ -1497,17 +1506,21 @@ fn output_dim_c2r(input_dim: &SymDim, n: Option<usize>) -> tenferro_tensor::Resu
 
 fn default_c2r_output_len(input_len: usize) -> tenferro_tensor::Result<usize> {
     if input_len == 0 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "irfft",
-            message: "input spectrum axis length must be positive".to_string(),
-        });
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "irfft",
+            "input spectrum axis length",
+            "must be positive",
+        ));
     }
     input_len
         .checked_sub(1)
         .and_then(|len| len.checked_mul(2))
-        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-            op: "irfft",
-            message: "default output length overflows usize".to_string(),
+        .ok_or_else(|| {
+            tenferro_tensor::Error::invalid_argument(
+                "irfft",
+                "default output length",
+                "overflows usize",
+            )
         })
 }
 
@@ -1517,12 +1530,13 @@ fn validate_c2r_spectrum_len(
 ) -> tenferro_tensor::Result<usize> {
     let expected = output_len / 2 + 1;
     if input_len != expected {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "irfft",
-            message: format!(
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "irfft",
+            "spectrum",
+            format!(
                 "one-sided spectrum axis length mismatch: expected {expected} for output length {output_len}, got {input_len}"
             ),
-        });
+        ));
     }
     Ok(expected)
 }
@@ -1531,21 +1545,22 @@ fn transform_len(shape: &[usize], axis: usize, n: Option<usize>) -> tenferro_ten
     validate_axis("fft", shape, axis)?;
     let len = n.unwrap_or(shape[axis]);
     if len == 0 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "fft",
-            message: "transform length must be positive".to_string(),
-        });
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "fft",
+            "transform length",
+            "must be positive",
+        ));
     }
     Ok(len)
 }
 
 fn validate_axis(op: &'static str, shape: &[usize], axis: usize) -> tenferro_tensor::Result<()> {
     if axis >= shape.len() {
-        return Err(tenferro_tensor::Error::AxisOutOfBounds {
+        return Err(tenferro_tensor::Error::axis_out_of_bounds(
             op,
             axis,
-            rank: shape.len(),
-        });
+            shape.len(),
+        ));
     }
     Ok(())
 }
@@ -1558,9 +1573,12 @@ fn checked_shape_product(
     shape
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
-        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-            op,
-            message: format!("{role} shape product overflows usize"),
+        .ok_or_else(|| {
+            tenferro_tensor::Error::invalid_argument(
+                op,
+                "shape product",
+                format!("{role} shape product overflows usize"),
+            )
         })
 }
 
@@ -1570,11 +1588,13 @@ fn checked_mul(
     lhs: usize,
     rhs: usize,
 ) -> tenferro_tensor::Result<usize> {
-    lhs.checked_mul(rhs)
-        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+    lhs.checked_mul(rhs).ok_or_else(|| {
+        tenferro_tensor::Error::invalid_argument(
             op,
-            message: format!("{role} overflows usize"),
-        })
+            "arithmetic",
+            format!("{role} overflows usize"),
+        )
+    })
 }
 
 fn checked_add(
@@ -1583,11 +1603,13 @@ fn checked_add(
     lhs: usize,
     rhs: usize,
 ) -> tenferro_tensor::Result<usize> {
-    lhs.checked_add(rhs)
-        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+    lhs.checked_add(rhs).ok_or_else(|| {
+        tenferro_tensor::Error::invalid_argument(
             op,
-            message: format!("{role} overflows usize"),
-        })
+            "arithmetic",
+            format!("{role} overflows usize"),
+        )
+    })
 }
 
 fn uninit_output_vec<T>(len: usize) -> Vec<MaybeUninit<T>> {
@@ -1842,9 +1864,12 @@ fn scale_for<T>(norm: FftNorm, forward: bool, n: usize) -> tenferro_tensor::Resu
 where
     T: Float + FromPrimitive,
 {
-    let len = T::from_usize(n).ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-        op: "tenferro_fft::scale_for",
-        message: format!("FFT length {n} cannot be represented as scalar"),
+    let len = T::from_usize(n).ok_or_else(|| {
+        tenferro_tensor::Error::invalid_argument(
+            "tenferro_fft::scale_for",
+            "FFT length",
+            format!("{n} cannot be represented as scalar"),
+        )
     })?;
     Ok(match (norm, forward) {
         (FftNorm::Backward, true) | (FftNorm::Forward, false) => T::one(),

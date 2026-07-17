@@ -1271,10 +1271,11 @@ fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
 
 fn checked_default_element_count(shape: &[usize]) -> Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim)
-            .ok_or_else(|| Error::InvalidCompiledGraph {
-                message: format!("deferred zero shape product overflows usize for shape {shape:?}"),
-            })
+        acc.checked_mul(dim).ok_or_else(|| {
+            Error::Internal(format!(
+                "deferred zero shape product overflows usize for shape {shape:?}"
+            ))
+        })
     })
 }
 

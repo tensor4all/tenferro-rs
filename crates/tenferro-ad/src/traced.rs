@@ -19,7 +19,7 @@ use tenferro_runtime::ad_support::{
     resolve_roots as tensor_resolve_roots, shape_hint as tensor_shape_hint, tensor_from_parts,
     tensor_meta_from_tensor, ConstraintScopeTransfer, RegisteredGraphAnalysis, TracedTensorParts,
 };
-use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor};
+use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::TensorBackend;
 use tidu::{linear_transpose, linearize, ADRuleError};
 
@@ -624,14 +624,14 @@ fn jvp_optional_impl(
         return Ok(None);
     };
     let tangent_input_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1)?;
-    let tangent_data =
-        tangent
-            .attached_data()
-            .cloned()
-            .ok_or_else(|| Error::InvalidGraphBuild {
-                op: "jvp",
-                message: "jvp tangent must have concrete tensor data".to_string(),
-            })?;
+    let tangent_data = tangent.attached_data().cloned().ok_or_else(|| {
+        Error::invalid_argument(
+            "jvp",
+            ErrorPhase::GraphBuild,
+            "tangent",
+            "jvp tangent must have concrete tensor data",
+        )
+    })?;
     let analysis = register_scoped_graph_analysis(
         linear.as_graph(),
         vec![(
@@ -912,14 +912,14 @@ fn build_vjp_tensor(
 ) -> Result<Option<TracedTensor>> {
     let cotangent_input_key =
         linear_input_key(transposed.as_graph(), transposed.tangent_inputs()[0].1)?;
-    let cotangent_data =
-        cotangent
-            .attached_data()
-            .cloned()
-            .ok_or_else(|| Error::InvalidGraphBuild {
-                op: "vjp",
-                message: "vjp cotangent must have concrete tensor data".to_string(),
-            })?;
+    let cotangent_data = cotangent.attached_data().cloned().ok_or_else(|| {
+        Error::invalid_argument(
+            "vjp",
+            ErrorPhase::GraphBuild,
+            "cotangent",
+            "vjp cotangent must have concrete tensor data",
+        )
+    })?;
     let transposed_analysis = register_scoped_graph_analysis(
         transposed.as_graph(),
         vec![(

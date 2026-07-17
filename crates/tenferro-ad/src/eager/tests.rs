@@ -342,8 +342,12 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for ReadPathFallbackRuntime
         _ctx: &mut ExtensionExecutionContext<'_, B>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         op.host_reference()
-            .ok_or(tenferro_tensor::Error::NoHostReference {
-                family_id: op.family_id(),
+            .ok_or_else(|| {
+                tenferro_tensor::Error::invalid_argument(
+                    "extension",
+                    "host_reference",
+                    format!("family {} has no host reference", op.family_id()),
+                )
             })?
             .execute(inputs)
     }

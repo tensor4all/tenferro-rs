@@ -1,13 +1,15 @@
 use tenferro_tensor::{DType, Tensor};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorPhase, Result};
 
 fn finite_real_scalar(op: &'static str, value: f64) -> Result<f64> {
     if !value.is_finite() {
-        return Err(Error::InvalidGraphBuild {
+        return Err(Error::invalid_argument(
             op,
-            message: format!("real scalar value must be finite, got {value}"),
-        });
+            ErrorPhase::GraphBuild,
+            "value",
+            format!("real scalar value must be finite, got {value}"),
+        ));
     }
     Ok(value)
 }
@@ -19,19 +21,25 @@ pub(crate) fn round_real_to_i64(value: f64) -> Result<i64> {
 pub(crate) fn round_real_to_i64_for_op(op: &'static str, value: f64) -> Result<i64> {
     let rounded = finite_real_scalar(op, value)?.round();
     if rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
-        return Err(Error::InvalidGraphBuild {
+        return Err(Error::invalid_argument(
             op,
-            message: format!("rounded real scalar {rounded} is out of i64 range"),
-        });
+            ErrorPhase::GraphBuild,
+            "value",
+            format!("rounded real scalar {rounded} is out of i64 range"),
+        ));
     }
     Ok(rounded as i64)
 }
 
 pub(crate) fn round_real_to_i32_for_op(op: &'static str, value: f64) -> Result<i32> {
     let rounded = round_real_to_i64_for_op(op, value)?;
-    i32::try_from(rounded).map_err(|_| Error::InvalidGraphBuild {
-        op,
-        message: format!("rounded real scalar {rounded} is out of i32 range"),
+    i32::try_from(rounded).map_err(|_| {
+        Error::invalid_argument(
+            op,
+            ErrorPhase::GraphBuild,
+            "value",
+            format!("rounded real scalar {rounded} is out of i32 range"),
+        )
     })
 }
 

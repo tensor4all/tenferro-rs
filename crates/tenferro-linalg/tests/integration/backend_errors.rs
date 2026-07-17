@@ -9,7 +9,7 @@ use tenferro_tensor::{
     DType, DotGeneralConfig, Error, GatherConfig, MemoryKind, PadConfig, Placement, ScatterConfig,
     SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
     TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
-    TensorView, TypedTensor,
+    TensorView, TypedTensor, ValidationError,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -522,9 +522,9 @@ fn cpu_lu_solve_prepared_restores_vector_rhs_and_validates_inputs() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::DTypeMismatch {
+        Error::Validation {
             op: "lu_solve_prepared",
-            ..
+            source: ValidationError::DTypeMismatch { .. },
         }
     ));
 
@@ -537,9 +537,9 @@ fn cpu_lu_solve_prepared_restores_vector_rhs_and_validates_inputs() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::DTypeMismatch {
+        Error::Validation {
             op: "lu_solve_prepared",
-            ..
+            source: ValidationError::DTypeMismatch { .. },
         }
     ));
 
@@ -569,9 +569,9 @@ fn cpu_lu_solve_prepared_rejects_rank_less_than_two() {
 
     assert!(matches!(
         err,
-        Error::RankMismatch {
+        Error::Validation {
             op: "lu_solve_prepared",
-            ..
+            source: ValidationError::RankMismatch { .. },
         }
     ));
 }
@@ -621,10 +621,9 @@ fn solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
     let err = backend.solve(&f64_a, &c64_b).unwrap_err();
     assert!(matches!(
         err,
-        Error::DTypeMismatch {
+        Error::Validation {
             op: "solve",
-            lhs: DType::F64,
-            rhs: DType::C64,
+            source: ValidationError::DTypeMismatch { .. },
         }
     ));
 
@@ -651,10 +650,9 @@ fn full_piv_lu_solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::DTypeMismatch {
+        Error::Validation {
             op: "full_piv_lu_solve",
-            lhs: DType::F64,
-            rhs: DType::C64,
+            source: ValidationError::DTypeMismatch { .. },
         }
     ));
 
@@ -681,10 +679,12 @@ fn cholesky_rejects_rank_less_than_two_even_when_zero_dim() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::RankMismatch {
+        Error::Validation {
             op: "cholesky",
-            expected: 2,
-            actual: 1,
+            source: ValidationError::RankMismatch {
+                expected: 2,
+                actual: 1,
+            },
         }
     ));
 }
@@ -717,9 +717,9 @@ fn triangular_solve_rejects_batch_mismatch_without_backend_panic() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::ShapeMismatch {
+        Error::Validation {
             op: "triangular_solve",
-            ..
+            source: ValidationError::ShapeMismatch(_),
         }
     ));
 }
@@ -741,9 +741,9 @@ fn full_piv_lu_solve_rejects_batch_mismatch_without_backend_panic() {
     let err = result.unwrap().unwrap_err();
     assert!(matches!(
         err,
-        Error::ShapeMismatch {
+        Error::Validation {
             op: "full_piv_lu_solve",
-            ..
+            source: ValidationError::ShapeMismatch(_),
         }
     ));
 }

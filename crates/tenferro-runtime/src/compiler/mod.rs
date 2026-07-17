@@ -451,9 +451,7 @@ fn lower_scoped_dim_expr(
 }
 
 fn invalid_compiled_graph(message: impl Into<String>) -> Error {
-    Error::InvalidCompiledGraph {
-        message: message.into(),
-    }
+    Error::Internal(message.into())
 }
 
 fn missing_slot_meta(kind: &'static str, slot: usize) -> Error {

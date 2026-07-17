@@ -62,7 +62,7 @@ fn test_dot_decomposer_missing_slot_metadata_returns_error() {
 
     assert!(matches!(
         err,
-        Error::InvalidCompiledGraph { ref message }
+        Error::Internal(ref message)
             if message.contains("missing shape for slot 2")
     ));
 }
@@ -84,7 +84,7 @@ fn test_dot_decomposer_mismatched_batch_dim_count_returns_error() {
 
     assert!(matches!(
         err,
-        Error::InvalidCompiledGraph { ref message }
+        Error::Internal(ref message)
             if message.contains("lhs batch dim count 1")
     ));
 }

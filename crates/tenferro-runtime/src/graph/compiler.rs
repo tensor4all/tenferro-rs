@@ -649,9 +649,7 @@ fn prune_compiled_extension_outputs(prog: &mut CompiledProgram<StdTensorOp>) -> 
 }
 
 fn invalid_compiled_graph(message: impl Into<String>) -> Error {
-    Error::InvalidCompiledGraph {
-        message: message.into(),
-    }
+    Error::Internal(message.into())
 }
 
 fn default_tensors_equivalent(lhs: &Arc<Tensor>, rhs: &Arc<Tensor>) -> bool {

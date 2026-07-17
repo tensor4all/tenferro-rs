@@ -13,7 +13,7 @@ use tenferro_runtime::{
     HostReferenceRuntime,
 };
 use tenferro_tensor::{
-    BackendSessionHost, Buffer, BufferHandle, DType, MemoryKind, Placement, Tensor,
+    BackendSessionHost, Buffer, BufferHandle, DType, ErrorKind, MemoryKind, Placement, Tensor,
     TensorOwnedView, TensorRead, TypedTensor,
 };
 
@@ -300,8 +300,11 @@ fn host_reference_runtime_reports_backend_only_family() {
 
     assert!(matches!(
         err,
-        tenferro_tensor::Error::NoHostReference {
-            family_id: "runtime.backend-only.v1"
+        tenferro_tensor::Error::Extension {
+            op: "extension",
+            family: "runtime.backend-only.v1",
+            kind: ErrorKind::Unsupported,
+            ..
         }
     ));
 }

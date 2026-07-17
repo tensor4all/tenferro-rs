@@ -1155,11 +1155,7 @@ impl LinalgBackend for CpuBackend {
         ensure_supported_linalg_pair(OP, a, b)?;
         ensure_supported_linalg_pair(OP, a, packed_lu)?;
         if !matches!(pivots, Tensor::I32(_)) {
-            return Err(Error::DTypeMismatch {
-                op: OP,
-                lhs: DType::I32,
-                rhs: pivots.dtype(),
-            });
+            return Err(Error::dtype_mismatch(OP, DType::I32, pivots.dtype()));
         }
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
             return zeros_like_tensor(b);
@@ -1322,11 +1318,7 @@ fn ensure_supported_linalg_pair(
     rhs: &Tensor,
 ) -> tenferro_tensor::Result<()> {
     if lhs.dtype() != rhs.dtype() {
-        return Err(Error::DTypeMismatch {
-            op,
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        });
+        return Err(Error::dtype_mismatch(op, lhs.dtype(), rhs.dtype()));
     }
     match lhs {
         Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_) => Ok(()),
@@ -1346,9 +1338,8 @@ fn checked_product(
     shape: &[usize],
 ) -> tenferro_tensor::Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim).ok_or_else(|| Error::InvalidConfig {
-            op,
-            message: format!("{role} element count overflow"),
+        acc.checked_mul(dim).ok_or_else(|| {
+            Error::invalid_argument(op, "shape", format!("{role} element count overflow"))
         })
     })
 }
@@ -1365,10 +1356,7 @@ fn checked_batch_offset(
 ) -> tenferro_tensor::Result<usize> {
     batch
         .checked_mul(stride)
-        .ok_or_else(|| Error::InvalidConfig {
-            op,
-            message: format!("{role} overflows usize"),
-        })
+        .ok_or_else(|| Error::invalid_argument(op, "shape", format!("{role} overflows usize")))
 }
 
 fn batched_vector_rhs_shape(a: &Tensor, b: &Tensor) -> Option<Vec<usize>> {
@@ -1560,11 +1548,11 @@ fn apply_lu_pivots_cpu(
     inverse: bool,
 ) -> tenferro_tensor::Result<Tensor> {
     let Tensor::I32(pivots) = pivots else {
-        return Err(Error::DTypeMismatch {
-            op: "lu_solve_prepared",
-            lhs: DType::I32,
-            rhs: pivots.dtype(),
-        });
+        return Err(Error::dtype_mismatch(
+            "lu_solve_prepared",
+            DType::I32,
+            pivots.dtype(),
+        ));
     };
     match input {
         Tensor::F32(t) => apply_lu_pivots_typed(t, pivots, inverse).map(Tensor::F32),
@@ -1584,21 +1572,17 @@ fn apply_lu_pivots_typed<T: Clone>(
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let shape = input.shape();
     if shape.len() < 2 {
-        return Err(Error::RankMismatch {
-            op: "lu_solve_prepared",
-            expected: 2,
-            actual: shape.len(),
-        });
+        return Err(Error::rank_mismatch("lu_solve_prepared", 2, shape.len()));
     }
     let rows = shape[0];
     let cols = shape[1];
     let k = pivots.shape()[0];
     if k > rows || pivots.shape()[1..] != shape[2..] {
-        return Err(Error::ShapeMismatch {
-            op: "lu_solve_prepared",
-            lhs: pivots.shape().to_vec(),
-            rhs: shape.to_vec(),
-        });
+        return Err(Error::shape_mismatch(
+            "lu_solve_prepared",
+            pivots.shape().to_vec(),
+            shape.to_vec(),
+        ));
     }
     let batch_total = batch_count("lu_solve_prepared", &shape[2..])?;
     let matrix_stride = checked_product("lu_solve_prepared", "matrix shape", &[rows, cols])?;
@@ -1667,37 +1651,34 @@ fn validate_lu_solve_prepared_shapes(
     let n = square_matrix_dim("lu_solve_prepared", lu_shape)?;
     let (b_rows, _) = matrix_dims("lu_solve_prepared", b_shape)?;
     if b_rows != n {
-        return Err(Error::InvalidConfig {
-            op: "lu_solve_prepared",
-            message: format!("rhs row count mismatch: expected {n}, got {b_rows}"),
-        });
+        return Err(Error::invalid_argument(
+            "lu_solve_prepared",
+            "rhs rows",
+            format!("expected {n}, got {b_rows}"),
+        ));
     }
     if lu_shape[2..] != b_shape[2..] {
-        return Err(Error::ShapeMismatch {
-            op: "lu_solve_prepared",
-            lhs: lu_shape.to_vec(),
-            rhs: b_shape.to_vec(),
-        });
+        return Err(Error::shape_mismatch(
+            "lu_solve_prepared",
+            lu_shape.to_vec(),
+            b_shape.to_vec(),
+        ));
     }
     let mut expected_pivots = vec![n];
     expected_pivots.extend_from_slice(&lu_shape[2..]);
     if pivots_shape != expected_pivots {
-        return Err(Error::ShapeMismatch {
-            op: "lu_solve_prepared",
-            lhs: expected_pivots,
-            rhs: pivots_shape.to_vec(),
-        });
+        return Err(Error::shape_mismatch(
+            "lu_solve_prepared",
+            expected_pivots,
+            pivots_shape.to_vec(),
+        ));
     }
     Ok(())
 }
 
 fn matrix_dims(op: &'static str, shape: &[usize]) -> tenferro_tensor::Result<(usize, usize)> {
     if shape.len() < 2 {
-        return Err(Error::RankMismatch {
-            op,
-            expected: 2,
-            actual: shape.len(),
-        });
+        return Err(Error::rank_mismatch(op, 2, shape.len()));
     }
     Ok((shape[0], shape[1]))
 }
@@ -1705,11 +1686,7 @@ fn matrix_dims(op: &'static str, shape: &[usize]) -> tenferro_tensor::Result<(us
 fn square_matrix_dim(op: &'static str, shape: &[usize]) -> tenferro_tensor::Result<usize> {
     let (rows, cols) = matrix_dims(op, shape)?;
     if rows != cols {
-        return Err(Error::ShapeMismatch {
-            op,
-            lhs: vec![rows],
-            rhs: vec![cols],
-        });
+        return Err(Error::shape_mismatch(op, vec![rows], vec![cols]));
     }
     Ok(rows)
 }
@@ -1718,10 +1695,11 @@ fn square_matrix_dim(op: &'static str, shape: &[usize]) -> tenferro_tensor::Resu
 // may not compile a direct call site.
 #[allow(dead_code)]
 fn unsupported_provider(op: &'static str, kind: CpuBackendKind) -> Error {
-    Error::InvalidConfig {
+    Error::invalid_argument(
         op,
-        message: format!("CPU linalg provider {kind:?} is not compiled in"),
-    }
+        "provider",
+        format!("CPU linalg provider {kind:?} is not compiled in"),
+    )
 }
 
 fn unsupported_pair(
@@ -1730,11 +1708,7 @@ fn unsupported_pair(
     rhs: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {
     if lhs.dtype() != rhs.dtype() {
-        Err(Error::DTypeMismatch {
-            op,
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        })
+        Err(Error::dtype_mismatch(op, lhs.dtype(), rhs.dtype()))
     } else {
         Err(unsupported_dtype(op, lhs.dtype()))
     }

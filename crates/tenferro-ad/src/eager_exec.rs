@@ -255,24 +255,26 @@ fn extension_error(
 }
 
 fn missing_extension_executor_error(ext: &dyn tenferro_ops::ext_op::ExtensionOp) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-        op: "extension",
-        message: format!(
+    Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+        "extension",
+        "executor",
+        format!(
             "extension op for family_id {:?} requires an ExtensionExecutor; execute through EagerRuntime or register and pass the extension runtime owner",
             ext.family_id()
         ),
-    })
+    ))
 }
 
 fn axis_out_of_bounds(op: &'static str, axis: usize, rank: usize) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::AxisOutOfBounds { op, axis, rank })
+    Error::TensorRuntime(tenferro_tensor::Error::axis_out_of_bounds(op, axis, rank))
 }
 
 fn invalid_config(op: &'static str, message: impl Into<String>) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+    Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
         op,
-        message: message.into(),
-    })
+        "configuration",
+        message,
+    ))
 }
 
 fn pad_to_match_high_padding(target_size: usize, current_size: usize) -> Result<i64> {

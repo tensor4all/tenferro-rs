@@ -723,9 +723,7 @@ fn deferred_zero_factory_errors_follow_metadata_and_guard_validation() {
     assert!(matches!(error, Error::PlaceholderShapeMismatch { .. }));
     assert_counts(&uploads, &dispatches, &sessions, 0, 0, 0);
 
-    let injected_error = || Error::InvalidCompiledGraph {
-        message: "injected deferred-zero factory failure".to_string(),
-    };
+    let injected_error = || Error::Internal("injected deferred-zero factory failure".to_string());
     let (mut backend, _, _, _) = counting_backend();
     let mut factory_calls = 0;
     let error = super::super::materialize_inputs(
@@ -751,7 +749,7 @@ fn deferred_zero_factory_errors_follow_metadata_and_guard_validation() {
         },
     )
     .unwrap_err();
-    assert!(matches!(error, Error::InvalidCompiledGraph { .. }));
+    assert!(matches!(error, Error::Internal(_)));
     assert_eq!(factory_calls, 1);
 }
 

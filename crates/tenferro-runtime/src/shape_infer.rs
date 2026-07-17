@@ -8,8 +8,12 @@ use tenferro_ops::ext_op::{invoke_extension_shape_inference, ExtensionOp};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
 use tenferro_ops::ShapeExtent;
-use tenferro_tensor::{DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig};
+use tenferro_tensor::{
+    DType, DotGeneralConfig, Error as TensorError, GatherConfig, PadConfig, ShapeMismatch,
+    ShapeVec, SliceConfig, ValidationError,
+};
 
+use crate::error::ErrorPhase;
 use crate::shape_constraint::{ConstraintSource, LocalShapeConstraint};
 use crate::{Error, Result};
 
@@ -322,10 +326,10 @@ pub fn infer_output_shapes(
         StdTensorOp::DynamicTruncate { axis } => {
             let shape = require_input(op, input_shapes, 0)?.to_vec();
             if *axis >= shape.len() {
-                return Err(shape_infer_error(format!(
-                    "DynamicTruncate axis {axis} out of bounds for rank {}",
-                    shape.len()
-                )));
+                return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
+                    axis: *axis,
+                    rank: shape.len(),
+                }));
             }
             vec![shape]
         }
@@ -356,10 +360,10 @@ pub fn infer_output_extents(
         StdTensorOp::DynamicTruncate { axis } => {
             let shape = require_input(op, input_shapes, 0)?;
             if *axis >= shape.len() {
-                return Err(shape_infer_error(format!(
-                    "DynamicTruncate axis {axis} out of bounds for rank {}",
-                    shape.len()
-                )));
+                return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
+                    axis: *axis,
+                    rank: shape.len(),
+                }));
             }
             let mut extents: Vec<_> = shape.iter().cloned().map(ShapeExtent::exact).collect();
             extents[*axis] = ShapeExtent::upper_bound(shape[*axis].clone());
@@ -615,21 +619,33 @@ fn broadcast_dim(lhs: DimExpr, rhs: DimExpr) -> Result<DimExpr> {
     match (&lhs, &rhs) {
         (DimExpr::Const(1), _) => Ok(rhs),
         (_, DimExpr::Const(1)) => Ok(lhs),
-        (DimExpr::Const(lhs_value), DimExpr::Const(rhs_value)) => Err(shape_infer_error(format!(
-            "incompatible Add/Mul broadcast dimensions: {lhs_value} and {rhs_value}"
-        ))),
+        (DimExpr::Const(lhs_value), DimExpr::Const(rhs_value)) => {
+            Err(shape_infer_validation(ShapeMismatch::IncompatibleShapes {
+                lhs: ShapeVec::from_vec(vec![*lhs_value]),
+                rhs: ShapeVec::from_vec(vec![*rhs_value]),
+            }))
+        }
         _ => Ok(dim_max(lhs, rhs)),
     }
 }
 
 fn shape_infer_error(message: impl Into<String>) -> Error {
-    Error::InvalidCompiledGraph {
-        message: message.into(),
-    }
+    Error::Internal(format!("shape inference failed: {}", message.into()))
 }
 
-fn shape_infer_from_tensor_error(err: tenferro_tensor::Error) -> Error {
-    shape_infer_error(err.to_string())
+fn shape_infer_validation(source: impl Into<ValidationError>) -> Error {
+    Error::validation("shape_infer", ErrorPhase::Compile, source.into())
+}
+
+fn shape_infer_invalid_argument(argument: &'static str, message: impl Into<String>) -> Error {
+    Error::invalid_argument("shape_infer", ErrorPhase::Compile, argument, message)
+}
+
+fn shape_infer_from_tensor_error(err: TensorError) -> Error {
+    match err {
+        TensorError::Validation { source, .. } => shape_infer_validation(source),
+        other => Error::TensorRuntime(other),
+    }
 }
 
 fn extract_diag_shape(
@@ -638,13 +654,16 @@ fn extract_diag_shape(
     axis_b: usize,
 ) -> Result<Vec<DimExpr>> {
     if axis_a >= input_shape.len() || axis_b >= input_shape.len() {
-        return Err(shape_infer_error(format!(
-            "ExtractDiag axes ({axis_a}, {axis_b}) out of bounds for rank {}",
-            input_shape.len()
-        )));
+        return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
+            axis: axis_a.max(axis_b),
+            rank: input_shape.len(),
+        }));
     }
     if axis_a == axis_b {
-        return Err(shape_infer_error("ExtractDiag requires distinct axes"));
+        return Err(shape_infer_validation(ValidationError::DuplicateAxis {
+            axis: axis_a,
+            role: "diagonal",
+        }));
     }
     let diag_output_axis = if axis_a < axis_b { axis_a } else { axis_a - 1 };
     let diag_dim = dim_min(input_shape[axis_a].clone(), input_shape[axis_b].clone());
@@ -656,16 +675,19 @@ fn extract_diag_shape(
 
 fn embed_diag_shape(input_shape: &[DimExpr], axis_a: usize, axis_b: usize) -> Result<Vec<DimExpr>> {
     if axis_a >= input_shape.len() {
-        return Err(shape_infer_error(format!(
-            "EmbedDiag axis_a {axis_a} out of bounds for rank {}",
-            input_shape.len()
-        )));
+        return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
+            axis: axis_a,
+            rank: input_shape.len(),
+        }));
     }
     if axis_b > input_shape.len() {
-        return Err(shape_infer_error(format!(
-            "EmbedDiag axis_b {axis_b} out of bounds for rank {}",
-            input_shape.len()
-        )));
+        return Err(shape_infer_validation(ValidationError::InvalidArgument {
+            argument: "axis_b",
+            message: format!(
+                "axis {axis_b} out of bounds for rank {} insertion",
+                input_shape.len()
+            ),
+        }));
     }
     let mut output_shape = input_shape.to_vec();
     output_shape.insert(axis_b, input_shape[axis_a].clone());
@@ -681,7 +703,7 @@ fn dot_general_shape(
     let rhs_rank = rhs_shape.len();
     config
         .validate_dims_with_ranks(lhs_rank, rhs_rank)
-        .map_err(|err| shape_infer_error(err.to_string()))?;
+        .map_err(shape_infer_from_tensor_error)?;
 
     let lhs_free = (0..lhs_rank).filter(|axis| {
         !config.lhs_contracting_dims.contains(axis) && !config.lhs_batch_dims.contains(axis)
@@ -732,18 +754,17 @@ fn gather_shape_from_slice_sizes(
     slice_sizes: &[DimExpr],
 ) -> Result<Vec<DimExpr>> {
     if slice_sizes.len() != operand_shape.len() {
-        return Err(shape_infer_error(format!(
-            "gather: slice_sizes rank mismatch: got {}, expected {}",
-            slice_sizes.len(),
-            operand_shape.len()
-        )));
+        return Err(shape_infer_validation(ValidationError::RankMismatch {
+            expected: operand_shape.len(),
+            actual: slice_sizes.len(),
+        }));
     }
     validate_gather_slice_sizes_within_operand(operand_shape, slice_sizes)?;
     if index_vector_dim > index_shape.len() {
-        return Err(shape_infer_error(format!(
-            "gather: index_vector_dim {index_vector_dim} out of bounds for index rank {}",
-            index_shape.len()
-        )));
+        return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
+            axis: index_vector_dim,
+            rank: index_shape.len(),
+        }));
     }
     ensure_unique_axes("gather", "offset_dims", offset_dims)?;
     ensure_unique_axes("gather", "collapsed_slice_dims", collapsed_slice_dims)?;
@@ -751,10 +772,15 @@ fn gather_shape_from_slice_sizes(
         .iter()
         .any(|&axis| axis >= operand_shape.len())
     {
-        return Err(shape_infer_error(format!(
-            "gather: collapsed_slice_dims {collapsed_slice_dims:?} out of bounds for operand rank {}",
-            operand_shape.len()
-        )));
+        let axis = collapsed_slice_dims
+            .iter()
+            .copied()
+            .find(|&axis| axis >= operand_shape.len())
+            .unwrap_or(operand_shape.len());
+        return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
+            axis,
+            rank: operand_shape.len(),
+        }));
     }
 
     let batch_shape = if index_vector_dim == index_shape.len() {
@@ -771,11 +797,10 @@ fn gather_shape_from_slice_sizes(
         .filter(|dim| !collapsed_slice_dims.contains(dim))
         .collect();
     if offset_dims.len() != window_dims.len() {
-        return Err(shape_infer_error(format!(
-            "gather: offset_dims length mismatch: got {}, expected {}",
-            offset_dims.len(),
-            window_dims.len()
-        )));
+        return Err(shape_infer_validation(ValidationError::RankMismatch {
+            expected: window_dims.len(),
+            actual: offset_dims.len(),
+        }));
     }
 
     let out_rank = batch_shape.len() + offset_dims.len();
@@ -783,9 +808,10 @@ fn gather_shape_from_slice_sizes(
     let mut out_axis_to_operand_dim = vec![None; out_rank];
     for (offset_axis, &out_axis) in offset_dims.iter().enumerate() {
         let Some(target) = out_axis_to_operand_dim.get_mut(out_axis) else {
-            return Err(shape_infer_error(format!(
-                "gather: offset_dim {out_axis} out of bounds for output rank {out_rank}"
-            )));
+            return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
+                axis: out_axis,
+                rank: out_rank,
+            }));
         };
         *target = Some(window_dims[offset_axis]);
     }
@@ -807,12 +833,13 @@ fn validate_gather_slice_sizes_within_operand(
     operand_shape: &[DimExpr],
     slice_sizes: &[DimExpr],
 ) -> Result<()> {
-    for (axis, (slice_size, dim_size)) in slice_sizes.iter().zip(operand_shape).enumerate() {
+    for (_axis, (slice_size, dim_size)) in slice_sizes.iter().zip(operand_shape).enumerate() {
         if let (DimExpr::Const(slice_size), DimExpr::Const(dim_size)) = (slice_size, dim_size) {
             if slice_size > dim_size {
-                return Err(shape_infer_error(format!(
-                    "gather: slice_sizes[{axis}]={slice_size} exceeds operand dimension {dim_size}"
-                )));
+                return Err(shape_infer_validation(ShapeMismatch::ExpectedActual {
+                    expected: ShapeVec::from_vec(vec![*dim_size]),
+                    actual: ShapeVec::from_vec(vec![*slice_size]),
+                }));
             }
         }
     }
@@ -822,9 +849,11 @@ fn validate_gather_slice_sizes_within_operand(
 fn ensure_unique_axes(op: &'static str, role: &'static str, axes: &[usize]) -> Result<()> {
     for (idx, &axis) in axes.iter().enumerate() {
         if axes[..idx].contains(&axis) {
-            return Err(shape_infer_error(format!(
-                "{op}: duplicate {role} axis {axis}"
-            )));
+            return Err(Error::validation(
+                op,
+                ErrorPhase::Compile,
+                ValidationError::DuplicateAxis { axis, role },
+            ));
         }
     }
     Ok(())
@@ -833,27 +862,26 @@ fn ensure_unique_axes(op: &'static str, role: &'static str, axes: &[usize]) -> R
 fn slice_shape(input_shape: &[DimExpr], config: &SliceConfig) -> Result<Vec<DimExpr>> {
     let rank = input_shape.len();
     if config.starts.len() != rank || config.limits.len() != rank || config.strides.len() != rank {
-        return Err(shape_infer_error(format!(
-            "slice: config rank mismatch for rank {rank}: starts={}, limits={}, strides={}",
-            config.starts.len(),
-            config.limits.len(),
-            config.strides.len()
-        )));
+        return Err(shape_infer_validation(ValidationError::RankMismatch {
+            expected: rank,
+            actual: config.starts.len(),
+        }));
     }
     (0..rank)
         .map(|axis| {
             let span = config.limits[axis]
                 .checked_sub(config.starts[axis])
                 .ok_or_else(|| {
-                    shape_infer_error(format!(
-                        "slice: limit {} is smaller than start {} on axis {axis}",
-                        config.limits[axis], config.starts[axis]
-                    ))
+                    shape_infer_validation(ValidationError::InvalidSliceBounds {
+                        start: config.starts[axis] as isize,
+                        end: config.limits[axis] as isize,
+                        axis_len: usize::MAX,
+                    })
                 })?;
             if config.strides[axis] == 0 {
-                return Err(shape_infer_error(format!(
-                    "slice: stride must be non-zero on axis {axis}"
-                )));
+                return Err(shape_infer_validation(ValidationError::InvalidSliceStep {
+                    step: 0,
+                }));
             }
             Ok(DimExpr::Const(span.div_ceil(config.strides[axis])))
         })
@@ -866,12 +894,10 @@ fn pad_shape(input_shape: &[DimExpr], config: &PadConfig) -> Result<Vec<DimExpr>
         || config.edge_padding_high.len() != rank
         || config.interior_padding.len() != rank
     {
-        return Err(shape_infer_error(format!(
-            "pad: config rank mismatch for rank {rank}: low={}, high={}, interior={}",
-            config.edge_padding_low.len(),
-            config.edge_padding_high.len(),
-            config.interior_padding.len()
-        )));
+        return Err(shape_infer_validation(ValidationError::RankMismatch {
+            expected: rank,
+            actual: config.edge_padding_low.len(),
+        }));
     }
 
     input_shape
@@ -879,9 +905,10 @@ fn pad_shape(input_shape: &[DimExpr], config: &PadConfig) -> Result<Vec<DimExpr>
         .enumerate()
         .map(|(axis, dim)| {
             if config.interior_padding[axis] < 0 {
-                return Err(shape_infer_error(format!(
-                    "pad: interior padding must be non-negative on axis {axis}"
-                )));
+                return Err(shape_infer_validation(ValidationError::InvalidArgument {
+                    argument: "interior_padding",
+                    message: format!("interior padding must be non-negative on axis {axis}"),
+                }));
             }
             if let DimExpr::Const(extent) = dim {
                 let base = if *extent == 0 {
@@ -980,31 +1007,33 @@ fn signed_padding_sum(low: i64, high: i64, axis: usize) -> Result<i64> {
 }
 
 fn concatenate_shape(input_shapes: &[&[DimExpr]], axis: usize) -> Result<Vec<DimExpr>> {
-    let first = input_shapes
-        .first()
-        .copied()
-        .ok_or_else(|| shape_infer_error("concatenate expects at least one input shape"))?;
+    let first = input_shapes.first().copied().ok_or_else(|| {
+        shape_infer_validation(ValidationError::InvalidArgument {
+            argument: "inputs",
+            message: "concatenate expects at least one input shape".into(),
+        })
+    })?;
     if axis >= first.len() {
-        return Err(shape_infer_error(format!(
-            "concatenate axis {axis} out of bounds for rank {}",
-            first.len()
-        )));
+        return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
+            axis,
+            rank: first.len(),
+        }));
     }
     let mut output_shape = first.to_vec();
     let mut axis_dim = first[axis].clone();
     for (input_idx, shape) in input_shapes.iter().enumerate().skip(1) {
         if shape.len() != first.len() {
-            return Err(shape_infer_error(format!(
-                "concatenate input {input_idx} rank mismatch: got {}, expected {}",
-                shape.len(),
-                first.len()
-            )));
+            return Err(shape_infer_validation(ValidationError::RankMismatch {
+                expected: first.len(),
+                actual: shape.len(),
+            }));
         }
         for (dim_idx, (expected, actual)) in first.iter().zip(*shape).enumerate() {
             if dim_idx != axis && actual != expected {
-                return Err(shape_infer_error(format!(
-                    "concatenate dimension mismatch on non-axis dim {dim_idx}: input {input_idx} has {actual:?}, expected {expected:?}"
-                )));
+                return Err(shape_infer_invalid_argument(
+                    "shapes",
+                    format!("input {input_idx} dimension {dim_idx} does not match the first input"),
+                ));
             }
         }
         axis_dim = dim_add(axis_dim, shape[axis].clone())?;
@@ -1019,16 +1048,16 @@ fn pad_to_match_shape(
     axis: usize,
 ) -> Result<Vec<DimExpr>> {
     if axis >= input_shape.len() {
-        return Err(shape_infer_error(format!(
-            "PadToMatch input axis {axis} out of bounds for rank {}",
-            input_shape.len()
-        )));
+        return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
+            axis,
+            rank: input_shape.len(),
+        }));
     }
     if axis >= reference_shape.len() {
-        return Err(shape_infer_error(format!(
-            "PadToMatch reference axis {axis} out of bounds for rank {}",
-            reference_shape.len()
-        )));
+        return Err(shape_infer_validation(ValidationError::AxisOutOfBounds {
+            axis,
+            rank: reference_shape.len(),
+        }));
     }
     let mut output_shape = input_shape.to_vec();
     output_shape[axis] = dim_max(input_shape[axis].clone(), reference_shape[axis].clone());

@@ -26,7 +26,7 @@ use tenferro_ops::SymDim;
 use tenferro_tensor::{Tensor, TensorBackend};
 
 use crate::checkpoint::CheckpointNode;
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorPhase, Result};
 use crate::metadata::{
     register_scoped_graph_analysis, registered_meta, MetadataScopeChain, RegisteredGraphAnalysis,
 };
@@ -126,22 +126,24 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 ///
 /// # Errors
 ///
-/// Returns [`Error::InvalidGraphBuild`] when the extension receives the wrong
-/// number of traced inputs. Canonical metadata inference failures, including a
-/// returned metadata count that differs from [`ExtensionOp::output_count`],
-/// are returned as [`Error::TensorRuntime`] containing
-/// [`tenferro_tensor::Error::InvalidConfig`].
+/// Returns a graph-build validation error when the extension receives the
+/// wrong number of traced inputs. Canonical metadata inference failures,
+/// including a returned metadata count that differs from
+/// [`ExtensionOp::output_count`], are returned as [`Error::TensorRuntime`]
+/// containing the typed tensor validation source.
 pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<TracedTensor>> {
     if inputs.len() != op.input_count() {
-        return Err(Error::InvalidGraphBuild {
-            op: "extension::apply",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "extension::apply",
+            ErrorPhase::GraphBuild,
+            "inputs",
+            format!(
                 "op family {:?} expects {} inputs, got {}",
                 op.family_id(),
                 op.input_count(),
                 inputs.len()
             ),
-        });
+        ));
     }
 
     // Build the carrier graph first; the graph-analysis pass below resolves
@@ -163,12 +165,16 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<T
         .iter()
         .map(|&output| {
             let meta = registered_meta(&graph.values()[output].key)?;
-            let shape = meta.bound_shape().ok_or_else(|| Error::InvalidGraphBuild {
-                op: "extension::apply",
-                message: format!(
-                    "extension family {:?} produced unknown output shape metadata",
-                    op.family_id()
-                ),
+            let shape = meta.bound_shape().ok_or_else(|| {
+                Error::invalid_argument(
+                    "extension::apply",
+                    ErrorPhase::Compile,
+                    "output_metadata",
+                    format!(
+                        "extension family {:?} produced unknown output shape metadata",
+                        op.family_id()
+                    ),
+                )
             })?;
             Ok((meta.dtype, shape))
         })
@@ -225,14 +231,16 @@ pub fn attach_expanded_shape_contract(
     output: TracedTensor,
 ) -> Result<TracedTensor> {
     if op.output_count() != 1 {
-        return Err(Error::InvalidGraphBuild {
-            op: "extension::attach_expanded_shape_contract",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "extension::attach_expanded_shape_contract",
+            ErrorPhase::GraphBuild,
+            "outputs",
+            format!(
                 "extension family {:?} contract expects {} outputs, got one expanded output",
                 op.family_id(),
                 op.output_count(),
             ),
-        });
+        ));
     }
     let (_, inferred) = infer_expanded_shape_contract(op, inputs)?;
     attach_inferred_expanded_shape_contract(inputs, vec![output], inferred)?
@@ -246,15 +254,17 @@ fn infer_expanded_shape_contract(
     inputs: &[&TracedTensor],
 ) -> Result<(ExpandedOutputMetas, InferredExtensionMeta)> {
     if inputs.len() != op.input_count() {
-        return Err(Error::InvalidGraphBuild {
-            op: "extension::infer_expanded_shape_contract",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "extension::infer_expanded_shape_contract",
+            ErrorPhase::GraphBuild,
+            "inputs",
+            format!(
                 "extension family {:?} contract expects {} inputs, got {}",
                 op.family_id(),
                 op.input_count(),
                 inputs.len()
             ),
-        });
+        ));
     }
     let input_dtypes: Vec<_> = inputs.iter().map(|input| input.dtype).collect();
     let input_shapes: Vec<_> = inputs
@@ -299,27 +309,31 @@ fn attach_inferred_expanded_shape_contract(
     inferred: InferredExtensionMeta,
 ) -> Result<Vec<TracedTensor>> {
     if inferred.output_metas.len() != outputs.len() {
-        return Err(Error::InvalidGraphBuild {
-            op: "extension::attach_expanded_shape_contract",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "extension::attach_expanded_shape_contract",
+            ErrorPhase::GraphBuild,
+            "outputs",
+            format!(
                 "extension contract inferred {} outputs, but expanded graph produced {}",
                 inferred.output_metas.len(),
                 outputs.len()
             ),
-        });
+        ));
     }
     for (output, (dtype, local_shape)) in outputs.iter().zip(inferred.output_metas.iter()) {
         if output.dtype != *dtype || output.rank != local_shape.len() {
-            return Err(Error::InvalidGraphBuild {
-                op: "extension::attach_expanded_shape_contract",
-                message: format!(
+            return Err(Error::invalid_argument(
+                "extension::attach_expanded_shape_contract",
+                ErrorPhase::GraphBuild,
+                "outputs",
+                format!(
                     "extension contract inferred output {:?} rank {}, but expanded output is {:?} rank {}",
                     dtype,
                     local_shape.len(),
                     output.dtype,
                     output.rank
                 ),
-            });
+            ));
         }
     }
     if inferred.constraints.is_empty() {
@@ -428,14 +442,16 @@ pub fn apply_expanded_graph(
         .collect();
     let outputs = build(&mut builder, &op_inputs)?;
     if outputs.len() != output_metas.len() {
-        return Err(Error::InvalidGraphBuild {
-            op: "extension::apply_expanded_graph",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "extension::apply_expanded_graph",
+            ErrorPhase::GraphBuild,
+            "outputs",
+            format!(
                 "extension expanded graph returned {} outputs for {} output metadata entries",
                 outputs.len(),
                 output_metas.len()
             ),
-        });
+        ));
     }
     builder.set_outputs(outputs.clone());
     let graph = Arc::new(builder.build());

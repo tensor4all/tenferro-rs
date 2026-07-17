@@ -1375,23 +1375,14 @@ pub(crate) fn tensor_ptr(tensor: &Arc<Tensor>) -> usize {
 
 fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTensor) -> Result<()> {
     if primal.dtype() != seed.dtype() {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op,
-            message: format!(
-                "{op} cotangent dtype must match primal dtype: {:?} vs {:?}",
-                seed.dtype(),
-                primal.dtype()
-            ),
-        }
-        .into());
+        return Err(
+            tenferro_tensor::Error::dtype_mismatch(op, primal.dtype(), seed.dtype()).into(),
+        );
     }
     if primal.shape() != seed.shape() {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op,
-            lhs: primal.shape().to_vec(),
-            rhs: seed.shape().to_vec(),
-        }
-        .into());
+        return Err(
+            tenferro_tensor::Error::shape_mismatch(op, primal.shape(), seed.shape()).into(),
+        );
     }
     Ok(())
 }

@@ -935,30 +935,27 @@ impl ConcreteEinsumPlan {
 
     fn validate_inputs(&self, actual: &[ConcreteEinsumInputSpec], op: &'static str) -> Result<()> {
         if actual.len() != self.inputs.len() {
-            return Err(Error::InvalidConfig {
+            return Err(Error::invalid_argument(
                 op,
-                message: format!(
+                "inputs",
+                format!(
                     "prepared einsum expects {} inputs, got {}",
                     self.inputs.len(),
                     actual.len()
                 ),
-            });
+            ));
         }
 
         for (expected, actual) in self.inputs.iter().zip(actual.iter()) {
             if expected.dtype != actual.dtype {
-                return Err(Error::DTypeMismatch {
-                    op,
-                    lhs: expected.dtype,
-                    rhs: actual.dtype,
-                });
+                return Err(Error::dtype_mismatch(op, expected.dtype, actual.dtype));
             }
             if expected.shape != actual.shape {
-                return Err(Error::ShapeMismatch {
+                return Err(Error::shape_mismatch(
                     op,
-                    lhs: expected.shape.clone(),
-                    rhs: actual.shape.clone(),
-                });
+                    expected.shape.clone(),
+                    actual.shape.clone(),
+                ));
             }
         }
 
@@ -973,9 +970,8 @@ struct ConcreteEinsumInputSpec {
 }
 
 fn parse_subscripts(subscripts: &str, op: &'static str) -> Result<Subscripts> {
-    Subscripts::parse(subscripts).map_err(|err| Error::InvalidConfig {
-        op,
-        message: format!("invalid subscripts: {err}"),
+    Subscripts::parse(subscripts).map_err(|err| {
+        Error::invalid_argument(op, "subscripts", format!("invalid subscripts: {err}"))
     })
 }
 
@@ -1108,18 +1104,14 @@ fn validate_output(
 ) -> Result<()> {
     let expected = output_spec(inputs, tree, op)?;
     if out.dtype() != expected.dtype {
-        return Err(Error::DTypeMismatch {
-            op,
-            lhs: out.dtype(),
-            rhs: expected.dtype,
-        });
+        return Err(Error::dtype_mismatch(op, expected.dtype, out.dtype()));
     }
     if out.shape() != expected.shape.as_slice() {
-        return Err(Error::ShapeMismatch {
+        return Err(Error::shape_mismatch(
             op,
-            lhs: out.shape().to_vec(),
-            rhs: expected.shape,
-        });
+            out.shape().to_vec(),
+            expected.shape.clone(),
+        ));
     }
     Ok(())
 }
@@ -1131,18 +1123,13 @@ fn output_spec(
 ) -> Result<ConcreteEinsumInputSpec> {
     let dtype = inputs
         .first()
-        .ok_or_else(|| Error::InvalidConfig {
-            op,
-            message: "einsum requires at least one input tensor".to_string(),
+        .ok_or_else(|| {
+            Error::invalid_argument(op, "inputs", "einsum requires at least one input tensor")
         })?
         .dtype;
     for input in inputs {
         if input.dtype != dtype {
-            return Err(Error::DTypeMismatch {
-                op,
-                lhs: dtype,
-                rhs: input.dtype,
-            });
+            return Err(Error::dtype_mismatch(op, dtype, input.dtype));
         }
     }
 
@@ -1151,11 +1138,7 @@ fn output_spec(
         let mut found = None;
         for (input, labels) in inputs.iter().zip(tree.subscripts.inputs.iter()) {
             if labels.len() != input.shape.len() {
-                return Err(Error::RankMismatch {
-                    op,
-                    expected: labels.len(),
-                    actual: input.shape.len(),
-                });
+                return Err(Error::rank_mismatch(op, labels.len(), input.shape.len()));
             }
             if let Some(axis) = labels.iter().position(|candidate| *candidate == label) {
                 found = Some(input.shape[axis]);
@@ -1163,10 +1146,11 @@ fn output_spec(
             }
         }
         let Some(extent) = found else {
-            return Err(Error::InvalidConfig {
+            return Err(Error::invalid_argument(
                 op,
-                message: format!("output label {label} is missing from inputs"),
-            });
+                "output labels",
+                format!("output label {label} is missing from inputs"),
+            ));
         };
         output_shape.push(extent);
     }
@@ -1192,9 +1176,5 @@ pub(crate) fn into_typed_result<T: TensorScalar>(
     op: &'static str,
 ) -> Result<TypedTensor<T>> {
     let actual = result.dtype();
-    T::into_typed(result).map_err(|_| Error::DTypeMismatch {
-        op,
-        lhs: T::dtype(),
-        rhs: actual,
-    })
+    T::into_typed(result).map_err(|_| Error::dtype_mismatch(op, T::dtype(), actual))
 }

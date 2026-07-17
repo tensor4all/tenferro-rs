@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{CompareDir, DType, DotGeneralConfig, Error, Result, TracedTensor};
+use tenferro_runtime::{
+    CompareDir, DType, DotGeneralConfig, Error, ErrorPhase, Result, TracedTensor,
+};
 
 use crate::extension::{
     validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
@@ -826,11 +828,9 @@ fn ensure_float_or_complex(op: &'static str, dtype: DType) -> Result<()> {
 
 fn ensure_min_rank(op: &'static str, actual: usize, expected: usize) -> Result<()> {
     if actual < expected {
-        return Err(Error::TensorRuntime(tenferro_tensor::Error::RankMismatch {
-            op,
-            expected,
-            actual,
-        }));
+        return Err(Error::TensorRuntime(tenferro_tensor::Error::rank_mismatch(
+            op, expected, actual,
+        )));
     }
     Ok(())
 }
@@ -839,7 +839,7 @@ fn validate_axes(op: &'static str, rank: usize, axes: &[usize]) -> Result<()> {
     for &axis in axes {
         if axis >= rank {
             return Err(Error::TensorRuntime(
-                tenferro_tensor::Error::AxisOutOfBounds { op, axis, rank },
+                tenferro_tensor::Error::axis_out_of_bounds(op, axis, rank),
             ));
         }
     }
@@ -923,10 +923,12 @@ fn frobenius_norm(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
 
 fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
     if !p.is_finite() || p == 0.0 {
-        return Err(Error::InvalidGraphBuild {
-            op: "norm",
-            message: format!("p-norm order must be finite and nonzero, got {p}"),
-        });
+        return Err(Error::invalid_argument(
+            "norm",
+            ErrorPhase::GraphBuild,
+            "p",
+            format!("p-norm order must be finite and nonzero, got {p}"),
+        ));
     }
     let power = abs.pow(&scalar_real(abs.dtype, p)?)?;
     let inv_p = scalar_real(abs.dtype, 1.0 / p)?;

@@ -736,9 +736,8 @@ fn eval_shape_exprs(
         .iter()
         .map(|tensor| tensor.shape())
         .collect::<Vec<_>>();
-    DimExpr::eval_all(shape, &input_shapes).map_err(|err| Error::InvalidCompiledGraph {
-        message: format!("invalid eager einsum shape expression: {err}"),
-    })
+    DimExpr::eval_all(shape, &input_shapes)
+        .map_err(|err| Error::Internal(format!("invalid eager einsum shape expression: {err}")))
 }
 
 fn slot_tensor(slots: &[Option<EagerTensor>], slot: usize) -> Result<&EagerTensor> {

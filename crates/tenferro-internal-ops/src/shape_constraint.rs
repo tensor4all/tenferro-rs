@@ -1,4 +1,4 @@
-use tenferro_tensor::DType;
+use tenferro_tensor::{DType, ErrorKind, ValidationKind};
 
 use crate::SymDim;
 
@@ -119,19 +119,21 @@ pub enum ExtensionShapeError {
 
 impl From<ExtensionShapeError> for tenferro_tensor::Error {
     fn from(error: ExtensionShapeError) -> Self {
-        // `tenferro_tensor::Error` has no source-carrying extension-config
-        // variant. Keep the context's native error typed, and cross the
-        // ExtensionOp callback boundary through its structured InvalidConfig
-        // carrier while retaining every field in the diagnostic.
-        let op = match &error {
-            ExtensionShapeError::InputOutOfBounds { family_id, .. }
-            | ExtensionShapeError::AxisOutOfBounds { family_id, .. }
-            | ExtensionShapeError::RankMismatch { family_id, .. } => *family_id,
+        let (family_id, kind) = match &error {
+            ExtensionShapeError::InputOutOfBounds { family_id, .. } => (
+                *family_id,
+                ErrorKind::Validation(ValidationKind::InvalidArgument),
+            ),
+            ExtensionShapeError::AxisOutOfBounds { family_id, .. } => (
+                *family_id,
+                ErrorKind::Validation(ValidationKind::AxisOutOfBounds),
+            ),
+            ExtensionShapeError::RankMismatch { family_id, .. } => (
+                *family_id,
+                ErrorKind::Validation(ValidationKind::RankMismatch),
+            ),
         };
-        Self::InvalidConfig {
-            op,
-            message: error.to_string(),
-        }
+        tenferro_tensor::Error::extension("extension", family_id, kind, error)
     }
 }
 

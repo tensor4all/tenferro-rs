@@ -4,10 +4,12 @@ use std::sync::Arc;
 use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueRef};
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{GatherConfig, SliceConfig, Tensor, TypedTensor};
+use tenferro_tensor::{
+    GatherConfig, ShapeMismatch, ShapeVec, SliceConfig, Tensor, TypedTensor, ValidationError,
+};
 
 use crate::checkpoint::CheckpointNode;
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorPhase, Result};
 use crate::metadata::{register_scoped_value_metadata, tensor_meta, MetadataScopeChain};
 use crate::shape_constraint::ConstraintScopeChain;
 use crate::shape_infer::promote_dtypes;
@@ -22,50 +24,66 @@ fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result
     let normalized = if axis >= 0 {
         axis as usize
     } else {
-        rank.checked_sub(axis.unsigned_abs())
-            .ok_or(tenferro_tensor::Error::AxisOutOfBounds {
+        rank.checked_sub(axis.unsigned_abs()).ok_or_else(|| {
+            Error::validation(
                 op,
-                axis: axis.unsigned_abs(),
-                rank,
-            })?
+                ErrorPhase::GraphBuild,
+                ValidationError::AxisOutOfBounds {
+                    axis: axis.unsigned_abs(),
+                    rank,
+                },
+            )
+        })?
     };
     if normalized >= rank {
-        return Err(tenferro_tensor::Error::AxisOutOfBounds {
+        return Err(Error::validation(
             op,
-            axis: axis.unsigned_abs(),
-            rank,
-        }
-        .into());
+            ErrorPhase::GraphBuild,
+            ValidationError::AxisOutOfBounds {
+                axis: axis.unsigned_abs(),
+                rank,
+            },
+        ));
     }
     Ok(normalized)
 }
 
 fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
-    let insert_rank = rank
-        .checked_add(1)
-        .ok_or(tenferro_tensor::Error::AxisOutOfBounds {
+    let insert_rank = rank.checked_add(1).ok_or_else(|| {
+        Error::validation(
             op,
-            axis: axis.unsigned_abs(),
-            rank,
-        })?;
+            ErrorPhase::GraphBuild,
+            ValidationError::AxisOutOfBounds {
+                axis: axis.unsigned_abs(),
+                rank,
+            },
+        )
+    })?;
     let normalized = if axis >= 0 {
         axis as usize
     } else {
-        insert_rank.checked_sub(axis.unsigned_abs()).ok_or(
-            tenferro_tensor::Error::AxisOutOfBounds {
-                op,
+        insert_rank
+            .checked_sub(axis.unsigned_abs())
+            .ok_or_else(|| {
+                Error::validation(
+                    op,
+                    ErrorPhase::GraphBuild,
+                    ValidationError::AxisOutOfBounds {
+                        axis: axis.unsigned_abs(),
+                        rank: insert_rank,
+                    },
+                )
+            })?
+    };
+    if normalized > rank {
+        return Err(Error::validation(
+            op,
+            ErrorPhase::GraphBuild,
+            ValidationError::AxisOutOfBounds {
                 axis: axis.unsigned_abs(),
                 rank: insert_rank,
             },
-        )?
-    };
-    if normalized > rank {
-        return Err(tenferro_tensor::Error::AxisOutOfBounds {
-            op,
-            axis: axis.unsigned_abs(),
-            rank: insert_rank,
-        }
-        .into());
+        ));
     }
     Ok(normalized)
 }
@@ -79,13 +97,16 @@ fn index_select_config(
     let axis_extent = shape[axis];
     for &position in positions {
         if position >= axis_extent {
-            return Err(tenferro_tensor::Error::InvalidConfig {
-                op: "index_select",
-                message: format!(
+            return Err(Error::validation(
+                "index_select",
+                ErrorPhase::GraphBuild,
+                ValidationError::InvalidArgument {
+                    argument: "positions",
+                    message: format!(
                     "position {position} out of bounds for axis {axis} with extent {axis_extent}"
-                ),
-            }
-            .into());
+                    ),
+                },
+            ));
         }
     }
 
@@ -99,12 +120,18 @@ fn index_select_config(
     let index_data = positions
         .iter()
         .map(|&position| {
-            i64::try_from(position).map_err(|_| tenferro_tensor::Error::InvalidConfig {
-                op: "index_select",
-                message: format!("position {position} cannot be represented as i64"),
+            i64::try_from(position).map_err(|_| {
+                Error::validation(
+                    "index_select",
+                    ErrorPhase::GraphBuild,
+                    ValidationError::InvalidArgument {
+                        argument: "positions",
+                        message: format!("position {position} cannot be represented as i64"),
+                    },
+                )
             })
         })
-        .collect::<tenferro_tensor::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
     let indices = Tensor::I64(TypedTensor::from_vec_col_major(
         vec![positions.len(), 1],
         index_data,
@@ -123,20 +150,26 @@ fn index_select_config(
 
 fn validate_stack_shapes(op: &'static str, shapes: &[&[usize]]) -> Result<()> {
     let Some(first) = shapes.first() else {
-        return Err(tenferro_tensor::Error::InvalidConfig {
+        return Err(Error::validation(
             op,
-            message: "stack requires at least one input".into(),
-        }
-        .into());
+            ErrorPhase::GraphBuild,
+            ValidationError::InvalidArgument {
+                argument: "tensors",
+                message: "stack requires at least one input".into(),
+            },
+        ));
     };
     for shape in shapes.iter().skip(1) {
         if *shape != *first {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
+            return Err(Error::validation(
                 op,
-                lhs: first.to_vec(),
-                rhs: shape.to_vec(),
-            }
-            .into());
+                ErrorPhase::GraphBuild,
+                ShapeMismatch::IncompatibleShapes {
+                    lhs: ShapeVec::from_vec(first.to_vec()),
+                    rhs: ShapeVec::from_vec(shape.to_vec()),
+                }
+                .into(),
+            ));
         }
     }
     Ok(())
@@ -156,9 +189,15 @@ enum AxisSelection {
 }
 
 fn concrete_shape_for_axis_slice(tensor: &TracedTensor, op: &'static str) -> Result<Vec<usize>> {
-    try_concrete_shape(tensor).ok_or_else(|| Error::InvalidGraphBuild {
-        op,
-        message: format!("{op} requires a concrete shape hint"),
+    try_concrete_shape(tensor).ok_or_else(|| {
+        Error::validation(
+            op,
+            ErrorPhase::GraphBuild,
+            ValidationError::InvalidArgument {
+                argument: "shape",
+                message: format!("{op} requires a concrete shape hint"),
+            },
+        )
     })
 }
 
@@ -169,15 +208,21 @@ fn validate_axis_selection(
     axis: usize,
 ) -> Result<()> {
     if axis >= rank {
-        return Err(tenferro_tensor::Error::AxisOutOfBounds { op, axis, rank }.into());
+        return Err(Error::validation(
+            op,
+            ErrorPhase::GraphBuild,
+            ValidationError::AxisOutOfBounds { axis, rank },
+        ));
     }
     if seen[axis] {
-        return Err(tenferro_tensor::Error::DuplicateAxis {
+        return Err(Error::validation(
             op,
-            axis,
-            role: "selection",
-        }
-        .into());
+            ErrorPhase::GraphBuild,
+            ValidationError::DuplicateAxis {
+                axis,
+                role: "selection",
+            },
+        ));
     }
     seen[axis] = true;
     Ok(())
@@ -197,22 +242,29 @@ fn apply_slice_axis_config(
             continue;
         };
         if *step == 0 {
-            return Err(tenferro_tensor::Error::InvalidConfig {
+            return Err(Error::validation(
                 op,
-                message: format!("axis {axis} has zero step"),
-            }
-            .into());
+                ErrorPhase::GraphBuild,
+                ValidationError::InvalidSliceStep { step: 0 },
+            ));
         }
         let extent = shape[*axis];
         if range.start > range.end || range.end > extent {
-            return Err(tenferro_tensor::Error::InvalidConfig {
+            let start = isize::try_from(range.start).map_err(|_| {
+                Error::validation(op, ErrorPhase::GraphBuild, ValidationError::IntegerOverflow)
+            })?;
+            let end = isize::try_from(range.end).map_err(|_| {
+                Error::validation(op, ErrorPhase::GraphBuild, ValidationError::IntegerOverflow)
+            })?;
+            return Err(Error::validation(
                 op,
-                message: format!(
-                    "axis {axis} range {}..{} is out of bounds for extent {extent}",
-                    range.start, range.end
-                ),
-            }
-            .into());
+                ErrorPhase::GraphBuild,
+                ValidationError::InvalidSliceBounds {
+                    start,
+                    end,
+                    axis_len: extent,
+                },
+            ));
         }
         starts[*axis] = range.start;
         limits[*axis] = range.end;
@@ -389,10 +441,14 @@ impl TracedTensor {
     /// ```
     pub fn take_axis(&self, axis: usize, indices: &[usize]) -> Result<Self> {
         let axis = isize::try_from(axis).map_err(|_| {
-            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-                op: "take_axis",
-                message: format!("axis {axis} cannot be represented as isize"),
-            })
+            Error::validation(
+                "take_axis",
+                ErrorPhase::GraphBuild,
+                ValidationError::InvalidArgument {
+                    argument: "axis",
+                    message: format!("axis {axis} cannot be represented as isize"),
+                },
+            )
         })?;
         self.index_select(axis, indices)
     }
@@ -420,9 +476,15 @@ impl TracedTensor {
     /// );
     /// ```
     pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self> {
-        let shape = try_concrete_shape(self).ok_or_else(|| Error::InvalidGraphBuild {
-            op: "index_select",
-            message: "index_select requires a concrete shape hint".into(),
+        let shape = try_concrete_shape(self).ok_or_else(|| {
+            Error::validation(
+                "index_select",
+                ErrorPhase::GraphBuild,
+                ValidationError::InvalidArgument {
+                    argument: "shape",
+                    message: "index_select requires a concrete shape hint".into(),
+                },
+            )
         })?;
         let (indices_tensor, config, out_shape) = index_select_config(&shape, axis, positions)?;
         let indices = TracedTensor::from_tensor_concrete_shape(indices_tensor)?;
@@ -458,24 +520,38 @@ impl TracedTensor {
     /// ```
     pub fn stack(tensors: &[&Self], dim: isize) -> Result<Self> {
         let first = tensors.first().copied().ok_or_else(|| {
-            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-                op: "stack",
-                message: "stack requires at least one input".into(),
-            })
+            Error::validation(
+                "stack",
+                ErrorPhase::GraphBuild,
+                ValidationError::InvalidArgument {
+                    argument: "tensors",
+                    message: "stack requires at least one input".into(),
+                },
+            )
         })?;
-        let first_shape = try_concrete_shape(first).ok_or_else(|| Error::InvalidGraphBuild {
-            op: "stack",
-            message: "stack requires concrete shape hints".into(),
+        let first_shape = try_concrete_shape(first).ok_or_else(|| {
+            Error::validation(
+                "stack",
+                ErrorPhase::GraphBuild,
+                ValidationError::InvalidArgument {
+                    argument: "shape",
+                    message: "stack requires concrete shape hints".into(),
+                },
+            )
         })?;
         let mut shapes = Vec::with_capacity(tensors.len());
         shapes.push(first_shape.as_slice());
         let mut owned_shapes = Vec::with_capacity(tensors.len().saturating_sub(1));
         for tensor in tensors.iter().copied().skip(1) {
             owned_shapes.push(try_concrete_shape(tensor).ok_or_else(|| {
-                Error::InvalidGraphBuild {
-                    op: "stack",
-                    message: "stack requires concrete shape hints".into(),
-                }
+                Error::validation(
+                    "stack",
+                    ErrorPhase::GraphBuild,
+                    ValidationError::InvalidArgument {
+                        argument: "shape",
+                        message: "stack requires concrete shape hints".into(),
+                    },
+                )
             })?);
         }
         shapes.extend(owned_shapes.iter().map(Vec::as_slice));
@@ -501,27 +577,35 @@ impl TracedTensor {
     /// Concatenate tensors along one existing axis.
     pub fn concatenate(tensors: &[&Self], axis: usize) -> Result<Self> {
         let first = tensors.first().copied().ok_or_else(|| {
-            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-                op: "concatenate",
-                message: "concatenate requires at least one input".into(),
-            })
+            Error::validation(
+                "concatenate",
+                ErrorPhase::GraphBuild,
+                ValidationError::InvalidArgument {
+                    argument: "tensors",
+                    message: "concatenate requires at least one input".into(),
+                },
+            )
         })?;
         if axis >= first.rank {
-            return Err(tenferro_tensor::Error::AxisOutOfBounds {
-                op: "concatenate",
-                axis,
-                rank: first.rank,
-            }
-            .into());
+            return Err(Error::validation(
+                "concatenate",
+                ErrorPhase::GraphBuild,
+                ValidationError::AxisOutOfBounds {
+                    axis,
+                    rank: first.rank,
+                },
+            ));
         }
         for tensor in tensors.iter().copied().skip(1) {
             if tensor.rank != first.rank {
-                return Err(tenferro_tensor::Error::RankMismatch {
-                    op: "concatenate",
-                    expected: first.rank,
-                    actual: tensor.rank,
-                }
-                .into());
+                return Err(Error::validation(
+                    "concatenate",
+                    ErrorPhase::GraphBuild,
+                    ValidationError::RankMismatch {
+                        expected: first.rank,
+                        actual: tensor.rank,
+                    },
+                ));
             }
         }
 

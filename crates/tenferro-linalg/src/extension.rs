@@ -259,10 +259,11 @@ pub(crate) fn validate_derivative_eps(
     if derivative_eps.is_finite() && derivative_eps > 0.0 {
         Ok(())
     } else {
-        Err(Error::InvalidConfig {
+        Err(Error::invalid_argument(
             op,
-            message: format!("derivative_eps must be positive and finite, got {derivative_eps}"),
-        })
+            "derivative_eps",
+            format!("must be positive and finite, got {derivative_eps}"),
+        ))
     }
 }
 
@@ -604,14 +605,15 @@ impl HostReference for LinalgExtensionOp {
     fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
         let expected = self.input_count();
         if inputs.len() != expected {
-            return Err(Error::InvalidConfig {
-                op: "linalg_host_reference",
-                message: format!(
+            return Err(Error::invalid_argument(
+                "linalg_host_reference",
+                "inputs",
+                format!(
                     "expected {expected} inputs for {:?}, got {}",
                     self.op,
                     inputs.len()
                 ),
-            });
+            ));
         }
 
         match eager_linalg_device(inputs)? {
@@ -741,13 +743,14 @@ pub(crate) fn apply_svd_gauge(
 
 fn apply_canonical_pivot_svd_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::Result<()> {
     if outputs.len() != 3 {
-        return Err(Error::InvalidConfig {
-            op: "tenferro-linalg.svd",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "tenferro-linalg.svd",
+            "outputs",
+            format!(
                 "canonical SVD gauge expected three outputs, got {}",
                 outputs.len()
             ),
-        });
+        ));
     }
 
     let (u_slice, rest) = outputs.split_at_mut(1);
@@ -759,12 +762,13 @@ fn apply_canonical_pivot_svd_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::R
     let s_shape = singular_values.shape().to_vec();
     let vt_shape = vt.shape().to_vec();
     if u_shape.len() < 2 || vt_shape.len() < 2 || s_shape.is_empty() {
-        return Err(Error::InvalidConfig {
-            op: "tenferro-linalg.svd",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "tenferro-linalg.svd",
+            "outputs",
+            format!(
                 "canonical SVD gauge expected U rank >= 2, S rank >= 1, VT rank >= 2; got U={u_shape:?}, S={s_shape:?}, VT={vt_shape:?}"
             ),
-        });
+        ));
     }
 
     let m = u_shape[0];
@@ -775,12 +779,13 @@ fn apply_canonical_pivot_svd_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::R
         || u_shape[2..] != vt_shape[2..]
         || s_shape[1..] != u_shape[2..]
     {
-        return Err(Error::InvalidConfig {
-            op: "tenferro-linalg.svd",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "tenferro-linalg.svd",
+            "outputs",
+            format!(
                 "canonical SVD gauge expected compatible compact SVD shapes, got U={u_shape:?}, S={s_shape:?}, VT={vt_shape:?}"
             ),
-        });
+        ));
     }
     let layout = canonical_svd_gauge_layout(m, k, n, &u_shape[2..])?;
 
@@ -797,11 +802,11 @@ fn apply_canonical_pivot_svd_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::R
         (Tensor::C32(u), Tensor::C32(vt)) => {
             canonicalize_svd_gauge_c32(u.host_data_mut()?, vt.host_data_mut()?, layout)
         }
-        (u, vt) => Err(Error::DTypeMismatch {
-            op: "tenferro-linalg.svd",
-            lhs: u.dtype(),
-            rhs: vt.dtype(),
-        }),
+        (u, vt) => Err(Error::dtype_mismatch(
+            "tenferro-linalg.svd",
+            u.dtype(),
+            vt.dtype(),
+        )),
     }
 }
 
@@ -819,22 +824,24 @@ struct CanonicalSvdGaugeLayout {
 impl CanonicalSvdGaugeLayout {
     fn validate_storage(self, u_len: usize, vt_len: usize) -> tenferro_tensor::Result<()> {
         if u_len != self.u_len {
-            return Err(Error::InvalidConfig {
-                op: "tenferro-linalg.svd",
-                message: format!(
+            return Err(Error::invalid_argument(
+                "tenferro-linalg.svd",
+                "U storage",
+                format!(
                     "canonical SVD gauge expected U storage length {}, got {u_len}",
                     self.u_len
                 ),
-            });
+            ));
         }
         if vt_len != self.vt_len {
-            return Err(Error::InvalidConfig {
-                op: "tenferro-linalg.svd",
-                message: format!(
+            return Err(Error::invalid_argument(
+                "tenferro-linalg.svd",
+                "VT storage",
+                format!(
                     "canonical SVD gauge expected VT storage length {}, got {vt_len}",
                     self.vt_len
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -1060,11 +1067,7 @@ fn max_abs_pivot_c32(u_column: &[Complex32]) -> usize {
 
 fn require_matrix_meta(op: &'static str, shape: &[SymDim]) -> tenferro_tensor::Result<()> {
     if shape.len() < 2 {
-        return Err(Error::RankMismatch {
-            op,
-            expected: 2,
-            actual: shape.len(),
-        });
+        return Err(Error::rank_mismatch(op, 2, shape.len()));
     }
     Ok(())
 }

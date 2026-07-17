@@ -200,10 +200,11 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
                 let op = op
                     .as_any()
                     .downcast_ref::<#op_type>()
-                    .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-                        op: "extension_runtime",
-                        message: format!("payload type mismatch for {}", #family_id),
-                    })?;
+                    .ok_or_else(|| tenferro_tensor::Error::invalid_argument(
+                        "extension_runtime",
+                        "payload",
+                        format!("type mismatch for {}", #family_id),
+                    ))?;
                 #execute(op, inputs, ctx)
             }
 
@@ -216,10 +217,11 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
                 let op = op
                     .as_any()
                     .downcast_ref::<#op_type>()
-                    .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-                        op: "extension_runtime",
-                        message: format!("payload type mismatch for {}", #family_id),
-                    })?;
+                    .ok_or_else(|| tenferro_tensor::Error::invalid_argument(
+                        "extension_runtime",
+                        "payload",
+                        format!("type mismatch for {}", #family_id),
+                    ))?;
                 #execute_reads(op, inputs, ctx)
             }
         }

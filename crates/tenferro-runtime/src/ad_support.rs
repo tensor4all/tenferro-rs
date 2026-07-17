@@ -12,6 +12,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{DType, Tensor, TypedTensor};
 
 pub use crate::checkpoint::CheckpointNode;
+use crate::error::ErrorPhase;
 use crate::metadata::MetadataScopeChain;
 pub use crate::metadata::{
     metadata_scopes_for_scope, metadata_scopes_with_new, metadata_scopes_with_scope,
@@ -349,10 +350,12 @@ pub fn allocate_input_key() -> TensorInputKey {
 pub fn leaf_input_key(tensor: &TracedTensor) -> Result<TensorInputKey> {
     match &tensor.graph.values()[tensor.val].key {
         ValueKey::Input(key) => Ok(key.clone()),
-        other => Err(Error::InvalidGraphBuild {
-            op: "ad_support::leaf_input_key",
-            message: format!("expected traced leaf input, got {other:?}"),
-        }),
+        other => Err(Error::invalid_argument(
+            "ad_support::leaf_input_key",
+            ErrorPhase::GraphBuild,
+            "tensor",
+            format!("expected traced leaf input, got {other:?}"),
+        )),
     }
 }
 
@@ -362,10 +365,12 @@ pub fn linear_input_key(
 ) -> Result<TensorInputKey> {
     match &graph.values()[local_id].key {
         ValueKey::Input(key) => Ok(key.clone()),
-        other => Err(Error::InvalidGraphBuild {
-            op: "ad_support::linear_input_key",
-            message: format!("expected linear graph input, got {other:?}"),
-        }),
+        other => Err(Error::invalid_argument(
+            "ad_support::linear_input_key",
+            ErrorPhase::Compile,
+            "graph",
+            format!("expected linear graph input, got {other:?}"),
+        )),
     }
 }
 

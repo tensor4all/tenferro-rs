@@ -8,16 +8,18 @@ use computegraph::types::{OperationRole, ValueKey, ValueRef};
 use computegraph::LocalValueId;
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::ad::context::GlobalMetadataScope;
-use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
+use tenferro_ops::broadcast::{
+    broadcast_input_plan, broadcast_shape, broadcast_shapes, BroadcastError,
+};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
-    Tensor, TensorScalar,
+    CompareDir, DType, DotGeneralConfig, Error as TensorError, GatherConfig, PadConfig,
+    ScatterConfig, ShapeMismatch, ShapeVec, SliceConfig, Tensor, TensorScalar, ValidationError,
 };
 
-use super::error::{Error, Result};
+use super::error::{Error, ErrorPhase, Result};
 use super::sym_dim::SymDim;
 use crate::checkpoint::CheckpointNode;
 use crate::metadata::{
@@ -132,21 +134,84 @@ pub(crate) fn try_concrete_shape(tensor: &TracedTensor) -> Option<Vec<usize>> {
         .collect()
 }
 
+fn graph_validation(op: &'static str, source: impl Into<ValidationError>) -> Error {
+    Error::validation(op, ErrorPhase::GraphBuild, source.into())
+}
+
+fn graph_invalid_argument(
+    op: &'static str,
+    argument: &'static str,
+    message: impl Into<String>,
+) -> Error {
+    graph_validation(
+        op,
+        ValidationError::InvalidArgument {
+            argument,
+            message: message.into(),
+        },
+    )
+}
+
+fn graph_broadcast_error(op: &'static str, error: BroadcastError) -> Error {
+    match error {
+        BroadcastError::IncompatibleBinary { lhs, rhs } => graph_validation(
+            op,
+            ShapeMismatch::IncompatibleShapes {
+                lhs: ShapeVec::from_vec(lhs),
+                rhs: ShapeVec::from_vec(rhs),
+            },
+        ),
+        BroadcastError::IncompatibleInput { input, output } => graph_validation(
+            op,
+            ShapeMismatch::ExpectedActual {
+                expected: ShapeVec::from_vec(output),
+                actual: ShapeVec::from_vec(input),
+            },
+        ),
+        BroadcastError::RankTooLarge { input, output } => graph_validation(
+            op,
+            ValidationError::RankMismatch {
+                expected: output.len(),
+                actual: input.len(),
+            },
+        ),
+    }
+}
+
+fn graph_tensor_error(op: &'static str, error: TensorError) -> Error {
+    match error {
+        TensorError::Validation { source, .. } => graph_validation(op, source),
+        other => Error::TensorRuntime(other),
+    }
+}
+
+fn graph_error_with_context(op: &'static str, error: Error) -> Error {
+    match error {
+        Error::Validation { source, .. } => graph_validation(op, source),
+        other => other,
+    }
+}
+
 pub(crate) fn concrete_shape(tensor: &TracedTensor) -> Result<Vec<usize>> {
     tensor
         .shape_hint
         .as_ref()
-        .ok_or_else(|| Error::InvalidGraphBuild {
-            op: "TracedTensor::concrete_shape",
-            message: format!("missing shape hint for traced tensor {}", tensor.id),
+        .ok_or_else(|| {
+            graph_invalid_argument(
+                "TracedTensor::concrete_shape",
+                "shape",
+                format!("missing shape hint for traced tensor {}", tensor.id),
+            )
         })?
         .iter()
         .map(|dim| {
-            dim.constant_value()
-                .ok_or_else(|| Error::InvalidGraphBuild {
-                    op: "TracedTensor::concrete_shape",
-                    message: format!("symbolic dimension in shape hint for tensor {}", tensor.id),
-                })
+            dim.constant_value().ok_or_else(|| {
+                graph_invalid_argument(
+                    "TracedTensor::concrete_shape",
+                    "shape",
+                    format!("symbolic dimension in shape hint for tensor {}", tensor.id),
+                )
+            })
         })
         .collect()
 }
@@ -161,12 +226,8 @@ pub(crate) fn broadcast_to(tensor: &TracedTensor, target_shape: &[usize]) -> Res
         return Ok(tensor.clone());
     }
 
-    let plan = broadcast_input_plan(&tensor_shape, target_shape).map_err(|err| {
-        Error::InvalidGraphBuild {
-            op: "broadcast_to",
-            message: err.to_string(),
-        }
-    })?;
+    let plan = broadcast_input_plan(&tensor_shape, target_shape)
+        .map_err(|err| graph_broadcast_error("broadcast_to", err))?;
 
     let source = if plan.source_shape == tensor_shape {
         tensor.clone()
@@ -189,10 +250,8 @@ pub(crate) fn broadcast_binary(
     }
     let a_shape = concrete_shape(a)?;
     let b_shape = concrete_shape(b)?;
-    let target = broadcast_shape(&a_shape, &b_shape).map_err(|err| Error::InvalidGraphBuild {
-        op: "broadcast_binary",
-        message: err.to_string(),
-    })?;
+    let target = broadcast_shape(&a_shape, &b_shape)
+        .map_err(|err| graph_broadcast_error("broadcast_binary", err))?;
     Ok((broadcast_to(a, &target)?, broadcast_to(b, &target)?))
 }
 
@@ -205,10 +264,7 @@ pub(crate) fn broadcast_ternary(
     let b_shape = concrete_shape(b)?;
     let c_shape = concrete_shape(c)?;
     let target = broadcast_shapes([a_shape.as_slice(), b_shape.as_slice(), c_shape.as_slice()])
-        .map_err(|err| Error::InvalidGraphBuild {
-            op: "broadcast_ternary",
-            message: err.to_string(),
-        })?;
+        .map_err(|err| graph_broadcast_error("broadcast_ternary", err))?;
     Ok((
         broadcast_to(a, &target)?,
         broadcast_to(b, &target)?,
@@ -227,20 +283,13 @@ fn scale_with_constant(input: &TracedTensor, op: StdTensorOp) -> Result<TracedTe
     )
 }
 
-fn dtype_inference_error(op: &StdTensorOp, context: &'static str, err: String) -> Error {
-    Error::InvalidGraphBuild {
-        op: context,
-        message: format!("built-in traced dtype inference failed for {op:?}: {err}"),
-    }
-}
-
 fn try_inferred_output_dtype(
     op: &StdTensorOp,
     inputs: &[DType],
     context: &'static str,
 ) -> Result<DType> {
     crate::shape_infer::infer_output_dtype(op, inputs)
-        .map_err(|err| dtype_inference_error(op, context, err.to_string()))
+        .map_err(|err| graph_error_with_context(context, err))
 }
 
 fn inferred_output_dtype(op: &StdTensorOp, inputs: &[DType], context: &'static str) -> DType {
@@ -255,14 +304,11 @@ fn inferred_output_dtype(op: &StdTensorOp, inputs: &[DType], context: &'static s
 fn checked_shape_product_for_graph_build(
     shape: &[usize],
     context: &'static str,
-    role: &'static str,
+    _role: &'static str,
 ) -> Result<usize> {
     shape.iter().copied().try_fold(1usize, |acc, dim| {
         acc.checked_mul(dim)
-            .ok_or_else(|| Error::InvalidGraphBuild {
-                op: context,
-                message: format!("{role} shape element count overflows usize"),
-            })
+            .ok_or_else(|| graph_validation(context, ValidationError::IntegerOverflow))
     })
 }
 
@@ -274,10 +320,10 @@ fn validate_concrete_reshape_shape(input: &TracedTensor, shape: &[usize]) -> Res
     let from =
         checked_shape_product_for_graph_build(&input_shape, "TracedTensor::reshape", "input")?;
     if from != to {
-        return Err(Error::InvalidGraphBuild {
-            op: "TracedTensor::reshape",
-            message: format!("reshape element-count mismatch: from {from} to {to}"),
-        });
+        return Err(graph_validation(
+            "TracedTensor::reshape",
+            ShapeMismatch::ReshapeElementCount { from, to },
+        ));
     }
     Ok(())
 }
@@ -317,27 +363,16 @@ pub(crate) fn infer_traced_single_output_shape(
         .map(|(input_idx, tensor)| traced_input_shape_exprs(input_idx, tensor))
         .collect();
     let input_shape_refs: Vec<&[DimExpr]> = input_shape_exprs.iter().map(Vec::as_slice).collect();
-    let output_shapes =
-        crate::shape_infer::infer_output_shapes(op, &input_shape_refs).map_err(|err| {
-            Error::InvalidGraphBuild {
-                op: op_name,
-                message: err.to_string(),
-            }
-        })?;
-    let output_shape = output_shapes
-        .first()
-        .ok_or_else(|| Error::InvalidGraphBuild {
-            op: op_name,
-            message: "shape inference returned no outputs".into(),
-        })?;
+    let output_shapes = crate::shape_infer::infer_output_shapes(op, &input_shape_refs)
+        .map_err(|err| graph_error_with_context(op_name, err))?;
+    let output_shape = output_shapes.first().ok_or_else(|| {
+        Error::Internal(format!("{op_name}: shape inference returned no outputs"))
+    })?;
     if output_shapes.len() != 1 {
-        return Err(Error::InvalidGraphBuild {
-            op: op_name,
-            message: format!(
-                "expected single-output shape inference, got {} outputs",
-                output_shapes.len()
-            ),
-        });
+        return Err(Error::Internal(format!(
+            "{op_name}: expected single-output shape inference, got {} outputs",
+            output_shapes.len()
+        )));
     }
 
     let input_sym_shapes: Vec<Vec<SymDim>> = inputs
@@ -366,16 +401,22 @@ fn reduction_output_meta(
     let mut seen = vec![false; tensor.rank];
     for &axis in axes {
         if axis >= tensor.rank {
-            return Err(Error::InvalidGraphBuild {
+            return Err(graph_validation(
                 op,
-                message: format!("axis {axis} out of bounds for rank {}", tensor.rank),
-            });
+                ValidationError::AxisOutOfBounds {
+                    axis,
+                    rank: tensor.rank,
+                },
+            ));
         }
         if seen[axis] {
-            return Err(Error::InvalidGraphBuild {
+            return Err(graph_validation(
                 op,
-                message: format!("duplicate reduction axis {axis}"),
-            });
+                ValidationError::DuplicateAxis {
+                    axis,
+                    role: "reduction",
+                },
+            ));
         }
         seen[axis] = true;
     }
@@ -391,10 +432,13 @@ fn reduction_output_meta(
 
 fn validate_traced_axis(tensor: &TracedTensor, axis: usize, op: &'static str) -> Result<()> {
     if axis >= tensor.rank {
-        return Err(Error::InvalidGraphBuild {
+        return Err(graph_validation(
             op,
-            message: format!("axis {axis} out of bounds for rank {}", tensor.rank),
-        });
+            ValidationError::AxisOutOfBounds {
+                axis,
+                rank: tensor.rank,
+            },
+        ));
     }
     Ok(())
 }
@@ -403,16 +447,16 @@ fn validate_traced_axes(rank: usize, axes: &[usize], op: &'static str) -> Result
     let mut seen = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
-            return Err(Error::InvalidGraphBuild {
+            return Err(graph_validation(
                 op,
-                message: format!("axis {axis} out of bounds for rank {rank}"),
-            });
+                ValidationError::AxisOutOfBounds { axis, rank },
+            ));
         }
         if seen[axis] {
-            return Err(Error::InvalidGraphBuild {
+            return Err(graph_validation(
                 op,
-                message: format!("duplicate axis {axis}"),
-            });
+                ValidationError::DuplicateAxis { axis, role: "axis" },
+            ));
         }
         seen[axis] = true;
     }
@@ -421,37 +465,41 @@ fn validate_traced_axes(rank: usize, axes: &[usize], op: &'static str) -> Result
 
 fn validate_traced_insert_axis(rank: usize, axis: usize, op: &'static str) -> Result<()> {
     if axis > rank {
-        return Err(Error::InvalidGraphBuild {
+        return Err(graph_invalid_argument(
             op,
-            message: format!("axis {axis} out of bounds for rank {rank} insertion"),
-        });
+            "axis",
+            format!("axis {axis} out of bounds for rank {rank} insertion"),
+        ));
     }
     Ok(())
 }
 
 fn validate_traced_perm(rank: usize, perm: &[usize], op: &'static str) -> Result<()> {
     if perm.len() != rank {
-        return Err(Error::InvalidGraphBuild {
+        return Err(graph_validation(
             op,
-            message: format!(
-                "permutation length {} does not match rank {rank}",
-                perm.len()
-            ),
-        });
+            ValidationError::InvalidPermutationLength {
+                expected: rank,
+                actual: perm.len(),
+            },
+        ));
     }
     let mut seen = vec![false; rank];
     for &axis in perm {
         if axis >= rank {
-            return Err(Error::InvalidGraphBuild {
+            return Err(graph_validation(
                 op,
-                message: format!("permutation axis {axis} out of bounds for rank {rank}"),
-            });
+                ValidationError::AxisOutOfBounds { axis, rank },
+            ));
         }
         if seen[axis] {
-            return Err(Error::InvalidGraphBuild {
+            return Err(graph_validation(
                 op,
-                message: format!("duplicate permutation axis {axis}"),
-            });
+                ValidationError::DuplicateAxis {
+                    axis,
+                    role: "permutation",
+                },
+            ));
         }
         seen[axis] = true;
     }
@@ -465,32 +513,34 @@ fn validate_broadcast_in_dim_args(
     op: &'static str,
 ) -> Result<()> {
     if dims.len() != input.rank {
-        return Err(Error::InvalidGraphBuild {
+        return Err(graph_validation(
             op,
-            message: format!(
-                "dims length {} must match input rank {}",
-                dims.len(),
-                input.rank
-            ),
-        });
+            ValidationError::RankMismatch {
+                expected: input.rank,
+                actual: dims.len(),
+            },
+        ));
     }
 
     let mut seen = vec![false; output_shape.len()];
     for &dim in dims {
         if dim >= output_shape.len() {
-            return Err(Error::InvalidGraphBuild {
+            return Err(graph_validation(
                 op,
-                message: format!(
-                    "broadcast dim {dim} out of bounds for output rank {}",
-                    output_shape.len()
-                ),
-            });
+                ValidationError::AxisOutOfBounds {
+                    axis: dim,
+                    rank: output_shape.len(),
+                },
+            ));
         }
         if seen[dim] {
-            return Err(Error::InvalidGraphBuild {
+            return Err(graph_validation(
                 op,
-                message: format!("duplicate broadcast dim {dim}"),
-            });
+                ValidationError::DuplicateAxis {
+                    axis: dim,
+                    role: "broadcast",
+                },
+            ));
         }
         seen[dim] = true;
     }
@@ -500,13 +550,14 @@ fn validate_broadcast_in_dim_args(
             let input_dim = &input_shape[input_axis];
             let output_dim = &output_shape[output_axis];
             if input_dim != output_dim && input_dim.constant_value() != Some(1) {
-                return Err(Error::InvalidGraphBuild {
+                return Err(graph_invalid_argument(
                     op,
-                    message: format!(
+                    "shape",
+                    format!(
                         "input axis {input_axis} with dim {input_dim:?} cannot broadcast to \
                          output axis {output_axis} with dim {output_dim:?}"
                     ),
-                });
+                ));
             }
         }
     }
@@ -1150,10 +1201,11 @@ impl TracedTensor {
                 StdTensorOp::constant(Complex32::new(factor.re as f32, factor.im as f32)),
             ),
             DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
-                Err(Error::InvalidGraphBuild {
-                    op: "scale_complex",
-                    message: format!("requires complex tensor dtype, got {:?}", self.dtype),
-                })
+                Err(graph_invalid_argument(
+                    "scale_complex",
+                    "dtype",
+                    format!("requires complex tensor dtype, got {:?}", self.dtype),
+                ))
             }
         }
     }
@@ -1382,10 +1434,7 @@ impl TracedTensor {
     ) -> Result<TracedTensor> {
         config
             .validate_dims_with_ranks(self.rank, other.rank)
-            .map_err(|err| Error::InvalidGraphBuild {
-                op: "dot_general",
-                message: err.to_string(),
-            })?;
+            .map_err(|err| graph_tensor_error("dot_general", err))?;
         let lhs_free: Vec<usize> = (0..self.rank)
             .filter(|d| {
                 !config.lhs_contracting_dims.contains(d) && !config.lhs_batch_dims.contains(d)
@@ -1426,28 +1475,37 @@ impl TracedTensor {
     /// Matrix multiplication for rank-2 tensors.
     pub fn matmul(&self, other: &TracedTensor) -> Result<TracedTensor> {
         if self.rank != 2 {
-            return Err(Error::InvalidGraphBuild {
-                op: "TracedTensor::matmul",
-                message: format!("matmul requires rank-2 inputs, got lhs rank {}", self.rank),
-            });
+            return Err(graph_validation(
+                "TracedTensor::matmul",
+                ValidationError::RankMismatch {
+                    expected: 2,
+                    actual: self.rank,
+                },
+            ));
         }
         if other.rank != 2 {
-            return Err(Error::InvalidGraphBuild {
-                op: "TracedTensor::matmul",
-                message: format!("matmul requires rank-2 inputs, got rhs rank {}", other.rank),
-            });
+            return Err(graph_validation(
+                "TracedTensor::matmul",
+                ValidationError::RankMismatch {
+                    expected: 2,
+                    actual: other.rank,
+                },
+            ));
         }
         if let (Some(lhs_shape), Some(rhs_shape)) = (&self.shape_hint, &other.shape_hint) {
             if let (Some(lhs_cols), Some(rhs_rows)) =
                 (lhs_shape[1].constant_value(), rhs_shape[0].constant_value())
             {
                 if lhs_cols != rhs_rows {
-                    return Err(Error::InvalidGraphBuild {
-                        op: "TracedTensor::matmul",
-                        message: format!(
-                            "matmul dimension mismatch: lhs columns {lhs_cols} != rhs rows {rhs_rows}"
-                        ),
-                    });
+                    return Err(graph_validation(
+                        "TracedTensor::matmul",
+                        ShapeMismatch::ContractedDimensions {
+                            lhs_axis: 1,
+                            lhs_size: lhs_cols,
+                            rhs_axis: 0,
+                            rhs_size: rhs_rows,
+                        },
+                    ));
                 }
             }
         }
@@ -1829,14 +1887,16 @@ impl TracedTensor {
         let to_shape: Vec<DimExpr> = shape
             .iter()
             .map(|dim| {
-                dim.to_dim_expr(&tensor_map)
-                    .map_err(|err| Error::InvalidGraphBuild {
-                        op: "broadcast_in_dim_sym",
-                        message: format!(
+                dim.to_dim_expr(&tensor_map).map_err(|err| {
+                    graph_invalid_argument(
+                        "broadcast_in_dim_sym",
+                        "shape",
+                        format!(
                             "unresolved symbolic dimension: {err}; \
                              pass every referenced tensor via `shape_refs`"
                         ),
-                    })
+                    )
+                })
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -2042,10 +2102,11 @@ impl TracedTensor {
         validate_traced_axis(self, axis_a, "TracedTensor::extract_diag")?;
         validate_traced_axis(self, axis_b, "TracedTensor::extract_diag")?;
         if axis_a == axis_b {
-            return Err(Error::InvalidGraphBuild {
-                op: "TracedTensor::extract_diag",
-                message: "diagonal axes must be distinct".into(),
-            });
+            return Err(graph_invalid_argument(
+                "TracedTensor::extract_diag",
+                "axes",
+                "diagonal axes must be distinct",
+            ));
         }
         let op = StdTensorOp::ExtractDiag { axis_a, axis_b };
         let (out_rank, out_shape_hint) =
@@ -2145,10 +2206,13 @@ impl TracedTensor {
     pub fn dynamic_truncate(&self, size: &TracedTensor, axis: usize) -> Result<TracedTensor> {
         validate_traced_axis(self, axis, "TracedTensor::dynamic_truncate")?;
         if size.rank != 0 {
-            return Err(Error::InvalidGraphBuild {
-                op: "TracedTensor::dynamic_truncate",
-                message: format!("size must be a scalar tensor, got rank {}", size.rank),
-            });
+            return Err(graph_validation(
+                "TracedTensor::dynamic_truncate",
+                ValidationError::RankMismatch {
+                    expected: 0,
+                    actual: size.rank,
+                },
+            ));
         }
         apply_binary_preserve_input_dtypes(
             StdTensorOp::DynamicTruncate { axis },

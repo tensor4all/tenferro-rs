@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorPhase, Result};
 use num_complex::{Complex32, Complex64};
 use smallvec::SmallVec;
 use tenferro_ops::ext_op::ExtensionOp;
@@ -9,7 +9,7 @@ use tenferro_tensor::backend::ElementwiseFusionOp;
 use tenferro_tensor::Error as TensorError;
 use tenferro_tensor::{
     BackendSession, CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
-    SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor,
+    SliceConfig, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor, ValidationError,
 };
 
 use crate::extension_runtime::ExtensionExecutor;
@@ -189,9 +189,7 @@ impl<'a> ExecSlot<'a> {
 }
 
 fn invalid_compiled_graph(message: impl Into<String>) -> Error {
-    Error::InvalidCompiledGraph {
-        message: message.into(),
-    }
+    Error::Internal(message.into())
 }
 
 fn checked_input_slot(input_slots: &[usize], idx: usize, caller: &'static str) -> Result<usize> {
@@ -580,21 +578,24 @@ pub(crate) fn resolve_tensor_shape_exprs(
     for &slot in input_slots {
         input_shapes.push(slot_ref(slots, slot, "input", "resolve_tensor_shape_exprs")?.shape());
     }
-    DimExpr::eval_all(exprs, &input_shapes).map_err(|err| Error::InvalidCompiledGraph {
-        message: format!("shape expression evaluation failed: {err}"),
-    })
+    DimExpr::eval_all(exprs, &input_shapes)
+        .map_err(|err| Error::Internal(format!("shape expression evaluation failed: {err}")))
 }
 
 pub(crate) fn ensure_core_exec_program(program: &ExecProgram, caller: &str) -> Result<()> {
     for (idx, inst) in program.instructions.iter().enumerate() {
         if let ExecOp::Extension(ext) = &inst.op {
-            return Err(Error::TensorRuntime(TensorError::InvalidConfig {
-                op: "extension",
-                message: format!(
+            return Err(Error::validation(
+                "extension",
+                ErrorPhase::Execution,
+                ValidationError::InvalidArgument {
+                    argument: "program",
+                    message: format!(
                     "{caller} can execute only core ExecProgram instructions; instruction {idx} uses extension family_id {:?}",
                     ext.family_id()
-                ),
-            }));
+                    ),
+                },
+            ));
         }
     }
     Ok(())
@@ -924,26 +925,25 @@ fn execute_extension_instruction<B: TensorBackend + 'static>(
 ) -> Result<()> {
     let inputs = collect_tensor_refs(slots, &inst.input_slots)?;
     let Some(extension_executor) = extension_executor else {
-        return Err(Error::TensorRuntime(TensorError::InvalidConfig {
-            op: "extension",
-            message: format!(
+        return Err(Error::validation(
+            "extension",
+            ErrorPhase::Execution,
+            ValidationError::InvalidArgument {
+                argument: "executor",
+                message: format!(
                 "extension instruction for family_id {:?} requires an ExtensionExecutor; execute compiled programs through GraphExecutor and register the extension runtime on that executor",
                 ext.family_id()
-            ),
-        }));
+                ),
+            },
+        ));
     };
-    let outputs = extension_executor
-        .execute(backend, ext, &inputs)
-        .map_err(|err| {
-            Error::TensorRuntime(tenferro_tensor::Error::backend_failure(
-                "extension",
-                format!("family_id={:?}: {err}", ext.family_id()),
-            ))
-        })?;
+    let outputs = extension_executor.execute(backend, ext, &inputs)?;
     if outputs.len() != inst.output_slots.len() {
-        return Err(Error::TensorRuntime(
-            tenferro_tensor::Error::InvalidConfig {
-                op: "extension",
+        return Err(Error::validation(
+            "extension",
+            ErrorPhase::Execution,
+            ValidationError::InvalidArgument {
+                argument: "outputs",
                 message: format!(
                     "family_id={:?}: extension runtime returned {} outputs for {} slots",
                     ext.family_id(),

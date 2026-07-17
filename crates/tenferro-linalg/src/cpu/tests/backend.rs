@@ -56,9 +56,9 @@ fn test_triangular_solve_dtype_mismatch_and_unsupported() {
         .unwrap_err();
     assert!(matches!(
         err,
-        tenferro_tensor::Error::DTypeMismatch {
+        tenferro_tensor::Error::Validation {
             op: "triangular_solve",
-            ..
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         }
     ));
 

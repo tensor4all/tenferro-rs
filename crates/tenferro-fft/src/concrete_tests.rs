@@ -131,14 +131,14 @@ fn public_tensor_fft_ext_reports_invalid_dtype_and_shape_errors() {
 
     assert!(matches!(
         dtype_err,
-        tenferro_tensor::Error::InvalidConfig {
+        tenferro_tensor::Error::UnsupportedDTypeConversion {
             op: "TensorFftExt::fft",
             ..
         }
     ));
     assert!(matches!(
         shape_err,
-        tenferro_tensor::Error::InvalidConfig { op: "irfft", .. }
+        tenferro_tensor::Error::Validation { op: "irfft", .. }
     ));
 }
 

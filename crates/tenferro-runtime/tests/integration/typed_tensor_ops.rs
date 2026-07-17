@@ -1,6 +1,6 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
-use tenferro_tensor::Error as TensorError;
+use tenferro_tensor::{Error as TensorError, ValidationError};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -60,10 +60,12 @@ fn typed_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
 
     assert!(matches!(
         err,
-        TensorError::RankMismatch {
+        TensorError::Validation {
             op: "matmul",
-            expected: 2,
-            actual: 0,
+            source: ValidationError::RankMismatch {
+                expected: 2,
+                actual: 0,
+            },
         }
     ));
 }

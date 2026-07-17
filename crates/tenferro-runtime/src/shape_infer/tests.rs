@@ -1,4 +1,6 @@
 use super::*;
+use crate::{Error, ErrorPhase};
+use tenferro_tensor::{ShapeMismatch, ValidationError};
 
 #[derive(Clone, Debug)]
 struct AxisEqualityExtension;
@@ -446,9 +448,17 @@ fn concatenate_rejects_non_axis_dimension_mismatch() {
 
     let err = infer_output_shapes(&op, &[&lhs, &rhs]).unwrap_err();
 
-    let message = err.to_string();
-    assert!(message.contains("concatenate"), "{message}");
-    assert!(message.contains("dimension mismatch"), "{message}");
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::Compile,
+            source: ValidationError::InvalidArgument {
+                argument: "shapes",
+                ..
+            },
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -487,9 +497,18 @@ fn gather_rejects_concrete_slice_sizes_larger_than_operand_dims() {
     });
 
     let err = infer_output_shapes(&op, &[&operand, &indices]).unwrap_err();
-    let message = err.to_string();
-    assert!(message.contains("gather"), "{message}");
-    assert!(message.contains("slice_sizes[0]"), "{message}");
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::Compile,
+            source: ValidationError::ShapeMismatch(source),
+            ..
+        } if matches!(
+            source.as_ref(),
+            ShapeMismatch::ExpectedActual { expected, actual }
+                if expected.as_slice() == [4] && actual.as_slice() == [5]
+        )
+    ));
 }
 
 #[test]

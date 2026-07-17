@@ -223,7 +223,7 @@ fn eager_concatenate_empty_reports_typed_validation_error() {
 
     assert!(matches!(
         err,
-        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::Validation {
             op: "concatenate",
             ..
         })
@@ -242,10 +242,9 @@ fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
     let out_of_bounds = x.reduce_sum(&[2]).unwrap_err();
     assert!(matches!(
         out_of_bounds,
-        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::AxisOutOfBounds {
+        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::Validation {
             op: "EagerTensor::reduce_sum",
-            axis: 2,
-            rank: 2,
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
         })
     ));
 
@@ -259,10 +258,12 @@ fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
         assert!(
             matches!(
                 err,
-                tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::DuplicateAxis {
-                    axis: 0,
-                    role: "axis",
-                    ..
+                tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::Validation {
+                    op: _,
+                    source: tenferro_tensor::ValidationError::DuplicateAxis {
+                        axis: 0,
+                        role: "axis",
+                    },
                 })
             ),
             "{err}"
@@ -386,7 +387,7 @@ fn eager_dot_general_with_conj_validates_config_before_untracked_backend_dispatc
 
     assert!(matches!(
         err,
-        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::Validation {
             op: "EagerTensor::dot_general_with_conj",
             ..
         })

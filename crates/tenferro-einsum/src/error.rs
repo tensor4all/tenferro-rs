@@ -52,7 +52,7 @@ impl Error {
     ///
     /// assert!(matches!(
     ///     err,
-    ///     TensorError::BackendFailure {
+    ///     TensorError::BackendSource {
     ///         op: "einsum_extension",
     ///         ..
     ///     }
@@ -60,7 +60,7 @@ impl Error {
     /// ```
     #[must_use]
     pub fn to_tensor_error(&self, op: &'static str) -> tenferro_tensor::Error {
-        tenferro_tensor::Error::backend_failure(op, self)
+        tenferro_tensor::Error::backend_source(op, self.clone())
     }
 }
 

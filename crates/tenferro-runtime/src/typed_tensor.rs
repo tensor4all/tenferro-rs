@@ -3,9 +3,14 @@
 //! Operation families that are no longer part of core, including einsum, live
 //! in their extension crates.
 
-use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
+use tenferro_ops::broadcast::{
+    broadcast_input_plan, broadcast_shape, broadcast_shapes, BroadcastError,
+};
 use tenferro_tensor::validate::matmul_config_for_shapes;
-use tenferro_tensor::{CompareDir, Error, Result, Tensor, TensorBackend, TensorRead, TensorScalar};
+use tenferro_tensor::{
+    CompareDir, DType, Error, Result, Tensor, TensorBackend, TensorRead, TensorScalar,
+    ValidationError,
+};
 
 use crate::{TypedTensorMaskOpsExt, TypedTensorOpsExt};
 use tenferro_tensor::TypedTensor;
@@ -618,15 +623,41 @@ fn broadcast_to_read<'a, T: TensorScalar>(
     Ok(ReadInput::Owned(out))
 }
 
-fn broadcast_error(err: impl std::fmt::Display) -> Error {
-    Error::backend_failure("broadcast", err.to_string())
+fn broadcast_error(err: BroadcastError) -> Error {
+    match err {
+        BroadcastError::IncompatibleBinary { lhs, rhs } => {
+            Error::shape_mismatch("broadcast", lhs, rhs)
+        }
+        BroadcastError::IncompatibleInput { input, output } => {
+            Error::shape_mismatch("broadcast", input, output)
+        }
+        BroadcastError::RankTooLarge { input, output } => {
+            Error::rank_mismatch("broadcast", output.len(), input.len())
+        }
+    }
 }
 
 fn into_typed_result<T: TensorScalar>(op: &'static str, tensor: Tensor) -> Result<TypedTensor<T>> {
     let actual = tensor.dtype();
-    T::into_typed(tensor).map_err(|_| Error::DTypeMismatch {
-        op,
-        lhs: T::dtype(),
-        rhs: actual,
+    T::into_typed(tensor).map_err(|_| {
+        Error::validation(
+            op,
+            ValidationError::DTypeMismatch {
+                expected: core_dtype(T::dtype()),
+                actual: core_dtype(actual),
+            },
+        )
     })
+}
+
+fn core_dtype(dtype: DType) -> tenferro_tensor::core::DType {
+    match dtype {
+        DType::F32 => tenferro_tensor::core::DType::F32,
+        DType::F64 => tenferro_tensor::core::DType::F64,
+        DType::I32 => tenferro_tensor::core::DType::I32,
+        DType::I64 => tenferro_tensor::core::DType::I64,
+        DType::Bool => tenferro_tensor::core::DType::Bool,
+        DType::C32 => tenferro_tensor::core::DType::C32,
+        DType::C64 => tenferro_tensor::core::DType::C64,
+    }
 }
