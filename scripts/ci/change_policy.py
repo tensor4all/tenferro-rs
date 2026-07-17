@@ -153,7 +153,7 @@ def classify_paths(
 
 def _changed_paths(base: str, head: str) -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=ACMR", base, head, "--"],
+        ["git", "diff", "--name-only", base, head, "--"],
         check=True,
         capture_output=True,
         text=True,

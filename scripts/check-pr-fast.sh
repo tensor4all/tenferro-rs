@@ -149,7 +149,10 @@ for path in "${changed_files[@]}"; do
   policy_args+=(--path "$path")
 done
 policy_json="$("${policy_args[@]}")"
-mapfile -t policy_fields < <(
+policy_fields=()
+while IFS= read -r field; do
+  policy_fields+=("$field")
+done < <(
   python3 -c \
     'import json, sys; data = json.load(sys.stdin); print(data["classification"]); print(data["reason"])' \
     <<<"${policy_json}"
@@ -163,8 +166,17 @@ run git diff --check "${BASE_REF}...HEAD"
 run git diff --cached --check
 run git diff --check
 if [[ "${#untracked_files[@]}" -gt 0 ]]; then
-  log "note: untracked files are listed above, but git diff --check only covers tracked/staged content"
-  log "      stage or commit new files before relying on this whitespace check"
+  untracked_whitespace_errors=0
+  for path in "${untracked_files[@]}"; do
+    whitespace_output="$(git diff --no-index --check -- /dev/null "$path" 2>&1 || true)"
+    if [[ -n "$whitespace_output" ]]; then
+      printf '%s\n' "$whitespace_output" >&2
+      untracked_whitespace_errors=1
+    fi
+  done
+  if [[ "$untracked_whitespace_errors" -ne 0 ]]; then
+    die "untracked files contain whitespace errors"
+  fi
 fi
 if [[ "${change_class}" == "code" ]]; then
   run cargo fmt --all --check

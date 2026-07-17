@@ -93,7 +93,71 @@ class ChangePolicyTests(unittest.TestCase):
             self.assertEqual(values["classification"], "docs-only")
             self.assertEqual(values["run_docs"], "true")
             self.assertEqual(values["run_rust"], "false")
-        self.assertIn("README.md", values["reason"])
+            self.assertIn("README.md", values["reason"])
+
+    def test_cli_classifies_deleted_documentation_as_docs_only(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=repo,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=repo,
+                check=True,
+            )
+            docs = repo / "docs"
+            docs.mkdir()
+            guide = docs / "guide.md"
+            guide.write_text("guide\n")
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", "add guide"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            base = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            guide.unlink()
+            subprocess.run(["git", "add", "-u"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "commit", "-m", "remove guide"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--base",
+                    base,
+                    "--head",
+                    head,
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(json.loads(result.stdout)["classification"], "docs-only")
 
 
 class LocalGateTests(unittest.TestCase):
@@ -187,6 +251,14 @@ class LocalGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("classification: docs-only", result.stdout)
         self.assertFalse(self.marker.exists(), "docs-only must not invoke Cargo")
+
+    def test_untracked_docs_with_trailing_whitespace_fail(self) -> None:
+        target = self.repo / "docs" / "guide.md"
+        target.parent.mkdir(parents=True)
+        target.write_text("trailing whitespace   \n")
+        result = self.run_gate()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("trailing whitespace", result.stdout + result.stderr)
 
     def test_ci_only_change_requires_a_focused_command(self) -> None:
         self.write_change("scripts/ci/example.py")

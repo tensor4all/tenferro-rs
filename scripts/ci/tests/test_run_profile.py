@@ -100,6 +100,11 @@ class RunProfileTests(unittest.TestCase):
         self.assertIn('python3 scripts/ci/run_profile.py "${profile_args[@]}"', source)
         self.assertNotIn("cargo nextest run --workspace", source)
 
+    def test_fast_preflight_avoids_bash4_only_mapfile(self) -> None:
+        source = (ROOT / "scripts" / "check-pr-fast.sh").read_text()
+        self.assertNotIn("mapfile", source)
+        self.assertIn("while IFS= read -r field", source)
+
     def test_create_pr_forwards_focused_tests(self) -> None:
         source = (ROOT / "scripts" / "create-pr.sh").read_text()
         self.assertIn("bash scripts/check-pr-fast.sh", source)
