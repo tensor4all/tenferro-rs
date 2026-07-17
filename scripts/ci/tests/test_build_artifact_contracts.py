@@ -70,5 +70,27 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertTrue(dependencies["faer"]["optional"])
         self.assertTrue(dependencies["lapack"]["optional"])
 
+    def test_cubecl_dependencies_share_cudarc_contract(self) -> None:
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
+        dependencies = manifest["workspace"]["dependencies"]
+
+        revision = "459fc905529d8b410403793795b73719fd5328d6"
+        for name in (
+            "cubecl",
+            "cubecl-cuda",
+            "cubecl-common",
+            "cubecl-runtime",
+            "cubecl-wgpu",
+        ):
+            with self.subTest(dependency=name):
+                self.assertEqual(dependencies[name]["rev"], revision)
+
+        cudarc = dependencies["cudarc"]
+        self.assertFalse(cudarc["default-features"])
+        self.assertEqual(
+            set(cudarc["features"]),
+            {"driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"},
+        )
+
 if __name__ == "__main__":
     unittest.main()
