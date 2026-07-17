@@ -196,8 +196,8 @@ else
   log "docs snippets: skipped"
 fi
 
-if [[ "${change_class}" != "docs-only" && "${#FOCUSED_TESTS[@]}" -eq 0 ]]; then
-  die "focused verification command required for ${change_class} changes; pass --test COMMAND"
+if [[ "${change_class}" != "docs-only" && "${#FOCUSED_TESTS[@]}" -eq 0 && "${#CI_PROFILES[@]}" -eq 0 ]]; then
+  die "focused verification command required for ${change_class} changes; pass --test COMMAND or --ci-profile NAME"
 fi
 
 for command in "${FOCUSED_TESTS[@]}"; do

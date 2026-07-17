@@ -106,6 +106,10 @@ class LocalGateTests(unittest.TestCase):
             ROOT / "scripts" / "ci" / "change_policy.py",
             self.repo / "scripts" / "ci",
         )
+        shutil.copy2(
+            ROOT / "scripts" / "ci" / "run_profile.py",
+            self.repo / "scripts" / "ci",
+        )
         bin_dir = self.repo / "bin"
         bin_dir.mkdir()
         cargo = bin_dir / "cargo"
@@ -189,6 +193,14 @@ class LocalGateTests(unittest.TestCase):
         result = self.run_gate()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("focused verification command required", result.stderr)
+
+    def test_ci_only_change_accepts_an_explicit_ci_profile(self) -> None:
+        self.write_change("scripts/ci/example.py")
+        result = self.run_gate(
+            "--ci-profile", "ci-config", "--ci-profile-dry-run"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("python3 -m unittest discover", result.stdout)
 
 
 if __name__ == "__main__":
