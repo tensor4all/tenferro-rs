@@ -1,4 +1,5 @@
 import io
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +11,33 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class RunProfileTests(unittest.TestCase):
+    def test_local_gate_uses_non_release_workspace_commands(self) -> None:
+        self.assertEqual(
+            commands_for("local-gate"),
+            (
+                "cargo nextest run --workspace --cargo-profile local-gate "
+                "--no-fail-fast",
+                "cargo test --doc --workspace --profile local-gate",
+            ),
+        )
+
+    def test_local_gate_cargo_profile_preserves_debug_checks(self) -> None:
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
+        self.assertEqual(
+            manifest["profile"]["local-gate"],
+            {
+                "inherits": "dev",
+                "opt-level": 0,
+                "debug": 0,
+                "debug-assertions": True,
+                "overflow-checks": True,
+                "incremental": False,
+            },
+        )
+
+    def test_hosted_full_profile_does_not_include_local_gate(self) -> None:
+        self.assertNotIn("local-gate", expand_profiles(["full"]))
+
     def test_workspace_blas_matches_ci_feature_contract(self) -> None:
         self.assertEqual(
             commands_for("workspace-blas"),
@@ -77,6 +105,42 @@ class RunProfileTests(unittest.TestCase):
         self.assertIn("--ci-profile", source)
         self.assertIn('python3 scripts/ci/run_profile.py "${profile_args[@]}"', source)
         self.assertNotIn("cargo nextest run --workspace", source)
+
+    def test_create_pr_uses_local_gate_instead_of_release_suite(self) -> None:
+        source = (ROOT / "scripts" / "create-pr.sh").read_text()
+        self.assertIn("bash scripts/check-pr-fast.sh", source)
+        self.assertIn("--ci-profile local-gate", source)
+        self.assertIn("python3 scripts/repository-rules-review.py", source)
+        self.assertNotIn("cargo nextest run --workspace --release", source)
+        self.assertNotIn("cargo llvm-cov", source)
+
+    def test_remediation_workflow_uses_local_gate_before_pr(self) -> None:
+        source = (
+            ROOT / "ai" / "contribution-workflows" / "repository-remediation.md"
+        ).read_text()
+        self.assertIn("bash scripts/check-pr-fast.sh", source)
+        self.assertIn("--ci-profile local-gate", source)
+        self.assertNotIn("cargo test --workspace --release", source)
+        self.assertNotIn("cargo llvm-cov --workspace --release", source)
+
+    def test_sccache_policy_preserves_incremental_ai_development(self) -> None:
+        agents = (ROOT / "AGENTS.md").read_text()
+        contributing = (ROOT / "CONTRIBUTING.md").read_text()
+        design = (
+            ROOT
+            / "docs"
+            / "superpowers"
+            / "specs"
+            / "2026-07-17-local-pr-gate-design.md"
+        ).read_text()
+
+        for source in (agents, contributing, design):
+            self.assertIn("AI-assisted edit-test loops", source)
+            self.assertRegex(source, r"Cargo\s+incremental compilation")
+
+        self.assertNotIn(
+            "Before the first workspace-wide local Rust build", agents
+        )
 
 
 if __name__ == "__main__":

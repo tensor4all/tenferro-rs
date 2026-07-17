@@ -338,13 +338,20 @@ Before opening the PR, run the repository-required checks from `AGENTS.md` when
 the environment supports them:
 
 ```bash
-cargo fmt --all --check
-cargo test --workspace --release
-cargo llvm-cov --workspace --release --json --output-path coverage.json
-python3 scripts/check-coverage.py coverage.json
-cargo doc --workspace --no-deps
-python3 scripts/check-docs-site.py
+bash scripts/check-pr-fast.sh \
+  --coverage-reviewed \
+  --ci-profile local-gate
+
+python3 scripts/repository-rules-review.py \
+  --base origin/main \
+  --head HEAD \
+  --output-json /tmp/repository-rules-review.json
 ```
+
+The local gate does not require a release build. Run release-mode checks
+locally only for performance, release-only, unsafe or optimization-sensitive
+changes, or when a maintainer requests them. Hosted CI owns the comprehensive
+release, coverage, backend, documentation, and GPU checks.
 
 For CUDA/GPU work, run the documented CUDA ignored tests when hardware and
 libraries are available. If they are unavailable, add CPU-side or ignored CUDA

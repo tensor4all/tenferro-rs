@@ -198,33 +198,61 @@ When using git worktrees for feature development, **always branch from the lates
 
 ## Pre-Push / PR Checklist
 
-Before pushing or creating a pull request, **all** of the following must pass:
+Before pushing or creating a pull request, run the non-release local gate:
 
 ```bash
-cargo fmt --all --check   # formatting
-cargo test --workspace --release   # all tests
-cargo llvm-cov --workspace --release --json --output-path coverage.json
-python3 scripts/check-coverage.py coverage.json
-cargo doc --workspace --no-deps
-python3 scripts/check-docs-site.py
+bash scripts/check-pr-fast.sh \
+  --coverage-reviewed \
+  --ci-profile local-gate
+
 python3 scripts/repository-rules-review.py \
   --base origin/main \
   --head HEAD \
   --output-json /tmp/repository-rules-review.json
 ```
 
-If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting automatically.
-Run the local LLM review on the committed PR head; `--worktree` is acceptable
-only as an earlier preview, and must be rerun without `--worktree` before PR
-creation.
+The `local-gate` Cargo profile is non-optimized, preserves debug assertions and
+overflow checks, omits debug symbols, and disables incremental compilation.
+Hosted CI owns the full release workspace tests, coverage enforcement, backend
+matrix, docs-site build, and GPU validation. Do not require those comprehensive
+hosted-CI commands locally before every PR.
+
+Run the relevant release test or benchmark locally when a change is
+performance-sensitive, reproduces a release-only bug, touches unsafe or
+optimization-sensitive behavior, or a maintainer explicitly requests it.
+
+If the formatting step fails, run `cargo fmt --all` to fix formatting
+automatically. Run the local LLM review on the committed PR head;
+`--worktree` is acceptable only as an earlier preview, and must be rerun
+without `--worktree` before PR creation.
 
 Additionally, verify the following before pushing:
 
-- **Clippy parity**: Run clippy locally with the same command and options as the repository CI `clippy` job; do not use a relaxed local variant.
 - **Side review**: Re-read `REPOSITORY_RULES.md` and review the local diff against repository rules before creating a PR. Fix any findings, or explicitly document residual risks.
 - **Sample code verification**: All code examples in `README.md` and `docs/getting-started/` must compile and run correctly. Extract and test any changed examples.
 - **Design document updates**: When code changes affect architecture or specifications, update the corresponding documents in `docs/architecture/`, `docs/spec/`, or `docs/design/`, and update any affected diagrams under `docs/assets/` or embedded in Markdown. Stale documentation is worse than no documentation.
 - **Work log updates**: For nontrivial refactors, cleanup streams, AI-assisted implementation, or explicit tradeoff decisions, add or update a work log under `docs/worklogs/` and link it from the PR body.
+
+### Local Rust Build Acceleration
+
+Ordinary focused local development, including AI-assisted edit-test loops,
+should use Cargo incremental compilation through the default dev/test
+profiles. Do not recommend or enable `sccache` solely for these loops.
+
+Before a non-incremental `local-gate` run or a workspace-wide build whose
+outputs should be reused across worktrees, check whether `sccache` is installed
+and enabled for that command. If either is missing, recommend the
+developer-local setup in `CONTRIBUTING.md` once.
+
+- Do not install sccache or edit global Cargo configuration without explicit
+  user approval.
+- Do not disable incremental compilation in the default dev/test profiles or
+  set `RUSTC_WRAPPER=sccache` globally as a general local-development default.
+- Use developer-local cache only. Do not introduce or recommend a shared remote
+  sccache.
+- Correctness checks and PR gates must work on a cache miss.
+- Disable sccache for clean-build measurements and report whether each timing
+  used a cold or warm cache.
 
 ### PR Creation Rules
 
@@ -255,6 +283,9 @@ cargo test -p tenferro-einsum
 
 # Run a single test
 cargo test test_name
+
+# Run the non-release local PR test profile
+python3 scripts/ci/run_profile.py local-gate
 
 # Check formatting
 cargo fmt --check

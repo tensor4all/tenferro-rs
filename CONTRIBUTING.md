@@ -72,7 +72,23 @@ Implementation PRs for new features or substantial changes that are opened
 before an accepted issue may be closed with a request to continue the
 discussion in an issue first.
 
-## Local and hosted CI profiles
+## Local PR gate and hosted CI profiles
+
+Before opening or updating a pull request, run the non-release local gate:
+
+```bash
+bash scripts/check-pr-fast.sh \
+  --coverage-reviewed \
+  --ci-profile local-gate
+```
+
+The `local-gate` profile uses non-optimized debug semantics with debug
+assertions and overflow checks enabled. It omits debug symbols and incremental
+state to keep workspace-wide validation bounded and compatible with sccache.
+Hosted CI remains responsible for release tests, coverage, backend variants,
+documentation builds, and GPU validation. Run release locally when validating
+performance, a release-only failure, unsafe or optimization-sensitive behavior,
+or an explicit maintainer request.
 
 The exact command groups used by hosted CI are available locally:
 
@@ -83,10 +99,36 @@ python3 scripts/ci/run_profile.py workspace-blas
 python3 scripts/ci/run_profile.py docs
 ```
 
-`full` expands every profile once. Use `--dry-run` to inspect commands without
-executing them. `scripts/check-pr-fast.sh` also accepts repeatable
-`--ci-profile NAME` options; prefer these profiles over copying hosted-CI
-commands into local scripts.
+`full` expands every hosted profile once and intentionally excludes
+`local-gate`. Use `--dry-run` to inspect commands without executing them.
+`scripts/check-pr-fast.sh` accepts repeatable `--ci-profile NAME` options;
+prefer these profiles over copying command lists into local scripts.
+
+### Optional developer-local sccache
+
+Developers who use multiple worktrees can share compatible compiler outputs
+for non-incremental workspace-wide gates through a local sccache. Keep the
+wrapper scoped to the gate command:
+
+```bash
+RUSTC_WRAPPER=sccache \
+SCCACHE_DIR="$HOME/.cache/tensor4all/sccache" \
+SCCACHE_CACHE_SIZE=20G \
+  bash scripts/check-pr-fast.sh \
+    --coverage-reviewed \
+    --ci-profile local-gate
+
+SCCACHE_DIR="$HOME/.cache/tensor4all/sccache" sccache --show-stats
+```
+
+This is an optional local optimization. Do not configure a shared remote cache,
+and do not rely on cache hits for correctness. Ordinary focused local
+development, including AI-assisted edit-test loops, should use Cargo
+incremental compilation through the default dev/test profiles. Do not set
+`RUSTC_WRAPPER=sccache` globally for those loops. The `local-gate` profile
+disables incremental compilation so sccache can cache eligible crate
+compilations across worktrees. Disable sccache when measuring clean-build
+performance.
 
 Pull-request CI classifies a diff conservatively as code, docs-only, or
 CI-only. Docs-only changes run documentation validation. CI-only changes run
