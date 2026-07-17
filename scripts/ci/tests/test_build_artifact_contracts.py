@@ -72,7 +72,7 @@ class BuildArtifactContracts(unittest.TestCase):
         self.assertFalse(faer["default-features"])
         self.assertEqual(set(faer["features"]), {"std", "rayon"})
 
-        revision = "017c7e2413e48e5182590eed9b2e99350cbd5283"
+        revision = "10fc972d3c0f8cdfd4ecb45d21d815aebfd7d1f2"
         for name in (
             "strided-view",
             "strided-traits",
@@ -101,7 +101,7 @@ class BuildArtifactContracts(unittest.TestCase):
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
         dependencies = manifest["workspace"]["dependencies"]
 
-        revision = "659b4ececd485b80c47c201b755ce4aaf5fee4c0"
+        revision = "b9e8f0f3bb45f95e983a5c444b583ea56755190a"
         for name in (
             "cubecl",
             "cubecl-cuda",
