@@ -11,7 +11,8 @@
    removed packages with `cargo tree`.
 6. Add failing linalg provider-isolation contract tests, make `faer` and
    `lapack` optional under their provider features, and compile faer-only,
-   BLAS-only, both-provider, and no-default configurations.
+   BLAS-only, and both-provider configurations. Confirm that no-default emits
+   the existing provider-required diagnostic.
 7. Audit direct CubeCL/cudarc imports and resolved CUDA features, add dependency
    ownership tests, remove redundant operation-crate edges, and compile CUDA
    targets without executing GPU tests.

@@ -48,9 +48,16 @@ Treat `tenferro-gpu` as the owner of CubeCL/cudarc runtime integration.
 Operation-family crates should request `tenferro-gpu/cuda` instead of declaring
 parallel direct CubeCL/cudarc edges unless their own source directly imports
 those crates. Disable dependency defaults and align the CUDA binding floor and
-dynamic-loading features at the workspace owner. Distinguish genuine duplicate
-feature builds from unavoidable host/build-versus-target artifacts before
-removing an edge.
+dynamic-loading features at the workspace owner.
+
+Cargo builds normal and build dependencies as distinct units even when their
+feature sets are identical. Do not broaden a build dependency merely to make
+its features textually match the normal dependency: use the same explicit CUDA
+floor and loading mode, but give each dependency role only the API families it
+actually uses. For CubeCL, the normal dependency needs driver, runtime, NVRTC,
+and NCCL; its build script only reads a driver version constant and therefore
+uses the smaller driver-only contract. The two artifacts are unavoidable, but
+avoidable fallback/version-detection features are not.
 
 ## Measurement contract
 
@@ -63,8 +70,9 @@ pruning, optional linalg providers, and CUDA unification.
 
 ## Verification
 
-In addition to the repository PR gate, verify no-default, faer-only, BLAS-only,
-both-provider, and CUDA compile configurations. Dependency-tree assertions must
-show that faer-only linalg excludes LAPACK, BLAS-only linalg excludes faer, and
-the removed faer packages do not re-enter through strided-rs.
-
+In addition to the repository PR gate, verify faer-only, BLAS-only,
+both-provider, and CUDA compile configurations. Confirm that no-default retains
+the existing explicit "enable at least one fallback CPU backend" compile-time
+diagnostic. Dependency-tree assertions must show that faer-only linalg excludes
+LAPACK, BLAS-only linalg excludes faer, and the removed faer packages do not
+re-enter through strided-rs.
