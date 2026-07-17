@@ -1,5 +1,6 @@
 [package]
 name = "tenferro-cpu"
+autotests = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -116,3 +117,7 @@ required-features = ["cpu-tblis-provider"]
 name = "numa_execution"
 harness = false
 required-features = ["cpu-faer"]
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

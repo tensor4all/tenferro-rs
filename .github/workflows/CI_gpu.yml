@@ -516,7 +516,7 @@ jobs:
           XLA_FLAGS="--xla_gpu_cuda_data_dir=${cuda_nvcc_dir} ${XLA_FLAGS:-}" \
           TENFERRO_PJRT_PLUGIN="${plugin_path}" \
           LD_LIBRARY_PATH="${cudnn_lib}:${LD_LIBRARY_PATH:-}" \
-            cargo test -p tenferro-xla --features pjrt --test pjrt_execution -- --nocapture
+            cargo test -p tenferro-xla --features pjrt --test integration pjrt_execution -- --nocapture
 
   cuda-gate:
     name: CI GPU gate

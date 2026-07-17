@@ -1,5 +1,6 @@
 [package]
 name = "tenferro-gpu"
+autotests = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -69,3 +70,7 @@ criterion.workspace = true
 [[example]]
 name = "cuda_quickstart"
 required-features = ["cuda"]
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

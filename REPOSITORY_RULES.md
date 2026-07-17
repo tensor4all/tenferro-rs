@@ -350,10 +350,10 @@ rules from `tensor4all-agent-rules`.
   asserted against the machine-readable manifest — not when llvm-cov reports a
   high line percentage. For linalg this is enforced by:
   - the finite-difference sweep in
-    `crates/tenferro-linalg/tests/traced_ad_explicit.rs` (cholesky, qr, eig,
+    `crates/tenferro-linalg/tests/integration/traced_ad_explicit.rs` (cholesky, qr, eig,
     eigh, lu, full_piv_lu, solve, triangular_solve, svd/eig/eigh values),
   - the manifest assertions in
-    `crates/tenferro-linalg/tests/ad_support_manifest.rs` against
+    `crates/tenferro-linalg/tests/integration/ad_support_manifest.rs` against
     `crates/tenferro-linalg/src/ad/support.rs`
     (`all_linalg_ad_support()` covers every dispatch arm and output status), and
   - the oracle support table in `docs/oracle/tensor-ad-oracles-support.md`.

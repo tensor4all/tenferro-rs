@@ -1,5 +1,6 @@
 [package]
 name = "tenferro-ad"
+autotests = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -59,3 +60,7 @@ criterion.workspace = true
 [[bench]]
 name = "eager_ad_transform_cache"
 harness = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

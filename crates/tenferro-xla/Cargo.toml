@@ -1,5 +1,6 @@
 [package]
 name = "tenferro-xla"
+autotests = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -29,3 +30,7 @@ thiserror.workspace = true
 [dev-dependencies]
 tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features = false, features = ["cpu-faer"] }
 tenferro-einsum = { path = "../tenferro-einsum", version = "0.2.0", default-features = false }
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

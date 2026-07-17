@@ -80,7 +80,7 @@ unset, empty, points to a missing file, or the library does not export
 
 ```bash
 TENFERRO_PJRT_PLUGIN=/path/to/pjrt_c_api_cpu_plugin.so \
-  cargo test -p tenferro-xla --features pjrt --test pjrt_env
+  cargo test -p tenferro-xla --features pjrt --test integration pjrt_env
 ```
 
 OpenXLA/JAX CUDA PJRT wheels provide a prebuilt C API plugin. For example, on a
@@ -107,7 +107,7 @@ export TENFERRO_PJRT_PLUGIN=/tmp/tenferro-openxla-prebuilt/unpacked/jax_cuda12_p
 export LD_LIBRARY_PATH=/tmp/tenferro-openxla-prebuilt/unpacked/nvidia_cudnn_cu12-9.23.2.1-py3-none-manylinux_2_27_x86_64/nvidia/cudnn/lib:$LD_LIBRARY_PATH
 export XLA_FLAGS=--xla_gpu_cuda_data_dir=/tmp/tenferro-openxla-prebuilt/unpacked/nvidia_cuda_nvcc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64/nvidia/cuda_nvcc
 
-cargo test -p tenferro-xla --features pjrt --test pjrt_execution -- --nocapture
+cargo test -p tenferro-xla --features pjrt --test integration pjrt_execution -- --nocapture
 ```
 
 `XlaExecutor::run_with_inputs` and `XlaExecutor::run_many_with_inputs` use a
@@ -251,7 +251,7 @@ StableHLO through OpenXLA's `run_hlo_module` tool when that tool is available:
 ```bash
 TENFERRO_XLA_RUN_HLO_MODULE=/path/to/run_hlo_module \
 TENFERRO_XLA_RUN_HLO_PLATFORM=Host \
-  cargo test -p tenferro-xla --test xla_tool_execution -- --nocapture
+  cargo test -p tenferro-xla --test integration xla_tool_execution -- --nocapture
 ```
 
 The test covers a direct static tensor graph, the Phase 1 real-floating
@@ -265,7 +265,7 @@ CUDA_PATH=/usr/local/cuda-12.8 \
 LD_LIBRARY_PATH=$CUDA_PATH/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
 TENFERRO_XLA_RUN_HLO_MODULE=/path/to/run_hlo_module \
 TENFERRO_XLA_RUN_HLO_PLATFORM=CUDA \
-  cargo test -p tenferro-xla --test xla_tool_execution -- --nocapture
+  cargo test -p tenferro-xla --test integration xla_tool_execution -- --nocapture
 ```
 
 If `TENFERRO_XLA_RUN_HLO_MODULE` is not set, the test exits successfully after
