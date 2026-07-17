@@ -568,6 +568,7 @@ impl CudaBackend {
     }
 
     /// Clear CUDA extension-owned backend state.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
@@ -577,6 +578,7 @@ impl CudaBackend {
     }
 
     /// Return CUDA extension cache stats.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
@@ -586,6 +588,7 @@ impl CudaBackend {
     }
 
     /// Return the CUDA extension cache entry bound.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
@@ -595,6 +598,7 @@ impl CudaBackend {
     }
 
     /// Configure the CUDA extension cache entry bound.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is

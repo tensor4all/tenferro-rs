@@ -96,8 +96,10 @@ pub fn raw_cuda_stream(rt: &CudaRuntime, op: &'static str) -> crate::Result<u64>
 /// Return the launch cube count for a one-dimensional kernel domain.
 /// # Errors
 ///
-/// Returns [`crate::Error::Validation`] with `InvalidArgument` when `len`
-/// cannot be represented by CubeCL's launch-count type.
+/// Returns [`crate::Error::Validation`] containing
+/// [`tenferro_tensor::ValidationError::InvalidArgument`] when the
+/// one-dimensional launch for `len` elements would require more than
+/// `u32::MAX` CubeCL workgroups.
 pub fn cube_count_for_len(len: usize) -> crate::Result<CubeCount> {
     dispatch::cube_count_for_len(len)
 }

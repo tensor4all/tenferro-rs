@@ -662,9 +662,14 @@ impl EagerTensor {
     /// ```
     /// # Errors
     ///
-    /// Returns [`tenferro_tensor::Error::Validation`] with `InvalidArgument`
-    /// when padding vectors do not match the input rank or checked output-size
-    /// arithmetic overflows, or a typed backend/runtime-state error.
+    /// Returns [`tenferro_runtime::Error::TensorRuntime`] containing
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when a
+    /// padding vector has a length different from the input rank, interior
+    /// padding is negative, or edge/interior padding produces a negative
+    /// dimension or checked output-size arithmetic overflows.
+    /// Backend execution and unavailable runtime state are propagated as their
+    /// typed [`tenferro_runtime::Error::TensorRuntime`] or
+    /// [`tenferro_runtime::Error::RuntimeState`] variants.
     pub fn pad(&self, config: PadConfig) -> Result<Self> {
         self.unary_op(StdTensorOp::Pad(config))
     }

@@ -166,9 +166,12 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 ///
 /// # Errors
 ///
-/// Returns `Error::Validation` with `InvalidArgument` if an extension op is
-/// passed to this standard-op entry point. Propagates concrete tensor,
-/// backend, and runtime-state failures from the selected eager context.
+/// Returns [`tenferro_runtime::Error::TensorRuntime`] containing
+/// [`tenferro_tensor::ValidationError::InvalidArgument`] if an extension
+/// op is passed to this standard-op entry point. Returns
+/// [`tenferro_runtime::Error::ContextMismatch`] for tensors from different
+/// eager contexts and propagates typed tensor/backend/runtime-state failures
+/// from the selected eager context.
 pub fn apply_standard_op(op: StdTensorOp, inputs: &[&EagerTensor]) -> Result<EagerTensor> {
     if matches!(op, StdTensorOp::Extension(_)) {
         return Err(Error::invalid_argument(

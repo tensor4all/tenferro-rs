@@ -133,9 +133,21 @@ pub trait LinalgBackend: TensorBackend {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation::InvalidArgument` when `derivative_eps` is
-    /// non-finite or non-positive, then propagates the concrete `svd` and
-    /// gauge validation/backend errors.
+    /// Returns [`tenferro_tensor::Error::Validation`] containing
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when
+    /// `derivative_eps` is non-finite or non-positive, or when canonical gauge
+    /// output metadata is malformed. It can return
+    /// [`tenferro_tensor::Error::Validation`] with
+    /// [`tenferro_tensor::ValidationError::RankMismatch`],
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`], or
+    /// [`tenferro_tensor::ValidationError::DTypeMismatch`] for the input
+    /// or generated outputs, [`tenferro_tensor::Error::Extension`] with the
+    /// typed `tenferro_linalg::Error::UnsupportedDType` or
+    /// `NonConvergence` source, [`tenferro_tensor::Error::BackendSource`] for
+    /// provider calls, and [`tenferro_tensor::Error::RuntimeState`] for
+    /// placement failures. A CPU provider that was not compiled is reported
+    /// as [`tenferro_tensor::ValidationError::InvalidArgument`] on the
+    /// provider configuration.
     fn svd_with_options(
         &mut self,
         input: &Tensor,
@@ -228,8 +240,17 @@ pub trait LinalgBackend: TensorBackend {
     ///
     /// # Errors
     ///
-    /// Propagates `Error::Validation` from the input or gauge configuration,
-    /// plus typed extension/backend errors from QR execution.
+    /// Returns [`tenferro_tensor::Error::Validation`] containing
+    /// [`tenferro_tensor::ValidationError::RankMismatch`] or
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] for an invalid
+    /// matrix input, or [`tenferro_tensor::ValidationError::InvalidArgument`]
+    /// for malformed gauge output metadata, checked size arithmetic, or an
+    /// unavailable compiled provider. A mismatched generated `Q`/`R` dtype is reported as
+    /// [`tenferro_tensor::ValidationError::DTypeMismatch`]. Provider
+    /// unsupported dtype or numerical rejection is
+    /// [`tenferro_tensor::Error::Extension`] with a typed linalg source, while
+    /// provider failures use [`tenferro_tensor::Error::BackendSource`] and a
+    /// backend-resident input uses [`tenferro_tensor::Error::RuntimeState`].
     fn qr_with_options(
         &mut self,
         input: &Tensor,
@@ -314,9 +335,20 @@ pub trait LinalgBackend: TensorBackend {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation::InvalidArgument` for an invalid
-    /// `derivative_eps`, then propagates eigensolver, gauge, and typed backend
-    /// errors.
+    /// Returns [`tenferro_tensor::Error::Validation`] containing
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when
+    /// `derivative_eps` is non-finite or non-positive, when canonical gauge
+    /// output metadata is malformed, or when checked output-size arithmetic
+    /// overflows. It can return [`tenferro_tensor::Error::Validation`] with
+    /// [`tenferro_tensor::ValidationError::RankMismatch`] or
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] for the
+    /// matrix input, or [`tenferro_tensor::ValidationError::DTypeMismatch`]
+    /// for generated outputs. It can also return
+    /// [`tenferro_tensor::Error::Extension`] with typed
+    /// `tenferro_linalg::Error::UnsupportedDType` or `NonConvergence`, and
+    /// [`tenferro_tensor::Error::BackendSource`] or
+    /// [`tenferro_tensor::Error::RuntimeState`] for provider and placement
+    /// failures.
     fn eigh_with_options(
         &mut self,
         input: &Tensor,

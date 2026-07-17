@@ -61,6 +61,20 @@ class PublicErrorDocsTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("concrete", findings[0].reason)
 
+    def test_validation_wrapper_without_payload_is_not_concrete(self) -> None:
+        findings = self.audit(
+            """
+            /// Compute a value.
+            ///
+            /// # Errors
+            ///
+            /// Returns `Error::Validation` with a typed validation source.
+            pub fn compute() -> Result<(), MyError> { Ok(()) }
+            """
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertIn("concrete", findings[0].reason)
+
     def test_trait_method_and_variant_are_accepted(self) -> None:
         findings = self.audit(
             """
@@ -69,7 +83,7 @@ class PublicErrorDocsTests(unittest.TestCase):
                 ///
                 /// # Errors
                 ///
-                /// Returns `Error::Validation` for invalid input.
+            /// Returns `ValidationError::ShapeMismatch` for incompatible input.
                 fn compute(&self) -> Result<(), Error>;
             }
             """
@@ -80,7 +94,7 @@ class PublicErrorDocsTests(unittest.TestCase):
         findings = self.audit(
             r'''
             #[doc = "Register an extension."]
-            #[doc = "\n# Errors\n\nReturns `Error::Validation` for an invalid family id."]
+            #[doc = "\n# Errors\n\nReturns `Error::InvalidArgument` for an invalid family id."]
             pub fn register() -> Result<(), Error> { Ok(()) }
             '''
         )
@@ -93,7 +107,7 @@ class PublicErrorDocsTests(unittest.TestCase):
             ///
             /// # Errors
             ///
-            /// Returns `Error::Validation` when shape compatibility is checked
+            /// Returns `ValidationError::ShapeMismatch` when shape compatibility is checked
             /// during compilation or execution.
             pub fn build() -> Result<(), Error> { Ok(()) }
             """,
@@ -109,7 +123,7 @@ class PublicErrorDocsTests(unittest.TestCase):
             ///
             /// # Errors
             ///
-            /// Returns `Error::Validation` for an invalid shape.
+            /// Returns `ValidationError::ShapeMismatch` for an invalid shape.
             ///
             /// # Deferred errors
             ///

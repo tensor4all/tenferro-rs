@@ -183,7 +183,7 @@ command passes with all 36 tests.
 The same release run found two einsum doctests whose trailing `Ok::<...>`
 annotations still named the removed AD error type after the einsum API became
 crate-local. The examples now return `tenferro_einsum::Error`; the exact
-`cargo test -p tenferro-einsum --doc --release` gate passes all 78 doctests.
+`cargo test -p tenferro-einsum --doc --release` gate passes all 81 doctests.
 
 The next workspace release run found one remaining stale doctest in
 `tenferro_tensor::validate::DiagonalError`: the example constructed the
@@ -203,10 +203,39 @@ passed `python3.11 scripts/check-coverage.py coverage.json` for 163/163 files
 The remaining static gates also passed: `cargo fmt --all --check`,
 `git diff --check`, `cargo doc --workspace --no-deps`, full and
 `--changed-from origin/main` public-error documentation audits, the audit's
-eight unit tests, docs consistency tests, repository-rule review tests, the
+nine unit tests, docs consistency tests, repository-rule review tests, the
 workspace strict Clippy command, and strict Clippy for both nested extension
 manifests. The public-error audit reported `public-error-docs-ok` in both
 modes; no `result_large_err` or documentation allowlist was added.
+
+The audit was then tightened after the committed-head repository review
+identified eight `TypedTensorView` methods and four CUDA cache methods whose
+sections were either generic or separated from the heading by a missing blank
+doc line. The concrete-variant matcher now rejects `Error::Validation` unless
+the section also names a payload variant or an observable condition; its
+negative regression test covers the exact category-only wording. The affected
+accessors now name rank/index/layout/dtype/runtime-state conditions, the linalg
+option methods name their input, gauge, provider, and placement failures, and
+the eager pad/extension and CubeCL launch docs name their concrete sources.
+The exact follow-up checks passed:
+
+```text
+python3.11 scripts/test-check-public-error-docs.py       # 9 tests
+python3.11 scripts/check-public-error-docs.py            # public-error-docs-ok
+python3.11 scripts/check-public-error-docs.py --changed-from origin/main
+python3 scripts/test-doc-consistency.py
+python3 scripts/test-repository-rules-review.py
+cargo doc --workspace --no-deps
+cargo test -p tenferro-ad --doc --release                    # 130 passed
+cargo test -p tenferro-linalg --doc --release                # 49 passed
+```
+
+The worktree-inclusive repository-rules review was rerun with
+`python3 scripts/repository-rules-review.py --base origin/main --head HEAD
+--worktree --output-json /tmp/repository-rules-review-worktree.json` and
+returned `Verdict: pass / No findings`. Rustdoc produced no broken-link
+warnings after replacing cross-crate links with the public
+`tenferro_tensor::ValidationError` path.
 
 The current WebGPU feature check was rerun as
 `cargo check -p tenferro-gpu --no-default-features --features 'webgpu cpu-faer' --all-targets --message-format=short` and still exits 101 with 18 diagnostics. Its first errors remain the CubeCL `TensorBinding`, `StorageType`, and `Type` mismatches recorded above; this is the same dependency mismatch proven on clean `origin/main`, not a structured-error change.

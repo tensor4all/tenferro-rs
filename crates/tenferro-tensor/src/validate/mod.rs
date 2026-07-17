@@ -129,8 +129,10 @@ pub fn validate_convert_dtype(op: &'static str, from: DType, to: DType) -> Resul
 /// ```
 /// # Errors
 ///
-/// Returns [`crate::Error::Validation`] with an `InvalidArgument` source when
-/// the shape product overflows `usize`.
+/// Returns [`crate::Error::Validation`] containing
+/// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+/// product of `shape` exceeds `usize::MAX`; `role` identifies the shape-like
+/// argument in the diagnostic.
 pub fn checked_shape_product(
     op: &'static str,
     role: &'static str,
