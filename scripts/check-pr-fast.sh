@@ -144,14 +144,45 @@ else
   printf '  %s\n' "${changed_files[@]}"
 fi
 
+policy_args=(python3 scripts/ci/change_policy.py)
+for path in "${changed_files[@]}"; do
+  policy_args+=(--path "$path")
+done
+policy_json="$("${policy_args[@]}")"
+policy_fields=()
+while IFS= read -r field; do
+  policy_fields+=("$field")
+done < <(
+  python3 -c \
+    'import json, sys; data = json.load(sys.stdin); print(data["classification"]); print(data["reason"])' \
+    <<<"${policy_json}"
+)
+change_class="${policy_fields[0]}"
+change_reason="${policy_fields[1]}"
+log "classification: ${change_class}"
+log "classification reason: ${change_reason}"
+
 run git diff --check "${BASE_REF}...HEAD"
 run git diff --cached --check
 run git diff --check
 if [[ "${#untracked_files[@]}" -gt 0 ]]; then
-  log "note: untracked files are listed above, but git diff --check only covers tracked/staged content"
-  log "      stage or commit new files before relying on this whitespace check"
+  untracked_whitespace_errors=0
+  for path in "${untracked_files[@]}"; do
+    whitespace_output="$(git diff --no-index --check -- /dev/null "$path" 2>&1 || true)"
+    if [[ -n "$whitespace_output" ]]; then
+      printf '%s\n' "$whitespace_output" >&2
+      untracked_whitespace_errors=1
+    fi
+  done
+  if [[ "$untracked_whitespace_errors" -ne 0 ]]; then
+    die "untracked files contain whitespace errors"
+  fi
 fi
-run cargo fmt --all --check
+if [[ "${change_class}" == "code" ]]; then
+  run cargo fmt --all --check
+else
+  log "cargo fmt: skipped for ${change_class} changes"
+fi
 
 run_doc_snippets=0
 case "$DOC_SNIPPETS" in
@@ -177,6 +208,10 @@ else
   log "docs snippets: skipped"
 fi
 
+if [[ "${change_class}" != "docs-only" && "${#FOCUSED_TESTS[@]}" -eq 0 && "${#CI_PROFILES[@]}" -eq 0 ]]; then
+  die "focused verification command required for ${change_class} changes; pass --test COMMAND or --ci-profile NAME"
+fi
+
 for command in "${FOCUSED_TESTS[@]}"; do
   log "+ ${command}"
   bash -lc "$command"
@@ -192,7 +227,7 @@ elif [[ "$CI_PROFILE_DRY_RUN" -eq 1 ]]; then
   die "--ci-profile-dry-run requires at least one --ci-profile"
 fi
 
-if [[ "$COVERAGE_REVIEWED" -ne 1 ]]; then
+if [[ "${change_class}" == "code" && "$COVERAGE_REVIEWED" -ne 1 ]]; then
   cat >&2 <<'EOF'
 coverage review not confirmed
 

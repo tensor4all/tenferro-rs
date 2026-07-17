@@ -340,7 +340,7 @@ the environment supports them:
 ```bash
 bash scripts/check-pr-fast.sh \
   --coverage-reviewed \
-  --ci-profile local-gate
+  --test 'cargo test -p tenferro-tensor checked_convert_follows_dtype_promotion_lattice'
 
 python3 scripts/repository-rules-review.py \
   --base origin/main \
@@ -348,10 +348,12 @@ python3 scripts/repository-rules-review.py \
   --output-json /tmp/repository-rules-review.json
 ```
 
-The local gate does not require a release build. Run release-mode checks
-locally only for performance, release-only, unsafe or optimization-sensitive
-changes, or when a maintainer requests them. Hosted CI owns the comprehensive
-release, coverage, backend, documentation, and GPU checks.
+Choose focused commands that cover every changed subsystem in the remediation
+batch. The local gate uses incremental non-release builds. Run release-mode
+checks locally only for performance, release-only, unsafe or
+optimization-sensitive changes, or when a maintainer requests them. Hosted CI
+owns comprehensive clean workspace, coverage, backend, documentation, and GPU
+checks.
 
 For CUDA/GPU work, run the documented CUDA ignored tests when hardware and
 libraries are available. If they are unavailable, add CPU-side or ignored CUDA

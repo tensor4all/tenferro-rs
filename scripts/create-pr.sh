@@ -8,6 +8,7 @@ AUTO_MERGE=1
 DRAFT=0
 AI_TOOL_NAME=""
 AI_TOOL_URL=""
+FOCUSED_TESTS=()
 
 usage() {
   cat <<'EOF'
@@ -17,6 +18,7 @@ Options:
   --base BRANCH          Base branch for the pull request (default: main)
   --title TITLE          Pull request title (defaults to the latest commit subject)
   --body-file PATH       Markdown body file to pass to gh pr create
+  --test COMMAND         Focused local verification command; repeatable
   --no-auto-merge        Do not enable auto-merge after PR creation
   --draft                Create the PR as a draft
   --ai-tool-name NAME    Attribution display name, for example "Claude Code"
@@ -47,7 +49,14 @@ ensure_body_file() {
     printf '## Summary\n\n'
     git log --format='- %s' "${BASE_BRANCH}..HEAD" 2>/dev/null || true
     printf '\n## Verification\n\n'
-    printf -- '- `bash scripts/check-pr-fast.sh --coverage-reviewed --ci-profile local-gate`\n'
+    printf -- '- Focused local verification:\n'
+    if [[ "${#FOCUSED_TESTS[@]}" -eq 0 ]]; then
+      printf -- '  - `bash scripts/check-pr-fast.sh` (documentation-only path)\n'
+    else
+      for command in "${FOCUSED_TESTS[@]}"; do
+        printf -- '  - `%s`\n' "$command"
+      done
+    fi
     printf -- '- `python3 scripts/repository-rules-review.py --base origin/%s --head HEAD`\n' "$BASE_BRANCH"
     printf '\n## Documentation\n\n'
     printf -- '- Reviewed `README.md`, `docs/design/**`, `docs/api/index.md`, and public rustdoc for consistency.\n'
@@ -67,10 +76,14 @@ append_ai_attribution() {
 }
 
 run_required_checks() {
-  bash scripts/check-pr-fast.sh \
-    --base "origin/${BASE_BRANCH}" \
-    --coverage-reviewed \
-    --ci-profile local-gate
+  fast_gate_args=(
+    --base "origin/${BASE_BRANCH}"
+    --coverage-reviewed
+  )
+  for command in "${FOCUSED_TESTS[@]}"; do
+    fast_gate_args+=(--test "$command")
+  done
+  bash scripts/check-pr-fast.sh "${fast_gate_args[@]}"
   python3 scripts/repository-rules-review.py \
     --base "origin/${BASE_BRANCH}" \
     --head HEAD \
@@ -89,6 +102,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --body-file)
       BODY_FILE="$2"
+      shift 2
+      ;;
+    --test)
+      [[ $# -ge 2 ]] || {
+        log "--test requires a command"
+        exit 1
+      }
+      FOCUSED_TESTS+=("$2")
       shift 2
       ;;
     --no-auto-merge)
@@ -143,11 +164,7 @@ fi
 ensure_body_file
 append_ai_attribution
 
-if git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then
-  git push
-else
-  git push -u origin "$current_branch"
-fi
+git push -u origin "$current_branch"
 
 create_args=(pr create --base "$BASE_BRANCH" --title "$TITLE" --body-file "$BODY_FILE")
 if [[ "$DRAFT" -eq 1 ]]; then

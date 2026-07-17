@@ -1,5 +1,9 @@
 # Local PR Gate Design
 
+> **Superseded:** This design records the former non-incremental workspace-wide
+> local gate. The current policy is defined by
+> [`2026-07-17-lightweight-local-pr-gate-design.md`](2026-07-17-lightweight-local-pr-gate-design.md).
+
 ## Scope
 
 Local pull-request preparation should catch ordinary Rust correctness failures

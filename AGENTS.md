@@ -198,12 +198,13 @@ When using git worktrees for feature development, **always branch from the lates
 
 ## Pre-Push / PR Checklist
 
-Before pushing or creating a pull request, run the non-release local gate:
+Before pushing or creating a pull request with code changes, run focused
+non-release verification through the local gate:
 
 ```bash
 bash scripts/check-pr-fast.sh \
   --coverage-reviewed \
-  --ci-profile local-gate
+  --test 'cargo test -p tenferro-tensor checked_convert_follows_dtype_promotion_lattice'
 
 python3 scripts/repository-rules-review.py \
   --base origin/main \
@@ -211,11 +212,16 @@ python3 scripts/repository-rules-review.py \
   --output-json /tmp/repository-rules-review.json
 ```
 
-The `local-gate` Cargo profile is non-optimized, preserves debug assertions and
-overflow checks, omits debug symbols, and disables incremental compilation.
-Hosted CI owns the full release workspace tests, coverage enforcement, backend
-matrix, docs-site build, and GPU validation. Do not require those comprehensive
-hosted-CI commands locally before every PR.
+For documentation-only changes, run `bash scripts/check-pr-fast.sh` without a
+Rust test or coverage acknowledgement. CI-only changes require a focused CI
+helper command through `--test`. The default dev/test profiles use
+`opt-level=0`, `debug=0`, and `incremental=true`, while preserving debug
+assertions and overflow checks.
+
+Hosted CI owns complete workspace tests, coverage enforcement, backend matrix,
+docs-site builds, GPU validation, and clean builds with incremental compilation
+disabled. Do not require those comprehensive hosted-CI commands locally before
+every PR.
 
 Run the relevant release test or benchmark locally when a change is
 performance-sensitive, reproduces a release-only bug, touches unsafe or
@@ -236,13 +242,10 @@ Additionally, verify the following before pushing:
 ### Local Rust Build Acceleration
 
 Ordinary focused local development, including AI-assisted edit-test loops,
-should use Cargo incremental compilation through the default dev/test
-profiles. Do not recommend or enable `sccache` solely for these loops.
-
-Before a non-incremental `local-gate` run or a workspace-wide build whose
-outputs should be reused across worktrees, check whether `sccache` is installed
-and enabled for that command. If either is missing, recommend the
-developer-local setup in `CONTRIBUTING.md` once.
+should use Cargo incremental compilation through the default dev/test profiles.
+Do not recommend or enable `sccache` solely for these loops. Debugger symbols
+may be enabled for one command with `CARGO_PROFILE_DEV_DEBUG=1` or
+`CARGO_PROFILE_TEST_DEBUG=1`.
 
 - Do not install sccache or edit global Cargo configuration without explicit
   user approval.
@@ -284,8 +287,9 @@ cargo test -p tenferro-einsum
 # Run a single test
 cargo test test_name
 
-# Run the non-release local PR test profile
-python3 scripts/ci/run_profile.py local-gate
+# Run a focused incremental local PR check
+bash scripts/check-pr-fast.sh --coverage-reviewed \
+  --test 'cargo test -p tenferro-tensor checked_convert_follows_dtype_promotion_lattice'
 
 # Check formatting
 cargo fmt --check
