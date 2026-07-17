@@ -279,6 +279,27 @@ features do pass `cargo check` and strict lints. CUDA-feature non-ignored
 tests compile and pass, while the CUDA tests marked `ignored` remain
 hardware-dependent and were not run.
 
+The committed-head repository-rules review then identified two documentation
+quality issues in the public surface: the four `GraphCompilerEinsumExt` methods
+had concrete `# Errors` text but no method-specific summary before the section,
+and several tensor-error doctests relied on imports or type aliases that a
+reviewer could not verify from the example alone. The methods now describe
+their exact default/explicit optimizer and textual/parsed-subscript behavior.
+The tensor-error examples use fully qualified public paths and match concrete
+variants, including the typed backend source chain, so their compilation and
+runtime contract is visible without inference. The targeted doctests pass
+(284 tensor examples and 78 einsum examples), and the committed-head review
+was rerun after these changes.
+
+The follow-up review also rejected the remaining blanket view/tensor wording
+as too broad. The tensor public surface was audited by operation family rather
+than patched call-site by call-site: strided views now name rank/slice/layout
+and mutable-overlap variants; owned views name reshape, broadcast, and slice
+payloads; typed/dynamic tensors distinguish dtype mismatch, host-access runtime
+state, shape-data length, index, and layout failures; and `TensorRead`/
+`TensorWrite` name stride and offset arithmetic failures. The full workspace
+docs build and the worktree repository-rules review now return no findings.
+
 ## Residual risks
 
 Hardware-dependent CUDA/WebGPU/PJRT execution and hosted affinity/NUMA

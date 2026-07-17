@@ -3,17 +3,11 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_tensor::{Error, ShapeMismatch, ShapeVec};
-//!
-//! let error = Error::validation(
-//!     "add",
-//!     ShapeMismatch::IncompatibleShapes {
-//!         lhs: ShapeVec::from_vec(vec![2]),
-//!         rhs: ShapeVec::from_vec(vec![3]),
-//!     }
-//!     .into(),
-//! );
-//! assert!(error.to_string().contains("add"));
+//! let error = tenferro_tensor::Error::shape_mismatch("add", [2], [3]);
+//! assert!(matches!(
+//!     error,
+//!     tenferro_tensor::Error::Validation { op: "add", .. }
+//! ));
 //! ```
 
 use std::error::Error as StdError;
@@ -33,16 +27,11 @@ pub type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::{Error, ErrorKind, ValidationError, ValidationKind};
-///
-/// let error = Error::validation(
-///     "reshape",
-///     ValidationError::RankMismatch {
-///         expected: 2,
-///         actual: 1,
-///     },
-/// );
-/// assert_eq!(error.kind(), ErrorKind::Validation(ValidationKind::RankMismatch));
+/// let error = tenferro_tensor::Error::rank_mismatch("reshape", 2, 1);
+/// assert!(matches!(
+///     error,
+///     tenferro_tensor::Error::Validation { op: "reshape", .. }
+/// ));
 /// ```
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -238,15 +227,16 @@ impl Error {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{Error, ErrorKind, DType};
-    ///
-    /// let error = Error::unsupported_dtype_conversion(
+    /// let error = tenferro_tensor::Error::unsupported_dtype_conversion(
     ///     "convert",
-    ///     DType::F64,
-    ///     DType::I32,
+    ///     tenferro_tensor::DType::F64,
+    ///     tenferro_tensor::DType::I32,
     ///     "lossy conversion is disabled",
     /// );
-    /// assert_eq!(error.kind(), ErrorKind::Unsupported);
+    /// assert!(matches!(
+    ///     error,
+    ///     tenferro_tensor::Error::UnsupportedDTypeConversion { .. }
+    /// ));
     /// ```
     pub fn unsupported_dtype_conversion(
         op: &'static str,
@@ -271,11 +261,19 @@ impl Error {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{DType, Error, ErrorKind};
-    ///
-    /// let error = Error::unsupported_dtype("exp", DType::I64, "integer exponentials are not implemented");
-    /// assert!(matches!(error, Error::UnsupportedDType { op: "exp", dtype: DType::I64, .. }));
-    /// assert_eq!(error.kind(), ErrorKind::Unsupported);
+    /// let error = tenferro_tensor::Error::unsupported_dtype(
+    ///     "exp",
+    ///     tenferro_tensor::DType::I64,
+    ///     "integer exponentials are not implemented",
+    /// );
+    /// assert!(matches!(
+    ///     error,
+    ///     tenferro_tensor::Error::UnsupportedDType {
+    ///         op: "exp",
+    ///         dtype: tenferro_tensor::DType::I64,
+    ///         ..
+    ///     }
+    /// ));
     /// ```
     pub fn unsupported_dtype(
         op: &'static str,
@@ -299,10 +297,14 @@ impl Error {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{Error, ErrorKind};
-    ///
-    /// let error = Error::unsupported("full_piv_lu", "backend has no implementation");
-    /// assert_eq!(error.kind(), ErrorKind::Unsupported);
+    /// let error = tenferro_tensor::Error::unsupported(
+    ///     "full_piv_lu",
+    ///     "backend has no implementation",
+    /// );
+    /// assert!(matches!(
+    ///     error,
+    ///     tenferro_tensor::Error::Unsupported { op: "full_piv_lu", .. }
+    /// ));
     /// ```
     pub fn unsupported(op: &'static str, message: impl Into<String>) -> Self {
         Self::Unsupported {
@@ -318,10 +320,14 @@ impl Error {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::Error;
-    ///
-    /// let error = Error::backend_failure("matmul", "backend rejected launch");
-    /// assert!(matches!(error, Error::BackendFailure { op: "matmul", .. }));
+    /// let error = tenferro_tensor::Error::backend_failure(
+    ///     "matmul",
+    ///     "backend rejected launch",
+    /// );
+    /// assert!(matches!(
+    ///     error,
+    ///     tenferro_tensor::Error::BackendFailure { op: "matmul", .. }
+    /// ));
     /// ```
     pub fn backend_failure(op: &'static str, message: impl Into<String>) -> Self {
         Self::BackendFailure {
@@ -335,11 +341,11 @@ impl Error {
     /// # Examples
     ///
     /// ```rust
-    /// use std::error::Error as _;
-    /// use tenferro_tensor::Error;
-    ///
-    /// let error = Error::backend_source("load", std::io::Error::other("read failed"));
-    /// assert!(error.source().is_some());
+    /// let error = tenferro_tensor::Error::backend_source(
+    ///     "load",
+    ///     std::io::Error::other("read failed"),
+    /// );
+    /// assert!(std::error::Error::source(&error).is_some());
     /// ```
     pub fn backend_source<E>(op: &'static str, source: E) -> Self
     where

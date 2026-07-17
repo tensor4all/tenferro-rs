@@ -909,10 +909,11 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when `axes` is
+    /// not a valid permutation of the view rank.
     pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
         let layout = self
             .layout
@@ -940,10 +941,15 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when the slice
+    /// count differs from the view rank,
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceStep`] or
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for an
+    /// invalid slice, [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// for slice arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// resulting layout exceeds the backing buffer.
     pub fn try_slice(&self, slices: &[StridedSliceSpec]) -> crate::Result<Self> {
         let specs = core_slice_specs(slices, self.shape(), "TypedTensorView::try_slice")?;
         let layout = self
@@ -971,10 +977,14 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`] when `axis`
+    /// is outside the view rank, [`tenferro_tensor_core::ValidationError::InvalidSliceStep`]
+    /// or [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for an
+    /// invalid slice, [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// for slice arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// resulting layout exceeds the backing buffer.
     pub fn try_slice_axis(&self, axis: usize, slice: StridedSliceSpec) -> crate::Result<Self> {
         let slices = slice_axis_specs(
             self.shape().len(),
@@ -999,10 +1009,16 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
+    /// the source is not compact column-major,
+    /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
+    /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
+    /// records the counts) when element counts differ,
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for shape
+    /// arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// reshaped view exceeds the backing buffer.
     pub fn try_reshape(&self, shape: &[usize]) -> crate::Result<TypedTensorView<'a, T, DynRank>> {
         let layout = reshape_layout_dyn(
             &self.layout,
@@ -1076,10 +1092,11 @@ impl<'a, T: 'static> TypedTensorViewMut<'a, T, DynRank> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn from_col_major(shape: &[usize], data: &'a mut [T]) -> crate::Result<Self> {
         let layout = TensorLayout::<DynRank>::compact(shape.to_vec().into())
             .map_err(|err| tensor_layout_error("TypedTensorViewMut::from_col_major", err))?;
@@ -1108,10 +1125,15 @@ impl<'a, T: 'static> TypedTensorViewMut<'a, T, DynRank> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `shape` and
+    /// `strides` have different ranks,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// layout reaches beyond `data`,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// logical elements alias, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn from_slice(
         shape: impl AsRef<[usize]>,
         strides: impl AsRef<[isize]>,
@@ -1144,10 +1166,15 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when the typed
+    /// rank does not match `shape` or `strides`,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// layout reaches beyond `data`,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// logical elements alias, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn from_slice_ranked(
         shape: impl Into<R::Shape>,
         strides: impl Into<R::Strides>,
@@ -1251,10 +1278,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::RuntimeState`] when this view wraps a backend
+    /// buffer; backend storage must be downloaded before host inspection.
     pub fn host_storage(&self) -> crate::Result<&[T]> {
         match &self.buffer {
             TensorBufferRefMut::Host(data) => Ok(data),
@@ -1284,10 +1309,8 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::RuntimeState`] when this view wraps a backend
+    /// buffer; backend storage must be downloaded before host inspection.
     pub fn host_storage_mut(&mut self) -> crate::Result<&mut [T]> {
         match &mut self.buffer {
             TensorBufferRefMut::Host(data) => Ok(data),
@@ -1391,10 +1414,12 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         checked_view_offset_result(
             self.shape(),
@@ -1419,10 +1444,9 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         self.layout
             .is_compact_col_major()
@@ -1459,10 +1483,11 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// view is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         assert_layout_col_major_contiguous(
             self.is_col_major_contiguous()?,
@@ -1577,10 +1602,14 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when `axes` is
+    /// not a valid permutation, [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`]
+    /// when the permutation creates aliases, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn transpose_view(
         self,
         axes: impl AsRef<[usize]>,
@@ -1625,10 +1654,17 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when the slice
+    /// count differs from the view rank,
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceStep`] or
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for an
+    /// invalid slice, [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`]
+    /// when the result exceeds the backing buffer,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// logical elements alias, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn try_slice(
         &mut self,
         slices: &[StridedSliceSpec],
@@ -1670,10 +1706,16 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`] when `axis`
+    /// is outside the view rank, [`tenferro_tensor_core::ValidationError::InvalidSliceStep`]
+    /// or [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for an
+    /// invalid slice, [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`]
+    /// when the result exceeds the backing buffer,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// logical elements alias, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn try_slice_axis(
         &mut self,
         axis: usize,
@@ -1710,10 +1752,18 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] for either
+    /// slice count, [`tenferro_tensor_core::ValidationError::InvalidSliceStep`]
+    /// or [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for
+    /// invalid parameters, [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`]
+    /// when a result exceeds the backing buffer,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// a result aliases, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// for a negative reachable offset, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow. The method returns `Ok(None)` when the two ranges
+    /// overlap or the view uses backend storage.
     pub fn try_multi_slice_mut(
         &mut self,
         first: &[StridedSliceSpec],
@@ -1850,10 +1900,17 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
+    /// the source is not compact column-major,
+    /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
+    /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
+    /// records the counts) when element counts differ,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// the reshaped layout aliases, [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// for shape or layout arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// reshaped view exceeds the backing buffer.
     pub fn try_reshape(
         &mut self,
         shape: &[usize],
@@ -1936,10 +1993,11 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// Wrap typed column-major data into a [`Tensor`] enum variant.
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when
+    /// the shape product differs from `data.len()`, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// arithmetic overflows.
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> crate::Result<Tensor>;
 
     /// Wrap a typed tensor into its dynamic [`Tensor`] enum variant.
@@ -2022,10 +2080,11 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// Borrow the host data from a [`Tensor`].
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `tensor`
+    /// is not the scalar type represented by this implementation, or
+    /// [`crate::Error::RuntimeState`] when the matching tensor uses backend
+    /// storage that has not been downloaded.
     fn as_slice(tensor: &Tensor) -> crate::Result<&[Self]>;
 
     /// Mutably borrow the host data from a [`Tensor`].
@@ -2043,10 +2102,11 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `tensor`
+    /// is not the scalar type represented by this implementation, or
+    /// [`crate::Error::RuntimeState`] when the matching tensor uses backend
+    /// storage that has not been downloaded.
     fn as_slice_mut(tensor: &mut Tensor) -> crate::Result<&mut [Self]>;
 
     /// Extract a [`TypedTensor<Self>`] from a dynamic [`Tensor`].
@@ -2064,10 +2124,9 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `tensor`
+    /// is not the scalar type represented by this implementation.
     fn into_typed(tensor: Tensor) -> crate::Result<TypedTensor<Self>>;
 }
 
@@ -2438,10 +2497,13 @@ impl TensorOwnedView {
     /// Create an owned view with explicit layout metadata.
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `shape` and
+    /// `strides` have different ranks,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// layout exceeds the base tensor buffer, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn from_parts(
         base: Arc<Tensor>,
         shape: Vec<usize>,
@@ -2484,10 +2546,11 @@ impl TensorOwnedView {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when `axes` is
+    /// not a valid permutation of the view rank.
     pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
         let layout = self
             .layout
@@ -2501,10 +2564,16 @@ impl TensorOwnedView {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
+    /// the source is not compact column-major,
+    /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
+    /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
+    /// records the counts) when element counts differ,
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for shape
+    /// arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// reshaped view exceeds the base buffer.
     pub fn reshape_view(&self, shape: &[usize]) -> crate::Result<Self> {
         let layout = reshape_layout_dyn(
             &self.layout,
@@ -2520,10 +2589,17 @@ impl TensorOwnedView {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when a slice
+    /// vector does not match the view rank,
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when a bound
+    /// or stride cannot be represented or is invalid,
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceStep`] or
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for slice
+    /// parameters, [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// for slice arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// result exceeds the base buffer.
     pub fn slice_view(&self, config: &SliceConfig) -> crate::Result<Self> {
         let op = "TensorOwnedView::slice_view";
         if config.starts.len() != self.shape().len() {
@@ -2598,10 +2674,17 @@ impl TensorOwnedView {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] for invalid
+    /// dimension mappings,
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] for
+    /// incompatible extents,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// result exceeds the base buffer, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn broadcast_in_dim_view(&self, shape: &[usize], dims: &[usize]) -> crate::Result<Self> {
         let layout = self
             .layout
@@ -2657,10 +2740,11 @@ impl TensorValue {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when `axes` is
+    /// not a valid permutation of the value rank.
     pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
         match self {
             Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
@@ -2672,10 +2756,16 @@ impl TensorValue {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
+    /// the source is not compact column-major,
+    /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
+    /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
+    /// records the counts) when element counts differ,
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for shape
+    /// arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// reshaped view exceeds the backing buffer.
     pub fn reshape_view(&self, shape: &[usize]) -> crate::Result<Self> {
         match self {
             Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
@@ -2687,10 +2777,17 @@ impl TensorValue {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when a slice
+    /// vector does not match the value rank,
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when a bound
+    /// or stride cannot be represented or is invalid,
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceStep`] or
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for slice
+    /// parameters, [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// for slice arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// result exceeds the backing buffer.
     pub fn slice_view(&self, config: &SliceConfig) -> crate::Result<Self> {
         match self {
             Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
@@ -2702,10 +2799,17 @@ impl TensorValue {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] for invalid
+    /// dimension mappings,
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] for
+    /// incompatible extents,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// result exceeds the backing buffer, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn broadcast_in_dim_view(&self, shape: &[usize], dims: &[usize]) -> crate::Result<Self> {
         match self {
             Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
@@ -2921,10 +3025,11 @@ impl<'a> TensorView<'a> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn f32(shape: &'a [usize], data: &'a [f32]) -> crate::Result<Self> {
         Ok(Self::F32(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -2943,10 +3048,11 @@ impl<'a> TensorView<'a> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn f64(shape: &'a [usize], data: &'a [f64]) -> crate::Result<Self> {
         Ok(Self::F64(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -2965,10 +3071,11 @@ impl<'a> TensorView<'a> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn i64(shape: &'a [usize], data: &'a [i64]) -> crate::Result<Self> {
         Ok(Self::I64(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -2987,10 +3094,11 @@ impl<'a> TensorView<'a> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn i32(shape: &'a [usize], data: &'a [i32]) -> crate::Result<Self> {
         Ok(Self::I32(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -3009,10 +3117,11 @@ impl<'a> TensorView<'a> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn bool(shape: &'a [usize], data: &'a [bool]) -> crate::Result<Self> {
         Ok(Self::Bool(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -3032,10 +3141,11 @@ impl<'a> TensorView<'a> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn c32(shape: &'a [usize], data: &'a [Complex32]) -> crate::Result<Self> {
         Ok(Self::C32(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -3055,10 +3165,11 @@ impl<'a> TensorView<'a> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn c64(shape: &'a [usize], data: &'a [Complex64]) -> crate::Result<Self> {
         Ok(Self::C64(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -3116,10 +3227,12 @@ impl<'a> TensorView<'a> {
     /// Compute the physical element offset for a logical index.
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         match self {
             Self::F32(t) => t.layout_linear_offset(indices),
@@ -3135,10 +3248,9 @@ impl<'a> TensorView<'a> {
     /// Return whether this view is compact column-major.
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         match self {
             Self::F32(t) => t.is_col_major_contiguous(),
@@ -3159,10 +3271,11 @@ impl<'a> TensorView<'a> {
     /// Assert this view is compact column-major.
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// view is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         assert_layout_col_major_contiguous(
             self.is_col_major_contiguous()?,
@@ -3178,10 +3291,11 @@ impl<'a> TensorViewMut<'a> {
     /// Create a dynamic `f64` mutable view over compact column-major host data.
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn f64(shape: &'a [usize], data: &'a mut [f64]) -> crate::Result<Self> {
         Ok(Self::F64(TypedTensorViewMut::from_col_major(shape, data)?))
     }
@@ -3234,12 +3348,16 @@ impl<'a> TensorViewMut<'a> {
         }
     }
 
+    /// Compute the physical element offset for a logical index.
+    ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         match self {
             Self::F32(t) => t.layout_linear_offset(indices),
@@ -3252,12 +3370,13 @@ impl<'a> TensorViewMut<'a> {
         }
     }
 
+    /// Return whether this view is compact column-major.
+    ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         match self {
             Self::F32(t) => t.is_col_major_contiguous(),
@@ -3274,12 +3393,15 @@ impl<'a> TensorViewMut<'a> {
         layout_summary(self.shape(), self.strides(), self.offset())
     }
 
+    /// Assert this view is compact column-major.
+    ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// view is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         assert_layout_col_major_contiguous(
             self.is_col_major_contiguous()?,
@@ -3328,10 +3450,9 @@ impl<'a> TensorRead<'a> {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// column-major stride arithmetic overflows.
     pub fn strides(&self) -> crate::Result<Vec<isize>> {
         match self {
             Self::Tensor(tensor) => col_major_strides(tensor.shape()),
@@ -3348,10 +3469,12 @@ impl<'a> TensorRead<'a> {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         match self {
             Self::Tensor(tensor) => tensor.layout_linear_offset(indices),
@@ -3361,10 +3484,9 @@ impl<'a> TensorRead<'a> {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         match self {
             Self::Tensor(tensor) => tensor.is_col_major_contiguous(),
@@ -3382,10 +3504,11 @@ impl<'a> TensorRead<'a> {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// view is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         let strides = self.strides()?;
         assert_layout_col_major_contiguous(
@@ -3454,10 +3577,9 @@ impl<'a> TensorWrite<'a> {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// column-major stride arithmetic overflows.
     pub fn strides(&self) -> crate::Result<Vec<isize>> {
         match self {
             Self::Tensor(tensor) => col_major_strides(tensor.shape()),
@@ -3474,10 +3596,12 @@ impl<'a> TensorWrite<'a> {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         match self {
             Self::Tensor(tensor) => tensor.layout_linear_offset(indices),
@@ -3487,10 +3611,9 @@ impl<'a> TensorWrite<'a> {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         match self {
             Self::Tensor(tensor) => tensor.is_col_major_contiguous(),
@@ -3508,10 +3631,11 @@ impl<'a> TensorWrite<'a> {
 
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// view is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         let strides = self.strides()?;
         assert_layout_col_major_contiguous(
@@ -3536,10 +3660,9 @@ impl<'a> TensorWrite<'a> {
 /// ```
 /// # Errors
 ///
-/// Returns [`crate::Error::Validation`] with a typed validation source for
-/// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-/// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-/// when the requested host or backend storage access is unavailable.
+/// Returns [`crate::Error::Validation`] with
+/// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when a
+/// column-major stride product overflows.
 pub fn col_major_strides(shape: &[usize]) -> crate::Result<Vec<isize>> {
     let mut strides = Vec::with_capacity(shape.len());
     let mut stride = 1isize;
@@ -4134,10 +4257,9 @@ impl<T: Clone + Zero, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// product or compact-stride arithmetic overflows.
     pub fn zeros(shape: impl Into<R::Shape>) -> crate::Result<Self> {
         typed_tensor_zeros(shape)
     }
@@ -4156,10 +4278,9 @@ impl<T: Clone + One + Zero, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// product or compact-stride arithmetic overflows.
     pub fn ones(shape: impl Into<R::Shape>) -> crate::Result<Self> {
         typed_tensor_ones(shape)
     }
@@ -4189,10 +4310,13 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when
+    /// the shape product differs from the buffer length,
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape or
+    /// stride arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when a supplied
+    /// rank-specific shape cannot be represented.
     pub fn from_buffer_col_major(
         shape: impl Into<R::Shape>,
         buffer: Buffer<T>,
@@ -4221,10 +4345,13 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when the typed
+    /// rank does not match the existing shape,
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when compact
+    /// strides cannot be computed, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// preserved buffer cannot hold the rank-converted layout.
     pub fn try_into_rank<const N: usize>(self) -> crate::Result<TypedTensor<T, Rank<N>>> {
         let op = "TypedTensor::try_into_rank";
         let shape = <Rank<N> as TensorRank>::shape_from_vec(self.shape().to_vec().into())
@@ -4427,10 +4554,14 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::RuntimeState`] when this tensor is host-backed;
+    /// backend region views require a backend buffer. It returns
+    /// [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] for incompatible
+    /// shape/stride ranks, [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`]
+    /// when the region exceeds the backend buffer, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn backend_region_view(
         &self,
         shape: Vec<usize>,
@@ -4485,10 +4616,16 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::RuntimeState`] when this tensor is host-backed;
+    /// mutable backend region views require a backend buffer. It returns
+    /// [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] for incompatible
+    /// shape/stride ranks, [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`]
+    /// when the region exceeds the backend buffer,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// logical elements alias, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn backend_region_view_mut(
         &mut self,
         shape: Vec<usize>,
@@ -4564,10 +4701,11 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when
+    /// the shape product differs from `data.len()`, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// arithmetic overflows.
     pub fn from_vec_col_major(shape: impl Into<R::Shape>, data: Vec<T>) -> crate::Result<Self> {
         typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
     }
@@ -4586,10 +4724,8 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
+    /// storage; download it before exporting a host `Vec`.
     pub fn into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
         let shape = self.shape().to_vec();
         match self.buffer {
@@ -4614,10 +4750,8 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
+    /// storage; download it before borrowing host data.
     pub fn host_data(&self) -> crate::Result<&[T]> {
         match &self.buffer {
             Buffer::Host(v) => Ok(v),
@@ -4644,10 +4778,8 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
+    /// storage; download it before borrowing it as a host slice.
     pub fn as_slice(&self) -> crate::Result<&[T]> {
         self.host_data()
     }
@@ -4666,10 +4798,8 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
+    /// storage; download it before mutably borrowing host data.
     pub fn host_data_mut(&mut self) -> crate::Result<&mut [T]> {
         match &mut self.buffer {
             Buffer::Host(v) => Ok(v),
@@ -4693,10 +4823,12 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         try_linear_offset_for_shape(self.shape(), indices, "TypedTensor::linear_offset")
     }
@@ -4714,10 +4846,12 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         try_linear_offset_for_shape(self.shape(), indices, "TypedTensor::layout_linear_offset")
     }
@@ -4735,10 +4869,9 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         self.layout
             .is_compact_col_major()
@@ -4773,10 +4906,11 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// tensor is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         assert_layout_col_major_contiguous(
             self.is_col_major_contiguous()?,
@@ -4800,10 +4934,13 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// computed offset is outside the host buffer. It returns
+    /// [`crate::Error::RuntimeState`] when the tensor uses backend storage.
     pub fn get(&self, indices: &[usize]) -> crate::Result<&T> {
         let off = self.linear_offset(indices)?;
         self.host_data()?.get(off).ok_or_else(|| {
@@ -4825,10 +4962,13 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// computed offset is outside the host buffer. It returns
+    /// [`crate::Error::RuntimeState`] when the tensor uses backend storage.
     pub fn get_mut(&mut self, indices: &[usize]) -> crate::Result<&mut T> {
         let off = self.linear_offset(indices)?;
         self.host_data_mut()?.get_mut(off).ok_or_else(|| {
@@ -4854,10 +4994,11 @@ impl Tensor {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when
+    /// the shape product differs from `data.len()`, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// arithmetic overflows.
     pub fn from_vec_col_major<T: TensorScalar>(
         shape: Vec<usize>,
         data: Vec<T>,
@@ -4966,10 +5107,12 @@ impl Tensor {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         match self {
             Tensor::F32(t) => t.layout_linear_offset(indices),
@@ -4995,10 +5138,9 @@ impl Tensor {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         match self {
             Tensor::F32(t) => t.is_col_major_contiguous(),
@@ -5040,10 +5182,11 @@ impl Tensor {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// tensor is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         let layout = tensor_layout(self);
         assert_layout_col_major_contiguous(
@@ -5070,10 +5213,10 @@ impl Tensor {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `T` does
+    /// not match the tensor dtype, or [`crate::Error::RuntimeState`] when the
+    /// matching tensor uses backend storage that has not been downloaded.
     pub fn as_slice<T: TensorScalar>(&self) -> crate::Result<&[T]> {
         T::as_slice(self)
     }
@@ -5091,10 +5234,10 @@ impl Tensor {
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::Validation`] with a typed validation source for
-    /// invalid shape, rank, axis, dtype, slice, index, or layout metadata. It
-    /// returns [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`]
-    /// when the requested host or backend storage access is unavailable.
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `T` does
+    /// not match the tensor dtype, or [`crate::Error::RuntimeState`] when the
+    /// matching tensor uses backend storage that has not been downloaded.
     pub fn into_vec_col_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
         let typed = T::into_typed(self)?;
         typed.into_vec_col_major()

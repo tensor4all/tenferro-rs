@@ -26,6 +26,8 @@ use crate::{
 
 /// Traced einsum extension methods for [`GraphCompiler`].
 pub trait GraphCompilerEinsumExt {
+    /// Build a traced einsum from textual subscripts using the default
+    /// optimizer.
     ///
     /// # Errors
     ///
@@ -41,6 +43,9 @@ pub trait GraphCompilerEinsumExt {
     /// graph construction are checked during compilation or execution and
     /// retain the runtime [`ErrorPhase`](tenferro_runtime::ErrorPhase).
     fn einsum(&mut self, inputs: &[&TracedTensor], subscripts: &str) -> Result<TracedTensor>;
+
+    /// Build a traced einsum from parsed integer-label subscripts using the
+    /// default optimizer.
     ///
     /// # Errors
     ///
@@ -59,6 +64,9 @@ pub trait GraphCompilerEinsumExt {
         inputs: &[&TracedTensor],
         subscripts: &EinsumSubscripts,
     ) -> Result<TracedTensor>;
+
+    /// Build a traced einsum from textual subscripts with an explicit
+    /// optimizer strategy.
     ///
     /// # Errors
     ///
@@ -79,6 +87,9 @@ pub trait GraphCompilerEinsumExt {
         subscripts: &str,
         optimize: EinsumOptimize,
     ) -> Result<TracedTensor>;
+
+    /// Build a traced einsum from parsed integer-label subscripts with an
+    /// explicit optimizer strategy.
     ///
     /// # Errors
     ///
