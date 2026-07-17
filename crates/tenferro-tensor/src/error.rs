@@ -68,6 +68,20 @@ pub enum Error {
         #[source]
         source: BoxError,
     },
+    #[error("{op}: I/O failure: {source}")]
+    IoSource {
+        op: &'static str,
+        #[source]
+        source: BoxError,
+    },
+    #[error("{op}: runtime state failure: {message}")]
+    RuntimeState { op: &'static str, message: String },
+    #[error("{op}: runtime state failure: {source}")]
+    RuntimeStateSource {
+        op: &'static str,
+        #[source]
+        source: BoxError,
+    },
     #[error("{op}: extension {family} failed: {source}")]
     Extension {
         op: &'static str,
@@ -280,6 +294,75 @@ impl Error {
         }
     }
 
+    /// Construct an I/O failure while preserving its typed source.
+    ///
+    /// I/O errors are intentionally separate from backend failures: callers
+    /// can classify them as [`ErrorKind::Io`] without parsing a message.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Error, ErrorKind};
+    ///
+    /// let error = Error::io_source("load", std::io::Error::other("read failed"));
+    /// assert_eq!(error.kind(), ErrorKind::Io);
+    /// assert!(std::error::Error::source(&error).is_some());
+    /// ```
+    pub fn io_source<E>(op: &'static str, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::IoSource {
+            op,
+            source: Box::new(source),
+        }
+    }
+
+    /// Construct a runtime-state failure when no typed source exists.
+    ///
+    /// Use this for missing, uninitialized, or invalid execution state. It is
+    /// distinct from [`Error::backend_failure`], which is reserved for
+    /// vendor/backend status text.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Error, ErrorKind};
+    ///
+    /// let error = Error::runtime_state("execute", "backend session is not initialized");
+    /// assert_eq!(error.kind(), ErrorKind::RuntimeState);
+    /// ```
+    pub fn runtime_state(op: &'static str, message: impl Into<String>) -> Self {
+        Self::RuntimeState {
+            op,
+            message: message.into(),
+        }
+    }
+
+    /// Construct a runtime-state failure while preserving a typed source.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Error, ErrorKind};
+    ///
+    /// let error = Error::runtime_state_source(
+    ///     "execute",
+    ///     std::io::Error::other("executor lock poisoned"),
+    /// );
+    /// assert_eq!(error.kind(), ErrorKind::RuntimeState);
+    /// assert!(std::error::Error::source(&error).is_some());
+    /// ```
+    pub fn runtime_state_source<E>(op: &'static str, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::RuntimeStateSource {
+            op,
+            source: Box::new(source),
+        }
+    }
+
     /// Construct an extension failure while preserving its typed source and
     /// coarse classification.
     ///
@@ -331,6 +414,8 @@ impl Error {
             Self::Validation { source, .. } => ErrorKind::Validation(source.kind()),
             Self::UnsupportedDTypeConversion { .. } => ErrorKind::Unsupported,
             Self::BackendFailure { .. } | Self::BackendSource { .. } => ErrorKind::BackendFailure,
+            Self::IoSource { .. } => ErrorKind::Io,
+            Self::RuntimeState { .. } | Self::RuntimeStateSource { .. } => ErrorKind::RuntimeState,
             Self::Extension { kind, .. } => *kind,
             Self::MissingValue { .. } => ErrorKind::RuntimeState,
             Self::Internal(_) => ErrorKind::Internal,

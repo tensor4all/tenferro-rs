@@ -190,6 +190,20 @@ error exposes `kind() -> ErrorKind`. This gives FFI, bindings, runtime
 registries, and generic application code one classification surface without
 forcing all crates into one concrete outer enum.
 
+The classification is also a routing policy, not a fallback label:
+
+- typed file, stream, serialization, or dynamic-library I/O sources use the
+  `Io` category and remain available through `source()`;
+- missing, uninitialized, poisoned, or otherwise invalid executor/cache/device
+  state uses `RuntimeState`, preserving a typed source when one exists;
+- `BackendFailure` is reserved for vendor/backend status text for which no
+  typed source or more specific category exists.
+
+An operation phase such as graph construction, compilation, or execution is
+orthogonal to these categories. In particular, a runtime-state or I/O failure
+must not be reclassified as a generic backend failure merely because it was
+observed while a backend was executing.
+
 ## 2. Crate-local outer errors
 
 Each crate retains an outer error that expresses its own domain. Shared

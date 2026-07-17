@@ -1009,6 +1009,13 @@ Use this decision rule at every current `backend_failure`, `InvalidConfig`, or `
 2. typed in-workspace kernel/extension error: `backend_source` or `extension` with its source;
 3. vendor status/message only: `BackendFailure` text is allowed;
 4. impossible internal state: typed `Internal`, not validation.
+5. typed file, stream, serialization, or dynamic-library I/O: preserve the
+   source and classify it as `ErrorKind::Io` (use the tensor/runtime I/O source
+   constructor or a crate-local source variant).
+6. missing, uninitialized, poisoned, or invalid executor/cache/device state:
+   classify it as `ErrorKind::RuntimeState`, preserving a typed source when
+   available. `BackendFailure` is reserved for vendor/backend status text with
+   no typed source or more specific category.
 
 Do not rewrite display-only `to_string()` calls in tests, logs, cache keys, or actual FFI message extraction. Update tests that match removed variants.
 

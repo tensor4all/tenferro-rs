@@ -47,6 +47,23 @@ fn typed_backend_source_is_not_formatted_away() {
     assert!(err.source().is_some());
 }
 
+#[test]
+fn typed_io_source_is_not_classified_as_backend_failure() {
+    let err = Error::io_source("load", std::io::Error::other("file read failed"));
+    assert_eq!(err.kind(), ErrorKind::Io);
+    assert!(err.source().is_some());
+}
+
+#[test]
+fn runtime_state_source_is_not_classified_as_backend_failure() {
+    let err = Error::runtime_state_source(
+        "execute",
+        std::io::Error::other("executor state is unavailable"),
+    );
+    assert_eq!(err.kind(), ErrorKind::RuntimeState);
+    assert!(err.source().is_some());
+}
+
 #[derive(Debug)]
 struct NonCloneElement;
 
