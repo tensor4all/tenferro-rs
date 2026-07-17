@@ -12,11 +12,6 @@ from typing import TextIO
 
 
 PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
-    "local-gate": (
-        "cargo nextest run --workspace --cargo-profile local-gate "
-        "--no-fail-fast",
-        "cargo test --doc --workspace --profile local-gate",
-    ),
     "workspace-faer": (
         "cargo nextest run --workspace --release --no-fail-fast",
         "cargo test --doc --workspace --release",

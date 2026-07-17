@@ -82,10 +82,16 @@ sha2 = "0.10"
 omeco = "0.2.4"
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7", version = "0.1.0" }
 
-[profile.local-gate]
-inherits = "dev"
+[profile.dev]
 opt-level = 0
 debug = 0
 debug-assertions = true
 overflow-checks = true
-incremental = false
+incremental = true
+
+[profile.test]
+opt-level = 0
+debug = 0
+debug-assertions = true
+overflow-checks = true
+incremental = true
