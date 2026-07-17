@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use num_complex::{Complex32, Complex64};
 use support::RunTraced;
 use tenferro_cpu::CpuBackend;

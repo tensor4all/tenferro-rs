@@ -9,10 +9,10 @@
 //!    merged execution (graph deduplication via `materialize_merge`).
 //! 4. Graph size grows linearly with iteration count.
 
-use tenferro_ad::TracedTensorAdExt;
-mod support;
+use crate::support;
 use std::collections::HashSet;
 use support::{run_many_traced_with, RunTraced};
+use tenferro_ad::TracedTensorAdExt;
 
 use computegraph::graph::Graph;
 use tenferro_cpu::CpuBackend;

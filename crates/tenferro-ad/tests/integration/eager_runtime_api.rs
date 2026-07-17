@@ -33,7 +33,7 @@ fn eager_runtime_synchronize_is_available_and_cpu_noop() {
 
 #[test]
 fn eager_runtime_grad_accumulation_keeps_slot_locked_through_update() {
-    let source = include_str!("../src/eager.rs");
+    let source = include_str!("../../src/eager.rs");
 
     assert!(
         !source.contains("let mut staged = Vec::new();"),

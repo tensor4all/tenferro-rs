@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use support::{run_many_traced_with, RunTraced};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::traced::TracedTensor;

@@ -1,6 +1,6 @@
 #[test]
 fn typed_tensor_helpers_do_not_erase_through_host_copies() {
-    let source = include_str!("../src/typed_tensor.rs");
+    let source = include_str!("../../src/typed_tensor.rs");
 
     assert!(
         !source.contains("host_data().to_vec()"),

@@ -17,7 +17,7 @@ use tenferro_ad::TracedTensorAdExt;
 use tenferro_ad::{AdContext, AdContextBuilder, EagerBackend, EagerRuntime, EagerTensor};
 #[path = "extension_op/api_and_registry.rs"]
 mod api_and_registry;
-mod support;
+use crate::support;
 use std::any::Any;
 use std::hash::Hasher;
 use std::sync::Arc;

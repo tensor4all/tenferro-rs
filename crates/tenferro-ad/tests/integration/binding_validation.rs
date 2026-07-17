@@ -2,7 +2,7 @@
 //!
 //! One test per Error variant introduced by the placeholder binding API.
 
-mod support;
+use crate::support;
 use support::RunTraced;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::error::Error;

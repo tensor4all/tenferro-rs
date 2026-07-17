@@ -1,4 +1,4 @@
-mod support;
+use crate::support;
 use support::RunTraced;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::error::Error;

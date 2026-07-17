@@ -2,7 +2,7 @@
 //!
 //! Verifies faer GEMM dispatch, batched GEMM, and stride-aware input handling.
 
-mod support;
+use crate::support;
 use support::RunTraced;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::traced::TracedTensor;

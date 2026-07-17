@@ -1,5 +1,6 @@
 [package]
 name = "tenferro-einsum"
+autotests = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -81,3 +82,7 @@ harness = false
 [[bench]]
 name = "mps_inner_product_compile"
 harness = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

@@ -1,7 +1,7 @@
 use tenferro_ad::TracedTensorAdExt;
 #[path = "ad/reductions_and_indexing.rs"]
 mod reductions_and_indexing;
-mod support;
+use crate::support;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use support::{run_many_traced_with, RunTraced};

@@ -27,7 +27,7 @@ fn webgpu_transfer_helpers_are_provider_specific() {
 
 #[test]
 fn webgpu_download_checks_runtime_residency_before_reading_backend_handle() {
-    let source = include_str!("../src/webgpu/memory.rs");
+    let source = include_str!("../../src/webgpu/memory.rs");
 
     let residency_check = source
         .find("ensure_resident_on_runtime(rt, typed, \"webgpu_download\")?;")

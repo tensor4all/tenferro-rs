@@ -3,9 +3,9 @@
 //! Primary approach: Forward-over-Reverse (FoR) = jvp(grad(f), x, v),
 //! matching JAX's standard HVP pattern.
 
-use tenferro_ad::TracedTensorAdExt;
-mod support;
+use crate::support;
 use support::RunTraced;
+use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::traced::TracedTensor;
 use tenferro_runtime::{DotGeneralConfig, GraphExecutor, Tensor, TypedTensor};

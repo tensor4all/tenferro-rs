@@ -12,9 +12,9 @@
 //! See the deferred zero-tangent policy in `docs/spec/extension-op.md` and the
 //! symbolic-shape tests in this file.
 
-use tenferro_ad::TracedTensorAdExt;
-mod support;
+use crate::support;
 use support::RunTraced;
+use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor};
 use tenferro_tensor::DType;

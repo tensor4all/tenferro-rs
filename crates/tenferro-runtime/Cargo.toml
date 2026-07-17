@@ -1,5 +1,6 @@
 [package]
 name = "tenferro-runtime"
+autotests = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -41,3 +42,7 @@ tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features =
 [[bench]]
 name = "elementwise_fusion"
 harness = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

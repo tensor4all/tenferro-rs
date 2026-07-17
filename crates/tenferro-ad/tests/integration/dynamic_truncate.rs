@@ -1,6 +1,6 @@
-use tenferro_ad::TracedTensorAdExt;
-mod support;
+use crate::support;
 use std::sync::Arc;
+use tenferro_ad::TracedTensorAdExt;
 
 use support::RunTraced;
 use tenferro_cpu::CpuBackend;

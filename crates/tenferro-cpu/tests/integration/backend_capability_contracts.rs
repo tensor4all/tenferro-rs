@@ -304,14 +304,14 @@ fn backend_session_exposes_narrow_capability_bounds() {
 
 #[test]
 fn backend_surface_no_longer_uses_forwarding_macro() {
-    let backend_source = include_str!("../src/backend.rs");
+    let backend_source = include_str!("../../src/backend.rs");
     assert!(!backend_source.contains("forward_exec_to_backend"));
 }
 
 #[test]
 fn read_elementwise_and_analytic_paths_do_not_materialize_views() {
-    let elementwise_source = include_str!("../src/elementwise.rs");
-    let analytic_source = include_str!("../src/analytic.rs");
+    let elementwise_source = include_str!("../../src/elementwise.rs");
+    let analytic_source = include_str!("../../src/analytic.rs");
 
     assert!(
         !elementwise_source.contains("materialize_tensor_read"),
@@ -325,9 +325,9 @@ fn read_elementwise_and_analytic_paths_do_not_materialize_views() {
 
 #[test]
 fn structural_read_paths_dispatch_directly_to_typed_view_helpers() {
-    let backend_source = include_str!("../src/backend.rs");
-    let session_source = include_str!("../src/exec_session.rs");
-    let structural_source = include_str!("../src/structural.rs");
+    let backend_source = include_str!("../../src/backend.rs");
+    let session_source = include_str!("../../src/exec_session.rs");
+    let structural_source = include_str!("../../src/structural.rs");
 
     for (surface, source) in [
         ("CpuBackend", backend_source),
@@ -374,7 +374,7 @@ fn structural_read_paths_dispatch_directly_to_typed_view_helpers() {
 
 #[test]
 fn indexing_hot_loops_do_not_recompute_multi_indices_from_flat_offsets() {
-    let indexing_source = include_str!("../src/indexing.rs");
+    let indexing_source = include_str!("../../src/indexing.rs");
 
     assert!(
         !indexing_source.contains("flat_to_multi"),
@@ -384,7 +384,7 @@ fn indexing_hot_loops_do_not_recompute_multi_indices_from_flat_offsets() {
 
 #[test]
 fn concatenate_hot_loop_does_not_linearly_scan_input_segments() {
-    let indexing_source = include_str!("../src/indexing.rs");
+    let indexing_source = include_str!("../../src/indexing.rs");
 
     assert!(
         !indexing_source.contains(".position(|&end| concat_idx < end)"),
@@ -398,7 +398,7 @@ fn concatenate_hot_loop_does_not_linearly_scan_input_segments() {
 
 #[test]
 fn gather_scatter_index_component_reuses_index_scratch() {
-    let indexing_source = include_str!("../src/indexing.rs");
+    let indexing_source = include_str!("../../src/indexing.rs");
 
     assert!(
         !indexing_source.contains("let mut full_idx = vec![0usize; indices.shape.len()];"),
@@ -412,7 +412,7 @@ fn gather_scatter_index_component_reuses_index_scratch() {
 
 #[test]
 fn cpu_public_ops_require_backend_owner() {
-    let lib_source = include_str!("../src/lib.rs");
+    let lib_source = include_str!("../../src/lib.rs");
     for reexport in [
         "pub use analytic::pow;",
         "pub use elementwise::",
@@ -427,10 +427,10 @@ fn cpu_public_ops_require_backend_owner() {
     }
 
     for (module, source) in [
-        ("analytic", include_str!("../src/analytic.rs")),
-        ("elementwise", include_str!("../src/elementwise.rs")),
-        ("indexing", include_str!("../src/indexing.rs")),
-        ("structural", include_str!("../src/structural.rs")),
+        ("analytic", include_str!("../../src/analytic.rs")),
+        ("elementwise", include_str!("../../src/elementwise.rs")),
+        ("indexing", include_str!("../../src/indexing.rs")),
+        ("structural", include_str!("../../src/structural.rs")),
     ] {
         assert!(
             !source.contains("fn with_local_pool"),
@@ -441,7 +441,7 @@ fn cpu_public_ops_require_backend_owner() {
 
 #[test]
 fn strided_kernel_ownership_requires_backend_execution_resources() {
-    let rules = include_str!("../../../REPOSITORY_RULES.md");
+    let rules = include_str!("../../../../REPOSITORY_RULES.md");
     let contract = ownership_contract(rules);
     assert_eq!(
         contract.get("schema"),
@@ -606,10 +606,10 @@ fn rust_public_function_scan_is_format_and_literal_independent() {
 
 #[test]
 fn install_pool_has_no_placeholder_construction_or_gemm_descriptor_clones() {
-    let backend_source = include_str!("../src/backend.rs");
-    let buffer_pool_source = include_str!("../src/buffer_pool.rs");
-    let gemm_source = include_str!("../src/gemm/mod.rs");
-    let exec_session_source = include_str!("../src/exec_session.rs");
+    let backend_source = include_str!("../../src/backend.rs");
+    let buffer_pool_source = include_str!("../../src/buffer_pool.rs");
+    let gemm_source = include_str!("../../src/gemm/mod.rs");
+    let exec_session_source = include_str!("../../src/exec_session.rs");
 
     assert!(!backend_source.contains("std::mem::take(target)"));
     assert!(backend_source.contains("buffers: &'a mut BufferPool"));

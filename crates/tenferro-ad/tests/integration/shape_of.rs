@@ -1,6 +1,6 @@
-use tenferro_ad::TracedTensorAdExt;
-mod support;
+use crate::support;
 use support::RunTraced;
+use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor, TypedTensor};
 

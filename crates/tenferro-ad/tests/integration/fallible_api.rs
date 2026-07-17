@@ -6,8 +6,8 @@ use tenferro_tensor::{Error as TensorError, Tensor};
 
 #[test]
 fn eager_public_tensor_accessors_are_fallible_source_contract() {
-    let eager_source = include_str!("../src/eager.rs");
-    let eager_builder_source = include_str!("../src/eager_builder.rs");
+    let eager_source = include_str!("../../src/eager.rs");
+    let eager_builder_source = include_str!("../../src/eager_builder.rs");
 
     for forbidden in [
         "pub fn data(&self) -> &Tensor",
@@ -40,7 +40,7 @@ fn eager_public_tensor_accessors_are_fallible_source_contract() {
 
 #[test]
 fn eager_axis_ops_validate_before_recording_source_contract() {
-    let source = include_str!("../src/eager_ops.rs");
+    let source = include_str!("../../src/eager_ops.rs");
 
     for (method, op_variant) in [
         (
@@ -77,7 +77,7 @@ fn eager_axis_ops_validate_before_recording_source_contract() {
 
 #[test]
 fn eager_runtime_lock_scopes_are_bounded_source_contract() {
-    let source = include_str!("../src/eager.rs");
+    let source = include_str!("../../src/eager.rs");
 
     let clear_grads = source
         .split_once("pub fn clear_grads(&self) -> Result<()>")
@@ -124,7 +124,7 @@ fn eager_runtime_lock_scopes_are_bounded_source_contract() {
 
 #[test]
 fn eager_dot_general_surfaces_validate_config_before_dispatch_source_contract() {
-    let source = include_str!("../src/eager_ops.rs");
+    let source = include_str!("../../src/eager_ops.rs");
 
     let dot_general = source
         .split_once("pub fn dot_general(&self, other: &Self, config: DotGeneralConfig)")

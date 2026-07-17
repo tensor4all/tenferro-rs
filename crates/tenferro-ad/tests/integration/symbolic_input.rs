@@ -11,7 +11,7 @@
 //!   dtype.
 //! * Mixed graphs (static leaves + placeholder leaves) route data correctly.
 
-mod support;
+use crate::support;
 use support::RunTraced;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor};

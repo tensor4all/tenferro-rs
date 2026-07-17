@@ -1,8 +1,8 @@
 #![cfg(feature = "cuda")]
 
-use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
-mod support;
+use crate::support;
 use support::RunTraced;
+use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
 use tenferro_cpu::CpuBackend;
 use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
 use tenferro_runtime::{DotGeneralConfig, GraphExecutor, Tensor, TracedTensor, TypedTensor};

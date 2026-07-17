@@ -2,7 +2,7 @@
 
 // Run with: cargo test --features cuda -- --ignored
 
-mod support;
+use crate::support;
 use support::RunTraced;
 use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
 use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor, TypedTensor};

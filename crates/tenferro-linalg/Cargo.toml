@@ -1,5 +1,6 @@
 [package]
 name = "tenferro-linalg"
+autotests = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -99,3 +100,7 @@ criterion.workspace = true
 name = "lu_ad_breakdown"
 harness = false
 required-features = ["autodiff"]
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

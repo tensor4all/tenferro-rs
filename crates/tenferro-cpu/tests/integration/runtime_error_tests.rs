@@ -89,8 +89,8 @@ fn cpu_device_transfer_rejects_backend_buffers_at_boundary() {
 
 #[test]
 fn cpu_linalg_dispatch_does_not_use_panic_catching_as_error_handling() {
-    let backend_dispatch = include_str!("../src/backend.rs");
-    let exec_session_dispatch = include_str!("../src/exec_session.rs");
+    let backend_dispatch = include_str!("../../src/backend.rs");
+    let exec_session_dispatch = include_str!("../../src/exec_session.rs");
 
     assert!(
         !backend_dispatch.contains("catch_backend_panic"),
@@ -108,7 +108,7 @@ fn cpu_linalg_dispatch_does_not_use_panic_catching_as_error_handling() {
 
 #[test]
 fn cpu_pooled_output_allocation_uses_checked_shape_product() {
-    let indexing_alloc = include_str!("../src/indexing_alloc.rs");
+    let indexing_alloc = include_str!("../../src/indexing_alloc.rs");
     assert!(
         indexing_alloc.contains("checked_shape_product(\"cpu_pooled_output\", &shape)?"),
         "CPU pooled output allocation must reject shape-product overflow"
@@ -121,7 +121,7 @@ fn cpu_pooled_output_allocation_uses_checked_shape_product() {
 
 #[test]
 fn cpu_zero_fill_pooled_outputs_use_checked_shape_product() {
-    let structural = include_str!("../src/structural.rs");
+    let structural = include_str!("../../src/structural.rs");
     let filled_section = source_section(
         structural,
         "fn filled_tensor_from_pool",
@@ -140,7 +140,7 @@ fn cpu_zero_fill_pooled_outputs_use_checked_shape_product() {
 
 #[test]
 fn cpu_uninit_pooled_output_allocation_uses_checked_shape_product() {
-    let cpu_lib = include_str!("../src/lib.rs");
+    let cpu_lib = include_str!("../../src/lib.rs");
     let section = source_section(
         cpu_lib,
         "pub(crate) unsafe fn typed_array_uninit_from_pool",
@@ -184,7 +184,7 @@ fn affinity_unsafe_blocks_document_safety_invariants() {
 
 #[test]
 fn cpu_reshape_concatenate_scatter_use_checked_boundary_arithmetic_contract() {
-    let structural = include_str!("../src/structural.rs");
+    let structural = include_str!("../../src/structural.rs");
     let reshape_section = source_section(
         structural,
         "pub fn typed_reshape",
@@ -203,7 +203,7 @@ fn cpu_reshape_concatenate_scatter_use_checked_boundary_arithmetic_contract() {
         "CPU reshape must not use unchecked shape.iter().product()"
     );
 
-    let indexing = include_str!("../src/indexing.rs");
+    let indexing = include_str!("../../src/indexing.rs");
     let concat_section = source_section(indexing, "fn typed_concatenate", "fn typed_reverse");
     assert!(
         concat_section.contains("axis_extent = axis_extent.checked_add"),
@@ -240,7 +240,7 @@ fn cpu_reshape_concatenate_scatter_use_checked_boundary_arithmetic_contract() {
 
 #[test]
 fn cpu_reductions_use_common_empty_axes_validation_helpers() {
-    let reduction = include_str!("../src/reduction.rs");
+    let reduction = include_str!("../../src/reduction.rs");
 
     for (start, end, empty_check) in [
         (
