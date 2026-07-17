@@ -3,63 +3,55 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_tensor::Error;
+//! use tenferro_tensor::{Error, ShapeMismatch, ShapeVec};
 //!
-//! let err = Error::AxisOutOfBounds {
-//!     op: "dot_general",
-//!     axis: 2,
-//!     rank: 1,
-//! };
-//! assert!(err.to_string().contains("dot_general"));
+//! let error = Error::validation(
+//!     "add",
+//!     ShapeMismatch::IncompatibleShapes {
+//!         lhs: ShapeVec::from_vec(vec![2]),
+//!         rhs: ShapeVec::from_vec(vec![3]),
+//!     }
+//!     .into(),
+//! );
+//! assert!(error.to_string().contains("add"));
 //! ```
 
+use std::error::Error as StdError;
+
+use tenferro_tensor_core::{ErrorKind, ValidationError};
+
+/// Boxed source used for backend and extension failures whose concrete type is
+/// owned by another crate or a vendor API.
+pub type BoxError = Box<dyn StdError + Send + Sync + 'static>;
+
 /// Runtime failures produced by tensor execution backends and helpers.
+///
+/// Validation failures retain the shared tensor-core payload as a typed source.
+/// Backend and extension failures retain opaque typed sources when one exists;
+/// text-only vendor failures use [`Error::BackendFailure`].
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor::Error;
+/// use tenferro_tensor::{Error, ErrorKind, ValidationError, ValidationKind};
 ///
-/// let err = Error::MissingValue { slot: 3 };
+/// let error = Error::validation(
+///     "reshape",
+///     ValidationError::RankMismatch {
+///         expected: 2,
+///         actual: 1,
+///     },
+/// );
+/// assert_eq!(error.kind(), ErrorKind::Validation(ValidationKind::RankMismatch));
 /// ```
-#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
-    #[error("{op}: axis {axis} out of bounds for rank {rank}")]
-    AxisOutOfBounds {
+    #[error("{op}: {source}")]
+    Validation {
         op: &'static str,
-        axis: usize,
-        rank: usize,
-    },
-    #[error("{op}: duplicate {role} axis {axis}")]
-    DuplicateAxis {
-        op: &'static str,
-        axis: usize,
-        role: &'static str,
-    },
-    #[error("{op}: axis {axis} appears in both {first_role} and {second_role}")]
-    AxisRoleConflict {
-        op: &'static str,
-        axis: usize,
-        first_role: &'static str,
-        second_role: &'static str,
-    },
-    #[error("{op}: shape mismatch lhs={lhs:?} rhs={rhs:?}")]
-    ShapeMismatch {
-        op: &'static str,
-        lhs: Vec<usize>,
-        rhs: Vec<usize>,
-    },
-    #[error("{op}: rank mismatch expected {expected}, actual {actual}")]
-    RankMismatch {
-        op: &'static str,
-        expected: usize,
-        actual: usize,
-    },
-    #[error("{op}: dtype mismatch lhs={lhs:?} rhs={rhs:?}")]
-    DTypeMismatch {
-        op: &'static str,
-        lhs: crate::DType,
-        rhs: crate::DType,
+        #[source]
+        source: ValidationError,
     },
     #[error("{op}: unsupported dtype conversion from {from:?} to {to:?}: {message}")]
     UnsupportedDTypeConversion {
@@ -68,110 +60,196 @@ pub enum Error {
         to: crate::DType,
         message: String,
     },
-    #[error("{backend} backend does not support {op} for dtype {dtype:?}")]
-    UnsupportedOpDType {
-        op: &'static str,
-        dtype: crate::DType,
-        backend: crate::BackendId,
-    },
-    #[error("{op}: division by zero for dtype {dtype:?}")]
-    DivisionByZero {
-        op: &'static str,
-        dtype: crate::DType,
-    },
-    #[error("{op}: negative integer exponent for dtype {dtype:?}")]
-    NegativeIntegerExponent {
-        op: &'static str,
-        dtype: crate::DType,
-    },
-    #[error("{op}: invalid config: {message}")]
-    InvalidConfig { op: &'static str, message: String },
-    #[error("extension family {family_id:?} has no host reference implementation")]
-    NoHostReference { family_id: &'static str },
     #[error("{op}: backend failure: {message}")]
     BackendFailure { op: &'static str, message: String },
+    #[error("{op}: backend failure: {source}")]
+    BackendSource {
+        op: &'static str,
+        #[source]
+        source: BoxError,
+    },
+    #[error("{op}: extension {family} failed: {source}")]
+    Extension {
+        op: &'static str,
+        family: &'static str,
+        kind: ErrorKind,
+        #[source]
+        source: BoxError,
+    },
     #[error("missing runtime value for slot {slot}")]
     MissingValue { slot: usize },
+    #[error("internal tensor error: {0}")]
+    Internal(String),
 }
 
 impl Error {
-    /// Construct a backend failure error while preserving the operation name.
+    /// Wrap shared tensor validation with the operation that requested it.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Error, ValidationError};
+    ///
+    /// let error = Error::validation(
+    ///     "transpose",
+    ///     ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
+    /// );
+    /// assert!(matches!(error, Error::Validation { op: "transpose", .. }));
+    /// ```
+    pub fn validation(op: &'static str, source: ValidationError) -> Self {
+        Self::Validation { op, source }
+    }
+
+    /// Construct a structured invalid-argument validation error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Error, ErrorKind, ValidationKind};
+    ///
+    /// let error = Error::invalid_argument("slice", "step", "must be non-zero");
+    /// assert_eq!(error.kind(), ErrorKind::Validation(ValidationKind::InvalidArgument));
+    /// ```
+    pub fn invalid_argument(
+        op: &'static str,
+        argument: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::validation(
+            op,
+            ValidationError::InvalidArgument {
+                argument,
+                message: message.into(),
+            },
+        )
+    }
+
+    /// Construct an unsupported dtype conversion error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Error, ErrorKind, DType};
+    ///
+    /// let error = Error::unsupported_dtype_conversion(
+    ///     "convert",
+    ///     DType::F64,
+    ///     DType::I32,
+    ///     "lossy conversion is disabled",
+    /// );
+    /// assert_eq!(error.kind(), ErrorKind::Unsupported);
+    /// ```
+    pub fn unsupported_dtype_conversion(
+        op: &'static str,
+        from: crate::DType,
+        to: crate::DType,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::UnsupportedDTypeConversion {
+            op,
+            from,
+            to,
+            message: message.into(),
+        }
+    }
+
+    /// Construct a text-only backend failure.
+    ///
+    /// Use [`Error::backend_source`] when a typed source is available.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use tenferro_tensor::Error;
     ///
-    /// let err = Error::backend_failure("matmul", "backend rejected launch");
-    /// assert!(matches!(
-    ///     err,
-    ///     Error::BackendFailure {
-    ///         op: "matmul",
-    ///         ref message,
-    ///     } if message == "backend rejected launch"
-    /// ));
+    /// let error = Error::backend_failure("matmul", "backend rejected launch");
+    /// assert!(matches!(error, Error::BackendFailure { op: "matmul", .. }));
     /// ```
-    pub fn backend_failure(op: &'static str, message: impl std::fmt::Display) -> Self {
+    pub fn backend_failure(op: &'static str, message: impl Into<String>) -> Self {
         Self::BackendFailure {
             op,
-            message: message.to_string(),
+            message: message.into(),
         }
     }
 
-    /// Construct a structured unsupported operation/dtype error.
+    /// Construct a backend failure while preserving its typed source.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{BackendId, DType, Error};
+    /// use std::error::Error as _;
+    /// use tenferro_tensor::Error;
     ///
-    /// let err = Error::unsupported_op_dtype("add", DType::Bool, BackendId::Cuda);
-    /// assert!(matches!(err, Error::UnsupportedOpDType { backend: BackendId::Cuda, .. }));
+    /// let error = Error::backend_source("load", std::io::Error::other("read failed"));
+    /// assert!(error.source().is_some());
     /// ```
-    pub fn unsupported_op_dtype(
-        op: &'static str,
-        dtype: crate::DType,
-        backend: crate::BackendId,
-    ) -> Self {
-        Self::UnsupportedOpDType { op, dtype, backend }
+    pub fn backend_source<E>(op: &'static str, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::BackendSource {
+            op,
+            source: Box::new(source),
+        }
     }
 
-    /// Construct a structured division-by-zero domain error.
+    /// Construct an extension failure while preserving its typed source and
+    /// coarse classification.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{DType, Error};
+    /// use std::error::Error as _;
+    /// use tenferro_tensor::{Error, ErrorKind};
     ///
-    /// let err = Error::division_by_zero("div", DType::I32);
-    /// assert!(matches!(err, Error::DivisionByZero { op: "div", .. }));
+    /// let error = Error::extension(
+    ///     "einsum",
+    ///     "einsum",
+    ///     ErrorKind::Internal,
+    ///     std::io::Error::other("planner failed"),
+    /// );
+    /// assert!(error.source().is_some());
     /// ```
-    pub fn division_by_zero(op: &'static str, dtype: crate::DType) -> Self {
-        Self::DivisionByZero { op, dtype }
+    pub fn extension<E>(op: &'static str, family: &'static str, kind: ErrorKind, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::Extension {
+            op,
+            family,
+            kind,
+            source: Box::new(source),
+        }
     }
 
-    /// Construct a structured negative-integer-exponent domain error.
+    /// Return the stable coarse classification for this tensor failure.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_tensor::{DType, Error};
+    /// use tenferro_tensor::{Error, ErrorKind, ValidationError, ValidationKind};
+    /// use tenferro_tensor::core::DType;
     ///
-    /// let err = Error::negative_integer_exponent("pow", DType::I64);
-    /// assert!(matches!(err, Error::NegativeIntegerExponent { op: "pow", .. }));
+    /// let error = Error::validation(
+    ///     "add",
+    ///     ValidationError::DTypeMismatch {
+    ///         expected: DType::F32,
+    ///         actual: DType::F64,
+    ///     },
+    /// );
+    /// assert_eq!(error.kind(), ErrorKind::Validation(ValidationKind::DTypeMismatch));
     /// ```
-    pub fn negative_integer_exponent(op: &'static str, dtype: crate::DType) -> Self {
-        Self::NegativeIntegerExponent { op, dtype }
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Validation { source, .. } => ErrorKind::Validation(source.kind()),
+            Self::UnsupportedDTypeConversion { .. } => ErrorKind::Unsupported,
+            Self::BackendFailure { .. } | Self::BackendSource { .. } => ErrorKind::BackendFailure,
+            Self::Extension { kind, .. } => *kind,
+            Self::MissingValue { .. } => ErrorKind::RuntimeState,
+            Self::Internal(_) => ErrorKind::Internal,
+        }
     }
 }
 
 /// Result type alias for runtime tensor operations.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_tensor::{Error, Result};
-///
-/// let output: Result<()> = Err(Error::MissingValue { slot: 0 });
-/// ```
 pub type Result<T> = std::result::Result<T, Error>;

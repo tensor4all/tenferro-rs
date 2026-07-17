@@ -378,10 +378,12 @@ fn rank_less_than_two_returns_error_instead_of_panicking() {
         let err = check_singular_diagonal(&t).unwrap_err();
         assert!(matches!(
             err,
-            Error::RankMismatch {
+            Error::Validation {
                 op: "solve",
-                expected: 2,
-                actual
+                source: tenferro_tensor_core::ValidationError::RankMismatch {
+                    expected: 2,
+                    actual,
+                },
             } if actual == shape.len()
         ));
     }

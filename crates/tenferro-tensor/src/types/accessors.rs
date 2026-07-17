@@ -44,6 +44,10 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(sum, 3.0);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn iter(&self) -> crate::Result<std::slice::Iter<'_, T>> {
         Ok(self.host_data()?.iter())
     }
@@ -62,6 +66,10 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.as_slice()?, &[2.0, 4.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn iter_mut(&mut self) -> crate::Result<std::slice::IterMut<'_, T>> {
         Ok(self.host_data_mut()?.iter_mut())
     }
@@ -77,6 +85,10 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.linear_offset2(1, 2)?, 5);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn linear_offset2(&self, i: usize, j: usize) -> crate::Result<usize> {
         try_linear_offset_for_shape(self.shape(), &[i, j], "TypedTensor::linear_offset2")
     }
@@ -92,6 +104,10 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.linear_offset3(1, 2, 1)?, 11);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn linear_offset3(&self, i: usize, j: usize, k: usize) -> crate::Result<usize> {
         try_linear_offset_for_shape(self.shape(), &[i, j, k], "TypedTensor::linear_offset3")
     }
@@ -107,14 +123,19 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.get2(1, 0)?, &2.0);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn get2(&self, i: usize, j: usize) -> crate::Result<&T> {
         let off = self.linear_offset2(i, j)?;
-        self.host_data()?
-            .get(off)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "TypedTensor::get2",
-                message: format!("linear offset {off} is outside host buffer"),
-            })
+        self.host_data()?.get(off).ok_or_else(|| {
+            crate::Error::invalid_argument(
+                "TypedTensor::get2",
+                "index",
+                format!("linear offset {off} is outside host buffer"),
+            )
+        })
     }
 
     /// Borrow a single element by rank-3 logical index.
@@ -128,14 +149,19 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.get3(0, 0, 1)?, &4.0);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn get3(&self, i: usize, j: usize, k: usize) -> crate::Result<&T> {
         let off = self.linear_offset3(i, j, k)?;
-        self.host_data()?
-            .get(off)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "TypedTensor::get3",
-                message: format!("linear offset {off} is outside host buffer"),
-            })
+        self.host_data()?.get(off).ok_or_else(|| {
+            crate::Error::invalid_argument(
+                "TypedTensor::get3",
+                "index",
+                format!("linear offset {off} is outside host buffer"),
+            )
+        })
     }
 
     /// Borrow a single element by multi-index without release-mode bounds
@@ -157,6 +183,10 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(unsafe { *t.get_unchecked(&[1])? }, 2.0);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub unsafe fn get_unchecked(&self, indices: &[usize]) -> crate::Result<&T> {
         let off = linear_offset_unchecked(self.shape(), indices);
         Ok(unsafe { self.host_data()?.get_unchecked(off) })
@@ -174,14 +204,19 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.as_slice()?, &[1.0, 5.0, 3.0, 4.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn get_mut2(&mut self, i: usize, j: usize) -> crate::Result<&mut T> {
         let off = self.linear_offset2(i, j)?;
-        self.host_data_mut()?
-            .get_mut(off)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "TypedTensor::get_mut2",
-                message: format!("linear offset {off} is outside host buffer"),
-            })
+        self.host_data_mut()?.get_mut(off).ok_or_else(|| {
+            crate::Error::invalid_argument(
+                "TypedTensor::get_mut2",
+                "index",
+                format!("linear offset {off} is outside host buffer"),
+            )
+        })
     }
 
     /// Mutably borrow a single element by rank-3 logical index.
@@ -196,14 +231,19 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.as_slice()?, &[3.0, 5.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn get_mut3(&mut self, i: usize, j: usize, k: usize) -> crate::Result<&mut T> {
         let off = self.linear_offset3(i, j, k)?;
-        self.host_data_mut()?
-            .get_mut(off)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "TypedTensor::get_mut3",
-                message: format!("linear offset {off} is outside host buffer"),
-            })
+        self.host_data_mut()?.get_mut(off).ok_or_else(|| {
+            crate::Error::invalid_argument(
+                "TypedTensor::get_mut3",
+                "index",
+                format!("linear offset {off} is outside host buffer"),
+            )
+        })
     }
 
     /// Mutably borrow a single element by multi-index without release-mode
@@ -228,6 +268,10 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.as_slice()?, &[2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub unsafe fn get_unchecked_mut(&mut self, indices: &[usize]) -> crate::Result<&mut T> {
         let off = linear_offset_unchecked(self.shape(), indices);
         Ok(unsafe { self.host_data_mut()?.get_unchecked_mut(off) })
@@ -246,6 +290,10 @@ impl Tensor {
     /// assert_eq!(t.linear_offset(&[1, 2])?, 5);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         try_linear_offset_for_shape(self.shape(), indices, "Tensor::linear_offset")
     }
@@ -261,6 +309,10 @@ impl Tensor {
     /// assert_eq!(t.linear_offset2(1, 2)?, 5);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn linear_offset2(&self, i: usize, j: usize) -> crate::Result<usize> {
         try_linear_offset_for_shape(self.shape(), &[i, j], "Tensor::linear_offset2")
     }
@@ -276,6 +328,10 @@ impl Tensor {
     /// assert_eq!(t.linear_offset3(1, 2, 1)?, 11);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn linear_offset3(&self, i: usize, j: usize, k: usize) -> crate::Result<usize> {
         try_linear_offset_for_shape(self.shape(), &[i, j, k], "Tensor::linear_offset3")
     }
@@ -292,14 +348,19 @@ impl Tensor {
     /// assert!(t.get::<f32>(&[1]).is_err());
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn get<T: TensorScalar>(&self, indices: &[usize]) -> crate::Result<&T> {
         let off = self.linear_offset(indices)?;
-        self.as_slice::<T>()?
-            .get(off)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "Tensor::get",
-                message: format!("linear offset {off} is outside host buffer"),
-            })
+        self.as_slice::<T>()?.get(off).ok_or_else(|| {
+            crate::Error::invalid_argument(
+                "Tensor::get",
+                "index",
+                format!("linear offset {off} is outside host buffer"),
+            )
+        })
     }
 
     /// Mutably borrow a single typed element by multi-index.
@@ -314,14 +375,19 @@ impl Tensor {
     /// assert_eq!(t.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn get_mut<T: TensorScalar>(&mut self, indices: &[usize]) -> crate::Result<&mut T> {
         let off = self.linear_offset(indices)?;
-        self.as_slice_mut::<T>()?
-            .get_mut(off)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "Tensor::get_mut",
-                message: format!("linear offset {off} is outside host buffer"),
-            })
+        self.as_slice_mut::<T>()?.get_mut(off).ok_or_else(|| {
+            crate::Error::invalid_argument(
+                "Tensor::get_mut",
+                "index",
+                format!("linear offset {off} is outside host buffer"),
+            )
+        })
     }
 
     /// Try to borrow a single typed element by multi-index without
@@ -344,6 +410,10 @@ impl Tensor {
     /// assert_eq!(unsafe { *t.get_unchecked::<f64>(&[1])? }, 2.0);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub unsafe fn get_unchecked<T: TensorScalar>(&self, indices: &[usize]) -> crate::Result<&T> {
         let off = linear_offset_unchecked(self.shape(), indices);
         let data = self.as_slice::<T>()?;
@@ -373,6 +443,10 @@ impl Tensor {
     /// assert_eq!(t.as_slice::<f64>()?, &[2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub unsafe fn get_unchecked_mut<T: TensorScalar>(
         &mut self,
         indices: &[usize],
@@ -395,6 +469,10 @@ impl Tensor {
     /// assert!(t.as_slice_mut::<f32>().is_err());
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn as_slice_mut<T: TensorScalar>(&mut self) -> crate::Result<&mut [T]> {
         T::as_slice_mut(self)
     }
@@ -412,6 +490,10 @@ impl Tensor {
     /// assert!(t.iter::<f32>().is_err());
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn iter<T: TensorScalar>(&self) -> crate::Result<std::slice::Iter<'_, T>> {
         Ok(self.as_slice::<T>()?.iter())
     }
@@ -431,6 +513,10 @@ impl Tensor {
     /// assert!(t.iter_mut::<f32>().is_err());
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed rank, index, or layout
+    /// source when the requested accessor cannot be applied.
     pub fn iter_mut<T: TensorScalar>(&mut self) -> crate::Result<std::slice::IterMut<'_, T>> {
         Ok(self.as_slice_mut::<T>()?.iter_mut())
     }

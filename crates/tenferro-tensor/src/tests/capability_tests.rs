@@ -112,10 +112,11 @@ fn backend_require_capability_reports_structured_unsupported_errors() {
 
     assert!(matches!(
         err,
-        Error::UnsupportedOpDType {
+        Error::UnsupportedDTypeConversion {
             op: "add",
-            dtype: DType::Bool,
-            backend: BackendId::Cpu,
+            from: DType::Bool,
+            to: DType::Bool,
+            ..
         }
     ));
 
@@ -127,10 +128,11 @@ fn backend_require_capability_reports_structured_unsupported_errors() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::UnsupportedOpDType {
+        Error::UnsupportedDTypeConversion {
             op: "add",
-            dtype: DType::I32,
-            backend: BackendId::Cpu,
+            from: DType::I32,
+            to: DType::I32,
+            ..
         }
     ));
 }

@@ -275,18 +275,23 @@ impl TensorStructural for DefaultReadBackend {
             ));
         }
         if src.dtype() != dst.dtype() {
-            return Err(crate::Error::DTypeMismatch {
-                op: "copy_read_into",
-                lhs: src.dtype(),
-                rhs: dst.dtype(),
-            });
+            return Err(crate::Error::validation(
+                "copy_read_into",
+                crate::ValidationError::DTypeMismatch {
+                    expected: crate::core_dtype(dst.dtype()),
+                    actual: crate::core_dtype(src.dtype()),
+                },
+            ));
         }
         if src.shape() != dst.shape() {
-            return Err(crate::Error::ShapeMismatch {
-                op: "copy_read_into",
-                lhs: src.shape().to_vec(),
-                rhs: dst.shape().to_vec(),
-            });
+            return Err(crate::Error::validation(
+                "copy_read_into",
+                crate::ShapeMismatch::IncompatibleShapes {
+                    lhs: src.shape().to_vec().into(),
+                    rhs: dst.shape().to_vec().into(),
+                }
+                .into(),
+            ));
         }
         let src = self.to_contiguous_read(src)?;
         macro_rules! copy_typed {
@@ -675,13 +680,25 @@ fn elementwise_into_defaults_overwrite_outputs_and_validate_output() {
     let err = backend
         .add_into(&a, &b, TensorWrite::from_tensor(&mut wrong_shape))
         .unwrap_err();
-    assert!(matches!(err, crate::Error::ShapeMismatch { .. }));
+    assert!(matches!(
+        err,
+        crate::Error::Validation {
+            source: crate::ValidationError::ShapeMismatch(_),
+            ..
+        }
+    ));
 
     let mut wrong_dtype = Tensor::from_vec_col_major(vec![1], vec![0_i32]).unwrap();
     let err = backend
         .add_into(&a, &b, TensorWrite::from_tensor(&mut wrong_dtype))
         .unwrap_err();
-    assert!(matches!(err, crate::Error::DTypeMismatch { .. }));
+    assert!(matches!(
+        err,
+        crate::Error::Validation {
+            source: crate::ValidationError::DTypeMismatch { .. },
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -1210,7 +1227,16 @@ fn grouped_gemm_validation_rejects_invalid_metadata() {
         "test_grouped_gemm",
     )
     .unwrap_err();
-    assert!(err.to_string().contains("lhs matrix range"));
+    assert!(matches!(
+        err,
+        crate::Error::Validation {
+            source: crate::ValidationError::InvalidArgument {
+                argument: "lhs",
+                ..
+            },
+            ..
+        }
+    ));
 
     let rhs_range_jobs = [GroupedGemmJob::new(0, 0, 1, 1, 1, 2)];
     let err = validate_grouped_gemm(
@@ -1221,7 +1247,16 @@ fn grouped_gemm_validation_rejects_invalid_metadata() {
         "test_grouped_gemm",
     )
     .unwrap_err();
-    assert!(err.to_string().contains("rhs matrix range"));
+    assert!(matches!(
+        err,
+        crate::Error::Validation {
+            source: crate::ValidationError::InvalidArgument {
+                argument: "rhs",
+                ..
+            },
+            ..
+        }
+    ));
 
     let out_range_jobs = [GroupedGemmJob::new(1, 0, 0, 1, 1, 2)];
     let err = validate_grouped_gemm(
@@ -1232,7 +1267,16 @@ fn grouped_gemm_validation_rejects_invalid_metadata() {
         "test_grouped_gemm",
     )
     .unwrap_err();
-    assert!(err.to_string().contains("out matrix range"));
+    assert!(matches!(
+        err,
+        crate::Error::Validation {
+            source: crate::ValidationError::InvalidArgument {
+                argument: "out",
+                ..
+            },
+            ..
+        }
+    ));
 
     let overlapping_jobs = [
         GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
@@ -1246,7 +1290,16 @@ fn grouped_gemm_validation_rejects_invalid_metadata() {
         "test_grouped_gemm",
     )
     .unwrap_err();
-    assert!(err.to_string().contains("overlaps job"));
+    assert!(matches!(
+        err,
+        crate::Error::Validation {
+            source: crate::ValidationError::InvalidArgument {
+                argument: "jobs",
+                ..
+            },
+            ..
+        }
+    ));
 
     let overflow_jobs = [GroupedGemmJob::new(0, 0, 0, usize::MAX, 0, 2)];
     let err = validate_grouped_gemm(
@@ -1257,7 +1310,13 @@ fn grouped_gemm_validation_rejects_invalid_metadata() {
         "test_grouped_gemm",
     )
     .unwrap_err();
-    assert!(err.to_string().contains("element count overflows"));
+    assert!(matches!(
+        err,
+        crate::Error::Validation {
+            source: crate::ValidationError::InvalidArgument { .. },
+            ..
+        }
+    ));
 
     let empty_jobs = [GroupedGemmJob::new(
         usize::MAX,
@@ -1348,7 +1407,13 @@ fn tensor_stack_reshapes_then_concatenates_and_validates_inputs() {
 
     let c = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
     let shape_err = Tensor::stack(&[&a, &c], 0, &mut backend).unwrap_err();
-    assert!(shape_err.to_string().contains("shape mismatch"));
+    assert!(matches!(
+        shape_err,
+        crate::Error::Validation {
+            source: crate::ValidationError::ShapeMismatch(_),
+            ..
+        }
+    ));
 
     let axis_err = Tensor::stack(&[&a], 2, &mut backend).unwrap_err();
     assert!(axis_err.to_string().contains("axis 2"));

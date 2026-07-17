@@ -44,10 +44,11 @@ fn with_scalar_rejects_dtype_outside_guard_with_structured_error() {
 
     assert!(matches!(
         err,
-        Error::UnsupportedOpDType {
+        Error::UnsupportedDTypeConversion {
             op: "dtype_probe",
-            dtype: DType::I32,
-            backend: BackendId::Cuda,
+            from: DType::I32,
+            to: DType::I32,
+            ..
         }
     ));
 }
