@@ -84,14 +84,13 @@ impl Subscripts {
     /// - `"ijk->"` — full contraction (scalar result)
     /// # Errors
     ///
-    /// Returns an error if the notation is malformed or contains
-    /// parenthesized contraction order.
+    /// Returns [`Error::InvalidSubscripts`] if the notation is malformed or
+    /// contains parenthesized contraction order.
     pub fn parse(notation: &str) -> Result<Self> {
         let (inputs_str, output_str) = split_and_validate_notation(notation)?;
         if inputs_str.contains(['(', ')']) {
-            return Err(Error::InvalidArgument(
-                "Subscripts::parse does not accept parentheses; use NestedEinsum::parse to preserve parenthesized contraction order"
-                    .into(),
+            return Err(Error::invalid_subscripts(
+                "Subscripts::parse does not accept parentheses; use NestedEinsum::parse to preserve parenthesized contraction order",
             ));
         }
 

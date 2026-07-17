@@ -279,7 +279,7 @@ pub(crate) fn plan_subscripts(
     }
 
     ContractionTree::optimize(subs, input_shapes)
-        .map_err(|err| eager_invalid_config(format!("failed to optimize contraction tree: {err}")))
+        .map_err(|error| error.into_tensor_error(EAGER_EINSUM_OP))
 }
 
 fn take_labeled<'a>(
@@ -956,8 +956,8 @@ pub(crate) fn eager_einsum(
     inputs: &[&Tensor],
     subscripts: &str,
 ) -> Result<Tensor> {
-    let subscripts = Subscripts::parse(subscripts)
-        .map_err(|err| eager_invalid_config(format!("invalid subscripts: {err}")))?;
+    let subscripts =
+        Subscripts::parse(subscripts).map_err(|error| error.into_tensor_error(EAGER_EINSUM_OP))?;
     eager_einsum_subscripts(ctx, inputs, &subscripts)
 }
 
@@ -1060,8 +1060,8 @@ pub(crate) fn eager_einsum_owned(
     inputs: Vec<Tensor>,
     subscripts: &str,
 ) -> Result<Tensor> {
-    let subscripts = Subscripts::parse(subscripts)
-        .map_err(|err| eager_invalid_config(format!("invalid subscripts: {err}")))?;
+    let subscripts =
+        Subscripts::parse(subscripts).map_err(|error| error.into_tensor_error(EAGER_EINSUM_OP))?;
     eager_einsum_owned_subscripts(ctx, inputs, &subscripts)
 }
 

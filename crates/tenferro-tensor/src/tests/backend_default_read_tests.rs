@@ -237,7 +237,7 @@ impl TensorStructural for DefaultReadBackend {
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         if !self.structural_runtime_enabled {
             let TensorRead::Tensor(tensor) = input else {
-                return Err(crate::Error::backend_failure(
+                return Err(crate::Error::unsupported(
                     "to_contiguous_read",
                     "backend does not accept borrowed tensor views at this execution boundary",
                 ));
@@ -248,7 +248,7 @@ impl TensorStructural for DefaultReadBackend {
                     crate::MemoryKind::PinnedHost | crate::MemoryKind::UnpinnedHost
                 )
             {
-                return Err(crate::Error::backend_failure(
+                return Err(crate::Error::runtime_state(
                     "to_contiguous_read",
                     "default materialization accepts only host-owned tensors; use the storage's owning backend",
                 ));
@@ -269,7 +269,7 @@ impl TensorStructural for DefaultReadBackend {
 
     fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
         if !self.structural_runtime_enabled {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::unsupported(
                 "copy_read_into",
                 "backend-owned runtime copy is unsupported by this backend",
             ));
@@ -1452,7 +1452,7 @@ fn structural_runtime_materialization_rejects_views_by_default() {
 
     assert!(matches!(
         err,
-        crate::Error::BackendFailure {
+        crate::Error::Unsupported {
             op: "to_contiguous_read",
             ref message,
         } if message.contains("borrowed tensor views")
@@ -1489,7 +1489,7 @@ fn structural_runtime_materialization_rejects_foreign_backend_storage_by_default
 
     assert!(matches!(
         err,
-        crate::Error::BackendFailure {
+        crate::Error::RuntimeState {
             op: "to_contiguous_read",
             ref message,
         } if message.contains("host-owned") && message.contains("owning backend")
@@ -1515,7 +1515,7 @@ fn structural_runtime_copy_is_explicitly_unsupported_by_default() {
 
     assert!(matches!(
         err,
-        crate::Error::BackendFailure {
+        crate::Error::Unsupported {
             op: "copy_read_into",
             ref message,
         } if message.contains("unsupported")

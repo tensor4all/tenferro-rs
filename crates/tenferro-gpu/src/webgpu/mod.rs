@@ -15,11 +15,13 @@ use crate::{
 
 const DEFAULT_CUBE_DIM_X: u32 = 256;
 
+mod error;
 mod gemm;
 mod kernels;
 mod memory;
 mod runtime;
 
+pub(crate) use error::{unsupported_dtype, unsupported_operation};
 pub use memory::{download_webgpu_tensor, upload_webgpu_tensor};
 pub use runtime::{webgpu_available, WebGpuRuntime};
 
@@ -80,7 +82,7 @@ fn webgpu_handle_from_backend<T: 'static>(
         .downcast_ref::<WebGpuBuffer<T>>()
         .map(|buffer| buffer.handle().clone())
         .ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::runtime_state(
                 op,
                 format!(
                     "expected WebGPU backend buffer, got `{}` backend buffer",
@@ -95,15 +97,20 @@ fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usi
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
         .ok_or_else(|| {
-            Error::backend_failure(op, format!("shape product overflow for shape {shape:?}"))
+            Error::invalid_argument(
+                op,
+                "shape",
+                format!("shape product overflow for shape {shape:?}"),
+            )
         })
 }
 
 fn cube_count_for_len(len: usize) -> crate::Result<CubeCount> {
     let cubes = len.div_ceil(DEFAULT_CUBE_DIM_X as usize);
     let cubes = u32::try_from(cubes).map_err(|_| {
-        Error::backend_failure(
+        Error::invalid_argument(
             "cube_count_for_len",
+            "length",
             format!(
                 "1D WebGPU launch for {len} elements requires {cubes} cubes, \
                  which exceeds u32::MAX"
@@ -136,7 +143,7 @@ fn validate_webgpu_buffer_len<T>(
     let expected_len = checked_shape_product(op, tensor.shape())?;
     let actual_len = buffer.element_len();
     if expected_len != actual_len {
-        return Err(Error::backend_failure(
+        return Err(Error::runtime_state(
             op,
             format!(
                 "expected shape product {expected_len} elements, actual WebGpuBuffer::len {actual_len}"
@@ -151,7 +158,7 @@ fn webgpu_buffer<'a, T: 'static>(
     op: &'static str,
 ) -> crate::Result<&'a WebGpuBuffer<T>> {
     match tensor.buffer() {
-        Buffer::Host(_) => Err(Error::backend_failure(
+        Buffer::Host(_) => Err(Error::runtime_state(
             op,
             "expected WebGPU tensor, got host tensor. \
              Use upload_webgpu_tensor() to transfer to WebGPU before calling WebGPU ops.",
@@ -160,7 +167,7 @@ fn webgpu_buffer<'a, T: 'static>(
             .as_any()
             .downcast_ref::<WebGpuBuffer<T>>()
             .ok_or_else(|| {
-                Error::backend_failure(
+                Error::runtime_state(
                     op,
                     format!(
                         "expected WebGPU tensor, got backend buffer family `{}`",
@@ -178,20 +185,13 @@ fn typed_tensor_binding_with_layout<T: CubeElement + Clone>(
     op: &'static str,
 ) -> crate::Result<TensorBinding<WgpuRuntime>> {
     if shape.len() != strides.len() {
-        return Err(Error::backend_failure(
-            op,
-            format!(
-                "WebGPU tensor binding layout rank mismatch: shape rank {} stride rank {}",
-                shape.len(),
-                strides.len()
-            ),
-        ));
+        return Err(Error::rank_mismatch(op, shape.len(), strides.len()));
     }
     let buffer = webgpu_buffer(tensor, op)?;
     validate_webgpu_buffer_len(tensor, buffer, op)?;
     let layout_len = checked_shape_product(op, shape)?;
     if layout_len != buffer.element_len() {
-        return Err(Error::backend_failure(
+        return Err(Error::runtime_state(
             op,
             format!(
                 "WebGPU tensor binding layout covers {layout_len} elements, backing buffer has {}",
@@ -230,7 +230,7 @@ fn ensure_placement_resident_on_runtime(
     op: &'static str,
 ) -> crate::Result<()> {
     if !matches!(&placement.memory_kind, MemoryKind::Device) {
-        return Err(Error::backend_failure(
+        return Err(Error::runtime_state(
             op,
             format!(
                 "expected WebGPU tensor placement, got {:?}",
@@ -245,7 +245,7 @@ fn ensure_placement_resident_on_runtime(
         {
             Ok(())
         }
-        Some(device) => Err(Error::backend_failure(
+        Some(device) => Err(Error::runtime_state(
             op,
             format!(
                 "expected WebGPU tensor resident on webgpu:{}, got {:?}:{}",
@@ -254,7 +254,7 @@ fn ensure_placement_resident_on_runtime(
                 device.ordinal
             ),
         )),
-        None => Err(Error::backend_failure(
+        None => Err(Error::runtime_state(
             op,
             format!(
                 "expected WebGPU tensor resident on webgpu:{}, got missing device metadata",
@@ -283,8 +283,9 @@ fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
 ) -> crate::Result<TypedTensor<T>> {
     let len = checked_shape_product(op, shape)?;
     let bytes = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
-        Error::backend_failure(
+        Error::invalid_argument(
             op,
+            "shape",
             format!("WebGPU output byte length overflow for shape {shape:?}"),
         )
     })?;
@@ -337,6 +338,12 @@ impl WebGpuBackend {
     ///
     /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuBackend> = WebGpuBackend::new;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when no adapter/device is
+    /// available, or [`crate::Error::BackendSource`] when CubeCL initialization
+    /// fails.
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
         WebGpuRuntime::new(device_ordinal).map(Self::from_runtime)
     }
@@ -350,6 +357,12 @@ impl WebGpuBackend {
     ///
     /// let _ctor: fn() -> tenferro_tensor::Result<WebGpuBackend> = WebGpuBackend::new_default;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when default adapter selection
+    /// is unavailable, or [`crate::Error::BackendSource`] when initialization
+    /// fails.
     pub fn new_default() -> crate::Result<Self> {
         WebGpuRuntime::new_default().map(Self::from_runtime)
     }
@@ -389,13 +402,19 @@ impl WebGpuBackend {
     ///
     /// let _sync: fn(&WebGpuBackend) -> tenferro_tensor::Result<()> = WebGpuBackend::synchronize;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when queue flush or
+    /// synchronization fails, or [`crate::Error::RuntimeState`] when the
+    /// runtime has lost its device state.
     pub fn synchronize(&self) -> crate::Result<()> {
         self.runtime.synchronize()
     }
 }
 
 fn unsupported_op(op: &'static str) -> crate::Error {
-    crate::Error::backend_failure(
+    crate::Error::unsupported(
         op,
         "WebGPU backend does not support this operation yet; upload/download explicitly and use a supported backend operation",
     )

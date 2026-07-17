@@ -48,6 +48,14 @@ use super::{exact_extents_from_shape, invalid_compiled_graph, missing_slot_meta}
 /// `input_shapes` are the program-input shapes (matching `program.input_slots`).
 /// They are needed because `ExecProgram` does not otherwise carry input-slot
 /// shape metadata.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Internal`] when an input/output slot is outside its
+/// slot table, output metadata is missing, or another canonicalization
+/// invariant is invalid. Returns [`crate::Error::Validation`] with
+/// `ShapeMismatch`, `RankMismatch`, or `InvalidArgument` when a dot shape or
+/// dimension expression cannot be validated.
 pub fn dot_decomposer(program: &mut ExecProgram, input_shapes: &[Vec<DimExpr>]) -> Result<()> {
     if program.input_slots.len() != input_shapes.len() {
         return Err(invalid_compiled_graph(format!(

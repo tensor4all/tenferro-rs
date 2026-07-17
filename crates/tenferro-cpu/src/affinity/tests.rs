@@ -25,7 +25,7 @@ fn affinity_mask_preserves_sparse_logical_cpu_ids() {
 fn affinity_mask_rejects_extreme_cpu_ids_before_allocation() {
     let cpus = CpuSet::new([CpuId::new(usize::MAX)]).unwrap();
     let error = build_affinity_mask(&cpus).unwrap_err();
-    assert!(error.contains("exceeds supported affinity mask"));
+    assert!(matches!(error, CpuAffinityError::MaskTooLarge { .. }));
 }
 
 #[test]
@@ -44,10 +44,7 @@ fn affinity_mask_builds_sparse_logical_cpu_ids() {
 fn system_thread_affinity_reports_unsupported_platform() {
     let error = SystemThreadAffinity.pin_current(CpuId::new(0)).unwrap_err();
 
-    assert_eq!(
-        error,
-        "setting thread affinity is unsupported on this platform"
-    );
+    assert!(matches!(error, CpuAffinityError::UnsupportedPlatform));
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]

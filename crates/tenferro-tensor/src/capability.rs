@@ -341,21 +341,20 @@ pub trait TensorBackendCapability {
     ///         CapabilityAxis::OwnedResult,
     ///     )
     ///     .unwrap_err();
-    /// assert!(matches!(err, Error::UnsupportedDTypeConversion { op: "neg", .. }));
+    /// assert!(matches!(err, Error::UnsupportedDType { op: "neg", dtype: DType::I32, .. }));
     /// ```
     /// # Errors
     ///
-    /// Returns [`crate::Error::UnsupportedDTypeConversion`] when the backend
-    /// capability table does not support the requested operation and dtype.
+    /// Returns [`crate::Error::UnsupportedDType`] when the backend capability
+    /// table does not support the requested operation and dtype.
     fn require_capability(
         &self,
         query: CapabilityQuery,
         axis: CapabilityAxis,
     ) -> crate::Result<OperationCapability> {
         let entry = self.capability(query).ok_or_else(|| {
-            crate::Error::unsupported_dtype_conversion(
+            crate::Error::unsupported_dtype(
                 descriptor(query.op).name,
-                query.dtype,
                 query.dtype,
                 format!(
                     "backend {} does not support this operation/dtype",
@@ -366,9 +365,8 @@ pub trait TensorBackendCapability {
         if entry.axis(axis).is_supported() {
             Ok(entry)
         } else {
-            Err(crate::Error::unsupported_dtype_conversion(
+            Err(crate::Error::unsupported_dtype(
                 descriptor(query.op).name,
-                query.dtype,
                 query.dtype,
                 format!(
                     "backend {} does not support this operation/dtype",

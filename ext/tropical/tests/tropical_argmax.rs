@@ -2,7 +2,7 @@ use tenferro_ext_tropical::{
     cpu::{tropical_gemm_with_argmax, tropical_gemm_with_argmax_generic, TropicalGemmKind},
     TropicalKind,
 };
-use tenferro_tensor::Error;
+use tenferro_tensor::{Error, ValidationError};
 
 #[test]
 fn maxplus_gemm_returns_values_and_first_winner_indices() {
@@ -167,14 +167,17 @@ fn gemm_kind_accepts_crate_level_tropical_kind() {
 }
 
 #[test]
-fn invalid_dimensions_return_invalid_config() {
+fn invalid_dimensions_return_validation_errors() {
     let err = tropical_gemm_with_argmax(TropicalGemmKind::MaxPlus, &[1.0_f64], 2, 2, &[1.0], 1)
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "tropical_gemm_with_argmax",
-            ..
+            source: ValidationError::ShapeDataLengthMismatch {
+                expected: 4,
+                actual: 1,
+            },
         }
     ));
 
@@ -182,9 +185,12 @@ fn invalid_dimensions_return_invalid_config() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "tropical_gemm_with_argmax",
-            ..
+            source: ValidationError::InvalidArgument {
+                argument: "configuration",
+                ..
+            },
         }
     ));
 }
@@ -200,33 +206,39 @@ fn zero_contracting_dimension_is_allowed_only_for_empty_outputs() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "tropical_gemm_with_argmax",
-            ..
+            source: ValidationError::InvalidArgument {
+                argument: "configuration",
+                ..
+            },
         }
     ));
 }
 
 #[cfg(target_pointer_width = "64")]
 #[test]
-fn oversized_contracting_dimension_returns_invalid_config_before_reading_inputs() {
+fn oversized_contracting_dimension_returns_validation_error_before_reading_inputs() {
     let too_large_k = u32::MAX as usize + 2;
 
     let err = tropical_gemm_with_argmax(
         TropicalGemmKind::MaxPlus,
         &[] as &[f64],
-        1,
+        0,
         too_large_k,
         &[],
-        1,
+        0,
     )
     .unwrap_err();
 
     assert!(matches!(
         err,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "tropical_gemm_with_argmax",
-            ..
+            source: ValidationError::InvalidArgument {
+                argument: "configuration",
+                ..
+            },
         }
     ));
 }

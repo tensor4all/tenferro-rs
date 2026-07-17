@@ -12,11 +12,11 @@ pub(crate) fn matrix_dims<T>(
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize)> {
     if input.shape().len() != 2 {
-        return Err(tenferro_tensor::Error::RankMismatch {
+        return Err(tenferro_tensor::Error::rank_mismatch(
             op,
-            expected: 2,
-            actual: input.shape().len(),
-        });
+            2,
+            input.shape().len(),
+        ));
     }
     Ok((input.shape()[0], input.shape()[1]))
 }
@@ -27,11 +27,11 @@ pub(crate) fn square_matrix_dim<T>(
 ) -> tenferro_tensor::Result<usize> {
     let (rows, cols) = matrix_dims(input, op)?;
     if rows != cols {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
+        return Err(tenferro_tensor::Error::shape_mismatch(
             op,
-            lhs: vec![rows],
-            rhs: vec![cols],
-        });
+            vec![rows],
+            vec![cols],
+        ));
     }
     Ok(rows)
 }
@@ -71,11 +71,11 @@ pub(crate) fn split_core_and_batch_result<'a, T>(
     op: &'static str,
 ) -> tenferro_tensor::Result<(&'a [usize], &'a [usize])> {
     if input.shape().len() < core_rank {
-        return Err(tenferro_tensor::Error::RankMismatch {
+        return Err(tenferro_tensor::Error::rank_mismatch(
             op,
-            expected: core_rank,
-            actual: input.shape().len(),
-        });
+            core_rank,
+            input.shape().len(),
+        ));
     }
     Ok(input.shape().split_at(core_rank))
 }
@@ -94,11 +94,11 @@ pub(crate) fn square_core_and_batch_result<'a, T>(
 ) -> tenferro_tensor::Result<(usize, &'a [usize])> {
     let (rows, cols, batch_shape) = matrix_core_and_batch_result(input, op)?;
     if rows != cols {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
+        return Err(tenferro_tensor::Error::shape_mismatch(
             op,
-            lhs: vec![rows],
-            rhs: vec![cols],
-        });
+            vec![rows],
+            vec![cols],
+        ));
     }
     Ok((rows, batch_shape))
 }
@@ -111,11 +111,12 @@ pub(crate) fn batch_element_count(
         return Ok(1);
     }
     batch_shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim)
-            .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+        acc.checked_mul(dim).ok_or_else(|| {
+            tenferro_tensor::Error::validation(
                 op,
-                message: "batch element count overflow".into(),
-            })
+                tenferro_tensor::ValidationError::IntegerOverflow,
+            )
+        })
     })
 }
 
@@ -125,11 +126,13 @@ pub(crate) fn checked_product(
     shape: &[usize],
 ) -> tenferro_tensor::Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim)
-            .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+        acc.checked_mul(dim).ok_or_else(|| {
+            tenferro_tensor::Error::invalid_argument(
                 op,
-                message: format!("{role} element count overflow"),
-            })
+                "shape",
+                format!("{role} element count overflow"),
+            )
+        })
     })
 }
 
@@ -139,12 +142,13 @@ fn checked_repeated_len(
     per_batch: usize,
     batch_count: usize,
 ) -> tenferro_tensor::Result<usize> {
-    per_batch
-        .checked_mul(batch_count)
-        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
+    per_batch.checked_mul(batch_count).ok_or_else(|| {
+        tenferro_tensor::Error::invalid_argument(
             op,
-            message: format!("{role} repeated batch length overflow"),
-        })
+            "batch",
+            format!("{role} repeated batch length overflow"),
+        )
+    })
 }
 
 pub(crate) fn checked_slice_range(
@@ -152,20 +156,12 @@ pub(crate) fn checked_slice_range(
     batch_idx: usize,
     slice_size: usize,
 ) -> tenferro_tensor::Result<Range<usize>> {
-    let start =
-        batch_idx
-            .checked_mul(slice_size)
-            .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-                op,
-                message: "batch slice start overflow".into(),
-            })?;
-    let end =
-        start
-            .checked_add(slice_size)
-            .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-                op,
-                message: "batch slice end overflow".into(),
-            })?;
+    let start = batch_idx.checked_mul(slice_size).ok_or_else(|| {
+        tenferro_tensor::Error::validation(op, tenferro_tensor::ValidationError::IntegerOverflow)
+    })?;
+    let end = start.checked_add(slice_size).ok_or_else(|| {
+        tenferro_tensor::Error::validation(op, tenferro_tensor::ValidationError::IntegerOverflow)
+    })?;
     Ok(start..end)
 }
 
@@ -190,9 +186,12 @@ pub(crate) fn vector_with_batch_shape(len: usize, batch_shape: &[usize]) -> Vec<
 }
 
 pub(crate) fn dim_i32(value: usize, op: &'static str) -> tenferro_tensor::Result<i32> {
-    i32::try_from(value).map_err(|_| tenferro_tensor::Error::InvalidConfig {
-        op,
-        message: format!("dimension {value} exceeds LAPACK i32 range"),
+    i32::try_from(value).map_err(|_| {
+        tenferro_tensor::Error::invalid_argument(
+            op,
+            "dimension",
+            format!("dimension {value} exceeds LAPACK i32 range"),
+        )
     })
 }
 
@@ -202,9 +201,11 @@ pub(crate) fn work_len(
     routine: &'static str,
 ) -> tenferro_tensor::Result<i32> {
     if !(query.is_finite() && query >= 1.0) {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(crate::error::invalid_workspace(
             op,
-            format!("LAPACK {routine} returned invalid workspace size {query}"),
+            "LAPACK",
+            routine,
+            format!("returned invalid workspace size {query}"),
         ));
     }
     dim_i32(query.ceil() as usize, op)
@@ -216,15 +217,16 @@ pub(crate) fn check_lapack_info(
     info: i32,
 ) -> tenferro_tensor::Result<()> {
     if info < 0 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
+        return Err(tenferro_tensor::Error::invalid_argument(
             op,
-            message: format!("LAPACK {routine} argument {} had an illegal value", -info),
-        });
+            "lapack_argument",
+            format!("LAPACK {routine} argument {} had an illegal value", -info),
+        ));
     }
     if info > 0 {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(crate::error::into_tensor_error(
             op,
-            format!("LAPACK {routine} failed with info {info}"),
+            crate::Error::NonConvergence { op },
         ));
     }
     Ok(())
@@ -289,10 +291,11 @@ where
     let slice_size = checked_product(op_name, "core shape", core_shape)?;
     let batch_count = batch_element_count(op_name, batch_shape)?;
     if batch_count == 0 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: op_name,
-            message: "zero-sized batch dims must be handled by the caller".into(),
-        });
+        return Err(tenferro_tensor::Error::invalid_argument(
+            op_name,
+            "batch",
+            "zero-sized batch dims must be handled by the caller",
+        ));
     }
 
     let mut out_core_shape: Option<Vec<usize>> = None;
@@ -315,11 +318,11 @@ where
 
         if let Some(expected_shape) = &out_core_shape {
             if batch_output.shape() != expected_shape.as_slice() {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: op_name,
-                    lhs: batch_output.shape().to_vec(),
-                    rhs: expected_shape.clone(),
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    op_name,
+                    batch_output.shape().to_vec(),
+                    expected_shape.clone(),
+                ));
             }
         } else {
             out_data = Some(Vec::with_capacity(checked_repeated_len(
@@ -334,22 +337,19 @@ where
         match &mut out_data {
             Some(data) => data.extend_from_slice(batch_output.host_data()?),
             None => {
-                return Err(tenferro_tensor::Error::InvalidConfig {
-                    op: op_name,
-                    message: "missing output buffer after first batch".into(),
-                });
+                return Err(tenferro_tensor::Error::Internal(format!(
+                    "{op_name}: missing output buffer after first batch"
+                )));
             }
         }
     }
 
-    let mut out_shape = out_core_shape.ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-        op: op_name,
-        message: "missing output shape".into(),
+    let mut out_shape = out_core_shape.ok_or_else(|| {
+        tenferro_tensor::Error::Internal(format!("{op_name}: missing output shape"))
     })?;
     out_shape.extend_from_slice(batch_shape);
-    let out_data = out_data.ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-        op: op_name,
-        message: "missing output data".into(),
+    let out_data = out_data.ok_or_else(|| {
+        tenferro_tensor::Error::Internal(format!("{op_name}: missing output data"))
     })?;
     tensor_from_vec_with_template(out_shape, out_data, input)
 }
@@ -372,10 +372,11 @@ where
     let slice_size = checked_product(op_name, "core shape", core_shape)?;
     let batch_count = batch_element_count(op_name, batch_shape)?;
     if batch_count == 0 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: op_name,
-            message: "zero-sized batch dims must be handled by the caller".into(),
-        });
+        return Err(tenferro_tensor::Error::invalid_argument(
+            op_name,
+            "batch",
+            "zero-sized batch dims must be handled by the caller",
+        ));
     }
 
     let mut out_shapes: Vec<Vec<usize>> = Vec::new();
@@ -398,10 +399,9 @@ where
 
         if out_shapes.is_empty() {
             if batch_outputs.is_empty() {
-                return Err(tenferro_tensor::Error::InvalidConfig {
-                    op: op_name,
-                    message: "missing outputs for first batch".into(),
-                });
+                return Err(tenferro_tensor::Error::Internal(format!(
+                    "{op_name}: missing outputs for first batch"
+                )));
             }
             out_shapes = batch_outputs
                 .iter()
@@ -416,24 +416,25 @@ where
                 .collect::<tenferro_tensor::Result<_>>()?;
         } else {
             if batch_outputs.len() != out_shapes.len() {
-                return Err(tenferro_tensor::Error::InvalidConfig {
-                    op: op_name,
-                    message: format!(
+                return Err(tenferro_tensor::Error::invalid_argument(
+                    op_name,
+                    "outputs",
+                    format!(
                         "output count mismatch across batches: got {}, expected {}",
                         batch_outputs.len(),
                         out_shapes.len()
                     ),
-                });
+                ));
             }
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
             if batch_output.shape() != out_shapes[idx].as_slice() {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: op_name,
-                    lhs: batch_output.shape().to_vec(),
-                    rhs: out_shapes[idx].clone(),
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    op_name,
+                    batch_output.shape().to_vec(),
+                    out_shapes[idx].clone(),
+                ));
             }
             out_data[idx].extend_from_slice(batch_output.host_data()?);
         }
@@ -466,10 +467,11 @@ where
     let slice_size = checked_product(op_name, "core shape", core_shape)?;
     let batch_count = batch_element_count(op_name, batch_shape)?;
     if batch_count == 0 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: op_name,
-            message: "zero-sized batch dims must be handled by the caller".into(),
-        });
+        return Err(tenferro_tensor::Error::invalid_argument(
+            op_name,
+            "batch",
+            "zero-sized batch dims must be handled by the caller",
+        ));
     }
 
     let mut out_shapes: Vec<Vec<usize>> = Vec::new();
@@ -492,10 +494,9 @@ where
 
         if out_shapes.is_empty() {
             if batch_outputs.is_empty() {
-                return Err(tenferro_tensor::Error::InvalidConfig {
-                    op: op_name,
-                    message: "missing outputs for first batch".into(),
-                });
+                return Err(tenferro_tensor::Error::Internal(format!(
+                    "{op_name}: missing outputs for first batch"
+                )));
             }
             out_shapes = batch_outputs
                 .iter()
@@ -510,24 +511,25 @@ where
                 .collect::<tenferro_tensor::Result<_>>()?;
         } else {
             if batch_outputs.len() != out_shapes.len() {
-                return Err(tenferro_tensor::Error::InvalidConfig {
-                    op: op_name,
-                    message: format!(
+                return Err(tenferro_tensor::Error::invalid_argument(
+                    op_name,
+                    "outputs",
+                    format!(
                         "output count mismatch across batches: got {}, expected {}",
                         batch_outputs.len(),
                         out_shapes.len()
                     ),
-                });
+                ));
             }
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
             if batch_output.shape() != out_shapes[idx].as_slice() {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: op_name,
-                    lhs: batch_output.shape().to_vec(),
-                    rhs: out_shapes[idx].clone(),
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    op_name,
+                    batch_output.shape().to_vec(),
+                    out_shapes[idx].clone(),
+                ));
             }
             out_data[idx].extend_from_slice(batch_output.host_data()?);
         }
@@ -561,11 +563,11 @@ where
     let (a_core_shape, a_batch_shape) = split_core_and_batch_result(a, 2, op_name)?;
     let (b_core_shape, b_batch_shape) = split_core_and_batch_result(b, 2, op_name)?;
     if a_batch_shape != b_batch_shape {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op: op_name,
-            lhs: a_batch_shape.to_vec(),
-            rhs: b_batch_shape.to_vec(),
-        });
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            op_name,
+            a_batch_shape.to_vec(),
+            b_batch_shape.to_vec(),
+        ));
     }
 
     if a_batch_shape.is_empty() {
@@ -576,10 +578,11 @@ where
     let b_slice_size = checked_product(op_name, "rhs core shape", b_core_shape)?;
     let batch_count = batch_element_count(op_name, a_batch_shape)?;
     if batch_count == 0 {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: op_name,
-            message: "zero-sized batch dims must be handled by the caller".into(),
-        });
+        return Err(tenferro_tensor::Error::invalid_argument(
+            op_name,
+            "batch",
+            "zero-sized batch dims must be handled by the caller",
+        ));
     }
 
     let mut out_core_shape: Option<Vec<usize>> = None;
@@ -611,11 +614,11 @@ where
 
         if let Some(expected_shape) = &out_core_shape {
             if batch_output.shape() != expected_shape.as_slice() {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: op_name,
-                    lhs: batch_output.shape().to_vec(),
-                    rhs: expected_shape.clone(),
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    op_name,
+                    batch_output.shape().to_vec(),
+                    expected_shape.clone(),
+                ));
             }
         } else {
             out_data = Some(Vec::with_capacity(checked_repeated_len(
@@ -630,22 +633,19 @@ where
         match &mut out_data {
             Some(data) => data.extend_from_slice(batch_output.host_data()?),
             None => {
-                return Err(tenferro_tensor::Error::InvalidConfig {
-                    op: op_name,
-                    message: "missing output buffer after first batch".into(),
-                });
+                return Err(tenferro_tensor::Error::Internal(format!(
+                    "{op_name}: missing output buffer after first batch"
+                )));
             }
         }
     }
 
-    let mut out_shape = out_core_shape.ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-        op: op_name,
-        message: "missing output shape".into(),
+    let mut out_shape = out_core_shape.ok_or_else(|| {
+        tenferro_tensor::Error::Internal(format!("{op_name}: missing output shape"))
     })?;
     out_shape.extend_from_slice(a_batch_shape);
-    let out_data = out_data.ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-        op: op_name,
-        message: "missing output data".into(),
+    let out_data = out_data.ok_or_else(|| {
+        tenferro_tensor::Error::Internal(format!("{op_name}: missing output data"))
     })?;
     tensor_from_vec_with_template(out_shape, out_data, b)
 }
@@ -653,19 +653,15 @@ where
 pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
     let shape = input.shape();
     if shape.len() < 2 {
-        return Err(tenferro_tensor::Error::RankMismatch {
-            op: "eig",
-            expected: 2,
-            actual: shape.len(),
-        });
+        return Err(tenferro_tensor::Error::rank_mismatch("eig", 2, shape.len()));
     }
     let n = shape[0];
     if shape[1] != n {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op: "eig",
-            lhs: vec![n],
-            rhs: vec![shape[1]],
-        });
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "eig",
+            vec![n],
+            vec![shape[1]],
+        ));
     }
     let batch_shape = &shape[2..];
     let value_shape = vector_with_batch_shape(n, batch_shape);
@@ -679,9 +675,6 @@ pub(crate) fn zero_dim_eig_outputs(input: &Tensor) -> tenferro_tensor::Result<Ve
             Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
             Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
         ]),
-        _ => Err(tenferro_tensor::Error::backend_failure(
-            "eig",
-            format!("unsupported dtype {:?}", input.dtype()),
-        )),
+        _ => Err(super::unsupported_dtype("eig", input.dtype())),
     }
 }

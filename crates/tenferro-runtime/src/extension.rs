@@ -126,11 +126,13 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 ///
 /// # Errors
 ///
-/// Returns a graph-build validation error when the extension receives the
-/// wrong number of traced inputs. Canonical metadata inference failures,
-/// including a returned metadata count that differs from
-/// [`ExtensionOp::output_count`], are returned as [`Error::TensorRuntime`]
-/// containing the typed tensor validation source.
+/// Returns [`Error::Validation`] with `ValidationError::InvalidArgument` when
+/// the extension receives the wrong number of traced inputs or produces an
+/// unknown output shape. Canonical metadata inference failures, including a
+/// returned metadata count that differs from [`ExtensionOp::output_count`],
+/// are returned as [`Error::TensorRuntime`] containing the typed tensor
+/// validation source, while poisoned metadata state is retained as
+/// [`Error::RuntimeStateSource`].
 pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<TracedTensor>> {
     if inputs.len() != op.input_count() {
         return Err(Error::invalid_argument(
@@ -427,6 +429,13 @@ pub fn apply_expanded_graph_with_shape_contract(
 /// This is for extension crates whose operation can be expanded at graph-build
 /// time. It preserves the same parent graph and metadata merging behavior as
 /// [`apply`], but does not insert a `StdTensorOp::Extension` carrier.
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] with `InvalidArgument` when lowering produces
+/// an invalid output count or unknown output metadata, [`Error::Internal`] for
+/// an invalid graph reference, and [`Error::RuntimeStateSource`] when metadata
+/// registration cannot retain the lowered graph state.
 pub fn apply_expanded_graph(
     inputs: &[&TracedTensor],
     output_metas: Vec<(tenferro_tensor::DType, Vec<SymDim>)>,

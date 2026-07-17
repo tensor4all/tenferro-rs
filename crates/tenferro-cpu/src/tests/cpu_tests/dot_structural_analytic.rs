@@ -1138,16 +1138,16 @@ fn test_tier2_elementwise_ops_complex() {
 
     assert!(matches!(
         backend.maximum(&lhs, &rhs),
-        Err(crate::Error::Validation {
+        Err(crate::Error::Unsupported {
             op: "maximum",
-            source,
-        }) if source.to_string().contains("total order")
+            message,
+        }) if message.contains("total order")
     ));
     assert!(matches!(
         backend.minimum(&lhs, &rhs),
-        Err(crate::Error::Validation {
+        Err(crate::Error::Unsupported {
             op: "minimum",
-            source,
-        }) if source.to_string().contains("total order")
+            message,
+        }) if message.contains("total order")
     ));
 }

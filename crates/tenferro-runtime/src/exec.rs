@@ -578,8 +578,10 @@ pub(crate) fn resolve_tensor_shape_exprs(
     for &slot in input_slots {
         input_shapes.push(slot_ref(slots, slot, "input", "resolve_tensor_shape_exprs")?.shape());
     }
-    DimExpr::eval_all(exprs, &input_shapes)
-        .map_err(|err| Error::Internal(format!("shape expression evaluation failed: {err}")))
+    DimExpr::eval_all(exprs, &input_shapes).map_err(|cause| Error::ShapeExpressionEvaluation {
+        expression: format!("{} expression(s)", exprs.len()),
+        cause: cause.into(),
+    })
 }
 
 pub(crate) fn ensure_core_exec_program(program: &ExecProgram, caller: &str) -> Result<()> {

@@ -31,14 +31,7 @@ where
     let mut typed_inputs = Vec::with_capacity(inputs.len());
     for tensor in inputs {
         typed_inputs.push(T::tensor_ref(tensor).ok_or_else(|| {
-            crate::Error::backend_failure(
-                "fused_elementwise",
-                format!(
-                    "plan dtype {:?} does not match runtime tensor dtype {:?}",
-                    plan.dtype(),
-                    tensor.dtype()
-                ),
-            )
+            crate::Error::dtype_mismatch("fused_elementwise", plan.dtype(), tensor.dtype())
         })?);
     }
 

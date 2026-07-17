@@ -24,9 +24,11 @@ pub(crate) trait LapackEigh: Clone + Copy + Default + PoolScalar {
 
 fn iwork_len(query: i32, op: &'static str, routine: &'static str) -> tenferro_tensor::Result<i32> {
     if query < 1 {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(crate::error::invalid_workspace(
             op,
-            format!("LAPACK {routine} returned invalid integer workspace size {query}"),
+            "LAPACK",
+            routine,
+            format!("invalid integer workspace size {query}"),
         ));
     }
     Ok(query)
@@ -38,9 +40,11 @@ fn queried_iwork_len(
     routine: &'static str,
 ) -> tenferro_tensor::Result<i32> {
     let query = query.first().copied().ok_or_else(|| {
-        tenferro_tensor::Error::backend_failure(
+        crate::error::invalid_workspace(
             op,
-            format!("LAPACK {routine} did not return an integer workspace size"),
+            "LAPACK",
+            routine,
+            "did not return an integer workspace size",
         )
     })?;
     iwork_len(query, op, routine)
@@ -52,9 +56,11 @@ fn iwork_capacity(
     routine: &'static str,
 ) -> tenferro_tensor::Result<usize> {
     usize::try_from(len).map_err(|_| {
-        tenferro_tensor::Error::backend_failure(
+        crate::error::invalid_workspace(
             op,
-            format!("LAPACK {routine} integer workspace size {len} does not fit usize"),
+            "LAPACK",
+            routine,
+            format!("integer workspace size {len} does not fit usize"),
         )
     })
 }
@@ -372,9 +378,8 @@ pub(crate) fn eigh_values<T: LapackEigh>(
         })?;
     match outputs.pop() {
         Some(values) if outputs.is_empty() => Ok(values),
-        _ => Err(tenferro_tensor::Error::InvalidConfig {
-            op: "eigh_values",
-            message: "expected exactly one output from batched eigenvalue helper".into(),
-        }),
+        _ => Err(tenferro_tensor::Error::Internal(
+            "eigh_values: expected exactly one output from batched eigenvalue helper".into(),
+        )),
     }
 }

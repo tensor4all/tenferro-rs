@@ -5,7 +5,7 @@ use std::sync::Arc;
 use computegraph::GraphOperation;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::ad_support::push_metadata_scope;
-use tenferro_runtime::{Error, Result};
+use tenferro_runtime::{Error, ErrorPhase, Result};
 use tenferro_tensor::{Tensor, TensorValue};
 
 use crate::eager::{eager_grad_recording_enabled, record_eager_outputs, EagerRuntime, EagerTensor};
@@ -67,19 +67,33 @@ pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue) -
 /// let _ = &x;
 /// let _apply = apply_eager;
 /// ```
+/// # Errors
+///
+/// Returns `Error::Validation` with `InvalidArgument` when `inputs` is empty
+/// or its length differs from the extension's declared input count. Returns
+/// `Error::ContextMismatch` when tensors belong to different eager runtimes;
+/// backend, extension, and runtime-state failures retain their typed sources.
 pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
     let Some(first) = inputs.first() else {
-        return Err(Error::Internal(
-            "extension::apply_eager requires at least one input tensor".to_string(),
+        return Err(Error::invalid_argument(
+            "extension::apply_eager",
+            ErrorPhase::Execution,
+            "inputs",
+            "at least one input tensor is required",
         ));
     };
     if inputs.len() != op.input_count() {
-        return Err(Error::Internal(format!(
-            "extension::apply_eager: op family {:?} expects {} inputs, got {}",
-            op.family_id(),
-            op.input_count(),
-            inputs.len()
-        )));
+        return Err(Error::invalid_argument(
+            "extension::apply_eager",
+            ErrorPhase::Execution,
+            "inputs",
+            format!(
+                "op family {:?} expects {} inputs, got {}",
+                op.family_id(),
+                op.input_count(),
+                inputs.len()
+            ),
+        ));
     }
 
     let ctx = Arc::clone(&first.ctx);
@@ -149,10 +163,19 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
 ///
 /// Extension crates use this when an extension-level eager operation expands
 /// into ordinary `StdTensorOp` nodes instead of a custom extension primitive.
+///
+/// # Errors
+///
+/// Returns `Error::Validation` with `InvalidArgument` if an extension op is
+/// passed to this standard-op entry point. Propagates concrete tensor,
+/// backend, and runtime-state failures from the selected eager context.
 pub fn apply_standard_op(op: StdTensorOp, inputs: &[&EagerTensor]) -> Result<EagerTensor> {
     if matches!(op, StdTensorOp::Extension(_)) {
-        return Err(Error::Internal(
-            "extension::apply_standard_op does not accept Extension ops".into(),
+        return Err(Error::invalid_argument(
+            "extension::apply_standard_op",
+            ErrorPhase::Execution,
+            "op",
+            "Extension ops must be passed to apply_eager",
         ));
     }
     EagerTensor::nary_op(inputs, op)

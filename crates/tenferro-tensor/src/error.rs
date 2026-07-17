@@ -60,6 +60,14 @@ pub enum Error {
         to: crate::DType,
         message: String,
     },
+    #[error("{op}: unsupported dtype {dtype:?}: {message}")]
+    UnsupportedDType {
+        op: &'static str,
+        dtype: crate::DType,
+        message: String,
+    },
+    #[error("{op}: unsupported operation: {message}")]
+    Unsupported { op: &'static str, message: String },
     #[error("{op}: backend failure: {message}")]
     BackendFailure { op: &'static str, message: String },
     #[error("{op}: backend failure: {source}")]
@@ -254,6 +262,55 @@ impl Error {
         }
     }
 
+    /// Construct an operation-level unsupported-dtype error.
+    ///
+    /// This is for an operation that cannot run for the supplied dtype. It is
+    /// deliberately distinct from [`Error::unsupported_dtype_conversion`],
+    /// which is reserved for an actual from-dtype to to-dtype conversion.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{DType, Error, ErrorKind};
+    ///
+    /// let error = Error::unsupported_dtype("exp", DType::I64, "integer exponentials are not implemented");
+    /// assert!(matches!(error, Error::UnsupportedDType { op: "exp", dtype: DType::I64, .. }));
+    /// assert_eq!(error.kind(), ErrorKind::Unsupported);
+    /// ```
+    pub fn unsupported_dtype(
+        op: &'static str,
+        dtype: crate::DType,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::UnsupportedDType {
+            op,
+            dtype,
+            message: message.into(),
+        }
+    }
+
+    /// Construct a structured unsupported-operation error.
+    ///
+    /// Use this for an operation or execution surface that is not implemented
+    /// by the selected backend. Dtype conversion failures use
+    /// [`Error::unsupported_dtype_conversion`] instead, and operation-specific
+    /// typed reasons should use [`Error::extension`] with `ErrorKind::Unsupported`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Error, ErrorKind};
+    ///
+    /// let error = Error::unsupported("full_piv_lu", "backend has no implementation");
+    /// assert_eq!(error.kind(), ErrorKind::Unsupported);
+    /// ```
+    pub fn unsupported(op: &'static str, message: impl Into<String>) -> Self {
+        Self::Unsupported {
+            op,
+            message: message.into(),
+        }
+    }
+
     /// Construct a text-only backend failure.
     ///
     /// Use [`Error::backend_source`] when a typed source is available.
@@ -412,7 +469,9 @@ impl Error {
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Validation { source, .. } => ErrorKind::Validation(source.kind()),
-            Self::UnsupportedDTypeConversion { .. } => ErrorKind::Unsupported,
+            Self::UnsupportedDTypeConversion { .. }
+            | Self::UnsupportedDType { .. }
+            | Self::Unsupported { .. } => ErrorKind::Unsupported,
             Self::BackendFailure { .. } | Self::BackendSource { .. } => ErrorKind::BackendFailure,
             Self::IoSource { .. } => ErrorKind::Io,
             Self::RuntimeState { .. } | Self::RuntimeStateSource { .. } => ErrorKind::RuntimeState,

@@ -1,3 +1,5 @@
+pub(crate) use crate::error::unsupported_dtype;
+
 mod cholesky;
 mod eig;
 mod eigh;

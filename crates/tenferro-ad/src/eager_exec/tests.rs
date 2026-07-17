@@ -13,7 +13,7 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
-use tenferro_tensor::{DType, Tensor, TypedTensor};
+use tenferro_tensor::{DType, ErrorKind, Tensor, TypedTensor, ValidationKind};
 
 fn f64t(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -211,11 +211,15 @@ fn eager_shape_expr_resolution_returns_error_instead_of_panicking() {
     )
     .unwrap_err();
 
-    assert!(
-        err.to_string()
-            .contains("failed to resolve eager shape expression"),
-        "{err}"
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
     );
+    assert_eq!(err.phase(), Some(tenferro_runtime::ErrorPhase::Execution));
+    assert!(matches!(
+        err,
+        tenferro_runtime::Error::ShapeExpressionEvaluation { .. }
+    ));
 }
 
 #[test]

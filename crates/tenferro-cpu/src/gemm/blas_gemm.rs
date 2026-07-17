@@ -211,7 +211,7 @@ fn infer_a_layout(
         Err(Error::invalid_argument(
             "dot_general",
             "configuration",
-            "BLAS requires unit stride on one axis of A".into(),
+            "BLAS requires unit stride on one axis of A",
         ))
     }
 }
@@ -248,7 +248,7 @@ fn infer_b_layout(
         Err(Error::invalid_argument(
             "dot_general",
             "configuration",
-            "BLAS requires unit stride on one axis of B".into(),
+            "BLAS requires unit stride on one axis of B",
         ))
     }
 }

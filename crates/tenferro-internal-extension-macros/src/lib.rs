@@ -226,6 +226,8 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
             }
         }
 
+        #[doc = "Register this extension runtime with an executor registry."]
+        #[doc = "\n# Errors\n\nReturns `ExtensionRuntimeRegistryError::MalformedFamilyId` when the generated family identifier is invalid."]
         pub fn #register_fn<B: #backend_bound + 'static>(
             executor: &mut tenferro_runtime::extension::ExtensionExecutor<B>,
         ) -> std::result::Result<

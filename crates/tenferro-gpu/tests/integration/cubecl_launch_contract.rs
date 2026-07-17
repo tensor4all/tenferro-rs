@@ -33,8 +33,12 @@ fn bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded() {
             "missing Bool copy/index dispatch: {needle}"
         );
     }
-    assert!(source.contains("Bool data tensors are not supported by additive scatter"));
-    assert!(!source.contains("scatter_bool_typed"));
+    let scatter = source_section(&source, "    fn scatter(", "    fn slice(");
+    assert!(
+        scatter.contains("(Tensor::Bool(_), _, _)")
+            && scatter.contains("Err(unsupported_dtype(\"scatter\", operand.dtype()))")
+    );
+    assert!(!scatter.contains("scatter_bool_typed"));
 }
 
 #[test]
@@ -1054,7 +1058,7 @@ fn cubecl_real_complex_scalar_promotion_stays_device_native_and_narrow() {
             "if !real.shape().is_empty()",
             "ensure_resident_on_runtime(backend.runtime(), real, op)?",
             "ensure_resident_on_runtime(backend.runtime(), complex, op)?",
-            "let component_len = complex\n        .n_elements()\n        .checked_mul(2)",
+            "let component_len = complex.n_elements().checked_mul(2)",
             "let real_arg = typed_tensor_array_arg(real, op)?",
             "// INVARIANT: `num_complex::Complex<T>` is `repr(C)` with interleaved `{ re, im }`",
             "let complex_arg = typed_tensor_array_arg_as::<C, R>(complex, component_len, op)?",

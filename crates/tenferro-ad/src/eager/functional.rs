@@ -13,14 +13,14 @@ use tidu::{
     PrimitiveValue,
 };
 
-use crate::ad_rule_error::ad_rule_error;
+use crate::ad_rule_error::{ad_rule_error, DeferredErrors};
 use crate::eager_exec::exec_op_on_tensors_with_extension_executor;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::extension_runtime::ExtensionExecutor;
 
 use super::backward::{
     eager_forward_input_metadata, eager_forward_value, live_graph_values, missing_tangent_base_key,
-    prefill_linear_residual_values, prefill_missing_linear_zero_values,
+    prefill_linear_residual_values, prefill_missing_linear_zero_values, EagerAdFailure,
 };
 use super::{
     eager_val_key, record_eager_outputs, tensor_ptr, zero_like_tensor, EagerRuntime, EagerTensor,
@@ -60,11 +60,13 @@ pub(super) fn functional_vjp_optional(
         &mut callbacks,
         &mut ad_ctx,
     );
+    let callback_typed_error = callbacks.take_typed_error();
     let callback_error = callbacks.take_error();
-    let cotangents = match (cotangents_result, callback_error) {
-        (_, Some(err)) => return Err(ad_rule_error("vjp", err)),
-        (Err(err), None) => return Err(ad_rule_error("vjp", err)),
-        (Ok(cotangents), None) => cotangents,
+    let cotangents = match (callback_typed_error, cotangents_result, callback_error) {
+        (Some(err), _, _) => return Err(err),
+        (_, _, Some(err)) => return Err(ad_rule_error("vjp", err)),
+        (_, Err(err), None) => return Err(ad_rule_error("vjp", err)),
+        (_, Ok(cotangents), None) => cotangents,
     };
 
     cotangents
@@ -104,11 +106,13 @@ pub(super) fn functional_jvp(
         &mut callbacks,
         &mut ad_ctx,
     );
+    let callback_typed_error = callbacks.take_typed_error();
     let callback_error = callbacks.take_error();
-    let tangent = match (tangent_result, callback_error) {
-        (_, Some(err)) => return Err(ad_rule_error("jvp", err)),
-        (Err(err), None) => return Err(ad_rule_error("jvp", err)),
-        (Ok(tangent), None) => tangent,
+    let tangent = match (callback_typed_error, tangent_result, callback_error) {
+        (Some(err), _, _) => return Err(err),
+        (_, _, Some(err)) => return Err(ad_rule_error("jvp", err)),
+        (_, Err(err), None) => return Err(ad_rule_error("jvp", err)),
+        (_, Ok(tangent), None) => tangent,
     };
 
     tangent
@@ -123,7 +127,7 @@ struct RecordingCallbacks<'a> {
     extension_executor: Option<&'a mut ExtensionExecutor<super::EagerBackend>>,
     metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     tensors_by_ptr: HashMap<usize, EagerTensor>,
-    deferred_error: Option<ADRuleError>,
+    errors: DeferredErrors,
 }
 
 impl<'a> RecordingCallbacks<'a> {
@@ -139,17 +143,33 @@ impl<'a> RecordingCallbacks<'a> {
             extension_executor,
             metadata_scopes,
             tensors_by_ptr: HashMap::new(),
-            deferred_error: None,
+            errors: DeferredErrors::default(),
         }
     }
 
     fn take_error(&mut self) -> Option<ADRuleError> {
-        self.deferred_error.take()
+        self.errors.take_ad_rule()
+    }
+
+    fn take_typed_error(&mut self) -> Option<Error> {
+        self.errors.take_typed()
     }
 
     fn record_error(&mut self, err: ADRuleError) {
-        if self.deferred_error.is_none() {
-            self.deferred_error = Some(err);
+        self.errors.record_ad_rule(err);
+    }
+
+    fn runtime_error(&mut self, err: Error) -> ADRuleError {
+        self.errors.runtime("tenferro-ad.eager.functional", err)
+    }
+
+    fn record_failure(&mut self, failure: EagerAdFailure) -> ADRuleError {
+        match failure {
+            EagerAdFailure::Rule(err) => {
+                self.record_error(err.clone());
+                err
+            }
+            EagerAdFailure::Runtime(err) => self.runtime_error(err),
         }
     }
 
@@ -165,7 +185,9 @@ impl<'a> RecordingCallbacks<'a> {
     }
 
     fn remember_result(&mut self, tensor: EagerTensor) -> ADRuleResult<Arc<Tensor>> {
-        let value = tensor.materialized_arc().map_err(recording_error)?;
+        let value = tensor
+            .materialized_arc()
+            .map_err(|err| self.runtime_error(err))?;
         self.tensors_by_ptr.insert(Self::ptr(&value), tensor);
         Ok(value)
     }
@@ -197,13 +219,17 @@ impl<'a> RecordingCallbacks<'a> {
         if let Some(record) = self
             .ctx
             .value_record_by_tensor(value)
-            .map_err(recording_error)?
+            .map_err(|err| self.runtime_error(err))?
         {
             let tensor = EagerTensor::from_record(record);
             self.tensors_by_ptr.insert(Self::ptr(value), tensor.clone());
             return Ok(tensor);
         }
-        if let Some(record) = self.ctx.value_record(key).map_err(recording_error)? {
+        if let Some(record) = self
+            .ctx
+            .value_record(key)
+            .map_err(|err| self.runtime_error(err))?
+        {
             let tensor = EagerTensor::from_record(record);
             self.tensors_by_ptr.insert(Self::ptr(value), tensor.clone());
             return Ok(tensor);
@@ -216,7 +242,7 @@ impl<'a> RecordingCallbacks<'a> {
             None,
             Vec::new(),
         )
-        .map_err(recording_error)?;
+        .map_err(|err| self.runtime_error(err))?;
         self.tensors_by_ptr.insert(Self::ptr(value), tensor.clone());
         Ok(tensor)
     }
@@ -235,20 +261,33 @@ impl<'a> RecordingCallbacks<'a> {
     }
 
     fn add_recorded(&mut self, a: &Arc<Tensor>, b: &Arc<Tensor>) -> ADRuleResult<Arc<Tensor>> {
-        let lhs = self.tensor_for_arc(a).map_err(recording_error)?;
-        let rhs = self.tensor_for_arc(b).map_err(recording_error)?;
+        let lhs = self
+            .tensor_for_arc(a)
+            .map_err(|err| self.runtime_error(err))?;
+        let rhs = self
+            .tensor_for_arc(b)
+            .map_err(|err| self.runtime_error(err))?;
         let mut builder = RecordingPrimitiveBuilder::new(
             Arc::clone(&self.ctx),
             self.backend,
             self.extension_executor.as_deref_mut(),
             HashMap::new(),
         );
-        let outputs = builder.execute_operation(&StdTensorOp::Add, vec![lhs, rhs])?;
+        let outputs_result = builder.execute_operation(&StdTensorOp::Add, vec![lhs, rhs]);
+        let builder_typed_error = builder.take_typed_error();
+        let builder_error = builder.take_error();
+        drop(builder);
+        if let Some(err) = builder_typed_error {
+            return Err(self.runtime_error(err));
+        }
+        if let Some(err) = builder_error {
+            return Err(err);
+        }
+        let outputs = outputs_result?;
         let output = outputs
             .into_iter()
             .next()
             .ok_or_else(|| recording_error("eager AD add produced no outputs"))?;
-        drop(builder);
         self.remember_result(output)
     }
 }
@@ -269,7 +308,7 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
         graph: PrimitiveGraph<'_, StdTensorOp>,
         initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     ) -> HashMap<ValueKey<StdTensorOp>, Arc<Tensor>> {
-        if self.deferred_error.is_some() {
+        if self.errors.has_error() {
             return initial_data.clone();
         }
         let graph = graph.as_graph();
@@ -280,7 +319,8 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
             match eager_forward_input_metadata(&key, initial_data) {
                 Ok(meta) => input_metadata.push((key, meta)),
                 Err(err) => {
-                    self.record_error(err);
+                    let ad_error = self.record_failure(err);
+                    self.record_error(ad_error);
                     return all_values;
                 }
             }
@@ -301,7 +341,8 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
                 match resolved {
                     Ok(value) => resolved_values.push(value),
                     Err(err) => {
-                        self.record_error(err);
+                        let ad_error = self.record_failure(err);
+                        self.record_error(ad_error);
                         return all_values;
                     }
                 }
@@ -316,10 +357,8 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
             ) {
                 Ok(outputs) => outputs,
                 Err(err) => {
-                    self.record_error(recording_error(format!(
-                        "eager forward exec failed for {:?}: {err}",
-                        op_node.operation
-                    )));
+                    let ad_error = self.runtime_error(err);
+                    self.record_error(ad_error);
                     return all_values;
                 }
             };
@@ -333,9 +372,10 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
         let live_values = live_graph_values(graph);
         match register_scoped_live_graph_metadata(graph, &live_values, input_metadata) {
             Ok(scope) => push_ad_metadata_scope(&mut self.metadata_scopes, Arc::new(scope)),
-            Err(err) => self.record_error(recording_error(format!(
-                "eager replay metadata registration failed: {err}"
-            ))),
+            Err(err) => {
+                let ad_error = self.runtime_error(err);
+                self.record_error(ad_error);
+            }
         }
 
         all_values
@@ -357,16 +397,21 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
             &mut external_data,
             self.backend,
             self.extension_executor.as_deref_mut(),
-        )?;
+        )
+        .map_err(|err| self.record_failure(err))?;
         ctx.refresh_global_metadata();
-        prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend)?;
+        prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend)
+            .map_err(|err| self.record_failure(err))?;
         let external_tensors = self.external_tensors(&external_data)?;
         let seed_tensors = cotangent_out
             .iter()
             .map(|maybe_seed| {
                 maybe_seed
                     .as_ref()
-                    .map(|seed| self.tensor_for_arc(seed).map_err(recording_error))
+                    .map(|seed| {
+                        self.tensor_for_arc(seed)
+                            .map_err(|err| self.runtime_error(err))
+                    })
                     .transpose()
             })
             .collect::<ADRuleResult<Vec<_>>>()?;
@@ -383,15 +428,34 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
 
         let transpose_result =
             tidu::linear_transpose_with_builder(linear, &mut builder, &cotangent_seed_ids, ctx);
-        if let Some(err) = builder.take_error() {
-            return Err(err);
-        }
-        let cotangent_ids = transpose_result?;
+        let cotangent_ids = match transpose_result {
+            Ok(ids) => ids,
+            Err(err) => {
+                let builder_typed_error = builder.take_typed_error();
+                let builder_error = builder.take_error();
+                drop(builder);
+                if let Some(err) = builder_typed_error {
+                    return Err(self.runtime_error(err));
+                }
+                if let Some(err) = builder_error {
+                    return Err(err);
+                }
+                return Err(err);
+            }
+        };
         let cotangent_tensors = cotangent_ids
             .into_iter()
             .map(|maybe_id| maybe_id.map(|id| builder.tensor(id)).transpose())
             .collect::<ADRuleResult<Vec<_>>>()?;
+        let builder_typed_error = builder.take_typed_error();
+        let builder_error = builder.take_error();
         drop(builder);
+        if let Some(err) = builder_typed_error {
+            return Err(self.runtime_error(err));
+        }
+        if let Some(err) = builder_error {
+            return Err(err);
+        }
         cotangent_tensors
             .into_iter()
             .map(|maybe_tensor| {
@@ -403,7 +467,7 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
     }
 
     fn add_operands(&mut self, a: &Arc<Tensor>, b: &Arc<Tensor>) -> Arc<Tensor> {
-        if self.deferred_error.is_some() {
+        if self.errors.has_error() {
             return Arc::clone(a);
         }
         match self.add_recorded(a, b) {
@@ -439,7 +503,8 @@ impl ForwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
         }
         let mut external_data = external_data.clone();
         ctx.refresh_global_metadata();
-        prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend)?;
+        prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend)
+            .map_err(|err| self.record_failure(err))?;
         let tangent_by_key: HashMap<_, _> = tangent_in
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -449,7 +514,9 @@ impl ForwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
             .iter()
             .map(
                 |(key, _)| match tangent_by_key.get(key).cloned().flatten() {
-                    Some(tangent) => self.tensor_for_arc(&tangent).map_err(recording_error),
+                    Some(tangent) => self
+                        .tensor_for_arc(&tangent)
+                        .map_err(|err| self.runtime_error(err)),
                     None => self.zero_tangent_for_key(key, &external_data),
                 },
             )
@@ -481,7 +548,14 @@ impl ForwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
                 .collect();
             let output_ids =
                 builder.add_primitive(op_node.operation.clone(), inputs, op_node.role.clone());
-            if let Some(err) = builder.take_error() {
+            let builder_typed_error = builder.take_typed_error();
+            let builder_error = builder.take_error();
+            if let Some(err) = builder_typed_error {
+                drop(builder);
+                return Err(self.runtime_error(err));
+            }
+            if let Some(err) = builder_error {
+                drop(builder);
                 return Err(err);
             }
             if output_ids != op_node.outputs {
@@ -497,7 +571,15 @@ impl ForwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
             .iter()
             .map(|maybe_id| maybe_id.map(|id| builder.tensor(id)).transpose())
             .collect::<ADRuleResult<Vec<_>>>()?;
+        let builder_typed_error = builder.take_typed_error();
+        let builder_error = builder.take_error();
         drop(builder);
+        if let Some(err) = builder_typed_error {
+            return Err(self.runtime_error(err));
+        }
+        if let Some(err) = builder_error {
+            return Err(err);
+        }
         tangent_tensors
             .into_iter()
             .map(|maybe_tensor| {
@@ -525,7 +607,8 @@ impl RecordingCallbacks<'_> {
         let base = external_data.get(&base_key).ok_or_else(|| {
             recording_error(format!("missing tangent base eager value for {base_key:?}"))
         })?;
-        let zero = zero_like_tensor(base.as_ref(), self.backend).map_err(recording_error)?;
+        let zero =
+            zero_like_tensor(base.as_ref(), self.backend).map_err(|err| self.runtime_error(err))?;
         EagerTensor::new_result_arc(
             Arc::clone(&self.ctx),
             eager_val_key(),
@@ -534,7 +617,7 @@ impl RecordingCallbacks<'_> {
             None,
             Vec::new(),
         )
-        .map_err(recording_error)
+        .map_err(|err| self.runtime_error(err))
     }
 }
 
@@ -544,7 +627,7 @@ struct RecordingPrimitiveBuilder<'a> {
     extension_executor: Option<&'a mut ExtensionExecutor<super::EagerBackend>>,
     external_data: HashMap<ValueKey<StdTensorOp>, EagerTensor>,
     results: Vec<EagerTensor>,
-    error: Option<ADRuleError>,
+    errors: DeferredErrors,
 }
 
 impl<'a> RecordingPrimitiveBuilder<'a> {
@@ -560,7 +643,7 @@ impl<'a> RecordingPrimitiveBuilder<'a> {
             extension_executor,
             external_data,
             results: Vec::new(),
-            error: None,
+            errors: DeferredErrors::default(),
         }
     }
 
@@ -578,13 +661,19 @@ impl<'a> RecordingPrimitiveBuilder<'a> {
     }
 
     fn take_error(&mut self) -> Option<ADRuleError> {
-        self.error.take()
+        self.errors.take_ad_rule()
+    }
+
+    fn take_typed_error(&mut self) -> Option<Error> {
+        self.errors.take_typed()
     }
 
     fn record_error(&mut self, err: ADRuleError) {
-        if self.error.is_none() {
-            self.error = Some(err);
-        }
+        self.errors.record_ad_rule(err);
+    }
+
+    fn runtime_error(&mut self, err: Error) -> ADRuleError {
+        self.errors.runtime("tenferro-ad.eager.functional", err)
     }
 
     fn dummy_output_ids(&self, operation: &StdTensorOp) -> Vec<LocalValueId> {
@@ -603,11 +692,11 @@ impl<'a> RecordingPrimitiveBuilder<'a> {
                 "missing tangent base eager AD value for {base_key:?}"
             ))
         })?;
-        let zero = zero_like_tensor(
-            base.materialized_arc().map_err(recording_error)?.as_ref(),
-            self.backend,
-        )
-        .map_err(recording_error)?;
+        let base = base
+            .materialized_arc()
+            .map_err(|err| self.runtime_error(err))?;
+        let zero =
+            zero_like_tensor(base.as_ref(), self.backend).map_err(|err| self.runtime_error(err))?;
         let tensor = EagerTensor::new_result_arc(
             Arc::clone(&self.ctx),
             eager_val_key(),
@@ -616,7 +705,7 @@ impl<'a> RecordingPrimitiveBuilder<'a> {
             None,
             Vec::new(),
         )
-        .map_err(recording_error)?;
+        .map_err(|err| self.runtime_error(err))?;
         self.external_data.insert(key.clone(), tensor.clone());
         Ok(tensor)
     }
@@ -638,7 +727,11 @@ impl<'a> RecordingPrimitiveBuilder<'a> {
     ) -> ADRuleResult<Vec<EagerTensor>> {
         let input_values = inputs
             .iter()
-            .map(|tensor| tensor.materialized_arc().map_err(recording_error))
+            .map(|tensor| {
+                tensor
+                    .materialized_arc()
+                    .map_err(|err| self.runtime_error(err))
+            })
             .collect::<ADRuleResult<Vec<_>>>()?;
         let input_refs: Vec<_> = input_values.iter().map(|tensor| tensor.as_ref()).collect();
         let outputs = exec_op_on_tensors_with_extension_executor(
@@ -647,7 +740,7 @@ impl<'a> RecordingPrimitiveBuilder<'a> {
             self.backend,
             self.extension_executor.as_deref_mut(),
         )
-        .map_err(|err| recording_error(format!("eager AD exec failed for {operation:?}: {err}")))?;
+        .map_err(|err| self.runtime_error(err))?;
         let output_arcs: Vec<_> = outputs.into_iter().map(Arc::new).collect();
 
         if !inputs.iter().any(|tensor| tensor.requires_grad) {
@@ -662,14 +755,14 @@ impl<'a> RecordingPrimitiveBuilder<'a> {
                         None,
                         Vec::new(),
                     )
-                    .map_err(recording_error)
+                    .map_err(|err| self.runtime_error(err))
                 })
                 .collect();
         }
 
         let input_refs: Vec<_> = inputs.iter().collect();
-        let recorded =
-            record_eager_outputs(operation, &output_arcs, &input_refs).map_err(recording_error)?;
+        let recorded = record_eager_outputs(operation, &output_arcs, &input_refs)
+            .map_err(|err| self.runtime_error(err))?;
         if recorded.traces.len() != output_arcs.len() {
             return Err(recording_error(format!(
                 "expected {} eager AD traces for {:?}, got {}",
@@ -698,7 +791,7 @@ impl<'a> RecordingPrimitiveBuilder<'a> {
                     trace.trace,
                     metadata_scopes.clone(),
                 )
-                .map_err(recording_error)
+                .map_err(|err| self.runtime_error(err))
             })
             .collect()
     }
@@ -734,4 +827,93 @@ fn recording_error(message: impl ToString) -> ADRuleError {
         ADRuleKind::Transpose,
         message.to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn functional_walkers_cover_active_and_inactive_inputs() {
+        let ctx = EagerRuntime::with_cpu_backend(tenferro_cpu::CpuBackend::new());
+        let active = EagerTensor::requires_grad_in(
+            Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+            Arc::clone(&ctx),
+        )
+        .unwrap();
+        let inactive = EagerTensor::requires_grad_in(
+            Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap(),
+            Arc::clone(&ctx),
+        )
+        .unwrap();
+        let seed = EagerTensor::from_tensor_in(
+            Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
+            Arc::clone(&ctx),
+        )
+        .unwrap();
+        let output = active.mul(&active).unwrap();
+
+        let vjp = functional_vjp_optional(&ctx, &output, &active, &seed)
+            .unwrap()
+            .unwrap();
+        let jvp = functional_jvp(&ctx, &output, &active, &seed)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            vjp.materialized().unwrap().as_slice::<f64>().unwrap(),
+            &[4.0, 6.0]
+        );
+        assert_eq!(
+            jvp.materialized().unwrap().as_slice::<f64>().unwrap(),
+            &[4.0, 6.0]
+        );
+
+        assert!(functional_vjp_optional(&ctx, &output, &inactive, &seed)
+            .unwrap()
+            .is_none());
+        assert!(functional_jvp(&ctx, &output, &inactive, &seed)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn recording_callbacks_keep_typed_failures_and_cache_materialized_values() {
+        let ctx = EagerRuntime::with_cpu_backend(tenferro_cpu::CpuBackend::new());
+        let mut backend = ctx.lock_backend().unwrap();
+        let mut extension_executor = ctx.lock_extension_executor().unwrap();
+        let mut callbacks = RecordingCallbacks::new(
+            Arc::clone(&ctx),
+            &mut backend,
+            Some(&mut *extension_executor),
+            Vec::new(),
+        );
+
+        let rule_error = ADRuleError::invalid_input(
+            "tenferro-ad.tests",
+            ADRuleKind::Transpose,
+            "synthetic callback rule failure",
+        );
+        let recorded_rule = callbacks.record_failure(EagerAdFailure::Rule(rule_error));
+        assert!(matches!(recorded_rule, ADRuleError::InvalidInput { .. }));
+        assert!(callbacks.take_error().is_some());
+
+        let recorded_runtime =
+            callbacks.record_failure(EagerAdFailure::Runtime(Error::runtime_state(
+                "functional-tests",
+                tenferro_runtime::ErrorPhase::Execution,
+                "synthetic runtime failure",
+            )));
+        assert!(matches!(recorded_runtime, ADRuleError::InvalidInput { .. }));
+        assert!(callbacks.take_typed_error().is_some());
+        assert!(callbacks.take_error().is_some());
+
+        let value = Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+        let first = callbacks.tensor_for_arc(&value).unwrap();
+        let second = callbacks.tensor_for_arc(&value).unwrap();
+        assert_eq!(
+            first.materialized().unwrap().as_slice::<f64>().unwrap(),
+            &[1.0, 2.0]
+        );
+        assert_eq!(first.key, second.key);
+    }
 }

@@ -6,7 +6,7 @@ use tenferro_tensor::{
 };
 
 use crate::{
-    parse_einsum_subscripts, ConcreteEinsumPlan, TensorEinsumExt, TensorEinsumIntoExt,
+    parse_einsum_subscripts, ConcreteEinsumPlan, Error, TensorEinsumExt, TensorEinsumIntoExt,
     TensorReadEinsumExt, TensorReadEinsumIntoExt, TypedTensorEinsumExt, TypedTensorEinsumIntoExt,
     TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt,
 };
@@ -308,7 +308,7 @@ fn public_einsum_into_rejects_output_shape_and_dtype_mismatch() {
         .unwrap_err();
     assert!(matches!(
         shape_err,
-        tenferro_tensor::Error::Validation {
+        Error::Validation {
             op: "TensorEinsumIntoExt::einsum_into",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
@@ -324,10 +324,10 @@ fn public_einsum_into_rejects_output_shape_and_dtype_mismatch() {
         .unwrap_err();
     assert!(matches!(
         dtype_err,
-        tenferro_tensor::Error::Validation {
+        Error::Tensor(tenferro_tensor::Error::Validation {
             op: "TensorEinsumIntoExt::einsum_into",
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
-        }
+        })
     ));
 }
 
@@ -513,7 +513,7 @@ fn concrete_einsum_plan_execute_into_rejects_incompatible_output() {
 
     assert!(matches!(
         err,
-        tenferro_tensor::Error::Validation {
+        Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
@@ -613,17 +613,17 @@ fn concrete_einsum_plan_rejects_shape_and_dtype_mismatches() {
 
     assert!(matches!(
         shape_err,
-        tenferro_tensor::Error::Validation {
+        Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
     ));
     assert!(matches!(
         dtype_err,
-        tenferro_tensor::Error::Validation {
+        Error::Tensor(tenferro_tensor::Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
-        }
+        })
     ));
 }
 
@@ -641,16 +641,10 @@ fn concrete_einsum_public_api_reports_parse_and_input_count_errors() {
     let plan = ConcreteEinsumPlan::prepare([&lhs, &rhs], "ij,jk->ik").unwrap();
     let count_err = plan.execute([&lhs], &mut backend).unwrap_err();
 
-    assert!(matches!(
-        parse_err,
-        tenferro_tensor::Error::Validation {
-            op: "TensorEinsumExt::einsum",
-            ..
-        }
-    ));
+    assert!(matches!(parse_err, Error::InvalidSubscripts { .. }));
     assert!(matches!(
         count_err,
-        tenferro_tensor::Error::Validation {
+        Error::Validation {
             op: "ConcreteEinsumPlan::execute",
             ..
         }
@@ -665,9 +659,9 @@ fn concrete_einsum_typed_result_reports_defensive_dtype_mismatch() {
 
     assert!(matches!(
         err,
-        tenferro_tensor::Error::Validation {
+        Error::Tensor(tenferro_tensor::Error::Validation {
             op: "test typed result",
             source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
-        }
+        })
     ));
 }

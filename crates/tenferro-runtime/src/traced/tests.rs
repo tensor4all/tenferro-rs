@@ -2,7 +2,7 @@ use num_complex::Complex64;
 use std::sync::Arc;
 
 use crate::{DType, DotGeneralConfig, Error, ErrorPhase, TracedTensor};
-use tenferro_tensor::{ShapeMismatch, ValidationError};
+use tenferro_tensor::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
 
 #[test]
 fn traced_binary_reuses_input_map_when_rhs_is_already_present() {
@@ -160,13 +160,22 @@ fn broadcast_in_dim_sym_rejects_missing_shape_reference() {
         .broadcast_in_dim_sym(&target_shape, &[0], &[])
         .unwrap_err();
 
-    let message = err.to_string();
     assert!(
-        message.contains("broadcast_in_dim_sym")
-            && message.contains("unresolved symbolic dimension")
-            && message.contains("shape_refs"),
-        "{message}"
+        matches!(
+            &err,
+            Error::SymbolicShapeConversion {
+                op: "broadcast_in_dim_sym",
+                phase: ErrorPhase::GraphBuild,
+                source: tenferro_ops::SymDimConversionError { .. },
+            }
+        ),
+        "{err}"
     );
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
+    );
+    assert_eq!(err.phase(), Some(ErrorPhase::GraphBuild));
 }
 
 #[test]

@@ -127,6 +127,15 @@ impl GraphCompiler {
     /// let program = compiler.compile(&y).unwrap();
     /// assert_eq!(program.input_count(), 1);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `ShapeMismatch`, `RankMismatch`,
+    /// `DTypeMismatch`, or `InvalidArgument` for invalid graph metadata or
+    /// shape constraints, [`Error::RuntimeState`] for missing/inconsistent
+    /// metadata or cache state, and [`Error::Internal`] when the graph
+    /// violates a compiler invariant. Extension lowering failures retain
+    /// their typed [`Error::Extension`] source.
     pub fn compile(&mut self, output: &TracedTensor) -> Result<GraphProgram> {
         self.compile_many(&[output])
     }
@@ -144,6 +153,15 @@ impl GraphCompiler {
     /// let program = compiler.compile_many(&[&x, &y]).unwrap();
     /// assert_eq!(program.output_count(), 2);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `ShapeMismatch`, `RankMismatch`,
+    /// `DTypeMismatch`, or `InvalidArgument` for invalid graph metadata or
+    /// shape constraints, [`Error::RuntimeState`] for missing/inconsistent
+    /// metadata or cache state, and [`Error::Internal`] when the graph
+    /// violates a compiler invariant. Extension lowering failures retain
+    /// their typed [`Error::Extension`] source.
     pub fn compile_many(&mut self, outputs: &[&TracedTensor]) -> Result<GraphProgram> {
         let mut all_inputs = HashMap::new();
         for output in outputs {
@@ -177,6 +195,17 @@ impl GraphCompiler {
     ///     .unwrap();
     /// assert_eq!(program.input_specs()[0].shape(), &[3]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedBinding`] for a data-carrying tensor,
+    /// [`Error::DuplicateBinding`] for repeated placeholders,
+    /// [`Error::PlaceholderDtypeMismatch`],
+    /// [`Error::PlaceholderShapeMismatch`], or
+    /// [`Error::PlaceholderRankMismatch`] for incompatible specs, and
+    /// [`Error::Validation`] with `ShapeMismatch`, `RankMismatch`,
+    /// `DTypeMismatch`, or `InvalidArgument` / [`Error::RuntimeState`] when
+    /// compilation or metadata lowering fails.
     pub fn compile_with_input_specs(
         &mut self,
         output: &TracedTensor,

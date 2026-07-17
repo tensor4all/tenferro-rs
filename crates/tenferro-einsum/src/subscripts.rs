@@ -1,4 +1,4 @@
-use crate::{Error, Result, Subscripts};
+use crate::{Result, Subscripts};
 
 /// Canonical N-ary einsum subscripts using integer labels.
 ///
@@ -101,11 +101,10 @@ impl From<&EinsumSubscripts> for Subscripts {
 ///
 /// # Errors
 ///
-/// Returns an error if the notation is malformed.
+/// Returns [`crate::Error::InvalidSubscripts`] when the notation is malformed,
+/// contains an invalid label, or has an invalid input/output separator.
 pub fn parse_einsum_subscripts(notation: &str) -> Result<EinsumSubscripts> {
-    Subscripts::parse(notation)
-        .map(EinsumSubscripts::from)
-        .map_err(|err| Error::InvalidArgument(format!("invalid einsum subscripts: {err}")))
+    Subscripts::parse(notation).map(EinsumSubscripts::from)
 }
 
 #[cfg(test)]

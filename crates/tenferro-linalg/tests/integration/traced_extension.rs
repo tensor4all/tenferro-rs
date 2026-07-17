@@ -366,10 +366,12 @@ fn traced_norm_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
         assert!(
             matches!(
                 err,
-                Error::TensorRuntime(TensorError::BackendFailure {
+                Error::TensorRuntime(TensorError::Extension {
                     op: "norm",
-                    ref message,
-                }) if message.contains("unsupported dtype")
+                    family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
+                    kind: tenferro_tensor::ErrorKind::Unsupported,
+                    ..
+                })
             ),
             "expected unsupported dtype error for {dtype:?}, got {err:?}"
         );
@@ -381,10 +383,12 @@ fn traced_norm_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
         assert!(
             matches!(
                 err,
-                Error::TensorRuntime(TensorError::BackendFailure {
+                Error::TensorRuntime(TensorError::Extension {
                     op: "pinv_with_rtol",
-                    ref message,
-                }) if message.contains("unsupported dtype")
+                    family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
+                    kind: tenferro_tensor::ErrorKind::Unsupported,
+                    ..
+                })
             ),
             "expected unsupported dtype error for {dtype:?}, got {err:?}"
         );
@@ -463,10 +467,13 @@ fn traced_linalg_helpers_reject_symbolic_shapes_without_panicking() {
         assert!(
             matches!(
                 err,
-                Error::TensorRuntime(TensorError::BackendFailure {
+                Error::TensorRuntime(TensorError::Validation {
                     op: actual_op,
-                    ref message,
-                }) if actual_op == op && message.contains("symbolic shape")
+                    source: tenferro_tensor::ValidationError::InvalidArgument {
+                        argument: "shape",
+                        ..
+                    },
+                }) if actual_op == op
             ),
             "expected symbolic-shape error for {op}, got {err:?}"
         );
@@ -499,10 +506,12 @@ fn traced_pinv_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
         assert!(
             matches!(
                 err,
-                Error::TensorRuntime(TensorError::BackendFailure {
+                Error::TensorRuntime(TensorError::Extension {
                     op: "pinv",
-                    ref message,
-                }) if message.contains("unsupported dtype")
+                    family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
+                    kind: tenferro_tensor::ErrorKind::Unsupported,
+                    ..
+                })
             ),
             "expected unsupported dtype error for {dtype:?}, got {err:?}"
         );

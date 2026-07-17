@@ -34,6 +34,23 @@ enum MissingConstraintOrigin {
     Preserve,
 }
 
+/// Compile a standard operation program into executable instructions.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::extension::compile_std_to_exec;
+/// let _compile = compile_std_to_exec;
+/// ```
+///
+/// # Errors
+///
+/// Returns [`Error::Internal`] when input counts disagree with the program or
+/// a slot is missing/out of bounds or has duplicate producers,
+/// [`Error::Validation`] with `DTypeMismatch`, `ShapeMismatch`,
+/// `RankMismatch`, `AxisOutOfBounds`, `DuplicateAxis`, or `InvalidArgument`
+/// for operation metadata and discharged shape constraints, and
+/// [`Error::Unsupported`] when an extension cannot be lowered or dispatched.
 pub fn compile_std_to_exec(
     prog: &CompiledProgram<StdTensorOp>,
     input_dtypes: &[DType],
@@ -49,6 +66,23 @@ pub fn compile_std_to_exec(
     )
 }
 
+/// Compile a standard operation program with explicit compiler options.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::extension::compile_std_to_exec_with_options;
+/// let _compile = compile_std_to_exec_with_options;
+/// ```
+///
+/// # Errors
+///
+/// Returns [`Error::Internal`] when input counts disagree with the program or
+/// a slot is missing/out of bounds or has duplicate producers,
+/// [`Error::Validation`] with `DTypeMismatch`, `ShapeMismatch`,
+/// `RankMismatch`, `AxisOutOfBounds`, `DuplicateAxis`, or `InvalidArgument`
+/// for operation metadata and discharged shape constraints, and
+/// [`Error::Unsupported`] when an extension cannot be lowered or dispatched.
 pub fn compile_std_to_exec_with_options(
     prog: &CompiledProgram<StdTensorOp>,
     input_dtypes: &[DType],

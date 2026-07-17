@@ -1,7 +1,7 @@
 use super::{select_worker_cpus, CpuContext, CpuContextError};
 #[cfg(target_os = "linux")]
 use crate::affinity::current_cpu;
-use crate::affinity::ThreadAffinity;
+use crate::affinity::{CpuAffinityError, ThreadAffinity};
 #[cfg(target_os = "linux")]
 use crate::process_cpu_affinity;
 use crate::{CpuId, CpuSet};
@@ -87,7 +87,7 @@ fn worker_assignment_spreads_a_reduced_budget_across_the_domain() {
 struct FailingAffinitySetter;
 
 impl ThreadAffinity for FailingAffinitySetter {
-    fn pin_current(&self, _cpu: CpuId) -> Result<CpuSet, String> {
-        Err("forced test failure".to_owned())
+    fn pin_current(&self, _cpu: CpuId) -> Result<CpuSet, CpuAffinityError> {
+        Err(CpuAffinityError::UnsupportedPlatform)
     }
 }

@@ -325,11 +325,15 @@ fn execute_shape_of_host<B: HostExecution + ?Sized>(
     };
     let input = get_read(slots, &inst.input_slots, 0)?;
     if *axis >= input.shape().len() {
-        return Err(Error::Internal(format!(
-            "ShapeOf: axis {} out of bounds for rank {}",
-            axis,
-            input.shape().len()
-        )));
+        return Err(Error::invalid_argument(
+            "shape_of",
+            crate::ErrorPhase::Execution,
+            "axis",
+            format!(
+                "axis {axis} is out of bounds for rank {}",
+                input.shape().len()
+            ),
+        ));
     }
     let host = Tensor::F64(tenferro_tensor::TypedTensor::from_vec_col_major(
         vec![],
@@ -352,11 +356,15 @@ fn execute_dynamic_truncate_host<B: HostExecution + ?Sized>(
     };
     let input = get(slots, &inst.input_slots, 0)?;
     if *axis >= input.shape().len() {
-        return Err(Error::Internal(format!(
-            "DynamicTruncate: axis {} out of bounds for rank {}",
-            axis,
-            input.shape().len()
-        )));
+        return Err(Error::invalid_argument(
+            "dynamic_truncate",
+            crate::ErrorPhase::Execution,
+            "axis",
+            format!(
+                "axis {axis} is out of bounds for rank {}",
+                input.shape().len()
+            ),
+        ));
     }
     let size_tensor = backend.download_to_host(get(slots, &inst.input_slots, 1)?)?;
     let axis_extent = input.shape()[*axis];
@@ -387,11 +395,15 @@ fn execute_pad_to_match_host<B: HostExecution + ?Sized>(
     let input = get(slots, &inst.input_slots, 0)?;
     let reference = get(slots, &inst.input_slots, 1)?;
     if *axis >= input.shape().len() {
-        return Err(Error::Internal(format!(
-            "PadToMatch: axis {} out of bounds for rank {}",
-            axis,
-            input.shape().len()
-        )));
+        return Err(Error::invalid_argument(
+            "pad_to_match",
+            crate::ErrorPhase::Execution,
+            "axis",
+            format!(
+                "axis {axis} is out of bounds for rank {}",
+                input.shape().len()
+            ),
+        ));
     }
     let target_size = reference.shape()[*axis];
     let current_size = input.shape()[*axis];

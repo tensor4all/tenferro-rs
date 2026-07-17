@@ -58,7 +58,13 @@ macro_rules! float_singular_tests {
                     ],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -81,21 +87,39 @@ macro_rules! float_singular_tests {
                     ],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
             fn zero_diagonal() {
                 let t = tensor(vec![2, 2], vec![0.0 as $t, 1.0 as $t, 1.0 as $t, 0.0 as $t]);
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
             fn nan_diagonal() {
                 let t = tensor(vec![2, 2], vec![<$t>::NAN, 1.0 as $t, 0.0 as $t, 1.0 as $t]);
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -105,7 +129,13 @@ macro_rules! float_singular_tests {
                     vec![<$t>::INFINITY, 1.0 as $t, 0.0 as $t, 1.0 as $t],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -115,14 +145,26 @@ macro_rules! float_singular_tests {
                     vec![<$t>::NEG_INFINITY, 1.0 as $t, 0.0 as $t, 1.0 as $t],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
             fn single_element_singular() {
                 let t = tensor(vec![1, 1], vec![0.0 as $t]);
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -141,7 +183,13 @@ macro_rules! float_singular_tests {
                     ],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -198,7 +246,13 @@ macro_rules! complex_singular_tests {
                     ],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -231,7 +285,13 @@ macro_rules! complex_singular_tests {
                     ],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -260,7 +320,13 @@ macro_rules! complex_singular_tests {
                     ],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -275,7 +341,13 @@ macro_rules! complex_singular_tests {
                     ],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -290,7 +362,13 @@ macro_rules! complex_singular_tests {
                     ],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -305,14 +383,26 @@ macro_rules! complex_singular_tests {
                     ],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
             fn single_element_singular() {
                 let t = tensor(vec![1, 1], vec![<$t>::new(0.0 as $float, 0.0 as $float)]);
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -337,7 +427,13 @@ macro_rules! complex_singular_tests {
                     ],
                 );
                 let err = check_singular_diagonal(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]
@@ -397,10 +493,7 @@ fn f64_batched_error_includes_batch_index_and_position() {
     )
     .unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
-    let msg = match &err {
-        Error::BackendFailure { message, .. } => message.clone(),
-        _ => unreachable!(),
-    };
+    let msg = std::error::Error::source(&err).unwrap().to_string();
     assert!(
         msg.contains("batch 1"),
         "expected batch index in error message, got: {msg}"
@@ -425,10 +518,7 @@ fn singular_diagonal_uses_checked_shape_products_before_indexing() {
 fn f64_unbatched_error_omits_batch_index_and_includes_position() {
     let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]).unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
-    let msg = match &err {
-        Error::BackendFailure { message, .. } => message.clone(),
-        _ => unreachable!(),
-    };
+    let msg = std::error::Error::source(&err).unwrap().to_string();
     assert!(
         !msg.contains("batch"),
         "unbatched error should not mention batch, got: {msg}"
@@ -443,10 +533,7 @@ fn f64_unbatched_error_omits_batch_index_and_includes_position() {
 fn f64_unbatched_error_second_diagonal_reports_correct_position() {
     let t = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![3.0, 1.0, 1.0, 0.0]).unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
-    let msg = match &err {
-        Error::BackendFailure { message, .. } => message.clone(),
-        _ => unreachable!(),
-    };
+    let msg = std::error::Error::source(&err).unwrap().to_string();
     assert!(
         msg.contains("position [1,1]"),
         "expected second diagonal position in error message, got: {msg}"
@@ -461,10 +548,7 @@ fn f64_batched_error_first_batch_reports_correct_position() {
     )
     .unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
-    let msg = match &err {
-        Error::BackendFailure { message, .. } => message.clone(),
-        _ => unreachable!(),
-    };
+    let msg = std::error::Error::source(&err).unwrap().to_string();
     assert!(
         msg.contains("batch 0"),
         "expected batch 0 in error message, got: {msg}"
@@ -480,10 +564,7 @@ fn f32_unbatched_error_includes_exact_position() {
     let t =
         TypedTensor::<f32>::from_vec_col_major(vec![2, 2], vec![0.0f32, 1.0, 1.0, 0.0]).unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
-    let msg = match &err {
-        Error::BackendFailure { message, .. } => message.clone(),
-        _ => unreachable!(),
-    };
+    let msg = std::error::Error::source(&err).unwrap().to_string();
     assert!(
         msg.contains("position [0,0]"),
         "expected exact diagonal position in error message, got: {msg}"
@@ -507,10 +588,7 @@ fn c64_unbatched_error_includes_exact_position() {
     )
     .unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
-    let msg = match &err {
-        Error::BackendFailure { message, .. } => message.clone(),
-        _ => unreachable!(),
-    };
+    let msg = std::error::Error::source(&err).unwrap().to_string();
     assert!(
         msg.contains("position [0,0]"),
         "expected exact position in c64 error, got: {msg}"
@@ -534,10 +612,7 @@ fn c32_unbatched_error_includes_exact_position() {
     )
     .unwrap();
     let err = check_singular_diagonal(&t).unwrap_err();
-    let msg = match &err {
-        Error::BackendFailure { message, .. } => message.clone(),
-        _ => unreachable!(),
-    };
+    let msg = std::error::Error::source(&err).unwrap().to_string();
     assert!(
         msg.contains("position [0,0]"),
         "expected exact position in c32 error, got: {msg}"
@@ -546,6 +621,27 @@ fn c32_unbatched_error_includes_exact_position() {
         !msg.contains("batch"),
         "unbatched c32 error should not mention batch, got: {msg}"
     );
+}
+
+#[test]
+fn diagonal_validation_preserves_numerical_source_and_unsupported_dtype() {
+    let singular = TypedTensor::<f64>::from_vec_col_major(vec![1, 1], vec![0.0]).unwrap();
+    let singular_error = check_singular_diagonal(&singular).unwrap_err();
+    assert_eq!(singular_error.kind(), ErrorKind::NumericalFailure);
+    assert!(matches!(
+        std::error::Error::source(&singular_error)
+            .and_then(|source| source.downcast_ref::<DiagonalError>()),
+        Some(DiagonalError::SingularOrNonFinite { index: 0 })
+    ));
+
+    let integer = Tensor::I32(TypedTensor::from_vec_col_major(vec![1, 1], vec![1]).unwrap());
+    let unsupported_error = validate_nonsingular_u(&integer).unwrap_err();
+    assert_eq!(unsupported_error.kind(), ErrorKind::Unsupported);
+    assert!(matches!(
+        std::error::Error::source(&unsupported_error)
+            .and_then(|source| source.downcast_ref::<DiagonalError>()),
+        Some(DiagonalError::UnsupportedDType { dtype: DType::I32 })
+    ));
 }
 
 macro_rules! validate_nonsingular_u_test {
@@ -570,7 +666,13 @@ macro_rules! validate_nonsingular_u_test {
                     .unwrap(),
                 );
                 let err = validate_nonsingular_u(&t).unwrap_err();
-                assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+                assert!(matches!(
+                    err,
+                    Error::Extension {
+                        kind: ErrorKind::NumericalFailure,
+                        ..
+                    }
+                ));
             }
 
             #[test]

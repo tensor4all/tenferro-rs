@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{Tensor, TensorRead, TensorView, TypedTensorView};
+use tenferro_tensor::{ErrorKind, Tensor, TensorRead, TensorView, TypedTensorView};
 
 use crate::{cached_fft_plan_from_cache, FftNorm, FftPlanCache, TensorFftExt, TensorReadFftExt};
 
@@ -131,8 +131,9 @@ fn public_tensor_fft_ext_reports_invalid_dtype_and_shape_errors() {
 
     assert!(matches!(
         dtype_err,
-        tenferro_tensor::Error::UnsupportedDTypeConversion {
+        tenferro_tensor::Error::Extension {
             op: "TensorFftExt::fft",
+            kind: ErrorKind::Unsupported,
             ..
         }
     ));
@@ -157,7 +158,7 @@ fn poisoned_fft_plan_cache_returns_typed_error() {
     };
     assert!(matches!(
         err,
-        tenferro_tensor::Error::BackendFailure {
+        tenferro_tensor::Error::RuntimeState {
             op: "fft_plan_cache",
             ..
         }

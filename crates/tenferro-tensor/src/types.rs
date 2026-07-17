@@ -639,7 +639,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     pub fn host_storage(&self) -> crate::Result<&'a [T]> {
         match &self.buffer {
             TensorBufferRef::Host(data) => Ok(data),
-            TensorBufferRef::Backend(_) => Err(crate::Error::backend_failure(
+            TensorBufferRef::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensorView::host_storage",
                 "backend buffers cannot expose host storage; download explicitly first",
             )),
@@ -868,7 +868,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
         let data =
             match &self.buffer {
                 TensorBufferRef::Host(data) => data,
-                TensorBufferRef::Backend(_) => return Err(crate::Error::backend_failure(
+                TensorBufferRef::Backend(_) => return Err(crate::Error::runtime_state(
                     "TypedTensorView::as_slice",
                     "backend buffers cannot be inspected as host slices; download explicitly first",
                 )),
@@ -1240,7 +1240,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     pub fn host_storage(&self) -> crate::Result<&[T]> {
         match &self.buffer {
             TensorBufferRefMut::Host(data) => Ok(data),
-            TensorBufferRefMut::Backend(_) => Err(crate::Error::backend_failure(
+            TensorBufferRefMut::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensorViewMut::host_storage",
                 "backend buffers cannot expose host storage; download explicitly first",
             )),
@@ -1273,7 +1273,7 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     pub fn host_storage_mut(&mut self) -> crate::Result<&mut [T]> {
         match &mut self.buffer {
             TensorBufferRefMut::Host(data) => Ok(data),
-            TensorBufferRefMut::Backend(_) => Err(crate::Error::backend_failure(
+            TensorBufferRefMut::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensorViewMut::host_storage_mut",
                 "backend buffers cannot expose mutable host storage; download explicitly first",
             )),
@@ -4424,7 +4424,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     {
         let op = "TypedTensor::backend_region_view";
         let Buffer::Backend(buffer) = &self.buffer else {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::runtime_state(
                 op,
                 "expected a backend (device) buffer; host tensors use \
                  TypedTensorView::from_slice over host storage",
@@ -4482,7 +4482,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     {
         let op = "TypedTensor::backend_region_view_mut";
         let Buffer::Backend(buffer) = &self.buffer else {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::runtime_state(
                 op,
                 "expected a backend (device) buffer; mutable host regions use \
                  TypedTensorViewMut host constructors or try_multi_slice_mut",
@@ -4576,7 +4576,7 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
         let shape = self.shape().to_vec();
         match self.buffer {
             Buffer::Host(data) => Ok((shape, data)),
-            Buffer::Backend(_) => Err(crate::Error::backend_failure(
+            Buffer::Backend(_) => Err(crate::Error::runtime_state(
                 "into_vec_col_major",
                 "backend buffers cannot be exported as host Vec",
             )),
@@ -4603,7 +4603,7 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     pub fn host_data(&self) -> crate::Result<&[T]> {
         match &self.buffer {
             Buffer::Host(v) => Ok(v),
-            Buffer::Backend(_) => Err(crate::Error::backend_failure(
+            Buffer::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensor::host_data",
                 "backend buffers cannot be inspected as host slices; download explicitly first",
             )),
@@ -4655,7 +4655,7 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     pub fn host_data_mut(&mut self) -> crate::Result<&mut [T]> {
         match &mut self.buffer {
             Buffer::Host(v) => Ok(v),
-            Buffer::Backend(_) => Err(crate::Error::backend_failure(
+            Buffer::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensor::host_data_mut",
                 "backend buffers cannot be mutated as host slices; download explicitly first",
             )),

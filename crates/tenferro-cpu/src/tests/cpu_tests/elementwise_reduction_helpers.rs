@@ -3,10 +3,10 @@ use super::*;
 fn assert_ordered_complex_error<T>(result: crate::Result<T>, op: &'static str) {
     assert!(matches!(
         result,
-        Err(crate::Error::Validation {
+        Err(crate::Error::Unsupported {
             op: actual,
-            source,
-        }) if actual == op && source.to_string().contains("total order")
+            message,
+        }) if actual == op && message.contains("total order")
     ));
 }
 
@@ -181,7 +181,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             TensorRead::from_view(TensorView::Bool(bools.as_view())),
             &[0]
         ),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_sum",
             ..
         })
@@ -191,7 +191,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             TensorRead::from_view(TensorView::Bool(bools.as_view())),
             &[0]
         ),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_prod",
             ..
         })
@@ -206,7 +206,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
     );
     assert!(matches!(
         backend.reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0]),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_min",
             ..
         })
@@ -397,14 +397,14 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         Tensor::Bool(TypedTensor::<bool>::from_vec_col_major(vec![2], vec![true, false]).unwrap());
     assert!(matches!(
         backend.reduce_sum_read(TensorRead::from_tensor(&bools), &[0]),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_sum",
             ..
         })
     ));
     assert!(matches!(
         backend.reduce_prod_read(TensorRead::from_tensor(&bools), &[0]),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_prod",
             ..
         })
@@ -586,14 +586,14 @@ fn equal_bool_add_and_mul_report_unsupported_dtype_not_mismatch() {
 
     assert!(matches!(
         add(&lhs, &rhs),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "add",
             message,
         }) if message == "unsupported dtype Bool"
     ));
     assert!(matches!(
         mul(&lhs, &rhs),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "mul",
             message,
         }) if message == "unsupported dtype Bool"
@@ -910,10 +910,10 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     ));
     assert!(matches!(
         clamp(&lhs_f32, &lhs_f32, &rhs_f64),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Validation {
             op: "clamp",
-            message,
-        }) if message == "dtype mismatch"
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
     ));
 
     assert!(matches!(
@@ -1024,14 +1024,14 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
     ));
     assert!(matches!(
         reduce_max(&complex, &[0]),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_max",
             ..
         })
     ));
     assert!(matches!(
         reduce_min(&complex, &[0]),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_min",
             ..
         })

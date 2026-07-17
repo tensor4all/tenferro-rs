@@ -61,13 +61,26 @@ impl SparseMatmulPlan {
         right_shape: &[usize],
         right_entries: &[[usize; 2]],
     ) -> Result<Self> {
-        if left_shape.len() != 2 || right_shape.len() != 2 {
-            return Err(invalid("sparse matmul requires rank-2 operands"));
+        if left_shape.len() != 2 {
+            return Err(tenferro_tensor::Error::rank_mismatch(
+                OP,
+                2,
+                left_shape.len(),
+            ));
+        }
+        if right_shape.len() != 2 {
+            return Err(tenferro_tensor::Error::rank_mismatch(
+                OP,
+                2,
+                right_shape.len(),
+            ));
         }
         if left_shape[1] != right_shape[0] {
-            return Err(invalid(format!(
-                "shape mismatch for sparse matmul: lhs {left_shape:?}, rhs {right_shape:?}"
-            )));
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                OP,
+                vec![left_shape[1]],
+                vec![right_shape[0]],
+            ));
         }
 
         let mut raw = Vec::new();
@@ -128,7 +141,10 @@ impl SparseMatmulPlan {
 ///
 /// # Errors
 ///
-/// Returns an error if runtime registration fails.
+/// Returns [`ExtensionRuntimeRegistryError::MalformedFamilyId`] when a
+/// runtime family identifier is invalid, or
+/// [`ExtensionRuntimeRegistryError::PoisonedLock`] if registry state was
+/// poisoned while registering the family.
 ///
 /// # Examples
 ///
@@ -554,7 +570,9 @@ impl ExtensionLinearTransposeRule for SparseMatmulJvpAdRule {
 ///
 /// # Errors
 ///
-/// Returns an error if rule registration fails.
+/// Returns `ExtensionRegistryError::MalformedFamilyId` if a generated sparse
+/// family identifier is invalid, or `ExtensionRegistryError::DuplicateRule`
+/// if a sparse linearize or linear-transpose rule is already registered.
 ///
 /// # Examples
 ///
@@ -759,10 +777,7 @@ fn hash_plan(plan: &SparseMatmulPlan, hasher: &mut dyn Hasher) {
 }
 
 fn invalid(message: impl Into<String>) -> Error {
-    Error::InvalidConfig {
-        op: OP,
-        message: message.into(),
-    }
+    Error::invalid_argument(OP, "configuration", message)
 }
 
 #[cfg(all(test, feature = "autodiff"))]

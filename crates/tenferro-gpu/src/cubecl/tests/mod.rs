@@ -117,14 +117,20 @@ fn assert_shape_mismatch(error: &Error, op: &'static str, lhs: &[usize], rhs: &[
     ));
 }
 
-fn assert_backend_failure(error: &Error, op: &'static str, message: &str) {
+fn assert_runtime_state(error: &Error, op: &'static str, message: &str) {
     assert!(matches!(
         error,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op: actual_op,
             message: actual_message,
         } if *actual_op == op && actual_message == message
     ));
+}
+
+fn assert_unsupported(error: &Error, op: &'static str, message: &str) {
+    assert_eq!(error.kind(), ErrorKind::Unsupported);
+    assert!(error.to_string().contains(op));
+    assert!(error.to_string().contains(message));
 }
 
 fn assert_error_parity(expected: Error, actual: Error) {

@@ -1,31 +1,44 @@
+use std::error::Error as _;
+
 use tenferro_einsum::{Error, Result};
-use tenferro_tensor::Error as TensorError;
+use tenferro_tensor::{Error as TensorError, ErrorKind, ShapeMismatch, ShapeVec, ValidationKind};
 
 #[test]
-fn local_error_preserves_existing_invalid_argument_text() {
-    let result: Result<()> = Err(Error::InvalidArgument("bad labels".into()));
+fn invalid_subscripts_are_a_typed_local_validation_error() {
+    let result: Result<()> = Err(Error::invalid_subscripts("bad labels"));
 
     let Err(err) = result else {
-        panic!("expected invalid argument error");
+        panic!("expected invalid subscripts error");
     };
 
-    assert_eq!(err.to_string(), "invalid argument: bad labels");
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
+    );
+    assert!(err.to_string().contains("bad labels"));
 }
 
 #[test]
-fn local_error_maps_to_tensor_backend_failure() {
-    let err = Error::ShapeMismatch {
-        expected: vec![2, 3],
-        got: vec![2, 4],
-    };
+fn shared_einsum_validation_promotes_directly_to_tensor_validation() {
+    let err = Error::validation(
+        "einsum",
+        ShapeMismatch::ExpectedActual {
+            expected: ShapeVec::from_vec(vec![2, 3]),
+            actual: ShapeVec::from_vec(vec![2, 4]),
+        }
+        .into(),
+    );
 
-    let tensor_err = err.to_tensor_error("einsum_extension");
+    let tensor_err = err.into_tensor_error("einsum_extension");
+    assert!(matches!(tensor_err, TensorError::Validation { .. }));
+}
 
-    assert!(matches!(
-        tensor_err,
-        TensorError::BackendFailure {
-            op: "einsum_extension",
-            ref message,
-        } if message == "shape mismatch: expected [2, 3], got [2, 4]"
-    ));
+#[test]
+fn einsum_planning_error_remains_a_typed_extension_source() {
+    let err = Error::planning("no valid contraction path");
+    let tensor_err = err.into_tensor_error("einsum_extension");
+
+    assert_eq!(tensor_err.kind(), ErrorKind::RuntimeState);
+    assert!(matches!(tensor_err, TensorError::Extension { .. }));
+    assert!(tensor_err.source().is_some());
 }

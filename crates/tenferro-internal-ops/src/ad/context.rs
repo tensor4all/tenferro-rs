@@ -474,6 +474,11 @@ impl ShapeGuardContext {
     /// let shape = ctx.shape_of(&value).unwrap();
     /// assert_eq!(shape, &[SymDim::from(4usize)]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved, metadata
+    /// is missing, or the metadata does not describe an exact shape.
     pub fn shape_of(&mut self, val: &ValueRef<StdTensorOp>) -> ShapeGuardResult<Vec<SymDim>> {
         let key = self.resolve_key(val)?.clone();
         self.ensure_metadata_loaded(&key);
@@ -511,6 +516,11 @@ impl ShapeGuardContext {
     ///
     /// assert_eq!(ctx.rank_of(&value).unwrap(), 1);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved or its
+    /// metadata is unavailable.
     pub fn rank_of(&mut self, val: &ValueRef<StdTensorOp>) -> ShapeGuardResult<usize> {
         self.metadata_of(val).map(TensorMeta::rank)
     }
@@ -537,6 +547,11 @@ impl ShapeGuardContext {
     /// let extents = ctx.extents_of(&value).unwrap();
     /// assert_eq!(extents[0], ShapeExtent::upper_bound(SymDim::from(8usize)));
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved or its
+    /// metadata is unavailable.
     pub fn extents_of(
         &mut self,
         val: &ValueRef<StdTensorOp>,
@@ -566,6 +581,11 @@ impl ShapeGuardContext {
     /// let maybe_shape = ctx.exact_shape_of(&value).unwrap();
     /// assert_eq!(maybe_shape, None);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved or its
+    /// metadata is unavailable.
     pub fn exact_shape_of(
         &mut self,
         val: &ValueRef<StdTensorOp>,
@@ -598,6 +618,11 @@ impl ShapeGuardContext {
     /// let dtype = ctx.dtype_of(&value).unwrap();
     /// assert_eq!(dtype, DType::F64);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved or its
+    /// metadata is unavailable.
     pub fn dtype_of(&mut self, val: &ValueRef<StdTensorOp>) -> ShapeGuardResult<DType> {
         self.metadata_of(val).map(|meta| meta.dtype)
     }
@@ -621,6 +646,11 @@ impl ShapeGuardContext {
     /// let meta = ctx.metadata_of(&value).unwrap();
     /// assert_eq!(meta.dtype, DType::F64);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved or its
+    /// metadata is unavailable.
     pub fn metadata_of(&mut self, val: &ValueRef<StdTensorOp>) -> ShapeGuardResult<&TensorMeta> {
         let key = self.resolve_key(val)?.clone();
         self.ensure_metadata_loaded(&key);
@@ -713,6 +743,11 @@ impl ShapeGuardContext {
 /// let meta = lookup_global_metadata(&key).unwrap();
 /// assert!(meta.is_none());
 /// ```
+///
+/// # Errors
+///
+/// Returns [`MetadataRegistryError::LockPoisoned`] when the global metadata
+/// registry lock is poisoned.
 pub fn lookup_global_metadata(
     key: &ValueKey<StdTensorOp>,
 ) -> Result<Option<TensorMeta>, MetadataRegistryError> {
@@ -723,6 +758,11 @@ pub fn lookup_global_metadata(
 }
 
 #[doc(hidden)]
+///
+/// # Errors
+///
+/// Returns [`MetadataRegistryError::LockPoisoned`] when the global metadata
+/// registry lock is poisoned.
 pub fn register_scoped_global_metadata_batch<I>(
     entries: I,
 ) -> Result<GlobalMetadataScope, MetadataRegistryError>

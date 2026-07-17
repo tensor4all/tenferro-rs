@@ -44,10 +44,9 @@ fn with_scalar_rejects_dtype_outside_guard_with_structured_error() {
 
     assert!(matches!(
         err,
-        Error::UnsupportedDTypeConversion {
+        Error::UnsupportedDType {
             op: "dtype_probe",
-            from: DType::I32,
-            to: DType::I32,
+            dtype: DType::I32,
             ..
         }
     ));

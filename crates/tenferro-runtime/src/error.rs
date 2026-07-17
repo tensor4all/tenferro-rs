@@ -3,16 +3,21 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_runtime::error::Error;
+//! use tenferro_runtime::error::{Error, ErrorPhase};
 //!
-//! let err = Error::InvalidSubscripts("bad label".into());
+//! let err = Error::invalid_argument(
+//!     "einsum",
+//!     ErrorPhase::GraphBuild,
+//!     "subscripts",
+//!     "bad label",
+//! );
 //! assert!(err.to_string().contains("bad label"));
 //! ```
 
 use std::error::Error as StdError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use tenferro_ops::ShapeRelation;
+use tenferro_ops::{dim_expr::DimExprEvalError, ShapeRelation, SymDimConversionError};
 use tenferro_tensor::{DType, ErrorKind, ValidationError, ValidationKind};
 
 static NEXT_CONTEXT_ID: AtomicUsize = AtomicUsize::new(1);
@@ -94,14 +99,47 @@ pub enum ShapeConstraintEvalError {
     DivisionByZero,
 }
 
+impl From<DimExprEvalError> for ShapeConstraintEvalError {
+    fn from(error: DimExprEvalError) -> Self {
+        match error {
+            DimExprEvalError::InputOutOfBounds {
+                input_idx,
+                input_count,
+            } => Self::MissingInput {
+                input_idx,
+                input_count,
+            },
+            DimExprEvalError::AxisOutOfBounds {
+                input_idx,
+                axis,
+                rank,
+            } => Self::AxisOutOfBounds {
+                input_idx,
+                axis,
+                rank,
+            },
+            DimExprEvalError::AddOverflow { .. } | DimExprEvalError::MulOverflow { .. } => {
+                Self::Overflow
+            }
+            DimExprEvalError::SubUnderflow { .. } => Self::Underflow,
+            DimExprEvalError::FloorDivByZero { .. } => Self::DivisionByZero,
+        }
+    }
+}
+
 /// Errors produced by einsum, eval, and other tenferro operations.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_runtime::error::Error;
+/// use tenferro_runtime::error::{Error, ErrorPhase};
 ///
-/// let err = Error::InvalidSubscripts("rank mismatch".into());
+/// let err = Error::invalid_argument(
+///     "einsum",
+///     ErrorPhase::GraphBuild,
+///     "subscripts",
+///     "rank mismatch",
+/// );
 /// ```
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -117,14 +155,6 @@ pub enum Error {
         source: ValidationError,
     },
 
-    /// Einsum subscript string is invalid or cannot be parsed.
-    #[error("invalid subscripts: {0}")]
-    InvalidSubscripts(String),
-
-    /// Contraction optimization failed (shape mismatch, bad path, etc.).
-    #[error("contraction error: {0}")]
-    ContractionError(String),
-
     /// A required input tensor is missing from the inputs map.
     #[error("missing input: {0}")]
     MissingInput(String),
@@ -133,14 +163,57 @@ pub enum Error {
     #[error("grad requires a scalar output, got shape {shape:?}")]
     NonScalarGrad { shape: Vec<usize> },
 
+    /// The operation is known not to support the requested input or
+    /// configuration at the phase where it was requested.
+    #[error("{op} ({phase:?}) is unsupported: {message}")]
+    Unsupported {
+        /// Operation that does not provide the requested behavior.
+        op: &'static str,
+        /// Phase that established the unsupported combination.
+        phase: ErrorPhase,
+        /// Human-readable unsupported-operation detail.
+        message: String,
+    },
+
     /// Runtime tensor execution failed in the backend layer.
     #[error(transparent)]
     TensorRuntime(#[from] tenferro_tensor::Error),
 
-    /// A runtime metadata or registry subsystem failed with a typed source.
-    #[error("runtime metadata failure: {source}")]
-    Metadata {
-        /// Typed metadata subsystem source.
+    /// A typed extension-domain error crossed a runtime registry boundary.
+    #[error("extension {family} ({phase:?}) failed for {op}: {source}")]
+    Extension {
+        /// Operation that discovered the extension failure.
+        op: &'static str,
+        /// Phase that discovered the extension failure.
+        phase: ErrorPhase,
+        /// Stable extension family identifier.
+        family: &'static str,
+        /// Coarse classification supplied by the extension owner.
+        kind: ErrorKind,
+        /// Original extension-domain source.
+        #[source]
+        source: BoxError,
+    },
+
+    /// Executor, cache, registry, or device state is unavailable or invalid.
+    #[error("{op} ({phase:?}): runtime state failure: {message}")]
+    RuntimeState {
+        /// Operation whose state was unavailable.
+        op: &'static str,
+        /// Phase that discovered the invalid state.
+        phase: ErrorPhase,
+        /// Human-readable state detail.
+        message: String,
+    },
+
+    /// A runtime-state failure retaining a typed source.
+    #[error("{op} ({phase:?}): runtime state failure: {source}")]
+    RuntimeStateSource {
+        /// Operation whose state was unavailable.
+        op: &'static str,
+        /// Phase that discovered the invalid state.
+        phase: ErrorPhase,
+        /// Typed state source.
         #[source]
         source: BoxError,
     },
@@ -241,6 +314,30 @@ pub enum Error {
         cause: ShapeConstraintEvalError,
     },
 
+    /// A symbolic dimension could not be converted into the graph's local
+    /// dimension-expression vocabulary.
+    #[error("{op} ({phase:?}): symbolic shape conversion failed: {source}")]
+    SymbolicShapeConversion {
+        /// Operation that requested the symbolic shape conversion.
+        op: &'static str,
+        /// Phase that discovered the invalid symbolic reference.
+        phase: ErrorPhase,
+        /// Typed symbolic-dimension conversion failure.
+        #[source]
+        source: SymDimConversionError,
+    },
+
+    /// A runtime dimension expression could not be evaluated for concrete
+    /// input shapes.
+    #[error("runtime shape expression {expression} could not evaluate: {cause}")]
+    ShapeExpressionEvaluation {
+        /// Expression that failed during execution.
+        expression: String,
+        /// Typed evaluation failure.
+        #[source]
+        cause: ShapeConstraintEvalError,
+    },
+
     /// An unexpected internal error.
     #[error("internal error: {0}")]
     Internal(String),
@@ -309,6 +406,155 @@ impl Error {
         )
     }
 
+    /// Construct a dtype-mismatch validation error using the runtime dtype
+    /// vocabulary.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::{DType, Error, ErrorPhase};
+    /// use tenferro_tensor::{ErrorKind, ValidationKind};
+    ///
+    /// let error = Error::dtype_mismatch(
+    ///     "add",
+    ///     ErrorPhase::GraphBuild,
+    ///     DType::F32,
+    ///     DType::F64,
+    /// );
+    /// assert_eq!(error.kind(), ErrorKind::Validation(ValidationKind::DTypeMismatch));
+    /// ```
+    pub fn dtype_mismatch(
+        op: &'static str,
+        phase: ErrorPhase,
+        expected: DType,
+        actual: DType,
+    ) -> Self {
+        Self::validation(
+            op,
+            phase,
+            ValidationError::DTypeMismatch {
+                expected: core_dtype(expected),
+                actual: core_dtype(actual),
+            },
+        )
+    }
+
+    /// Preserve a typed extension-domain source at the runtime boundary.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::error::Error as _;
+    /// use tenferro_runtime::{Error, ErrorPhase};
+    /// use tenferro_tensor::ErrorKind;
+    ///
+    /// let source = std::io::Error::new(std::io::ErrorKind::Other, "extension failed");
+    /// let error = Error::extension(
+    ///     "einsum",
+    ///     ErrorPhase::GraphBuild,
+    ///     "example.extension.v1",
+    ///     ErrorKind::RuntimeState,
+    ///     source,
+    /// );
+    /// assert_eq!(error.kind(), ErrorKind::RuntimeState);
+    /// assert!(error.source().is_some());
+    /// ```
+    pub fn extension<E>(
+        op: &'static str,
+        phase: ErrorPhase,
+        family: &'static str,
+        kind: ErrorKind,
+        source: E,
+    ) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::Extension {
+            op,
+            phase,
+            family,
+            kind,
+            source: Box::new(source),
+        }
+    }
+
+    /// Construct a runtime-state failure for an unavailable or invalid
+    /// executor, cache, registry, or device state.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::{Error, ErrorPhase};
+    /// use tenferro_tensor::ErrorKind;
+    ///
+    /// let error = Error::runtime_state(
+    ///     "executor",
+    ///     ErrorPhase::Execution,
+    ///     "the executor is not initialized",
+    /// );
+    /// assert_eq!(error.kind(), ErrorKind::RuntimeState);
+    /// ```
+    pub fn runtime_state(op: &'static str, phase: ErrorPhase, message: impl Into<String>) -> Self {
+        Self::RuntimeState {
+            op,
+            phase,
+            message: message.into(),
+        }
+    }
+
+    /// Preserve a typed source for an unavailable or invalid runtime state.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::error::Error as _;
+    /// use tenferro_runtime::{Error, ErrorPhase};
+    /// use tenferro_tensor::ErrorKind;
+    ///
+    /// let error = Error::runtime_state_source(
+    ///     "metadata",
+    ///     ErrorPhase::Compile,
+    ///     std::io::Error::other("registry lock poisoned"),
+    /// );
+    /// assert_eq!(error.kind(), ErrorKind::RuntimeState);
+    /// assert!(error.source().is_some());
+    /// ```
+    pub fn runtime_state_source<E>(op: &'static str, phase: ErrorPhase, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::RuntimeStateSource {
+            op,
+            phase,
+            source: Box::new(source),
+        }
+    }
+
+    /// Construct an operation-level unsupported error with an explicit
+    /// discovery phase.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_runtime::{Error, ErrorPhase};
+    /// use tenferro_tensor::ErrorKind;
+    ///
+    /// let error = Error::unsupported(
+    ///     "compare",
+    ///     ErrorPhase::Compile,
+    ///     "complex values have no total order",
+    /// );
+    /// assert_eq!(error.kind(), ErrorKind::Unsupported);
+    /// assert_eq!(error.phase(), Some(ErrorPhase::Compile));
+    /// ```
+    pub fn unsupported(op: &'static str, phase: ErrorPhase, message: impl Into<String>) -> Self {
+        Self::Unsupported {
+            op,
+            phase,
+            message: message.into(),
+        }
+    }
+
     /// Return the stable coarse classification of this runtime failure.
     ///
     /// # Examples
@@ -327,16 +573,16 @@ impl Error {
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Validation { source, .. } => ErrorKind::Validation(source.kind()),
-            Self::InvalidSubscripts(_) => ErrorKind::Validation(ValidationKind::InvalidArgument),
-            Self::ContractionError(_) => ErrorKind::RuntimeState,
             Self::MissingInput(_)
             | Self::UnexpectedBinding { .. }
             | Self::UnboundPlaceholder { .. }
             | Self::DuplicateBinding { .. }
             | Self::ContextMismatch { .. } => ErrorKind::RuntimeState,
             Self::NonScalarGrad { .. } => ErrorKind::Validation(ValidationKind::InvalidArgument),
+            Self::Unsupported { .. } | Self::UnsupportedAdRule { .. } => ErrorKind::Unsupported,
             Self::TensorRuntime(error) => error.kind(),
-            Self::Metadata { .. } => ErrorKind::Internal,
+            Self::Extension { kind, .. } => *kind,
+            Self::RuntimeState { .. } | Self::RuntimeStateSource { .. } => ErrorKind::RuntimeState,
             Self::PlaceholderDtypeMismatch { .. } => {
                 ErrorKind::Validation(ValidationKind::DTypeMismatch)
             }
@@ -346,11 +592,16 @@ impl Error {
             Self::PlaceholderRankMismatch { .. } => {
                 ErrorKind::Validation(ValidationKind::RankMismatch)
             }
-            Self::UnsupportedAdRule { .. } => ErrorKind::Unsupported,
             Self::ShapeConstraintViolation { .. } => {
                 ErrorKind::Validation(ValidationKind::ShapeMismatch)
             }
             Self::ShapeConstraintEvaluation { .. } => {
+                ErrorKind::Validation(ValidationKind::InvalidArgument)
+            }
+            Self::SymbolicShapeConversion { .. } => {
+                ErrorKind::Validation(ValidationKind::InvalidArgument)
+            }
+            Self::ShapeExpressionEvaluation { .. } => {
                 ErrorKind::Validation(ValidationKind::InvalidArgument)
             }
             Self::Internal(_) => ErrorKind::Internal,
@@ -376,15 +627,33 @@ impl Error {
         match self {
             Self::Validation { phase, .. } => Some(*phase),
             Self::TensorRuntime(_) => Some(ErrorPhase::Execution),
-            Self::Metadata { .. } => Some(ErrorPhase::Compile),
+            Self::Unsupported { phase, .. } => Some(*phase),
+            Self::Extension { phase, .. } => Some(*phase),
+            Self::RuntimeState { phase, .. } | Self::RuntimeStateSource { phase, .. } => {
+                Some(*phase)
+            }
             Self::PlaceholderDtypeMismatch { .. }
             | Self::PlaceholderShapeMismatch { .. }
             | Self::PlaceholderRankMismatch { .. }
             | Self::UnexpectedBinding { .. }
             | Self::UnboundPlaceholder { .. }
             | Self::DuplicateBinding { .. } => Some(ErrorPhase::Execution),
+            Self::SymbolicShapeConversion { phase, .. } => Some(*phase),
+            Self::ShapeExpressionEvaluation { .. } => Some(ErrorPhase::Execution),
             _ => None,
         }
+    }
+}
+
+fn core_dtype(dtype: DType) -> tenferro_tensor::core::DType {
+    match dtype {
+        DType::F32 => tenferro_tensor::core::DType::F32,
+        DType::F64 => tenferro_tensor::core::DType::F64,
+        DType::I32 => tenferro_tensor::core::DType::I32,
+        DType::I64 => tenferro_tensor::core::DType::I64,
+        DType::Bool => tenferro_tensor::core::DType::Bool,
+        DType::C32 => tenferro_tensor::core::DType::C32,
+        DType::C64 => tenferro_tensor::core::DType::C64,
     }
 }
 
@@ -412,3 +681,424 @@ impl std::fmt::Display for ContextId {
 
 /// Result type alias for tenferro operations.
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as StdError;
+
+    use tenferro_ops::dim_expr::{DimExpr, DimExprEvalError};
+    use tenferro_tensor::{
+        DType, ErrorKind, ShapeMismatch, ShapeVec, ValidationError, ValidationKind,
+    };
+
+    use super::{ContextId, Error, ErrorPhase, ShapeConstraintEvalError};
+
+    #[test]
+    fn dimension_evaluation_errors_keep_the_runtime_vocabulary() {
+        let cases = [
+            (
+                DimExpr::InputDim {
+                    input_idx: 2,
+                    axis: 0,
+                }
+                .eval(&[&[1usize]])
+                .unwrap_err(),
+                ShapeConstraintEvalError::MissingInput {
+                    input_idx: 2,
+                    input_count: 1,
+                },
+            ),
+            (
+                DimExpr::InputDim {
+                    input_idx: 0,
+                    axis: 2,
+                }
+                .eval(&[&[1usize]])
+                .unwrap_err(),
+                ShapeConstraintEvalError::AxisOutOfBounds {
+                    input_idx: 0,
+                    axis: 2,
+                    rank: 1,
+                },
+            ),
+            (
+                DimExpr::Add(
+                    Box::new(DimExpr::Const(usize::MAX)),
+                    Box::new(DimExpr::Const(1)),
+                )
+                .eval(&[])
+                .unwrap_err(),
+                ShapeConstraintEvalError::Overflow,
+            ),
+            (
+                DimExpr::Mul(
+                    Box::new(DimExpr::Const(usize::MAX)),
+                    Box::new(DimExpr::Const(2)),
+                )
+                .eval(&[])
+                .unwrap_err(),
+                ShapeConstraintEvalError::Overflow,
+            ),
+            (
+                DimExpr::Sub(Box::new(DimExpr::Const(0)), Box::new(DimExpr::Const(1)))
+                    .eval(&[])
+                    .unwrap_err(),
+                ShapeConstraintEvalError::Underflow,
+            ),
+            (
+                DimExpr::FloorDiv(Box::new(DimExpr::Const(1)), Box::new(DimExpr::Const(0)))
+                    .eval(&[])
+                    .unwrap_err(),
+                ShapeConstraintEvalError::DivisionByZero,
+            ),
+        ];
+
+        for (actual, expected) in cases {
+            assert_eq!(ShapeConstraintEvalError::from(actual), expected);
+        }
+
+        assert_eq!(
+            ShapeConstraintEvalError::from(DimExprEvalError::AddOverflow { lhs: 1, rhs: 2 }),
+            ShapeConstraintEvalError::Overflow
+        );
+    }
+
+    #[test]
+    fn constructors_preserve_classification_and_typed_sources() {
+        let shape = Error::validation(
+            "reshape",
+            ErrorPhase::GraphBuild,
+            ShapeMismatch::ExpectedActual {
+                expected: ShapeVec::from_vec(vec![2, 3]),
+                actual: ShapeVec::from_vec(vec![6]),
+            }
+            .into(),
+        );
+        assert_eq!(
+            shape.kind(),
+            ErrorKind::Validation(ValidationKind::ShapeMismatch)
+        );
+        assert_eq!(shape.phase(), Some(ErrorPhase::GraphBuild));
+
+        let invalid =
+            Error::invalid_argument("slice", ErrorPhase::Compile, "step", "must be non-zero");
+        assert!(matches!(
+            invalid,
+            Error::Validation {
+                source: ValidationError::InvalidArgument {
+                    argument: "step",
+                    ..
+                },
+                ..
+            }
+        ));
+
+        for dtype in [
+            DType::F32,
+            DType::F64,
+            DType::I32,
+            DType::I64,
+            DType::Bool,
+            DType::C32,
+            DType::C64,
+        ] {
+            let error = Error::dtype_mismatch("cast", ErrorPhase::GraphBuild, dtype, dtype);
+            assert!(matches!(
+                error,
+                Error::Validation {
+                    source: ValidationError::DTypeMismatch { .. },
+                    ..
+                }
+            ));
+        }
+
+        let extension = Error::extension(
+            "extension",
+            ErrorPhase::Compile,
+            "example.v1",
+            ErrorKind::Io,
+            std::io::Error::other("manifest read failed"),
+        );
+        assert_eq!(extension.kind(), ErrorKind::Io);
+        assert!(StdError::source(&extension).is_some());
+
+        let state = Error::runtime_state(
+            "executor",
+            ErrorPhase::Execution,
+            "executor is not initialized",
+        );
+        assert_eq!(state.kind(), ErrorKind::RuntimeState);
+        let state_source = Error::runtime_state_source(
+            "registry",
+            ErrorPhase::Compile,
+            std::io::Error::other("registry lock poisoned"),
+        );
+        assert_eq!(state_source.kind(), ErrorKind::RuntimeState);
+        assert!(StdError::source(&state_source).is_some());
+        let unsupported = Error::unsupported(
+            "compare",
+            ErrorPhase::Compile,
+            "complex values have no total order",
+        );
+        assert_eq!(unsupported.kind(), ErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn kind_classifies_every_runtime_variant_without_string_inspection() {
+        let errors = [
+            (
+                Error::validation(
+                    "shape",
+                    ErrorPhase::GraphBuild,
+                    ValidationError::RankMismatch {
+                        expected: 2,
+                        actual: 1,
+                    },
+                ),
+                ErrorKind::Validation(ValidationKind::RankMismatch),
+            ),
+            (Error::MissingInput("x".into()), ErrorKind::RuntimeState),
+            (
+                Error::NonScalarGrad { shape: vec![2] },
+                ErrorKind::Validation(ValidationKind::InvalidArgument),
+            ),
+            (
+                Error::unsupported("op", ErrorPhase::Compile, "missing rule"),
+                ErrorKind::Unsupported,
+            ),
+            (
+                Error::TensorRuntime(tenferro_tensor::Error::unsupported("op", "not available")),
+                ErrorKind::Unsupported,
+            ),
+            (
+                Error::extension(
+                    "op",
+                    ErrorPhase::Execution,
+                    "family.v1",
+                    ErrorKind::NumericalFailure,
+                    std::io::Error::other("numerical source"),
+                ),
+                ErrorKind::NumericalFailure,
+            ),
+            (
+                Error::runtime_state("op", ErrorPhase::Execution, "state"),
+                ErrorKind::RuntimeState,
+            ),
+            (
+                Error::runtime_state_source(
+                    "op",
+                    ErrorPhase::Execution,
+                    std::io::Error::other("state"),
+                ),
+                ErrorKind::RuntimeState,
+            ),
+            (
+                Error::UnexpectedBinding { binding_index: 0 },
+                ErrorKind::RuntimeState,
+            ),
+            (
+                Error::UnboundPlaceholder {
+                    input_key: "x".into(),
+                },
+                ErrorKind::RuntimeState,
+            ),
+            (
+                Error::DuplicateBinding {
+                    input_key: "x".into(),
+                },
+                ErrorKind::RuntimeState,
+            ),
+            (
+                Error::PlaceholderDtypeMismatch {
+                    expected: DType::F32,
+                    actual: DType::F64,
+                },
+                ErrorKind::Validation(ValidationKind::DTypeMismatch),
+            ),
+            (
+                Error::PlaceholderShapeMismatch {
+                    expected: vec![2],
+                    actual: vec![3],
+                },
+                ErrorKind::Validation(ValidationKind::ShapeMismatch),
+            ),
+            (
+                Error::PlaceholderRankMismatch {
+                    expected: 2,
+                    actual: 1,
+                },
+                ErrorKind::Validation(ValidationKind::RankMismatch),
+            ),
+            (
+                Error::ContextMismatch {
+                    lhs: ContextId::fresh(),
+                    rhs: ContextId::fresh(),
+                },
+                ErrorKind::RuntimeState,
+            ),
+            (
+                Error::UnsupportedAdRule {
+                    transform: "vjp",
+                    op: "example".into(),
+                },
+                ErrorKind::Unsupported,
+            ),
+            (
+                Error::ShapeConstraintViolation {
+                    family: "example.v1",
+                    instruction_index: Some(3),
+                    relation: tenferro_ops::ShapeRelation::Equal,
+                    lhs_expr: "m".into(),
+                    rhs_expr: "n".into(),
+                    lhs_value: 2,
+                    rhs_value: 3,
+                },
+                ErrorKind::Validation(ValidationKind::ShapeMismatch),
+            ),
+            (
+                Error::ShapeConstraintEvaluation {
+                    family: "example.v1",
+                    instruction_index: None,
+                    relation: tenferro_ops::ShapeRelation::Equal,
+                    expression: "m+n".into(),
+                    cause: ShapeConstraintEvalError::Overflow,
+                },
+                ErrorKind::Validation(ValidationKind::InvalidArgument),
+            ),
+            (
+                Error::SymbolicShapeConversion {
+                    op: "broadcast",
+                    phase: ErrorPhase::GraphBuild,
+                    source: tenferro_ops::SymDimConversionError { tensor_id: 7 },
+                },
+                ErrorKind::Validation(ValidationKind::InvalidArgument),
+            ),
+            (
+                Error::ShapeExpressionEvaluation {
+                    expression: "m/0".into(),
+                    cause: ShapeConstraintEvalError::DivisionByZero,
+                },
+                ErrorKind::Validation(ValidationKind::InvalidArgument),
+            ),
+            (Error::Internal("invariant".into()), ErrorKind::Internal),
+        ];
+
+        for (error, expected) in errors {
+            assert_eq!(error.kind(), expected, "classified {error:?}");
+        }
+    }
+
+    #[test]
+    fn phase_reports_discovery_axis_separately_from_kind() {
+        let with_phase = [
+            Error::validation(
+                "op",
+                ErrorPhase::GraphBuild,
+                ValidationError::InvalidArgument {
+                    argument: "x",
+                    message: "bad".into(),
+                },
+            ),
+            Error::TensorRuntime(tenferro_tensor::Error::invalid_argument("op", "x", "bad")),
+            Error::unsupported("op", ErrorPhase::Compile, "unsupported"),
+            Error::extension(
+                "op",
+                ErrorPhase::GraphBuild,
+                "family.v1",
+                ErrorKind::Internal,
+                std::io::Error::other("extension"),
+            ),
+            Error::runtime_state("op", ErrorPhase::Execution, "state"),
+            Error::runtime_state_source("op", ErrorPhase::Compile, std::io::Error::other("state")),
+            Error::PlaceholderDtypeMismatch {
+                expected: DType::F32,
+                actual: DType::F64,
+            },
+            Error::PlaceholderShapeMismatch {
+                expected: vec![2],
+                actual: vec![3],
+            },
+            Error::PlaceholderRankMismatch {
+                expected: 2,
+                actual: 1,
+            },
+            Error::UnexpectedBinding { binding_index: 0 },
+            Error::UnboundPlaceholder {
+                input_key: "x".into(),
+            },
+            Error::DuplicateBinding {
+                input_key: "x".into(),
+            },
+            Error::SymbolicShapeConversion {
+                op: "op",
+                phase: ErrorPhase::Compile,
+                source: tenferro_ops::SymDimConversionError { tensor_id: 1 },
+            },
+            Error::ShapeExpressionEvaluation {
+                expression: "m".into(),
+                cause: ShapeConstraintEvalError::Overflow,
+            },
+        ];
+        let expected = [
+            Some(ErrorPhase::GraphBuild),
+            Some(ErrorPhase::Execution),
+            Some(ErrorPhase::Compile),
+            Some(ErrorPhase::GraphBuild),
+            Some(ErrorPhase::Execution),
+            Some(ErrorPhase::Compile),
+            Some(ErrorPhase::Execution),
+            Some(ErrorPhase::Execution),
+            Some(ErrorPhase::Execution),
+            Some(ErrorPhase::Execution),
+            Some(ErrorPhase::Execution),
+            Some(ErrorPhase::Execution),
+            Some(ErrorPhase::Compile),
+            Some(ErrorPhase::Execution),
+        ];
+        for (error, expected) in with_phase.into_iter().zip(expected) {
+            assert_eq!(error.phase(), expected);
+        }
+
+        let without_phase = [
+            Error::MissingInput("x".into()),
+            Error::NonScalarGrad { shape: vec![2] },
+            Error::ContextMismatch {
+                lhs: ContextId::fresh(),
+                rhs: ContextId::fresh(),
+            },
+            Error::UnsupportedAdRule {
+                transform: "jvp",
+                op: "example".into(),
+            },
+            Error::ShapeConstraintViolation {
+                family: "example.v1",
+                instruction_index: None,
+                relation: tenferro_ops::ShapeRelation::Equal,
+                lhs_expr: "m".into(),
+                rhs_expr: "n".into(),
+                lhs_value: 1,
+                rhs_value: 2,
+            },
+            Error::ShapeConstraintEvaluation {
+                family: "example.v1",
+                instruction_index: None,
+                relation: tenferro_ops::ShapeRelation::Equal,
+                expression: "m".into(),
+                cause: ShapeConstraintEvalError::Overflow,
+            },
+            Error::Internal("invariant".into()),
+        ];
+        for error in without_phase {
+            assert_eq!(error.phase(), None);
+        }
+    }
+
+    #[test]
+    fn context_ids_are_opaque_but_displayable() {
+        let first = ContextId::fresh();
+        let second = ContextId::fresh();
+
+        assert_ne!(first, second);
+        assert!(first.to_string().starts_with("ctx@"));
+    }
+}

@@ -1,3 +1,4 @@
+use std::error::Error as _;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
@@ -6,10 +7,10 @@ use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, Buffer, BufferHandle, CompareDir,
-    DType, DotGeneralConfig, Error, GatherConfig, MemoryKind, PadConfig, Placement, ScatterConfig,
-    SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
-    TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
-    TensorView, TypedTensor, ValidationError,
+    DType, DotGeneralConfig, Error, ErrorKind, GatherConfig, MemoryKind, PadConfig, Placement,
+    ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorReduction, TensorStructural, TensorView, TypedTensor, ValidationError,
 };
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -73,7 +74,7 @@ fn assert_backend_download_error<T>(result: tenferro_tensor::Result<T>, expected
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op,
             ref message,
         } if op == expected_op && message.contains("download")
@@ -215,7 +216,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     let err = backend.lu_factor(&Tensor::F64(input.clone())).unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Unsupported {
             op: "lu_factor",
             ref message,
         } if message.contains("does not implement")
@@ -224,7 +225,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     let err = backend.svd_values(&Tensor::F64(input.clone())).unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Unsupported {
             op: "svd_values",
             ref message,
         } if message.contains("does not implement")
@@ -236,7 +237,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Unsupported {
             op: "svd",
             ref message,
         } if message.contains("borrowed tensor views")
@@ -248,7 +249,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Unsupported {
             op: "qr",
             ref message,
         } if message.contains("borrowed tensor views")
@@ -260,7 +261,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Unsupported {
             op: "eigh",
             ref message,
         } if message.contains("borrowed tensor views")
@@ -271,7 +272,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Unsupported {
             op: "eigh_values",
             ref message,
         } if message.contains("does not implement")
@@ -290,7 +291,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Unsupported {
             op: "lu_solve_prepared",
             ref message,
         } if message.contains("does not implement")
@@ -301,7 +302,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Unsupported {
             op: "cholesky",
             ref message,
         } if message.contains("borrowed tensor views")
@@ -312,7 +313,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Unsupported {
             op: "lu",
             ref message,
         } if message.contains("borrowed tensor views")
@@ -323,7 +324,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Unsupported {
             op: "full_piv_lu",
             ref message,
         } if message.contains("borrowed tensor views")
@@ -334,7 +335,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Unsupported {
             op: "eig",
             ref message,
         } if message.contains("borrowed tensor views")
@@ -549,10 +550,13 @@ fn cpu_lu_solve_prepared_restores_vector_rhs_and_validates_inputs() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Validation {
             op: "lu_solve_prepared",
-            ref message,
-        } if message.contains("1-based")
+            source: ValidationError::InvalidArgument {
+                argument: "pivot",
+                ..
+            },
+        }
     ));
 }
 
@@ -630,10 +634,12 @@ fn solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
     let err = backend.solve(&i32_a, &i32_b).unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Extension {
             op: "solve",
-            ref message,
-        } if message.contains("unsupported dtype I32")
+            family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
+            kind: tenferro_tensor::ErrorKind::Unsupported,
+            ..
+        }
     ));
 }
 
@@ -661,10 +667,12 @@ fn full_piv_lu_solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
         .unwrap_err();
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Extension {
             op: "full_piv_lu_solve",
-            ref message,
-        } if message.contains("unsupported dtype I32")
+            family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
+            kind: tenferro_tensor::ErrorKind::Unsupported,
+            ..
+        }
     ));
 }
 
@@ -697,7 +705,12 @@ fn solve_rejects_singular_matrix() {
 
     let err = backend.solve(&a, &b).unwrap_err();
 
-    assert!(matches!(err, Error::BackendFailure { op: "solve", .. }));
+    assert_eq!(err.kind(), ErrorKind::NumericalFailure);
+    assert!(matches!(
+        err.source()
+            .and_then(|source| source.downcast_ref::<tenferro_linalg::Error>()),
+        Some(tenferro_linalg::Error::Singular { op: "solve" })
+    ));
 }
 
 #[test]

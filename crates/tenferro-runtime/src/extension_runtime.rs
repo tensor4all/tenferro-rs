@@ -115,6 +115,15 @@ impl<'a, B: TensorBackend> ExtensionExecutionContext<'a, B> {
     ///     .unwrap();
     /// assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[3.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// `ValidationError::InvalidArgument` when the program has an invalid
+    /// input/slot contract, [`crate::Error::Internal`] when it contains a
+    /// nested extension or violates an execution-IR invariant, and
+    /// [`crate::Error::TensorRuntime`] when backend execution returns a typed
+    /// validation, backend, or runtime-state source.
     pub fn execute_core_exec_program_unsegmented(
         &mut self,
         program: &crate::extension::ExecProgram,
@@ -142,6 +151,15 @@ pub trait ExtensionRuntime<B: TensorBackend + 'static>: Debug + Send + Sync + 's
     fn family_id(&self) -> &'static str;
 
     /// Execute the extension op with backend and cache state supplied by core.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with
+    /// `ValidationError::InvalidArgument` for an invalid input/output arity
+    /// or metadata contract, [`tenferro_tensor::Error::Unsupported`] when the
+    /// operation is not implemented, or a typed
+    /// [`tenferro_tensor::Error::BackendSource`] /
+    /// [`tenferro_tensor::Error::RuntimeStateSource`] from backend execution.
     fn execute(
         &self,
         op: &dyn ExtensionOp,
@@ -154,6 +172,14 @@ pub trait ExtensionRuntime<B: TensorBackend + 'static>: Debug + Send + Sync + 's
     /// Implementations that need compact tensors must materialize inputs here
     /// explicitly. Keeping this method required prevents implicit read-path
     /// fallbacks from hiding backend or view handling bugs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with
+    /// `ValidationError::InvalidArgument` for an invalid input/output arity
+    /// or metadata contract, [`tenferro_tensor::Error::RuntimeStateSource`]
+    /// when a borrowed view cannot be materialized, or a typed
+    /// [`tenferro_tensor::Error::BackendSource`] from execution.
     fn execute_reads(
         &self,
         op: &dyn ExtensionOp,
@@ -324,6 +350,11 @@ impl<B: TensorBackend + 'static> ExtensionRegistry<B> {
     /// Registration is idempotent by family id: registering the same extension
     /// family more than once succeeds and keeps the first runtime. This lets
     /// extension crates register their own dependency extensions defensively.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRuntimeRegistryError::MalformedFamilyId`] when the
+    /// executor advertises an invalid family identifier.
     pub fn register(
         &mut self,
         executor: Arc<dyn ExtensionRuntime<B>>,
@@ -433,6 +464,15 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     }
 
     /// Execute an extension using a registered runtime executor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with
+    /// `ValidationError::InvalidArgument` when the input/output count or
+    /// registered family is invalid, [`tenferro_tensor::Error::Extension`]
+    /// when the extension source fails, or a typed
+    /// [`tenferro_tensor::Error::BackendSource`] /
+    /// [`tenferro_tensor::Error::RuntimeStateSource`] from execution.
     pub fn execute(
         &mut self,
         backend: &mut B,
@@ -530,6 +570,15 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     /// assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with
+    /// `ValidationError::InvalidArgument` when the input/output count or
+    /// registered family is invalid, [`tenferro_tensor::Error::Extension`]
+    /// when the extension source fails, or a typed
+    /// [`tenferro_tensor::Error::BackendSource`] /
+    /// [`tenferro_tensor::Error::RuntimeStateSource`] from execution.
     pub fn execute_reads(
         &mut self,
         backend: &mut B,

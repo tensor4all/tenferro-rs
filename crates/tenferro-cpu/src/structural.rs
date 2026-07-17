@@ -252,7 +252,7 @@ pub(crate) fn validate_cpu_host_placement(
     ) {
         return Ok(());
     }
-    Err(crate::Error::backend_failure(
+    Err(crate::Error::runtime_state(
         op,
         format!(
             "CPU backend requires {role} host placement for {op}, got {:?}",
@@ -729,6 +729,11 @@ where
     })
 }
 
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `ShapeMismatch` when the input and
+/// output element counts differ, or `InvalidArgument` when checked shape
+/// products overflow `usize` or output storage cannot be constructed.
 pub fn typed_reshape<T: Clone + 'static>(
     tensor: &TypedTensor<T>,
     shape: &[usize],

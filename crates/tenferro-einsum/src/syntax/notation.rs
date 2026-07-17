@@ -12,7 +12,7 @@ const RESERVED_CHARS: &[char] = &[',', '-', '>', '(', ')', ' '];
 /// generate when the ASCII label space is exhausted.
 pub(crate) fn char_to_label(c: char) -> Result<u32> {
     if RESERVED_CHARS.contains(&c) {
-        return Err(Error::InvalidArgument(format!(
+        return Err(Error::invalid_subscripts(format!(
             "invalid einsum label character: {c:?} (U+{:04X}); reserved syntax character",
             c as u32
         )));
@@ -25,19 +25,19 @@ pub(crate) fn char_to_label(c: char) -> Result<u32> {
 /// Returns `(lhs, rhs)` where `lhs` is the input side and `rhs` is the output side.
 pub(crate) fn split_and_validate_notation(notation: &str) -> Result<(&str, &str)> {
     if notation.contains("...") {
-        return Err(Error::InvalidArgument(
-            "einsum ellipsis '...' is not supported yet".into(),
+        return Err(Error::invalid_subscripts(
+            "einsum ellipsis '...' is not supported yet",
         ));
     }
     if notation.contains('.') {
-        return Err(Error::InvalidArgument(
-            "einsum label '.' is reserved for ellipsis, which is not supported yet".into(),
+        return Err(Error::invalid_subscripts(
+            "einsum label '.' is reserved for ellipsis, which is not supported yet",
         ));
     }
 
     let parts: Vec<&str> = notation.split("->").collect();
     if parts.len() != 2 {
-        return Err(Error::InvalidArgument(format!(
+        return Err(Error::invalid_subscripts(format!(
             "einsum notation must contain exactly one '->', got: {notation}"
         )));
     }
@@ -52,7 +52,7 @@ pub(crate) fn split_and_validate_notation(notation: &str) -> Result<(&str, &str)
             ')' => {
                 depth -= 1;
                 if depth < 0 {
-                    return Err(Error::InvalidArgument(format!(
+                    return Err(Error::invalid_subscripts(format!(
                         "unmatched ')' in einsum notation: {notation}"
                     )));
                 }
@@ -61,7 +61,7 @@ pub(crate) fn split_and_validate_notation(notation: &str) -> Result<(&str, &str)
         }
     }
     if depth != 0 {
-        return Err(Error::InvalidArgument(format!(
+        return Err(Error::invalid_subscripts(format!(
             "unmatched '(' in einsum notation: {notation}"
         )));
     }

@@ -39,6 +39,11 @@ pub enum BroadcastError {
 /// assert_eq!(broadcast_shape(&[3, 1], &[1, 4]).unwrap(), vec![3, 4]);
 /// assert_eq!(broadcast_shape(&[], &[2, 3]).unwrap(), vec![2, 3]);
 /// ```
+///
+/// # Errors
+///
+/// Returns [`BroadcastError::IncompatibleBinary`] when a pair of aligned
+/// dimensions is incompatible.
 pub fn broadcast_shape(lhs: &[usize], rhs: &[usize]) -> Result<Vec<usize>, BroadcastError> {
     let rank = lhs.len().max(rhs.len());
     let mut out = Vec::with_capacity(rank);
@@ -71,6 +76,11 @@ pub fn broadcast_shape(lhs: &[usize], rhs: &[usize]) -> Result<Vec<usize>, Broad
 /// let shape = broadcast_shapes([&[3, 1][..], &[1, 4][..], &[3, 4][..]]).unwrap();
 /// assert_eq!(shape, vec![3, 4]);
 /// ```
+///
+/// # Errors
+///
+/// Returns [`BroadcastError::IncompatibleBinary`] when any pair of input
+/// shapes cannot be broadcast together.
 pub fn broadcast_shapes<'a>(
     shapes: impl IntoIterator<Item = &'a [usize]>,
 ) -> Result<Vec<usize>, BroadcastError> {
@@ -99,6 +109,11 @@ pub fn broadcast_shapes<'a>(
 /// assert_eq!(plan.source_shape, vec![3]);
 /// assert_eq!(plan.dims, vec![0]);
 /// ```
+///
+/// # Errors
+///
+/// Returns [`BroadcastError::RankTooLarge`] when `input` has higher rank than
+/// `output`, or [`BroadcastError::IncompatibleInput`] for incompatible axes.
 pub fn broadcast_input_plan(
     input: &[usize],
     output: &[usize],

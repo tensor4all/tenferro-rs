@@ -18,8 +18,9 @@ pub(crate) const DEFAULT_CUBE_DIM_X: u32 = 256;
 pub(crate) fn cube_count_for_len(len: usize) -> crate::Result<CubeCount> {
     let cubes = len.div_ceil(DEFAULT_CUBE_DIM_X as usize);
     let cubes = u32::try_from(cubes).map_err(|_| {
-        crate::Error::backend_failure(
+        crate::Error::invalid_argument(
             "cube_count_for_len",
+            "length",
             format!(
                 "1D CubeCL launch for {len} elements requires {cubes} cubes, \
                  which exceeds u32::MAX"
@@ -49,7 +50,7 @@ pub(crate) fn cubecl_buffer<'a, T: 'static>(
     op: &'static str,
 ) -> crate::Result<&'a CubeclBuffer<T>> {
     match tensor.buffer() {
-        Buffer::Host(_) => Err(crate::Error::backend_failure(
+        Buffer::Host(_) => Err(crate::Error::runtime_state(
             op,
             "expected CubeCL GPU tensor, got host tensor. \
                       Use upload_tensor() to transfer to GPU before calling GPU ops.",
@@ -58,7 +59,7 @@ pub(crate) fn cubecl_buffer<'a, T: 'static>(
             .as_any()
             .downcast_ref::<CubeclBuffer<T>>()
             .ok_or_else(|| {
-                crate::Error::backend_failure(
+                crate::Error::runtime_state(
                     op,
                     format!(
                         "expected CubeCL GPU tensor, got backend buffer family `{}`",
@@ -74,7 +75,7 @@ pub(crate) fn cubecl_view_buffer<'a, T: 'static>(
     op: &'static str,
 ) -> crate::Result<&'a CubeclBuffer<T>> {
     let buffer = view.backend_buffer().ok_or_else(|| {
-        crate::Error::backend_failure(
+        crate::Error::runtime_state(
             op,
             "expected CubeCL GPU tensor view, got host tensor. \
                       Use upload_tensor() to transfer to GPU before calling GPU ops.",
@@ -84,7 +85,7 @@ pub(crate) fn cubecl_view_buffer<'a, T: 'static>(
         .as_any()
         .downcast_ref::<CubeclBuffer<T>>()
         .ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::runtime_state(
                 op,
                 format!(
                     "expected CubeCL GPU tensor view, got backend buffer family `{}`",
@@ -99,7 +100,7 @@ pub(crate) fn cubecl_view_mut_buffer<'a, T: 'static>(
     op: &'static str,
 ) -> crate::Result<&'a CubeclBuffer<T>> {
     let buffer = view.backend_buffer().ok_or_else(|| {
-        crate::Error::backend_failure(
+        crate::Error::runtime_state(
             op,
             "expected CubeCL GPU tensor view, got host tensor. \
                       Use upload_tensor() to transfer to GPU before calling GPU ops.",
@@ -109,7 +110,7 @@ pub(crate) fn cubecl_view_mut_buffer<'a, T: 'static>(
         .as_any()
         .downcast_ref::<CubeclBuffer<T>>()
         .ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::runtime_state(
                 op,
                 format!(
                     "expected CubeCL GPU tensor view, got backend buffer family `{}`",
@@ -142,8 +143,9 @@ fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usi
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
         .ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::invalid_argument(
                 op,
+                "shape",
                 format!("shape product overflow for CubeCL tensor shape {shape:?}"),
             )
         })
@@ -157,7 +159,7 @@ fn validate_cubecl_buffer_len<T>(
     let expected_len = checked_shape_product(op, tensor.shape())?;
     let actual_len = buffer.element_len();
     if expected_len != actual_len {
-        return Err(crate::Error::backend_failure(
+        return Err(crate::Error::runtime_state(
             op,
             format!(
                 "expected shape product {expected_len} elements, actual CubeclBuffer::len {}",
@@ -372,7 +374,7 @@ fn ensure_placement_resident_on_runtime(
     op: &'static str,
 ) -> crate::Result<()> {
     if !matches!(&placement.memory_kind, MemoryKind::Device) {
-        return Err(crate::Error::backend_failure(
+        return Err(crate::Error::runtime_state(
             op,
             format!(
                 "expected GPU tensor placement, got {:?}",
@@ -387,7 +389,7 @@ fn ensure_placement_resident_on_runtime(
         {
             Ok(())
         }
-        Some(device) => Err(crate::Error::backend_failure(
+        Some(device) => Err(crate::Error::runtime_state(
             op,
             format!(
                 "expected GPU tensor resident on cuda:{}, got {:?}:{}",
@@ -396,7 +398,7 @@ fn ensure_placement_resident_on_runtime(
                 device.ordinal
             ),
         )),
-        None => Err(crate::Error::backend_failure(
+        None => Err(crate::Error::runtime_state(
             op,
             format!(
                 "expected GPU tensor resident on cuda:{}, got missing device metadata",
@@ -430,8 +432,9 @@ pub(crate) fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
 ) -> crate::Result<TypedTensor<T>> {
     let len = checked_shape_product("cubecl_alloc_output", shape)?;
     let byte_len = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
-        crate::Error::backend_failure(
+        crate::Error::invalid_argument(
             "cubecl_alloc_output",
+            "shape",
             format!("output byte length overflow for shape {shape:?}"),
         )
     })?;
@@ -520,8 +523,9 @@ where
     let buffer = cubecl_buffer(tensor, op)?;
     validate_cubecl_buffer_len(tensor, buffer, op)?;
     let requested_bytes = len.checked_mul(core::mem::size_of::<U>()).ok_or_else(|| {
-        crate::Error::backend_failure(
+        crate::Error::invalid_argument(
             op,
+            "length",
             format!("reinterpreted CubeCL array length overflow for len {len}"),
         )
     })?;
@@ -529,7 +533,7 @@ where
         .element_len()
         .checked_mul(core::mem::size_of::<T>())
         .ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::runtime_state(
                 op,
                 format!(
                     "CubeCL buffer byte length overflow for {} elements",
@@ -538,7 +542,7 @@ where
             )
         })?;
     if requested_bytes > available_bytes {
-        return Err(crate::Error::backend_failure(op, format!(
+        return Err(crate::Error::runtime_state(op, format!(
                 "reinterpreted CubeCL array needs {requested_bytes} bytes, buffer has {available_bytes}"
             )));
     }
@@ -951,15 +955,12 @@ pub(crate) fn ternary_dtype_mismatch(
     second: &Tensor,
     third: &Tensor,
 ) -> crate::Error {
-    crate::Error::backend_failure(
-        op,
-        format!(
-            "dtype mismatch first={:?} second={:?} third={:?}",
-            first.dtype(),
-            second.dtype(),
-            third.dtype()
-        ),
-    )
+    let (expected, actual) = if first.dtype() != second.dtype() {
+        (first.dtype(), second.dtype())
+    } else {
+        (first.dtype(), third.dtype())
+    };
+    crate::Error::dtype_mismatch(op, expected, actual)
 }
 
 pub(crate) fn ensure_same_shape(
@@ -1196,9 +1197,9 @@ macro_rules! dispatch_binary_float_int {
                     I64
                 )
             }
-            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => Err(
-                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", $lhs.dtype())),
-            ),
+            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
+                Err($crate::cubecl::unsupported_dtype(op, $lhs.dtype()))
+            }
             _ => Err(dtype_mismatch(op, $lhs, $rhs)),
         }
     }};

@@ -297,8 +297,8 @@ fn lapack_full_piv_lu_rejects_positive_getc2_info() {
         "factor_getc2 should not discard positive getc2 singularity info"
     );
     assert!(
-        factor.contains("matrix is singular"),
-        "positive getc2 info should be reported as a singular matrix"
+        factor.contains("crate::Error::Singular"),
+        "positive getc2 info should be reported through the typed singular source"
     );
 }
 

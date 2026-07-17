@@ -1,6 +1,6 @@
 use super::*;
 use crate::{Error, ErrorPhase};
-use tenferro_tensor::{ShapeMismatch, ValidationError};
+use tenferro_tensor::{ErrorKind, ShapeMismatch, ValidationError};
 
 #[derive(Clone, Debug)]
 struct AxisEqualityExtension;
@@ -348,6 +348,8 @@ fn ordered_ops_reject_complex_dtypes() {
 
     for (op, dtypes) in cases {
         let err = infer_output_dtype(&op, &dtypes).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
+        assert_eq!(err.phase(), Some(ErrorPhase::Compile));
         let message = err.to_string();
         assert!(message.contains("complex"), "{op:?}: {message}");
         assert!(message.contains("total order"), "{op:?}: {message}");

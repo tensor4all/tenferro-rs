@@ -13,46 +13,51 @@ use super::helpers::{
 pub(crate) trait LapackTriangularSolve:
     Clone + Copy + PartialEq + PoolScalar + Zero
 {
-    fn trtrs(
-        uplo: u8,
-        trans: u8,
-        diag: u8,
-        n: i32,
-        nrhs: i32,
-        a: &[Self],
-        lda: i32,
-        b: &mut [Self],
-        ldb: i32,
-        info: &mut i32,
-    );
+    fn trtrs(args: TrtrsArgs<'_, Self>);
 
-    fn trsm(
-        side: CBLAS_SIDE,
-        uplo: CBLAS_UPLO,
-        transa: CBLAS_TRANSPOSE,
-        diag: CBLAS_DIAG,
-        m: i32,
-        n: i32,
-        a: &[Self],
-        lda: i32,
-        b: &mut [Self],
-        ldb: i32,
-    );
+    fn trsm(args: TrsmArgs<'_, Self>);
+}
+
+pub(crate) struct TrtrsArgs<'a, T> {
+    uplo: u8,
+    trans: u8,
+    diag: u8,
+    n: i32,
+    nrhs: i32,
+    a: &'a [T],
+    lda: i32,
+    b: &'a mut [T],
+    ldb: i32,
+    info: &'a mut i32,
+}
+
+pub(crate) struct TrsmArgs<'a, T> {
+    side: CBLAS_SIDE,
+    uplo: CBLAS_UPLO,
+    transa: CBLAS_TRANSPOSE,
+    diag: CBLAS_DIAG,
+    m: i32,
+    n: i32,
+    a: &'a [T],
+    lda: i32,
+    b: &'a mut [T],
+    ldb: i32,
 }
 
 impl LapackTriangularSolve for f64 {
-    fn trtrs(
-        uplo: u8,
-        trans: u8,
-        diag: u8,
-        n: i32,
-        nrhs: i32,
-        a: &[Self],
-        lda: i32,
-        b: &mut [Self],
-        ldb: i32,
-        info: &mut i32,
-    ) {
+    fn trtrs(args: TrtrsArgs<'_, Self>) {
+        let TrtrsArgs {
+            uplo,
+            trans,
+            diag,
+            n,
+            nrhs,
+            a,
+            lda,
+            b,
+            ldb,
+            info,
+        } = args;
         // SAFETY: callers validate the triangular matrix and RHS shapes,
         // provide column-major `a`/`b` buffers matching `lda`/`ldb`, and live `info`.
         unsafe {
@@ -60,18 +65,19 @@ impl LapackTriangularSolve for f64 {
         }
     }
 
-    fn trsm(
-        side: CBLAS_SIDE,
-        uplo: CBLAS_UPLO,
-        transa: CBLAS_TRANSPOSE,
-        diag: CBLAS_DIAG,
-        m: i32,
-        n: i32,
-        a: &[Self],
-        lda: i32,
-        b: &mut [Self],
-        ldb: i32,
-    ) {
+    fn trsm(args: TrsmArgs<'_, Self>) {
+        let TrsmArgs {
+            side,
+            uplo,
+            transa,
+            diag,
+            m,
+            n,
+            a,
+            lda,
+            b,
+            ldb,
+        } = args;
         // SAFETY: callers validate dimensions and provide compact column-major
         // `a` and writable `b` buffers with matching leading dimensions.
         unsafe {
@@ -94,18 +100,19 @@ impl LapackTriangularSolve for f64 {
 }
 
 impl LapackTriangularSolve for f32 {
-    fn trtrs(
-        uplo: u8,
-        trans: u8,
-        diag: u8,
-        n: i32,
-        nrhs: i32,
-        a: &[Self],
-        lda: i32,
-        b: &mut [Self],
-        ldb: i32,
-        info: &mut i32,
-    ) {
+    fn trtrs(args: TrtrsArgs<'_, Self>) {
+        let TrtrsArgs {
+            uplo,
+            trans,
+            diag,
+            n,
+            nrhs,
+            a,
+            lda,
+            b,
+            ldb,
+            info,
+        } = args;
         // SAFETY: callers validate the triangular matrix and RHS shapes,
         // provide column-major `a`/`b` buffers matching `lda`/`ldb`, and live `info`.
         unsafe {
@@ -113,18 +120,19 @@ impl LapackTriangularSolve for f32 {
         }
     }
 
-    fn trsm(
-        side: CBLAS_SIDE,
-        uplo: CBLAS_UPLO,
-        transa: CBLAS_TRANSPOSE,
-        diag: CBLAS_DIAG,
-        m: i32,
-        n: i32,
-        a: &[Self],
-        lda: i32,
-        b: &mut [Self],
-        ldb: i32,
-    ) {
+    fn trsm(args: TrsmArgs<'_, Self>) {
+        let TrsmArgs {
+            side,
+            uplo,
+            transa,
+            diag,
+            m,
+            n,
+            a,
+            lda,
+            b,
+            ldb,
+        } = args;
         // SAFETY: callers validate dimensions and provide compact column-major
         // `a` and writable `b` buffers with matching leading dimensions.
         unsafe {
@@ -147,18 +155,19 @@ impl LapackTriangularSolve for f32 {
 }
 
 impl LapackTriangularSolve for Complex32 {
-    fn trtrs(
-        uplo: u8,
-        trans: u8,
-        diag: u8,
-        n: i32,
-        nrhs: i32,
-        a: &[Self],
-        lda: i32,
-        b: &mut [Self],
-        ldb: i32,
-        info: &mut i32,
-    ) {
+    fn trtrs(args: TrtrsArgs<'_, Self>) {
+        let TrtrsArgs {
+            uplo,
+            trans,
+            diag,
+            n,
+            nrhs,
+            a,
+            lda,
+            b,
+            ldb,
+            info,
+        } = args;
         // SAFETY: callers validate the triangular matrix and RHS shapes,
         // provide column-major `a`/`b` buffers matching `lda`/`ldb`, and live `info`.
         unsafe {
@@ -166,18 +175,19 @@ impl LapackTriangularSolve for Complex32 {
         }
     }
 
-    fn trsm(
-        side: CBLAS_SIDE,
-        uplo: CBLAS_UPLO,
-        transa: CBLAS_TRANSPOSE,
-        diag: CBLAS_DIAG,
-        m: i32,
-        n: i32,
-        a: &[Self],
-        lda: i32,
-        b: &mut [Self],
-        ldb: i32,
-    ) {
+    fn trsm(args: TrsmArgs<'_, Self>) {
+        let TrsmArgs {
+            side,
+            uplo,
+            transa,
+            diag,
+            m,
+            n,
+            a,
+            lda,
+            b,
+            ldb,
+        } = args;
         let alpha = Complex32::new(1.0, 0.0);
         // SAFETY: callers validate dimensions and provide compact column-major
         // `a` and writable `b` buffers with matching leading dimensions.
@@ -201,18 +211,19 @@ impl LapackTriangularSolve for Complex32 {
 }
 
 impl LapackTriangularSolve for Complex64 {
-    fn trtrs(
-        uplo: u8,
-        trans: u8,
-        diag: u8,
-        n: i32,
-        nrhs: i32,
-        a: &[Self],
-        lda: i32,
-        b: &mut [Self],
-        ldb: i32,
-        info: &mut i32,
-    ) {
+    fn trtrs(args: TrtrsArgs<'_, Self>) {
+        let TrtrsArgs {
+            uplo,
+            trans,
+            diag,
+            n,
+            nrhs,
+            a,
+            lda,
+            b,
+            ldb,
+            info,
+        } = args;
         // SAFETY: callers validate the triangular matrix and RHS shapes,
         // provide column-major `a`/`b` buffers matching `lda`/`ldb`, and live `info`.
         unsafe {
@@ -220,18 +231,19 @@ impl LapackTriangularSolve for Complex64 {
         }
     }
 
-    fn trsm(
-        side: CBLAS_SIDE,
-        uplo: CBLAS_UPLO,
-        transa: CBLAS_TRANSPOSE,
-        diag: CBLAS_DIAG,
-        m: i32,
-        n: i32,
-        a: &[Self],
-        lda: i32,
-        b: &mut [Self],
-        ldb: i32,
-    ) {
+    fn trsm(args: TrsmArgs<'_, Self>) {
+        let TrsmArgs {
+            side,
+            uplo,
+            transa,
+            diag,
+            m,
+            n,
+            a,
+            lda,
+            b,
+            ldb,
+        } = args;
         let alpha = Complex64::new(1.0, 0.0);
         // SAFETY: callers validate dimensions and provide compact column-major
         // `a` and writable `b` buffers with matching leading dimensions.
@@ -290,9 +302,11 @@ fn validate_non_unit_diagonal<T: LapackTriangularSolve>(
     let data = a.host_data()?;
     for idx in 0..n {
         if data[idx + idx * n] == T::zero() {
-            return Err(tenferro_tensor::Error::backend_failure(
+            return Err(crate::error::into_tensor_error(
                 "triangular_solve",
-                "matrix is singular",
+                crate::Error::Singular {
+                    op: "triangular_solve",
+                },
             ));
         }
     }
@@ -309,27 +323,27 @@ fn solve_left<T: LapackTriangularSolve>(
     let n = square_matrix_dim(a, "triangular_solve")?;
     let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
     if b_rows != n {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op: "triangular_solve",
-            lhs: vec![n],
-            rhs: vec![b_rows],
-        });
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "triangular_solve",
+            vec![n],
+            vec![b_rows],
+        ));
     }
 
     let mut rhs = b.host_data()?.to_vec();
     let mut info = 0;
-    T::trtrs(
-        if lower { b'L' } else { b'U' },
-        if transpose_a { b'T' } else { b'N' },
-        if unit_diagonal { b'U' } else { b'N' },
-        dim_i32(n, "triangular_solve")?,
-        dim_i32(b_cols, "triangular_solve")?,
-        a.host_data()?,
-        dim_i32(n, "triangular_solve")?,
-        &mut rhs,
-        dim_i32(n, "triangular_solve")?,
-        &mut info,
-    );
+    T::trtrs(TrtrsArgs {
+        uplo: if lower { b'L' } else { b'U' },
+        trans: if transpose_a { b'T' } else { b'N' },
+        diag: if unit_diagonal { b'U' } else { b'N' },
+        n: dim_i32(n, "triangular_solve")?,
+        nrhs: dim_i32(b_cols, "triangular_solve")?,
+        a: a.host_data()?,
+        lda: dim_i32(n, "triangular_solve")?,
+        b: &mut rhs,
+        ldb: dim_i32(n, "triangular_solve")?,
+        info: &mut info,
+    });
     check_lapack_info("triangular_solve", "trtrs", info)?;
     tensor_from_vec_with_template(vec![n, b_cols], rhs, b)
 }
@@ -344,27 +358,27 @@ fn solve_right<T: LapackTriangularSolve>(
     let n = square_matrix_dim(a, "triangular_solve")?;
     let (b_rows, b_cols) = matrix_dims(b, "triangular_solve")?;
     if b_cols != n {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op: "triangular_solve",
-            lhs: vec![n],
-            rhs: vec![b_cols],
-        });
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "triangular_solve",
+            vec![n],
+            vec![b_cols],
+        ));
     }
 
     validate_non_unit_diagonal(a, n, unit_diagonal)?;
     let mut rhs = b.host_data()?.to_vec();
-    T::trsm(
-        CBLAS_SIDE::CblasRight,
-        cblas_uplo(lower),
-        cblas_transpose(transpose_a),
-        cblas_diag(unit_diagonal),
-        dim_i32(b_rows, "triangular_solve")?,
-        dim_i32(n, "triangular_solve")?,
-        a.host_data()?,
-        dim_i32(n, "triangular_solve")?,
-        &mut rhs,
-        dim_i32(b_rows, "triangular_solve")?,
-    );
+    T::trsm(TrsmArgs {
+        side: CBLAS_SIDE::CblasRight,
+        uplo: cblas_uplo(lower),
+        transa: cblas_transpose(transpose_a),
+        diag: cblas_diag(unit_diagonal),
+        m: dim_i32(b_rows, "triangular_solve")?,
+        n: dim_i32(n, "triangular_solve")?,
+        a: a.host_data()?,
+        lda: dim_i32(n, "triangular_solve")?,
+        b: &mut rhs,
+        ldb: dim_i32(b_rows, "triangular_solve")?,
+    });
     tensor_from_vec_with_template(vec![b_rows, n], rhs, b)
 }
 
@@ -398,18 +412,18 @@ pub(crate) fn triangular_solve<T: LapackTriangularSolve>(
         let (b_rows, b_cols, b_batch_shape) = matrix_core_and_batch_result(b, "triangular_solve")?;
         let rhs_core_dim = if left_side { b_rows } else { b_cols };
         if rhs_core_dim != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "triangular_solve",
-                lhs: vec![n],
-                rhs: vec![rhs_core_dim],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "triangular_solve",
+                vec![n],
+                vec![rhs_core_dim],
+            ));
         }
         if a_batch_shape != b_batch_shape {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "triangular_solve",
-                lhs: a_batch_shape.to_vec(),
-                rhs: b_batch_shape.to_vec(),
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "triangular_solve",
+                a_batch_shape.to_vec(),
+                b_batch_shape.to_vec(),
+            ));
         }
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b);
     }

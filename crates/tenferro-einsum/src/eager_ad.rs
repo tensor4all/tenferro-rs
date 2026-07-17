@@ -1,6 +1,7 @@
 //! EagerTensor einsum extension API.
 
 use std::collections::hash_map::DefaultHasher;
+use std::error::Error as StdError;
 use std::hash::{Hash, Hasher};
 use std::mem::size_of;
 use std::sync::Arc;
@@ -10,14 +11,13 @@ use computegraph::graph::GraphBuilder;
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{ValueKey, ValueRef};
-use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::{adopt_untracked_eager_value, apply_eager};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::ExtensionCacheKey;
-use tenferro_tensor::TensorFusion;
+use tenferro_runtime::{ErrorPhase, ExtensionCacheKey};
+use tenferro_tensor::{ErrorKind, ShapeMismatch, TensorFusion, ValidationError, ValidationKind};
 
 use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
 use crate::builder::build_einsum_graph;
@@ -30,11 +30,28 @@ use crate::optimize::{
     default_auto_options, hash_einsum_plan_spec, plan_specs_equal, resolve_plan_spec,
     EinsumPlanSpec,
 };
-use crate::{parse_einsum_subscripts, EinsumSubscripts, Subscripts, TensorDotAxes};
+use crate::{parse_einsum_subscripts, EinsumSubscripts, Error, Result, Subscripts, TensorDotAxes};
 
 /// Eager einsum extension methods for slices or arrays of [`EagerTensor`] refs.
 pub trait EagerEinsumExt {
+    /// Execute an einsum from string notation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] for rank/shape/dtype mismatches, or
+    /// [`Error::Planning`] / [`Error::Runtime`] for contraction planning and
+    /// execution failures.
     fn einsum(&self, subscripts: &str) -> Result<EagerTensor>;
+
+    /// Execute an einsum from parsed integer labels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for rank/shape/dtype mismatches,
+    /// [`Error::Planning`] for an invalid contraction plan, or
+    /// [`Error::Runtime`] for extension registration or backend execution
+    /// failures.
     fn einsum_subscripts(&self, subscripts: &EinsumSubscripts) -> Result<EagerTensor>;
 }
 
@@ -60,6 +77,13 @@ impl<const N: usize> EagerEinsumExt for [&EagerTensor; N] {
 
 /// Eager tensor contraction-sugar methods.
 pub trait EagerTensorEinsumExt {
+    /// Contract two eager tensors over the requested axes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds`, `DuplicateAxis`,
+    /// `RankMismatch`, or `ShapeMismatch` for invalid axes/shapes, or
+    /// [`Error::Runtime`] for backend execution failures.
     fn tensordot(&self, rhs: &EagerTensor, axes: TensorDotAxes<'_>) -> Result<EagerTensor>;
 }
 
@@ -90,11 +114,17 @@ impl EagerTensorEinsumExt for EagerTensor {
 /// ).unwrap();
 /// let out = [&a, &b].einsum("ij,jk->ik")?;
 /// assert_eq!(out.shape(), &[2, 4]);
-/// # Ok::<(), tenferro_ad::error::Error>(())
+/// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidSubscripts`] for malformed notation,
+/// [`Error::Validation`] for input count/rank/shape/dtype mismatches,
+/// [`Error::Planning`] when no contraction path is valid, or [`Error::Runtime`]
+/// for extension registration and backend execution failures.
 pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> {
-    let subscripts = parse_einsum_subscripts(subscripts)
-        .map_err(|err| Error::ContractionError(err.to_string()))?;
+    let subscripts = parse_einsum_subscripts(subscripts)?;
     einsum_subscripts(inputs, &subscripts)
 }
 
@@ -120,8 +150,14 @@ pub fn einsum(inputs: &[&EagerTensor], subscripts: &str) -> Result<EagerTensor> 
 /// let subscripts = parse_einsum_subscripts("ij,jk->ik").unwrap();
 /// let out = [&a, &b].einsum_subscripts(&subscripts)?;
 /// assert_eq!(out.shape(), &[2, 4]);
-/// # Ok::<(), tenferro_ad::error::Error>(())
+/// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] for input count/rank/shape/dtype mismatches,
+/// [`Error::Planning`] when no contraction path is valid, or [`Error::Runtime`]
+/// for extension registration and backend execution failures.
 pub fn einsum_subscripts(
     inputs: &[&EagerTensor],
     subscripts: &EinsumSubscripts,
@@ -143,7 +179,7 @@ pub fn einsum_subscripts(
         first
             .runtime()
             .register_extension(register_runtime)
-            .map_err(|err| Error::Internal(err.to_string()))?;
+            .map_err(|error| runtime_extension_error("einsum", ErrorKind::RuntimeState, error))?;
     }
 
     let op = Arc::new(EinsumExtensionOp::with_output_shape_hint(
@@ -152,9 +188,11 @@ pub fn einsum_subscripts(
         EinsumPlanSpec::Auto(default_auto_options()),
     ));
     let mut outputs = apply_eager(op, inputs)?;
-    outputs
-        .pop()
-        .ok_or_else(|| Error::Internal("einsum extension produced no eager output".to_string()))
+    outputs.pop().ok_or_else(|| {
+        Error::Runtime(tenferro_runtime::Error::MissingInput(
+            "einsum extension produced no eager output".into(),
+        ))
+    })
 }
 
 fn try_direct_binary_dot_general(
@@ -175,8 +213,12 @@ fn try_direct_binary_dot_general(
         try_build_exact_output_binary_dot_plan(lhs_labels, rhs_labels, &subscripts.output)
     {
         return Some(match plan.operand_order {
-            BinaryDotOperandOrder::Original => inputs[0].dot_general(inputs[1], plan.config),
-            BinaryDotOperandOrder::Swapped => inputs[1].dot_general(inputs[0], plan.config),
+            BinaryDotOperandOrder::Original => inputs[0]
+                .dot_general(inputs[1], plan.config)
+                .map_err(Error::Runtime),
+            BinaryDotOperandOrder::Swapped => inputs[1]
+                .dot_general(inputs[0], plan.config)
+                .map_err(Error::Runtime),
         });
     }
     None
@@ -222,7 +264,7 @@ fn try_whole_program_untracked(
     let subs = Subscripts::from(subscripts);
     let tensor_arcs = inputs
         .iter()
-        .map(|tensor| tensor.materialized())
+        .map(|tensor| tensor.materialized().map_err(Error::Runtime))
         .collect::<Result<Vec<_>>>()?;
     let tensors: Vec<_> = tensor_arcs.iter().map(|tensor| tensor.as_ref()).collect();
     let result = runtime.with_backend_mut(|backend| {
@@ -269,11 +311,17 @@ fn einsum_whole_program_untracked(
     tree: &crate::ContractionTree,
 ) -> Result<EagerTensor> {
     let first = inputs.first().ok_or_else(|| {
-        Error::ContractionError("einsum requires at least one input tensor".into())
+        Error::invalid_argument(
+            "einsum",
+            "inputs",
+            "einsum requires at least one input tensor",
+        )
     })?;
     if inputs.iter().any(|tensor| tensor.tracks_grad()) {
-        return Err(Error::Internal(
-            "whole-program eager einsum requires untracked inputs".into(),
+        return Err(Error::invalid_argument(
+            "einsum",
+            "inputs",
+            "whole-program eager einsum requires untracked inputs",
         ));
     }
     let runtime = first.runtime();
@@ -281,19 +329,21 @@ fn einsum_whole_program_untracked(
         .iter()
         .any(|tensor| !Arc::ptr_eq(tensor.runtime(), runtime))
     {
-        return Err(Error::Internal(
-            "whole-program eager einsum requires inputs from one runtime".into(),
+        return Err(Error::invalid_argument(
+            "einsum",
+            "inputs",
+            "whole-program eager einsum requires inputs from one runtime",
         ));
     }
     let tensor_arcs = inputs
         .iter()
-        .map(|tensor| tensor.materialized())
+        .map(|tensor| tensor.materialized().map_err(Error::Runtime))
         .collect::<Result<Vec<_>>>()?;
     let tensors: Vec<_> = tensor_arcs.iter().map(|tensor| tensor.as_ref()).collect();
     let result = runtime.with_backend_mut(|backend| {
         crate::eager::eager_einsum_with_tree(backend, &tensors, tree)
     })??;
-    EagerTensor::from_tensor_in(result, runtime.clone())
+    EagerTensor::from_tensor_in(result, runtime.clone()).map_err(Error::Runtime)
 }
 
 fn try_expand_eager_einsum(
@@ -391,8 +441,7 @@ fn cached_expanded_eager_program(
             }
         }
 
-        let tree = resolve_plan_spec(plan_spec, subs, shape_refs)
-            .map_err(|err| Error::ContractionError(err.to_string()))?;
+        let tree = resolve_plan_spec(plan_spec, subs, shape_refs)?;
         let program = Arc::new(build_expanded_eager_program(&tree, shapes)?);
         let key_data = ExpandedEagerProgramCacheKeyData::new(subscripts, shapes, plan_spec);
         let retained_bytes = saturating_sum([
@@ -460,12 +509,11 @@ fn build_expanded_eager_program(
         input_vals.push(ValueRef::Local(local));
     }
 
-    let result_ref = build_einsum_graph(&mut builder, tree, &input_vals, shapes)
-        .map_err(|err| Error::ContractionError(err.to_string()))?;
+    let result_ref = build_einsum_graph(&mut builder, tree, &input_vals, shapes)?;
     let ValueRef::Local(result_local) = result_ref else {
-        return Err(Error::Internal(
+        return Err(Error::Runtime(tenferro_runtime::Error::Internal(
             "expanded eager einsum returned an external value".into(),
-        ));
+        )));
     };
     builder.set_outputs(vec![result_local]);
     let graph = Arc::new(builder.build());
@@ -479,7 +527,7 @@ fn build_expanded_eager_program(
         .zip(graph.inputs.iter())
         .map(|(&slot, key)| {
             let ValueKey::Input(TensorInputKey::User { id }) = key else {
-                return Err(Error::Internal(format!(
+                return Err(runtime_internal(format!(
                     "expanded eager einsum saw unexpected input key: {key:?}"
                 )));
             };
@@ -500,7 +548,7 @@ fn execute_eager_einsum_program(
     let mut slots: Vec<Option<EagerTensor>> = vec![None; program.compiled.n_slots];
     for &(slot, input_idx) in &program.input_slots {
         let tensor = inputs.get(input_idx).ok_or_else(|| {
-            Error::Internal(format!(
+            runtime_missing(format!(
                 "expanded eager einsum input {input_idx} is missing"
             ))
         })?;
@@ -522,7 +570,7 @@ fn execute_eager_einsum_program(
 
         let instr = &program.compiled.instructions[instruction_idx];
         if instr.outputs.len() != 1 {
-            return Err(Error::Internal(format!(
+            return Err(runtime_internal(format!(
                 "expanded eager einsum expected single-output op, got {} outputs",
                 instr.outputs.len()
             )));
@@ -536,7 +584,7 @@ fn execute_eager_einsum_program(
                     .and_then(Option::as_ref)
                     .cloned()
                     .ok_or_else(|| {
-                        Error::Internal(format!(
+                        runtime_missing(format!(
                             "expanded eager einsum missing value for slot {slot}"
                         ))
                     })
@@ -550,7 +598,7 @@ fn execute_eager_einsum_program(
     }
 
     let [output_slot] = program.compiled.output_slots.as_slice() else {
-        return Err(Error::Internal(format!(
+        return Err(runtime_internal(format!(
             "expanded eager einsum expected one graph output, got {}",
             program.compiled.output_slots.len()
         )));
@@ -559,7 +607,7 @@ fn execute_eager_einsum_program(
         .get_mut(*output_slot)
         .and_then(Option::take)
         .map(Some)
-        .ok_or_else(|| Error::Internal("expanded eager einsum output slot is missing".into()))
+        .ok_or_else(|| runtime_missing("expanded eager einsum output slot is missing"))
 }
 
 fn expanded_eager_program_retained_bytes(program: &ExpandedEagerProgram) -> usize {
@@ -699,10 +747,11 @@ fn backend_broadcast_multiply_untracked(
     rhs_dims: &[usize],
 ) -> Result<Option<EagerTensor>> {
     if !Arc::ptr_eq(lhs.runtime(), rhs.runtime()) {
-        return Err(Error::ContextMismatch {
+        return Err(tenferro_runtime::Error::ContextMismatch {
             lhs: lhs.ctx_id(),
             rhs: rhs.ctx_id(),
-        });
+        }
+        .into());
     }
     if lhs.tracks_grad() || rhs.tracks_grad() {
         return Ok(None);
@@ -736,15 +785,20 @@ fn eval_shape_exprs(
         .iter()
         .map(|tensor| tensor.shape())
         .collect::<Vec<_>>();
-    DimExpr::eval_all(shape, &input_shapes)
-        .map_err(|err| Error::Internal(format!("invalid eager einsum shape expression: {err}")))
+    DimExpr::eval_all(shape, &input_shapes).map_err(|error| {
+        runtime_extension_error(
+            "einsum",
+            ErrorKind::Validation(ValidationKind::InvalidArgument),
+            error,
+        )
+    })
 }
 
 fn slot_tensor(slots: &[Option<EagerTensor>], slot: usize) -> Result<&EagerTensor> {
     slots.get(slot).and_then(Option::as_ref).ok_or_else(|| {
-        Error::Internal(format!(
+        Error::Runtime(tenferro_runtime::Error::MissingInput(format!(
             "expanded eager einsum missing value for slot {slot}"
-        ))
+        )))
     })
 }
 
@@ -753,34 +807,47 @@ fn infer_eager_output_shape(
     inputs: &[&EagerTensor],
 ) -> Result<Vec<tenferro_runtime::SymDim>> {
     if inputs.is_empty() {
-        return Err(Error::ContractionError(
-            "einsum requires at least one input tensor".into(),
+        return Err(Error::invalid_argument(
+            "einsum",
+            "inputs",
+            "einsum requires at least one input tensor",
         ));
     }
     if subscripts.inputs.len() != inputs.len() {
-        return Err(Error::ContractionError(format!(
-            "einsum subscripts expect {} inputs, got {}",
-            subscripts.inputs.len(),
-            inputs.len()
-        )));
+        return Err(Error::invalid_argument(
+            "einsum",
+            "inputs",
+            format!(
+                "einsum subscripts expect {} inputs, got {}",
+                subscripts.inputs.len(),
+                inputs.len()
+            ),
+        ));
     }
 
     let mut label_dims = std::collections::HashMap::new();
     for (labels, tensor) in subscripts.inputs.iter().zip(inputs.iter()) {
         let shape = tensor.shape();
         if labels.len() != shape.len() {
-            return Err(Error::ContractionError(format!(
-                "einsum input rank mismatch: labels={}, shape={}",
-                labels.len(),
-                shape.len()
-            )));
+            return Err(Error::validation(
+                "einsum",
+                ValidationError::RankMismatch {
+                    expected: labels.len(),
+                    actual: shape.len(),
+                },
+            ));
         }
         for (&label, &dim) in labels.iter().zip(shape.iter()) {
             if let Some(existing) = label_dims.insert(label, dim) {
                 if existing != dim {
-                    return Err(Error::ContractionError(format!(
-                        "einsum label {label} has inconsistent dimensions {existing} and {dim}"
-                    )));
+                    return Err(Error::validation(
+                        "einsum",
+                        ShapeMismatch::ExpectedActual {
+                            expected: tenferro_tensor::ShapeVec::from_vec(vec![existing]),
+                            actual: tenferro_tensor::ShapeVec::from_vec(vec![dim]),
+                        }
+                        .into(),
+                    ));
                 }
             }
         }
@@ -795,12 +862,35 @@ fn infer_eager_output_shape(
                 .copied()
                 .map(tenferro_runtime::SymDim::from)
                 .ok_or_else(|| {
-                    Error::ContractionError(format!(
-                        "einsum output label {label} is missing from input labels"
-                    ))
+                    Error::invalid_argument(
+                        "einsum",
+                        "output",
+                        format!("einsum output label {label} is missing from input labels"),
+                    )
                 })
         })
         .collect()
+}
+
+fn runtime_extension_error<E>(op: &'static str, kind: ErrorKind, source: E) -> Error
+where
+    E: StdError + Send + Sync + 'static,
+{
+    Error::Runtime(tenferro_runtime::Error::extension(
+        op,
+        ErrorPhase::Execution,
+        EINSUM_EXTENSION_FAMILY_ID,
+        kind,
+        source,
+    ))
+}
+
+fn runtime_internal(message: impl Into<String>) -> Error {
+    Error::Runtime(tenferro_runtime::Error::Internal(message.into()))
+}
+
+fn runtime_missing(message: impl Into<String>) -> Error {
+    Error::Runtime(tenferro_runtime::Error::MissingInput(message.into()))
 }
 
 /// Execute a NumPy-style tensor contraction on [`EagerTensor`] values.
@@ -829,6 +919,12 @@ fn infer_eager_output_shape(
 ///
 /// assert_eq!(out.shape(), &[2, 4]);
 /// ```
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] with `AxisOutOfBounds`, `DuplicateAxis`,
+/// `RankMismatch`, or `ShapeMismatch` for invalid contraction axes and shapes,
+/// or [`Error::Runtime`] for eager backend execution failures.
 pub fn tensordot(
     lhs: &EagerTensor,
     rhs: &EagerTensor,
@@ -836,7 +932,7 @@ pub fn tensordot(
 ) -> Result<EagerTensor> {
     let config = crate::tensordot::dot_general_config(axes, lhs.shape().len(), rhs.shape().len())?;
     crate::tensordot::validate_concrete_contract_dims(lhs.shape(), rhs.shape(), &config)?;
-    lhs.dot_general(rhs, config)
+    lhs.dot_general(rhs, config).map_err(Error::Runtime)
 }
 
 #[cfg(test)]

@@ -25,7 +25,17 @@ fn apply_eager_rejects_empty_input_list() {
         Err(err) => err,
     };
 
-    assert!(err.to_string().contains("requires at least one input"));
+    assert!(matches!(
+        err,
+        RuntimeError::Validation {
+            phase: ErrorPhase::Execution,
+            source: ValidationError::InvalidArgument {
+                argument: "inputs",
+                ..
+            },
+            ..
+        }
+    ));
 }
 
 #[test]

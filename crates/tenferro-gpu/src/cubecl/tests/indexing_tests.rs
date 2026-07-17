@@ -7,9 +7,10 @@ use tenferro_tensor::{
 };
 
 use super::{
-    assert_backend_failure, assert_error_parity, assert_tensor_close, assert_validation_kind,
-    cpu_backend, diagonal_scatter_config, download, gpu_backend, simple_gather_config, tensor_bool,
-    tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
+    assert_error_parity, assert_runtime_state, assert_tensor_close, assert_unsupported,
+    assert_validation_kind, cpu_backend, diagonal_scatter_config, download, gpu_backend,
+    simple_gather_config, tensor_bool, tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64,
+    upload,
 };
 use tenferro_tensor::{ValidationError, ValidationKind};
 
@@ -464,7 +465,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     let err = gpu
         .dynamic_slice(&empty_operand, &wrong_starts, &[0])
         .unwrap_err();
-    assert_backend_failure(&err, "dynamic_slice", &wrong_device_message);
+    assert_runtime_state(&err, "dynamic_slice", &wrong_device_message);
 
     let empty_bool = upload(&gpu, &tensor_bool(vec![0], vec![]));
     let wrong_float_starts = crate::Tensor::F32(with_cuda_ordinal(
@@ -477,7 +478,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     let err = gpu
         .dynamic_slice(&empty_bool, &wrong_float_starts, &[0])
         .unwrap_err();
-    assert_backend_failure(&err, "dynamic_slice", &wrong_device_message);
+    assert_runtime_state(&err, "dynamic_slice", &wrong_device_message);
 
     let malformed_bool = crate::Tensor::Bool(
         TypedTensor::from_buffer_col_major(
@@ -500,7 +501,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
             &[0],
         )
         .unwrap_err();
-    assert_backend_failure(
+    assert_runtime_state(
         &err,
         "dynamic_slice",
         "expected CubeCL GPU tensor, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.",
@@ -517,28 +518,28 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     let err = gpu
         .gather(&gather_operand, &wrong_indices, &simple_gather_config())
         .unwrap_err();
-    assert_backend_failure(&err, "gather", &wrong_device_message);
+    assert_runtime_state(&err, "gather", &wrong_device_message);
 
     let host_updates = tensor_f64(vec![0], vec![]);
     let host_message = "expected CubeCL GPU tensor, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.".to_string();
     let err = gpu
         .scatter(&empty_operand, &indices, &host_updates, &config)
         .unwrap_err();
-    assert_backend_failure(&err, "scatter", &host_message);
+    assert_runtime_state(&err, "scatter", &host_message);
 
     let operand = upload(&gpu, &tensor_f64(vec![2], vec![1.0, 2.0]));
     let updates = upload(&gpu, &tensor_f64(vec![0], vec![]));
     let err = gpu
         .scatter(&operand, &wrong_indices, &updates, &config)
         .unwrap_err();
-    assert_backend_failure(&err, "scatter", &wrong_device_message);
+    assert_runtime_state(&err, "scatter", &wrong_device_message);
 
     let complex_operand = upload(&gpu, &tensor_c64(vec![0], vec![]));
     let complex_updates = upload(&gpu, &tensor_c64(vec![0], vec![]));
     let err = gpu
         .scatter(&complex_operand, &wrong_indices, &complex_updates, &config)
         .unwrap_err();
-    assert_backend_failure(&err, "scatter", &wrong_device_message);
+    assert_runtime_state(&err, "scatter", &wrong_device_message);
     let nonempty_complex_operand = upload(
         &gpu,
         &tensor_c64(vec![2], vec![Complex64::new(1.0, 2.0); 2]),
@@ -551,7 +552,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
             &config,
         )
         .unwrap_err();
-    assert_backend_failure(&err, "scatter", &wrong_device_message);
+    assert_runtime_state(&err, "scatter", &wrong_device_message);
 
     let malformed_updates = crate::Tensor::F64(
         TypedTensor::from_buffer_col_major(
@@ -570,7 +571,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
     let err = gpu
         .scatter(&empty_operand, &indices, &malformed_updates, &config)
         .unwrap_err();
-    assert_backend_failure(&err, "scatter", &host_message);
+    assert_runtime_state(&err, "scatter", &host_message);
 }
 
 #[test]
@@ -767,7 +768,7 @@ fn cuda_bool_indexing_ops_match_cpu() {
     let expected_scatter_error = cpu
         .scatter(&input, &scatter_indices, &updates, &config)
         .unwrap_err();
-    assert_backend_failure(
+    assert_unsupported(
         &expected_scatter_error,
         "scatter",
         "Bool data tensors are not supported by additive scatter",
@@ -777,7 +778,7 @@ fn cuda_bool_indexing_ops_match_cpu() {
     let actual = gpu
         .scatter(&gi, &gpu_scatter_indices, &gpu_updates, &config)
         .unwrap_err();
-    assert_backend_failure(
+    assert_unsupported(
         &actual,
         "scatter",
         "Bool data tensors are not supported by additive scatter",

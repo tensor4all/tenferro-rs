@@ -302,9 +302,9 @@ impl ExtensionOp for EinsumExtensionOp {
         let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
         let subs = Subscripts::from(&self.subscripts);
         let tree = resolve_plan_spec(self.plan_spec(), &subs, &shape_refs)
-            .map_err(|err| ExtensionLoweringError::new(err.to_string()))?;
+            .map_err(ExtensionLoweringError::from_source)?;
         let output = build_einsum_graph(builder, &tree, inputs, &shapes)
-            .map_err(|err| ExtensionLoweringError::new(err.to_string()))?;
+            .map_err(ExtensionLoweringError::from_source)?;
         Ok(Some(vec![output]))
     }
 }
@@ -332,6 +332,12 @@ fn concrete_sym_shape_slices(input_shapes: &[&[SymDim]]) -> Option<Vec<Vec<usize
 
 /// Return the explicit einsum extension AD rule set.
 #[cfg(feature = "autodiff")]
+///
+/// # Errors
+///
+/// Returns [`ExtensionRegistryError::MalformedFamilyId`] if the einsum family
+/// identifier is invalid, or [`ExtensionRegistryError::DuplicateRule`] if a
+/// rule for the family and role is already present.
 pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
     ExtensionRuleSet::new()
         .with_linearize(Arc::new(EinsumAdRule))?
@@ -987,14 +993,14 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
     let cached = caches
         .get_mut::<CachedRuntimeExecProgram<B::RuntimeCache>>(&key)
         .ok_or_else(|| {
-            tenferro_tensor::Error::backend_failure(
+            tenferro_tensor::Error::runtime_state(
                 "einsum_extension",
                 "runtime exec program cache entry missing after insertion",
             )
         })?;
     let key_data = &cached.key_data;
     if !key_data.matches_runtime_exec_program(op, inputs, &shapes, optimizer_fingerprint) {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(tenferro_tensor::Error::runtime_state(
             "einsum_extension",
             "runtime exec program cache hash collision was not replaced",
         ));
@@ -1008,7 +1014,7 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
     )
     .map_err(|err| tenferro_tensor::Error::backend_source("einsum_extension", err))?;
     if outputs.len() != 1 {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(tenferro_tensor::Error::runtime_state(
             "einsum_extension",
             format!("expected 1 output, got {}", outputs.len()),
         ));
@@ -1221,7 +1227,7 @@ fn build_runtime_exec_program<B: TensorBackend>(
     let result_local = match result_ref {
         ValueRef::Local(local) => local,
         ValueRef::External(_) => {
-            return Err(tenferro_tensor::Error::backend_failure(
+            return Err(tenferro_tensor::Error::runtime_state(
                 "einsum_extension",
                 "einsum builder returned an external value at runtime",
             ))
@@ -1243,7 +1249,7 @@ fn build_runtime_exec_program<B: TensorBackend>(
             ValueKey::Input(TensorInputKey::User { id }) => {
                 let input_idx = *id as usize;
                 let tensor = inputs.get(input_idx).ok_or_else(|| {
-                    tenferro_tensor::Error::backend_failure(
+                    tenferro_tensor::Error::runtime_state(
                         "einsum_extension",
                         format!("runtime input {input_idx} missing"),
                     )
@@ -1255,7 +1261,7 @@ fn build_runtime_exec_program<B: TensorBackend>(
                 ));
             }
             other => {
-                return Err(tenferro_tensor::Error::backend_failure(
+                return Err(tenferro_tensor::Error::runtime_state(
                     "einsum_extension",
                     format!("unexpected runtime input key: {other:?}"),
                 ))
@@ -1285,7 +1291,7 @@ fn runtime_program_inputs(
     let mut program_inputs = Vec::with_capacity(input_indices.len());
     for &input_idx in input_indices {
         let tensor = inputs.get(input_idx).ok_or_else(|| {
-            tenferro_tensor::Error::backend_failure(
+            tenferro_tensor::Error::runtime_state(
                 "einsum_extension",
                 format!("runtime input {input_idx} missing"),
             )
@@ -1390,7 +1396,7 @@ fn cached_runtime_tree<B: TensorBackend>(
 }
 
 fn einsum_runtime_error(error: EinsumError) -> tenferro_tensor::Error {
-    error.to_tensor_error("einsum_extension")
+    error.into_tensor_error("einsum_extension")
 }
 
 fn runtime_tree_cache_discriminator(

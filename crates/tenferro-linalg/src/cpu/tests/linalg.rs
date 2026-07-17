@@ -286,11 +286,19 @@ fn linalg_read_rejects_non_float_view_dtypes() {
         let err = result.unwrap_err();
         assert!(matches!(
             err,
-            tenferro_tensor::Error::BackendFailure {
+            tenferro_tensor::Error::Extension {
                 op,
-                ref message,
-            } if op == expected_op && message.contains("unsupported dtype")
+                family: crate::LINALG_EXTENSION_FAMILY_ID,
+                kind: tenferro_tensor::ErrorKind::Unsupported,
+                ..
+            } if op == expected_op
         ));
+        assert!(std::error::Error::source(&err)
+            .and_then(|source| source.downcast_ref::<crate::Error>())
+            .is_some_and(|source| matches!(
+                source,
+                crate::Error::UnsupportedDType { op, .. } if *op == expected_op
+            )));
     }
 
     let i32_input = TypedTensor::<i32>::from_vec_col_major(vec![2, 2], vec![1, 0, 0, 1]).unwrap();
@@ -339,11 +347,19 @@ fn linalg_read_rejects_non_float_view_dtypes() {
         let err = result.unwrap_err();
         assert!(matches!(
             err,
-            tenferro_tensor::Error::BackendFailure {
+            tenferro_tensor::Error::Extension {
                 op,
-                ref message,
-            } if op == expected_op && message.contains("unsupported dtype")
+                family: crate::LINALG_EXTENSION_FAMILY_ID,
+                kind: tenferro_tensor::ErrorKind::Unsupported,
+                ..
+            } if op == expected_op
         ));
+        assert!(std::error::Error::source(&err)
+            .and_then(|source| source.downcast_ref::<crate::Error>())
+            .is_some_and(|source| matches!(
+                source,
+                crate::Error::UnsupportedDType { op, .. } if *op == expected_op
+            )));
     }
 
     assert_unsupported_dtype_single(
@@ -1117,7 +1133,11 @@ fn test_real_cholesky_returns_error_for_non_positive_definite_input() {
     let err = backend.cholesky(&input).unwrap_err();
     assert!(matches!(
         err,
-        tenferro_tensor::Error::BackendFailure { op: "cholesky", .. }
+        tenferro_tensor::Error::Extension {
+            op: "cholesky",
+            kind: tenferro_tensor::ErrorKind::NumericalFailure,
+            ..
+        }
     ));
 }
 
@@ -1130,8 +1150,15 @@ fn test_real_solve_returns_error_for_singular_matrix() {
     let err = backend.solve(&a, &b).unwrap_err();
     assert!(matches!(
         err,
-        tenferro_tensor::Error::BackendFailure { op: "solve", .. }
+        tenferro_tensor::Error::Extension {
+            op: "solve",
+            kind: tenferro_tensor::ErrorKind::NumericalFailure,
+            ..
+        }
     ));
+    assert!(std::error::Error::source(&err)
+        .and_then(|source| source.downcast_ref::<crate::Error>())
+        .is_some_and(|source| matches!(source, crate::Error::Singular { op: "solve" })));
 }
 
 #[test]
@@ -1174,7 +1201,11 @@ fn test_complex_cholesky_returns_error_for_non_positive_definite_input() {
     let err = backend.cholesky(&input).unwrap_err();
     assert!(matches!(
         err,
-        tenferro_tensor::Error::BackendFailure { op: "cholesky", .. }
+        tenferro_tensor::Error::Extension {
+            op: "cholesky",
+            kind: tenferro_tensor::ErrorKind::NumericalFailure,
+            ..
+        }
     ));
 }
 
@@ -1363,7 +1394,11 @@ fn test_complex_solve_returns_error_for_singular_matrix() {
     let err = backend.solve(&a, &b).unwrap_err();
     assert!(matches!(
         err,
-        tenferro_tensor::Error::BackendFailure { op: "solve", .. }
+        tenferro_tensor::Error::Extension {
+            op: "solve",
+            kind: tenferro_tensor::ErrorKind::NumericalFailure,
+            ..
+        }
     ));
 }
 

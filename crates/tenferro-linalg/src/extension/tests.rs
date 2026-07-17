@@ -38,12 +38,12 @@ fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
         .unwrap_err();
 
     match err {
-        Error::BackendFailure { op, message } => {
+        Error::Unsupported { op, message } => {
             assert_eq!(op, "linalg_host_reference");
             assert!(message.contains("cuda feature"));
             assert!(message.contains("download"));
         }
-        other => panic!("expected BackendFailure, got {other:?}"),
+        other => panic!("expected Unsupported, got {other:?}"),
     }
 }
 
@@ -701,7 +701,7 @@ fn gauge_validation_errors_cover_malformed_outputs() {
     ];
     assert!(matches!(
         apply_eigh_gauge(EighGauge::CanonicalPivot, &mut bad_eigh_dtype),
-        Err(Error::BackendFailure { .. })
+        Err(Error::Unsupported { .. })
     ));
 
     assert_invalid_config(apply_qr_gauge(QrGauge::PositiveDiagonal, &mut []));

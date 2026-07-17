@@ -58,12 +58,7 @@ struct CudaPrimaryContext {
 impl CudaPrimaryContext {
     fn retain(cuda_device: CUdevice) -> crate::Result<Self> {
         let cuda_context = unsafe { cudarc::driver::result::primary_ctx::retain(cuda_device) }
-            .map_err(|err| {
-                crate::Error::backend_failure(
-                    "cubecl_runtime_init",
-                    format!("failed to retain CUDA primary context: {err:?}"),
-                )
-            })?;
+            .map_err(|err| crate::Error::backend_source("cubecl_runtime_init", err))?;
         Ok(Self {
             cuda_device,
             cuda_context,
@@ -104,37 +99,24 @@ impl CudaRuntime {
     ///
     /// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaRuntime> = CudaRuntime::new;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when CUDA device selection,
+    /// driver initialization, primary-context retention, or CubeCL client
+    /// creation fails.
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
         // INVARIANT: CUDA ordinals are device identifiers, not tensor extents;
         // an unrepresentable ordinal becomes a CUDA invalid-device error.
-        cudarc::runtime::result::device::set(device_ordinal as i32).map_err(|err| {
-            crate::Error::backend_failure(
-                "cubecl_runtime_init",
-                format!("failed to set CUDA runtime device: {err:?}"),
-            )
-        })?;
-        cudarc::driver::result::init().map_err(|err| {
-            crate::Error::backend_failure(
-                "cubecl_runtime_init",
-                format!("failed to initialize CUDA driver: {err:?}"),
-            )
-        })?;
-        let cuda_device =
-            cudarc::driver::result::device::get(device_ordinal as i32).map_err(|err| {
-                crate::Error::backend_failure(
-                    "cubecl_runtime_init",
-                    format!("failed to obtain CUDA device {device_ordinal}: {err:?}"),
-                )
-            })?;
+        cudarc::runtime::result::device::set(device_ordinal as i32)
+            .map_err(|err| crate::Error::backend_source("cubecl_runtime_init", err))?;
+        cudarc::driver::result::init()
+            .map_err(|err| crate::Error::backend_source("cubecl_runtime_init", err))?;
+        let cuda_device = cudarc::driver::result::device::get(device_ordinal as i32)
+            .map_err(|err| crate::Error::backend_source("cubecl_runtime_init", err))?;
         let primary_context = CudaPrimaryContext::retain(cuda_device)?;
-        unsafe { cudarc::driver::result::ctx::set_current(primary_context.context()) }.map_err(
-            |err| {
-                crate::Error::backend_failure(
-                    "cubecl_runtime_init",
-                    format!("failed to set CUDA primary context current: {err:?}"),
-                )
-            },
-        )?;
+        unsafe { cudarc::driver::result::ctx::set_current(primary_context.context()) }
+            .map_err(|err| crate::Error::backend_source("cubecl_runtime_init", err))?;
         let device = CudaDevice::new(device_ordinal);
         let client = CubeclCudaRuntime::client(&device);
         Ok(Self {
@@ -165,17 +147,10 @@ impl CudaRuntime {
     pub fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
         // INVARIANT: CUDA ordinals are device identifiers; bad ordinals are
         // reported by CUDA instead of indexing memory in tenferro.
-        cudarc::runtime::result::device::set(self.device_ordinal as i32).map_err(|err| {
-            crate::Error::backend_failure(op, format!("failed to set CUDA runtime device: {err:?}"))
-        })?;
-        unsafe { cudarc::driver::result::ctx::set_current(self.primary_context.context()) }.map_err(
-            |err| {
-                crate::Error::backend_failure(
-                    op,
-                    format!("failed to activate CUDA primary context: {err:?}"),
-                )
-            },
-        )
+        cudarc::runtime::result::device::set(self.device_ordinal as i32)
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+        unsafe { cudarc::driver::result::ctx::set_current(self.primary_context.context()) }
+            .map_err(|err| crate::Error::backend_source(op, err))
     }
 
     pub(crate) fn raw_cuda_stream(&self) -> crate::Result<u64> {
@@ -184,12 +159,10 @@ impl CudaRuntime {
                 server
                     .raw_stream(StreamId::current())
                     .map(|stream| stream as u64)
-                    .map_err(|err| {
-                        crate::Error::backend_failure("raw_cuda_stream", format!("{err:?}"))
-                    })
+                    .map_err(|err| crate::Error::backend_source("raw_cuda_stream", err))
             })
             .ok_or_else(|| {
-                crate::Error::backend_failure("raw_cuda_stream", "with_server returned None")
+                crate::Error::runtime_state("raw_cuda_stream", "CubeCL server is unavailable")
             })?
     }
 
@@ -203,13 +176,18 @@ impl CudaRuntime {
     /// let _sync: fn(&CudaRuntime) -> tenferro_tensor::Result<()> =
     ///     CudaRuntime::synchronize;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when CubeCL cannot expose the
+    /// current stream, or [`crate::Error::BackendSource`] when CUDA context or
+    /// stream synchronization fails.
     pub fn synchronize(&self) -> crate::Result<()> {
         const OP: &str = "cubecl_runtime_synchronize";
         self.set_current_cuda_context(OP)?;
         let stream = self.raw_cuda_stream()? as usize as cudaStream_t;
-        unsafe { cuda_result::stream::synchronize(stream) }.map_err(|err| {
-            crate::Error::backend_failure(OP, format!("CUDA stream synchronize failed: {err:?}"))
-        })
+        unsafe { cuda_result::stream::synchronize(stream) }
+            .map_err(|err| crate::Error::backend_source(OP, err))
     }
 }
 

@@ -285,6 +285,14 @@ impl<'a> GraphInstructionView<'a> {
     /// let inst = program.lowering_view().instructions().next().unwrap();
     /// assert_eq!(inst.static_output_shape(0, &[&[1]]).unwrap(), vec![1]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GraphProgramLoweringShapeError::MissingOutput`] when
+    /// `output_index` is absent, [`GraphProgramLoweringShapeError::NonStatic`]
+    /// when an extent is only an upper bound, or
+    /// [`GraphProgramLoweringShapeError::InvalidDimExpr`] when a symbolic
+    /// dimension cannot be evaluated for `input_shapes`.
     pub fn static_output_shape(
         &self,
         output_index: usize,

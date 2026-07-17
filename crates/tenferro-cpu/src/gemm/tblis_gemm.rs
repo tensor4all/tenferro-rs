@@ -404,7 +404,11 @@ pub(crate) fn runtime_available() -> Result<bool> {
 
 pub(crate) fn output_element_count(shape: &[usize]) -> Result<usize> {
     checked_product(shape).ok_or_else(|| {
-        Error::backend_failure(OP, "TBLIS output element count overflow while allocating")
+        Error::invalid_argument(
+            OP,
+            "configuration",
+            "TBLIS output element count overflow while allocating",
+        )
     })
 }
 

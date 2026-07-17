@@ -300,6 +300,13 @@ pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
     tensor.resolve_roots()
 }
 
+///
+/// # Errors
+///
+/// Returns [`Error::RuntimeStateSource`] when either metadata scope cannot be
+/// registered because the global registry is poisoned. The tensor metadata is
+/// derived from the already-valid `Tensor`; no dtype/shape validation is
+/// deferred by this operation.
 pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) -> Result<()> {
     let old_graph = tensor.graph.clone();
     let old_output_key = old_graph.values()[tensor.val].key.clone();
@@ -347,6 +354,11 @@ pub fn allocate_input_key() -> TensorInputKey {
     next_input_key()
 }
 
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] with `ValidationError::InvalidArgument` when
+/// `tensor` is an operation result rather than a placeholder input.
 pub fn leaf_input_key(tensor: &TracedTensor) -> Result<TensorInputKey> {
     match &tensor.graph.values()[tensor.val].key {
         ValueKey::Input(key) => Ok(key.clone()),
@@ -359,6 +371,11 @@ pub fn leaf_input_key(tensor: &TracedTensor) -> Result<TensorInputKey> {
     }
 }
 
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] with `ValidationError::InvalidArgument` when
+/// `local_id` does not refer to an input value in the linearized graph.
 pub fn linear_input_key(
     graph: &Graph<StdTensorOp>,
     local_id: LocalValueId,
@@ -374,6 +391,12 @@ pub fn linear_input_key(
     }
 }
 
+///
+/// # Errors
+///
+/// Returns [`Error::TensorRuntime`] containing `ValidationError::IntegerOverflow`
+/// when the shape product overflows, or the typed tensor's validation source
+/// when it cannot be constructed from `shape`.
 pub fn ones_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
     match dtype {
         DType::F32 => Ok(Tensor::F32(TypedTensor::ones(shape)?)),

@@ -34,6 +34,7 @@ mod cpu;
 mod eager_backend;
 #[cfg(feature = "autodiff")]
 mod eager_ext;
+pub mod error;
 mod extension;
 #[cfg(feature = "cuda")]
 mod gpu;
@@ -49,6 +50,7 @@ pub use ad::support::{
 pub use backend::LinalgBackend;
 #[cfg(feature = "autodiff")]
 pub use eager_ext::EagerTensorLinalgExt;
+pub use error::{Error, Result};
 pub use extension::{
     register_runtime, EighGauge, EighOptions, QrGauge, QrOptions, SvdGauge, SvdOptions,
     DEFAULT_DECOMPOSITION_DERIVATIVE_EPS, LINALG_EXTENSION_FAMILY_ID,

@@ -52,6 +52,11 @@ impl WebGpuRuntime {
     ///
     /// let _ctor: fn(usize) -> tenferro_tensor::Result<WebGpuRuntime> = WebGpuRuntime::new;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when the requested adapter is
+    /// unavailable or CubeCL initialization panics while selecting it.
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
         Self::from_device(WgpuDevice::DiscreteGpu(device_ordinal), device_ordinal)
     }
@@ -65,6 +70,11 @@ impl WebGpuRuntime {
     ///
     /// let _ctor: fn() -> tenferro_tensor::Result<WebGpuRuntime> = WebGpuRuntime::new_default;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when default adapter selection is
+    /// unavailable or CubeCL initialization panics.
     pub fn new_default() -> crate::Result<Self> {
         Self::from_device(WgpuDevice::DefaultDevice, 0)
     }
@@ -74,7 +84,7 @@ impl WebGpuRuntime {
             WgpuRuntime::client(&device)
         }))
         .map_err(|payload| {
-            crate::Error::backend_failure(
+            crate::Error::runtime_state(
                 "webgpu_runtime_init",
                 format!("failed to initialize CubeCL WebGPU runtime: {payload:?}"),
             )
@@ -112,12 +122,15 @@ impl WebGpuRuntime {
     /// let _sync: fn(&WebGpuRuntime) -> tenferro_tensor::Result<()> =
     ///     WebGpuRuntime::synchronize;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when queue flush or sync fails.
     pub fn synchronize(&self) -> crate::Result<()> {
         const OP: &str = "webgpu_runtime_synchronize";
         self.client
             .flush()
-            .map_err(|err| crate::Error::backend_failure(OP, format!("{err:?}")))?;
-        future::block_on(self.client.sync())
-            .map_err(|err| crate::Error::backend_failure(OP, format!("{err:?}")))
+            .map_err(|err| crate::Error::backend_source(OP, err))?;
+        future::block_on(self.client.sync()).map_err(|err| crate::Error::backend_source(OP, err))
     }
 }

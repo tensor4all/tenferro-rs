@@ -43,7 +43,7 @@
 //!
 //! let out = [&a, &b].einsum("ij,jk->ik", &mut backend)?;
 //! assert_eq!(out.shape(), &[2, 4]);
-//! # Ok::<(), tenferro_tensor::Error>(())
+//! # Ok::<(), tenferro_einsum::Error>(())
 //! ```
 //!
 //! ```

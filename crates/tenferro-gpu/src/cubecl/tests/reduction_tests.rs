@@ -1,9 +1,9 @@
 // Run with: cargo test --features cuda -- --ignored
-use tenferro_tensor::TensorReduction;
+use tenferro_tensor::{DType, TensorReduction};
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool, tensor_c32, tensor_c64,
-    tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
+    assert_cuda_unsupported_dtype, assert_tensor_close, cpu_backend, download, gpu_backend,
+    tensor_bool, tensor_c32, tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
 };
 
 #[test]
@@ -191,22 +191,10 @@ fn test_cubecl_complex_sum_and_prod_match_cpu() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let err = gpu.reduce_max(&gpu_input, &[0]).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::BackendFailure {
-            op: "reduce_max",
-            ..
-        }
-    ));
+    assert_cuda_unsupported_dtype(&err, "reduce_max", DType::C64);
 
     let err = gpu.reduce_min(&gpu_input, &[0]).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::BackendFailure {
-            op: "reduce_min",
-            ..
-        }
-    ));
+    assert_cuda_unsupported_dtype(&err, "reduce_min", DType::C64);
 }
 
 #[test]
@@ -331,22 +319,10 @@ fn test_cubecl_bool_reductions_are_unsupported() {
     let gpu_input = upload(&gpu, &input);
 
     let err = gpu.reduce_sum(&gpu_input, &[0]).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::BackendFailure {
-            op: "reduce_sum",
-            ..
-        }
-    ));
+    assert_cuda_unsupported_dtype(&err, "reduce_sum", DType::Bool);
 
     let err = gpu.reduce_prod(&gpu_input, &[1]).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::BackendFailure {
-            op: "reduce_prod",
-            ..
-        }
-    ));
+    assert_cuda_unsupported_dtype(&err, "reduce_prod", DType::Bool);
 }
 
 #[test]

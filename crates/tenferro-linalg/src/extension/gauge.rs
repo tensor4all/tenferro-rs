@@ -86,7 +86,7 @@ fn apply_canonical_pivot_eigh_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::
             batch_count,
             "tenferro-linalg.eigh",
         ),
-        vectors => Err(Error::backend_failure(
+        vectors => Err(Error::unsupported(
             "tenferro-linalg.eigh",
             format!("unsupported eigenvector dtype {:?}", vectors.dtype()),
         )),

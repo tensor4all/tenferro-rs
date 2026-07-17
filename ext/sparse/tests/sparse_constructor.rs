@@ -1,6 +1,6 @@
 use tenferro_ext_sparse::SparseCooTracedTensor;
 use tenferro_runtime::{Error as RuntimeError, TracedTensor};
-use tenferro_tensor::{DType, Error as TensorError, Tensor};
+use tenferro_tensor::{DType, Error as TensorError, ShapeMismatch, Tensor, ValidationError};
 
 fn one_coordinate() -> Tensor {
     Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0]).unwrap()
@@ -26,9 +26,13 @@ fn traced_constructor_rejects_known_concrete_nnz_mismatch() {
 
     assert!(matches!(
         error,
-        RuntimeError::TensorRuntime(TensorError::InvalidConfig {
+        RuntimeError::TensorRuntime(TensorError::Validation {
             op: "tenferro-ext-sparse",
-            message,
-        }) if message == "value tensor must have shape [1], got [2]"
+            source: ValidationError::ShapeMismatch(payload),
+        }) if matches!(
+            payload.as_ref(),
+            ShapeMismatch::IncompatibleShapes { lhs, rhs }
+                if lhs.as_slice() == [1] && rhs.as_slice() == [2]
+        )
     ));
 }

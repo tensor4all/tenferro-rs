@@ -64,6 +64,19 @@ fn runtime_state_source_is_not_classified_as_backend_failure() {
     assert!(err.source().is_some());
 }
 
+#[test]
+fn unsupported_operation_has_a_distinct_coarse_classification() {
+    let err = Error::unsupported("full_piv_lu", "backend has no implementation");
+    assert_eq!(err.kind(), ErrorKind::Unsupported);
+    assert!(matches!(
+        err,
+        Error::Unsupported {
+            op: "full_piv_lu",
+            ..
+        }
+    ));
+}
+
 #[derive(Debug)]
 struct NonCloneElement;
 
@@ -419,7 +432,7 @@ fn typed_tensor_as_view_preserves_rank_and_layout() {
 }
 
 #[test]
-fn typed_tensor_view_backend_as_slice_returns_backend_failure() {
+fn typed_tensor_view_backend_as_slice_returns_runtime_state() {
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(77, 2))),
@@ -437,7 +450,7 @@ fn typed_tensor_view_backend_as_slice_returns_backend_failure() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op: "TypedTensorView::as_slice",
             ..
         }
@@ -572,7 +585,7 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
     .unwrap();
     let col_err = tensor.clone().into_vec_col_major().unwrap_err();
 
-    assert!(matches!(col_err, Error::BackendFailure { .. }));
+    assert!(matches!(col_err, Error::RuntimeState { .. }));
     assert!(col_err
         .to_string()
         .contains("backend buffers cannot be exported"));

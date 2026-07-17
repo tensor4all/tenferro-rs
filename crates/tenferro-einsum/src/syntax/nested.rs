@@ -73,8 +73,8 @@ impl NestedEinsum {
     ///
     /// # Errors
     ///
-    /// Returns an error if parentheses are mismatched or the notation is
-    /// otherwise malformed.
+    /// Returns [`Error::InvalidSubscripts`] when parentheses are mismatched,
+    /// labels are invalid, or the notation is otherwise malformed.
     pub fn parse(notation: &str) -> Result<Self> {
         let (lhs, output_str) = split_and_validate_notation(notation)?;
 
@@ -162,7 +162,7 @@ impl NestedEinsum {
                 '(' => depth += 1,
                 ')' => {
                     if depth == 0 {
-                        return Err(Error::InvalidArgument(format!(
+                        return Err(Error::invalid_subscripts(format!(
                             "unmatched ')' in einsum group: {s}"
                         )));
                     }

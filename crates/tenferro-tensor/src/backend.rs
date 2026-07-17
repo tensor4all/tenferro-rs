@@ -13,7 +13,7 @@ use crate::{
 use num_complex::{Complex32, Complex64};
 
 fn read_boundary_error(op: &'static str) -> crate::Error {
-    crate::Error::backend_failure(
+    crate::Error::unsupported(
         op,
         "backend does not accept borrowed tensor views at this execution boundary",
     )
@@ -737,7 +737,7 @@ fn typed_read_storage<'a, T>(
 ) -> crate::Result<(&'a [T], isize)> {
     match tensor.buffer() {
         Buffer::Host(data) => Ok((data, 0)),
-        Buffer::Backend(_) => Err(crate::Error::backend_failure(
+        Buffer::Backend(_) => Err(crate::Error::runtime_state(
             op,
             "grouped GEMM default path requires host-backed tensor storage",
         )),
@@ -1769,7 +1769,7 @@ pub trait TensorElementwise: TensorStructural {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn rem(&mut self, lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        Err(crate::Error::backend_failure(
+        Err(crate::Error::unsupported(
             "rem",
             format!("backend does not implement rem for dtype {:?}", lhs.dtype()),
         ))
@@ -2195,7 +2195,7 @@ pub trait TensorStructural {
                 crate::MemoryKind::PinnedHost | crate::MemoryKind::UnpinnedHost
             )
         {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::runtime_state(
                 "to_contiguous_read",
                 "default materialization accepts only host-owned tensors; use the storage's owning backend",
             ));
@@ -2254,7 +2254,7 @@ pub trait TensorStructural {
     /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
     /// backend execution or storage access cannot provide the requested result.
     fn copy_read_into(&mut self, _src: TensorRead<'_>, _dst: TensorWrite<'_>) -> crate::Result<()> {
-        Err(crate::Error::backend_failure(
+        Err(crate::Error::unsupported(
             "copy_read_into",
             "backend-owned runtime copy is unsupported by this backend",
         ))
@@ -2459,7 +2459,7 @@ pub trait TensorReduction {
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_sum(input, axes),
-            None => Err(crate::Error::backend_failure(
+            None => Err(crate::Error::unsupported(
                 "reduce_sum",
                 "backend does not accept borrowed tensor views at this execution boundary",
             )),
@@ -2497,7 +2497,7 @@ pub trait TensorReduction {
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_prod(input, axes),
-            None => Err(crate::Error::backend_failure(
+            None => Err(crate::Error::unsupported(
                 "reduce_prod",
                 "backend does not accept borrowed tensor views at this execution boundary",
             )),
@@ -2535,7 +2535,7 @@ pub trait TensorReduction {
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_max(input, axes),
-            None => Err(crate::Error::backend_failure(
+            None => Err(crate::Error::unsupported(
                 "reduce_max",
                 "backend does not accept borrowed tensor views at this execution boundary",
             )),
@@ -2573,7 +2573,7 @@ pub trait TensorReduction {
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_min(input, axes),
-            None => Err(crate::Error::backend_failure(
+            None => Err(crate::Error::unsupported(
                 "reduce_min",
                 "backend does not accept borrowed tensor views at this execution boundary",
             )),

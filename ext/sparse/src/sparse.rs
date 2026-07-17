@@ -237,8 +237,10 @@ impl SparseCooTracedTensor {
 ///
 /// # Errors
 ///
-/// Returns an error when the sparse shapes are not matrix-multiplication
-/// compatible or when value tensors have unsupported metadata.
+/// Returns [`tenferro_tensor::Error::Validation`] for non-matrix ranks,
+/// contracting-dimension mismatches, invalid COO coordinates, or value shape
+/// mismatches, and [`tenferro_tensor::Error::Unsupported`] for unsupported
+/// value dtypes.
 ///
 /// # Examples
 ///
@@ -275,32 +277,38 @@ pub(crate) fn validate_coordinates(
     coordinates: &Tensor,
 ) -> Result<Vec<[usize; 2]>> {
     if shape.len() != 2 {
-        return Err(invalid(format!(
-            "expected rank-2 sparse shape, got {shape:?}"
-        )));
+        return Err(Error::rank_mismatch(OP, 2, shape.len()));
     }
     if coordinates.dtype() != DType::I64 {
-        return Err(invalid(format!(
-            "coordinate tensor must have dtype I64, got {:?}",
-            coordinates.dtype()
-        )));
+        return Err(Error::dtype_mismatch(OP, DType::I64, coordinates.dtype()));
     }
     let coord_shape = coordinates.shape();
-    if coord_shape.len() != 2 || coord_shape[0] != 2 {
-        return Err(invalid(format!(
-            "coordinate tensor must have shape [2, nnz], got {coord_shape:?}"
-        )));
+    if coord_shape.len() != 2 {
+        return Err(Error::rank_mismatch(OP, 2, coord_shape.len()));
+    }
+    if coord_shape[0] != 2 {
+        return Err(Error::shape_mismatch(
+            OP,
+            vec![2, coord_shape[1]],
+            coord_shape.to_vec(),
+        ));
     }
     let mut entries = Vec::with_capacity(coord_shape[1]);
     for pair in coordinates.as_slice::<i64>()?.chunks_exact(2) {
         let row =
-            usize::try_from(pair[0]).map_err(|_| invalid("negative sparse row coordinate"))?;
+            usize::try_from(pair[0]).map_err(|_| {
+                Error::invalid_argument(OP, "coordinates", "negative sparse row coordinate")
+            })?;
         let col =
-            usize::try_from(pair[1]).map_err(|_| invalid("negative sparse column coordinate"))?;
+            usize::try_from(pair[1]).map_err(|_| {
+                Error::invalid_argument(OP, "coordinates", "negative sparse column coordinate")
+            })?;
         if row >= shape[0] || col >= shape[1] {
-            return Err(invalid(format!(
-                "coordinate [{row}, {col}] is out of bounds for shape {shape:?}"
-            )));
+            return Err(Error::invalid_argument(
+                OP,
+                "coordinates",
+                format!("coordinate [{row}, {col}] is out of bounds for shape {shape:?}"),
+            ));
         }
         entries.push([row, col]);
     }
@@ -309,38 +317,34 @@ pub(crate) fn validate_coordinates(
 
 pub(crate) fn validate_value_tensor(values: &Tensor, nnz: usize) -> Result<()> {
     if values.dtype() != DType::F64 {
-        return Err(invalid(format!(
-            "sparse tutorial supports F64 values, got {:?}",
-            values.dtype()
-        )));
+        return Err(Error::dtype_mismatch(OP, DType::F64, values.dtype()));
     }
     if values.shape() != [nnz] {
-        return Err(invalid(format!(
-            "value tensor must have shape [{nnz}], got {:?}",
-            values.shape()
-        )));
+        return Err(Error::shape_mismatch(OP, vec![nnz], values.shape().to_vec()));
     }
     Ok(())
 }
 
 pub(crate) fn validate_traced_values(values: &TracedTensor, nnz: usize) -> RuntimeResult<()> {
     if values.dtype != DType::F64 {
-        return Err(RuntimeError::TensorRuntime(invalid(format!(
-            "sparse tutorial supports F64 values, got {:?}",
-            values.dtype
-        ))));
+        return Err(RuntimeError::TensorRuntime(Error::dtype_mismatch(
+            OP,
+            DType::F64,
+            values.dtype,
+        )));
     }
     if values.rank != 1 {
-        return Err(RuntimeError::TensorRuntime(invalid(format!(
-            "value tensor must have rank 1, got rank {}",
-            values.rank
-        ))));
+        return Err(RuntimeError::TensorRuntime(Error::rank_mismatch(
+            OP, 1, values.rank,
+        )));
     }
     if let Some(shape) = values.try_concrete_shape() {
         if shape != [nnz] {
-            return Err(RuntimeError::TensorRuntime(invalid(format!(
-                "value tensor must have shape [{nnz}], got {shape:?}"
-            ))));
+            return Err(RuntimeError::TensorRuntime(Error::shape_mismatch(
+                OP,
+                vec![nnz],
+                shape.to_vec(),
+            )));
         }
     }
     Ok(())
@@ -349,15 +353,12 @@ pub(crate) fn validate_traced_values(values: &TracedTensor, nnz: usize) -> Runti
 pub(crate) fn coordinates_tensor(entries: &[[usize; 2]]) -> Result<Tensor> {
     let mut data = Vec::with_capacity(entries.len() * 2);
     for &[row, col] in entries {
-        data.push(i64::try_from(row).map_err(|_| invalid("row coordinate exceeds i64"))?);
-        data.push(i64::try_from(col).map_err(|_| invalid("column coordinate exceeds i64"))?);
+        data.push(i64::try_from(row).map_err(|_| {
+            Error::invalid_argument(OP, "coordinates", "row coordinate exceeds i64")
+        })?);
+        data.push(i64::try_from(col).map_err(|_| {
+            Error::invalid_argument(OP, "coordinates", "column coordinate exceeds i64")
+        })?);
     }
     Tensor::from_vec_col_major(vec![2, entries.len()], data)
-}
-
-fn invalid(message: impl Into<String>) -> Error {
-    Error::InvalidConfig {
-        op: OP,
-        message: message.into(),
-    }
 }

@@ -1,7 +1,7 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tenferro_ops::ext_op::HostReference;
-use tenferro_tensor::{Error, Tensor};
+use tenferro_tensor::{Error, ErrorKind, Tensor, ValidationKind};
 
 use super::{SparseMatmulJvpOp, SparseMatmulPlan, SparseMatmulVjpOp};
 
@@ -23,7 +23,8 @@ fn assert_invalid_without_panic(result: std::thread::Result<tenferro_tensor::Res
     let error = result
         .expect("host-reference validation must not panic")
         .expect_err("malformed host-reference inputs must be rejected");
-    assert!(matches!(error, Error::InvalidConfig { .. }));
+    assert_eq!(error.kind(), ErrorKind::Validation(ValidationKind::InvalidArgument));
+    assert!(matches!(error, Error::Validation { .. }));
 }
 
 #[test]

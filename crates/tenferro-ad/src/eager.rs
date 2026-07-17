@@ -23,6 +23,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::ones_tensor;
+use tenferro_runtime::ErrorPhase;
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{
     CacheStats, DType, Tensor, TensorBackend, TensorElementwise, TensorRead, TensorValue,
@@ -317,39 +318,55 @@ impl fmt::Debug for EagerRuntime {
 
 impl EagerRuntime {
     fn lock_backend(&self) -> Result<MutexGuard<'_, EagerBackend>> {
-        self.backend
-            .lock()
-            .map_err(|_| Error::Internal("backend lock poisoned".to_string()))
+        self.backend.lock().map_err(|_| {
+            Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned")
+        })
     }
 
     fn lock_extension_executor(&self) -> Result<MutexGuard<'_, ExtensionExecutor<EagerBackend>>> {
-        self.extension_executor
-            .lock()
-            .map_err(|_| Error::Internal("extension executor lock poisoned".to_string()))
+        self.extension_executor.lock().map_err(|_| {
+            Error::runtime_state(
+                "eager_extension_executor",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            )
+        })
     }
 
     fn lock_grad_slots(
         &self,
     ) -> Result<MutexGuard<'_, HashMap<ValueKey<StdTensorOp>, WeakGradSlot>>> {
-        self.grad_slots
-            .lock()
-            .map_err(|_| Error::Internal("gradient slot registry lock poisoned".to_string()))
+        self.grad_slots.lock().map_err(|_| {
+            Error::runtime_state(
+                "eager_gradient_slots",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            )
+        })
     }
 
     fn lock_value_records(
         &self,
     ) -> Result<MutexGuard<'_, HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>> {
-        self.value_records
-            .lock()
-            .map_err(|_| Error::Internal("eager value registry lock poisoned".to_string()))
+        self.value_records.lock().map_err(|_| {
+            Error::runtime_state(
+                "eager_value_registry",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            )
+        })
     }
 
     fn lock_value_ptr_records(
         &self,
     ) -> Result<MutexGuard<'_, HashMap<usize, Weak<EagerTensorRecord>>>> {
-        self.value_ptr_records
-            .lock()
-            .map_err(|_| Error::Internal("eager value pointer registry lock poisoned".to_string()))
+        self.value_ptr_records.lock().map_err(|_| {
+            Error::runtime_state(
+                "eager_value_pointer_registry",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            )
+        })
     }
 
     fn from_backend(backend: EagerBackend) -> Self {
@@ -551,6 +568,13 @@ impl EagerRuntime {
     }
 
     /// Register one extension runtime on this eager context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRuntimeRegistryError::PoisonedLock`] when the
+    /// extension executor is unavailable, or propagates the callback's
+    /// [`ExtensionRuntimeRegistryError::MalformedFamilyId`] and
+    /// [`ExtensionRuntimeRegistryError::MissingHostReference`] failures.
     pub fn register_extension(
         &self,
         register: impl FnOnce(
@@ -578,6 +602,11 @@ impl EagerRuntime {
     /// assert_eq!(ctx.cache_stats()?.extensions.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] when the extension
+    /// executor lock is poisoned.
     pub fn clear_extension_caches(&self) -> Result<()> {
         self.lock_extension_executor()?.clear_caches();
         Ok(())
@@ -597,6 +626,11 @@ impl EagerRuntime {
     /// assert_eq!(ctx.cache_stats()?.ad_transforms.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] when either the
+    /// extension executor or AD-transform cache is poisoned.
     pub fn clear_caches(&self) -> Result<()> {
         self.clear_extension_caches()?;
         self.clear_ad_transform_caches()?;
@@ -617,6 +651,11 @@ impl EagerRuntime {
     /// assert_eq!(stats.ad_transforms.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] when an executor or
+    /// AD-transform cache lock is poisoned.
     pub fn cache_stats(&self) -> Result<EagerRuntimeCacheStats> {
         Ok(EagerRuntimeCacheStats {
             extensions: self.lock_extension_executor()?.cache_stats(),
@@ -636,6 +675,11 @@ impl EagerRuntime {
     /// assert!(ctx.ad_transform_cache_limits()?.max_entries().get() > 0);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the AD-transform
+    /// cache lock is poisoned.
     pub fn ad_transform_cache_limits(&self) -> Result<AdTransformCacheLimits> {
         self.ad_transform_cache.limits()
     }
@@ -655,6 +699,11 @@ impl EagerRuntime {
     /// assert_eq!(ctx.ad_transform_cache_limits()?, limits);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the AD-transform
+    /// cache lock is poisoned while updating limits.
     pub fn set_ad_transform_cache_limits(&self, limits: AdTransformCacheLimits) -> Result<()> {
         self.ad_transform_cache.set_limits(limits)
     }
@@ -672,16 +721,31 @@ impl EagerRuntime {
     /// assert_eq!(ctx.cache_stats()?.ad_transforms.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the AD-transform
+    /// cache lock is poisoned while clearing entries.
     pub fn clear_ad_transform_caches(&self) -> Result<()> {
         self.ad_transform_cache.clear()
     }
 
     /// Return the extension cache retention limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the extension
+    /// executor lock is poisoned.
     pub fn extension_cache_limits(&self) -> Result<ExtensionCacheLimits> {
         Ok(self.lock_extension_executor()?.cache_limits())
     }
 
     /// Replace extension cache retention limits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the extension
+    /// executor lock is poisoned.
     pub fn set_extension_cache_limits(&self, limits: ExtensionCacheLimits) -> Result<()> {
         self.lock_extension_executor()?.set_cache_limits(limits);
         Ok(())
@@ -709,6 +773,11 @@ impl EagerRuntime {
     ///
     /// assert_eq!(ctx.cache_stats().unwrap().extensions.entries, 1);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the extension
+    /// executor lock is poisoned before the closure can run.
     pub fn with_extension_caches_mut<R>(
         &self,
         f: impl FnOnce(&mut ExtensionCacheStore) -> R,
@@ -735,6 +804,11 @@ impl EagerRuntime {
     /// let answer = ctx.with_backend_mut(|_backend| 42).unwrap();
     /// assert_eq!(answer, 42);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the eager backend
+    /// lock is poisoned before the closure can run.
     pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> Result<R> {
         let mut backend = self.lock_backend()?;
         Ok(f(&mut backend))
@@ -765,6 +839,11 @@ impl EagerRuntime {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// ctx.synchronize().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the backend lock is
+    /// poisoned, or a typed tensor backend error if synchronization fails.
     pub fn synchronize(&self) -> Result<()> {
         self.lock_backend()?.synchronize().map_err(Error::from)
     }
@@ -1023,6 +1102,11 @@ impl EagerRuntime {
     /// assert!(y.grad()?.is_none());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if a gradient-slot
+    /// lock is poisoned while clearing live gradients.
     pub fn clear_grads(&self) -> Result<()> {
         let live_slots = {
             let mut live_slots = Vec::new();
@@ -1049,7 +1133,11 @@ impl EagerRuntime {
             }
         }
         if poisoned_slot {
-            return Err(Error::Internal("gradient slot lock poisoned".to_string()));
+            return Err(Error::runtime_state(
+                "eager_gradient_slot",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            ));
         }
         Ok(())
     }
@@ -1074,6 +1162,11 @@ impl EagerRuntime {
     /// assert_eq!(z.materialized()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] when metadata cannot
+    /// be registered or the backend lock is poisoned.
     pub fn constant_from(self: &Arc<Self>, tensor: Tensor) -> Result<EagerTensor> {
         EagerTensor::new_leaf(Arc::clone(self), tensor, false)
     }
@@ -1098,6 +1191,11 @@ impl EagerRuntime {
     /// assert_eq!(grad.shape(), &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] when gradient metadata
+    /// or the eager backend state cannot be registered.
     pub fn variable_from(self: &Arc<Self>, tensor: Tensor) -> Result<EagerTensor> {
         EagerTensor::new_leaf(Arc::clone(self), tensor, true)
     }
@@ -1124,6 +1222,13 @@ impl EagerRuntime {
     /// assert_eq!(dx.materialized()?.as_slice::<f64>().unwrap(), &[6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::NonScalarGrad`] for a non-scalar
+    /// output, [`Error::ContextMismatch`] for tensors from another runtime,
+    /// [`Error::UnsupportedAdRule`] when an AD rule is unavailable, or a typed
+    /// validation/backend error from eager execution.
     pub fn grad(self: &Arc<Self>, output: &EagerTensor, wrt: &EagerTensor) -> Result<EagerTensor> {
         self.grad_optional(output, wrt)?
             .ok_or_else(|| Error::Internal(format!("grad output is inactive for {:?}", wrt.key)))
@@ -1150,6 +1255,12 @@ impl EagerRuntime {
     /// assert!(ctx.grad_optional(&loss, &x)?.is_none());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::NonScalarGrad`] for a non-scalar
+    /// output, [`Error::ContextMismatch`] for a foreign runtime, or a typed
+    /// validation/backend/runtime-state error from eager execution.
     pub fn grad_optional(
         self: &Arc<Self>,
         output: &EagerTensor,
@@ -1199,6 +1310,13 @@ impl EagerRuntime {
     /// assert_eq!(dx.materialized()?.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for tensors from different eager
+    /// runtimes, [`Error::Validation`] when the cotangent shape or dtype does
+    /// not match the output, [`Error::UnsupportedAdRule`] when a rule is not
+    /// registered, or a typed backend/runtime-state error.
     pub fn vjp(
         self: &Arc<Self>,
         output: &EagerTensor,
@@ -1234,6 +1352,13 @@ impl EagerRuntime {
     /// assert!(ctx.vjp_optional(&loss, &x, &seed)?.is_none());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for tensors from different eager
+    /// runtimes, [`Error::Validation`] when the cotangent shape or dtype does
+    /// not match the output, [`Error::UnsupportedAdRule`] when a rule is not
+    /// registered, or a typed backend/runtime-state error.
     pub fn vjp_optional(
         self: &Arc<Self>,
         output: &EagerTensor,
@@ -1269,6 +1394,13 @@ impl EagerRuntime {
     /// assert_eq!(dy.materialized()?.as_slice::<f64>().unwrap(), &[6.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for tensors from different eager
+    /// runtimes, [`Error::Validation`] when the tangent shape or dtype does not
+    /// match `wrt`, [`Error::UnsupportedAdRule`] when a rule is unavailable, or
+    /// a typed backend/runtime-state error.
     pub fn jvp(
         self: &Arc<Self>,
         output: &EagerTensor,
@@ -1304,6 +1436,13 @@ impl EagerRuntime {
     /// assert!(ctx.jvp_optional(&loss, &x, &tangent)?.is_none());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for tensors from different eager
+    /// runtimes, [`Error::Validation`] when the tangent shape or dtype does not
+    /// match `wrt`, [`Error::UnsupportedAdRule`] when a rule is unavailable, or
+    /// a typed backend/runtime-state error.
     pub fn jvp_optional(
         self: &Arc<Self>,
         output: &EagerTensor,
@@ -1340,9 +1479,13 @@ impl EagerRuntime {
         }
 
         for (slot, incoming) in updates {
-            let mut current = slot
-                .lock()
-                .map_err(|_| Error::Internal("gradient slot lock poisoned".to_string()))?;
+            let mut current = slot.lock().map_err(|_| {
+                Error::runtime_state(
+                    "eager_gradient_slot",
+                    ErrorPhase::Execution,
+                    "lock poisoned",
+                )
+            })?;
             let next = match current.as_ref() {
                 Some(existing) => Arc::new(backend.add(existing.as_ref(), incoming.as_ref())?),
                 None => incoming,
@@ -1464,6 +1607,12 @@ impl EagerTensor {
     /// assert_eq!(x.materialized()?.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] when metadata cannot
+    /// be registered in the target context, or a typed tensor/backend error
+    /// while materializing the source value.
     pub fn from_tensor_in(tensor: Tensor, ctx: Arc<EagerRuntime>) -> Result<Self> {
         Self::new_leaf(ctx, tensor, false)
     }
@@ -1482,6 +1631,12 @@ impl EagerTensor {
     /// assert!(x.grad().unwrap().is_none());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] when gradient metadata
+    /// cannot be registered in the target context, or a typed tensor/backend
+    /// error while creating the leaf.
     pub fn requires_grad_in(tensor: Tensor, ctx: Arc<EagerRuntime>) -> Result<Self> {
         Self::new_leaf(ctx, tensor, true)
     }
@@ -1494,7 +1649,9 @@ impl EagerTensor {
         let key = eager_val_key();
         let metadata_scope =
             register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor)).map_err(
-                |err| Error::Internal(format!("eager leaf metadata registration failed: {err}")),
+                |err| {
+                    Error::runtime_state_source("eager leaf metadata", ErrorPhase::GraphBuild, err)
+                },
             )?;
         Self::from_parts(
             ctx,
@@ -1691,6 +1848,11 @@ impl EagerTensor {
     /// assert_eq!(d.ctx_id(), ctx_b.id());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] if the source cannot be materialized or
+    /// the target context cannot register its metadata.
     pub fn detach_into(&self, ctx: &Arc<EagerRuntime>) -> Result<Self> {
         Self::from_tensor_in(self.to_tensor()?, Arc::clone(ctx))
     }
@@ -1708,6 +1870,11 @@ impl EagerTensor {
     /// assert_eq!(x.materialized()?.as_slice::<f64>().unwrap(), &[3.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] when lazy/backend-resident storage cannot
+    /// be materialized, or when eager value-record state is poisoned.
     pub fn materialized(&self) -> Result<Arc<Tensor>> {
         self.materialized_arc()
     }
@@ -1738,6 +1905,11 @@ impl EagerTensor {
     /// This is the owned materialization boundary for callers that need a
     /// standalone compact tensor. The operation is fallible because eager
     /// values may be backed by lazy or backend-resident storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] if backend state is unavailable, or a
+    /// typed tensor backend error when contiguous materialization fails.
     pub fn to_tensor(&self) -> Result<Tensor> {
         self.ctx.materialize_value(self.value.as_ref())
     }
@@ -1791,10 +1963,21 @@ impl EagerTensor {
     /// assert_eq!(grad.shape(), &[2]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] if the gradient slot is poisoned or no
+    /// longer available.
     pub fn grad(&self) -> Result<Option<Arc<Tensor>>> {
         self.grad_slot
             .lock()
-            .map_err(|_| Error::Internal("gradient slot lock poisoned".to_string()))
+            .map_err(|_| {
+                Error::runtime_state(
+                    "eager_gradient_slot",
+                    ErrorPhase::Execution,
+                    "lock poisoned",
+                )
+            })
             .map(|slot| slot.clone())
     }
 
@@ -1822,11 +2005,18 @@ impl EagerTensor {
     /// assert!(y.grad()?.is_some());
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] if the gradient slot lock is poisoned.
     pub fn clear_grad(&self) -> Result<()> {
-        *self
-            .grad_slot
-            .lock()
-            .map_err(|_| Error::Internal("gradient slot lock poisoned".to_string()))? = None;
+        *self.grad_slot.lock().map_err(|_| {
+            Error::runtime_state(
+                "eager_gradient_slot",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            )
+        })? = None;
         Ok(())
     }
 
@@ -2024,6 +2214,12 @@ impl EagerTensor {
     ///
     /// assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 4.0, 4.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::NonScalarGrad`] when this output is not scalar,
+    /// [`Error::UnsupportedAdRule`] when a graph operation lacks a reverse rule,
+    /// or a typed validation/backend/runtime-state error during the reverse pass.
     pub fn backward(&self) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
         if !self.shape().is_empty() {
             return Err(Error::NonScalarGrad {
@@ -2066,6 +2262,13 @@ impl EagerTensor {
     /// assert_eq!(x.grad()?.unwrap().as_slice::<f64>().unwrap(), &[4.0, 12.0]);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] when `cotangent` belongs to another
+    /// eager runtime, [`Error::Validation`] when its shape or dtype is not a
+    /// valid seed, [`Error::UnsupportedAdRule`] for an unavailable reverse
+    /// rule, or a typed backend/runtime-state error during execution.
     pub fn backward_with(
         &self,
         cotangent: &EagerTensor,
@@ -2103,8 +2306,12 @@ impl EagerTensor {
             &mut callbacks,
             &mut ad_ctx,
         );
+        let callback_typed_error = callbacks.take_typed_error();
         let callback_error = callbacks.take_error();
         drop(callbacks);
+        if let Some(err) = callback_typed_error {
+            return Err(err);
+        }
         let cotangents = match (cotangents_result, callback_error) {
             (_, Some(err)) => return Err(crate::ad_rule_error::ad_rule_error("backward", err)),
             (Err(err), None) => return Err(crate::ad_rule_error::ad_rule_error("backward", err)),
@@ -2194,7 +2401,7 @@ pub(crate) fn record_eager_recorded_graph_outputs(
 }
 
 fn eager_record_error(err: tidu::eager::EagerRecordError) -> Error {
-    Error::Internal(format!("invalid eager recording metadata: {err}"))
+    Error::runtime_state_source("eager recording", ErrorPhase::GraphBuild, err)
 }
 
 fn eager_ad_transform_cache_error(message: impl ToString) -> ADRuleError {

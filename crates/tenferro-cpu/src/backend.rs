@@ -13,7 +13,10 @@ use crate::arbiter::{
 };
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
 use crate::engine::{CpuEngine, EngineResources};
-use crate::placement::{resolve_placement, resolve_placement_with_affinity, ResolvedCpuExecution};
+use crate::placement::{
+    resolve_placement, resolve_placement_with_affinity, CpuEngineConstructionError,
+    ResolvedCpuExecution,
+};
 use crate::{
     discover_cpu_topology, CpuId, CpuPlacement, CpuPlacementError, CpuSet, CpuTopology,
     CpuTopologyError, NumaNodeId, ResolvedCpuPlacement,
@@ -332,7 +335,21 @@ impl From<CpuBackendError> for crate::Error {
     fn from(error: CpuBackendError) -> Self {
         match error {
             CpuBackendError::Tensor(error) => error,
-            CpuBackendError::Placement { op, source } => Self::backend_source(op, source),
+            CpuBackendError::Placement { op, source } => match source {
+                CpuPlacementError::TopologyDiscovery { .. }
+                | CpuPlacementError::ManagedAffinityUnavailable { .. }
+                | CpuPlacementError::NumaDiscoveryUnavailable { .. }
+                | CpuPlacementError::UnknownNumaNode { .. } => {
+                    Self::runtime_state_source(op, source)
+                }
+                CpuPlacementError::ExternalProviderAffinityUnmanaged { .. } => {
+                    Self::extension(op, "cpu", crate::ErrorKind::Unsupported, source)
+                }
+                CpuPlacementError::EngineConstruction { .. } => Self::backend_source(op, source),
+                CpuPlacementError::InternalState { .. } => {
+                    Self::extension(op, "cpu", crate::ErrorKind::Internal, source)
+                }
+            },
         }
     }
 }
@@ -528,7 +545,6 @@ pub(crate) fn tblis_required_not_applicable(op: &'static str) -> crate::Error {
 fn constructor_tensor_error(op: &'static str, error: crate::Error) -> CpuBackendError {
     CpuBackendError::Tensor(match error {
         crate::Error::Validation { source, .. } => crate::Error::validation(op, source),
-        crate::Error::BackendFailure { message, .. } => crate::Error::backend_failure(op, message),
         error => error,
     })
 }
@@ -681,7 +697,7 @@ impl CpuBackend {
                 CpuPlacementError::EngineConstruction {
                     requested: CpuPlacement::Auto,
                     backend: kind,
-                    message: error.to_string(),
+                    source: CpuEngineConstructionError::Tensor(error),
                 }
             })?;
             Ok(Self::compatibility_with_topology(
@@ -702,7 +718,7 @@ impl CpuBackend {
                     .map_err(|error| CpuPlacementError::EngineConstruction {
                         requested: CpuPlacement::Auto,
                         backend: kind,
-                        message: error.to_string(),
+                        source: CpuEngineConstructionError::Context(error),
                     })?,
             );
             let all_allowed = OnceLock::new();
@@ -824,8 +840,9 @@ impl CpuBackend {
     ///
     /// # Errors
     ///
-    /// Returns an error when the provider is unavailable or CPU topology and
-    /// placement initialization fails.
+    /// Returns [`CpuBackendError::Tensor`] when the provider is unavailable or
+    /// its configuration is invalid, and [`CpuBackendError::Placement`] when
+    /// CPU topology discovery or placement initialization fails.
     pub fn with_kind(kind: CpuBackendKind) -> Result<Self, CpuBackendError> {
         let op = "CpuBackend::with_kind";
         ensure_cpu_backend_kind_available(kind, op)
@@ -853,8 +870,10 @@ impl CpuBackend {
     ///
     /// # Errors
     ///
-    /// Returns an error when the environment-driven thread configuration is
-    /// invalid or CPU topology and placement initialization fails.
+    /// Returns [`CpuBackendError::Tensor`] when `RAYON_NUM_THREADS` is zero,
+    /// malformed, or the compiled provider cannot be selected, and
+    /// [`CpuBackendError::Placement`] when CPU topology or managed placement
+    /// initialization is unavailable.
     pub fn try_new() -> Result<Self, CpuBackendError> {
         let op = "CpuBackend::try_new";
         let context =
@@ -934,8 +953,9 @@ impl CpuBackend {
     ///
     /// # Errors
     ///
-    /// Returns an error when `num_threads` is zero, Rayon rejects the pool, or
-    /// CPU topology and placement initialization fails.
+    /// Returns [`CpuBackendError::Tensor`] with `ValidationError::InvalidArgument`
+    /// when `num_threads` is zero or the context cannot be configured, and
+    /// [`CpuBackendError::Placement`] when CPU topology or placement fails.
     pub fn with_threads(num_threads: usize) -> Result<Self, CpuBackendError> {
         let op = "CpuBackend::with_threads";
         let context = CpuContext::with_threads(num_threads)
@@ -965,9 +985,9 @@ impl CpuBackend {
     ///
     /// # Errors
     ///
-    /// Returns an error when `num_threads` is zero, Rayon rejects the pool, or
-    /// the selected provider is unavailable, or CPU topology and placement
-    /// initialization fails.
+    /// Returns [`CpuBackendError::Tensor`] with `ValidationError::InvalidArgument`
+    /// when `num_threads` is zero or the provider is unavailable, and
+    /// [`CpuBackendError::Placement`] when CPU topology or placement fails.
     pub fn with_threads_and_kind(
         num_threads: usize,
         kind: CpuBackendKind,
@@ -1041,11 +1061,10 @@ impl CpuBackend {
                 cpus: self.shared.topology.allowed_cpus().clone(),
             },
             ResolvedCpuExecution::Compatibility => {
-                return Err(CpuPlacementError::EngineConstruction {
+                return Err(CpuPlacementError::InternalState {
                     requested,
                     backend: self.kind(),
-                    message: "placement resolution returned an internal compatibility mode"
-                        .to_owned(),
+                    message: "placement resolution returned an internal compatibility mode",
                 });
             }
         };
@@ -1053,7 +1072,7 @@ impl CpuBackend {
             CpuPlacementError::EngineConstruction {
                 requested,
                 backend: self.kind(),
-                message: error.to_string(),
+                source: CpuEngineConstructionError::Context(error),
             }
         })?;
         Ok(Self {
@@ -2725,7 +2744,7 @@ impl TensorFusion for CpuBackend {
 impl TensorDeviceTransfer for CpuBackend {
     fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
         if tensor.is_backend_buffer() {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::runtime_state(
                 "CpuBackend::download_to_host",
                 "CPU backend received a backend buffer; download the tensor to host with its owning backend before CPU execution",
             ));
@@ -2735,7 +2754,7 @@ impl TensorDeviceTransfer for CpuBackend {
 
     fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
         if tensor.is_backend_buffer() {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::runtime_state(
                 "CpuBackend::upload_host_tensor",
                 "CPU backend upload_host_tensor expects a host tensor; download backend buffers to host before CPU execution",
             ));

@@ -369,6 +369,12 @@ fn lapack_registration_status(
 ///     ProviderRegistrationError::NullPointer { symbol: "dgemm" }
 /// );
 /// ```
+///
+/// # Errors
+///
+/// Returns [`ProviderRegistrationError::NullPointer`] for a null supplied
+/// pointer, `FunctionPointerSizeMismatch` when the ABI pointer width is not
+/// representable, or `AlreadyRegistered`/`UnknownStatus` from the injector.
 pub unsafe fn register_blas_gemm_provider_ptrs(
     abi: ProviderAbi,
     ptrs: BlasGemmProviderPtrSet,
@@ -508,6 +514,12 @@ unsafe fn cast_provider_function_pointer<F: Copy>(
 ///     ProviderRegistrationError::NullPointer { symbol: "dgesvd" }
 /// );
 /// ```
+///
+/// # Errors
+///
+/// Returns [`ProviderRegistrationError::NullPointer`] for a null supplied
+/// pointer, `FunctionPointerSizeMismatch` when the ABI pointer width is not
+/// representable, or `AlreadyRegistered`/`UnknownStatus` from the injector.
 pub unsafe fn register_lapack_provider_ptrs(
     abi: ProviderAbi,
     ptrs: LapackProviderPtrSet,

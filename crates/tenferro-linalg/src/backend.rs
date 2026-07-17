@@ -1,22 +1,10 @@
 use tenferro_tensor::{Tensor, TensorBackend, TensorView};
 
+pub(crate) use crate::error::unsupported_dtype;
 use crate::extension::{
     apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, validate_derivative_eps, EighOptions,
     QrOptions, SvdOptions,
 };
-
-/// Build the shared "unsupported dtype" backend-failure error used by the
-/// linalg backends.
-///
-/// Both the CPU and GPU linalg backends reject integer and boolean dtypes for
-/// floating-point decompositions with an identical message; this helper keeps
-/// that error construction in one place.
-pub(crate) fn unsupported_dtype(
-    op: &'static str,
-    dtype: tenferro_tensor::DType,
-) -> tenferro_tensor::Error {
-    tenferro_tensor::Error::backend_failure(op, format!("unsupported dtype {dtype:?}"))
-}
 
 /// Backend surface required by the linalg extension runtime.
 ///
@@ -33,10 +21,24 @@ pub(crate) fn unsupported_dtype(
 /// ```
 pub trait LinalgBackend: TensorBackend {
     /// Compute a Cholesky factorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for non-matrix, non-square, or unsupported
+    /// input dtypes; `Error::Extension` with `ErrorKind::NumericalFailure`
+    /// when the matrix is not positive definite; or a typed backend source
+    /// when the provider cannot execute the factorization.
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor>;
 
     /// Solve a triangular linear system with explicit side, triangle,
     /// transpose, and unit-diagonal flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for incompatible matrix/rhs shapes, rank,
+    /// or dtype; `Error::Extension` with `ErrorKind::NumericalFailure` for a
+    /// singular or zero-diagonal system; or a typed backend source for a
+    /// provider failure.
     fn triangular_solve(
         &mut self,
         a: &Tensor,
@@ -48,11 +50,17 @@ pub trait LinalgBackend: TensorBackend {
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Compute public LU outputs `(P, L, U, parity)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` when the input is not a supported matrix or
+    /// dtype, and `Error::Extension` or a typed backend source when LU
+    /// execution or pivot storage fails.
     fn lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
     #[doc(hidden)]
     fn lu_factor(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "lu_factor",
             format!(
                 "backend {} does not implement internal packed LU factorization",
@@ -67,12 +75,24 @@ pub trait LinalgBackend: TensorBackend {
     /// `P * A * Q^T = L * U`. `parity` is a scalar real tensor containing
     /// `+1` or `-1`: `F32` for `F32`/`C32` inputs and `F64` for `F64`/`C64`
     /// inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for an invalid rank, square-shape
+    /// requirement, or dtype, and `Error::Extension` or a typed backend source
+    /// when complete-pivot factorization cannot be executed.
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
     /// Solve a linear system through the complete-pivot LU path.
     ///
     /// With `transpose_a = false`, this solves `A * x = b`. With
     /// `transpose_a = true`, this solves `A^T * x = b`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for incompatible coefficient/rhs shapes or
+    /// dtypes, `Error::Extension` with `ErrorKind::NumericalFailure` for a
+    /// singular system, or a typed backend source for provider failure.
     fn full_piv_lu_solve(
         &mut self,
         a: &Tensor,
@@ -81,6 +101,11 @@ pub trait LinalgBackend: TensorBackend {
     ) -> tenferro_tensor::Result<Tensor>;
 
     /// Compute public SVD outputs `(U, S, Vt)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for an unsupported rank or dtype and a
+    /// typed `Error::Extension` or backend source when the solver fails.
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
     /// Compute public SVD outputs `(U, S, Vt)` with explicit options.
@@ -105,6 +130,12 @@ pub trait LinalgBackend: TensorBackend {
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation::InvalidArgument` when `derivative_eps` is
+    /// non-finite or non-positive, then propagates the concrete `svd` and
+    /// gauge validation/backend errors.
     fn svd_with_options(
         &mut self,
         input: &Tensor,
@@ -118,7 +149,7 @@ pub trait LinalgBackend: TensorBackend {
 
     #[doc(hidden)]
     fn svd_values(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "svd_values",
             format!(
                 "backend {} does not implement internal singular-values-only decomposition",
@@ -148,8 +179,15 @@ pub trait LinalgBackend: TensorBackend {
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported` because the
+    /// backend does not accept borrowed views; an implementation may instead
+    /// return validation or typed backend-source errors after canonicalizing
+    /// the view.
     fn svd_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "svd",
             "backend does not accept borrowed tensor views at this execution boundary",
         ))
@@ -159,6 +197,12 @@ pub trait LinalgBackend: TensorBackend {
     ///
     /// QR is thin: for an `m x n` input, `Q` has shape `m x min(m, n)` and
     /// `R` has shape `min(m, n) x n`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for an unsupported rank, shape, or dtype,
+    /// and a typed `Error::Extension` or backend source when QR execution
+    /// fails.
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
     /// Compute public QR outputs `(Q, R)` with explicit options.
@@ -181,6 +225,11 @@ pub trait LinalgBackend: TensorBackend {
     /// assert_eq!(outputs[0].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Propagates `Error::Validation` from the input or gauge configuration,
+    /// plus typed extension/backend errors from QR execution.
     fn qr_with_options(
         &mut self,
         input: &Tensor,
@@ -213,8 +262,14 @@ pub trait LinalgBackend: TensorBackend {
     /// assert_eq!(outputs[1].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported` because the
+    /// backend does not accept borrowed views; implementations may return
+    /// validation or typed backend-source errors.
     fn qr_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "qr",
             "backend does not accept borrowed tensor views at this execution boundary",
         ))
@@ -224,6 +279,12 @@ pub trait LinalgBackend: TensorBackend {
     ///
     /// The returned vector order is `[values, vectors]`, where `values` has
     /// shape `[n]` and `vectors` has shape `[n, n]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for a non-square or unsupported-dtype input
+    /// and a typed `Error::Extension` or backend source when eigendecomposition
+    /// fails.
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
     /// Compute public Hermitian eigendecomposition outputs with explicit options.
@@ -250,6 +311,12 @@ pub trait LinalgBackend: TensorBackend {
     /// assert_eq!(outputs[0].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation::InvalidArgument` for an invalid
+    /// `derivative_eps`, then propagates eigensolver, gauge, and typed backend
+    /// errors.
     fn eigh_with_options(
         &mut self,
         input: &Tensor,
@@ -283,8 +350,14 @@ pub trait LinalgBackend: TensorBackend {
     /// assert_eq!(outputs[1].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported` because the
+    /// backend does not accept borrowed views; implementations may return
+    /// validation or typed backend-source errors.
     fn eigh_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "eigh",
             "backend does not accept borrowed tensor views at this execution boundary",
         ))
@@ -311,8 +384,14 @@ pub trait LinalgBackend: TensorBackend {
     /// assert_eq!(output.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported` because the
+    /// backend does not accept borrowed views; implementations may return
+    /// validation or typed backend-source errors.
     fn cholesky_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Tensor> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "cholesky",
             "backend does not accept borrowed tensor views at this execution boundary",
         ))
@@ -339,8 +418,14 @@ pub trait LinalgBackend: TensorBackend {
     /// assert_eq!(outputs.len(), 4);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported` because the
+    /// backend does not accept borrowed views; implementations may return
+    /// validation or typed backend-source errors.
     fn lu_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "lu",
             "backend does not accept borrowed tensor views at this execution boundary",
         ))
@@ -367,8 +452,14 @@ pub trait LinalgBackend: TensorBackend {
     /// assert_eq!(outputs.len(), 5);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported` because the
+    /// backend does not accept borrowed views; implementations may return
+    /// validation or typed backend-source errors.
     fn full_piv_lu_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "full_piv_lu",
             "backend does not accept borrowed tensor views at this execution boundary",
         ))
@@ -395,8 +486,14 @@ pub trait LinalgBackend: TensorBackend {
     /// assert_eq!(outputs.len(), 2);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported` because the
+    /// backend does not accept borrowed views; implementations may return
+    /// validation or typed backend-source errors.
     fn eig_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "eig",
             "backend does not accept borrowed tensor views at this execution boundary",
         ))
@@ -404,7 +501,7 @@ pub trait LinalgBackend: TensorBackend {
 
     #[doc(hidden)]
     fn eigh_values(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "eigh_values",
             format!(
                 "backend {} does not implement internal Hermitian eigenvalues-only decomposition",
@@ -414,11 +511,17 @@ pub trait LinalgBackend: TensorBackend {
     }
 
     /// Compute public general eigendecomposition outputs `(values, vectors)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for a non-square, rank, or dtype mismatch,
+    /// and a typed `Error::Extension` or backend source when the eigensolver
+    /// fails.
     fn eig(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>>;
 
     #[doc(hidden)]
     fn eig_values(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "eig_values",
             format!(
                 "backend {} does not implement internal general eigenvalues-only decomposition",
@@ -428,6 +531,12 @@ pub trait LinalgBackend: TensorBackend {
     }
 
     /// Solve a dense linear system.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for incompatible matrix/rhs shapes, rank,
+    /// or dtype; `Error::Extension` with `ErrorKind::NumericalFailure` for a
+    /// singular system; or a typed backend source for provider failure.
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor>;
 
     #[doc(hidden)]
@@ -440,7 +549,7 @@ pub trait LinalgBackend: TensorBackend {
         _transpose_a: bool,
         _conjugate_a: bool,
     ) -> tenferro_tensor::Result<Tensor> {
-        Err(tenferro_tensor::Error::backend_failure(
+        Err(tenferro_tensor::Error::unsupported(
             "lu_solve_prepared",
             format!(
                 "backend {} does not implement internal prepared LU solve",

@@ -1304,7 +1304,7 @@ fn ensure_host_typed_tensor<T: 'static>(
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<()> {
     if input.as_view().backend_buffer().is_some() {
-        return Err(Error::backend_failure(
+        return Err(Error::runtime_state(
             op,
             "CPU linalg backend received a backend buffer; download the tensor to host before CPU execution",
         ));
@@ -1415,15 +1415,21 @@ fn complex64_real_part_tensor(
 }
 
 fn svd_output_count_error(count: usize) -> Error {
-    Error::backend_failure("svd", format!("expected 3 outputs, got {count}"))
+    Error::Internal(format!(
+        "svd produced an invalid output count: expected 3, got {count}"
+    ))
 }
 
 fn full_piv_lu_output_count_error(count: usize) -> Error {
-    Error::backend_failure("full_piv_lu", format!("expected 5 outputs, got {count}"))
+    Error::Internal(format!(
+        "full_piv_lu produced an invalid output count: expected 5, got {count}"
+    ))
 }
 
 fn eigh_output_count_error(count: usize) -> Error {
-    Error::backend_failure("eigh", format!("expected 2 outputs, got {count}"))
+    Error::Internal(format!(
+        "eigh produced an invalid output count: expected 2, got {count}"
+    ))
 }
 
 fn full_piv_lu_c32_outputs_to_public_tensors(
@@ -1602,17 +1608,19 @@ fn apply_lu_pivots_typed<T: Clone>(
         for step in 0..k {
             let pivot_one_based = pivot_data[pivot_offset + step];
             if pivot_one_based <= 0 {
-                return Err(Error::backend_failure(
+                return Err(Error::invalid_argument(
                     "lu_solve_prepared",
+                    "pivot",
                     "LU pivot index must be 1-based and positive",
                 ));
             }
             let pivot = usize::try_from(pivot_one_based - 1).map_err(|_| {
-                Error::backend_failure("lu_solve_prepared", "LU pivot index is invalid")
+                Error::invalid_argument("lu_solve_prepared", "pivot", "LU pivot index is invalid")
             })?;
             if pivot >= rows {
-                return Err(Error::backend_failure(
+                return Err(Error::invalid_argument(
                     "lu_solve_prepared",
+                    "pivot",
                     "LU pivot index is out of bounds",
                 ));
             }

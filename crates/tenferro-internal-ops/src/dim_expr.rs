@@ -90,6 +90,12 @@ impl DimExpr {
     /// );
     /// assert_eq!(expr.eval(&[&[5, 7]]).unwrap(), 7);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DimExprEvalError`] when an input or axis is unavailable, an
+    /// arithmetic operation overflows, subtraction underflows, or division
+    /// would use zero as its divisor.
     pub fn eval(&self, input_shapes: &[&[usize]]) -> Result<usize, DimExprEvalError> {
         match self {
             Self::Const(v) => Ok(*v),
@@ -370,6 +376,11 @@ impl DimExpr {
     /// ];
     /// assert_eq!(DimExpr::eval_all(&exprs, &[&[3, 5]]).unwrap(), vec![3, 4]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the first [`DimExprEvalError`] encountered while evaluating an
+    /// expression.
     pub fn eval_all(
         exprs: &[Self],
         input_shapes: &[&[usize]],

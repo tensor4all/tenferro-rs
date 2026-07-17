@@ -7,9 +7,10 @@ use tenferro_tensor::{
 };
 
 use super::{
-    assert_cuda_unsupported_dtype, assert_error_parity, assert_shape_mismatch, assert_tensor_close,
-    assert_validation_kind, cpu_backend, download, gpu_backend, tensor_bool, tensor_c32,
-    tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
+    assert_cuda_unsupported_dtype, assert_error_parity, assert_runtime_state,
+    assert_shape_mismatch, assert_tensor_close, assert_validation_kind, cpu_backend, download,
+    gpu_backend, tensor_bool, tensor_c32, tensor_c64, tensor_f32, tensor_f64, tensor_i32,
+    tensor_i64, upload,
 };
 use tenferro_tensor::{ValidationError, ValidationKind};
 
@@ -756,7 +757,7 @@ fn cuda_to_contiguous_empty_view_stays_on_cuda() {
 
 #[test]
 #[ignore]
-fn cuda_to_contiguous_bool_view_returns_backend_failure() {
+fn cuda_to_contiguous_bool_view_returns_unsupported_dtype() {
     let mut gpu = gpu_backend();
     let input = tensor_bool(vec![2], vec![true, false]);
     let gpu_input = upload(&gpu, &input);
@@ -766,13 +767,7 @@ fn cuda_to_contiguous_bool_view_returns_backend_failure() {
 
     let err = gpu.to_contiguous(&gpu_tensor.as_view()).unwrap_err();
 
-    assert!(matches!(
-        err,
-        Error::BackendFailure {
-            op: "CudaBackend::to_contiguous",
-            ref message,
-        } if message.contains("unsupported dtype")
-    ));
+    assert_cuda_unsupported_dtype(&err, "CudaBackend::to_contiguous", DType::Bool);
 }
 
 #[test]
@@ -783,13 +778,11 @@ fn cuda_to_contiguous_host_view_returns_upload_hint() {
 
     let err = gpu.to_contiguous(&host.as_view()).unwrap_err();
 
-    assert!(matches!(
-        err,
-        Error::BackendFailure {
-            op: "CudaBackend::to_contiguous",
-            ref message,
-        } if message.contains("upload_tensor()")
-    ));
+    assert_runtime_state(
+        &err,
+        "CudaBackend::to_contiguous",
+        "expected CubeCL GPU tensor view, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.",
+    );
 }
 
 #[test]
@@ -807,13 +800,11 @@ fn cuda_copy_into_host_source_returns_upload_hint() {
         .copy_into(&src.as_view(), &mut dst.as_view_mut())
         .unwrap_err();
 
-    assert!(matches!(
-        err,
-        Error::BackendFailure {
-            op: "CudaBackend::copy_into",
-            ref message,
-        } if message.contains("upload_tensor()")
-    ));
+    assert_runtime_state(
+        &err,
+        "CudaBackend::copy_into",
+        "expected CubeCL GPU tensor view, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.",
+    );
 }
 
 #[test]
@@ -831,13 +822,11 @@ fn cuda_copy_into_host_destination_returns_upload_hint() {
         .copy_into(&src.as_view(), &mut dst.as_view_mut())
         .unwrap_err();
 
-    assert!(matches!(
-        err,
-        Error::BackendFailure {
-            op: "CudaBackend::copy_into",
-            ref message,
-        } if message.contains("upload_tensor()")
-    ));
+    assert_runtime_state(
+        &err,
+        "CudaBackend::copy_into",
+        "expected CubeCL GPU tensor view, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.",
+    );
 }
 
 #[test]
@@ -910,7 +899,7 @@ fn cuda_copy_into_rejects_source_on_wrong_device() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op: "CudaBackend::copy_into",
             ref message,
         } if message.contains("cuda:0") && message.contains("Cuda):1")
@@ -936,7 +925,7 @@ fn cuda_copy_into_rejects_destination_on_wrong_device() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op: "CudaBackend::copy_into",
             ref message,
         } if message.contains("cuda:0") && message.contains("Cuda):1")

@@ -28,14 +28,30 @@ macro_rules! dispatch_ternary_result_with_pool {
         match ($a, $b, $c) {
             (Tensor::F32($x), Tensor::F32($y), Tensor::F32($z)) => Ok(Tensor::F32($body?)),
             (Tensor::F64($x), Tensor::F64($y), Tensor::F64($z)) => Ok(Tensor::F64($body?)),
-            _ => Err(crate::Error::backend_failure($op, "dtype mismatch")),
+            _ => Err(ternary_dtype_error(
+                $op,
+                [$a.dtype(), $b.dtype(), $c.dtype()],
+            )),
         }
     };
 }
 
+fn ternary_dtype_error(op: &'static str, dtypes: [DType; 3]) -> crate::Error {
+    if dtypes[0] != dtypes[1] {
+        dtype_pair_error(op, dtypes[0], dtypes[1])
+    } else if dtypes[0] != dtypes[2] {
+        dtype_pair_error(op, dtypes[0], dtypes[2])
+    } else {
+        crate::Error::unsupported(
+            op,
+            format!("unsupported dtype {:?} for all three inputs", dtypes[0]),
+        )
+    }
+}
+
 fn dtype_pair_error(op: &'static str, lhs: DType, rhs: DType) -> crate::Error {
     if lhs == rhs {
-        crate::Error::backend_failure(op, format!("unsupported dtype {lhs:?}"))
+        crate::Error::unsupported(op, format!("unsupported dtype {lhs:?}"))
     } else {
         crate::Error::dtype_mismatch(op, lhs, rhs)
     }
@@ -54,7 +70,10 @@ fn is_complex_dtype(dtype: DType) -> bool {
 }
 
 fn ordered_complex_error(op: &'static str) -> crate::Error {
-    crate::Error::invalid_argument(op, "configuration", "complex tensors do not have a total order; compute abs/norm explicitly before ordered operations")
+    crate::Error::unsupported(
+        op,
+        "complex tensors do not have a total order; compute abs/norm explicitly before ordered operations",
+    )
 }
 
 fn reject_complex_ordered_dtypes(op: &'static str, dtypes: &[DType]) -> crate::Result<()> {
@@ -72,8 +91,9 @@ fn validate_elementwise_fusion_inputs(
     plan: &ElementwiseFusionPlan,
 ) -> crate::Result<bool> {
     if inputs.len() != plan.input_count() {
-        return Err(crate::Error::backend_failure(
+        return Err(crate::Error::invalid_argument(
             ELEMENTWISE_FUSION_OP,
+            "inputs",
             format!(
                 "plan expects {} inputs but backend received {}",
                 plan.input_count(),
@@ -82,8 +102,9 @@ fn validate_elementwise_fusion_inputs(
         ));
     }
     if plan.input_views().len() != plan.input_count() {
-        return Err(crate::Error::backend_failure(
+        return Err(crate::Error::invalid_argument(
             ELEMENTWISE_FUSION_OP,
+            "input_views",
             format!(
                 "plan has {} input views for {} inputs",
                 plan.input_views().len(),
@@ -1500,8 +1521,9 @@ where
     T: 'static,
 {
     axes.iter().try_fold(1usize, |acc, &axis| {
-        acc.checked_mul(view.shape()[axis])
-            .ok_or_else(|| crate::Error::backend_failure(op, "shape size overflows usize"))
+        acc.checked_mul(view.shape()[axis]).ok_or_else(|| {
+            crate::Error::invalid_argument(op, "shape", "shape size overflows usize")
+        })
     })
 }
 
@@ -1810,8 +1832,9 @@ fn lazy_outer_product_strides(spec: LazyOuterProductStrideSpec<'_>) -> crate::Re
     for (&lhs_axis, &rhs_axis) in spec.lhs_batch_axes.iter().zip(spec.rhs_batch_axes.iter()) {
         let output_axis = spec.lhs_dims[lhs_axis];
         if spec.rhs_dims[rhs_axis] != output_axis {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::invalid_argument(
                 "broadcast_multiply",
+                "dimensions",
                 "batch axes disagree while building lazy outer-product layout",
             ));
         }
@@ -1823,8 +1846,9 @@ fn lazy_outer_product_strides(spec: LazyOuterProductStrideSpec<'_>) -> crate::Re
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::invalid_argument(
                 "broadcast_multiply",
+                "dimensions",
                 "lazy outer-product layout did not cover every output axis",
             )
         })
@@ -2059,7 +2083,11 @@ where
 {
     let len = shape.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim).ok_or_else(|| {
-            crate::Error::backend_failure("broadcast_multiply", "output shape size overflows usize")
+            crate::Error::invalid_argument(
+                "broadcast_multiply",
+                "shape",
+                "output shape size overflows usize",
+            )
         })
     })?;
     // SAFETY: every pooled element is initialized with `fill` before tensor construction.
@@ -2403,7 +2431,7 @@ pub(crate) fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
         Tensor::F64(t) => Ok(Tensor::F64(typed_neg_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_neg_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_neg_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::Bool(_) => Err(crate::Error::unsupported(
             "neg",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2454,7 +2482,7 @@ pub(crate) fn neg_read_with_pool(
             &t,
             |x| -x,
         )?)),
-        _ => Err(crate::Error::backend_failure(
+        _ => Err(crate::Error::unsupported(
             "neg",
             format!("unsupported dtype {dtype:?}"),
         )),
@@ -2484,7 +2512,7 @@ pub(crate) fn conj_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate:
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_conj_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_conj_with_pool(buffers, t)?)),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::unsupported(
             "conj",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2523,7 +2551,7 @@ pub(crate) fn conj_read_with_pool(
             &t,
             |x| x.conj_elem(),
         )?)),
-        _ => Err(crate::Error::backend_failure(
+        _ => Err(crate::Error::unsupported(
             "conj",
             format!("unsupported dtype {dtype:?}"),
         )),
@@ -2556,7 +2584,7 @@ pub(crate) fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
         Tensor::F64(t) => Ok(Tensor::F64(typed_abs_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_abs_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_abs_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::Bool(_) => Err(crate::Error::unsupported(
             "abs",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2597,7 +2625,7 @@ pub(crate) fn abs_read_with_pool(
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::F32(typed_complex_abs_view_with_pool(buffers, &t)?)),
         CpuReadView::C64(t) => Ok(Tensor::F64(typed_complex_abs_view_with_pool(buffers, &t)?)),
-        _ => Err(crate::Error::backend_failure(
+        _ => Err(crate::Error::unsupported(
             "abs",
             format!("unsupported dtype {dtype:?}"),
         )),
@@ -2628,7 +2656,7 @@ pub(crate) fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate:
         Tensor::F64(t) => Ok(Tensor::F64(typed_sign_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_integer_sign_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_integer_sign_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::Bool(_) => Err(crate::Error::unsupported(
             "sign",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2679,7 +2707,7 @@ pub(crate) fn sign_read_with_pool(
             &t,
             |x| x.sign_elem(),
         )?)),
-        _ => Err(crate::Error::backend_failure(
+        _ => Err(crate::Error::unsupported(
             "sign",
             format!("unsupported dtype {dtype:?}"),
         )),
@@ -3122,7 +3150,7 @@ where
             &typed_view("add", rhs)?,
             |x, y| x + y,
         )
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data("add", lhs)?[0];
@@ -3131,7 +3159,7 @@ where
         map_into(&mut out.view_mut(), &typed_view("add", rhs)?, |x| {
             scalar + x
         })
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data("add", rhs)?[0];
@@ -3140,7 +3168,7 @@ where
         map_into(&mut out.view_mut(), &typed_view("add", lhs)?, |x| {
             x + scalar
         })
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else {
         Err(crate::Error::shape_mismatch(
@@ -3170,21 +3198,21 @@ where
             &typed_view(op, rhs)?,
             f,
         )
-        .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data(op, lhs)?[0];
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view(op, rhs)?, |x| f(scalar, x))
-            .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
+            .map_err(|err| crate::Error::backend_source(op, err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data(op, rhs)?[0];
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view(op, lhs)?, |x| f(x, scalar))
-            .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
+            .map_err(|err| crate::Error::backend_source(op, err))?;
         Ok(tensor_from_array(out))
     } else {
         Err(crate::Error::shape_mismatch(
@@ -3238,7 +3266,7 @@ where
             &typed_view_from_view("add", rhs)?,
             |x, y| x + y,
         )
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view("add", lhs)?.get(&[]);
@@ -3249,7 +3277,7 @@ where
             &typed_view_from_view("add", rhs)?,
             |x| scalar + x,
         )
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view("add", rhs)?.get(&[]);
@@ -3260,7 +3288,7 @@ where
             &typed_view_from_view("add", lhs)?,
             |x| x + scalar,
         )
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else {
         Err(crate::Error::shape_mismatch(

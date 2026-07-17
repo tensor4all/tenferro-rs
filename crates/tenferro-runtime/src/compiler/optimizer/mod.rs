@@ -7,6 +7,15 @@ use crate::Result;
 use super::options::OptimizerConfig;
 
 /// Run the standard execution-IR optimizer pipeline.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `ShapeMismatch`, `DTypeMismatch`,
+/// `RankMismatch`, or `InvalidArgument` when shape/dtype metadata is
+/// inconsistent with an optimizer pass, [`crate::Error::Unsupported`] when a
+/// configured decomposition cannot support an operation, and
+/// [`crate::Error::Internal`] when the execution IR violates an invariant such
+/// as a missing slot metadata entry.
 pub fn optimize_exec_program(
     program: &mut ExecProgram,
     input_dtypes: &[DType],

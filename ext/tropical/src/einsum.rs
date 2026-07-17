@@ -29,6 +29,7 @@ use tenferro_einsum::{ContractionTree, Subscripts};
 use tenferro_tensor::{DType, Tensor, TensorScalar};
 
 use crate::cpu::{tropical_gemm_with_argmax, TropicalGemmKind};
+use crate::error::{from_einsum_error, unsupported_dtype};
 use crate::TropicalKind;
 
 const OP: &str = "tropical_einsum_with_argmax";
@@ -232,12 +233,12 @@ pub struct TropicalEinsumResult {
 /// This supports binary contractions over compact host `f32` and `f64`
 /// tensors, including batched GEMM-style contractions and a generic fallback
 /// for unique-label binary contractions. Unsupported cases return
-/// [`tenferro_tensor::Error::InvalidConfig`] instead of panicking.
+/// structured validation errors instead of panicking.
 ///
 /// # Errors
 ///
-/// Returns [`tenferro_tensor::Error::InvalidConfig`] when notation, shapes,
-/// dtype, or lowering features are outside the supported surface.
+/// Returns shared validation errors for invalid notation, shapes, and dtypes;
+/// unsupported lowering features use a structured argument error.
 ///
 /// # Examples
 ///
@@ -257,8 +258,7 @@ pub fn tropical_einsum_with_argmax(
     inputs: &[&Tensor],
     notation: &str,
 ) -> tenferro_tensor::Result<TropicalEinsumResult> {
-    let subscripts = Subscripts::parse(notation)
-        .map_err(|err| invalid_config(format!("invalid einsum notation `{notation}`: {err}")))?;
+    let subscripts = Subscripts::parse(notation).map_err(|err| from_einsum_error(OP, err))?;
     tropical_einsum_subscripts_with_argmax(kind, inputs, &subscripts)
 }
 
@@ -270,8 +270,9 @@ pub fn tropical_einsum_with_argmax(
 ///
 /// # Errors
 ///
-/// Returns [`tenferro_tensor::Error::InvalidConfig`] when shapes, dtype, or
-/// lowering features are outside the supported binary tropical surface.
+/// Returns [`tenferro_tensor::Error::Validation`] for invalid shapes or
+/// lowering features, or [`tenferro_tensor::Error::Extension`] containing the
+/// typed `UnsupportedDType` source when the input dtype is not `F32` or `F64`.
 ///
 /// # Examples
 ///
@@ -315,7 +316,7 @@ pub fn tropical_einsum_subscripts_with_argmax(
 
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
     let tree = ContractionTree::optimize(subscripts, &shapes)
-        .map_err(|err| invalid_config(format!("einsum lowering failed: {err}")))?;
+        .map_err(|err| from_einsum_error(OP, err))?;
     if tree.step_count() != 1 {
         return Err(invalid_config(format!(
             "only one pairwise contraction step is supported, got {}",
@@ -371,12 +372,8 @@ pub fn tropical_einsum_subscripts_with_argmax(
             output_subs,
             &gemm,
         ),
-        (lhs, rhs) if lhs != rhs => Err(invalid_config(format!(
-            "input dtype mismatch: left is {lhs:?}, right is {rhs:?}"
-        ))),
-        (dtype, _) => Err(invalid_config(format!(
-            "unsupported dtype {dtype:?}; only F32 and F64 are supported"
-        ))),
+        (lhs, rhs) if lhs != rhs => Err(tenferro_tensor::Error::dtype_mismatch(OP, lhs, rhs)),
+        (dtype, _) => Err(unsupported_dtype(OP, dtype)),
     }
 }
 
@@ -635,9 +632,7 @@ trait TropicalFloat: Float + TensorScalar {
 impl TropicalFloat for f32 {
     fn host_slice(tensor: &Tensor) -> tenferro_tensor::Result<&[Self]> {
         match tensor {
-            Tensor::F32(tensor) => tensor.as_view().as_slice().map_err(|err| {
-                invalid_config(format!("input must be a compact host F32 tensor: {err}"))
-            }),
+            Tensor::F32(tensor) => tensor.as_view().as_slice(),
             _ => Err(invalid_config(format!(
                 "expected F32 input, got {:?}",
                 tensor.dtype()
@@ -649,9 +644,7 @@ impl TropicalFloat for f32 {
 impl TropicalFloat for f64 {
     fn host_slice(tensor: &Tensor) -> tenferro_tensor::Result<&[Self]> {
         match tensor {
-            Tensor::F64(tensor) => tensor.as_view().as_slice().map_err(|err| {
-                invalid_config(format!("input must be a compact host F64 tensor: {err}"))
-            }),
+            Tensor::F64(tensor) => tensor.as_view().as_slice(),
             _ => Err(invalid_config(format!(
                 "expected F64 input, got {:?}",
                 tensor.dtype()
@@ -928,8 +921,5 @@ fn decode_col_major_index(mut flat: usize, shape: &[usize]) -> Option<Vec<usize>
 }
 
 fn invalid_config(message: impl Into<String>) -> tenferro_tensor::Error {
-    tenferro_tensor::Error::InvalidConfig {
-        op: OP,
-        message: message.into(),
-    }
+    tenferro_tensor::Error::invalid_argument(OP, "configuration", message)
 }

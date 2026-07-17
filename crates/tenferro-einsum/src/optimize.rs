@@ -109,9 +109,8 @@ pub(crate) fn plan_spec_from_optimize(
             let _ = jax_path_to_v1_pairs(&path, subscripts.inputs.len())?;
             Ok(EinsumPlanSpec::Path(path))
         }
-        EinsumOptimize::Tree(_) => Err(Error::InvalidArgument(
-            "precomputed contraction tree requires concrete input shapes; use Path or parenthesized notation for symbolic traced einsum"
-                .into(),
+        EinsumOptimize::Tree(_) => Err(Error::planning(
+            "precomputed contraction tree requires concrete input shapes; use Path or parenthesized notation for symbolic traced einsum",
         )),
     }
 }
@@ -202,7 +201,7 @@ fn tree_pairs(tree: &ContractionTree) -> Vec<(usize, usize)> {
 fn validate_fixed_pairs(pairs: &[(usize, usize)], input_count: usize) -> Result<()> {
     let required_steps = input_count.saturating_sub(1);
     if pairs.len() != required_steps {
-        return Err(Error::InvalidArgument(format!(
+        return Err(Error::planning(format!(
             "explicit contraction path for {input_count} operands must have {required_steps} steps, got {}",
             pairs.len()
         )));
@@ -216,17 +215,17 @@ fn validate_fixed_pairs(pairs: &[(usize, usize)], input_count: usize) -> Result<
     for (step_idx, &(left, right)) in pairs.iter().enumerate() {
         let next_idx = input_count + step_idx;
         if left == right {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::planning(format!(
                 "pair ({left}, {right}) must reference two distinct live operands"
             )));
         }
         if left >= next_idx || right >= next_idx {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::planning(format!(
                 "pair ({left}, {right}) references non-existent operand"
             )));
         }
         if !live[left] || !live[right] {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::planning(format!(
                 "pair ({left}, {right}) references an operand or intermediate that is no longer live"
             )));
         }
@@ -238,7 +237,7 @@ fn validate_fixed_pairs(pairs: &[(usize, usize)], input_count: usize) -> Result<
 
     let live_count = live.iter().filter(|&&is_live| is_live).count();
     if live_count != 1 {
-        return Err(Error::InvalidArgument(format!(
+        return Err(Error::planning(format!(
             "explicit contraction path must leave exactly one live result, got {live_count}"
         )));
     }
@@ -294,7 +293,7 @@ pub(crate) fn jax_path_to_v1_pairs(
 ) -> Result<Vec<(usize, usize)>> {
     let required_steps = input_count.saturating_sub(1);
     if jax_path.len() != required_steps {
-        return Err(Error::InvalidArgument(format!(
+        return Err(Error::planning(format!(
             "explicit contraction path for {input_count} operands must have {required_steps} steps, got {}",
             jax_path.len()
         )));
@@ -305,13 +304,13 @@ pub(crate) fn jax_path_to_v1_pairs(
 
     for (step, &(pos_a, pos_b)) in jax_path.iter().enumerate() {
         if pos_a == pos_b {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::planning(format!(
                 "path step {step} references the same operand position twice: {pos_a}"
             )));
         }
         let current_len = positions.len();
         if pos_a >= current_len || pos_b >= current_len {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::planning(format!(
                 "path step {step} references operand positions ({pos_a}, {pos_b}) with only {current_len} live operands"
             )));
         }
@@ -347,8 +346,8 @@ pub(crate) fn nested_to_v1_pairs(
     let mut next_id = input_count;
     let root_id = walk_nested(nested, input_count, &mut pairs, &mut next_id)?;
     if input_count == 0 || root_id >= next_id {
-        return Err(Error::InvalidArgument(
-            "nested einsum did not produce a valid root operand".into(),
+        return Err(Error::planning(
+            "nested einsum did not produce a valid root operand",
         ));
     }
     Ok(pairs)
@@ -363,7 +362,7 @@ fn walk_nested(
     match nested {
         NestedEinsum::Leaf(idx) => {
             if *idx >= input_count {
-                return Err(Error::InvalidArgument(format!(
+                return Err(Error::planning(format!(
                     "nested einsum leaf {idx} is outside 0..{input_count}"
                 )));
             }
@@ -371,8 +370,8 @@ fn walk_nested(
         }
         NestedEinsum::Node { children, .. } => {
             let Some(first) = children.first() else {
-                return Err(Error::InvalidArgument(
-                    "nested einsum node must have at least one child".into(),
+                return Err(Error::planning(
+                    "nested einsum node must have at least one child",
                 ));
             };
             let mut result_id = walk_nested(first, input_count, pairs, next_id)?;

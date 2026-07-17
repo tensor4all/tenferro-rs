@@ -48,7 +48,7 @@ pub use ext_op::{
 pub use ext_op::{ExtensionOp, HostReference};
 pub use shape_constraint::{ExtensionShapeContext, ExtensionShapeError, ShapeRelation};
 pub use shape_extent::ShapeExtent;
-pub use sym_dim::SymDim;
+pub use sym_dim::{SymDim, SymDimConversionError};
 pub use tenferro_extension_macros::ExtensionFamilyId;
 pub use tenferro_tensor::config;
 

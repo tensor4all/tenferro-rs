@@ -3,7 +3,7 @@ use tenferro_ext_tropical::{
     einsum::tropical_einsum_with_argmax, traced::tropical_einsum_subscripts, TropicalKind,
 };
 use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
-use tenferro_tensor::{Error, Tensor};
+use tenferro_tensor::{Error, ErrorKind, Tensor, ValidationError};
 
 #[test]
 fn independent_symbolic_contract_enforces_repeated_tropical_labels() {
@@ -302,7 +302,7 @@ fn empty_outputs_allow_zero_sized_contracted_modes() {
 }
 
 #[test]
-fn unsupported_cases_return_invalid_config() {
+fn unsupported_cases_return_structured_errors() {
     let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let b = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 
@@ -320,9 +320,12 @@ fn unsupported_cases_return_invalid_config() {
         assert!(
             matches!(
                 err,
-                Error::InvalidConfig {
+                Error::Validation {
                     op: "tropical_einsum_with_argmax",
-                    ..
+                    source: ValidationError::InvalidArgument {
+                        argument: "configuration",
+                        ..
+                    },
                 }
             ),
             "{case} returned {err:?}"
@@ -338,8 +341,10 @@ fn unsupported_cases_return_invalid_config() {
     .unwrap_err();
     assert!(matches!(
         err,
-        Error::InvalidConfig {
+        Error::Extension {
             op: "tropical_einsum_with_argmax",
+            family: "tropical",
+            kind: ErrorKind::Unsupported,
             ..
         }
     ));
@@ -351,9 +356,12 @@ fn unsupported_cases_return_invalid_config() {
             .unwrap_err();
     assert!(matches!(
         err,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "tropical_einsum_with_argmax",
-            ..
+            source: ValidationError::InvalidArgument {
+                argument: "configuration",
+                ..
+            },
         }
     ));
 }

@@ -6,7 +6,11 @@ fn checked_shape_product(op: &'static str, shape: &[usize]) -> crate::Result<usi
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
         .ok_or_else(|| {
-            crate::Error::backend_failure(op, format!("shape product overflow for {shape:?}"))
+            crate::Error::invalid_argument(
+                op,
+                "shape",
+                format!("shape product overflow for {shape:?}"),
+            )
         })
 }
 
@@ -21,4 +25,32 @@ where
     // SAFETY: callers use this helper only for pooled outputs that are fully overwritten.
     let data = unsafe { T::pool_acquire(buffers, len) };
     TypedTensor::from_vec_col_major(shape, data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pooled_uninit_tensor;
+    use crate::buffer_pool::BufferPool;
+    use tenferro_tensor::{ErrorKind, ValidationKind};
+
+    #[test]
+    fn pooled_uninit_tensor_preserves_shape_for_full_overwrite_callers() {
+        let mut buffers = BufferPool::new();
+        let output = pooled_uninit_tensor::<f64>(&mut buffers, vec![2, 3]).unwrap();
+
+        assert_eq!(output.shape(), &[2, 3]);
+    }
+
+    #[test]
+    fn pooled_uninit_tensor_reports_shape_product_overflow() {
+        let mut buffers = BufferPool::new();
+        let error = pooled_uninit_tensor::<f64>(&mut buffers, vec![usize::MAX, 2])
+            .expect_err("an overflowing output shape must be rejected before allocation");
+
+        assert_eq!(
+            error.kind(),
+            ErrorKind::Validation(ValidationKind::InvalidArgument)
+        );
+        assert!(error.to_string().contains("shape product overflow"));
+    }
 }

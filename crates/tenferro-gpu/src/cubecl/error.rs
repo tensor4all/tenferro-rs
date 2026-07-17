@@ -8,6 +8,23 @@ pub(crate) enum CudaError {
     /// The operation does not have a CUDA implementation for this dtype.
     #[error("{op} does not support dtype {dtype:?} on CUDA")]
     UnsupportedDType { op: &'static str, dtype: DType },
+    /// The backend does not implement an operation or configuration.
+    #[error("{op} is unsupported on CUDA: {detail}")]
+    UnsupportedOperation {
+        op: &'static str,
+        detail: &'static str,
+    },
+    /// A CUDA library call returned a non-success status.
+    #[error("{library} call {call} returned status {status}")]
+    ProviderStatus {
+        library: &'static str,
+        call: &'static str,
+        status: i32,
+    },
+    /// A CUDA provider reported a workspace size that cannot be represented
+    /// by the host allocator.
+    #[error("{op} workspace size {size} does not fit in usize")]
+    WorkspaceSizeOverflow { op: &'static str, size: u64 },
     /// Integer arithmetic encountered a zero divisor.
     #[error("{op} detected division by zero for dtype {dtype:?} on CUDA")]
     DivisionByZero { op: &'static str, dtype: DType },
@@ -34,6 +51,45 @@ pub(crate) fn division_by_zero(op: &'static str, dtype: DType) -> crate::Error {
         "cuda",
         ErrorKind::NumericalFailure,
         CudaError::DivisionByZero { op, dtype },
+    )
+}
+
+/// Construct a typed CUDA operation-capability failure.
+pub(crate) fn unsupported_operation(op: &'static str, detail: &'static str) -> crate::Error {
+    crate::Error::extension(
+        op,
+        "cuda",
+        ErrorKind::Unsupported,
+        CudaError::UnsupportedOperation { op, detail },
+    )
+}
+
+/// Preserve a CUDA library status as a typed backend source.
+pub(crate) fn provider_status(
+    op: &'static str,
+    library: &'static str,
+    call: &'static str,
+    status: i32,
+) -> crate::Error {
+    crate::Error::extension(
+        op,
+        "cuda",
+        ErrorKind::BackendFailure,
+        CudaError::ProviderStatus {
+            library,
+            call,
+            status,
+        },
+    )
+}
+
+/// Preserve a CUDA workspace allocation overflow as a typed backend source.
+pub(crate) fn workspace_size_overflow(op: &'static str, size: u64) -> crate::Error {
+    crate::Error::extension(
+        op,
+        "cuda",
+        ErrorKind::BackendFailure,
+        CudaError::WorkspaceSizeOverflow { op, size },
     )
 }
 
@@ -67,6 +123,43 @@ mod tests {
             CudaError::UnsupportedDType {
                 op: "exp",
                 dtype: DType::I32
+            }
+        ));
+    }
+
+    #[test]
+    fn provider_status_preserves_classification_and_source() {
+        let error = provider_status("dot_general", "cuTENSOR", "cutensorContract", 7);
+
+        assert_eq!(error.kind(), ErrorKind::BackendFailure);
+        let source = error.source().expect("CUDA errors have a source");
+        let source = source
+            .downcast_ref::<CudaError>()
+            .expect("CUDA errors preserve their typed source");
+        assert!(matches!(
+            source,
+            CudaError::ProviderStatus {
+                library: "cuTENSOR",
+                call: "cutensorContract",
+                status: 7,
+            }
+        ));
+    }
+
+    #[test]
+    fn workspace_overflow_preserves_classification_and_source() {
+        let error = workspace_size_overflow("dot_general", u64::MAX);
+
+        assert_eq!(error.kind(), ErrorKind::BackendFailure);
+        let source = error.source().expect("CUDA errors have a source");
+        let source = source
+            .downcast_ref::<CudaError>()
+            .expect("CUDA errors preserve their typed source");
+        assert!(matches!(
+            source,
+            CudaError::WorkspaceSizeOverflow {
+                op: "dot_general",
+                size: u64::MAX,
             }
         ));
     }

@@ -542,21 +542,21 @@ fn test_gpu_eig_returns_unsupported_error() {
     let gpu = upload(&backend, &cpu);
 
     let err = backend.eig(&gpu).unwrap_err();
-    assert!(matches!(err, Error::BackendFailure { op: "eig", .. }));
+    assert!(matches!(err, Error::Unsupported { op: "eig", .. }));
 }
 
 #[test]
 #[ignore]
-fn test_cubecl_eig_f32_returns_backend_failure() {
+fn test_cubecl_eig_f32_returns_unsupported_error() {
     let input = tensor_f32(vec![2, 2], vec![1.0, 0.0, 0.0, 3.0]);
     let mut gpu = gpu_backend();
     let err = gpu.eig(&upload(&gpu, &input)).unwrap_err();
-    assert!(matches!(err, Error::BackendFailure { op: "eig", .. }));
+    assert!(matches!(err, Error::Unsupported { op: "eig", .. }));
 }
 
 #[test]
 #[ignore]
-fn test_cubecl_eig_c32_returns_backend_failure() {
+fn test_cubecl_eig_c32_returns_unsupported_error() {
     let input = tensor_c32(
         vec![2, 2],
         vec![
@@ -568,7 +568,7 @@ fn test_cubecl_eig_c32_returns_backend_failure() {
     );
     let mut gpu = gpu_backend();
     let err = gpu.eig(&upload(&gpu, &input)).unwrap_err();
-    assert!(matches!(err, Error::BackendFailure { op: "eig", .. }));
+    assert!(matches!(err, Error::Unsupported { op: "eig", .. }));
 }
 
 #[test]

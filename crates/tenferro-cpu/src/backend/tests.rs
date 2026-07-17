@@ -881,17 +881,58 @@ fn with_threads_rejects_invalid_thread_count() {
 
 #[test]
 fn backend_error_keeps_placement_failure_typed() {
-    let placement = CpuPlacementError::TopologyDiscovery {
-        requested: CpuPlacement::Auto,
-        backend: CpuBackendKind::Faer,
-        source: CpuTopologyError::InvalidCpuList {
-            list: "bad".to_owned(),
-            reason: "test failure",
+    let error = CpuBackendError::placement(
+        "CpuBackend::try_new",
+        CpuPlacementError::TopologyDiscovery {
+            requested: CpuPlacement::Auto,
+            backend: CpuBackendKind::Faer,
+            source: CpuTopologyError::InvalidCpuList {
+                list: "bad".to_owned(),
+                reason: "test failure",
+            },
         },
-    };
+    );
+    assert!(matches!(
+        error.placement_error(),
+        Some(CpuPlacementError::TopologyDiscovery {
+            requested: CpuPlacement::Auto,
+            backend: CpuBackendKind::Faer,
+            source: CpuTopologyError::InvalidCpuList { .. },
+        })
+    ));
+}
 
-    let error = CpuBackendError::placement("CpuBackend::try_new", placement.clone());
-    assert_eq!(error.placement_error(), Some(&placement));
+#[test]
+fn placement_error_conversion_uses_runtime_state_for_environment_failures() {
+    let error = CpuBackendError::placement(
+        "CpuBackend::try_new",
+        CpuPlacementError::ManagedAffinityUnavailable {
+            requested: CpuPlacement::AllAllowed,
+            backend: CpuBackendKind::Faer,
+        },
+    );
+
+    let error: crate::Error = error.into();
+    assert_eq!(error.kind(), crate::ErrorKind::RuntimeState);
+    assert!(matches!(
+        std::error::Error::source(&error),
+        Some(source) if source.downcast_ref::<CpuPlacementError>().is_some()
+    ));
+}
+
+#[test]
+fn placement_error_conversion_keeps_unsupported_affinity_distinct() {
+    let error = CpuBackendError::placement(
+        "CpuBackend::with_placement",
+        CpuPlacementError::ExternalProviderAffinityUnmanaged {
+            requested: CpuPlacement::AllAllowed,
+            backend: CpuBackendKind::Blas,
+        },
+    );
+
+    let error: crate::Error = error.into();
+    assert_eq!(error.kind(), crate::ErrorKind::Unsupported);
+    assert!(std::error::Error::source(&error).is_some());
 }
 
 #[test]
@@ -901,15 +942,15 @@ fn fallible_backend_construction_preserves_topology_error_category() {
         reason: "component is not a CPU number",
     };
 
-    let error = resolve_discovered_topology(CpuBackendKind::Faer, Err(source.clone())).unwrap_err();
-    assert_eq!(
-        error,
+    let error = resolve_discovered_topology(CpuBackendKind::Faer, Err(source)).unwrap_err();
+    match error {
         CpuPlacementError::TopologyDiscovery {
             requested: CpuPlacement::Auto,
             backend: CpuBackendKind::Faer,
-            source,
-        }
-    );
+            source: CpuTopologyError::InvalidCpuList { list, .. },
+        } => assert_eq!(list, "not-a-cpu"),
+        other => panic!("unexpected placement error: {other:?}"),
+    }
 }
 
 #[test]

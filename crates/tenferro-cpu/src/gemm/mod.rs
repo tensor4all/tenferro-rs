@@ -617,8 +617,9 @@ where
     let beta_is_zero = beta == T::zero();
     let shape = out.shape().to_vec();
     let element_count = checked_product(&shape).ok_or_else(|| {
-        Error::backend_failure(
+        Error::invalid_argument(
             OP,
+            "configuration",
             "output element count overflow while scaling empty contraction output",
         )
     })?;
@@ -1060,7 +1061,7 @@ where
         rhs_conj,
     )?
     .ok_or_else(|| {
-        Error::backend_failure(
+        Error::runtime_state(
             "dot_general",
             "CPU GEMM requires host-backed canonical inputs",
         )
@@ -1729,8 +1730,13 @@ where
     let Some(dims) = analyse_gemm_cached(cache, cache_slot, cache_kind, lhs, rhs, config)? else {
         return Ok(None);
     };
-    let out_n = checked_product(&dims.out_shape)
-        .ok_or_else(|| Error::backend_failure("dot_general", "output element count overflow"))?;
+    let out_n = checked_product(&dims.out_shape).ok_or_else(|| {
+        Error::invalid_argument(
+            "dot_general",
+            "configuration",
+            "output element count overflow",
+        )
+    })?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
         let data = T::pool_acquire_zeroed(buffers, out_n);
         return Ok(Some(TypedTensor::from_buffer_col_major(
@@ -1852,7 +1858,7 @@ where
         &new_config,
     )?
     .ok_or_else(|| {
-        Error::backend_failure(
+        Error::runtime_state(
             "dot_general",
             "CPU GEMM requires host-backed canonical inputs",
         )
@@ -2484,8 +2490,13 @@ where
         Some(dims) => dims,
         None => return Ok(None),
     };
-    let out_n = checked_product(&dims.out_shape)
-        .ok_or_else(|| Error::backend_failure("dot_general", "output element count overflow"))?;
+    let out_n = checked_product(&dims.out_shape).ok_or_else(|| {
+        Error::invalid_argument(
+            "dot_general",
+            "configuration",
+            "output element count overflow",
+        )
+    })?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
         let data = T::pool_acquire_zeroed(buffers, out_n);
         return Ok(Some(TypedTensor::from_buffer_col_major(
@@ -2584,8 +2595,13 @@ where
         Some(dims) => dims,
         None => return Ok(None),
     };
-    let out_n = checked_product(&dims.out_shape)
-        .ok_or_else(|| Error::backend_failure("dot_general", "output element count overflow"))?;
+    let out_n = checked_product(&dims.out_shape).ok_or_else(|| {
+        Error::invalid_argument(
+            "dot_general",
+            "configuration",
+            "output element count overflow",
+        )
+    })?;
     if dims.m == 0 || dims.n == 0 || dims.k == 0 || dims.batch_total == 0 {
         let data = T::pool_acquire_zeroed(buffers, out_n);
         return Ok(Some(TypedTensor::from_buffer_col_major(

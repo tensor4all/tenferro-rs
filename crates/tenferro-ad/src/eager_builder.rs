@@ -6,9 +6,11 @@ use crate::extension_runtime::ExtensionExecutor;
 use computegraph::{GraphOperation, LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_runtime::Error;
 use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveBuilder, PrimitiveValue};
 
+use crate::ad_rule_error::DeferredErrors;
 use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
 
 pub(crate) struct EagerPrimitiveBuilder<'a, B: TensorBackend + 'static> {
@@ -16,7 +18,7 @@ pub(crate) struct EagerPrimitiveBuilder<'a, B: TensorBackend + 'static> {
     pub(crate) extension_executor: Option<&'a mut ExtensionExecutor<B>>,
     pub(crate) external_data: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     pub(crate) results: Vec<Arc<Tensor>>,
-    error: Option<ADRuleError>,
+    errors: DeferredErrors,
 }
 
 impl<B: TensorBackend + 'static> fmt::Debug for EagerPrimitiveBuilder<'_, B> {
@@ -26,7 +28,7 @@ impl<B: TensorBackend + 'static> fmt::Debug for EagerPrimitiveBuilder<'_, B> {
             .field("has_extension_executor", &self.extension_executor.is_some())
             .field("external_data_len", &self.external_data.len())
             .field("results_len", &self.results.len())
-            .field("has_error", &self.error.is_some())
+            .field("has_error", &self.errors.has_error())
             .finish_non_exhaustive()
     }
 }
@@ -38,7 +40,7 @@ impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
             extension_executor: None,
             external_data: HashMap::new(),
             results: Vec::new(),
-            error: None,
+            errors: DeferredErrors::default(),
         }
     }
 
@@ -51,7 +53,7 @@ impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
             extension_executor: Some(extension_executor),
             external_data: HashMap::new(),
             results: Vec::new(),
-            error: None,
+            errors: DeferredErrors::default(),
         }
     }
 
@@ -68,13 +70,19 @@ impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
     }
 
     pub(crate) fn take_error(&mut self) -> Option<ADRuleError> {
-        self.error.take()
+        self.errors.take_ad_rule()
+    }
+
+    pub(crate) fn take_typed_error(&mut self) -> Option<Error> {
+        self.errors.take_typed()
     }
 
     fn record_error(&mut self, err: ADRuleError) {
-        if self.error.is_none() {
-            self.error = Some(err);
-        }
+        self.errors.record_ad_rule(err);
+    }
+
+    fn runtime_error(&mut self, err: Error) -> ADRuleError {
+        self.errors.runtime("tenferro-ad.eager", err)
     }
 
     fn dummy_output_ids(&self, operation: &StdTensorOp) -> Vec<LocalValueId> {
@@ -93,11 +101,8 @@ impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
             eager_builder_error(format!("missing tangent base eager value for {base_key:?}"))
         })?;
         let zero = Arc::new(
-            zero_like_tensor(base.as_ref(), self.backend).map_err(|err| {
-                eager_builder_error(format!(
-                    "failed to create eager primitive tangent zero: {err}"
-                ))
-            })?,
+            zero_like_tensor(base.as_ref(), self.backend)
+                .map_err(|err| self.runtime_error(Error::TensorRuntime(err)))?,
         );
         self.external_data.insert(key.clone(), Arc::clone(&zero));
         Ok(zero)
@@ -108,7 +113,7 @@ impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
         operation: StdTensorOp,
         inputs: Vec<ValueRef<StdTensorOp>>,
     ) -> Vec<LocalValueId> {
-        if self.error.is_some() {
+        if self.errors.has_error() {
             return self.dummy_output_ids(&operation);
         }
 
@@ -143,7 +148,7 @@ impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
         } else {
             exec_op_on_tensors(&operation, &concrete, self.backend)
         }
-        .map_err(|err| eager_builder_error(format!("eager exec failed for {operation:?}: {err}")));
+        .map_err(|err| self.runtime_error(err));
 
         let outputs = match outputs {
             Ok(outputs) => outputs,

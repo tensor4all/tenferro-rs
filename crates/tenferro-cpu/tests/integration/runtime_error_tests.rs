@@ -79,7 +79,7 @@ fn cpu_device_transfer_rejects_backend_buffers_at_boundary() {
         let err = actual.unwrap_err();
         assert!(matches!(
             err,
-            Error::BackendFailure {
+            Error::RuntimeState {
                 op,
                 ref message,
             } if op == expected_op && message.contains(expected_hint)
@@ -403,7 +403,7 @@ fn cpu_backend_rejects_backend_buffers_without_panicking() {
 
     assert!(result.is_ok(), "CPU backend should return Err, not panic");
     let err = result.unwrap().unwrap_err();
-    assert!(matches!(err, Error::BackendFailure { op: "add", .. }));
+    assert!(matches!(err, Error::RuntimeState { op: "add", .. }));
     assert!(err.to_string().contains("download to host"));
 }
 

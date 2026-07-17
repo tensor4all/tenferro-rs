@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::error::Error as StdError;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -387,10 +388,13 @@ pub(crate) fn infer_traced_single_output_shape(
     Ok((output_shape.len(), Some(out_shape_hint)))
 }
 
-pub(crate) fn register_metadata_or_internal(
-    result: std::result::Result<GlobalMetadataScope, impl std::fmt::Display>,
-) -> Result<GlobalMetadataScope> {
-    result.map_err(|err| Error::Internal(format!("metadata registration failed: {err}")))
+pub(crate) fn register_metadata_or_runtime_state<E>(
+    result: std::result::Result<GlobalMetadataScope, E>,
+) -> Result<GlobalMetadataScope>
+where
+    E: StdError + Send + Sync + 'static,
+{
+    result.map_err(|err| Error::runtime_state_source("metadata", ErrorPhase::Compile, err))
 }
 
 fn reduction_output_meta(
@@ -685,6 +689,11 @@ impl TracedTensor {
     /// assert_eq!(a.rank, 2);
     /// assert!(a.is_concrete_shape());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when graph metadata registration
+    /// cannot retain the concrete tensor's shape or dtype.
     pub fn from_tensor_concrete_shape(tensor: Tensor) -> Result<Self> {
         let shape = tensor.shape().to_vec();
         let rank = shape.len();
@@ -697,7 +706,7 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let graph = Arc::new(builder.build());
-        let metadata_scope = register_metadata_or_internal(register_scoped_value_metadata(
+        let metadata_scope = register_metadata_or_runtime_state(register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             concrete_tensor_meta(dtype, &shape),
         ))?;
@@ -741,6 +750,11 @@ impl TracedTensor {
     /// assert_eq!(t.rank, 2);
     /// assert!(!t.is_concrete_shape());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when symbolic graph metadata
+    /// registration is unavailable or its registry state is poisoned.
     pub fn from_tensor_symbolic_shape(tensor: Tensor) -> Result<Self> {
         let rank = tensor.shape().len();
         let dtype = tensor.dtype();
@@ -752,7 +766,7 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let graph = Arc::new(builder.build());
-        let metadata_scope = register_metadata_or_internal(register_scoped_value_metadata(
+        let metadata_scope = register_metadata_or_runtime_state(register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             symbolic_input_meta(dtype, id, rank),
         ))?;
@@ -792,6 +806,12 @@ impl TracedTensor {
     /// assert_eq!(x.rank, 2);
     /// assert!(x.is_concrete_shape());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when graph metadata registration
+    /// fails or the registry state is poisoned. `dtype` and `shape` are
+    /// metadata values and are not revalidated by this constructor.
     pub fn input_concrete_shape(dtype: DType, shape: &[usize]) -> Result<Self> {
         let shape = shape.to_vec();
         let rank = shape.len();
@@ -802,7 +822,7 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let graph = Arc::new(builder.build());
-        let metadata_scope = register_metadata_or_internal(register_scoped_value_metadata(
+        let metadata_scope = register_metadata_or_runtime_state(register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             concrete_tensor_meta(dtype, &shape),
         ))?;
@@ -839,6 +859,12 @@ impl TracedTensor {
     /// assert_eq!(x.rank, 2);
     /// assert!(!x.is_concrete_shape());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when graph metadata registration
+    /// fails or the registry state is poisoned. `rank` is recorded as the
+    /// symbolic placeholder rank and is not otherwise rejected here.
     pub fn input_symbolic_shape(dtype: DType, rank: usize) -> Result<Self> {
         let key = next_input_key();
         let id = next_traced_id();
@@ -847,7 +873,7 @@ impl TracedTensor {
         let val = builder.add_input(key.clone());
         builder.set_outputs(vec![val]);
         let graph = Arc::new(builder.build());
-        let metadata_scope = register_metadata_or_internal(register_scoped_value_metadata(
+        let metadata_scope = register_metadata_or_runtime_state(register_scoped_value_metadata(
             graph.values()[val].key.clone(),
             symbolic_input_meta(dtype, id, rank),
         ))?;
@@ -885,6 +911,13 @@ impl TracedTensor {
     /// assert_eq!(a.rank, 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TensorRuntime`] containing
+    /// `ValidationError::ShapeDataLengthMismatch` when the shape product does
+    /// not equal `data.len()`, or `ValidationError::IntegerOverflow` when the
+    /// shape product cannot be represented by `usize`.
     pub fn from_vec_col_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Result<Self> {
         Self::from_tensor_concrete_shape(Tensor::from_vec_col_major(shape, data)?)
     }
@@ -936,6 +969,11 @@ impl TracedTensor {
     /// Returns an error when a shape hint is missing or any dimension is
     /// symbolic. Composite traced ops that require concrete sizes should
     /// propagate this error instead of panicking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `InvalidArgument` when this tensor
+    /// has no shape hint or any dimension is symbolic.
     pub fn concrete_shape(&self) -> Result<Vec<usize>> {
         concrete_shape(self)
     }
@@ -962,6 +1000,20 @@ impl TracedTensor {
     /// let y = x.add(&z);
     /// let y2 = &x + &z;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `ShapeMismatch` when operand shapes
+    /// cannot be broadcast, or [`Error::RuntimeStateSource`] when graph
+    /// metadata registration fails.
+    ///
+    /// # Deferred errors
+    ///
+    /// If symbolic dimensions prevent shape comparison during graph
+    /// construction, the same `ShapeMismatch` can be reported during
+    /// compilation or execution, with the corresponding [`ErrorPhase`]. A
+    /// backend-detected integer zero divisor is returned during execution as
+    /// [`Error::TensorRuntime`] with a typed `DivisionByZero` numerical source.
     pub fn add(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         apply_binary(
@@ -976,6 +1028,20 @@ impl TracedTensor {
     /// Elementwise subtraction with NumPy-style broadcasting.
     ///
     /// Prefer using the `-` operator when it reads naturally.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `ShapeMismatch` when operand shapes
+    /// cannot be broadcast, or [`Error::RuntimeStateSource`] when graph
+    /// metadata registration fails.
+    ///
+    /// # Deferred errors
+    ///
+    /// If symbolic dimensions prevent shape comparison during graph
+    /// construction, the same `ShapeMismatch` can be reported during
+    /// compilation or execution, with the corresponding [`ErrorPhase`]. A
+    /// backend-detected integer zero divisor is returned during execution as
+    /// [`Error::TensorRuntime`] with a typed `DivisionByZero` numerical source.
     pub fn sub(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         apply_binary(
@@ -1000,6 +1066,18 @@ impl TracedTensor {
     /// let y = x.mul(&z);
     /// let y2 = &x * &z;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `ShapeMismatch` when operand shapes
+    /// cannot be broadcast, or [`Error::RuntimeStateSource`] when graph
+    /// metadata registration fails.
+    ///
+    /// # Deferred errors
+    ///
+    /// If symbolic ranks prevent shape comparison during graph construction,
+    /// the same `ShapeMismatch` can be reported during compilation or
+    /// execution, with the corresponding [`ErrorPhase`].
     pub fn mul(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         apply_binary(
@@ -1024,6 +1102,18 @@ impl TracedTensor {
     /// let y = x.div(&z);
     /// let y2 = &x / &z;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `ShapeMismatch` when operand shapes
+    /// cannot be broadcast, or [`Error::RuntimeStateSource`] when graph
+    /// metadata registration fails.
+    ///
+    /// # Deferred errors
+    ///
+    /// If symbolic ranks prevent shape comparison during graph construction,
+    /// the same `ShapeMismatch` can be reported during compilation or
+    /// execution, with the corresponding [`ErrorPhase`].
     pub fn div(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         apply_binary(
@@ -1038,6 +1128,18 @@ impl TracedTensor {
     /// Elementwise remainder with NumPy-style broadcasting.
     ///
     /// Prefer using the `%` operator when it reads naturally.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `ShapeMismatch` when operand shapes
+    /// cannot be broadcast, or [`Error::RuntimeStateSource`] when graph
+    /// metadata registration fails.
+    ///
+    /// # Deferred errors
+    ///
+    /// If symbolic ranks prevent shape comparison during graph construction,
+    /// the same `ShapeMismatch` can be reported during compilation or
+    /// execution, with the corresponding [`ErrorPhase`].
     pub fn rem(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         apply_binary(
@@ -1050,21 +1152,70 @@ impl TracedTensor {
     }
 
     /// Elementwise comparison with NumPy-style broadcasting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `ShapeMismatch` when the concrete
+    /// operands cannot be broadcast, [`Error::Unsupported`] when ordered
+    /// comparison rejects a complex dtype, or [`Error::RuntimeStateSource`]
+    /// when result metadata cannot be registered.
+    ///
+    /// # Deferred errors
+    ///
+    /// With same-rank symbolic operands, shape compatibility is retained as a
+    /// graph constraint. A concrete mismatch is reported later as
+    /// [`Error::TensorRuntime`] containing a typed validation source, with the
+    /// failure phase identifying compilation or execution.
     pub fn compare(&self, other: &TracedTensor, dir: CompareDir) -> Result<TracedTensor> {
         apply_broadcast_binary_op(StdTensorOp::Compare(dir), self, other)
     }
 
     /// Elementwise maximum with NumPy-style broadcasting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `ShapeMismatch` when the concrete
+    /// operands cannot be broadcast, [`Error::Unsupported`] when ordered
+    /// maximum rejects a complex dtype, or [`Error::RuntimeStateSource`] when
+    /// result metadata cannot be registered.
+    ///
+    /// # Deferred errors
+    ///
+    /// With same-rank symbolic operands, the broadcast constraint may fail at
+    /// compile or execution and is returned as [`Error::TensorRuntime`] with
+    /// its typed validation source.
     pub fn maximum(&self, other: &TracedTensor) -> Result<TracedTensor> {
         apply_broadcast_binary_op(StdTensorOp::Maximum, self, other)
     }
 
     /// Elementwise minimum with NumPy-style broadcasting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `ShapeMismatch` when the concrete
+    /// operands cannot be broadcast, [`Error::Unsupported`] when ordered
+    /// minimum rejects a complex dtype, or [`Error::RuntimeStateSource`] when
+    /// result metadata cannot be registered.
+    ///
+    /// # Deferred errors
+    ///
+    /// With same-rank symbolic operands, the broadcast constraint may fail at
+    /// compile or execution and is returned as [`Error::TensorRuntime`] with
+    /// its typed validation source.
     pub fn minimum(&self, other: &TracedTensor) -> Result<TracedTensor> {
         apply_broadcast_binary_op(StdTensorOp::Minimum, self, other)
     }
 
     /// Select values from `on_true` or `on_false` using `condition`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `InvalidArgument` when an operand
+    /// lacks concrete shape metadata, or `ShapeMismatch` when the concrete
+    /// condition and branches cannot share a broadcast shape. Dtype promotion
+    /// failures are returned as [`Error::TensorRuntime`] with the typed
+    /// `UnsupportedDTypeConversion` source; metadata failures retain
+    /// [`Error::RuntimeStateSource`].
     pub fn where_select(
         condition: &TracedTensor,
         on_true: &TracedTensor,
@@ -1074,6 +1225,14 @@ impl TracedTensor {
     }
 
     /// Alias for [`Self::where_select`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same concrete failures as [`Self::where_select`]:
+    /// [`Error::Validation`] with `InvalidArgument`/`ShapeMismatch` for shape
+    /// metadata or broadcasting, [`Error::TensorRuntime`] with
+    /// `UnsupportedDTypeConversion` for failed promotion, and
+    /// [`Error::RuntimeStateSource`] for metadata registration.
     pub fn select(
         condition: &TracedTensor,
         on_true: &TracedTensor,
@@ -1083,6 +1242,14 @@ impl TracedTensor {
     }
 
     /// Clamp values elementwise between lower and upper bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `InvalidArgument` when an operand
+    /// lacks concrete shape metadata, `ShapeMismatch` when bounds cannot be
+    /// broadcast with the input, [`Error::Unsupported`] for an ordered
+    /// complex dtype, or [`Error::RuntimeStateSource`] when metadata cannot be
+    /// registered.
     pub fn clamp(&self, lower: &TracedTensor, upper: &TracedTensor) -> Result<TracedTensor> {
         apply_broadcast_ternary_op(StdTensorOp::Clamp, self, lower, upper)
     }
@@ -1103,6 +1270,11 @@ impl TracedTensor {
     /// let y = x.neg().unwrap();
     /// let y2 = (-&x).unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn neg(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Neg)
     }
@@ -1121,6 +1293,11 @@ impl TracedTensor {
     /// # .unwrap();
     /// let y = x.conj().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn conj(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Conj)
     }
@@ -1136,6 +1313,11 @@ impl TracedTensor {
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]).unwrap();
     /// let y = x.abs().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn abs(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Abs)
     }
@@ -1149,6 +1331,11 @@ impl TracedTensor {
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![-1.0_f64, 2.0]).unwrap();
     /// let y = x.sign().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn sign(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Sign)
     }
@@ -1163,6 +1350,12 @@ impl TracedTensor {
     /// let y = x.scale_real(2.0)?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `InvalidArgument` when an integer or
+    /// boolean factor is non-finite or out of range for the input dtype, or
+    /// [`Error::RuntimeStateSource`] when output metadata registration fails.
     pub fn scale_real(&self, factor: f64) -> Result<TracedTensor> {
         let op = match self.dtype {
             DType::F64 => StdTensorOp::constant(factor),
@@ -1193,6 +1386,12 @@ impl TracedTensor {
     /// # .unwrap();
     /// let y = x.scale_complex(Complex64::new(0.0, 1.0)).unwrap(); // multiply by i
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `InvalidArgument` when a complex
+    /// factor is applied to a non-complex dtype, or
+    /// [`Error::RuntimeStateSource`] when output metadata registration fails.
     pub fn scale_complex(&self, factor: Complex64) -> Result<TracedTensor> {
         match self.dtype {
             DType::C64 => scale_with_constant(self, StdTensorOp::constant(factor)),
@@ -1219,6 +1418,11 @@ impl TracedTensor {
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.exp().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn exp(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Exp)
     }
@@ -1232,6 +1436,11 @@ impl TracedTensor {
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.log().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn log(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Log)
     }
@@ -1245,6 +1454,11 @@ impl TracedTensor {
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.sin().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn sin(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Sin)
     }
@@ -1258,6 +1472,11 @@ impl TracedTensor {
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.cos().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn cos(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Cos)
     }
@@ -1271,6 +1490,11 @@ impl TracedTensor {
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.tanh().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn tanh(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Tanh)
     }
@@ -1284,6 +1508,11 @@ impl TracedTensor {
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
     /// let y = x.sqrt().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn sqrt(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Sqrt)
     }
@@ -1297,6 +1526,11 @@ impl TracedTensor {
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
     /// let y = x.rsqrt().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn rsqrt(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Rsqrt)
     }
@@ -1311,6 +1545,20 @@ impl TracedTensor {
     /// # let exp = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 2.0]).unwrap();
     /// let y = base.pow(&exp);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `ShapeMismatch` when the concrete
+    /// operands cannot be broadcast, or [`Error::RuntimeStateSource`] when
+    /// result metadata cannot be registered.
+    ///
+    /// # Deferred errors
+    ///
+    /// A symbolic broadcast mismatch or integer negative exponent is
+    /// discovered at compile or execution and is returned as
+    /// [`Error::TensorRuntime`] with a typed `ShapeMismatch` or
+    /// `NegativeIntegerExponent` numerical source and the corresponding
+    /// [`ErrorPhase`].
     pub fn pow(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         apply_binary(
@@ -1331,6 +1579,11 @@ impl TracedTensor {
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.expm1().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn expm1(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Expm1)
     }
@@ -1344,6 +1597,11 @@ impl TracedTensor {
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let y = x.log1p().unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when the graph metadata registry
+    /// is unavailable or poisoned while recording the unary result.
     pub fn log1p(&self) -> Result<TracedTensor> {
         self.apply_same_shape_unary(StdTensorOp::Log1p)
     }
@@ -1365,9 +1623,10 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when the requested conversion is outside tenferro's
-    /// checked dtype-promotion lattice. Use [`cast`](Self::cast) for explicit
-    /// lossy dtype projection.
+    /// Returns [`tenferro_tensor::Error::UnsupportedDTypeConversion`] when the
+    /// requested pair is outside tenferro's checked dtype-promotion lattice,
+    /// or [`Error::Validation`] when graph metadata rejects the conversion.
+    /// Use [`cast`](Self::cast) for explicit lossy dtype projection.
     pub fn convert(&self, to: DType) -> Result<TracedTensor> {
         tenferro_tensor::validate::validate_convert_dtype("TracedTensor::convert", self.dtype, to)?;
         self.cast(to)
@@ -1388,6 +1647,13 @@ impl TracedTensor {
     ///
     /// let y = x.cast(DType::I32).unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TensorRuntime`] containing
+    /// `UnsupportedDTypeConversion` when the requested input-to-target
+    /// projection is not supported, or [`Error::RuntimeStateSource`] when
+    /// converted-output metadata cannot be registered.
     pub fn cast(&self, to: DType) -> Result<TracedTensor> {
         if self.dtype == to {
             return Ok(self.clone());
@@ -1425,8 +1691,17 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when the dimension-numbering configuration is invalid
-    /// for the operand ranks.
+    /// Returns [`Error::Validation`] with `RankMismatch`, `AxisOutOfBounds`,
+    /// `DuplicateAxis`, or `AxisRoleConflict` when dimension numbers are
+    /// invalid for the operand ranks, and [`Error::RuntimeStateSource`] when
+    /// output metadata cannot be registered.
+    ///
+    /// # Deferred errors
+    ///
+    /// Contracting or batch dimensions whose sizes are symbolic are checked
+    /// when concrete inputs reach compilation or execution. A mismatch is
+    /// returned as [`Error::TensorRuntime`] with a typed `ShapeMismatch`
+    /// source and its corresponding [`ErrorPhase`].
     pub fn dot_general(
         &self,
         other: &TracedTensor,
@@ -1473,6 +1748,19 @@ impl TracedTensor {
     }
 
     /// Matrix multiplication for rank-2 tensors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `RankMismatch` when either operand is
+    /// not rank 2, `ShapeMismatch::ContractedDimensions` when known matrix
+    /// dimensions differ, or [`Error::RuntimeStateSource`] when output
+    /// metadata cannot be registered.
+    ///
+    /// # Deferred errors
+    ///
+    /// If either contracted dimension is symbolic, the mismatch is discovered
+    /// at compilation or execution and returned as [`Error::TensorRuntime`]
+    /// with its typed `ShapeMismatch` source.
     pub fn matmul(&self, other: &TracedTensor) -> Result<TracedTensor> {
         if self.rank != 2 {
             return Err(graph_validation(
@@ -1534,7 +1822,10 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when an axis is out of bounds or duplicated.
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when an axis is
+    /// outside the input rank or `DuplicateAxis` when `axes` repeats an axis,
+    /// or [`Error::RuntimeStateSource`] when output metadata cannot be
+    /// registered.
     pub fn reduce_sum(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_sum")?;
@@ -1564,7 +1855,11 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when an axis is out of bounds or duplicated.
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when an axis is
+    /// outside the input rank or `DuplicateAxis` when `axes` repeats an axis,
+    /// [`Error::Unsupported`] when a non-empty maximum reduction receives a
+    /// complex dtype, or [`Error::RuntimeStateSource`] when output metadata
+    /// cannot be registered.
     pub fn reduce_max(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_max")?;
@@ -1595,7 +1890,11 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when an axis is out of bounds or duplicated.
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when an axis is
+    /// outside the input rank or `DuplicateAxis` when `axes` repeats an axis,
+    /// [`Error::Unsupported`] when a non-empty minimum reduction receives a
+    /// complex dtype, or [`Error::RuntimeStateSource`] when output metadata
+    /// cannot be registered.
     pub fn reduce_min(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_min")?;
@@ -1623,7 +1922,10 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when an axis is out of bounds or duplicated.
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when an axis is
+    /// outside the input rank or `DuplicateAxis` when `axes` repeats an axis,
+    /// or [`Error::RuntimeStateSource`] when output metadata cannot be
+    /// registered.
     pub fn reduce_prod(&self, axes: &[usize]) -> Result<TracedTensor> {
         let (out_rank, out_shape_hint) =
             reduction_output_meta(self, axes, "TracedTensor::reduce_prod")?;
@@ -1650,9 +1952,9 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when the input has a concrete shape and the target
-    /// shape has a different element count, or when the target shape product
-    /// overflows `usize`.
+    /// Returns [`Error::Validation`] with `ShapeMismatch::ReshapeElementCount`
+    /// when a concrete input has a different element count, or
+    /// `IntegerOverflow` when the target shape product overflows `usize`.
     pub fn reshape(&self, shape: &[usize]) -> Result<TracedTensor> {
         validate_concrete_reshape_shape(self, shape)?;
         apply_unary_with_dtype(
@@ -1695,7 +1997,8 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when `axis` is out of bounds.
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis` is
+    /// outside this tensor's rank.
     pub fn sym_size(&self, axis: usize) -> Result<SymDim> {
         validate_traced_axis(self, axis, "TracedTensor::sym_size")?;
         Ok(self
@@ -1734,7 +2037,8 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when `axis` is out of bounds.
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis` is
+    /// outside this tensor's rank.
     pub fn axis_sym_dim(&self, axis: usize) -> Result<SymDim> {
         validate_traced_axis(self, axis, "TracedTensor::axis_sym_dim")?;
         match self.shape_hint.as_ref().and_then(|shape| shape.get(axis)) {
@@ -1780,11 +2084,30 @@ impl TracedTensor {
     /// let y = x.reshape_sym(&[rows * cols]).unwrap();
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::SymbolicShapeConversion`] when a supplied symbolic
+    /// dimension cannot be mapped to this graph, or [`Error::RuntimeStateSource`]
+    /// when result metadata cannot be registered.
+    ///
+    /// # Deferred errors
+    ///
+    /// Element-count compatibility for symbolic dimensions is checked when
+    /// concrete inputs reach compilation or execution. A mismatch is returned
+    /// as [`Error::TensorRuntime`] with a typed `ShapeMismatch` source.
     pub fn reshape_sym(&self, shape: &[SymDim]) -> Result<TracedTensor> {
         let tensor_map = [(self.id, 0usize)];
         let to_shape = shape
             .iter()
-            .map(|dim| dim.to_dim_expr(&tensor_map).map_err(Error::Internal))
+            .map(|dim| {
+                dim.to_dim_expr(&tensor_map)
+                    .map_err(|source| Error::SymbolicShapeConversion {
+                        op: "TracedTensor::reshape_sym",
+                        phase: ErrorPhase::GraphBuild,
+                        source,
+                    })
+            })
             .collect::<Result<Vec<_>>>()?;
         let out_shape_hint = Some(shape.to_vec());
         apply_unary(
@@ -1808,9 +2131,11 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when `dims` is not a duplicate-free mapping from every
-    /// input axis into the output rank, or when a known input dimension cannot
-    /// broadcast to the corresponding output dimension.
+    /// Returns [`Error::Validation`] with `RankMismatch` when `dims` does not
+    /// have one entry per input axis, `AxisOutOfBounds` or `DuplicateAxis` for
+    /// an invalid output mapping, or `InvalidArgument` when known dimensions
+    /// cannot broadcast. [`Error::RuntimeStateSource`] reports failure to
+    /// register the result metadata.
     pub fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Result<TracedTensor> {
         let out_shape_hint: Vec<SymDim> = shape.iter().copied().map(SymDim::from).collect();
         validate_broadcast_in_dim_args(
@@ -1863,6 +2188,21 @@ impl TracedTensor {
     /// assert_eq!(a_b.rank, 3);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `RankMismatch`, `AxisOutOfBounds`,
+    /// `DuplicateAxis`, or `InvalidArgument` when the output mapping or shape
+    /// references are invalid, [`Error::SymbolicShapeConversion`] for an
+    /// unmappable symbolic dimension, or [`Error::RuntimeStateSource`] when
+    /// metadata cannot be registered.
+    ///
+    /// # Deferred errors
+    ///
+    /// If a symbolic output dimension is smaller than a non-unit input axis,
+    /// the concrete broadcast check is deferred to compilation or execution
+    /// and is returned as [`Error::TensorRuntime`] with a typed validation
+    /// source.
     pub fn broadcast_in_dim_sym(
         &self,
         shape: &[SymDim],
@@ -1887,16 +2227,12 @@ impl TracedTensor {
         let to_shape: Vec<DimExpr> = shape
             .iter()
             .map(|dim| {
-                dim.to_dim_expr(&tensor_map).map_err(|err| {
-                    graph_invalid_argument(
-                        "broadcast_in_dim_sym",
-                        "shape",
-                        format!(
-                            "unresolved symbolic dimension: {err}; \
-                             pass every referenced tensor via `shape_refs`"
-                        ),
-                    )
-                })
+                dim.to_dim_expr(&tensor_map)
+                    .map_err(|source| Error::SymbolicShapeConversion {
+                        op: "broadcast_in_dim_sym",
+                        phase: ErrorPhase::GraphBuild,
+                        source,
+                    })
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -1923,6 +2259,14 @@ impl TracedTensor {
     }
 
     /// Slice with explicit start, limit, and stride per axis.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `RankMismatch` when the start/limit/
+    /// stride vectors do not match the input rank, `InvalidSliceStep` when a
+    /// stride is zero, `InvalidSliceBounds` when a limit precedes its start,
+    /// or [`Error::RuntimeStateSource`] when output metadata cannot be
+    /// registered.
     pub fn slice(&self, config: SliceConfig) -> Result<TracedTensor> {
         let op = StdTensorOp::Slice(config);
         let (out_rank, out_shape_hint) =
@@ -1931,6 +2275,14 @@ impl TracedTensor {
     }
 
     /// Pad with zeros using StableHLO-style edge and interior padding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `RankMismatch` when padding vectors
+    /// do not match the input rank, `InvalidArgument` for negative interior
+    /// padding, or `IntegerOverflow` when the padded extent exceeds `usize`.
+    /// [`Error::RuntimeStateSource`] is returned when output metadata cannot be
+    /// registered.
     pub fn pad(&self, config: PadConfig) -> Result<TracedTensor> {
         let op = StdTensorOp::Pad(config);
         let (out_rank, out_shape_hint) =
@@ -1939,6 +2291,13 @@ impl TracedTensor {
     }
 
     /// Reverse the order of elements along the requested axes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when an axis is
+    /// outside the input rank or `DuplicateAxis` when `axes` repeats one, or
+    /// [`Error::RuntimeStateSource`] when result metadata cannot be
+    /// registered.
     pub fn reverse(&self, axes: &[usize]) -> Result<TracedTensor> {
         validate_traced_axes(self.rank, axes, "TracedTensor::reverse")?;
         apply_unary(
@@ -1952,6 +2311,20 @@ impl TracedTensor {
     }
 
     /// Gather slices from `self` using integer start indices.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `RankMismatch`, `AxisOutOfBounds`,
+    /// `DuplicateAxis`, or `ShapeMismatch` when indices or the gather
+    /// configuration is incompatible with the input, and
+    /// [`Error::RuntimeStateSource`] when output metadata cannot be
+    /// registered.
+    ///
+    /// # Deferred errors
+    ///
+    /// Runtime index values are checked after binding. An out-of-range index
+    /// is returned as [`Error::TensorRuntime`] with the backend's typed
+    /// validation source and [`ErrorPhase::Execution`].
     pub fn gather(&self, indices: &TracedTensor, config: GatherConfig) -> Result<TracedTensor> {
         let op = StdTensorOp::Gather(config);
         let (out_rank, out_shape_hint) =
@@ -1960,6 +2333,21 @@ impl TracedTensor {
     }
 
     /// Scatter updates into `self` using StableHLO scatter semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `RankMismatch`, `AxisOutOfBounds`,
+    /// `DuplicateAxis`, or `ShapeMismatch` when indices, updates, or the
+    /// scatter configuration is incompatible, [`Error::TensorRuntime`] with
+    /// `UnsupportedDTypeConversion` when dtype promotion cannot be
+    /// represented, or [`Error::RuntimeStateSource`] when output metadata
+    /// cannot be registered.
+    ///
+    /// # Deferred errors
+    ///
+    /// Runtime index/update values are checked after binding. An invalid
+    /// index or update shape is returned as [`Error::TensorRuntime`] with its
+    /// typed validation source and [`ErrorPhase::Execution`].
     pub fn scatter(
         &self,
         indices: &TracedTensor,
@@ -1995,6 +2383,19 @@ impl TracedTensor {
     }
 
     /// Slice using runtime start indices.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `RankMismatch`, `AxisOutOfBounds`,
+    /// or `InvalidArgument` when `starts` or `sizes` has an incompatible rank
+    /// or extent, and [`Error::RuntimeStateSource`] when output metadata cannot
+    /// be registered.
+    ///
+    /// # Deferred errors
+    ///
+    /// Runtime start values are checked after binding. An out-of-range start
+    /// is returned as [`Error::TensorRuntime`] with the backend's typed
+    /// validation source and [`ErrorPhase::Execution`].
     pub fn dynamic_slice(&self, starts: &TracedTensor, sizes: &[usize]) -> Result<TracedTensor> {
         let op = StdTensorOp::DynamicSlice {
             slice_sizes: sizes.to_vec(),
@@ -2018,7 +2419,8 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error if traced output metadata registration fails.
+    /// Returns [`Error::RuntimeStateSource`] when traced output metadata
+    /// registration is unavailable or inconsistent with the graph.
     pub fn tril(&self, k: i64) -> Result<TracedTensor> {
         apply_unary(
             StdTensorOp::Tril { k },
@@ -2042,7 +2444,8 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error if traced output metadata registration fails.
+    /// Returns [`Error::RuntimeStateSource`] when traced output metadata
+    /// registration is unavailable or inconsistent with the graph.
     pub fn triu(&self, k: i64) -> Result<TracedTensor> {
         apply_unary(
             StdTensorOp::Triu { k },
@@ -2065,8 +2468,10 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when `perm` is not a valid permutation of the tensor
-    /// axes.
+    /// Returns [`Error::Validation`] with `InvalidPermutationLength`,
+    /// `AxisOutOfBounds`, or `DuplicateAxis` when `perm` is not a valid
+    /// permutation of the tensor axes, or [`Error::RuntimeStateSource`] when
+    /// output metadata registration fails.
     pub fn transpose(&self, perm: &[usize]) -> Result<TracedTensor> {
         validate_traced_perm(self.rank, perm, "TracedTensor::transpose")?;
         let out_shape_hint = self
@@ -2096,8 +2501,8 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when either axis is out of bounds or the two axes are
-    /// equal.
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when either axis
+    /// is outside the input rank or `InvalidArgument` when `axis_a == axis_b`.
     pub fn extract_diag(&self, axis_a: usize, axis_b: usize) -> Result<TracedTensor> {
         validate_traced_axis(self, axis_a, "TracedTensor::extract_diag")?;
         validate_traced_axis(self, axis_b, "TracedTensor::extract_diag")?;
@@ -2127,7 +2532,8 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when `axis_a` is out of bounds or `axis_b` is not a
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis_a` is
+    /// outside the input rank or `InvalidArgument` when `axis_b` is not a
     /// valid insertion axis.
     pub fn embed_diag(&self, axis_a: usize, axis_b: usize) -> Result<TracedTensor> {
         validate_traced_axis(self, axis_a, "TracedTensor::embed_diag")?;
@@ -2166,7 +2572,9 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when `axis` is out of bounds.
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis` is
+    /// outside the input rank, or [`Error::RuntimeStateSource`] when scalar
+    /// output metadata cannot be registered.
     pub fn shape_of(&self, axis: usize) -> Result<TracedTensor> {
         validate_traced_axis(self, axis, "TracedTensor::shape_of")?;
         apply_unary_with_dtype(
@@ -2202,7 +2610,15 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when `axis` is out of bounds or `size` is not scalar.
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis` is
+    /// outside the input rank or `RankMismatch` when `size` is not scalar.
+    ///
+    /// # Deferred errors
+    ///
+    /// At execution, non-`f32`/`f64`/`i64` size dtypes return
+    /// [`Error::TensorRuntime`] with `Unsupported`, non-finite size values
+    /// return a typed `InvalidArgument`, and an empty scalar buffer returns a
+    /// typed runtime-state source.
     pub fn dynamic_truncate(&self, size: &TracedTensor, axis: usize) -> Result<TracedTensor> {
         validate_traced_axis(self, axis, "TracedTensor::dynamic_truncate")?;
         if size.rank != 0 {
@@ -2246,7 +2662,9 @@ impl TracedTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when `axis` is out of bounds for either tensor.
+    /// Returns [`Error::Validation`] with `AxisOutOfBounds` when `axis` is
+    /// outside either tensor's rank, or [`Error::RuntimeStateSource`] when
+    /// output metadata cannot be registered.
     pub fn pad_to_match(&self, reference: &TracedTensor, axis: usize) -> Result<TracedTensor> {
         validate_traced_axis(self, axis, "TracedTensor::pad_to_match")?;
         validate_traced_axis(reference, axis, "TracedTensor::pad_to_match")?;
@@ -2695,14 +3113,17 @@ fn register_single_output_metadata(
     if let Some(shape) = shape_hint {
         // Fresh graph output keys are generated in this builder, so metadata
         // registration failure would indicate a global metadata invariant bug.
-        register_metadata_or_internal(register_scoped_value_metadata(
+        register_metadata_or_runtime_state(register_scoped_value_metadata(
             graph.values()[output].key.clone(),
             tensor_meta(dtype, shape.clone()),
         ))
     } else {
         // Fresh graph output keys are generated in this builder, so metadata
         // registration failure would indicate a global metadata invariant bug.
-        register_metadata_or_internal(register_scoped_graph_metadata(graph, std::iter::empty()))
+        register_metadata_or_runtime_state(register_scoped_graph_metadata(
+            graph,
+            std::iter::empty(),
+        ))
     }
 }
 

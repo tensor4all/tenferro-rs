@@ -7,7 +7,7 @@ fn parse_rejects_parenthesized_order_without_discarding_it() {
 
     assert!(matches!(
         err,
-        Error::InvalidArgument(message)
+        Error::InvalidSubscripts { message }
             if message.contains("parentheses")
                 && message.contains("NestedEinsum::parse")
     ));
@@ -19,7 +19,7 @@ fn parse_rejects_ellipsis_with_specific_error() {
 
     assert!(matches!(
         err,
-        Error::InvalidArgument(message)
+        Error::InvalidSubscripts { message }
             if message.contains("ellipsis")
                 && message.contains("not supported")
     ));

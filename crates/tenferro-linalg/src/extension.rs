@@ -389,16 +389,16 @@ fn input_eager_device(input: &Tensor) -> tenferro_tensor::Result<EagerLinalgDevi
     match (&placement.memory_kind, placement.device.as_ref()) {
         (MemoryKind::Device, Some(device)) => match &device.kind {
             DeviceKind::Gpu(GpuBackendKind::Cuda) => Ok(EagerLinalgDevice::Cuda(device.ordinal)),
-            DeviceKind::Gpu(kind) => Err(Error::backend_failure(
+            DeviceKind::Gpu(kind) => Err(Error::unsupported(
                 "linalg_host_reference",
                 format!("unsupported GPU backend {kind:?} for eager linalg"),
             )),
-            kind => Err(Error::backend_failure(
+            kind => Err(Error::runtime_state(
                 "linalg_host_reference",
                 format!("unsupported device kind {kind:?} for eager linalg"),
             )),
         },
-        (MemoryKind::Device, None) => Err(Error::backend_failure(
+        (MemoryKind::Device, None) => Err(Error::runtime_state(
             "linalg_host_reference",
             "device tensor is missing placement device metadata",
         )),
@@ -415,8 +415,9 @@ fn eager_linalg_device(inputs: &[&Tensor]) -> tenferro_tensor::Result<EagerLinal
             (Some(EagerLinalgDevice::Cpu), EagerLinalgDevice::Cpu) => {}
             (Some(EagerLinalgDevice::Cuda(lhs)), EagerLinalgDevice::Cuda(rhs)) if lhs == rhs => {}
             (Some(lhs), rhs) => {
-                return Err(Error::backend_failure(
+                return Err(Error::invalid_argument(
                     "linalg_host_reference",
+                    "inputs",
                     format!("all eager linalg inputs must be on the same device, got {lhs:?} and {rhs:?}"),
                 ));
             }
@@ -441,7 +442,7 @@ fn execute_cuda_eager_linalg(
     _inputs: &[&Tensor],
     device_ordinal: usize,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    Err(Error::backend_failure(
+    Err(Error::unsupported(
         "linalg_host_reference",
         format!(
             "received CUDA tensor on cuda:{device_ordinal}, but tenferro-linalg was built \

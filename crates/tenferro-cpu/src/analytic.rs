@@ -276,9 +276,8 @@ fn require_cpu_capability(
     if supported {
         Ok(())
     } else {
-        Err(crate::Error::unsupported_dtype_conversion(
+        Err(crate::Error::unsupported_dtype(
             op,
-            dtype,
             dtype,
             format!("CPU backend does not support this operation for {dtype:?}"),
         ))

@@ -11,6 +11,7 @@ use super::dispatch::{
     ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, launch_nullary_into,
     typed_tensor_array_arg,
 };
+use super::error::{unsupported_dtype, unsupported_operation, workspace_size_overflow};
 use super::ffi::cutensor::{
     CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle, CutensorOperator,
     CutensorWorksizePreference, OperationDescriptor, Plan, PlanPreference, TensorDescriptor,
@@ -426,12 +427,7 @@ pub(super) fn dot_general_read_into_accum(
         DType::F64 => accum_erased::<f64>(backend, lhs, rhs, config, accumulation, out),
         DType::C32 => accum_erased::<Complex32>(backend, lhs, rhs, config, accumulation, out),
         DType::C64 => accum_erased::<Complex64>(backend, lhs, rhs, config, accumulation, out),
-        dtype => Err(Error::backend_failure(
-            OP,
-            format!(
-                "CUDA dot-general accumulation supports f32/f64/c32/c64 operands, got {dtype:?}"
-            ),
-        )),
+        dtype => Err(unsupported_dtype(OP, dtype)),
     }
 }
 
@@ -452,10 +448,12 @@ where
         read_operand::<T>(rhs),
         write_operand::<T>(out),
     ) else {
-        return Err(Error::backend_failure(
-            OP,
-            format!("dtype mismatch lhs={lhs_dtype:?} rhs={rhs_dtype:?} out={out_dtype:?}"),
-        ));
+        let (expected, actual) = if lhs_dtype != rhs_dtype {
+            (lhs_dtype, rhs_dtype)
+        } else {
+            (lhs_dtype, out_dtype)
+        };
+        return Err(Error::dtype_mismatch(OP, expected, actual));
     };
     dot_general_typed_into_accum(
         backend,
@@ -513,11 +511,9 @@ where
                 } else {
                     // No strided in-place scale kernel exists yet; an explicit
                     // error is required instead of a silent wrong result.
-                    Err(Error::backend_failure(
+                    Err(unsupported_operation(
                         OP,
-                        "zero-sized contraction with beta != 1 is not supported for \
-                         borrowed view outputs on CUDA; use an owned output tensor \
-                         or scale the region explicitly",
+                        "zero-sized contraction with beta != 1 is not supported for borrowed view outputs",
                     ))
                 }
             }
@@ -655,8 +651,9 @@ fn resolve_device_region<T: 'static>(
     let mut strides_i64 = Vec::with_capacity(strides.len());
     for &stride in strides {
         if stride < 0 {
-            return Err(Error::backend_failure(
+            return Err(Error::invalid_argument(
                 OP,
+                "layout",
                 format!(
                     "cuTENSOR dot-general accumulation requires nonnegative view \
                      strides, got {strides:?}; canonicalize the view on device first"
@@ -666,8 +663,9 @@ fn resolve_device_region<T: 'static>(
         strides_i64.push(stride as i64);
     }
     let offset = usize::try_from(offset).map_err(|_| {
-        Error::backend_failure(
+        Error::invalid_argument(
             OP,
+            "layout",
             format!(
                 "view offset {offset} must be nonnegative for cuTENSOR dot-general accumulation"
             ),
@@ -680,11 +678,14 @@ fn resolve_device_region<T: 'static>(
             max_offset = (dim - 1)
                 .checked_mul(stride as usize)
                 .and_then(|span| max_offset.checked_add(span))
-                .ok_or_else(|| Error::backend_failure(OP, "view element span overflows usize"))?;
+                .ok_or_else(|| {
+                    Error::invalid_argument(OP, "layout", "view element span overflows usize")
+                })?;
         }
         if max_offset >= buffer.element_len() {
-            return Err(Error::backend_failure(
+            return Err(Error::invalid_argument(
                 OP,
+                "layout",
                 format!(
                     "view region reaches element offset {max_offset} but the device \
                      buffer holds only {} elements",
@@ -696,17 +697,17 @@ fn resolve_device_region<T: 'static>(
     let resource = rt
         .client()
         .get_resource(buffer.handle().clone())
-        .map_err(|err| {
-            Error::backend_failure(OP, format!("failed to obtain CubeCL resource: {err:?}"))
-        })?;
+        .map_err(|err| Error::backend_source(OP, err))?;
     let offset_bytes = (offset as u64)
         .checked_mul(std::mem::size_of::<T>() as u64)
-        .ok_or_else(|| Error::backend_failure(OP, "view byte offset overflows u64"))?;
+        .ok_or_else(|| Error::invalid_argument(OP, "layout", "view byte offset overflows u64"))?;
     let addr = resource
         .resource()
         .ptr
         .checked_add(offset_bytes)
-        .ok_or_else(|| Error::backend_failure(OP, "view device address overflows u64"))?;
+        .ok_or_else(|| {
+            Error::invalid_argument(OP, "layout", "view device address overflows u64")
+        })?;
     Ok(ResolvedOperand {
         ptr: cuda_device_ptr_from_addr(addr, OP)?,
         strides: strides_i64,
@@ -750,7 +751,7 @@ where
     let factor_host = T::wrap_tensor(TypedTensor::from_vec_col_major(vec![1], vec![beta])?);
     let factor_device = upload_tensor(rt, &factor_host)?;
     let factor_typed = T::unwrap_tensor(&factor_device)
-        .ok_or_else(|| Error::backend_failure(OP, "scale factor upload changed dtype"))?;
+        .ok_or_else(|| Error::Internal("scale factor upload changed dtype".to_string()))?;
     ensure_resident_on_runtime(rt, out, OP)?;
     ensure_resident_on_runtime(rt, factor_typed, OP)?;
     let out_arg = typed_tensor_array_arg(out, OP)?;
@@ -894,16 +895,13 @@ fn alloc_workspace(rt: &CudaRuntime, workspace_size: u64) -> crate::Result<Works
     if workspace_size == 0 {
         return Ok(Workspace::none());
     }
-    let workspace_len = usize::try_from(workspace_size).map_err(|_| {
-        crate::Error::backend_failure(
-            OP,
-            format!("workspace size {workspace_size} does not fit in usize"),
-        )
-    })?;
+    let workspace_len =
+        usize::try_from(workspace_size).map_err(|_| workspace_size_overflow(OP, workspace_size))?;
     let handle = rt.client().empty(workspace_len);
-    let resource = rt.client().get_resource(handle.clone()).map_err(|err| {
-        crate::Error::backend_failure(OP, format!("failed to obtain workspace resource: {err:?}"))
-    })?;
+    let resource = rt
+        .client()
+        .get_resource(handle.clone())
+        .map_err(|err| crate::Error::backend_source(OP, err))?;
     Ok(Workspace {
         _handle: Some(handle),
         ptr: cuda_device_ptr_from_addr(resource.resource().ptr, OP)?,
@@ -920,9 +918,7 @@ fn typed_device_ptr<T: 'static>(
     let resource = rt
         .client()
         .get_resource(buffer.handle().clone())
-        .map_err(|err| {
-            crate::Error::backend_failure(OP, format!("failed to obtain CubeCL resource: {err:?}"))
-        })?;
+        .map_err(|err| crate::Error::backend_source(OP, err))?;
     // The residency check above ties this raw FFI pointer to the caller's runtime/device.
     cuda_device_ptr_from_addr(resource.resource().ptr, OP)
 }

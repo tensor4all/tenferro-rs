@@ -1,4 +1,4 @@
-use tenferro_tensor::{DType, DotGeneralConfig};
+use tenferro_tensor::{DType, DotGeneralConfig, ValidationError};
 
 use super::*;
 
@@ -127,9 +127,11 @@ fn dot_shape_rejects_invalid_dimension_config() {
         },
     )
     .unwrap_err();
-
     assert!(matches!(
         err,
-        Error::InvalidProgram { ref message } if message.contains("lhs_contracting_dim")
+        Error::Tensor(tenferro_tensor::Error::Validation {
+            source: ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
+            ..
+        })
     ));
 }

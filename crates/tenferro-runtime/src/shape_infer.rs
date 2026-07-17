@@ -100,9 +100,11 @@ fn reject_complex_ordered_dtypes(op: &StdTensorOp, input_dtypes: &[DType]) -> Re
         return Ok(());
     };
     if input_dtypes.iter().copied().any(is_complex_dtype) {
-        return Err(shape_infer_error(format!(
-            "{op_name} does not support complex dtypes because complex numbers have no total order"
-        )));
+        return Err(Error::unsupported(
+            op_name,
+            ErrorPhase::Compile,
+            "{op_name} does not support complex dtypes because complex numbers have no total order",
+        ));
     }
     Ok(())
 }
@@ -112,6 +114,13 @@ fn reject_complex_ordered_dtypes(op: &StdTensorOp, input_dtypes: &[DType]) -> Re
 /// For `StdTensorOp::Extension`, prefer the combined
 /// `infer_extension_output_meta` helper when shape metadata is also needed.
 /// This function returns only the first output's dtype.
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] with `InvalidArgument` when an operation is
+/// missing an input dtype, [`Error::Unsupported`] when an ordered operation
+/// receives a complex dtype, or [`Error::Extension`] when an extension's
+/// typed dtype inference fails.
 pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DType> {
     reject_complex_ordered_dtypes(op, input_dtypes)?;
 
@@ -192,10 +201,13 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DT
 
 fn dtype_input(op: &StdTensorOp, input_dtypes: &[DType], index: usize) -> Result<DType> {
     input_dtypes.get(index).copied().ok_or_else(|| {
-        shape_infer_error(format!(
-            "{op:?} missing input dtype at index {index}; got {} input dtypes",
-            input_dtypes.len()
-        ))
+        shape_infer_invalid_argument(
+            "input_dtypes",
+            format!(
+                "{op:?} missing input dtype at index {index}; got {} input dtypes",
+                input_dtypes.len()
+            ),
+        )
     })
 }
 
@@ -212,6 +224,13 @@ fn real_dtype_for_abs(dtype: DType) -> DType {
 /// Returns a vector of shapes (one per output slot). For single-output ops,
 /// the vector has length 1. Multi-output extension ops return one entry per
 /// output.
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] with `ShapeMismatch`, `RankMismatch`,
+/// `AxisOutOfBounds`, `DuplicateAxis`, or `InvalidArgument` when input shape
+/// metadata or an operation configuration is invalid, and [`Error::Extension`]
+/// when an extension's typed shape inference fails.
 pub fn infer_output_shapes(
     op: &StdTensorOp,
     input_shapes: &[&[DimExpr]],
@@ -352,6 +371,12 @@ pub fn infer_output_shapes(
 /// can instead report a known upper bound so metadata consumers do not treat a
 /// bound expression as proof of exactness.
 ///
+/// # Errors
+///
+/// Returns [`Error::Validation`] with `ShapeMismatch`, `RankMismatch`,
+/// `AxisOutOfBounds`, `DuplicateAxis`, or `InvalidArgument` when input shape
+/// metadata or an operation configuration is invalid, and [`Error::Extension`]
+/// when an extension's typed extent inference fails.
 pub fn infer_output_extents(
     op: &StdTensorOp,
     input_shapes: &[&[DimExpr]],
@@ -386,6 +411,16 @@ pub fn infer_output_extents(
 /// `input_dtypes` must have length `op.input_count()` and be consistent with
 /// `input_shapes`. `input_shapes` uses [`DimExpr`] expressions so shape
 /// inference can flow through composed symbolic graphs.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `DTypeMismatch`, `RankMismatch`,
+/// `ShapeMismatch`, or `InvalidArgument` when input metadata is inconsistent,
+/// [`crate::Error::SymbolicShapeConversion`] when an extension dimension cannot
+/// be mapped to the graph vocabulary, and [`crate::Error::Unsupported`] when
+/// the extension does not provide output metadata for the supplied
+/// configuration. The extension's typed source is retained in
+/// [`crate::Error::Extension`] when it supplies one.
 pub fn infer_extension_output_meta(
     op: &dyn ExtensionOp,
     input_dtypes: &[DType],
@@ -426,13 +461,13 @@ pub(crate) fn infer_extension_output_meta_with_constraints(
         .collect::<Result<_>>()?;
 
     let convert = |dim: &SymDim| {
-        let local_expr = dim.to_dim_expr(&tensor_map).map_err(|err| {
-            shape_infer_error(format!(
-                "ExtensionOp::infer_output_meta for family {:?} returned a SymDim \
-                 that cannot be converted to a local DimExpr: {err}",
-                op.family_id()
-            ))
-        })?;
+        let local_expr =
+            dim.to_dim_expr(&tensor_map)
+                .map_err(|source| Error::SymbolicShapeConversion {
+                    op: "ExtensionOp::infer_output_meta",
+                    phase: ErrorPhase::Compile,
+                    source,
+                })?;
         resolve_dim_expr_from_shapes(&local_expr, input_shapes)
     };
 
@@ -469,14 +504,16 @@ pub(crate) fn infer_extension_output_meta_with_constraints(
 
 fn extension_local_tensor_id(input_idx: usize) -> Result<u64> {
     let offset = u64::try_from(input_idx).map_err(|_| {
-        shape_infer_error(format!(
-            "extension input index {input_idx} does not fit the local symbolic namespace"
-        ))
+        shape_infer_invalid_argument(
+            "input_index",
+            "extension input index {input_idx} does not fit the local symbolic namespace",
+        )
     })?;
     u64::MAX.checked_sub(offset).ok_or_else(|| {
-        shape_infer_error(format!(
-            "extension input index {input_idx} exhausts the local symbolic namespace"
-        ))
+        shape_infer_invalid_argument(
+            "input_index",
+            "extension input index {input_idx} exhausts the local symbolic namespace",
+        )
     })
 }
 
@@ -493,7 +530,7 @@ fn extension_first_output_dtype(op: &dyn ExtensionOp, input_dtypes: &[DType]) ->
         .first()
         .map(|meta| meta.0)
         .ok_or_else(|| {
-            shape_infer_error(format!(
+            Error::Internal(format!(
                 "ExtensionOp::infer_output_meta for family {:?} returned an empty meta list",
                 op.family_id()
             ))
@@ -506,10 +543,13 @@ fn require_input<'a>(
     idx: usize,
 ) -> Result<&'a [DimExpr]> {
     input_shapes.get(idx).copied().ok_or_else(|| {
-        shape_infer_error(format!(
-            "{op:?} expects input index {idx}, got {} input shapes",
-            input_shapes.len()
-        ))
+        shape_infer_invalid_argument(
+            "input_shapes",
+            format!(
+                "{op:?} expects input index {idx}, got {} input shapes",
+                input_shapes.len()
+            ),
+        )
     })
 }
 
@@ -556,12 +596,15 @@ fn require_input_expr(
         .and_then(|shape| shape.get(axis))
         .cloned()
         .ok_or_else(|| {
-            shape_infer_error(format!(
-                "InputDim({}, {}) cannot be resolved from {} input shapes",
-                input_idx,
-                axis,
-                input_shapes.len()
-            ))
+            shape_infer_invalid_argument(
+                "shape_expression",
+                format!(
+                    "InputDim({}, {}) cannot be resolved from {} input shapes",
+                    input_idx,
+                    axis,
+                    input_shapes.len()
+                ),
+            )
         })
 }
 
@@ -627,10 +670,6 @@ fn broadcast_dim(lhs: DimExpr, rhs: DimExpr) -> Result<DimExpr> {
         }
         _ => Ok(dim_max(lhs, rhs)),
     }
-}
-
-fn shape_infer_error(message: impl Into<String>) -> Error {
-    Error::Internal(format!("shape inference failed: {}", message.into()))
 }
 
 fn shape_infer_validation(source: impl Into<ValidationError>) -> Error {
@@ -833,7 +872,7 @@ fn validate_gather_slice_sizes_within_operand(
     operand_shape: &[DimExpr],
     slice_sizes: &[DimExpr],
 ) -> Result<()> {
-    for (_axis, (slice_size, dim_size)) in slice_sizes.iter().zip(operand_shape).enumerate() {
+    for (slice_size, dim_size) in slice_sizes.iter().zip(operand_shape) {
         if let (DimExpr::Const(slice_size), DimExpr::Const(dim_size)) = (slice_size, dim_size) {
             if slice_size > dim_size {
                 return Err(shape_infer_validation(ShapeMismatch::ExpectedActual {
@@ -914,38 +953,23 @@ fn pad_shape(input_shape: &[DimExpr], config: &PadConfig) -> Result<Vec<DimExpr>
                 let base = if *extent == 0 {
                     0
                 } else {
-                    let extent = i64::try_from(*extent).map_err(|_| {
-                        shape_infer_error(format!(
-                            "pad: input extent {extent} exceeds i64 on axis {axis}"
-                        ))
-                    })?;
+                    let extent = i64::try_from(*extent)
+                        .map_err(|_| shape_infer_validation(ValidationError::IntegerOverflow))?;
                     let stride = config.interior_padding[axis]
                         .checked_add(1)
-                        .ok_or_else(|| {
-                            shape_infer_error(format!(
-                                "pad: interior padding overflow on axis {axis}"
-                            ))
-                        })?;
+                        .ok_or_else(|| shape_infer_validation(ValidationError::IntegerOverflow))?;
                     extent
                         .checked_sub(1)
                         .and_then(|value| value.checked_mul(stride))
                         .and_then(|value| value.checked_add(1))
-                        .ok_or_else(|| {
-                            shape_infer_error(format!(
-                                "pad: stretched extent overflow on axis {axis}"
-                            ))
-                        })?
+                        .ok_or_else(|| shape_infer_validation(ValidationError::IntegerOverflow))?
                 };
                 let padded = config.edge_padding_low[axis]
                     .checked_add(config.edge_padding_high[axis])
                     .and_then(|value| value.checked_add(base))
-                    .ok_or_else(|| {
-                        shape_infer_error(format!("pad: output extent overflow on axis {axis}"))
-                    })?;
+                    .ok_or_else(|| shape_infer_validation(ValidationError::IntegerOverflow))?;
                 Ok(DimExpr::Const(usize::try_from(padded).map_err(|_| {
-                    shape_infer_error(format!(
-                        "pad: output extent {padded} must be representable as usize on axis {axis}"
-                    ))
+                    shape_infer_validation(ValidationError::IntegerOverflow)
                 })?))
             } else if config.interior_padding[axis] == 0 {
                 add_signed(
@@ -953,18 +977,13 @@ fn pad_shape(input_shape: &[DimExpr], config: &PadConfig) -> Result<Vec<DimExpr>
                     signed_padding_sum(
                         config.edge_padding_low[axis],
                         config.edge_padding_high[axis],
-                        axis,
                     )?,
                 )
             } else {
                 let stride = DimExpr::Const(usize_from_nonnegative_i64(
                     config.interior_padding[axis]
                         .checked_add(1)
-                        .ok_or_else(|| {
-                            shape_infer_error(format!(
-                                "pad: interior padding overflow on axis {axis}"
-                            ))
-                        })?,
+                        .ok_or_else(|| shape_infer_validation(ValidationError::IntegerOverflow))?,
                     "pad",
                 )?);
                 let stretched = dim_add(
@@ -976,7 +995,6 @@ fn pad_shape(input_shape: &[DimExpr], config: &PadConfig) -> Result<Vec<DimExpr>
                     signed_padding_sum(
                         config.edge_padding_low[axis],
                         config.edge_padding_high[axis],
-                        axis,
                     )?,
                 )
             }
@@ -993,7 +1011,7 @@ fn add_signed(expr: DimExpr, amount: i64) -> Result<DimExpr> {
     } else {
         let magnitude = amount
             .checked_neg()
-            .ok_or_else(|| shape_infer_error("add_signed: negative amount magnitude overflow"))?;
+            .ok_or_else(|| shape_infer_validation(ValidationError::IntegerOverflow))?;
         dim_sub(
             expr,
             DimExpr::Const(usize_from_nonnegative_i64(magnitude, "add_signed")?),
@@ -1001,9 +1019,9 @@ fn add_signed(expr: DimExpr, amount: i64) -> Result<DimExpr> {
     }
 }
 
-fn signed_padding_sum(low: i64, high: i64, axis: usize) -> Result<i64> {
+fn signed_padding_sum(low: i64, high: i64) -> Result<i64> {
     low.checked_add(high)
-        .ok_or_else(|| shape_infer_error(format!("pad: edge padding overflow on axis {axis}")))
+        .ok_or_else(|| shape_infer_validation(ValidationError::IntegerOverflow))
 }
 
 fn concatenate_shape(input_shapes: &[&[DimExpr]], axis: usize) -> Result<Vec<DimExpr>> {
@@ -1066,40 +1084,37 @@ fn pad_to_match_shape(
 
 fn dim_add(lhs: DimExpr, rhs: DimExpr) -> Result<DimExpr> {
     match (lhs, rhs) {
-        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => {
-            lhs.checked_add(rhs).map(DimExpr::Const).ok_or_else(|| {
-                shape_infer_error(format!("dimension addition overflow: {lhs} + {rhs}"))
-            })
-        }
+        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => lhs
+            .checked_add(rhs)
+            .map(DimExpr::Const)
+            .ok_or_else(|| shape_infer_validation(ValidationError::IntegerOverflow)),
         (lhs, rhs) => Ok(DimExpr::add(lhs, rhs)),
     }
 }
 
 fn dim_sub(lhs: DimExpr, rhs: DimExpr) -> Result<DimExpr> {
     match (lhs, rhs) {
-        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => {
-            lhs.checked_sub(rhs).map(DimExpr::Const).ok_or_else(|| {
-                shape_infer_error(format!("dimension subtraction underflow: {lhs} - {rhs}"))
-            })
-        }
+        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => lhs
+            .checked_sub(rhs)
+            .map(DimExpr::Const)
+            .ok_or_else(|| shape_infer_validation(ValidationError::IntegerOverflow)),
         (lhs, rhs) => Ok(DimExpr::sub(lhs, rhs)),
     }
 }
 
 fn dim_mul(lhs: DimExpr, rhs: DimExpr) -> Result<DimExpr> {
     match (lhs, rhs) {
-        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => {
-            lhs.checked_mul(rhs).map(DimExpr::Const).ok_or_else(|| {
-                shape_infer_error(format!("dimension multiplication overflow: {lhs} * {rhs}"))
-            })
-        }
+        (DimExpr::Const(lhs), DimExpr::Const(rhs)) => lhs
+            .checked_mul(rhs)
+            .map(DimExpr::Const)
+            .ok_or_else(|| shape_infer_validation(ValidationError::IntegerOverflow)),
         (lhs, rhs) => Ok(DimExpr::mul(lhs, rhs)),
     }
 }
 
 fn usize_from_nonnegative_i64(value: i64, op: &'static str) -> Result<usize> {
-    usize::try_from(value)
-        .map_err(|_| shape_infer_error(format!("{op}: value {value} must fit in usize")))
+    let _ = op;
+    usize::try_from(value).map_err(|_| shape_infer_validation(ValidationError::IntegerOverflow))
 }
 
 fn dim_min(lhs: DimExpr, rhs: DimExpr) -> DimExpr {

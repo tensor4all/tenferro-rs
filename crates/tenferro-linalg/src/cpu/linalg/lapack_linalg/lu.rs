@@ -108,16 +108,14 @@ fn lu_2d<T: LapackLu>(
         let pivot = match usize::try_from(pivot_one_based - 1) {
             Ok(pivot) => pivot,
             Err(_) => {
-                return Err(tenferro_tensor::Error::backend_failure(
-                    "lu",
-                    "LAPACK getrf returned invalid pivot index",
+                return Err(tenferro_tensor::Error::Internal(
+                    "LAPACK getrf returned an invalid pivot index".to_string(),
                 ));
             }
         };
         if pivot >= m {
-            return Err(tenferro_tensor::Error::backend_failure(
-                "lu",
-                "LAPACK getrf returned out-of-bounds pivot index",
+            return Err(tenferro_tensor::Error::Internal(
+                "LAPACK getrf returned an out-of-bounds pivot index".to_string(),
             ));
         }
         if pivot != idx {
@@ -131,7 +129,7 @@ fn lu_2d<T: LapackLu>(
     for (row, &source_row) in permutation.iter().enumerate() {
         p_data[row + source_row * m] = T::one();
     }
-    let parity = if swap_count % 2 == 0 {
+    let parity = if swap_count.is_multiple_of(2) {
         T::one()
     } else {
         T::negative_one()
@@ -173,7 +171,7 @@ fn lu_factor_2d<T: LapackLu>(
         .enumerate()
         .filter(|(idx, pivot_one_based)| **pivot_one_based != (*idx as i32 + 1))
         .count();
-    let parity = if swap_count % 2 == 0 {
+    let parity = if swap_count.is_multiple_of(2) {
         T::one()
     } else {
         T::negative_one()

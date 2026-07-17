@@ -4,6 +4,7 @@ use tenferro_tensor::{GatherConfig, SliceConfig, Tensor, TensorDeviceTransfer, T
 
 use crate::eager::EagerTensor;
 use crate::error::{Error, Result};
+use tenferro_runtime::ErrorPhase;
 
 fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
     let normalized = if axis >= 0 {
@@ -304,6 +305,12 @@ impl<'a> EagerSliceBuilder<'a> {
     /// let y = x.slice_builder().axis(0, 1..4).apply().unwrap();
     /// assert_eq!(y.shape(), &[3]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::AxisOutOfBounds`] or
+    /// `DuplicateAxis` when selections address an invalid/repeated axis,
+    /// `InvalidArgument` for zero steps or out-of-bounds ranges, or a typed
+    /// backend/runtime-state error while applying the selections.
     pub fn apply(self) -> Result<EagerTensor> {
         let shape = self.tensor.shape().to_vec();
         let mut seen = vec![false; shape.len()];
@@ -343,6 +350,11 @@ impl EagerTensor {
     /// let y = x.slice_axis(0, 1..3).unwrap();
     /// assert_eq!(y.shape(), &[2]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::AxisOutOfBounds`] when `axis` is not
+    /// present, `InvalidArgument` when `range` exceeds the axis extent, or a
+    /// typed backend/runtime-state error.
     pub fn slice_axis(&self, axis: usize, range: Range<usize>) -> Result<Self> {
         self.slice_builder().axis(axis, range).apply()
     }
@@ -386,6 +398,11 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::AxisOutOfBounds`] for an invalid axis,
+    /// `InvalidArgument` when an index is outside the axis extent or cannot fit
+    /// in the backend index dtype, or a typed backend/runtime-state error.
     pub fn take_axis(&self, axis: usize, indices: &[usize]) -> Result<Self> {
         let axis = isize::try_from(axis).map_err(|_| {
             Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
@@ -415,6 +432,11 @@ impl EagerTensor {
     /// assert_eq!(y.shape(), &[1, 2]);
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::InvalidArgument`] for a row index
+    /// outside the matrix, or [`Error::Validation`] for a non-matrix input;
+    /// backend/runtime-state failures retain their typed source.
     pub fn take_rows(&self, rows: &[usize]) -> Result<Self> {
         self.take_axis(0, rows)
     }
@@ -437,6 +459,11 @@ impl EagerTensor {
     /// assert_eq!(y.shape(), &[2, 1]);
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::InvalidArgument`] for a column index
+    /// outside the matrix, or [`Error::Validation`] for a non-matrix input;
+    /// backend/runtime-state failures retain their typed source.
     pub fn take_cols(&self, cols: &[usize]) -> Result<Self> {
         self.take_axis(1, cols)
     }
@@ -463,6 +490,11 @@ impl EagerTensor {
     /// assert_eq!(y.shape(), &[1, 1]);
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[2.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Propagates [`tenferro_tensor::ValidationError::InvalidArgument`] for an out of
+    /// bounds row or column and [`Error::Validation`] for a non-matrix input;
+    /// backend/runtime-state failures retain their typed source.
     pub fn take_block(&self, rows: &[usize], cols: &[usize]) -> Result<Self> {
         self.take_rows(rows)?.take_cols(cols)
     }
@@ -484,14 +516,17 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::AxisOutOfBounds`] for an invalid
+    /// signed axis, `InvalidArgument` for an out-of-range position or integer
+    /// conversion overflow, or a typed backend/runtime-state error.
     pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self> {
         let (indices, config) = index_select_config(self.shape(), axis, positions)?;
         let indices = {
-            let mut backend = self
-                .ctx
-                .backend
-                .lock()
-                .map_err(|_| Error::Internal("backend lock poisoned".to_string()))?;
+            let mut backend = self.ctx.backend.lock().map_err(|_| {
+                Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned")
+            })?;
             backend.upload_host_tensor(&indices)?
         };
         let indices = self.ctx.constant_from(indices)?;
@@ -517,6 +552,11 @@ impl EagerTensor {
     /// assert_eq!(out.shape(), &[2]);
     /// assert_eq!(out.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::InvalidArgument`] when `tensors` is
+    /// empty or `dim` is outside the insertion rank, `ShapeMismatch` when
+    /// inputs differ in shape, or a typed context/backend/runtime-state error.
     pub fn stack(tensors: &[&Self], dim: isize) -> Result<Self> {
         let first = tensors.first().copied().ok_or_else(|| {
             Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(

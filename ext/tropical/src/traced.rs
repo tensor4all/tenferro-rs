@@ -23,17 +23,22 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tenferro_einsum::Subscripts;
-use tenferro_runtime::{extension, DType, Error, Result, TracedTensor};
+use tenferro_runtime::{extension, DType, Error, ErrorPhase, Result, TracedTensor};
+use tenferro_tensor::{ShapeMismatch, ShapeVec, ValidationError};
 
 use crate::extension::TropicalEinsumOp;
 use crate::TropicalKind;
 
-fn try_require_rank2(tensor: &TracedTensor, label: &str) -> Result<()> {
+fn try_require_rank2(tensor: &TracedTensor, op: &'static str) -> Result<()> {
     if tensor.rank != 2 {
-        return Err(Error::ContractionError(format!(
-            "{label}: tropical matrix composition requires rank-2 input, got rank {}",
-            tensor.rank
-        )));
+        return Err(Error::validation(
+            op,
+            ErrorPhase::GraphBuild,
+            ValidationError::RankMismatch {
+                expected: 2,
+                actual: tensor.rank,
+            },
+        ));
     }
     Ok(())
 }
@@ -41,14 +46,21 @@ fn try_require_rank2(tensor: &TracedTensor, label: &str) -> Result<()> {
 fn try_require_contracting_axes_compatible(
     a: &TracedTensor,
     b: &TracedTensor,
-    label: &str,
+    op: &'static str,
 ) -> Result<()> {
     if let (Some(a_shape), Some(b_shape)) = (a.try_concrete_shape(), b.try_concrete_shape()) {
         if a_shape[1] != b_shape[0] {
-            return Err(Error::ContractionError(format!(
-                "{label}: contracting axes must match, got a[1]={} and b[0]={}",
-                a_shape[1], b_shape[0]
-            )));
+            return Err(Error::validation(
+                op,
+                ErrorPhase::GraphBuild,
+                ShapeMismatch::ContractedDimensions {
+                    lhs_axis: 1,
+                    lhs_size: a_shape[1],
+                    rhs_axis: 0,
+                    rhs_size: b_shape[0],
+                }
+                .into(),
+            ));
         }
     }
     Ok(())
@@ -58,11 +70,11 @@ fn checked_tropical_dot_general_impl(
     a: &TracedTensor,
     b: &TracedTensor,
     reduce: impl FnOnce(&TracedTensor) -> Result<TracedTensor>,
-    label: &str,
+    op: &'static str,
 ) -> Result<TracedTensor> {
-    try_require_rank2(a, &format!("{label}.a"))?;
-    try_require_rank2(b, &format!("{label}.b"))?;
-    try_require_contracting_axes_compatible(a, b, label)?;
+    try_require_rank2(a, op)?;
+    try_require_rank2(b, op)?;
+    try_require_contracting_axes_compatible(a, b, op)?;
 
     let m = a.axis_sym_dim(0)?;
     let k = a.axis_sym_dim(1)?;
@@ -82,8 +94,16 @@ fn checked_tropical_dot_general_impl(
 ///
 /// # Errors
 ///
-/// Returns an error if either input is not rank 2 or if concrete contracting
-/// dimensions are known and incompatible.
+/// Returns `Error::Validation` if either input is not rank 2 or if known
+/// contracting dimensions are incompatible, `Error::Extension` with an
+/// unsupported-dtype source for non-floating inputs, and `Error::RuntimeState`
+/// if the tropical runtime extension is unavailable.
+///
+/// # Deferred errors
+///
+/// Symbolic contracting dimensions are checked during compilation or
+/// execution and can produce `ShapeConstraintViolation` or
+/// `ShapeConstraintEvaluation`.
 ///
 /// # Examples
 ///
@@ -112,8 +132,16 @@ pub fn tropical_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<Traced
 ///
 /// # Errors
 ///
-/// Returns an error if either input is not rank 2 or if concrete contracting
-/// dimensions are known and incompatible.
+/// Returns `Error::Validation` if either input is not rank 2 or if known
+/// contracting dimensions are incompatible, `Error::Extension` with an
+/// unsupported-dtype source for non-floating inputs, and `Error::RuntimeState`
+/// if the tropical runtime extension is unavailable.
+///
+/// # Deferred errors
+///
+/// Symbolic contracting dimensions are checked during compilation or
+/// execution and can produce `ShapeConstraintViolation` or
+/// `ShapeConstraintEvaluation`.
 ///
 /// # Examples
 ///
@@ -142,8 +170,15 @@ pub fn min_plus_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<Traced
 ///
 /// # Errors
 ///
-/// Returns an error when the notation is invalid or outside the supported
-/// two-input tropical contraction surface.
+/// Returns `Error::Validation` when `subscripts` describe anything other than
+/// two inputs with compatible contracting axes, `Error::Extension` with an
+/// unsupported-dtype source for non-floating inputs, or `Error::Internal` if
+/// the extension returns no output.
+///
+/// # Deferred errors
+///
+/// Symbolic dimension equalities are checked during compilation or execution
+/// and can produce `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 ///
 /// # Examples
 ///
@@ -168,9 +203,8 @@ pub fn tropical_einsum(
     inputs: &[&TracedTensor],
     notation: &str,
 ) -> Result<TracedTensor> {
-    let subscripts = Subscripts::parse(notation).map_err(|err| {
-        Error::InvalidSubscripts(format!("invalid tropical einsum notation: {err}"))
-    })?;
+    let subscripts = Subscripts::parse(notation)
+        .map_err(|err| crate::error::from_einsum_error("tropical_einsum", err))?;
     tropical_einsum_subscripts(kind, inputs, &subscripts)
 }
 
@@ -181,8 +215,15 @@ pub fn tropical_einsum(
 ///
 /// # Errors
 ///
-/// Returns an error when the parsed subscripts are outside the supported
-/// two-input tropical contraction surface.
+/// Returns `Error::Validation` when `subscripts` describe anything other than
+/// two inputs with compatible contracting axes, `Error::Extension` with an
+/// unsupported-dtype source for non-floating inputs, or `Error::Internal` if
+/// the extension returns no output.
+///
+/// # Deferred errors
+///
+/// Symbolic dimension equalities are checked during compilation or execution
+/// and can produce `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 ///
 /// # Examples
 ///
@@ -227,8 +268,16 @@ pub fn tropical_einsum_subscripts(
 ///
 /// # Errors
 ///
-/// Returns an error if either input is not rank 2 or if concrete contracting
-/// dimensions are known and incompatible.
+/// Returns `Error::Validation` if either input is not rank 2 or if known
+/// contracting dimensions are incompatible, `Error::Extension` with an
+/// unsupported-dtype source for non-floating inputs, and `Error::RuntimeState`
+/// if the tropical runtime extension is unavailable.
+///
+/// # Deferred errors
+///
+/// Symbolic contracting dimensions are checked during compilation or
+/// execution and can produce `ShapeConstraintViolation` or
+/// `ShapeConstraintEvaluation`.
 ///
 /// # Examples
 ///
@@ -259,8 +308,16 @@ pub fn tropical_dot_general_fused(a: &TracedTensor, b: &TracedTensor) -> Result<
 ///
 /// # Errors
 ///
-/// Returns an error if either input is not rank 2 or if concrete contracting
-/// dimensions are known and incompatible.
+/// Returns `Error::Validation` if either input is not rank 2 or if known
+/// contracting dimensions are incompatible, `Error::Extension` with an
+/// unsupported-dtype source for non-floating inputs, and `Error::RuntimeState`
+/// if the tropical runtime extension is unavailable.
+///
+/// # Deferred errors
+///
+/// Symbolic contracting dimensions are checked during compilation or
+/// execution and can produce `ShapeConstraintViolation` or
+/// `ShapeConstraintEvaluation`.
 ///
 /// # Examples
 ///
@@ -288,11 +345,11 @@ fn try_fused_dot_general_impl(
     kind: TropicalKind,
     a: &TracedTensor,
     b: &TracedTensor,
-    label: &str,
+    op: &'static str,
 ) -> Result<TracedTensor> {
-    try_require_rank2(a, &format!("{label}.a"))?;
-    try_require_rank2(b, &format!("{label}.b"))?;
-    try_require_contracting_axes_compatible(a, b, label)?;
+    try_require_rank2(a, op)?;
+    try_require_rank2(b, op)?;
+    try_require_contracting_axes_compatible(a, b, op)?;
     let subscripts = Subscripts::new(
         &[&[b'i' as u32, b'j' as u32], &[b'j' as u32, b'k' as u32]],
         &[b'i' as u32, b'k' as u32],
@@ -305,59 +362,82 @@ fn validate_tropical_einsum_inputs(
     subscripts: &Subscripts,
 ) -> Result<()> {
     if inputs.len() != 2 {
-        return Err(Error::ContractionError(format!(
-            "tropical einsum supports exactly two inputs, got {}",
-            inputs.len()
-        )));
+        return Err(Error::invalid_argument(
+            "tropical_einsum_subscripts",
+            ErrorPhase::GraphBuild,
+            "inputs",
+            format!("tropical einsum supports exactly two inputs, got {}", inputs.len()),
+        ));
     }
     if subscripts.inputs.len() != 2 {
-        return Err(Error::ContractionError(format!(
-            "tropical einsum subscripts describe {} inputs, expected 2",
-            subscripts.inputs.len()
-        )));
+        return Err(Error::invalid_argument(
+            "tropical_einsum_subscripts",
+            ErrorPhase::GraphBuild,
+            "subscripts",
+            format!(
+                "tropical einsum subscripts describe {} inputs, expected 2",
+                subscripts.inputs.len()
+            ),
+        ));
     }
-    for (input_idx, tensor) in inputs.iter().enumerate() {
+    for tensor in inputs.iter() {
         if !matches!(tensor.dtype, DType::F32 | DType::F64) {
-            return Err(Error::ContractionError(format!(
-                "tropical einsum input {input_idx} dtype {:?} is not supported",
-                tensor.dtype
+            return Err(Error::TensorRuntime(crate::error::unsupported_dtype(
+                "tropical_einsum_subscripts",
+                tensor.dtype,
             )));
         }
     }
     if inputs[0].dtype != inputs[1].dtype {
-        return Err(Error::ContractionError(format!(
-            "tropical einsum input dtypes must match, got {:?} and {:?}",
-            inputs[0].dtype, inputs[1].dtype
-        )));
+        return Err(Error::dtype_mismatch(
+            "tropical_einsum_subscripts",
+            ErrorPhase::GraphBuild,
+            inputs[0].dtype,
+            inputs[1].dtype,
+        ));
     }
 
     let mut labels_seen = HashSet::new();
     let mut concrete_label_dims = HashMap::new();
-    for (input_idx, (labels, tensor)) in subscripts.inputs.iter().zip(inputs).enumerate() {
+    for (labels, tensor) in subscripts.inputs.iter().zip(inputs) {
         if labels.len() != tensor.rank {
-            return Err(Error::ContractionError(format!(
-                "tropical einsum input {input_idx} rank mismatch: labels={}, rank={}",
-                labels.len(),
-                tensor.rank
-            )));
+            return Err(Error::validation(
+                "tropical_einsum_subscripts",
+                ErrorPhase::GraphBuild,
+                ValidationError::RankMismatch {
+                    expected: labels.len(),
+                    actual: tensor.rank,
+                },
+            ));
         }
         if labels
             .iter()
             .enumerate()
             .any(|(idx, label)| labels[..idx].contains(label))
         {
-            return Err(Error::ContractionError(format!(
-                "tropical einsum input {input_idx} repeated labels are not supported"
-            )));
+            return Err(Error::validation(
+                "tropical_einsum_subscripts",
+                ErrorPhase::GraphBuild,
+                ValidationError::DuplicateAxis {
+                    axis: 0,
+                    role: "input label",
+                },
+            ));
         }
         labels_seen.extend(labels.iter().copied());
         if let Some(shape) = tensor.try_concrete_shape() {
             for (&label, &extent) in labels.iter().zip(shape.iter()) {
                 if let Some(previous) = concrete_label_dims.insert(label, extent) {
                     if previous != extent {
-                        return Err(Error::ContractionError(format!(
-                            "tropical einsum label {label} has inconsistent concrete sizes {previous} and {extent}"
-                        )));
+                        return Err(Error::validation(
+                            "tropical_einsum_subscripts",
+                            ErrorPhase::GraphBuild,
+                            ShapeMismatch::ExpectedActual {
+                                expected: ShapeVec::from_vec(vec![previous]),
+                                actual: ShapeVec::from_vec(vec![extent]),
+                            }
+                            .into(),
+                        ));
                     }
                 }
             }
@@ -369,23 +449,34 @@ fn validate_tropical_einsum_inputs(
         .enumerate()
         .any(|(idx, label)| subscripts.output[..idx].contains(label))
     {
-        return Err(Error::ContractionError(
-            "tropical einsum repeated output labels are not supported".to_string(),
+        return Err(Error::validation(
+            "tropical_einsum_subscripts",
+            ErrorPhase::GraphBuild,
+            ValidationError::DuplicateAxis {
+                axis: 0,
+                role: "output label",
+            },
         ));
     }
     for &label in &subscripts.output {
         if !labels_seen.contains(&label) {
-            return Err(Error::ContractionError(format!(
-                "tropical einsum output label {label} is not present in any input"
-            )));
+            return Err(Error::invalid_argument(
+                "tropical_einsum_subscripts",
+                ErrorPhase::GraphBuild,
+                "output",
+                format!("output label {label} is not present in any input"),
+            ));
         }
     }
     let has_contracted = subscripts.inputs[0]
         .iter()
         .any(|label| subscripts.inputs[1].contains(label) && !subscripts.output.contains(label));
     if !has_contracted {
-        return Err(Error::ContractionError(
-            "tropical einsum requires at least one contracted label".to_string(),
+        return Err(Error::invalid_argument(
+            "tropical_einsum_subscripts",
+            ErrorPhase::GraphBuild,
+            "subscripts",
+            "tropical einsum requires at least one contracted label",
         ));
     }
     Ok(())
@@ -412,6 +503,13 @@ fn validate_tropical_einsum_inputs(
 /// let out = executor.run(&program).unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[5.0]);
 /// ```
+///
+/// # Errors
+///
+/// Returns [`tenferro_runtime::Error::Validation`] with an
+/// `AxisOutOfBounds` or `DuplicateAxis` payload when `axes` is invalid, or
+/// [`tenferro_runtime::Error::Internal`] if output metadata registration
+/// fails.
 pub fn tropical_reduce_sum(a: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
     a.reduce_max(axes)
 }
@@ -426,7 +524,17 @@ mod tests {
         let rhs = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
 
         let err = tropical_dot_general(&lhs, &rhs).unwrap_err();
-        assert!(err.to_string().contains("requires rank-2 input"));
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "tropical_dot_general",
+                phase: ErrorPhase::GraphBuild,
+                source: ValidationError::RankMismatch {
+                    expected: 2,
+                    actual: 1,
+                },
+            }
+        ));
     }
 
     #[test]
@@ -435,6 +543,21 @@ mod tests {
         let rhs = TracedTensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
 
         let err = min_plus_dot_general(&lhs, &rhs).unwrap_err();
-        assert!(err.to_string().contains("contracting axes must match"));
+        assert!(matches!(
+            err,
+            Error::Validation {
+                op: "min_plus_dot_general",
+                phase: ErrorPhase::GraphBuild,
+                source: ValidationError::ShapeMismatch(payload),
+            } if matches!(
+                payload.as_ref(),
+                ShapeMismatch::ContractedDimensions {
+                    lhs_axis: 1,
+                    lhs_size: 3,
+                    rhs_axis: 0,
+                    rhs_size: 4,
+                }
+            )
+        ));
     }
 }

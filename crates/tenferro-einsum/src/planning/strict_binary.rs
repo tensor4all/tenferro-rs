@@ -28,7 +28,7 @@ fn product(dims: &[usize], label: &'static str) -> crate::Result<usize> {
     }
     dims.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim).ok_or_else(|| {
-            Error::InvalidArgument(format!(
+            Error::planning(format!(
                 "dimension product overflow while fusing {label} dimensions {dims:?}"
             ))
         })
@@ -159,7 +159,7 @@ fn compile_strict_binary_lowering_plan_from_parts(
                 .iter()
                 .position(|candidate| candidate == label)
                 .ok_or_else(|| {
-                    Error::InvalidArgument(format!("strict lowering: missing output label {label}"))
+                    Error::planning(format!("strict lowering: missing output label {label}"))
                 })
         })
         .collect::<EinsumResult<_>>()?;
@@ -192,7 +192,7 @@ pub(crate) fn compile_strict_binary_lowering_step_plan(
         subs.iter()
             .map(|label| {
                 size_dict.get(label).copied().ok_or_else(|| {
-                    Error::InvalidArgument(format!(
+                    Error::planning(format!(
                         "strict lowering: missing dimension for label {label}"
                     ))
                 })

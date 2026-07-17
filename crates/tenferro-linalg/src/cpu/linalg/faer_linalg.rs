@@ -288,7 +288,11 @@ impl_complex_faer_casts!(
 );
 
 fn decomposition_failed(op: &'static str) -> tenferro_tensor::Error {
-    tenferro_tensor::Error::backend_failure(op, "decomposition failed")
+    crate::error::into_tensor_error(op, crate::Error::NonConvergence { op })
+}
+
+fn singular_matrix(op: &'static str) -> tenferro_tensor::Error {
+    crate::error::into_tensor_error(op, crate::Error::Singular { op })
 }
 
 fn invalid_config(op: &'static str, message: impl Into<String>) -> tenferro_tensor::Error {
@@ -1033,7 +1037,7 @@ macro_rules! impl_faer_linalg_for_real {
             stack,
             Default::default(),
         )
-        .map_err(|_| tenferro_tensor::Error::backend_failure("cholesky", "matrix is not positive definite"))?;
+        .map_err(|_| decomposition_failed("cholesky"))?;
         tensor_from_vec_with_template(
             vec![n, n],
             lower_triangle_vec_from_mat(l.as_ref())?,
@@ -1262,7 +1266,7 @@ macro_rules! impl_faer_linalg_for_real {
                 max_diagonal,
                 <$scalar>::EPSILON as f64,
             ) {
-                return Err(tenferro_tensor::Error::backend_failure("full_piv_lu_solve", "matrix is singular"));
+                return Err(singular_matrix("full_piv_lu_solve"));
             }
         }
 
@@ -1344,7 +1348,7 @@ macro_rules! impl_faer_linalg_for_real {
                 max_diagonal,
                 <$scalar>::EPSILON as f64,
             ) {
-                return Err(tenferro_tensor::Error::backend_failure("solve", "matrix is singular"));
+                return Err(singular_matrix("solve"));
             }
         }
 
@@ -1865,7 +1869,7 @@ macro_rules! impl_faer_linalg_for_complex {
             stack,
             Default::default(),
         )
-        .map_err(|_| tenferro_tensor::Error::backend_failure("cholesky", "matrix is not positive definite"))?;
+        .map_err(|_| decomposition_failed("cholesky"))?;
         tensor_from_vec_with_template(
             vec![n, n],
             $matrix_from_predicate(l.as_ref(), n, n, |row, col| row >= col)?,
@@ -2129,7 +2133,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 max_diagonal,
                 <$real>::EPSILON as f64,
             ) {
-                return Err(tenferro_tensor::Error::backend_failure("full_piv_lu_solve", "matrix is singular"));
+                return Err(singular_matrix("full_piv_lu_solve"));
             }
         }
 
@@ -2224,7 +2228,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 max_diagonal,
                 <$real>::EPSILON as f64,
             ) {
-                return Err(tenferro_tensor::Error::backend_failure("solve", "matrix is singular"));
+                return Err(singular_matrix("solve"));
             }
         }
 
@@ -3172,14 +3176,14 @@ fn host_base_ptr<T: 'static>(view: &TypedTensorView<'_, T>) -> tenferro_tensor::
     let storage = view.host_storage()?;
     let offset = view.offset();
     if offset < 0 {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(tenferro_tensor::Error::runtime_state(
             "faer_view",
             "view offset is negative",
         ));
     }
     let offset_usize = offset as usize;
     if !storage.is_empty() && offset_usize >= storage.len() {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(tenferro_tensor::Error::runtime_state(
             "faer_view",
             "view offset is outside host buffer",
         ));
@@ -3550,10 +3554,7 @@ pub(crate) fn eig(
                 Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
                 Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
             ]),
-            _ => Err(tenferro_tensor::Error::backend_failure(
-                "eig",
-                format!("unsupported dtype {:?}", input.dtype()),
-            )),
+            _ => Err(crate::error::unsupported_dtype("eig", input.dtype())),
         };
     }
 
@@ -3598,10 +3599,7 @@ pub(crate) fn eig(
                 .collect(),
             )
         }
-        _ => Err(tenferro_tensor::Error::backend_failure(
-            "eig",
-            format!("unsupported dtype {:?}", input.dtype()),
-        )),
+        _ => Err(crate::error::unsupported_dtype("eig", input.dtype())),
     }
 }
 
@@ -3631,10 +3629,7 @@ pub(crate) fn eig_values(
                 value_shape,
                 Vec::new(),
             )?)),
-            _ => Err(tenferro_tensor::Error::backend_failure(
-                "eig_values",
-                format!("unsupported dtype {:?}", input.dtype()),
-            )),
+            _ => Err(crate::error::unsupported_dtype("eig_values", input.dtype())),
         };
     }
 
@@ -3667,10 +3662,7 @@ pub(crate) fn eig_values(
                 })?;
             Ok(Tensor::C64(outputs.remove(0)))
         }
-        _ => Err(tenferro_tensor::Error::backend_failure(
-            "eig_values",
-            format!("unsupported dtype {:?}", input.dtype()),
-        )),
+        _ => Err(crate::error::unsupported_dtype("eig_values", input.dtype())),
     }
 }
 

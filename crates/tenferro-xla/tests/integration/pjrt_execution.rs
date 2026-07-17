@@ -1,6 +1,6 @@
 #![cfg(feature = "pjrt")]
 
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::MutexGuard;
 
 use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
@@ -146,19 +146,12 @@ fn pjrt_executes_nary_einsum_plus_elementwise_from_rust_when_configured() {
 }
 
 fn configured_executor() -> Option<(MutexGuard<'static, ()>, XlaExecutor)> {
-    let guard = pjrt_lock();
-    if std::env::var_os(TENFERRO_PJRT_PLUGIN_ENV).is_none() {
+    let guard = super::pjrt_env_lock();
+    if std::env::var_os(TENFERRO_PJRT_PLUGIN_ENV).is_none_or(|path| path.is_empty()) {
         eprintln!("skipping PJRT execution check; set {TENFERRO_PJRT_PLUGIN_ENV}");
         return None;
     }
     Some((guard, XlaExecutor::from_env().unwrap()))
-}
-
-fn pjrt_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn expected_ij_jk_kl_to_il(lhs: &[f32], mid: &[f32], rhs: &[f32]) -> Vec<f32> {

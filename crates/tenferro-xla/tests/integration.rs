@@ -1,3 +1,12 @@
+#[cfg(feature = "pjrt")]
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+#[cfg(feature = "pjrt")]
+fn pjrt_env_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+}
+
 #[path = "integration/pjrt_env.rs"]
 mod pjrt_env;
 #[path = "integration/pjrt_execution.rs"]

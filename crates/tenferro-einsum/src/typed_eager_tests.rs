@@ -279,6 +279,27 @@ fn typed_einsum_reports_dtype_mismatch_from_backend_result() {
 }
 
 #[test]
+fn typed_einsum_preserves_typed_parser_source_for_invalid_notation() {
+    let mut ctx = CpuBackend::new();
+    let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+
+    let error = typed_eager_einsum(&mut ctx, &[&input], "ij,(jk,kl)->il")
+        .expect_err("malformed notation must fail before backend execution");
+
+    assert!(matches!(
+        error,
+        tenferro_tensor::Error::Extension {
+            op: "typed_eager_einsum",
+            kind: tenferro_tensor::ErrorKind::Validation(
+                tenferro_tensor::ValidationKind::InvalidArgument
+            ),
+            ..
+        }
+    ));
+    assert!(std::error::Error::source(&error).is_some());
+}
+
+#[test]
 fn tensor_backend_default_cached_methods_delegate_to_backend_ops() {
     let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![1.0]).unwrap());
     let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![1, 1], vec![3.0]).unwrap());

@@ -11,10 +11,11 @@ pub(crate) fn typed_eager_einsum<T: TensorScalar>(
     subscripts: &str,
 ) -> Result<TypedTensor<T>> {
     let subscripts = Subscripts::parse(subscripts).map_err(|err| {
-        Error::invalid_argument(
+        Error::extension(
             "typed_eager_einsum",
-            "subscripts",
-            format!("invalid subscripts: {err}"),
+            crate::EINSUM_EXTENSION_FAMILY_ID,
+            err.kind(),
+            err,
         )
     })?;
     let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();

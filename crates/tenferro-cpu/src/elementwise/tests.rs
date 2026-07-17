@@ -17,8 +17,9 @@ fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
     );
     assert!(matches!(
         validate_elementwise_fusion_inputs(&[&input], &wrong_input_count),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Validation {
             op: ELEMENTWISE_FUSION_OP,
+            source: tenferro_tensor::ValidationError::InvalidArgument { .. },
             ..
         })
     ));
@@ -63,7 +64,7 @@ fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
     assert!(reject_complex_ordered_dtypes("maximum", &[DType::F32]).is_ok());
     assert!(matches!(
         reject_complex_ordered_dtypes("maximum", &[DType::C64]),
-        Err(crate::Error::Validation { op: "maximum", .. })
+        Err(crate::Error::Unsupported { op: "maximum", .. })
     ));
 }
 
@@ -423,20 +424,20 @@ fn assert_dtype_mismatch<T>(result: crate::Result<T>, op: &'static str) {
     ));
 }
 
-fn assert_backend_failure<T>(result: crate::Result<T>, op: &'static str) {
+fn assert_unsupported<T>(result: crate::Result<T>, op: &'static str) {
     assert!(matches!(
         result,
-        Err(crate::Error::BackendFailure { op: actual, .. }) if actual == op
+        Err(crate::Error::Unsupported { op: actual, .. }) if actual == op
     ));
 }
 
-fn assert_invalid_config_contains<T>(result: crate::Result<T>, op: &'static str, expected: &str) {
+fn assert_unsupported_contains<T>(result: crate::Result<T>, op: &'static str, expected: &str) {
     assert!(matches!(
         result,
-        Err(crate::Error::Validation {
+        Err(crate::Error::Unsupported {
             op: actual,
-            source,
-        }) if actual == op && source.to_string().contains(expected)
+            message,
+        }) if actual == op && message.contains(expected)
     ));
 }
 
@@ -450,10 +451,18 @@ fn complex_ordered_ops_are_explicitly_rejected() {
         ("minimum", minimum(&lhs, &rhs)),
         ("compare", compare(&lhs, &rhs, &CompareDir::Le)),
     ] {
-        assert_invalid_config_contains(result, op, "total order");
+        assert!(matches!(
+            result,
+            Err(crate::Error::Unsupported { op: actual, message })
+                if actual == op && message.contains("total order")
+        ));
     }
 
-    assert_invalid_config_contains(clamp(&lhs, &rhs, &lhs), "clamp", "total order");
+    assert!(matches!(
+        clamp(&lhs, &rhs, &lhs),
+        Err(crate::Error::Unsupported { op: "clamp", message })
+            if message.contains("total order")
+    ));
 }
 
 #[test]
@@ -836,7 +845,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     )
     .unwrap();
     assert_c32_close(conj.as_slice::<Complex<f32>>().unwrap()[0], c32(3.0, -4.0));
-    assert_backend_failure(
+    assert_unsupported(
         conj_read_with_pool(
             &mut buffers,
             TensorRead::from_view(TensorView::Bool(bool_a.as_view())),
@@ -868,7 +877,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
         c32(0.6, 0.8),
     );
 
-    assert_invalid_config_contains(
+    assert_unsupported_contains(
         maximum_read_with_pool(
             &mut buffers,
             TensorRead::from_view(TensorView::C32(c32_a.as_view())),
@@ -877,7 +886,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
         "maximum",
         "total order",
     );
-    assert_invalid_config_contains(
+    assert_unsupported_contains(
         minimum_read_with_pool(
             &mut buffers,
             TensorRead::from_view(TensorView::C64(c64_a.as_view())),
@@ -914,7 +923,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
     .unwrap();
     assert_eq!(cmp_bool.as_slice::<bool>().unwrap(), &[false, true]);
 
-    assert_invalid_config_contains(
+    assert_unsupported_contains(
         compare_read_with_pool(
             &mut buffers,
             TensorRead::from_view(TensorView::C32(c32_a.as_view())),
@@ -974,7 +983,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
         "select",
     );
 
-    assert_invalid_config_contains(
+    assert_unsupported_contains(
         clamp_read_with_pool(
             &mut buffers,
             TensorRead::from_view(TensorView::C32(c32_a.as_view())),
@@ -984,7 +993,7 @@ fn tensor_read_elementwise_dispatch_covers_view_and_complex_scalar_branches() {
         "clamp",
         "total order",
     );
-    assert_invalid_config_contains(
+    assert_unsupported_contains(
         clamp_read_with_pool(
             &mut buffers,
             TensorRead::from_view(TensorView::C64(c64_a.as_view())),

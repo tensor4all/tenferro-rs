@@ -1,23 +1,82 @@
 use std::num::NonZeroUsize;
 
+use thiserror::Error;
+
 use crate::{CpuId, CpuSet};
 
+/// Typed failures from the operating-system CPU-affinity boundary.
+///
+/// These errors stay CPU-local until a context-construction failure is
+/// reported to the tensor API, where the complete value is retained as the
+/// source of [`crate::CpuContextError`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuAffinityError;
+///
+/// let error = CpuAffinityError::UnsupportedPlatform;
+/// assert!(error.to_string().contains("unsupported"));
+/// ```
+#[derive(Debug, Error)]
+pub enum CpuAffinityError {
+    /// Constructing the one-CPU mask failed because the CPU set was invalid.
+    #[error("CPU affinity set is invalid: {0}")]
+    CpuSet(#[from] crate::CpuSetError),
+    /// The operating system rejected the requested affinity mask.
+    #[error("setting thread affinity failed: {source}")]
+    Set {
+        #[source]
+        source: std::io::Error,
+    },
+    /// Querying the current worker affinity failed.
+    #[error("querying worker affinity failed: {source}")]
+    Query {
+        #[source]
+        source: std::io::Error,
+    },
+    /// The platform has no supported thread-affinity implementation.
+    #[error("setting thread affinity is unsupported on this platform")]
+    UnsupportedPlatform,
+    /// The operating system did not expose a process affinity mask.
+    #[error("failed to verify worker affinity")]
+    VerificationUnavailable,
+    /// The returned affinity did not contain exactly the requested worker.
+    #[error("verification returned affinity {observed:?}")]
+    Verification { observed: Vec<CpuId> },
+    /// The requested CPU would overflow the affinity-mask size calculation.
+    #[error("affinity mask size overflow")]
+    MaskSizeOverflow,
+    /// The requested CPU exceeds the supported mask allocation limit.
+    #[error("CPU {cpu} exceeds supported affinity mask size of {max_bytes} bytes")]
+    MaskTooLarge { cpu: CpuId, max_bytes: usize },
+    /// Allocating the operating-system affinity mask failed.
+    #[error("failed to allocate affinity mask: {source}")]
+    MaskAllocation {
+        #[source]
+        source: std::collections::TryReserveError,
+    },
+    /// The affinity mask had no CPU entries.
+    #[error("cannot set an empty affinity mask")]
+    EmptyMask,
+}
+
 pub(crate) trait ThreadAffinity: Clone + Send + Sync + 'static {
-    fn pin_current(&self, cpu: CpuId) -> Result<CpuSet, String>;
+    fn pin_current(&self, cpu: CpuId) -> Result<CpuSet, CpuAffinityError>;
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SystemThreadAffinity;
 
 impl ThreadAffinity for SystemThreadAffinity {
-    fn pin_current(&self, cpu: CpuId) -> Result<CpuSet, String> {
-        set_current_thread_affinity(&CpuSet::new([cpu]).map_err(|err| err.to_string())?)?;
-        process_cpu_affinity().ok_or_else(|| "failed to verify worker affinity".to_owned())
+    fn pin_current(&self, cpu: CpuId) -> Result<CpuSet, CpuAffinityError> {
+        set_current_thread_affinity(&CpuSet::new([cpu])?)?;
+        process_cpu_affinity().ok_or(CpuAffinityError::VerificationUnavailable)
     }
 }
 
 #[cfg(all(test, target_os = "linux"))]
-pub(crate) fn current_cpu() -> Result<CpuId, String> {
+pub(crate) fn current_cpu() -> Result<CpuId, CpuAffinityError> {
     unsafe extern "C" {
         fn sched_getcpu() -> i32;
     }
@@ -26,10 +85,12 @@ pub(crate) fn current_cpu() -> Result<CpuId, String> {
     let cpu = unsafe { sched_getcpu() };
     usize::try_from(cpu)
         .map(CpuId::new)
-        .map_err(|_| std::io::Error::last_os_error().to_string())
+        .map_err(|_| CpuAffinityError::Query {
+            source: std::io::Error::last_os_error(),
+        })
 }
 
-fn set_current_thread_affinity(cpus: &CpuSet) -> Result<(), String> {
+fn set_current_thread_affinity(cpus: &CpuSet) -> Result<(), CpuAffinityError> {
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         unsafe extern "C" {
@@ -47,17 +108,19 @@ fn set_current_thread_affinity(cpus: &CpuSet) -> Result<(), String> {
             unsafe { sched_setaffinity(0, mask.len(), mask.as_ptr().cast::<core::ffi::c_void>()) };
         (rc == 0)
             .then_some(())
-            .ok_or_else(|| std::io::Error::last_os_error().to_string())
+            .ok_or_else(|| CpuAffinityError::Set {
+                source: std::io::Error::last_os_error(),
+            })
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
         let _ = cpus;
-        Err("setting thread affinity is unsupported on this platform".to_owned())
+        Err(CpuAffinityError::UnsupportedPlatform)
     }
 }
 
 #[cfg(any(target_os = "linux", target_os = "android", test))]
-fn build_affinity_mask(cpus: &CpuSet) -> Result<Vec<u8>, String> {
+fn build_affinity_mask(cpus: &CpuSet) -> Result<Vec<u8>, CpuAffinityError> {
     const MIN_MASK_BYTES: usize = 128;
     const MAX_MASK_BYTES: usize = 1 << 20;
 
@@ -65,22 +128,23 @@ fn build_affinity_mask(cpus: &CpuSet) -> Result<Vec<u8>, String> {
         .as_slice()
         .last()
         .copied()
-        .ok_or_else(|| "cannot set an empty affinity mask".to_owned())?;
+        .ok_or(CpuAffinityError::EmptyMask)?;
     let required_bytes = highest_cpu
         .as_usize()
         .checked_div(u8::BITS as usize)
         .and_then(|index| index.checked_add(1))
-        .ok_or_else(|| "affinity mask size overflow".to_owned())?
+        .ok_or(CpuAffinityError::MaskSizeOverflow)?
         .max(MIN_MASK_BYTES);
     if required_bytes > MAX_MASK_BYTES {
-        return Err(format!(
-            "CPU {highest_cpu} exceeds supported affinity mask size of {MAX_MASK_BYTES} bytes"
-        ));
+        return Err(CpuAffinityError::MaskTooLarge {
+            cpu: highest_cpu,
+            max_bytes: MAX_MASK_BYTES,
+        });
     }
 
     let mut mask = Vec::new();
     mask.try_reserve_exact(required_bytes)
-        .map_err(|error| format!("failed to allocate affinity mask: {error}"))?;
+        .map_err(|source| CpuAffinityError::MaskAllocation { source })?;
     mask.resize(required_bytes, 0u8);
     for cpu in cpus.as_slice() {
         let byte = cpu.as_usize() / u8::BITS as usize;

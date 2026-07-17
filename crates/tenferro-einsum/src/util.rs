@@ -10,7 +10,7 @@ pub(crate) fn build_size_dict(
     extra: Option<&HashMap<u32, usize>>,
 ) -> Result<HashMap<u32, usize>> {
     if subscripts.inputs.len() != shapes.len() {
-        return Err(Error::InvalidArgument(format!(
+        return Err(Error::planning(format!(
             "expected {} input shapes, got {}",
             subscripts.inputs.len(),
             shapes.len()
@@ -19,7 +19,7 @@ pub(crate) fn build_size_dict(
     let mut size_dict: HashMap<u32, usize> = HashMap::new();
     for (i, input_subs) in subscripts.inputs.iter().enumerate() {
         if input_subs.len() != shapes[i].len() {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::planning(format!(
                 "input {} has {} subscript labels but shape has {} dimensions",
                 i,
                 input_subs.len(),
@@ -30,10 +30,7 @@ pub(crate) fn build_size_dict(
             let size = shapes[i][j];
             if let Some(&existing) = size_dict.get(&label) {
                 if existing != size {
-                    return Err(Error::ShapeMismatch {
-                        expected: vec![existing],
-                        got: vec![size],
-                    });
+                    return Err(Error::shape_mismatch("einsum", [existing], [size]));
                 }
             } else {
                 size_dict.insert(label, size);
@@ -59,7 +56,7 @@ pub(crate) fn compute_output_shape(
             size_dict
                 .get(&label)
                 .copied()
-                .ok_or_else(|| Error::InvalidArgument(format!("unknown size for label {label}")))
+                .ok_or_else(|| Error::planning(format!("unknown size for label {label}")))
         })
         .collect()
 }

@@ -336,9 +336,9 @@ fn cubecl_copy_into_reports_typed_shape_mismatch() {
         .0;
 
     assert!(
-        copy_body.contains("crate::Error::ShapeMismatch")
-            && copy_body.contains("lhs: src.shape().to_vec()")
-            && copy_body.contains("rhs: dst.shape().to_vec()"),
+        copy_body.contains("crate::Error::shape_mismatch(")
+            && copy_body.contains("src.shape().to_vec()")
+            && copy_body.contains("dst.shape().to_vec()"),
         "CUDA copy_into shape mismatch must use the shared typed error"
     );
 }

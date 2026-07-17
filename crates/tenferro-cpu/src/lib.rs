@@ -88,7 +88,9 @@ extern crate lapack_src as _;
 #[cfg(feature = "cpu-tblis-linked")]
 extern crate tblis_src as _;
 
-pub use affinity::{available_parallelism, process_cpu_affinity, process_cpu_affinity_count};
+pub use affinity::{
+    available_parallelism, process_cpu_affinity, process_cpu_affinity_count, CpuAffinityError,
+};
 pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
     DotGeneralProvider,
@@ -96,7 +98,9 @@ pub use backend::{
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 pub use context::{CpuContext, CpuContextError};
-pub use placement::{CpuPlacement, CpuPlacementError, ResolvedCpuPlacement};
+pub use placement::{
+    CpuEngineConstructionError, CpuPlacement, CpuPlacementError, ResolvedCpuPlacement,
+};
 pub use topology::{
     discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
     NumaNodeId,
@@ -130,7 +134,7 @@ pub mod linalg_interop {
 }
 
 pub(crate) fn cpu_backend_buffer_error(op: &'static str) -> crate::Error {
-    crate::Error::backend_failure(
+    crate::Error::runtime_state(
         op,
         "CPU backend received backend buffer; download to host before CPU execution",
     )

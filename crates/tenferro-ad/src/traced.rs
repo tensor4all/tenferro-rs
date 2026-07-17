@@ -348,6 +348,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert_eq!(eval(&dx).as_slice::<f64>().unwrap(), &[6.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::NonScalarGrad`] for a non-scalar
+    /// output, [`tenferro_runtime::Error::UnsupportedAdRule`] when an AD rule
+    /// is unavailable, or a typed validation/backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor>;
 
     /// Like [`grad`](Self::grad), but returns `None` when `wrt` is inactive.
@@ -364,6 +377,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert!(loss.grad_optional(&x).unwrap().is_none());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::NonScalarGrad`] for a non-scalar
+    /// output, [`Error::UnsupportedAdRule`] when an AD rule is unavailable, or
+    /// a typed validation/backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn grad_optional(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>>;
 
     /// Evaluate this tensor and replace its graph with a concrete leaf while
@@ -386,6 +412,12 @@ pub trait TracedTensorAdExt {
     /// let value = y.attached_data().unwrap();
     /// assert_eq!(value.as_slice::<f64>().unwrap(), &[9.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::Validation`] when checkpoint metadata
+    /// is invalid, [`Error::RuntimeState`] when graph metadata or executor
+    /// state is unavailable, or a typed backend error from evaluation.
     fn checkpoint<B: TensorBackend>(
         &mut self,
         compiler: &mut GraphCompiler,
@@ -415,6 +447,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert_eq!(eval(&dy).as_slice::<f64>().unwrap(), &[12.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when a JVP rule
+    /// is unavailable, [`Error::Validation`] for incompatible tangent metadata,
+    /// or a typed backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Result<TracedTensor>;
 
     /// Like [`jvp`](Self::jvp), but returns `None` when `wrt` is inactive.
@@ -432,6 +477,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert!(loss.jvp_optional(&x, &tangent).unwrap().is_none());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when a JVP rule
+    /// is unavailable, [`Error::Validation`] for incompatible tangent metadata,
+    /// or a typed backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn jvp_optional(
         &self,
         wrt: &TracedTensor,
@@ -466,6 +524,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert_eq!(eval(&dx).as_slice::<f64>().unwrap(), &[3.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when a VJP rule
+    /// is unavailable, [`Error::Validation`] for incompatible cotangent
+    /// metadata, or a typed backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Result<TracedTensor>;
 
     /// Like [`vjp`](Self::vjp), but returns `None` when `wrt` is inactive.
@@ -483,6 +554,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert!(loss.vjp_optional(&x, &cotangent).unwrap().is_none());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when a VJP rule
+    /// is unavailable, [`Error::Validation`] for incompatible cotangent
+    /// metadata, or a typed backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn vjp_optional(
         &self,
         wrt: &TracedTensor,

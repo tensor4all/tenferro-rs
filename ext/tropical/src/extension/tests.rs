@@ -16,7 +16,16 @@ fn assert_invalid_without_panic(result: std::thread::Result<tenferro_tensor::Res
     let error = result
         .expect("host-reference validation must not panic")
         .expect_err("malformed host-reference inputs must be rejected");
-    assert!(matches!(error, Error::InvalidConfig { .. }));
+    assert!(matches!(
+        error,
+        Error::Validation {
+            source: tenferro_tensor::ValidationError::InvalidArgument {
+                argument: "configuration",
+                ..
+            },
+            ..
+        }
+    ));
 }
 
 #[test]

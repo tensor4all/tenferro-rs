@@ -99,7 +99,7 @@ fn concrete_tree_strategy_revalidates_current_shapes() {
         };
 
     assert!(
-        matches!(err, Error::ShapeMismatch { .. }),
+        matches!(err, Error::Validation { .. }),
         "expected ShapeMismatch, got {err}"
     );
 }

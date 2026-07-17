@@ -36,8 +36,8 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, ShapeRelation, SymDim};
 use tenferro_runtime::extension::{apply, HostReferenceRuntime};
-use tenferro_runtime::{Error as RuntimeError, GraphExecutor, Tensor, TracedTensor};
-use tenferro_tensor::{DType, TensorBackend, TypedTensor};
+use tenferro_runtime::{Error as RuntimeError, ErrorPhase, GraphExecutor, Tensor, TracedTensor};
+use tenferro_tensor::{DType, TensorBackend, TypedTensor, ValidationError};
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 // ----------------------------------------------------------------------

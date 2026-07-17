@@ -35,10 +35,13 @@ fn cube_count_for_len_rejects_u32_overflow() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::Validation {
             op: "cube_count_for_len",
-            ref message,
-        } if message.contains("exceeds u32::MAX")
+            source: tenferro_tensor::ValidationError::InvalidArgument {
+                argument: "length",
+                ..
+            },
+        }
     ));
 }
 
@@ -134,7 +137,7 @@ gpu_test!(test_download_empty_host_bool_rejects_before_fast_path, {
 });
 
 fn assert_download_rejects_host_tensor_before_empty_fast_path(err: Error) {
-    assert!(matches!(err, Error::BackendFailure { .. }));
+    assert!(matches!(err, Error::RuntimeState { .. }));
 }
 
 gpu_test!(test_upload_download_c64, {

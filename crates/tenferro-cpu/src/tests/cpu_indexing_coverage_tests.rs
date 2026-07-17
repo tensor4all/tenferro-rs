@@ -208,7 +208,7 @@ fn cpu_indexing_dispatch_covers_supported_dtypes() {
             &Tensor::from_vec_col_major(vec![2], vec![true, false]).unwrap(),
             &diagonal_scatter_config(),
         ),
-        Err(crate::Error::BackendFailure { op: "scatter", .. })
+        Err(crate::Error::Unsupported { op: "scatter", .. })
     ));
     assert!(matches!(
         scatter(

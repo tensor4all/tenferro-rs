@@ -4,7 +4,7 @@ use crate::cubecl::gpu_available;
 use crate::{DType, DeviceKind, GpuBackendKind, Tensor};
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{
-    TensorAnalytic, TensorElementwise, TensorFusion, TensorRead, TensorStructural,
+    ErrorKind, TensorAnalytic, TensorElementwise, TensorFusion, TensorRead, TensorStructural,
 };
 
 use super::{
@@ -1429,22 +1429,13 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     let err = gpu
         .compare(&gpu_lhs, &gpu_rhs, &CompareDir::Eq)
         .unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::BackendFailure { op: "compare", .. }
-    ));
+    assert_cuda_unsupported_dtype(&err, "compare", DType::C64);
 
     let err = gpu.select(&gpu_lhs, &gpu_lhs, &gpu_rhs).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::BackendFailure { op: "select", .. }
-    ));
+    assert_cuda_unsupported_dtype(&err, "select", DType::C64);
 
     let err = gpu.clamp(&gpu_lhs, &gpu_lhs, &gpu_rhs).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::BackendFailure { op: "clamp", .. }
-    ));
+    assert_cuda_unsupported_dtype(&err, "clamp", DType::C64);
 
     let converted = gpu.convert(&gpu_lhs, DType::C64).unwrap();
     let actual = download(&gpu, &converted);
@@ -1499,8 +1490,5 @@ fn test_cubecl_conj_real_clone_rejects_missing_resident_device_metadata() {
 
     let err = gpu.conj(&Tensor::F64(gpu_input)).unwrap_err();
 
-    assert!(matches!(
-        err,
-        crate::Error::BackendFailure { op: "conj", .. }
-    ));
+    assert_eq!(err.kind(), ErrorKind::RuntimeState);
 }

@@ -90,7 +90,7 @@ fn pairwise_step_plan_preserves_strict_lowering_error_type() {
 
     assert!(matches!(
         err,
-        Error::InvalidArgument(message)
+        Error::Planning { message }
             if message.contains("unknown size")
     ));
 }
@@ -105,7 +105,7 @@ fn pairwise_step_plan_rejects_overflowing_fused_dimensions() {
 
     assert!(matches!(
         err,
-        Error::InvalidArgument(message)
+        Error::Planning { message }
             if message.contains("dimension product overflow")
     ));
 }
@@ -119,7 +119,7 @@ fn strict_binary_lowering_rejects_overflowing_fused_dimensions() {
 
     assert!(matches!(
         err,
-        Error::InvalidArgument(message)
+        Error::Planning { message }
             if message.contains("dimension product overflow")
     ));
 }
