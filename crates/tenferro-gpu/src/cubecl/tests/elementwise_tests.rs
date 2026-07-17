@@ -3,14 +3,14 @@ use crate::config::CompareDir;
 use crate::cubecl::gpu_available;
 use crate::{DType, DeviceKind, GpuBackendKind, Tensor};
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::BackendId;
 use tenferro_tensor::{
     TensorAnalytic, TensorElementwise, TensorFusion, TensorRead, TensorStructural,
 };
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,
-    tensor_f64, tensor_i32, tensor_i64, upload,
+    assert_cuda_numerical_error, assert_cuda_unsupported_dtype, assert_dtype_mismatch,
+    assert_shape_mismatch, assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32,
+    tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
 };
 
 fn assert_complex_classes_and_values_match(actual: &Tensor, expected: &Tensor) {
@@ -173,11 +173,8 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
                 scalar.dtype(),
             ),
         ] {
-            assert!(matches!(
-                result,
-                Err(crate::Error::DTypeMismatch { op: actual, lhs, rhs })
-                    if actual == op && lhs == expected_lhs && rhs == expected_rhs
-            ));
+            let error = result.expect_err("complex dtype mismatch must be rejected");
+            assert_dtype_mismatch(&error, op, expected_lhs, expected_rhs);
         }
     }
 
@@ -319,11 +316,8 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ("mul", gpu.mul(&gpu_lhs, &gpu_rhs)),
             ("div", gpu.div(&gpu_lhs, &gpu_rhs)),
         ] {
-            assert!(matches!(
-                result,
-                Err(crate::Error::DTypeMismatch { op: actual, lhs, rhs })
-                    if actual == op && lhs == expected_lhs && rhs == expected_rhs
-            ));
+            let error = result.expect_err("mixed dtype operation must be rejected");
+            assert_dtype_mismatch(&error, op, expected_lhs, expected_rhs);
         }
         for (op, result) in [
             ("add", gpu.add(&gpu_rhs, &gpu_lhs)),
@@ -331,11 +325,8 @@ fn test_real_scalar_complex_binary_ops_match_cpu() {
             ("mul", gpu.mul(&gpu_rhs, &gpu_lhs)),
             ("div", gpu.div(&gpu_rhs, &gpu_lhs)),
         ] {
-            assert!(matches!(
-                result,
-                Err(crate::Error::DTypeMismatch { op: actual, lhs, rhs })
-                    if actual == op && lhs == expected_rhs && rhs == expected_lhs
-            ));
+            let error = result.expect_err("mixed dtype operation must be rejected");
+            assert_dtype_mismatch(&error, op, expected_rhs, expected_lhs);
         }
     }
 }
@@ -447,14 +438,10 @@ fn test_scalar_div_rem_pow_match_cpu() {
     ] {
         let gpu_lhs = upload(&gpu, &lhs);
         let gpu_zero = upload(&gpu, &zero);
-        assert!(matches!(
-            gpu.div(&gpu_lhs, &gpu_zero),
-            Err(crate::Error::DivisionByZero { op: "div", dtype: actual }) if actual == dtype
-        ));
-        assert!(matches!(
-            gpu.rem(&gpu_lhs, &gpu_zero),
-            Err(crate::Error::DivisionByZero { op: "rem", dtype: actual }) if actual == dtype
-        ));
+        let error = gpu.div(&gpu_lhs, &gpu_zero).unwrap_err();
+        assert_cuda_numerical_error(&error, "div", dtype, false);
+        let error = gpu.rem(&gpu_lhs, &gpu_zero).unwrap_err();
+        assert_cuda_numerical_error(&error, "rem", dtype, false);
 
         let (scalar_one, zero_rhs) = match dtype {
             DType::I32 => (tensor_i32(vec![], vec![1]), tensor_i32(vec![2], vec![1, 0])),
@@ -463,14 +450,10 @@ fn test_scalar_div_rem_pow_match_cpu() {
         };
         let gpu_scalar_one = upload(&gpu, &scalar_one);
         let gpu_zero_rhs = upload(&gpu, &zero_rhs);
-        assert!(matches!(
-            gpu.div(&gpu_scalar_one, &gpu_zero_rhs),
-            Err(crate::Error::DivisionByZero { op: "div", dtype: actual }) if actual == dtype
-        ));
-        assert!(matches!(
-            gpu.rem(&gpu_scalar_one, &gpu_zero_rhs),
-            Err(crate::Error::DivisionByZero { op: "rem", dtype: actual }) if actual == dtype
-        ));
+        let error = gpu.div(&gpu_scalar_one, &gpu_zero_rhs).unwrap_err();
+        assert_cuda_numerical_error(&error, "div", dtype, false);
+        let error = gpu.rem(&gpu_scalar_one, &gpu_zero_rhs).unwrap_err();
+        assert_cuda_numerical_error(&error, "rem", dtype, false);
 
         let minus_one = match dtype {
             DType::I32 => tensor_i32(vec![], vec![-1]),
@@ -582,20 +565,14 @@ fn test_scalar_div_rem_pow_match_cpu() {
         let dtype = base.dtype();
         let gpu_base = upload(&gpu, &base);
         let gpu_exponent = upload(&gpu, &exponent);
-        assert!(matches!(
-            gpu.pow(&gpu_base, &gpu_exponent),
-            Err(crate::Error::NegativeIntegerExponent { op: "pow", dtype: actual })
-                if actual == dtype
-        ));
+        let error = gpu.pow(&gpu_base, &gpu_exponent).unwrap_err();
+        assert_cuda_numerical_error(&error, "pow", dtype, true);
     }
 
     let unequal_lhs = upload(&gpu, &tensor_f32(vec![2], vec![2.0, 3.0]));
     let unequal_rhs = upload(&gpu, &tensor_f32(vec![3], vec![2.0, 3.0, 4.0]));
-    assert!(matches!(
-        gpu.pow(&unequal_lhs, &unequal_rhs),
-        Err(crate::Error::ShapeMismatch { op: "pow", lhs, rhs })
-            if lhs == vec![2] && rhs == vec![3]
-    ));
+    let error = gpu.pow(&unequal_lhs, &unequal_rhs).unwrap_err();
+    assert_shape_mismatch(&error, "pow", &[2], &[3]);
 
     for (tensor, scalar) in [
         (
@@ -1372,33 +1349,15 @@ fn test_cubecl_integer_domain_errors_match_cpu() {
     let gpu_zero_rhs = upload(&gpu, &zero_rhs);
 
     let err = gpu.div(&gpu_lhs, &gpu_zero_rhs).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::DivisionByZero {
-            op: "div",
-            dtype: DType::I32
-        }
-    ));
+    assert_cuda_numerical_error(&err, "div", DType::I32, false);
 
     let err = gpu.rem(&gpu_lhs, &gpu_zero_rhs).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::DivisionByZero {
-            op: "rem",
-            dtype: DType::I32
-        }
-    ));
+    assert_cuda_numerical_error(&err, "rem", DType::I32, false);
 
     let exp = tensor_i32(vec![2], vec![2, -1]);
     let gpu_exp = upload(&gpu, &exp);
     let err = gpu.pow(&gpu_lhs, &gpu_exp).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::NegativeIntegerExponent {
-            op: "pow",
-            dtype: DType::I32
-        }
-    ));
+    assert_cuda_numerical_error(&err, "pow", DType::I32, true);
 }
 
 #[test]
@@ -1447,14 +1406,7 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let err = gpu.rem(&gpu_lhs, &gpu_rhs).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::UnsupportedOpDType {
-            op: "rem",
-            dtype: DType::C64,
-            backend: BackendId::Cuda,
-        }
-    ));
+    assert_cuda_unsupported_dtype(&err, "rem", DType::C64);
 
     let expected = cpu.neg(&lhs).unwrap();
     let gpu_out = gpu.neg(&gpu_lhs).unwrap();
@@ -1472,14 +1424,7 @@ fn test_cubecl_complex_elementwise_matches_cpu_and_rejects_unsupported_ops() {
     assert_tensor_close(&actual, &expected, 1e-12);
 
     let err = gpu.exp(&gpu_lhs).unwrap_err();
-    assert!(matches!(
-        err,
-        crate::Error::UnsupportedOpDType {
-            op: "exp",
-            dtype: DType::C64,
-            backend: tenferro_tensor::BackendId::Cuda,
-        }
-    ));
+    assert_cuda_unsupported_dtype(&err, "exp", DType::C64);
 
     let err = gpu
         .compare(&gpu_lhs, &gpu_rhs, &CompareDir::Eq)

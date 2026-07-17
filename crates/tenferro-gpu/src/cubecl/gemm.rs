@@ -325,11 +325,11 @@ macro_rules! impl_from_contraction_scalar {
             fn from_contraction_scalar(value: ContractionScalar) -> crate::Result<Self> {
                 match value {
                     ContractionScalar::$variant(value) => Ok(value),
-                    other => Err(Error::DTypeMismatch {
-                        op: OP,
-                        lhs: <$ty as tenferro_tensor::TensorScalar>::dtype(),
-                        rhs: other.dtype(),
-                    }),
+                    other => Err(Error::dtype_mismatch(
+                        OP,
+                        <$ty as tenferro_tensor::TensorScalar>::dtype(),
+                        other.dtype(),
+                    )),
                 }
             }
         }
@@ -489,11 +489,11 @@ where
     validate_dot_general(lhs.shape(), rhs.shape(), config)?;
     let layout = build_layout(lhs.shape(), rhs.shape(), config)?;
     if out.shape() != layout.output_shape.as_slice() {
-        return Err(Error::ShapeMismatch {
-            op: OP,
-            lhs: out.shape().to_vec(),
-            rhs: layout.output_shape.clone(),
-        });
+        return Err(Error::shape_mismatch(
+            OP,
+            out.shape().to_vec(),
+            layout.output_shape.clone(),
+        ));
     }
     // Residency, buffer-family, stride-sign, and bounds validation for all
     // three slots happens here, before any degenerate-case early return.
@@ -984,11 +984,14 @@ fn build_layout(
         rhs_modes[rhs_axis] = mode;
         contracting_elements = contracting_elements
             .checked_mul(lhs_shape[lhs_axis])
-            .ok_or_else(|| Error::InvalidConfig {
-                op: OP,
-                message: format!(
-                    "contracting dimension product overflows usize for lhs shape {lhs_shape:?}"
-                ),
+            .ok_or_else(|| {
+                Error::invalid_argument(
+                    OP,
+                    "shape",
+                    format!(
+                        "contracting dimension product overflows usize for lhs shape {lhs_shape:?}"
+                    ),
+                )
             })?;
     }
 
@@ -1045,9 +1048,12 @@ fn build_layout(
 fn dims_to_i64(dims: &[usize]) -> crate::Result<Vec<i64>> {
     dims.iter()
         .map(|&dim| {
-            i64::try_from(dim).map_err(|_| Error::InvalidConfig {
-                op: OP,
-                message: format!("extent {dim} exceeds cuTENSOR i64 limit"),
+            i64::try_from(dim).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "shape",
+                    format!("extent {dim} exceeds cuTENSOR i64 limit"),
+                )
             })
         })
         .collect()
@@ -1057,9 +1063,12 @@ fn strides_to_i64(strides: &[isize]) -> crate::Result<Vec<i64>> {
     strides
         .iter()
         .map(|&stride| {
-            i64::try_from(stride).map_err(|_| Error::InvalidConfig {
-                op: OP,
-                message: format!("stride {stride} exceeds cuTENSOR i64 limit"),
+            i64::try_from(stride).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "stride",
+                    format!("stride {stride} exceeds cuTENSOR i64 limit"),
+                )
             })
         })
         .collect()
@@ -1080,10 +1089,10 @@ fn validate_axis_list(
     let mut seen = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
-            return Err(Error::AxisOutOfBounds { op, axis, rank });
+            return Err(Error::axis_out_of_bounds(op, axis, rank));
         }
         if seen[axis] {
-            return Err(Error::DuplicateAxis { op, axis, role });
+            return Err(Error::duplicate_axis(op, axis, role));
         }
         seen[axis] = true;
     }
@@ -1099,12 +1108,14 @@ fn validate_role_disjoint(
 ) -> crate::Result<()> {
     for &axis in first_axes {
         if second_axes.contains(&axis) {
-            return Err(Error::AxisRoleConflict {
+            return Err(Error::validation(
                 op,
-                axis,
-                first_role,
-                second_role,
-            });
+                tenferro_tensor::ValidationError::AxisRoleConflict {
+                    axis,
+                    first_role,
+                    second_role,
+                },
+            ));
         }
     }
     Ok(())
@@ -1116,16 +1127,18 @@ fn validate_dot_general(
     config: &DotGeneralConfig,
 ) -> crate::Result<()> {
     if config.lhs_contracting_dims.len() != config.rhs_contracting_dims.len() {
-        return Err(Error::InvalidConfig {
-            op: OP,
-            message: "lhs/rhs contracting dim counts differ".into(),
-        });
+        return Err(Error::invalid_argument(
+            OP,
+            "contracting_dims",
+            "lhs/rhs contracting dim counts differ",
+        ));
     }
     if config.lhs_batch_dims.len() != config.rhs_batch_dims.len() {
-        return Err(Error::InvalidConfig {
-            op: OP,
-            message: "lhs/rhs batch dim counts differ".into(),
-        });
+        return Err(Error::invalid_argument(
+            OP,
+            "batch_dims",
+            "lhs/rhs batch dim counts differ",
+        ));
     }
 
     let lhs_rank = lhs_shape.len();
@@ -1166,25 +1179,26 @@ fn validate_dot_general(
         .zip(&config.rhs_contracting_dims)
     {
         if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
-            return Err(Error::InvalidConfig {
-                op: OP,
-                message: format!(
-                    "contracting dim size mismatch: lhs axis {lhs_axis}={} rhs axis {rhs_axis}={}",
-                    lhs_shape[lhs_axis], rhs_shape[rhs_axis]
-                ),
-            });
+            return Err(Error::validation(
+                OP,
+                tenferro_tensor::ShapeMismatch::ContractedDimensions {
+                    lhs_axis,
+                    lhs_size: lhs_shape[lhs_axis],
+                    rhs_axis,
+                    rhs_size: rhs_shape[rhs_axis],
+                }
+                .into(),
+            ));
         }
     }
 
     for (&lhs_axis, &rhs_axis) in config.lhs_batch_dims.iter().zip(&config.rhs_batch_dims) {
         if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
-            return Err(Error::InvalidConfig {
-                op: OP,
-                message: format!(
-                    "batch dim size mismatch: lhs axis {lhs_axis}={} rhs axis {rhs_axis}={}",
-                    lhs_shape[lhs_axis], rhs_shape[rhs_axis]
-                ),
-            });
+            return Err(Error::shape_mismatch(
+                OP,
+                lhs_shape.to_vec(),
+                rhs_shape.to_vec(),
+            ));
         }
     }
 

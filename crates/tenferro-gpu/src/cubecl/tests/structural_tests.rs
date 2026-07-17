@@ -7,9 +7,11 @@ use tenferro_tensor::{
 };
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_bool, tensor_c32, tensor_c64,
-    tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
+    assert_cuda_unsupported_dtype, assert_error_parity, assert_shape_mismatch, assert_tensor_close,
+    assert_validation_kind, cpu_backend, download, gpu_backend, tensor_bool, tensor_c32,
+    tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
 };
+use tenferro_tensor::{ValidationError, ValidationKind};
 
 fn with_cuda_ordinal<T: Clone + 'static>(
     tensor: &TypedTensor<T>,
@@ -56,7 +58,7 @@ fn cuda_bool_structural_ops_match_cpu() {
     }
     macro_rules! error_parity {
         ($cpu:expr, $gpu:expr) => {{
-            assert_eq!($cpu.unwrap_err(), $gpu.unwrap_err());
+            assert_error_parity($cpu.unwrap_err(), $gpu.unwrap_err());
         }};
     }
     parity!(cpu.transpose(&matrix, &[1, 0]), gpu.transpose(&gm, &[1, 0]));
@@ -383,7 +385,7 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
             let expected = cpu.cast(source, target);
             let actual = gpu.cast(&gpu_source, target);
             match (expected, actual) {
-                (Err(expected), Err(actual)) => assert_eq!(actual, expected),
+                (Err(expected), Err(actual)) => assert_error_parity(expected, actual),
                 (Ok(expected), Ok(actual)) => {
                     let actual = download(&gpu, &actual);
                     assert_cast_tensor_equal(&actual, &expected);
@@ -457,9 +459,9 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
         ),
     ] {
         let gpu_source = upload(&gpu, &source);
-        assert_eq!(
+        assert_error_parity(
+            cpu.cast(&source, target).unwrap_err(),
             gpu.cast(&gpu_source, target).unwrap_err(),
-            cpu.cast(&source, target).unwrap_err()
         );
     }
 
@@ -492,9 +494,9 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
         tensor_c32(vec![1], vec![Complex32::new(-2_147_483_904.0, 3.0)]),
     ] {
         let gpu_source = upload(&gpu, &source);
-        assert_eq!(
+        assert_error_parity(
+            cpu.cast(&source, DType::I32).unwrap_err(),
             gpu.cast(&gpu_source, DType::I32).unwrap_err(),
-            cpu.cast(&source, DType::I32).unwrap_err()
         );
     }
 
@@ -524,9 +526,9 @@ fn test_cuda_explicit_cast_matrix_matches_cpu() {
         tensor_c32(vec![1], vec![Complex32::new(i64_lower_invalid, 2.0)]),
     ] {
         let gpu_source = upload(&gpu, &source);
-        assert_eq!(
+        assert_error_parity(
+            cpu.cast(&source, DType::I64).unwrap_err(),
             gpu.cast(&gpu_source, DType::I64).unwrap_err(),
-            cpu.cast(&source, DType::I64).unwrap_err()
         );
     }
 }
@@ -651,13 +653,18 @@ fn cuda_runtime_copy_rejects_noncompact_source_with_erased_operation_name() {
         )
         .unwrap_err();
 
-    assert_eq!(
-        err,
-        Error::InvalidConfig {
-            op: "CudaBackend::copy_read_into",
-            message: "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization".into(),
-        }
+    assert_validation_kind(
+        &err,
+        "CudaBackend::copy_read_into",
+        ValidationKind::InvalidArgument,
     );
+    assert!(matches!(
+        err,
+        Error::Validation {
+            source: ValidationError::InvalidArgument { argument: "source", message },
+            ..
+        } if message.contains("compact source view")
+    ));
 }
 
 #[test]
@@ -670,13 +677,7 @@ fn cuda_runtime_bool_materialization_reports_intentional_erased_limitation() {
         .to_contiguous_read(TensorRead::from_tensor(&gpu_input))
         .unwrap_err();
 
-    assert_eq!(
-        err,
-        Error::BackendFailure {
-            op: "CudaBackend::to_contiguous_read",
-            message: "unsupported dtype Bool".into(),
-        }
-    );
+    assert_cuda_unsupported_dtype(&err, "CudaBackend::to_contiguous_read", DType::Bool);
 }
 
 #[test]
@@ -693,13 +694,7 @@ fn cuda_runtime_bool_copy_reports_intentional_erased_limitation() {
         )
         .unwrap_err();
 
-    assert_eq!(
-        err,
-        Error::BackendFailure {
-            op: "CudaBackend::copy_read_into",
-            message: "unsupported dtype Bool".into(),
-        }
-    );
+    assert_cuda_unsupported_dtype(&err, "CudaBackend::copy_read_into", DType::Bool);
 }
 
 #[test]
@@ -882,11 +877,16 @@ fn cuda_copy_into_rejects_arbitrary_stride_source_without_materializing() {
         .copy_into(&src_view, &mut dst.as_view_mut())
         .unwrap_err();
 
+    assert_validation_kind(
+        &err,
+        "CudaBackend::copy_into",
+        ValidationKind::InvalidArgument,
+    );
     assert!(matches!(
         err,
-        Error::InvalidConfig {
-            op: "CudaBackend::copy_into",
-            ref message,
+        Error::Validation {
+            source: ValidationError::InvalidArgument { argument: "source", message },
+            ..
         } if message.contains("compact source view")
     ));
 }
@@ -956,11 +956,16 @@ fn cuda_copy_into_rejects_cloned_aliased_allocation() {
 
     let err = gpu.copy_into(&src.as_view(), &mut dst_view).unwrap_err();
 
+    assert_validation_kind(
+        &err,
+        "CudaBackend::copy_into",
+        ValidationKind::InvalidArgument,
+    );
     assert!(matches!(
         err,
-        Error::InvalidConfig {
-            op: "CudaBackend::copy_into",
-            ref message,
+        Error::Validation {
+            source: ValidationError::InvalidArgument { argument: "source/destination", message },
+            ..
         } if message.contains("alias")
     ));
 }
@@ -979,12 +984,5 @@ fn cuda_copy_into_reports_typed_shape_mismatch() {
         .copy_into(&src.as_view(), &mut dst.as_view_mut())
         .unwrap_err();
 
-    assert_eq!(
-        err,
-        Error::ShapeMismatch {
-            op: "CudaBackend::copy_into",
-            lhs: vec![2],
-            rhs: vec![3],
-        }
-    );
+    assert_shape_mismatch(&err, "CudaBackend::copy_into", &[2], &[3]);
 }

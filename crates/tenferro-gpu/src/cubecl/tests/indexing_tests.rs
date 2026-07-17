@@ -7,10 +7,11 @@ use tenferro_tensor::{
 };
 
 use super::{
-    assert_tensor_close, cpu_backend, diagonal_scatter_config, download, gpu_backend,
-    simple_gather_config, tensor_bool, tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64,
-    upload,
+    assert_backend_failure, assert_error_parity, assert_tensor_close, assert_validation_kind,
+    cpu_backend, diagonal_scatter_config, download, gpu_backend, simple_gather_config, tensor_bool,
+    tensor_c64, tensor_f32, tensor_f64, tensor_i32, tensor_i64, upload,
 };
+use tenferro_tensor::{ValidationError, ValidationKind};
 
 fn with_cuda_ordinal<T: Clone + 'static>(
     tensor: &TypedTensor<T>,
@@ -102,7 +103,7 @@ fn cuda_float_index_validation_matches_cpu() {
                     .unwrap_or_else(|| panic!("{label} {op} CPU unexpectedly succeeded"));
                 match gpu_result {
                     Ok(_) => failures.push(format!("{label} {op}: CUDA unexpectedly succeeded")),
-                    Err(actual) if actual != expected => {
+                    Err(actual) if actual.kind() != expected.kind() => {
                         failures.push(format!("{label} {op}: CUDA {actual:?} != CPU {expected:?}"))
                     }
                     Err(_) => {}
@@ -230,24 +231,26 @@ fn cuda_bool_dynamic_slice_float_starts_match_cpu() {
             tensor_f64(vec![1], vec![-9_007_199_254_740_994.0]),
         ),
     ] {
-        assert_eq!(
-            gpu.dynamic_slice(&gpu_input, &upload(&gpu, &starts), &[2])
-                .unwrap_err(),
-            cpu.dynamic_slice(&input, &starts, &[2]).unwrap_err(),
-            "{label}"
-        );
+        let actual = gpu
+            .dynamic_slice(&gpu_input, &upload(&gpu, &starts), &[2])
+            .unwrap_err();
+        let expected = cpu.dynamic_slice(&input, &starts, &[2]).unwrap_err();
+        assert_eq!(actual.kind(), expected.kind(), "{label}");
+        assert_error_parity(expected, actual);
     }
 
     let invalid_starts = tensor_f64(vec![1], vec![f64::NAN]);
-    assert_eq!(
-        gpu.dynamic_slice(&gpu_input, &upload(&gpu, &invalid_starts), &[5])
-            .unwrap_err(),
-        Error::InvalidConfig {
-            op: "dynamic_slice",
-            message: "slice size exceeds dimension on axis 0".into(),
-        },
-        "invalid slice metadata must precede float value validation"
-    );
+    let err = gpu
+        .dynamic_slice(&gpu_input, &upload(&gpu, &invalid_starts), &[5])
+        .unwrap_err();
+    assert_validation_kind(&err, "dynamic_slice", ValidationKind::InvalidArgument);
+    assert!(matches!(
+        err,
+        Error::Validation {
+            source: ValidationError::InvalidArgument { argument: "slice_sizes", message },
+            ..
+        } if message.contains("slice size exceeds dimension on axis 0")
+    ));
 
     let empty = tensor_bool(vec![0], vec![]);
     for starts in [
@@ -270,11 +273,11 @@ fn cuda_bool_dynamic_slice_float_starts_match_cpu() {
 #[test]
 #[ignore = "requires CUDA 12.8+ GPU"]
 fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
-    fn assert_error_parity(
+    fn assert_result_error_parity(
         cpu: tenferro_tensor::Result<crate::Tensor>,
         gpu: tenferro_tensor::Result<crate::Tensor>,
     ) {
-        assert_eq!(cpu.unwrap_err(), gpu.unwrap_err());
+        super::assert_error_parity(cpu.unwrap_err(), gpu.unwrap_err());
     }
 
     let mut cpu = cpu_backend();
@@ -289,19 +292,15 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
         (operand_f32.clone(), starts_f32),
     ] {
         assert!(cpu.dynamic_slice(&operand, &valid_starts, &[3]).is_err());
-        assert_eq!(
-            gpu.dynamic_slice(
+        let err = gpu
+            .dynamic_slice(
                 &upload(&gpu, &operand),
                 &upload(&gpu, &invalid_starts),
                 &[3],
             )
-            .unwrap_err(),
-            Error::InvalidConfig {
-                op: "dynamic_slice",
-                message: "slice size exceeds dimension on axis 0".into(),
-            },
-        );
-        assert_error_parity(
+            .unwrap_err();
+        assert_validation_kind(&err, "dynamic_slice", ValidationKind::InvalidArgument);
+        assert_result_error_parity(
             cpu.dynamic_slice(&operand, &invalid_starts, &[1]),
             gpu.dynamic_slice(
                 &upload(&gpu, &operand),
@@ -313,7 +312,7 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
 
     let operand_bool = tensor_bool(vec![2], vec![true, false]);
     let starts_i32 = tensor_i32(vec![2], vec![0, 1]);
-    assert_error_parity(
+    assert_result_error_parity(
         cpu.dynamic_slice(&operand_bool, &starts_i32, &[1]),
         gpu.dynamic_slice(
             &upload(&gpu, &operand_bool),
@@ -339,16 +338,15 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
         let expected = cpu
             .gather(&operand, &valid_gather_indices, &bad_gather)
             .unwrap_err();
-        assert_eq!(
-            gpu.gather(
+        let actual = gpu
+            .gather(
                 &upload(&gpu, &operand),
                 &upload(&gpu, &gather_indices),
                 &bad_gather,
             )
-            .unwrap_err(),
-            expected,
-        );
-        assert_error_parity(
+            .unwrap_err();
+        assert_error_parity(expected, actual);
+        assert_result_error_parity(
             cpu.gather(&operand, &gather_indices, &simple_gather_config()),
             gpu.gather(
                 &upload(&gpu, &operand),
@@ -380,17 +378,16 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
             &bad_scatter,
         )
         .unwrap_err();
-    assert_eq!(
-        gpu.scatter(
+    let actual = gpu
+        .scatter(
             &upload(&gpu, &operand_f64),
             &upload(&gpu, &gather_indices),
             &upload(&gpu, &updates_f64),
             &bad_scatter,
         )
-        .unwrap_err(),
-        expected,
-    );
-    assert_error_parity(
+        .unwrap_err();
+    assert_error_parity(expected, actual);
+    assert_result_error_parity(
         cpu.scatter(&operand_f64, &gather_indices, &updates_f64, &valid_scatter),
         gpu.scatter(
             &upload(&gpu, &operand_f64),
@@ -409,17 +406,16 @@ fn cuda_indexing_invalid_config_precedes_invalid_float_index_values() {
             &bad_scatter,
         )
         .unwrap_err();
-    assert_eq!(
-        gpu.scatter(
+    let actual = gpu
+        .scatter(
             &upload(&gpu, &operand_c64),
             &upload(&gpu, &gather_indices),
             &upload(&gpu, &updates_c64),
             &bad_scatter,
         )
-        .unwrap_err(),
-        expected,
-    );
-    assert_error_parity(
+        .unwrap_err();
+    assert_error_parity(expected, actual);
+    assert_result_error_parity(
         cpu.scatter(&operand_c64, &gather_indices, &updates_c64, &valid_scatter),
         gpu.scatter(
             &upload(&gpu, &operand_c64),
@@ -465,14 +461,10 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
         },
         1,
     ));
-    assert_eq!(
-        gpu.dynamic_slice(&empty_operand, &wrong_starts, &[0])
-            .unwrap_err(),
-        Error::BackendFailure {
-            op: "dynamic_slice",
-            message: wrong_device_message.clone(),
-        }
-    );
+    let err = gpu
+        .dynamic_slice(&empty_operand, &wrong_starts, &[0])
+        .unwrap_err();
+    assert_backend_failure(&err, "dynamic_slice", &wrong_device_message);
 
     let empty_bool = upload(&gpu, &tensor_bool(vec![0], vec![]));
     let wrong_float_starts = crate::Tensor::F32(with_cuda_ordinal(
@@ -482,14 +474,10 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
         },
         1,
     ));
-    assert_eq!(
-        gpu.dynamic_slice(&empty_bool, &wrong_float_starts, &[0])
-            .unwrap_err(),
-        Error::BackendFailure {
-            op: "dynamic_slice",
-            message: wrong_device_message.clone(),
-        }
-    );
+    let err = gpu
+        .dynamic_slice(&empty_bool, &wrong_float_starts, &[0])
+        .unwrap_err();
+    assert_backend_failure(&err, "dynamic_slice", &wrong_device_message);
 
     let malformed_bool = crate::Tensor::Bool(
         TypedTensor::from_buffer_col_major(
@@ -505,18 +493,17 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
         )
         .unwrap(),
     );
-    assert_eq!(
-        gpu.dynamic_slice(
+    let err = gpu
+        .dynamic_slice(
             &malformed_bool,
             &upload(&gpu, &tensor_f64(vec![1], vec![f64::NAN])),
             &[0],
         )
-        .unwrap_err(),
-        Error::BackendFailure {
-            op: "dynamic_slice",
-            message: "expected CubeCL GPU tensor, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.".into(),
-        },
-        "malformed Bool input must be rejected before scanning float starts"
+        .unwrap_err();
+    assert_backend_failure(
+        &err,
+        "dynamic_slice",
+        "expected CubeCL GPU tensor, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.",
     );
 
     let wrong_indices = crate::Tensor::I32(with_cuda_ordinal(
@@ -527,64 +514,44 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
         1,
     ));
     let gather_operand = upload(&gpu, &tensor_f64(vec![2], vec![1.0, 2.0]));
-    assert_eq!(
-        gpu.gather(&gather_operand, &wrong_indices, &simple_gather_config())
-            .unwrap_err(),
-        Error::BackendFailure {
-            op: "gather",
-            message: wrong_device_message.clone(),
-        }
-    );
+    let err = gpu
+        .gather(&gather_operand, &wrong_indices, &simple_gather_config())
+        .unwrap_err();
+    assert_backend_failure(&err, "gather", &wrong_device_message);
 
     let host_updates = tensor_f64(vec![0], vec![]);
     let host_message = "expected CubeCL GPU tensor, got host tensor. Use upload_tensor() to transfer to GPU before calling GPU ops.".to_string();
-    assert_eq!(
-        gpu.scatter(&empty_operand, &indices, &host_updates, &config)
-            .unwrap_err(),
-        Error::BackendFailure {
-            op: "scatter",
-            message: host_message.clone(),
-        }
-    );
+    let err = gpu
+        .scatter(&empty_operand, &indices, &host_updates, &config)
+        .unwrap_err();
+    assert_backend_failure(&err, "scatter", &host_message);
 
     let operand = upload(&gpu, &tensor_f64(vec![2], vec![1.0, 2.0]));
     let updates = upload(&gpu, &tensor_f64(vec![0], vec![]));
-    assert_eq!(
-        gpu.scatter(&operand, &wrong_indices, &updates, &config)
-            .unwrap_err(),
-        Error::BackendFailure {
-            op: "scatter",
-            message: wrong_device_message.clone(),
-        }
-    );
+    let err = gpu
+        .scatter(&operand, &wrong_indices, &updates, &config)
+        .unwrap_err();
+    assert_backend_failure(&err, "scatter", &wrong_device_message);
 
     let complex_operand = upload(&gpu, &tensor_c64(vec![0], vec![]));
     let complex_updates = upload(&gpu, &tensor_c64(vec![0], vec![]));
-    assert_eq!(
-        gpu.scatter(&complex_operand, &wrong_indices, &complex_updates, &config)
-            .unwrap_err(),
-        Error::BackendFailure {
-            op: "scatter",
-            message: wrong_device_message.clone(),
-        }
-    );
+    let err = gpu
+        .scatter(&complex_operand, &wrong_indices, &complex_updates, &config)
+        .unwrap_err();
+    assert_backend_failure(&err, "scatter", &wrong_device_message);
     let nonempty_complex_operand = upload(
         &gpu,
         &tensor_c64(vec![2], vec![Complex64::new(1.0, 2.0); 2]),
     );
-    assert_eq!(
-        gpu.scatter(
+    let err = gpu
+        .scatter(
             &nonempty_complex_operand,
             &wrong_indices,
             &complex_updates,
             &config,
         )
-        .unwrap_err(),
-        Error::BackendFailure {
-            op: "scatter",
-            message: wrong_device_message.clone(),
-        }
-    );
+        .unwrap_err();
+    assert_backend_failure(&err, "scatter", &wrong_device_message);
 
     let malformed_updates = crate::Tensor::F64(
         TypedTensor::from_buffer_col_major(
@@ -600,14 +567,10 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
         )
         .unwrap(),
     );
-    assert_eq!(
-        gpu.scatter(&empty_operand, &indices, &malformed_updates, &config)
-            .unwrap_err(),
-        Error::BackendFailure {
-            op: "scatter",
-            message: host_message,
-        }
-    );
+    let err = gpu
+        .scatter(&empty_operand, &indices, &malformed_updates, &config)
+        .unwrap_err();
+    assert_backend_failure(&err, "scatter", &host_message);
 }
 
 #[test]
@@ -657,11 +620,10 @@ fn cuda_float_index_validation_reports_first_invalid_value() {
                 gpu.scatter(&gpu_operand, &gpu_indices, &gpu_updates, &scatter_config),
             ),
         ] {
-            assert_eq!(
-                actual.unwrap_err(),
-                expected.unwrap_err(),
-                "{label} {op} must report the lower flat invalid index"
-            );
+            let actual = actual.unwrap_err();
+            let expected = expected.unwrap_err();
+            assert_eq!(actual.kind(), expected.kind(), "{label} {op}");
+            assert_error_parity(expected, actual);
         }
     }
 
@@ -726,7 +688,7 @@ fn cuda_bool_indexing_ops_match_cpu() {
     }
     macro_rules! error_parity {
         ($cpu:expr, $gpu:expr) => {{
-            assert_eq!($cpu.unwrap_err(), $gpu.unwrap_err());
+            super::assert_error_parity($cpu.unwrap_err(), $gpu.unwrap_err());
         }};
     }
     parity!(cpu.slice(&input, &slice), gpu.slice(&gi, &slice));
@@ -802,21 +764,23 @@ fn cuda_bool_indexing_ops_match_cpu() {
         scatter_dims_to_operand_dims: vec![0],
         index_vector_dim: 1,
     };
-    let expected_scatter_error = Error::BackendFailure {
-        op: "scatter",
-        message: "Bool data tensors are not supported by additive scatter".into(),
-    };
-    assert_eq!(
-        cpu.scatter(&input, &scatter_indices, &updates, &config)
-            .unwrap_err(),
-        expected_scatter_error
+    let expected_scatter_error = cpu
+        .scatter(&input, &scatter_indices, &updates, &config)
+        .unwrap_err();
+    assert_backend_failure(
+        &expected_scatter_error,
+        "scatter",
+        "Bool data tensors are not supported by additive scatter",
     );
     let gpu_updates = upload(&gpu, &updates);
     let gpu_scatter_indices = upload(&gpu, &scatter_indices);
-    assert_eq!(
-        gpu.scatter(&gi, &gpu_scatter_indices, &gpu_updates, &config)
-            .unwrap_err(),
-        expected_scatter_error
+    let actual = gpu
+        .scatter(&gi, &gpu_scatter_indices, &gpu_updates, &config)
+        .unwrap_err();
+    assert_backend_failure(
+        &actual,
+        "scatter",
+        "Bool data tensors are not supported by additive scatter",
     );
 }
 

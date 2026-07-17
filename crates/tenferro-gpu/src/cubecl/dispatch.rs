@@ -942,11 +942,7 @@ where
 }
 
 pub(crate) fn dtype_mismatch(op: &'static str, lhs: &Tensor, rhs: &Tensor) -> crate::Error {
-    crate::Error::DTypeMismatch {
-        op,
-        lhs: lhs.dtype(),
-        rhs: rhs.dtype(),
-    }
+    crate::Error::dtype_mismatch(op, lhs.dtype(), rhs.dtype())
 }
 
 pub(crate) fn ternary_dtype_mismatch(
@@ -972,29 +968,21 @@ pub(crate) fn ensure_same_shape(
     rhs: &[usize],
 ) -> crate::Result<()> {
     if lhs != rhs {
-        return Err(crate::Error::ShapeMismatch {
-            op,
-            lhs: lhs.to_vec(),
-            rhs: rhs.to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(op, lhs.to_vec(), rhs.to_vec()));
     }
     Ok(())
 }
 
 pub(crate) fn ensure_rank(op: &'static str, expected: usize, actual: usize) -> crate::Result<()> {
     if expected != actual {
-        return Err(crate::Error::RankMismatch {
-            op,
-            expected,
-            actual,
-        });
+        return Err(crate::Error::rank_mismatch(op, expected, actual));
     }
     Ok(())
 }
 
 pub(crate) fn ensure_axis(op: &'static str, axis: usize, rank: usize) -> crate::Result<()> {
     if axis >= rank {
-        return Err(crate::Error::AxisOutOfBounds { op, axis, rank });
+        return Err(crate::Error::axis_out_of_bounds(op, axis, rank));
     }
     Ok(())
 }
@@ -1025,7 +1013,7 @@ pub(crate) fn ensure_axes_unique(
     for &axis in axes {
         ensure_axis(op, axis, rank)?;
         if seen[axis] {
-            return Err(crate::Error::DuplicateAxis { op, axis, role });
+            return Err(crate::Error::duplicate_axis(op, axis, role));
         }
         seen[axis] = true;
     }
@@ -1282,11 +1270,7 @@ macro_rules! dispatch_unary_float_complex_int {
                 num_complex::Complex64,
                 C64
             ),
-            Tensor::Bool(_) => Err(crate::Error::unsupported_op_dtype(
-                op,
-                input.dtype(),
-                tenferro_tensor::BackendId::Cuda,
-            )),
+            Tensor::Bool(_) => Err($crate::cubecl::unsupported_dtype(op, input.dtype())),
         }
     }};
 }
@@ -1342,11 +1326,7 @@ macro_rules! dispatch_unary_float_int {
                 )
             }
             Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
-                Err(crate::Error::unsupported_op_dtype(
-                    op,
-                    input.dtype(),
-                    tenferro_tensor::BackendId::Cuda,
-                ))
+                Err($crate::cubecl::unsupported_dtype(op, input.dtype()))
             }
         }
     }};
@@ -1382,11 +1362,7 @@ macro_rules! dispatch_unary_float_only {
                     F64
                 )
             }
-            _ => Err(crate::Error::unsupported_op_dtype(
-                op,
-                input.dtype(),
-                tenferro_tensor::BackendId::Cuda,
-            )),
+            _ => Err($crate::cubecl::unsupported_dtype(op, input.dtype())),
         }
     }};
 }
