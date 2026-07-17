@@ -74,7 +74,7 @@ class BuildArtifactContracts(unittest.TestCase):
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
         dependencies = manifest["workspace"]["dependencies"]
 
-        revision = "459fc905529d8b410403793795b73719fd5328d6"
+        revision = "072cf82387ae099ce1d23efe6c0cbc68e231d9d2"
         for name in (
             "cubecl",
             "cubecl-cuda",
