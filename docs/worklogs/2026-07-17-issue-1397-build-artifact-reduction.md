@@ -279,6 +279,13 @@ in this inventory) were:
 - Every measurement command completed successfully; all workspace release and
   debug rows used `cargo test --workspace --no-run`, which compiles every
   consolidated integration harness.
+- A final `cargo test --workspace` using the measured unoptimized/debug-zero
+  target executed all unit, integration, tutorial-contract, and doc tests with
+  no failures.
+- `bash scripts/check-pr-fast.sh --coverage-reviewed --ci-profile local-gate`
+  passed: 34 binaries, 2,209 nextest tests, doctests, doc snippets, and fmt.
+- `repository-rules-review.py --base origin/main --head HEAD` returned `pass`
+  with no findings.
 
 ## Remaining risks and follow-up
 
