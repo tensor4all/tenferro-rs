@@ -237,6 +237,20 @@ returned `Verdict: pass / No findings`. Rustdoc produced no broken-link
 warnings after replacing cross-crate links with the public
 `tenferro_tensor::ValidationError` path.
 
+After checkpoint `05221f5a`, the committed-head gates were rerun without a
+worktree overlay. `cargo check --workspace --all-targets
+--message-format=short` exited 0, as did the CI-identical commands:
+
+```text
+cargo clippy --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+cargo clippy --manifest-path ext/sparse/Cargo.toml --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+python3 scripts/repository-rules-review.py --base origin/main --head HEAD --output-json /tmp/repository-rules-review-final.json
+```
+
+The final committed-head review again returned `Verdict: pass / No
+findings`, and `git diff HEAD^ HEAD --check` was clean.
+
 The current WebGPU feature check was rerun as
 `cargo check -p tenferro-gpu --no-default-features --features 'webgpu cpu-faer' --all-targets --message-format=short` and still exits 101 with 18 diagnostics. Its first errors remain the CubeCL `TensorBinding`, `StorageType`, and `Type` mismatches recorded above; this is the same dependency mismatch proven on clean `origin/main`, not a structured-error change.
 
