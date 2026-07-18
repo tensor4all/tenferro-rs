@@ -162,6 +162,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 <!-- end-snippet-source -->
 
+### Fallible operator chaining
+
+Tensor operator overloads are deliberately fallible: each `+` produces a
+`Result<TracedTensor, Error>`. Consequently, `a + b + c` parses as
+`(a + b) + c`, and the second `+` would receive the first `Result` rather
+than a tensor. The chained expression therefore does not compose for dynamic
+tensors.
+
+Use `?` at each step, or use the explicit fallible methods when a longer
+operation sequence is clearer:
+
+```rust
+use tenferro_runtime::{Error, TracedTensor};
+
+fn add_three(
+    a: &TracedTensor,
+    b: &TracedTensor,
+    c: &TracedTensor,
+) -> Result<TracedTensor, Error> {
+    let ab = (a + b)?;
+    let sum = (&ab + c)?;
+
+    let method_chain = a.add(b)?.add(c)?;
+    let _ = method_chain;
+    Ok(sum)
+}
+```
+
+Tenferro prioritizes robust error handling over the conciseness of chained
+operator notation. The explicit methods are the canonical form for code that
+needs to make fallible control flow and deferred graph errors easy to review.
+
 Traced mode is the right API when `grad`, `vjp`, `jvp`, or HVP-style
 composition should run on traced graphs with symbolic inputs, graph
 optimization, and repeated execution.

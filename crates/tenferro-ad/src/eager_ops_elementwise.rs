@@ -268,8 +268,9 @@ impl EagerTensor {
     /// Returns [`crate::error::Error::ContextMismatch`] for different eager runtimes,
     /// [`tenferro_tensor::ValidationError::ShapeMismatch`] or
     /// `ValidationError::DTypeMismatch` for
-    /// incompatible operands, `DivisionByZero` for a checked zero divisor, or
-    /// a typed backend/runtime-state error.
+    /// incompatible operands, or a typed backend/runtime-state error. Addition
+    /// does not have a zero-divisor failure; numerical zero-divisor errors are
+    /// specific to division and remainder.
     pub fn div(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("div", self, other)?;
         lhs.binary_op(&rhs, StdTensorOp::Div)
@@ -281,8 +282,9 @@ impl EagerTensor {
     /// Returns [`crate::error::Error::ContextMismatch`] for different eager runtimes,
     /// [`tenferro_tensor::ValidationError::ShapeMismatch`] or
     /// `ValidationError::DTypeMismatch` for
-    /// incompatible operands, `DivisionByZero` for a checked zero divisor, or
-    /// a typed backend/runtime-state error.
+    /// incompatible operands, or a typed backend/runtime-state error.
+    /// Subtraction does not have a zero-divisor failure; numerical
+    /// zero-divisor errors are specific to division and remainder.
     pub fn rem(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("rem", self, other)?;
         lhs.binary_op(&rhs, StdTensorOp::Rem)

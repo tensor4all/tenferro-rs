@@ -300,6 +300,56 @@ state, shape-data length, index, and layout failures; and `TensorRead`/
 `TensorWrite` name stride and offset arithmetic failures. The full workspace
 docs build and the worktree repository-rules review now return no findings.
 
+## Review remediation on 2026-07-18
+
+The follow-up review was handled as boundary-level changes rather than
+per-call-site compile fixes:
+
+- Traced unary, binary, and ternary construction now uses fallible dtype
+  inference at `GraphBuild`. Ordered operations, including complex `Rem`,
+  return a typed `Unsupported` error with the graph-build phase instead of
+  reaching an inference panic. The compiler keeps the same inference helper
+  on the `Compile` phase, and the public-operation audit found no remaining
+  infallible dtype-inference helper.
+- `BroadcastError` has one conversion to the shared validation vocabulary.
+  Eager, traced, and direct runtime tensor surfaces use that conversion for
+  `IncompatibleBinary`, `IncompatibleInput`, and `RankTooLarge`; parity tests
+  assert identical payloads while allowing the discovery phase to differ.
+- `ShapeGuardFailure` wraps the original typed `ShapeGuardError`. Its
+  autodiff-only side channel records that value before it crosses tidu's
+  message-only `ADRuleError` boundary; the eager and traced frontends consume
+  the side channel and expose `Error::AdRuleSource` with a real source chain.
+  Non-autodiff builds compile without a dead side-channel field.
+- Einsum planning now owns a typed `PlanningError`: caller-invalid
+  expressions, shapes, paths, and optimizer options classify as validation,
+  while an explicitly unavailable or poisoned planner state classifies as
+  runtime state. Extension lowering passes the source's `kind()` through the
+  typed `ExtensionLoweringError`, so XLA no longer flattens unsupported,
+  numerical, backend, or runtime-state failures into invalid argument.
+- Online guides and `TracedTensor::add` explain why `a + b + c` cannot compose
+  when `Add<Output = Result<_>>`, show the two-step `?` form and the explicit
+  method chain, and state that robust error handling takes priority over
+  operator-chain concision. Add/sub docs no longer claim zero-divisor errors;
+  div/rem retain their execution-time numerical condition.
+
+The focused review-fix verification completed before the final workspace gate:
+
+```text
+cargo test -p tenferro-runtime --all-targets --no-fail-fast --message-format=short
+cargo test -p tenferro-ad eager_and_traced_broadcast_errors_share_payloads_across_discovery_phases --test integration --message-format=short
+cargo test -p tenferro-internal-ops --all-targets --no-fail-fast --message-format=short
+cargo test -p tenferro-ad ad_rule_error --lib --message-format=short
+cargo test -p tenferro-einsum --test integration error_public --message-format=short
+cargo test -p tenferro-xla error::tests --lib --message-format=short
+cargo test -p tenferro-internal-ops --doc --message-format=short
+cargo test -p tenferro-einsum -p tenferro-xla --doc --message-format=short
+```
+
+All commands above exited successfully. The implementation adds no
+compatibility variants, deprecated aliases, or long-lived lint allowlists;
+staged file lists and `git diff --cached --check` were reviewed before each
+checkpoint commit.
+
 ## Residual risks
 
 Hardware-dependent CUDA/WebGPU/PJRT execution and hosted affinity/NUMA
