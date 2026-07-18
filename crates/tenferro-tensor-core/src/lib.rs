@@ -51,6 +51,24 @@ pub use rank::{DynRank, Rank, TensorRank};
 /// ```
 pub type ShapeVec = SmallVec<[usize; 8]>;
 
+/// Convert a common shape container into the dynamic owned shape type.
+///
+/// Arrays, vectors, slices, and [`ShapeVec`] implement this trait through
+/// their `AsRef<[usize]>` representation.
+pub trait IntoShapeVec {
+    /// Convert this shape container into an owned [`ShapeVec`].
+    fn into_shape_vec(self) -> ShapeVec;
+}
+
+impl<S> IntoShapeVec for S
+where
+    S: AsRef<[usize]>,
+{
+    fn into_shape_vec(self) -> ShapeVec {
+        self.as_ref().iter().copied().collect()
+    }
+}
+
 /// Small tensor stride vector with signed element strides.
 ///
 /// # Examples

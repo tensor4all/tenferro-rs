@@ -9,7 +9,7 @@ use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, Buffer, BufferHandle, CompareDir,
     DType, DotGeneralConfig, Error, ErrorKind, GatherConfig, MemoryKind, PadConfig, Placement,
     ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
-    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing,
+    TensorDeviceTransfer, TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorRead,
     TensorReduction, TensorStructural, TensorView, TypedTensor, ValidationError,
 };
 
@@ -231,8 +231,9 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         } if message.contains("does not implement")
     ));
 
+    let owned_input = Tensor::F64(input.clone());
     let err = backend
-        .svd_read(TensorView::F64(input.as_view()))
+        .svd_read(tenferro_tensor::TensorRead::from_tensor(&owned_input))
         .unwrap_err();
 
     assert!(matches!(
@@ -240,11 +241,11 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         Error::Unsupported {
             op: "svd",
             ref message,
-        } if message.contains("borrowed tensor views")
+        } if message.contains("tensor reads")
     ));
 
     let err = backend
-        .qr_read(TensorView::F64(input.as_view()))
+        .qr_read(TensorRead::from_view(TensorView::F64(input.as_view())))
         .unwrap_err();
 
     assert!(matches!(
@@ -252,11 +253,11 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         Error::Unsupported {
             op: "qr",
             ref message,
-        } if message.contains("borrowed tensor views")
+        } if message.contains("tensor reads")
     ));
 
     let err = backend
-        .eigh_read(TensorView::F64(input.as_view()))
+        .eigh_read(TensorRead::from_view(TensorView::F64(input.as_view())))
         .unwrap_err();
 
     assert!(matches!(
@@ -264,7 +265,7 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
         Error::Unsupported {
             op: "eigh",
             ref message,
-        } if message.contains("borrowed tensor views")
+        } if message.contains("tensor reads")
     ));
 
     let err = backend
@@ -298,47 +299,47 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
     ));
 
     let err = backend
-        .cholesky_read(TensorView::F64(input.as_view()))
+        .cholesky_read(TensorRead::from_view(TensorView::F64(input.as_view())))
         .unwrap_err();
     assert!(matches!(
         err,
         Error::Unsupported {
             op: "cholesky",
             ref message,
-        } if message.contains("borrowed tensor views")
+        } if message.contains("tensor reads")
     ));
 
     let err = backend
-        .lu_read(TensorView::F64(input.as_view()))
+        .lu_read(TensorRead::from_view(TensorView::F64(input.as_view())))
         .unwrap_err();
     assert!(matches!(
         err,
         Error::Unsupported {
             op: "lu",
             ref message,
-        } if message.contains("borrowed tensor views")
+        } if message.contains("tensor reads")
     ));
 
     let err = backend
-        .full_piv_lu_read(TensorView::F64(input.as_view()))
+        .full_piv_lu_read(TensorRead::from_view(TensorView::F64(input.as_view())))
         .unwrap_err();
     assert!(matches!(
         err,
         Error::Unsupported {
             op: "full_piv_lu",
             ref message,
-        } if message.contains("borrowed tensor views")
+        } if message.contains("tensor reads")
     ));
 
     let err = backend
-        .eig_read(TensorView::F64(input.as_view()))
+        .eig_read(TensorRead::from_view(TensorView::F64(input.as_view())))
         .unwrap_err();
     assert!(matches!(
         err,
         Error::Unsupported {
             op: "eig",
             ref message,
-        } if message.contains("borrowed tensor views")
+        } if message.contains("tensor reads")
     ));
 }
 

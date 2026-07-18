@@ -91,7 +91,6 @@ pub(crate) fn dot_general_config(
     Ok(config)
 }
 
-#[cfg(feature = "autodiff")]
 pub(crate) fn validate_concrete_contract_dims(
     lhs_shape: &[usize],
     rhs_shape: &[usize],

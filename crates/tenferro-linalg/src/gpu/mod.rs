@@ -3,7 +3,7 @@ mod kernels;
 mod linalg;
 
 use tenferro_gpu::CudaBackend;
-use tenferro_tensor::{Tensor, TensorView, TensorViewCanonicalization};
+use tenferro_tensor::{Tensor, TensorRead, TensorView, TensorViewCanonicalization};
 
 use crate::backend::{unsupported_dtype, LinalgBackend};
 
@@ -53,7 +53,8 @@ impl LinalgBackend for CudaBackend {
         linalg::svd_values(self, input)
     }
 
-    fn svd_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous(&view)?;
@@ -85,7 +86,8 @@ impl LinalgBackend for CudaBackend {
         linalg::qr(self, input)
     }
 
-    fn qr_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn qr_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous(&view)?;
@@ -117,7 +119,8 @@ impl LinalgBackend for CudaBackend {
         linalg::eigh(self, input)
     }
 
-    fn eigh_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn eigh_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous(&view)?;
@@ -145,7 +148,8 @@ impl LinalgBackend for CudaBackend {
         }
     }
 
-    fn cholesky_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Tensor> {
+    fn cholesky_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous(&view)?;
@@ -173,7 +177,8 @@ impl LinalgBackend for CudaBackend {
         }
     }
 
-    fn lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous(&view)?;
@@ -201,7 +206,8 @@ impl LinalgBackend for CudaBackend {
         }
     }
 
-    fn full_piv_lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn full_piv_lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous(&view)?;
@@ -229,7 +235,8 @@ impl LinalgBackend for CudaBackend {
         }
     }
 
-    fn eig_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn eig_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         match input {
             TensorView::F32(view) => {
                 let compact = self.to_contiguous(&view)?;

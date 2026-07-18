@@ -17,8 +17,8 @@ use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{
-    CompareDir, DType, DotGeneralConfig, Error as TensorError, GatherConfig, PadConfig,
-    ScatterConfig, ShapeMismatch, SliceConfig, Tensor, TensorScalar, ValidationError,
+    CompareDir, DType, DotGeneralConfig, Error as TensorError, GatherConfig, IntoShapeVec,
+    PadConfig, ScatterConfig, ShapeMismatch, SliceConfig, Tensor, TensorScalar, ValidationError,
 };
 
 use super::error::{Error, ErrorPhase, Result};
@@ -888,8 +888,16 @@ impl TracedTensor {
     /// `ValidationError::ShapeDataLengthMismatch` when the shape product does
     /// not equal `data.len()`, or `ValidationError::IntegerOverflow` when the
     /// shape product cannot be represented by `usize`.
-    pub fn from_vec_col_major<T: TensorScalar>(shape: Vec<usize>, data: Vec<T>) -> Result<Self> {
+    pub fn from_vec_col_major<T: TensorScalar>(
+        shape: impl IntoShapeVec,
+        data: Vec<T>,
+    ) -> Result<Self> {
         Self::from_tensor_concrete_shape(Tensor::from_vec_col_major(shape, data)?)
+    }
+
+    /// Return the tensor element dtype recorded for this traced value.
+    pub fn dtype(&self) -> DType {
+        self.dtype
     }
 
     /// Returns `true` iff every dim of this tensor's `shape_hint` is a

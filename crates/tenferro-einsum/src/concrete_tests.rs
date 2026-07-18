@@ -7,8 +7,9 @@ use tenferro_tensor::{
 
 use crate::{
     parse_einsum_subscripts, ConcreteEinsumPlan, Error, TensorEinsumExt, TensorEinsumIntoExt,
-    TensorReadEinsumExt, TensorReadEinsumIntoExt, TypedTensorEinsumExt, TypedTensorEinsumIntoExt,
-    TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt,
+    TensorReadEinsumExt, TensorReadEinsumIntoExt, TensorTensordotExt, TypedTensorEinsumExt,
+    TypedTensorEinsumIntoExt, TypedTensorReadEinsumExt, TypedTensorReadEinsumIntoExt,
+    TypedTensorTensordotExt,
 };
 
 fn assert_f64_tensor(tensor: &Tensor, shape: &[usize], expected: &[f64]) {
@@ -27,6 +28,24 @@ fn public_tensor_einsum_ext_executes_dtype_erased_inputs() {
     let result = [&lhs, &rhs].einsum("ij,jk->ik", &mut backend).unwrap();
 
     assert_f64_tensor(&result, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
+}
+
+#[test]
+fn concrete_tensordot_matches_einsum_for_erased_and_typed_tensors() {
+    let mut backend = CpuBackend::new();
+    let lhs = Tensor::from_vec_col_major([2], vec![1.0_f64, 2.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major([2], vec![3.0_f64, 4.0]).unwrap();
+    let erased = lhs
+        .tensordot(&rhs, crate::TensorDotAxes::Count(1), &mut backend)
+        .unwrap();
+    assert_eq!(erased.as_slice::<f64>().unwrap(), &[11.0]);
+
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![3.0, 4.0]).unwrap();
+    let typed = lhs
+        .tensordot(&rhs, crate::TensorDotAxes::Count(1), &mut backend)
+        .unwrap();
+    assert_eq!(typed.as_slice().unwrap(), &[11.0]);
 }
 
 #[test]

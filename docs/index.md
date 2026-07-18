@@ -34,7 +34,7 @@ compilation, CUDA, or experimental WebGPU only when the workflow needs them.
 ```rust
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::LinalgBackend;
-use tenferro_runtime::{TensorView, TypedTensor, TypedTensorOpsExt};
+use tenferro_runtime::{TensorRead, TensorView, TypedTensor, TypedTensorOpsExt};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(product.shape(), &[2, 2]);
     assert_close(product.host_data()?, &[3.0, 0.0, 0.0, 1.0]);
 
-    let svd = backend.svd_read(TensorView::F64(product.as_view()))?;
+    let svd = backend.svd_read(TensorRead::from_view(TensorView::F64(product.as_view())))?;
     assert_eq!(svd.len(), 3);
     assert_eq!(svd[0].shape(), &[2, 2]);
     assert_eq!(svd[1].shape(), &[2]);

@@ -467,6 +467,19 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
 }
 
 #[test]
+fn eager_tensor_has_one_step_column_major_constructor() {
+    let eager =
+        EagerTensor::from_vec_col_major_in([2, 2], vec![1.0_f64, 3.0, 2.0, 4.0], test_ctx())
+            .unwrap();
+
+    assert_eq!(eager.shape(), &[2, 2]);
+    assert_eq!(
+        eager.materialized().unwrap().as_slice::<f64>().unwrap(),
+        &[1.0, 3.0, 2.0, 4.0]
+    );
+}
+
+#[test]
 fn eager_gather_keeps_indices_integer_for_complex_operand() {
     let x = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(

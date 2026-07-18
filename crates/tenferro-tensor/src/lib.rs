@@ -41,15 +41,15 @@
 /// the host-only core model during the crate-boundary split.
 pub mod core {
     pub use tenferro_tensor_core::{
-        col_major_strides, DType, DynRank, ErrorKind, HostTensor, HostTensorView, Rank, Result,
-        ShapeMismatch, ShapeVec, SliceSpec, StrideVec, Tensor, TensorLayout, TensorRank, TensorRef,
-        TensorScalar, TensorView, ValidationError, ValidationKind,
+        col_major_strides, DType, DynRank, ErrorKind, HostTensor, HostTensorView, IntoShapeVec,
+        Rank, Result, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, Tensor, TensorLayout,
+        TensorRank, TensorRef, TensorScalar, TensorView, ValidationError, ValidationKind,
     };
 }
 
 pub use tenferro_tensor_core::{
-    ErrorKind, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, TensorRef, ValidationError,
-    ValidationKind,
+    ErrorKind, IntoShapeVec, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, TensorRef,
+    ValidationError, ValidationKind,
 };
 
 pub mod backend;

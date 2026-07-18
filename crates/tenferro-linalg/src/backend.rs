@@ -1,4 +1,4 @@
-use tenferro_tensor::{Tensor, TensorBackend, TensorView};
+use tenferro_tensor::{Tensor, TensorBackend, TensorRead};
 
 pub(crate) use crate::error::unsupported_dtype;
 use crate::extension::{
@@ -170,9 +170,9 @@ pub trait LinalgBackend: TensorBackend {
         ))
     }
 
-    /// Compute a singular value decomposition from a borrowed tensor view.
+    /// Compute a singular value decomposition from a tensor read target.
     ///
-    /// Backends may canonicalize the view inside the same placement family, but
+    /// Backends may canonicalize the input inside the same placement family, but
     /// must not silently transfer between CPU and GPU memory.
     ///
     /// # Examples
@@ -180,14 +180,14 @@ pub trait LinalgBackend: TensorBackend {
     /// ```rust
     /// use tenferro_linalg::LinalgBackend;
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{TensorView, TypedTensor};
+    /// use tenferro_tensor::{TensorRead, TensorView, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(
     ///     vec![2, 2],
     ///     vec![1.0, 0.0, 0.0, 2.0],
     /// )?;
     /// let mut backend = CpuBackend::new();
-    /// let outputs = backend.svd_read(TensorView::F64(input.as_view()))?;
+    /// let outputs = backend.svd_read(TensorRead::from_view(TensorView::F64(input.as_view())))?;
     /// assert_eq!(outputs[1].shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -195,13 +195,13 @@ pub trait LinalgBackend: TensorBackend {
     /// # Errors
     ///
     /// The default implementation returns `Error::Unsupported` because the
-    /// backend does not accept borrowed views; an implementation may instead
+    /// backend does not accept tensor read targets; an implementation may instead
     /// return validation or typed backend-source errors after canonicalizing
     /// the view.
-    fn svd_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn svd_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         Err(tenferro_tensor::Error::unsupported(
             "svd",
-            "backend does not accept borrowed tensor views at this execution boundary",
+            "backend does not accept tensor reads at this execution boundary",
         ))
     }
 
@@ -261,9 +261,9 @@ pub trait LinalgBackend: TensorBackend {
         Ok(outputs)
     }
 
-    /// Compute public QR outputs `(Q, R)` from a borrowed tensor view.
+    /// Compute public QR outputs `(Q, R)` from a tensor read target.
     ///
-    /// Backends may canonicalize the view inside the same placement family, but
+    /// Backends may canonicalize the input inside the same placement family, but
     /// must not silently transfer between CPU and GPU memory.
     ///
     /// # Examples
@@ -271,14 +271,14 @@ pub trait LinalgBackend: TensorBackend {
     /// ```rust
     /// use tenferro_linalg::LinalgBackend;
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{TensorView, TypedTensor};
+    /// use tenferro_tensor::{TensorRead, TensorView, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(
     ///     vec![2, 2],
     ///     vec![1.0, 0.0, 0.0, 2.0],
     /// )?;
     /// let mut backend = CpuBackend::new();
-    /// let outputs = backend.qr_read(TensorView::F64(input.as_view()))?;
+    /// let outputs = backend.qr_read(TensorRead::from_view(TensorView::F64(input.as_view())))?;
     /// assert_eq!(outputs[0].shape(), &[2, 2]);
     /// assert_eq!(outputs[1].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -287,12 +287,12 @@ pub trait LinalgBackend: TensorBackend {
     /// # Errors
     ///
     /// The default implementation returns `Error::Unsupported` because the
-    /// backend does not accept borrowed views; implementations may return
+    /// backend does not accept tensor read targets; implementations may return
     /// validation or typed backend-source errors.
-    fn qr_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn qr_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         Err(tenferro_tensor::Error::unsupported(
             "qr",
-            "backend does not accept borrowed tensor views at this execution boundary",
+            "backend does not accept tensor reads at this execution boundary",
         ))
     }
 
@@ -360,9 +360,9 @@ pub trait LinalgBackend: TensorBackend {
         Ok(outputs)
     }
 
-    /// Compute public Hermitian eigendecomposition outputs from a borrowed tensor view.
+    /// Compute public Hermitian eigendecomposition outputs from a tensor read target.
     ///
-    /// Backends may canonicalize the view inside the same placement family, but
+    /// Backends may canonicalize the input inside the same placement family, but
     /// must not silently transfer between CPU and GPU memory.
     ///
     /// # Examples
@@ -370,14 +370,14 @@ pub trait LinalgBackend: TensorBackend {
     /// ```rust
     /// use tenferro_linalg::LinalgBackend;
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{TensorView, TypedTensor};
+    /// use tenferro_tensor::{TensorRead, TensorView, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(
     ///     vec![2, 2],
     ///     vec![1.0, 0.0, 0.0, 2.0],
     /// )?;
     /// let mut backend = CpuBackend::new();
-    /// let outputs = backend.eigh_read(TensorView::F64(input.as_view()))?;
+    /// let outputs = backend.eigh_read(TensorRead::from_view(TensorView::F64(input.as_view())))?;
     /// assert_eq!(outputs[0].shape(), &[2]);
     /// assert_eq!(outputs[1].shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
@@ -386,18 +386,18 @@ pub trait LinalgBackend: TensorBackend {
     /// # Errors
     ///
     /// The default implementation returns `Error::Unsupported` because the
-    /// backend does not accept borrowed views; implementations may return
+    /// backend does not accept tensor read targets; implementations may return
     /// validation or typed backend-source errors.
-    fn eigh_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn eigh_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         Err(tenferro_tensor::Error::unsupported(
             "eigh",
-            "backend does not accept borrowed tensor views at this execution boundary",
+            "backend does not accept tensor reads at this execution boundary",
         ))
     }
 
-    /// Compute Cholesky factorization from a borrowed tensor view.
+    /// Compute Cholesky factorization from a tensor read target.
     ///
-    /// Backends may canonicalize the view inside the same placement family, but
+    /// Backends may canonicalize the input inside the same placement family, but
     /// must not silently transfer between CPU and GPU memory.
     ///
     /// # Examples
@@ -405,14 +405,14 @@ pub trait LinalgBackend: TensorBackend {
     /// ```rust
     /// use tenferro_linalg::LinalgBackend;
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{TensorView, TypedTensor};
+    /// use tenferro_tensor::{TensorRead, TensorView, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(
     ///     vec![2, 2],
     ///     vec![4.0, 2.0, 2.0, 3.0],
     /// )?;
     /// let mut backend = CpuBackend::new();
-    /// let output = backend.cholesky_read(TensorView::F64(input.as_view()))?;
+    /// let output = backend.cholesky_read(TensorRead::from_view(TensorView::F64(input.as_view())))?;
     /// assert_eq!(output.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -420,18 +420,18 @@ pub trait LinalgBackend: TensorBackend {
     /// # Errors
     ///
     /// The default implementation returns `Error::Unsupported` because the
-    /// backend does not accept borrowed views; implementations may return
+    /// backend does not accept tensor read targets; implementations may return
     /// validation or typed backend-source errors.
-    fn cholesky_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Tensor> {
+    fn cholesky_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         Err(tenferro_tensor::Error::unsupported(
             "cholesky",
-            "backend does not accept borrowed tensor views at this execution boundary",
+            "backend does not accept tensor reads at this execution boundary",
         ))
     }
 
-    /// Compute public LU outputs from a borrowed tensor view.
+    /// Compute public LU outputs from a tensor read target.
     ///
-    /// Backends may canonicalize the view inside the same placement family, but
+    /// Backends may canonicalize the input inside the same placement family, but
     /// must not silently transfer between CPU and GPU memory.
     ///
     /// # Examples
@@ -439,14 +439,14 @@ pub trait LinalgBackend: TensorBackend {
     /// ```rust
     /// use tenferro_linalg::LinalgBackend;
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{TensorView, TypedTensor};
+    /// use tenferro_tensor::{TensorRead, TensorView, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(
     ///     vec![2, 2],
     ///     vec![1.0, 3.0, 2.0, 4.0],
     /// )?;
     /// let mut backend = CpuBackend::new();
-    /// let outputs = backend.lu_read(TensorView::F64(input.as_view()))?;
+    /// let outputs = backend.lu_read(TensorRead::from_view(TensorView::F64(input.as_view())))?;
     /// assert_eq!(outputs.len(), 4);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -454,18 +454,18 @@ pub trait LinalgBackend: TensorBackend {
     /// # Errors
     ///
     /// The default implementation returns `Error::Unsupported` because the
-    /// backend does not accept borrowed views; implementations may return
+    /// backend does not accept tensor read targets; implementations may return
     /// validation or typed backend-source errors.
-    fn lu_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn lu_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         Err(tenferro_tensor::Error::unsupported(
             "lu",
-            "backend does not accept borrowed tensor views at this execution boundary",
+            "backend does not accept tensor reads at this execution boundary",
         ))
     }
 
-    /// Compute public full-pivoting LU outputs from a borrowed tensor view.
+    /// Compute public full-pivoting LU outputs from a tensor read target.
     ///
-    /// Backends may canonicalize the view inside the same placement family, but
+    /// Backends may canonicalize the input inside the same placement family, but
     /// must not silently transfer between CPU and GPU memory.
     ///
     /// # Examples
@@ -473,14 +473,14 @@ pub trait LinalgBackend: TensorBackend {
     /// ```rust
     /// use tenferro_linalg::LinalgBackend;
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{TensorView, TypedTensor};
+    /// use tenferro_tensor::{TensorRead, TensorView, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(
     ///     vec![2, 2],
     ///     vec![1.0, 3.0, 2.0, 4.0],
     /// )?;
     /// let mut backend = CpuBackend::new();
-    /// let outputs = backend.full_piv_lu_read(TensorView::F64(input.as_view()))?;
+    /// let outputs = backend.full_piv_lu_read(TensorRead::from_view(TensorView::F64(input.as_view())))?;
     /// assert_eq!(outputs.len(), 5);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -488,18 +488,18 @@ pub trait LinalgBackend: TensorBackend {
     /// # Errors
     ///
     /// The default implementation returns `Error::Unsupported` because the
-    /// backend does not accept borrowed views; implementations may return
+    /// backend does not accept tensor read targets; implementations may return
     /// validation or typed backend-source errors.
-    fn full_piv_lu_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn full_piv_lu_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         Err(tenferro_tensor::Error::unsupported(
             "full_piv_lu",
-            "backend does not accept borrowed tensor views at this execution boundary",
+            "backend does not accept tensor reads at this execution boundary",
         ))
     }
 
-    /// Compute general eigendecomposition outputs from a borrowed tensor view.
+    /// Compute general eigendecomposition outputs from a tensor read target.
     ///
-    /// Backends may canonicalize the view inside the same placement family, but
+    /// Backends may canonicalize the input inside the same placement family, but
     /// must not silently transfer between CPU and GPU memory.
     ///
     /// # Examples
@@ -507,14 +507,14 @@ pub trait LinalgBackend: TensorBackend {
     /// ```rust
     /// use tenferro_linalg::LinalgBackend;
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_tensor::{TensorView, TypedTensor};
+    /// use tenferro_tensor::{TensorRead, TensorView, TypedTensor};
     ///
     /// let input = TypedTensor::<f64>::from_vec_col_major(
     ///     vec![2, 2],
     ///     vec![2.0, 0.0, 0.0, 3.0],
     /// )?;
     /// let mut backend = CpuBackend::new();
-    /// let outputs = backend.eig_read(TensorView::F64(input.as_view()))?;
+    /// let outputs = backend.eig_read(TensorRead::from_view(TensorView::F64(input.as_view())))?;
     /// assert_eq!(outputs.len(), 2);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
@@ -522,12 +522,12 @@ pub trait LinalgBackend: TensorBackend {
     /// # Errors
     ///
     /// The default implementation returns `Error::Unsupported` because the
-    /// backend does not accept borrowed views; implementations may return
+    /// backend does not accept tensor read targets; implementations may return
     /// validation or typed backend-source errors.
-    fn eig_read(&mut self, _input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn eig_read(&mut self, _input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         Err(tenferro_tensor::Error::unsupported(
             "eig",
-            "backend does not accept borrowed tensor views at this execution boundary",
+            "backend does not accept tensor reads at this execution boundary",
         ))
     }
 

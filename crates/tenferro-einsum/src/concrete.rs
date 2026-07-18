@@ -10,6 +10,7 @@ use crate::eager::{
     eager_einsum_exec_read_into_accum, eager_einsum_read_subscripts, eager_einsum_subscripts,
     plan_subscripts,
 };
+use crate::TensorDotAxes;
 use crate::{ContractionTree, EinsumSubscripts, Error, Result, Subscripts};
 
 const TENSOR_EINSUM_OP: &str = "TensorEinsumExt::einsum";
@@ -22,6 +23,74 @@ const TYPED_TENSOR_READ_EINSUM_OP: &str = "TypedTensorReadEinsumExt::einsum_read
 const TYPED_TENSOR_READ_EINSUM_INTO_OP: &str = "TypedTensorReadEinsumIntoExt::einsum_read_into";
 const PLAN_PREPARE_OP: &str = "ConcreteEinsumPlan::prepare";
 const PLAN_EXECUTE_OP: &str = "ConcreteEinsumPlan::execute";
+const TYPED_TENSOR_TENSORDOT_OP: &str = "TypedTensorTensordotExt::tensordot";
+
+/// Backend-explicit tensordot sugar for dtype-erased concrete tensors.
+pub trait TensorTensordotExt {
+    /// Contract this tensor with `rhs` over explicit axes or an axis count.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `InvalidArgument`, `RankMismatch`,
+    /// `AxisOutOfBounds`, or `ShapeMismatch` for invalid axes or incompatible
+    /// contracting dimensions, or [`Error::Tensor`] when backend execution
+    /// fails.
+    fn tensordot<B: TensorBackend>(
+        &self,
+        rhs: &Tensor,
+        axes: TensorDotAxes<'_>,
+        backend: &mut B,
+    ) -> Result<Tensor>;
+}
+
+impl TensorTensordotExt for Tensor {
+    fn tensordot<B: TensorBackend>(
+        &self,
+        rhs: &Tensor,
+        axes: TensorDotAxes<'_>,
+        backend: &mut B,
+    ) -> Result<Tensor> {
+        let config =
+            crate::tensordot::dot_general_config(axes, self.shape().len(), rhs.shape().len())?;
+        crate::tensordot::validate_concrete_contract_dims(self.shape(), rhs.shape(), &config)?;
+        backend.dot_general(self, rhs, &config).map_err(Error::from)
+    }
+}
+
+/// Backend-explicit tensordot sugar for typed concrete tensors.
+pub trait TypedTensorTensordotExt<T: TensorScalar> {
+    /// Contract this tensor with `rhs` while preserving its scalar type.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `InvalidArgument`, `RankMismatch`,
+    /// `AxisOutOfBounds`, or `ShapeMismatch` for invalid axes or incompatible
+    /// contracting dimensions, or [`Error::Tensor`] when backend execution
+    /// fails.
+    fn tensordot<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        axes: TensorDotAxes<'_>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>>;
+}
+
+impl<T: TensorScalar> TypedTensorTensordotExt<T> for TypedTensor<T> {
+    fn tensordot<B: TensorBackend>(
+        &self,
+        rhs: &TypedTensor<T>,
+        axes: TensorDotAxes<'_>,
+        backend: &mut B,
+    ) -> Result<TypedTensor<T>> {
+        let config =
+            crate::tensordot::dot_general_config(axes, self.shape().len(), rhs.shape().len())?;
+        crate::tensordot::validate_concrete_contract_dims(self.shape(), rhs.shape(), &config)?;
+        let result = backend
+            .dot_general_read(T::tensor_read(self), T::tensor_read(rhs), &config)
+            .map_err(Error::from)?;
+        into_typed_result(result, TYPED_TENSOR_TENSORDOT_OP)
+    }
+}
 
 /// Backend-explicit einsum methods for dtype-erased concrete tensors.
 ///

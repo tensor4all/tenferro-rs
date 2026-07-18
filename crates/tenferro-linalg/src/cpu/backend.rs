@@ -5,8 +5,8 @@ use super::linalg;
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::{CpuBackend, CpuBackendKind};
 use tenferro_tensor::{
-    validate::validate_nonsingular_u, DType, Error, Tensor, TensorElementwise, TensorStructural,
-    TensorView, TensorViewCanonicalization, TypedTensor,
+    validate::validate_nonsingular_u, DType, Error, Tensor, TensorElementwise, TensorRead,
+    TensorStructural, TensorView, TensorViewCanonicalization, TypedTensor,
 };
 
 impl LinalgBackend for CpuBackend {
@@ -545,7 +545,8 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
-    fn svd_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         #[cfg(feature = "cpu-faer")]
         if matches!(
             linalg_provider_kind(self.kind(), "svd")?,
@@ -651,7 +652,8 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
-    fn qr_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn qr_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         #[cfg(feature = "cpu-faer")]
         if matches!(
             linalg_provider_kind(self.kind(), "qr")?,
@@ -756,7 +758,8 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
-    fn eigh_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn eigh_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         #[cfg(feature = "cpu-faer")]
         if matches!(
             linalg_provider_kind(self.kind(), "eigh")?,
@@ -816,7 +819,8 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
-    fn cholesky_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Tensor> {
+    fn cholesky_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
+        let input = input.tensor_view();
         #[cfg(feature = "cpu-faer")]
         if matches!(
             linalg_provider_kind(self.kind(), "cholesky")?,
@@ -875,7 +879,8 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
-    fn lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         #[cfg(feature = "cpu-faer")]
         if matches!(
             linalg_provider_kind(self.kind(), "lu")?,
@@ -930,7 +935,8 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
-    fn full_piv_lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn full_piv_lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         #[cfg(feature = "cpu-faer")]
         if matches!(
             linalg_provider_kind(self.kind(), "full_piv_lu")?,
@@ -993,7 +999,8 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
-    fn eig_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn eig_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+        let input = input.tensor_view();
         // eig has no faer fast-path; always materialize first.
         match input {
             TensorView::F32(view) => {

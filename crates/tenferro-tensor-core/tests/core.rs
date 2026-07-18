@@ -572,7 +572,7 @@ fn empty_views_are_contiguous_even_with_degenerate_strides() {
     assert!(layout.is_compact_col_major().unwrap());
     assert_eq!(
         layout
-            .reshape_view_as::<DynRank>(vec![0].into(), data.len())
+            .reshape_view_as::<DynRank>(vec![0], data.len())
             .unwrap()
             .shape(),
         &[0]

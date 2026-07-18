@@ -197,6 +197,19 @@ Constraints (document in the API):
 
 ## Argument convention (fixed across categories)
 
+Shape arguments accept owned or borrowed shape-like values: fixed-rank APIs use
+`impl Into<R::Shape>`, while dynamic-rank APIs use `impl IntoShapeVec`. Axis lists,
+dimension mappings, and similar collections use `impl AsRef<[T]>`.
+
+Axis sign is part of each operation's public contract, not a global coercion.
+Negative `isize` axes are currently accepted only by FFT (`fft`, `ifft`, `rfft`,
+`irfft`), `index_select`, `stack`, and explicit `TensorDotAxes::Axes`; each is
+normalized relative to the input rank and rejects an out-of-range result. Other
+axis-taking APIs, including reductions, `concatenate`, and `reverse`, accept
+non-negative `usize` axes only. New negative-axis support must be added
+deliberately and consistently across the relevant concrete, eager, and traced
+surfaces.
+
 Multi-input structural ops (`concatenate`, `stack`, `split`, …) must accept owned
 values, views, and `IntoIterator` ergonomically, and define behavior for an empty
 input. This pre-empts the owned-vs-view boilerplate complaint seen in NumPy/ndarray
