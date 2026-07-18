@@ -20,3 +20,5 @@ accepted and recorded.
 
 Contributor entries may describe the contribution type. A contributor listing
 does not imply maintainer status or GitHub repository permissions.
+
+- Ryo Watanabe
