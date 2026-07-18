@@ -126,9 +126,19 @@ class WorkflowContractTests(unittest.TestCase):
         smoke = create.index("cuda_smoke_test.py")
         runner = create.index("./run.sh --jitconfig")
         self.assertLess(smoke, runner)
+        # The smoke script is embedded from the trusted checkout, never
+        # fetched over the network from the pod (raw.githubusercontent is
+        # rate-limited from datacenter IPs and its failure looked like a
+        # startup timeout in live runs).
+        self.assertIn("cat scripts/ci/cuda_smoke_test.py >> /tmp/runpod-startup.sh", create)
+        self.assertNotIn("raw.githubusercontent.com", create)
+        embed = create.index("cat > /tmp/cuda_smoke_test.py <<'EMBEDDED_SMOKE_PY'")
+        self.assertLess(embed, create.index("env -u RUNNER_JIT_CONFIG python3 /tmp/cuda_smoke_test.py"))
         # The single credential that reaches the pod (the one-shot JIT
         # runner config) must be stripped from the smoke child's env.
         self.assertIn("env -u RUNNER_JIT_CONFIG python3 /tmp/cuda_smoke_test.py", create)
+        # Debug switch: keep smoke-rejected pods for console-log triage.
+        self.assertIn("PROVISION_KEEP_FAILED_PODS: ${{ inputs.keep_failed_pods || 'false' }}", create)
         # JIT configs are minted per candidate attempt inside the provision
         # loop; the workflow must not pre-mint a single shared config, and
         # run-gpu-tests must target the ACCEPTED attempt's label.
@@ -159,11 +169,9 @@ class WorkflowContractTests(unittest.TestCase):
         # Both acceptance paths (discovered toolkit and cached seed tree)
         # must run the completeness check.
         self.assertGreaterEqual(configure.count("cuda_tree_has_runtime_libs "), 2)
-        self.assertIn("${{ github.sha }}/scripts/ci/cuda_smoke_test.py", create)
         self.assertNotIn("TENFERRO_REF", create)
         # Smoke parameters flow through non-secret pod env only.
         for pod_env in (
-            "SMOKE_SOURCE_URL=",
             "SMOKE_MIN_RUNTIME_VERSION=",
             "SMOKE_FULL_RUNTIME_VERSION=",
             "SMOKE_MIN_VRAM_GB=",

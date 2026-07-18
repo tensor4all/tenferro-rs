@@ -71,6 +71,13 @@ on:
         required: false
         default: ""
         type: string
+      keep_failed_pods:
+        description: >-
+          Debug only: keep smoke-rejected pods alive (they keep billing!) so
+          their console logs can be inspected in the RunPod dashboard
+        required: false
+        default: false
+        type: boolean
   workflow_run:
     workflows: ["CI PR workspace tests"]
     types: [completed]
@@ -690,7 +697,7 @@ jobs:
           PROVISION_ORG: ${{ env.ORG_NAME }}
           PROVISION_RUNNER_LABEL: ${{ steps.vars.outputs.runner_label }}
           PROVISION_RUNNER_GROUP_ID: ${{ vars.RUNPOD_RUNNER_GROUP_ID || '1' }}
-          SMOKE_SOURCE_URL: https://raw.githubusercontent.com/${{ env.TENFERRO_REPO }}/${{ github.sha }}/scripts/ci/cuda_smoke_test.py
+          PROVISION_KEEP_FAILED_PODS: ${{ inputs.keep_failed_pods || 'false' }}
         run: |
           set -euo pipefail
 
@@ -726,19 +733,26 @@ jobs:
           free -h
           nproc
 
+          cat > /tmp/cuda_smoke_test.py <<'EMBEDDED_SMOKE_PY'
+          EOS
+          # Embed the smoke script from the trusted checkout between the
+          # startup-script halves so the pod needs no network fetch for it.
+          cat scripts/ci/cuda_smoke_test.py >> /tmp/runpod-startup.sh
+          cat >> /tmp/runpod-startup.sh <<'EOS'
+          EMBEDDED_SMOKE_PY
+
           # CUDA compatibility smoke proof (#1404): NVRTC-compile a tiny
           # kernel, load its PTX through the driver, launch, and synchronize
           # BEFORE registering the runner. On an incompatible host this
           # exits nonzero, the container stops without ever becoming a
           # runner, and the trusted provision loop deletes the pod and
           # retries the next candidate with the same immutable archive.
-          # The script is fetched at the trusted default-branch SHA baked
-          # into SMOKE_SOURCE_URL by the trusted start-runpod job. The
-          # long-lived RunPod/GitHub App credentials never reach the pod;
-          # the single-use JIT runner config necessarily does, so strip it
-          # from the smoke child's environment.
-          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
-            -o /tmp/cuda_smoke_test.py "${SMOKE_SOURCE_URL}"
+          # The smoke script is EMBEDDED below by the trusted start-runpod
+          # job from its own checkout — no runtime network fetch, so pod-side
+          # rate limiting or DNS cannot break the proof. The long-lived
+          # RunPod/GitHub App credentials never reach the pod; the
+          # single-use JIT runner config necessarily does, so strip it from
+          # the smoke child's environment.
           env -u RUNNER_JIT_CONFIG python3 /tmp/cuda_smoke_test.py \
             --min-runtime-version "${SMOKE_MIN_RUNTIME_VERSION}" \
             --full-runtime-version "${SMOKE_FULL_RUNTIME_VERSION}" \

@@ -50,8 +50,24 @@ from scripts.ci.runpod_contract import configured_gpu_tiers
 from scripts.ci.runpod_pricing import candidate_plan
 
 # Pod desiredStatus values that mean the startup script stopped without
-# registering the runner (smoke failure or setup failure).
+# registering the runner (smoke failure or setup failure). desiredStatus
+# alone is NOT sufficient: RunPod keeps it at RUNNING after the container
+# exits, so container death is detected through the GraphQL runtime field
+# (present while the container runs, null once it stops).
 _DEAD_POD_STATUSES = frozenset({"EXITED", "TERMINATED", "DEAD", "STOPPED"})
+
+
+@dataclasses.dataclass(frozen=True)
+class PodState:
+    """One observation of a pod: desired status plus container liveness.
+
+    ``has_runtime`` is None when the observation could not determine
+    container state (transient poll failure); True while the container is
+    running; False once GraphQL reports no runtime for the pod.
+    """
+
+    desired: str | None
+    has_runtime: bool | None
 
 
 class ProvisionExhaustedError(RunPodError):
@@ -102,9 +118,10 @@ def provision(
     mint_runner: Callable[[str], str],
     create: Callable[[CreateRequest, str], CreateResult],
     runner_online: Callable[[str], bool],
-    pod_status: Callable[[str], str | None],
+    pod_status: Callable[[str], PodState],
     delete_pod: Callable[[str], bool],
     publish_pod_id: Callable[[str], None] = lambda pod_id: None,
+    keep_failed_pods: bool = False,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> ProvisionResult:
@@ -127,7 +144,17 @@ def provision(
     attempts = 0
     last_reason = "no candidates attempted"
 
+    kept_pods: list[str] = []
+
     def reject_and_delete(pod_id: str, description: str) -> None:
+        if keep_failed_pods:
+            kept_pods.append(pod_id)
+            print(
+                f"DEBUG MODE: keeping failed pod {pod_id} ({description}) "
+                "for console-log inspection. It keeps billing until deleted "
+                "manually in the RunPod dashboard."
+            )
+            return
         if delete_pod(pod_id):
             print(f"Deleted pod {pod_id} before any test setup.")
             return
@@ -178,19 +205,32 @@ def provision(
         started = monotonic()
         deadline = started + startup_timeout
         reason: str | None = None
+        runtime_seen = False
         while True:
             # Check the pod BEFORE trusting the runner registry: the two
             # signals are independently eventually consistent, and a stale
             # online record (or a runner that registered and died) must not
             # accept a dead pod.
-            status = pod_status(result.pod_id)
-            if status in _DEAD_POD_STATUSES:
+            state = pod_status(result.pod_id)
+            if state.desired in _DEAD_POD_STATUSES:
                 reason = (
-                    f"pod exited before runner registration (status {status}); "
+                    f"pod exited before runner registration (status "
+                    f"{state.desired}); CUDA smoke proof or startup failed"
+                )
+                break
+            if state.has_runtime:
+                runtime_seen = True
+            elif runtime_seen and state.has_runtime is False:
+                # The container ran and then stopped without registering
+                # the runner: the startup script (usually the CUDA smoke
+                # proof) failed. desiredStatus stays RUNNING in this case,
+                # so this is the authoritative fast-fail signal.
+                reason = (
+                    "container stopped before runner registration; "
                     "CUDA smoke proof or startup failed"
                 )
                 break
-            if runner_online(label) and status is not None:
+            if runner_online(label) and state.desired is not None:
                 startup_seconds = monotonic() - started
                 print(
                     f"Runner {label} online: pod {result.pod_id} passed the "
@@ -225,8 +265,10 @@ def provision(
         reject_and_delete(result.pod_id, reason or "startup failure")
         last_reason = reason or "unknown failure"
 
+    kept = f"; kept debug pods: {', '.join(kept_pods)}" if kept_pods else ""
     raise ProvisionExhaustedError(
-        f"all {attempts} bounded provision attempts failed; last: {last_reason}"
+        f"all {attempts} bounded provision attempts failed; "
+        f"last: {last_reason}{kept}"
     )
 
 
@@ -335,18 +377,6 @@ def _pod_api(api_url: str, api_key: str):
             print(f"RunPod pod API transport failure (transient): {error}")
             return 0, b""
 
-    def status(pod_id: str) -> str | None:
-        code, body = request(pod_id, "GET")
-        if code != 200:
-            print(f"Pod status poll returned HTTP {code} (transient).")
-            return None
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            return None
-        value = payload.get("desiredStatus") if isinstance(payload, Mapping) else None
-        return str(value) if value else None
-
     def delete(pod_id: str, *, retries: int = 3) -> bool:
         """Delete a pod and only report success when it is confirmed gone."""
 
@@ -366,7 +396,56 @@ def _pod_api(api_url: str, api_key: str):
                 time.sleep(5.0)
         return False
 
-    return status, delete
+    return delete
+
+
+def _pod_state_checker(graphql_url: str, api_key: str) -> Callable[[str], PodState]:
+    """Observe desiredStatus AND container liveness through GraphQL.
+
+    The REST desiredStatus stays RUNNING after the container exits; only
+    the GraphQL ``runtime`` object (null once the container stops) tells
+    whether the startup script is still alive.
+    """
+
+    query = (
+        "query Pod($input: PodFilter!) { pod(input: $input) "
+        "{ desiredStatus runtime { uptimeInSeconds } } }"
+    )
+
+    def check(pod_id: str) -> PodState:
+        body = json.dumps(
+            {"query": query, "variables": {"input": {"podId": pod_id}}}
+        ).encode()
+        request = urllib.request.Request(
+            graphql_url,
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "tenferro-ci-runpod-provision/1",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30.0) as response:
+                payload = json.loads(response.read())
+        except (OSError, json.JSONDecodeError) as error:
+            print(f"Pod state poll failed (transient): {error}")
+            return PodState(desired=None, has_runtime=None)
+        data = payload.get("data") if isinstance(payload, Mapping) else None
+        pod = data.get("pod") if isinstance(data, Mapping) else None
+        if not isinstance(pod, Mapping):
+            if isinstance(payload, Mapping) and payload.get("errors"):
+                print(f"Pod state query errors (transient): {payload['errors']!r}")
+            return PodState(desired=None, has_runtime=None)
+        desired = pod.get("desiredStatus")
+        return PodState(
+            desired=str(desired) if desired else None,
+            has_runtime=pod.get("runtime") is not None,
+        )
+
+    return check
 
 
 def _publish(result: ProvisionResult) -> None:
@@ -472,7 +551,14 @@ def main() -> int:
                 secrets=(api_key, jit_config),
             )
 
-        pod_status, delete_pod = _pod_api(str(config["api_url"]), api_key)
+        delete_pod = _pod_api(str(config["api_url"]), api_key)
+        pod_status = _pod_state_checker(
+            str(config.get("graphql_url", "https://api.runpod.io/graphql")),
+            api_key,
+        )
+        keep_failed_pods = (
+            os.environ.get("PROVISION_KEEP_FAILED_PODS", "").lower() == "true"
+        )
 
         def publish_pod_id(pod_id: str) -> None:
             output_path = os.environ.get("GITHUB_OUTPUT")
@@ -490,6 +576,7 @@ def main() -> int:
             pod_status=pod_status,
             delete_pod=delete_pod,
             publish_pod_id=publish_pod_id,
+            keep_failed_pods=keep_failed_pods,
         )
         args.response_file.write_bytes(result.body)
         _publish(result)
