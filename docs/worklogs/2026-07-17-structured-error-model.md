@@ -539,6 +539,37 @@ inside the same tropical validation/AD module: an unused `enumerate()` index
 and an elidable helper lifetime. Both were removed without changing behavior
 or error mapping.
 
+## Sparse AD host-boundary follow-up on 2026-07-18
+
+The first rerun of the hosted `extensions` profile confirmed that the tropical
+tests were fixed, then exposed the analogous stale sparse JVP/VJP assertions.
+Both sparse tests still expected `InvalidArgument` for count, dtype, and shape.
+The host path already used the shared value-tensor validator for tangent and
+cotangent inputs, so the observed dtype and shape results were the intended
+structured errors rather than an implementation regression.
+
+The owning sparse metadata boundary was then audited as well. Its primal,
+tangent, and cotangent metadata checks had been erasing dtype and rank facts
+into the configuration bucket. They now use the same exact constructors as
+the host boundary: invalid arity/active-input configuration remains
+`InvalidArgument`, wrong dtype is `DTypeMismatch`, wrong rank is
+`RankMismatch`, and known value extent is `ShapeMismatch`. The tests assert
+the concrete payloads, coarse `ErrorKind`, operation name, and source chain
+for the host path, plus shared metadata dtype/rank classification.
+
+The sparse RED/GREEN gates were:
+
+```text
+cargo test --manifest-path ext/sparse/Cargo.toml --features autodiff --lib sparse_jvp_host_boundary_rejects_count_dtype_and_exact_shape -- --nocapture
+# initial RED: stale InvalidArgument assertion failed with Validation(DTypeMismatch)
+cargo test --manifest-path ext/sparse/Cargo.toml --features autodiff --lib extension::tests::sparse_ -- --nocapture
+# exit 0; 3 focused classification tests passed
+cargo test --manifest-path ext/sparse/Cargo.toml --features autodiff --all-targets -- --nocapture
+# exit 0; 3 unit, 6 AD integration, and 2 constructor tests passed
+cargo clippy --manifest-path ext/sparse/Cargo.toml --features autodiff --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+# exit 0
+```
+
 ## Residual risks
 
 Hardware-dependent CUDA/WebGPU/PJRT execution and hosted affinity/NUMA

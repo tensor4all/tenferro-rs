@@ -347,13 +347,17 @@ impl ExtensionOp for SparseMatmulJvpOp {
             }
             let tangent_idx = 2 + active_pos;
             if input_dtypes[tangent_idx] != input_dtypes[active] {
-                return Err(invalid(
-                    "sparse tangent dtype must match active input dtype",
+                return Err(Error::dtype_mismatch(
+                    OP,
+                    input_dtypes[active],
+                    input_dtypes[tangent_idx],
                 ));
             }
             if !is_rank1_shape(&input_shapes[tangent_idx]) {
-                return Err(invalid(
-                    "sparse tangent inputs must be rank-1 value tensors",
+                return Err(Error::rank_mismatch(
+                    OP,
+                    1,
+                    input_shapes[tangent_idx].len(),
                 ));
             }
             ctx.require_same_shape(tangent_idx, active)?;
@@ -436,14 +440,14 @@ impl ExtensionOp for SparseMatmulVjpOp {
         validate_primal_meta(&input_dtypes[..2], &primal_shapes)?;
         require_primal_shape_constraints(ctx, &self.plan)?;
         if input_dtypes[2] != input_dtypes[self.active_input] {
-            return Err(invalid(
-                "sparse VJP cotangent dtype does not match active input dtype",
+            return Err(Error::dtype_mismatch(
+                OP,
+                input_dtypes[self.active_input],
+                input_dtypes[2],
             ));
         }
         if !is_rank1_shape(&input_shapes[2]) {
-            return Err(invalid(
-                "sparse VJP cotangent must be a rank-1 value tensor",
-            ));
+            return Err(Error::rank_mismatch(OP, 1, input_shapes[2].len()));
         }
         ctx.require_equal(ctx.input_axis(2, 0)?, SymDim::from(self.plan.output_nnz()))?;
         Ok(vec![(
@@ -658,14 +662,25 @@ fn validate_primal_meta(input_dtypes: &[DType], input_shapes: &[&[SymDim]]) -> R
             input_shapes.len()
         )));
     }
-    if input_dtypes[0] != DType::F64 || input_dtypes[1] != DType::F64 {
-        return Err(invalid(format!(
-            "sparse matmul supports F64 values, got {:?} and {:?}",
-            input_dtypes[0], input_dtypes[1]
-        )));
+    if input_dtypes[0] != DType::F64 {
+        return Err(Error::dtype_mismatch(
+            OP,
+            DType::F64,
+            input_dtypes[0],
+        ));
     }
-    if !is_rank1_shape(input_shapes[0]) || !is_rank1_shape(input_shapes[1]) {
-        return Err(invalid("sparse matmul inputs must be rank-1 value tensors"));
+    if input_dtypes[1] != DType::F64 {
+        return Err(Error::dtype_mismatch(
+            OP,
+            DType::F64,
+            input_dtypes[1],
+        ));
+    }
+    if !is_rank1_shape(input_shapes[0]) {
+        return Err(Error::rank_mismatch(OP, 1, input_shapes[0].len()));
+    }
+    if !is_rank1_shape(input_shapes[1]) {
+        return Err(Error::rank_mismatch(OP, 1, input_shapes[1].len()));
     }
     Ok(())
 }
