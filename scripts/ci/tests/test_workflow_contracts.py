@@ -383,6 +383,33 @@ class WorkflowContractTests(unittest.TestCase):
             run_gpu,
         )
 
+    def test_archive_key_hashes_every_embedded_markdown_input(self) -> None:
+        """include_str! docs are compile-time inputs to archived binaries."""
+
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        key_line = next(
+            line for line in text.splitlines() if 'key="cuda-pjrt-archive-' in line
+        )
+        embeds: set[str] = set()
+        for rust_file in (ROOT / "crates").rglob("*.rs"):
+            source = rust_file.read_text()
+            if "include_str!" not in source and "include_bytes!" not in source:
+                continue
+            for quoted in re.findall(r'"([^"]+\.md)"', source):
+                repo_relative = re.sub(r"^(\.\./|/)+", "", quoted)
+                self.assertTrue(
+                    (ROOT / repo_relative).is_file(),
+                    f"{rust_file}: cannot resolve embedded path {quoted!r}",
+                )
+                embeds.add(repo_relative)
+        self.assertTrue(embeds, "expected at least one embedded markdown input")
+        for path in sorted(embeds):
+            self.assertIn(
+                f"tenferro-rs/{path}",
+                key_line,
+                f"embedded compile-time input {path} missing from archive key",
+            )
+
     def test_finder_only_trusts_default_branch_workflow_definitions(self) -> None:
         from scripts.ci.find_archive_artifact import (
             TRUSTED_PRODUCER_EVENTS,

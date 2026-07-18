@@ -51,6 +51,10 @@ The CUDA/PJRT archive key is derived from material compilation inputs only:
   `benches/**`, and every `build.rs` (hashed) — everything
   `cargo nextest archive` compiles, including required-feature CUDA
   examples that no non-GPU lane checks,
+- every Markdown file embedded into a binary with `include_str!` (for
+  example `docs/guides/devices-and-gpu.md` in the CUDA capability tests) —
+  a contract test discovers these embeds and fails if one is missing from
+  the key,
 - `scripts/ci/**`, `.cargo/**`, and `rust-toolchain*` (hashed) — these are
   executed or read from the PR checkout during the archive build, so a key
   match must prove they were identical; without this, a PR that only edits
