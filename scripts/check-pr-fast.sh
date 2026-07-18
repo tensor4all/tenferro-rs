@@ -125,8 +125,10 @@ log "base:   ${BASE_REF} (${base_short})"
 log "head:   ${head_short}"
 
 changed_files=()
+changed_file_count=0
 while IFS= read -r path; do
   changed_files+=("$path")
+  changed_file_count=$((changed_file_count + 1))
 done < <(
   {
     git diff --name-only "${BASE_REF}...HEAD"
@@ -137,11 +139,13 @@ done < <(
 )
 
 untracked_files=()
+untracked_file_count=0
 while IFS= read -r path; do
   untracked_files+=("$path")
+  untracked_file_count=$((untracked_file_count + 1))
 done < <(git ls-files --others --exclude-standard | awk 'NF' | sort -u)
 
-if [[ "${#changed_files[@]}" -eq 0 ]]; then
+if [[ "$changed_file_count" -eq 0 ]]; then
   log "changed files: none"
 else
   log "changed files:"
@@ -149,9 +153,11 @@ else
 fi
 
 policy_args=(python3 scripts/ci/change_policy.py)
-for path in "${changed_files[@]}"; do
-  policy_args+=(--path "$path")
-done
+if [[ "$changed_file_count" -gt 0 ]]; then
+  for path in "${changed_files[@]}"; do
+    policy_args+=(--path "$path")
+  done
+fi
 policy_json="$("${policy_args[@]}")"
 policy_fields=()
 while IFS= read -r field; do
@@ -169,7 +175,7 @@ log "classification reason: ${change_reason}"
 run git diff --check "${BASE_REF}...HEAD"
 run git diff --cached --check
 run git diff --check
-if [[ "${#untracked_files[@]}" -gt 0 ]]; then
+if [[ "$untracked_file_count" -gt 0 ]]; then
   untracked_whitespace_errors=0
   for path in "${untracked_files[@]}"; do
     whitespace_output="$(git diff --no-index --check -- /dev/null "$path" 2>&1 || true)"
@@ -197,12 +203,14 @@ case "$DOC_SNIPPETS" in
     run_doc_snippets=0
     ;;
   auto)
-    for path in "${changed_files[@]}"; do
-      if [[ "$path" == docs/* || "$path" == README.md || "$path" == *.md || "$path" == *.qmd ]]; then
-        run_doc_snippets=1
-        break
-      fi
-    done
+    if [[ "$changed_file_count" -gt 0 ]]; then
+      for path in "${changed_files[@]}"; do
+        if [[ "$path" == docs/* || "$path" == README.md || "$path" == *.md || "$path" == *.qmd ]]; then
+          run_doc_snippets=1
+          break
+        fi
+      done
+    fi
     ;;
 esac
 

@@ -536,25 +536,6 @@ fn validate_broadcast_in_dim_args(
         seen[dim] = true;
     }
 
-    if concrete_output_shape.is_none() {
-        if let Some(input_shape) = input.shape_hint.as_ref() {
-            for (input_axis, &output_axis) in dims.iter().enumerate() {
-                let input_dim = &input_shape[input_axis];
-                let output_dim = &output_shape[output_axis];
-                if input_dim != output_dim && input_dim.constant_value() != Some(1) {
-                    return Err(graph_invalid_argument(
-                        op,
-                        "shape",
-                        format!(
-                            "input axis {input_axis} with dim {input_dim:?} cannot broadcast to \
-                             output axis {output_axis} with dim {output_dim:?}"
-                        ),
-                    ));
-                }
-            }
-        }
-    }
-
     Ok(())
 }
 
@@ -1119,7 +1100,13 @@ impl TracedTensor {
     ///
     /// If symbolic ranks prevent shape comparison during graph construction,
     /// the same `ShapeMismatch` can be reported during compilation or
-    /// execution, with the corresponding [`ErrorPhase`].
+    /// execution, with the corresponding [`ErrorPhase`]. For integer inputs,
+    /// a zero divisor is reported during execution as
+    /// [`Error::TensorRuntime`] containing a
+    /// [`tenferro_tensor::Error::Extension`] classified as
+    /// `tenferro_tensor::ErrorKind::NumericalFailure` and retaining the typed
+    /// backend source; floating-point and complex zero divisors follow their
+    /// numeric semantics instead.
     pub fn div(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         apply_binary(
@@ -1145,7 +1132,13 @@ impl TracedTensor {
     ///
     /// If symbolic ranks prevent shape comparison during graph construction,
     /// the same `ShapeMismatch` can be reported during compilation or
-    /// execution, with the corresponding [`ErrorPhase`].
+    /// execution, with the corresponding [`ErrorPhase`]. For integer inputs,
+    /// a zero divisor is reported during execution as
+    /// [`Error::TensorRuntime`] containing a
+    /// [`tenferro_tensor::Error::Extension`] classified as
+    /// `tenferro_tensor::ErrorKind::NumericalFailure` and retaining the typed
+    /// backend source; floating-point and complex zero divisors follow their
+    /// numeric semantics instead.
     pub fn rem(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         apply_binary(

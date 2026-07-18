@@ -407,7 +407,7 @@ preflight portable. With the fix, the focused CI policy tests pass:
 
 ```text
 PATH=/Users/hiroshi/.local/share/uv/python/cpython-3.11-macos-aarch64-none/bin:$PATH /Users/hiroshi/.local/bin/python3.11 -m unittest discover -s scripts/ci/tests -p 'test_change_policy.py' -v
-# exit 0; 15 tests passed
+# exit 0; 16 tests passed
 ```
 
 The full `ci-config` profile reaches its final `actionlint` step after 81 CI
@@ -416,6 +416,58 @@ command not found`). It is therefore an environmental limitation and is not
 claimed as a passing local gate. The obsolete `--ci-profile local-gate`
 argument was also verified to be rejected because current `origin/main`
 removed that profile; the current profiles above are authoritative.
+
+## Independent re-review follow-up on 2026-07-18
+
+The follow-up review identified one semantic overvalidation and two small
+portability/documentation gaps. The structural-equality check in
+`validate_broadcast_in_dim_args` was removed: when the target extent is
+symbolic, a concrete input extent is now left for the existing deferred shape
+guard, while known-known incompatible extents still fail during graph build.
+The regression constructs a concrete `[2]` input and a symbolic extent owned by
+another tensor, verifies execution for the compatible `[2]` binding, and
+verifies an incompatible `[3]` binding returns the typed shape mismatch at
+execution. A separate test asserts the known-known `[2]` to `[3]` mismatch is
+reported with `ErrorPhase::GraphBuild`.
+
+The traced `div` and `rem` deferred-error sections now state that integer zero
+divisors are execution-time `Error::TensorRuntime` numerical failures whose
+typed backend source remains in the source chain; floating-point and complex
+zero divisors retain their numeric semantics.
+
+The fast preflight now uses explicit changed/untracked-file counters before
+expanding arrays, covering both changed-file loops under macOS Bash 3.2's
+`set -u` behavior. The new no-change regression invokes `/bin/bash` directly
+against a clean temporary repository with `--base HEAD`; because this host's
+system Python 3.9 cannot import the repository's `StrEnum`-based policy
+module, the test prepends the resolved Python 3.11 runtime directory so the
+script still executes the same `python3` entry point.
+
+The focused RED/GREEN and final gates were:
+
+```text
+cargo test -p tenferro-runtime broadcast_in_dim_sym --lib
+# exit 0; 2 tests passed
+PATH=/Users/hiroshi/.local/share/uv/python/cpython-3.11-macos-aarch64-none/bin:$PATH \
+  /Users/hiroshi/.local/bin/python3.11 -m unittest discover -s scripts/ci/tests -p 'test_change_policy.py' -v
+# exit 0; 16 tests passed
+cargo test -p tenferro-runtime --all-targets --no-fail-fast --message-format=short
+# exit 0; 247 unit tests and 41 integration tests passed
+cargo test --workspace --release
+# exit 0; all workspace unit, integration, and doctests passed
+cargo clippy --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+# exit 0
+cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+cargo clippy --manifest-path ext/sparse/Cargo.toml --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+# both exit 0
+cargo fmt --all --check
+/bin/bash -n scripts/check-pr-fast.sh
+# both exit 0
+PATH=/Users/hiroshi/.local/share/uv/python/cpython-3.11-macos-aarch64-none/bin:$PATH \
+  /bin/bash scripts/check-pr-fast.sh --base origin/main --no-fetch --coverage-reviewed \
+  --test 'cargo test -p tenferro-runtime broadcast_in_dim_sym_defers_cross_tensor_symbolic_extent_validation'
+# exit 0; fast PR checks passed
+```
 
 ## Residual risks
 

@@ -2,8 +2,13 @@ use num_complex::Complex64;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
-use crate::{DType, DotGeneralConfig, Error, ErrorPhase, TracedTensor};
-use tenferro_tensor::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
+use crate::{
+    DType, DotGeneralConfig, Error, ErrorPhase, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
+};
+use tenferro_cpu::CpuBackend;
+use tenferro_tensor::{
+    Error as TensorError, ErrorKind, ShapeMismatch, ValidationError, ValidationKind,
+};
 
 #[test]
 fn traced_binary_reuses_input_map_when_rhs_is_already_present() {
@@ -222,6 +227,69 @@ fn broadcast_in_dim_rejects_invalid_dimension_mappings() {
     let valid = x.broadcast_in_dim(&[2, 3, 4], &[0, 1]).unwrap();
     assert_eq!(valid.rank, 3);
     assert_eq!(valid.try_concrete_shape().unwrap(), &[2, 3, 4]);
+}
+
+#[test]
+fn broadcast_in_dim_rejects_known_incompatible_extent_at_graph_build() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
+
+    let err = x.broadcast_in_dim(&[3], &[0]).unwrap_err();
+
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            op: "TracedTensor::broadcast_in_dim",
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::ShapeMismatch(source),
+        } if matches!(
+            source.as_ref(),
+            ShapeMismatch::ExpectedActual { expected, actual }
+                if expected.as_slice() == [3] && actual.as_slice() == [2]
+        )
+    ));
+}
+
+#[test]
+fn broadcast_in_dim_sym_defers_cross_tensor_symbolic_extent_validation() {
+    let input = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let shape_ref = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let target_shape = [shape_ref.axis_sym_dim(0).unwrap()];
+
+    let output = input
+        .broadcast_in_dim_sym(&target_shape, &[0], &[&shape_ref])
+        .expect("a symbolic extent from another tensor must remain deferred");
+    assert_eq!(output.try_concrete_shape(), None);
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&output, &[(&shape_ref, DType::F64, &[2])])
+        .unwrap();
+    let matching_shape_ref = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let result = executor
+        .run_with_inputs(&program, &[(&shape_ref, &matching_shape_ref)])
+        .unwrap();
+    assert_eq!(result.shape(), &[2]);
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+
+    let mismatch_program = compiler
+        .compile_with_input_specs(&output, &[(&shape_ref, DType::F64, &[3])])
+        .unwrap();
+    let mismatched_shape_ref = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
+    let err = executor
+        .run_with_inputs(&mismatch_program, &[(&shape_ref, &mismatched_shape_ref)])
+        .unwrap_err();
+    assert!(matches!(
+        &err,
+        Error::TensorRuntime(TensorError::Validation {
+            source: ValidationError::ShapeMismatch(source),
+            ..
+        }) if matches!(
+            source.as_ref(),
+            ShapeMismatch::IncompatibleShapes { lhs, rhs }
+                if lhs.as_slice() == [2] && rhs.as_slice() == [3]
+        )
+    ));
 }
 
 #[test]

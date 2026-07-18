@@ -245,6 +245,31 @@ class LocalGateTests(unittest.TestCase):
         self.assertIn("classification: code", result.stdout)
         self.assertTrue(self.marker.exists(), "code changes should run cargo fmt")
 
+    def test_clean_base_head_is_a_valid_no_change_gate_under_bin_bash(self) -> None:
+        compatible_python_dir = Path(sys.executable).resolve().parent
+        env = self.env | {
+            "PATH": f"{compatible_python_dir}:{self.env['PATH']}",
+        }
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                "scripts/check-pr-fast.sh",
+                "--base",
+                "HEAD",
+                "--no-fetch",
+                "--skip-doc-snippets",
+                "--coverage-reviewed",
+                "--test",
+                "true",
+            ],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("changed files: none", result.stdout)
+
     def test_docs_only_change_skips_cargo_and_coverage_acknowledgement(self) -> None:
         self.write_change("docs/guide.md")
         result = self.run_gate()
