@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -142,6 +143,93 @@ class PublicErrorDocsTests(unittest.TestCase):
             """
         )
         self.assertEqual(findings, [])
+
+    def test_changed_audit_requires_base_object_in_shallow_checkout(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="tenferro-error-docs-git-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+
+            def git(*args: str, cwd: Path = source) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    ["git", *args],
+                    cwd=cwd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+            git("init", "-b", "main")
+            git("config", "user.name", "public-error-docs-test")
+            git("config", "user.email", "public-error-docs-test@example.invalid")
+            sample = source / "sample.rs"
+            sample.write_text(
+                """
+                /// Compute a value.
+                ///
+                /// # Errors
+                ///
+                /// Returns `Error::InvalidArgument` when input is invalid.
+                pub fn compute() -> Result<(), Error> { Ok(()) }
+                """.lstrip(),
+                encoding="utf-8",
+            )
+            git("add", "sample.rs")
+            git("commit", "-m", "base")
+            base = git("rev-parse", "HEAD").stdout.strip()
+
+            sample.write_text(
+                sample.read_text(encoding="utf-8").replace(
+                    "Compute a value.", "Compute another value."
+                ),
+                encoding="utf-8",
+            )
+            git("add", "sample.rs")
+            git("commit", "-m", "head")
+
+            full = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--root-dir",
+                    str(source),
+                    "--changed-from",
+                    base,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(full.returncode, 0, full.stderr)
+
+            shallow = root / "shallow"
+            subprocess.run(
+                ["git", "clone", "--depth", "1", source.as_uri(), str(shallow)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            missing_base_diff = subprocess.run(
+                ["git", "diff", "--name-only", f"{base}...HEAD", "--", "*.rs"],
+                cwd=shallow,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(missing_base_diff.returncode, 128, missing_base_diff.stderr)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--root-dir",
+                    str(shallow),
+                    "--changed-from",
+                    base,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("128", result.stderr)
 
 
 if __name__ == "__main__":

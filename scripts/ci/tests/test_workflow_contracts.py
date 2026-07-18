@@ -54,6 +54,27 @@ class WorkflowContractTests(unittest.TestCase):
             "github.com/rhysd/actionlint/cmd/actionlint@v1.7.7", text
         )
 
+    def test_changed_error_audit_jobs_fetch_base_history(self) -> None:
+        job_header = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):\s*$", re.MULTILINE)
+        audited_jobs: list[str] = []
+        workflow_dir = ROOT / ".github" / "workflows"
+        for path in sorted(workflow_dir.iterdir()):
+            if path.suffix not in {".yml", ".yaml"}:
+                continue
+            text = path.read_text()
+            matches = list(job_header.finditer(text))
+            for index, match in enumerate(matches):
+                end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+                block = text[match.start() : end]
+                if "check-public-error-docs.py --changed-from" not in block:
+                    continue
+                job = f"{path.name}:{match.group('name')}"
+                audited_jobs.append(job)
+                self.assertIn("uses: actions/checkout@", block, job)
+                self.assertRegex(block, r"(?m)^\s+fetch-depth:\s*0\s*$", job)
+
+        self.assertTrue(audited_jobs, "no changed public-error audit job was found")
+
     def test_runpod_schema_preflight_precedes_archive(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         self.assertIn("runpod-contract:", text)

@@ -469,6 +469,36 @@ PATH=/Users/hiroshi/.local/share/uv/python/cpython-3.11-macos-aarch64-none/bin:$
 # exit 0; fast PR checks passed
 ```
 
+## CI changed-base audit fix on 2026-07-18
+
+The public-error documentation audit keeps its `revision...HEAD` comparison:
+the triple-dot form is required because the audit must inspect the merge-base
+diff and must fail loudly when the requested base object is unavailable. PR
+CI's `clippy` job was invoking `--changed-from` after the default
+`actions/checkout` shallow checkout, so a base SHA such as
+`e8ef92c9e62260eb83e2c1e221234d945e9e9c3c` was not guaranteed to be present.
+The correct boundary fix is `fetch-depth: 0` on that checkout. A workflow
+contract test scans every workflow job that invokes `--changed-from` and
+requires this full-history setting; no two-dot fallback or audit error
+suppression was added.
+
+The public-error audit tests also create a two-commit repository, clone only
+the head with `git clone --depth 1`, and verify that the missing-base
+`git diff base...HEAD` returns exit 128 and that the Python audit propagates
+the failure. The same fixture passes against the full-history repository.
+This reproduces the hosted checkout failure without depending on GitHub's
+runner filesystem.
+
+The failing PR run `29627808652` confirmed the same sequence: the full audit
+printed `public-error-docs-ok`, then the changed audit raised
+`CalledProcessError` for
+`git diff --name-only e8ef92c9e62260eb83e2c1e221234d945e9e9c3c...HEAD -- *.rs`
+with `returned non-zero exit status 128`. The checkout-depth change addresses
+that Git object availability failure at the workflow boundary. The same run's
+configuration checks passed; a separate extension test lane failed on
+tropical tests asserting the old validation payload and is not silenced or
+folded into this checkout fix.
+
 ## Residual risks
 
 Hardware-dependent CUDA/WebGPU/PJRT execution and hosted affinity/NUMA

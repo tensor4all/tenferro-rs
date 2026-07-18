@@ -75,6 +75,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
