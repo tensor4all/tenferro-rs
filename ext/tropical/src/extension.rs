@@ -632,7 +632,7 @@ fn validate_tropical_primal_host_meta(
     }
 
     let mut label_dims = HashMap::new();
-    for (input_idx, (labels, input)) in subscripts.inputs.iter().zip(inputs).enumerate() {
+    for (labels, input) in subscripts.inputs.iter().zip(inputs) {
         if labels.len() != input.shape().len() {
             return Err(tenferro_tensor::Error::rank_mismatch(
                 op,
@@ -919,7 +919,7 @@ fn routed_input_offset(
 }
 
 #[cfg(feature = "autodiff")]
-fn typed_slice<'a, T>(tensor: &'a Tensor) -> tenferro_tensor::Result<&'a [T]>
+fn typed_slice<T>(tensor: &Tensor) -> tenferro_tensor::Result<&[T]>
 where
     T: TensorScalar,
 {

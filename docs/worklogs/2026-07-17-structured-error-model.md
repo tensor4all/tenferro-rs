@@ -499,6 +499,46 @@ configuration checks passed; a separate extension test lane failed on
 tropical tests asserting the old validation payload and is not silenced or
 folded into this checkout fix.
 
+## Tropical AD host-boundary classification follow-up on 2026-07-18
+
+The two failing tropical tests were stale expectations, not an implementation
+classification defect. The structured implementation already validates the
+three cases in this order and preserves the shared error vocabulary:
+
+| Surface | Input defect | Required result |
+| --- | --- | --- |
+| JVP and VJP host reference | wrong input arity/configuration | `Validation(InvalidArgument { argument: "configuration" })` |
+| JVP tangent or VJP cotangent | dtype differs from the primal/active input | `Validation(DTypeMismatch { expected: F64, actual: I64 })` |
+| JVP tangent or VJP cotangent | exact shape differs from the required shape | `Validation(ShapeMismatch(IncompatibleShapes { lhs: expected, rhs: actual }))` |
+
+The tests now assert each operation name, `ErrorKind`, concrete payload, and
+the `thiserror` source chain while retaining the `catch_unwind` boundary
+regression. Operation-level unsupported dtype remains a distinct typed
+tropical extension error when the primal inputs themselves use an unsupported
+but matching dtype; it is not substituted for a tangent/cotangent dtype
+mismatch. The direct `HostReference` contract returns the tensor error, while
+the runtime execution wrapper preserves that typed source in
+`Error::TensorRuntime` and supplies the execution phase.
+
+The focused RED/GREEN and strict feature-enabled gates were:
+
+```text
+cargo test --manifest-path ext/tropical/Cargo.toml --features autodiff --lib tropical_jvp_host_boundary_rejects_count_dtype_and_exact_shape -- --nocapture
+# initial RED: stale InvalidArgument assertion failed
+# final GREEN: 1 passed
+cargo test --manifest-path ext/tropical/Cargo.toml --features autodiff --lib tropical_vjp_host_boundary_rejects_count_dtype_and_exact_shape -- --nocapture
+# exit 0; 1 passed
+cargo test --manifest-path ext/tropical/Cargo.toml --features autodiff --all-targets -- --nocapture
+# exit 0; all tropical unit, integration, and benchmark targets passed
+cargo clippy --manifest-path ext/tropical/Cargo.toml --features autodiff --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+# exit 0
+```
+
+The feature-enabled Clippy gate also exposed two pre-existing lint findings
+inside the same tropical validation/AD module: an unused `enumerate()` index
+and an elidable helper lifetime. Both were removed without changing behavior
+or error mapping.
+
 ## Residual risks
 
 Hardware-dependent CUDA/WebGPU/PJRT execution and hosted affinity/NUMA
