@@ -104,14 +104,110 @@ class WorkflowContractTests(unittest.TestCase):
     def test_runpod_creation_uses_status_aware_helper(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         create = text[
-            text.index("      - name: Create RunPod pod") : text.index(
-                "      - name: Wait for org runner to come online"
-            )
+            text.index(
+                "      - name: Provision cheapest compatible RunPod pod"
+            ) : text.index("      - name: Delete pod if runner startup failed")
         ]
-        self.assertIn("python3 -m scripts.ci.runpod_client create", create)
+        self.assertIn("python3 -m scripts.ci.runpod_provision", create)
         self.assertNotIn("python3 scripts/ci/runpod_client.py", create)
         self.assertNotIn("for attempt in $(seq 1 5)", create)
         self.assertNotIn("curl -sS", create)
+
+    def test_runpod_smoke_proof_gates_runner_registration(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        create = text[
+            text.index(
+                "      - name: Provision cheapest compatible RunPod pod"
+            ) : text.index("      - name: Delete pod if runner startup failed")
+        ]
+        # The smoke proof must run inside the startup script BEFORE the
+        # runner registers, and its script must be fetched at the trusted
+        # default-branch SHA — never from a PR-controlled ref.
+        smoke = create.index("cuda_smoke_test.py")
+        runner = create.index("./run.sh --jitconfig")
+        self.assertLess(smoke, runner)
+        # The single credential that reaches the pod (the one-shot JIT
+        # runner config) must be stripped from the smoke child's env.
+        self.assertIn("env -u RUNNER_JIT_CONFIG python3 /tmp/cuda_smoke_test.py", create)
+        # JIT configs are minted per candidate attempt inside the provision
+        # loop; the workflow must not pre-mint a single shared config, and
+        # run-gpu-tests must target the ACCEPTED attempt's label.
+        text_full = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertNotIn("- name: Generate JIT runner config", text_full)
+        self.assertNotIn("RUNNER_JIT_CONFIG: ${{", text_full)
+        self.assertIn(
+            "runner_label: ${{ steps.create_pod.outputs.runner_label }}",
+            text_full,
+        )
+        self.assertIn("PROVISION_RUNNER_GROUP_ID:", create)
+        # zstd on the pod keeps the actions/cache version hash compatible
+        # with the zstd-equipped hosted publisher; without it every pod
+        # restore misses exact-match keys.
+        self.assertIn("zstd \\", create)
+        # The smoke's NVRTC-only install leaves a partial /usr/local tree;
+        # the test job's runtime discovery must reject trees missing the
+        # full library set instead of skipping the real runtime install.
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        configure = text[
+            text.index("      - name: Configure CUDA runtime libraries") : text.index(
+                "      - name: Verify loaded NVRTC version"
+            )
+        ]
+        self.assertIn("cuda_tree_has_runtime_libs", configure)
+        for lib in ("libcublas.so", "libcusolver.so", "libcusparse.so", "libnvrtc.so"):
+            self.assertIn(lib, configure)
+        # Both acceptance paths (discovered toolkit and cached seed tree)
+        # must run the completeness check.
+        self.assertGreaterEqual(configure.count("cuda_tree_has_runtime_libs "), 2)
+        self.assertIn("${{ github.sha }}/scripts/ci/cuda_smoke_test.py", create)
+        self.assertNotIn("TENFERRO_REF", create)
+        # Smoke parameters flow through non-secret pod env only.
+        for pod_env in (
+            "SMOKE_SOURCE_URL=",
+            "SMOKE_MIN_RUNTIME_VERSION=",
+            "SMOKE_FULL_RUNTIME_VERSION=",
+            "SMOKE_MIN_VRAM_GB=",
+        ):
+            self.assertIn(f'--pod-env "{pod_env}', create)
+        self.assertNotIn('--pod-env "RUNPOD_API_KEY', create)
+
+    def test_runpod_provision_is_bounded_and_price_ordered(self) -> None:
+        config = json.loads(read("scripts/ci/runpod_config.json"))
+        for key in (
+            "graphql_url",
+            "min_vram_gb",
+            "max_price_candidates",
+            "max_provision_attempts",
+            "startup_timeout_seconds",
+            "startup_poll_seconds",
+        ):
+            self.assertIn(key, config)
+        self.assertGreaterEqual(config["max_provision_attempts"], 1)
+        self.assertLessEqual(config["max_provision_attempts"], 8)
+        # Live-priced candidates must never starve the reviewed static
+        # fallback tiers out of the bounded attempt budget.
+        self.assertGreaterEqual(
+            config["max_provision_attempts"],
+            config["max_price_candidates"] + len(config["gpu_tiers"]),
+        )
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn("gpu_cost_per_hr:", text)
+        self.assertIn("RunPod hourly price:", text)
+        self.assertIn("RunPod estimated paid cost:", text)
+        # The job timeout must contain the worst-case provision budget so
+        # the loop reaches its explicit exhaustion error instead of being
+        # cancelled mid-attempt (60s deletion + 300s setup margins).
+        start_runpod = text[
+            text.index("  start-runpod:") : text.index("  run-gpu-tests:")
+        ]
+        timeout = re.search(r"timeout-minutes: (\d+)", start_runpod)
+        assert timeout is not None
+        worst_case = config["max_provision_attempts"] * (
+            config["create_deadline_seconds"]
+            + config["startup_timeout_seconds"]
+            + 60
+        )
+        self.assertGreaterEqual(int(timeout.group(1)) * 60, worst_case + 300)
 
     def test_runpod_selected_gpu_is_forwarded_and_logged(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")

@@ -43,6 +43,9 @@ class ChangePolicyTests(unittest.TestCase):
             "scripts/ci/install_cuda_toolkit_hosted.sh",
             "scripts/ci/install_cuda_runtime_tree.sh",
             "scripts/ci/install_cutensor.sh",
+            "scripts/ci/runpod_pricing.py",
+            "scripts/ci/runpod_provision.py",
+            "scripts/ci/cuda_smoke_test.py",
         ):
             with self.subTest(path=path):
                 policy = classify_paths([path])

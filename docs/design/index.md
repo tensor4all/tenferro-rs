@@ -32,6 +32,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [review-decision-records.md](./review-decision-records.md) | Relationship between historical plans, reviewer-facing work logs, and durable design records |
 | [change-aware-ci.md](./change-aware-ci.md) | Conservative pull-request classification, shared command profiles, stable required checks, and trusted RunPod recovery |
 | [ci-cache-trust.md](./ci-cache-trust.md) | CI cache namespace trust model, the single trusted default-branch cache writer, material-input cache keys, and immutable GPU archive artifact reuse across allocation retries |
+| [runpod-gpu-provisioning.md](./runpod-gpu-provisioning.md) | Live price-ordered RunPod GPU candidate selection, the pre-registration CUDA smoke proof (NVRTC -> PTX -> launch -> sync), the bounded delete-and-retry provision loop, and paid-cost observability |
 
 ## Reference
 

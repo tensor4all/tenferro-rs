@@ -37,6 +37,15 @@ name: RunPod tenferro-rs GPU Test
 #     default-branch code. GPU allocation retries reuse the immutable per-key
 #     archive artifact through scripts/ci/find_archive_artifact.py instead of
 #     rebuilding. See docs/design/ci-cache-trust.md.
+#   * GPU selection and compatibility (#1404): the trusted start-runpod job
+#     orders reviewed GPU candidates by live Secure Cloud price and creates
+#     them one at a time. The pod startup script proves CUDA compatibility
+#     (NVRTC compile -> PTX load -> kernel launch -> sync) BEFORE the runner
+#     registers; incompatible pods exit, are deleted, and the next candidate
+#     is tried with the same immutable archive, bounded by
+#     max_provision_attempts. The smoke script is fetched at the trusted
+#     default-branch SHA and receives no credentials. See
+#     docs/design/runpod-gpu-provisioning.md.
 #   * This workflow owns the branch-protection-required `CI GPU gate` check for
 #     eligible same-repo maintainer PRs by publishing that check to the PR head
 #     SHA from a GitHub-hosted final gate job. Fork PRs keep using the legacy
@@ -619,13 +628,23 @@ jobs:
       - cuda-archive
     if: needs.authorize.outputs.gpu_required == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Bounded provision attempts may create, smoke-test, and delete several
+    # candidate pods before one is accepted. Must exceed the worst case of
+    # max_provision_attempts x (create_deadline_seconds +
+    # startup_timeout_seconds + deletion) plus setup, so the loop reaches
+    # its explicit exhaustion error instead of being cancelled mid-attempt
+    # (contract-tested).
+    timeout-minutes: 70
 
     outputs:
       pod_id: ${{ steps.create_pod.outputs.pod_id }}
-      runner_label: ${{ steps.vars.outputs.runner_label }}
+      # Per-attempt label of the ACCEPTED runner: each provision candidate
+      # mints its own single-use JIT config under a fresh label so a stale
+      # online record from a rejected pod can never satisfy the wait.
+      runner_label: ${{ steps.create_pod.outputs.runner_label }}
       gpu_type_id: ${{ steps.create_pod.outputs.gpu_type_id }}
       gpu_tier: ${{ steps.create_pod.outputs.gpu_tier }}
+      gpu_cost_per_hr: ${{ steps.create_pod.outputs.gpu_cost_per_hr }}
 
     steps:
       - name: Checkout trusted RunPod client
@@ -645,82 +664,37 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: ${{ env.ORG_NAME }}
 
-      # JIT (just-in-time) runner config replaces the old org-level
+      # JIT (just-in-time) runner configs replace the old org-level
       # registration-token + `config.sh` flow (see issue #1, finding 1). A JIT
       # config is single-runner, single-job, cannot be replayed, and is scoped
       # to the runner group below, so a leaked config has far smaller blast
       # radius than the old org-wide reusable registration token.
+      #
+      # The provision loop mints one JIT config PER CANDIDATE ATTEMPT under a
+      # fresh per-attempt label: a JIT config cannot be replayed after an
+      # earlier candidate registered with it, and a shared label would let a
+      # stale online record from a rejected pod satisfy the wait for a new
+      # pod that never passed the smoke proof (#1404).
       #
       # runner_group_id defaults to 1 (the org's "Default" runner group, which
       # every repo in the org can use). To actually restrict which repos may
       # consume these runners, create a dedicated restricted runner group in
       # the organization settings and set the `RUNPOD_RUNNER_GROUP_ID` repo
       # variable to its id.
-      - name: Generate JIT runner config
-        id: jit_config
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          ORG_NAME: ${{ env.ORG_NAME }}
-          RUNNER_LABEL: ${{ steps.vars.outputs.runner_label }}
-          RUNNER_GROUP_ID: ${{ vars.RUNPOD_RUNNER_GROUP_ID || '1' }}
-        run: |
-          set -euo pipefail
-
-          request_body="$(
-            jq -n \
-              --arg name "$RUNNER_LABEL" \
-              --arg label "$RUNNER_LABEL" \
-              --argjson runner_group_id "$RUNNER_GROUP_ID" \
-              '{
-                name: $name,
-                runner_group_id: $runner_group_id,
-                labels: ["self-hosted", $label],
-                work_folder: "_work"
-              }'
-          )"
-
-          response_file=/tmp/github-jit-config.json
-          status="$(
-            curl -sS \
-              -X POST \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/orgs/${ORG_NAME}/actions/runners/generate-jitconfig" \
-              -d "${request_body}" \
-              --output "$response_file" \
-              --write-out "%{http_code}"
-          )"
-
-          echo "GitHub generate-jitconfig HTTP status: ${status}"
-
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            jq . "$response_file" || cat "$response_file"
-            echo "Failed to generate JIT runner config" >&2
-            exit 1
-          fi
-
-          jit_config="$(jq -r .encoded_jit_config "$response_file")"
-
-          if [ -z "$jit_config" ] || [ "$jit_config" = "null" ]; then
-            jq 'del(.encoded_jit_config)' "$response_file" || cat "$response_file"
-            echo "Failed to generate JIT runner config: missing encoded_jit_config" >&2
-            exit 1
-          fi
-
-          echo "::add-mask::$jit_config"
-          echo "jit_config=${jit_config}" >> "$GITHUB_OUTPUT"
-
-      - name: Create RunPod pod
+      - name: Provision cheapest compatible RunPod pod
         id: create_pod
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          RUNNER_JIT_CONFIG: ${{ steps.jit_config.outputs.jit_config }}
           RUNPOD_IMAGE: ${{ env.RUNPOD_IMAGE }}
+          PROVISION_GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PROVISION_ORG: ${{ env.ORG_NAME }}
+          PROVISION_RUNNER_LABEL: ${{ steps.vars.outputs.runner_label }}
+          PROVISION_RUNNER_GROUP_ID: ${{ vars.RUNPOD_RUNNER_GROUP_ID || '1' }}
+          SMOKE_SOURCE_URL: https://raw.githubusercontent.com/${{ env.TENFERRO_REPO }}/${{ github.sha }}/scripts/ci/cuda_smoke_test.py
         run: |
           set -euo pipefail
 
-          echo "::add-mask::${RUNNER_JIT_CONFIG}"
+          smoke_min_vram_gb="$(jq -r '.min_vram_gb' scripts/ci/runpod_config.json)"
           cat > /tmp/runpod-startup.sh <<'EOS'
           set -euo pipefail
 
@@ -728,11 +702,17 @@ jobs:
           export RUNNER_ALLOW_RUNASROOT=1
 
           apt-get update
+          # zstd must be present BEFORE any actions/cache restore step runs
+          # on this pod: the cache version hash includes the available
+          # compression tool, so a pod without zstd can never hit entries
+          # saved by the zstd-equipped hosted publisher (observed as
+          # "Cache not found" for exact-match keys).
           apt-get install -y \
             curl \
             jq \
             tar \
             gzip \
+            zstd \
             ca-certificates \
             build-essential \
             pkg-config \
@@ -745,6 +725,24 @@ jobs:
           df -h
           free -h
           nproc
+
+          # CUDA compatibility smoke proof (#1404): NVRTC-compile a tiny
+          # kernel, load its PTX through the driver, launch, and synchronize
+          # BEFORE registering the runner. On an incompatible host this
+          # exits nonzero, the container stops without ever becoming a
+          # runner, and the trusted provision loop deletes the pod and
+          # retries the next candidate with the same immutable archive.
+          # The script is fetched at the trusted default-branch SHA baked
+          # into SMOKE_SOURCE_URL by the trusted start-runpod job. The
+          # long-lived RunPod/GitHub App credentials never reach the pod;
+          # the single-use JIT runner config necessarily does, so strip it
+          # from the smoke child's environment.
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
+            -o /tmp/cuda_smoke_test.py "${SMOKE_SOURCE_URL}"
+          env -u RUNNER_JIT_CONFIG python3 /tmp/cuda_smoke_test.py \
+            --min-runtime-version "${SMOKE_MIN_RUNTIME_VERSION}" \
+            --full-runtime-version "${SMOKE_FULL_RUNTIME_VERSION}" \
+            --min-vram-gb "${SMOKE_MIN_VRAM_GB}"
 
           cd /tmp
           rm -rf actions-runner
@@ -774,62 +772,20 @@ jobs:
           ./run.sh --jitconfig "${RUNNER_JIT_CONFIG}"
           EOS
 
-          python3 -m scripts.ci.runpod_client create \
+          # The provision loop orders reviewed candidates by live Secure
+          # Cloud price, creates one pod at a time, waits for the smoke
+          # proof (runner online) or startup failure (pod exited), deletes
+          # incompatible pods immediately, and stops after the bounded
+          # attempt budget with an explicit error.
+          python3 -m scripts.ci.runpod_provision \
             --config scripts/ci/runpod_config.json \
             --startup-script /tmp/runpod-startup.sh \
             --image-name "${RUNPOD_IMAGE}" \
-            --response-file /tmp/runpod-response.json
-
-      - name: Wait for org runner to come online
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          ORG_NAME: ${{ env.ORG_NAME }}
-          RUNNER_LABEL: ${{ steps.vars.outputs.runner_label }}
-        run: |
-          set -euo pipefail
-
-          for i in $(seq 1 90); do
-            echo "Waiting for runner label: ${RUNNER_LABEL} (${i}/90)"
-
-            response_file=/tmp/github-runners.json
-            status="$(
-              curl -sS \
-                -H "Authorization: Bearer ${GH_TOKEN}" \
-                -H "Accept: application/vnd.github+json" \
-                -H "X-GitHub-Api-Version: 2022-11-28" \
-                "https://api.github.com/orgs/${ORG_NAME}/actions/runners?per_page=100" \
-                --output "$response_file" \
-                --write-out "%{http_code}"
-            )"
-
-            if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-              echo "GitHub runners API HTTP status: ${status}"
-              jq . "$response_file" || cat "$response_file"
-              sleep 10
-              continue
-            fi
-
-            online_count="$(
-              jq --arg label "$RUNNER_LABEL" '
-                [
-                  .runners[]
-                  | select(.status == "online")
-                  | select(any(.labels[]; .name == $label))
-                ]
-                | length
-              ' "$response_file"
-            )"
-
-            if [ "$online_count" -ge 1 ]; then
-              echo "Runner is online."
-              exit 0
-            fi
-
-            sleep 10
-          done
-
-          echo "Timed out waiting for RunPod runner to come online" >&2
-          exit 1
+            --response-file /tmp/runpod-response.json \
+            --pod-env "SMOKE_SOURCE_URL=${SMOKE_SOURCE_URL}" \
+            --pod-env "SMOKE_MIN_RUNTIME_VERSION=${CUDA_MIN_RUNTIME_VERSION}" \
+            --pod-env "SMOKE_FULL_RUNTIME_VERSION=${CUDA_RUNTIME_VERSION}" \
+            --pod-env "SMOKE_MIN_VRAM_GB=${smoke_min_vram_gb}"
 
       - name: Delete pod if runner startup failed
         if: failure() && steps.create_pod.outputs.pod_id != ''
@@ -920,10 +876,12 @@ jobs:
         env:
           RUNPOD_GPU_TIER: ${{ needs.start-runpod.outputs.gpu_tier }}
           RUNPOD_GPU_TYPE_ID: ${{ needs.start-runpod.outputs.gpu_type_id }}
+          RUNPOD_GPU_COST_PER_HR: ${{ needs.start-runpod.outputs.gpu_cost_per_hr }}
         run: |
           set -euxo pipefail
           echo "tenferro-rs ref: ${TENFERRO_REF}"
           echo "RunPod price tier: ${RUNPOD_GPU_TIER}"
+          echo "RunPod hourly price: \$${RUNPOD_GPU_COST_PER_HR:-unknown}/hr"
           echo "RunPod gpu_type_id (from pod create): ${RUNPOD_GPU_TYPE_ID}"
           echo "=== GPU (nvidia-smi) ==="
           nvidia-smi --query-gpu=index,name,memory.total,driver_version --format=csv
@@ -1027,6 +985,23 @@ jobs:
             fi
           }
 
+          # A candidate tree must carry the full runtime library set the
+          # archived tests load, not just NVRTC: the pre-registration smoke
+          # proof (#1404) installs only cuda-nvrtc, which leaves a partial
+          # /usr/local/cuda-X.Y tree that must not shadow the full install.
+          cuda_tree_has_runtime_libs() {
+            local candidate="$1"
+            local lib
+            for lib in libcublas.so libcusolver.so libcusparse.so libnvrtc.so; do
+              if ! ls "${candidate}/lib64/${lib}"* >/dev/null 2>&1 \
+                && ! ls "${candidate}/targets/x86_64-linux/lib/${lib}"* >/dev/null 2>&1; then
+                echo "Skipping CUDA toolkit at ${candidate} (missing ${lib}; partial tree)."
+                return 1
+              fi
+            done
+            return 0
+          }
+
           accept_cuda_toolkit() {
             local candidate="$1"
             if [ ! -d "${candidate}" ]; then
@@ -1039,6 +1014,9 @@ jobs:
             local version
             version="$(cuda_toolkit_version "${candidate}")"
             if [ "${version}" = "${CUDA_RUNTIME_VERSION}" ]; then
+              if ! cuda_tree_has_runtime_libs "${candidate}"; then
+                return 1
+              fi
               cuda_path="${candidate}"
               echo "Using CUDA toolkit at ${candidate} (version ${version})."
               return 0
@@ -1072,7 +1050,8 @@ jobs:
             done
           fi
 
-          if [ -z "${cuda_path}" ] && [ -f "${cuda_runtime_cache}/.seed-complete" ] && [ -d "${cuda_runtime_cache}/lib64" ]; then
+          if [ -z "${cuda_path}" ] && [ -f "${cuda_runtime_cache}/.seed-complete" ] && [ -d "${cuda_runtime_cache}/lib64" ] \
+            && cuda_tree_has_runtime_libs "${cuda_runtime_cache}"; then
             echo "Using cached CUDA ${CUDA_RUNTIME_VERSION} minimal runtime tree from ${cuda_runtime_cache}."
             cuda_path="${cuda_runtime_cache}"
           fi
@@ -1310,6 +1289,36 @@ jobs:
           if [ -z "${POD_ID}" ] || [ "${POD_ID}" = "null" ]; then
             echo "No POD_ID; nothing to delete"
             exit 0
+          fi
+
+          # Estimated paid cost observability (#1404): read hourly price and
+          # uptime from the pod record before deleting it.
+          pod_file=/tmp/runpod-pod.json
+          get_status="$(
+            curl -sS \
+              --url "https://rest.runpod.io/v1/pods/${POD_ID}" \
+              --header "Authorization: Bearer ${RUNPOD_API_KEY}" \
+              --output "$pod_file" \
+              --write-out "%{http_code}"
+          )" || get_status=000
+          if [ "$get_status" -ge 200 ] && [ "$get_status" -lt 300 ]; then
+            python3 - "$pod_file" <<'PY' || true
+          import datetime, json, sys
+          pod = json.load(open(sys.argv[1]))
+          cost = pod.get("adjustedCostPerHr") or pod.get("costPerHr")
+          started = pod.get("lastStartedAt")
+          if isinstance(cost, (int, float)) and isinstance(started, str):
+              begin = datetime.datetime.fromisoformat(started.replace("Z", "+00:00"))
+              hours = max(
+                  0.0,
+                  (datetime.datetime.now(datetime.timezone.utc) - begin).total_seconds()
+                  / 3600.0,
+              )
+              print(f"RunPod paid time: {hours:.2f}h at ${cost:.2f}/hr")
+              print(f"RunPod estimated paid cost: ${hours * cost:.2f}")
+          else:
+              print("RunPod cost data unavailable in pod record")
+          PY
           fi
 
           echo "Deleting RunPod pod: ${POD_ID}"
