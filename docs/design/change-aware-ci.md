@@ -75,11 +75,13 @@ requested tier, is rejected before the external runner starts. The created pod
 ID is still forwarded to the trusted startup-failure cleanup path so rejection
 cannot leave a paid pod running.
 
-The CUDA test archive key is content-addressed across source, manifests,
+The CUDA/PJRT test archive key is content-addressed across source, manifests,
 tests, lockfile, workflow, and RunPod configuration. It excludes branch, ref,
 and commit identity, allowing equivalent automatic and recovery runs to reuse
 the hosted cache while still uploading a per-run artifact for the external
-runner.
+runner. Hosted archive builds produce separate `cuda-tests.tar.zst` and
+`pjrt-tests.tar.zst` nextest archives; the GPU node runs both from archive and
+does not compile Rust (PJRT plugin wheels remain a runtime download).
 
 The archive toolkit and external-runner CUDA runtime must match the workspace
 `cudarc` CUDA binding floor. The current floor is CUDA 12.8, which is required

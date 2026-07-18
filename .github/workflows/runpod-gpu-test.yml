@@ -69,6 +69,7 @@ env:
   CARGO_TERM_COLOR: always
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
+  PJRT_ARCHIVE: pjrt-tests.tar.zst
   # Match the CUDA 12.8 cudarc bindings and CubeCL compiler API floor.
   CUDARC_CUDA_VERSION: "12080"
   CUDA_RUNTIME_VERSION: "12.8"
@@ -390,7 +391,7 @@ jobs:
             core.setFailed(`Timed out waiting for prerequisite checks: ${required.join(", ")}`);
 
   cuda-archive:
-    name: CUDA test archive
+    name: CUDA/PJRT test archive
     needs:
       - authorize
       - runpod-contract
@@ -544,34 +545,36 @@ jobs:
           echo "LD_LIBRARY_PATH=${cuda_library_path}:${LD_LIBRARY_PATH:-}" >> "${GITHUB_ENV}"
           "${nvcc_bin}" --version
 
-      - name: Compute CUDA archive cache key
+      - name: Compute CUDA/PJRT archive cache key
         id: archive_key
         run: |
           set -euo pipefail
-          key="cuda-archive-v10-ci-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/scripts/ci/runpod_config.json', 'tenferro-rs/.github/workflows/runpod-gpu-test.yml') }}"
+          key="cuda-pjrt-archive-v11-ci-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/scripts/ci/runpod_config.json', 'tenferro-rs/.github/workflows/runpod-gpu-test.yml') }}"
           echo "key=${key}" >> "${GITHUB_OUTPUT}"
-          echo "CUDA archive cache key: ${key}"
+          echo "CUDA/PJRT archive cache key: ${key}"
 
-      - name: Cache CUDA test archive
+      - name: Cache CUDA/PJRT test archives
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cuda_archive_cache
         with:
-          path: tenferro-rs/${{ env.CUDA_ARCHIVE }}
+          path: |
+            tenferro-rs/${{ env.CUDA_ARCHIVE }}
+            tenferro-rs/${{ env.PJRT_ARCHIVE }}
           key: ${{ steps.archive_key.outputs.key }}
 
-      - name: Log CUDA archive cache status
+      - name: Log CUDA/PJRT archive cache status
         run: |
           if [ "${{ steps.cuda_archive_cache.outputs.cache-hit }}" = "true" ]; then
-            echo "CUDA archive cache hit; skipping build."
+            echo "CUDA/PJRT archive cache hit; skipping build."
           else
-            echo "CUDA archive cache miss; will build archive with CUDA ${CUDA_RUNTIME_VERSION} PTX."
+            echo "CUDA/PJRT archive cache miss; will build CUDA ${CUDA_RUNTIME_VERSION} PTX and PJRT archives."
           fi
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
         with:
-          prefix-key: v6-rust-cuda-ci-ubuntu22-ptx
-          shared-key: cuda-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}
+          prefix-key: v7-rust-cuda-pjrt-ci-ubuntu22-ptx
+          shared-key: cuda-pjrt-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}
           cache-all-crates: true
           cache-workspace-crates: true
           workspaces: tenferro-rs -> target
@@ -596,7 +599,20 @@ jobs:
             -p tenferro-linalg \
             --features cuda
 
-      - name: Verify CUDA test archive
+      - name: Build PJRT test archive
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+        working-directory: tenferro-rs
+        run: |
+          set -euo pipefail
+          # Hosted CPU build only: pjrt feature is libloading + dynamic plugin load at
+          # RunPod runtime. Keep this archive separate from --features cuda.
+          cargo nextest archive \
+            --cargo-profile ci \
+            --archive-file "${PJRT_ARCHIVE}" \
+            -p tenferro-xla \
+            --features pjrt
+
+      - name: Verify CUDA/PJRT test archives
         working-directory: tenferro-rs
         env:
           ARCHIVE_CACHE_HIT: ${{ steps.cuda_archive_cache.outputs.cache-hit }}
@@ -606,23 +622,30 @@ jobs:
             echo "Missing archive: ${CUDA_ARCHIVE}"
             exit 1
           fi
+          if [ ! -f "${PJRT_ARCHIVE}" ]; then
+            echo "Missing archive: ${PJRT_ARCHIVE}"
+            exit 1
+          fi
           echo "Build environment glibc: $(ldd --version | head -1)"
           nvcc_bin="${CUDA_PATH}/bin/nvcc"
           echo "Archive PTX toolkit: ${CUDA_PATH} ($("${nvcc_bin}" --version | head -1))"
           if [ "${ARCHIVE_CACHE_HIT}" = "true" ]; then
-            echo "Reusing cached CUDA test archive."
+            echo "Reusing cached CUDA/PJRT test archives."
           else
-            echo "Built fresh CUDA test archive on Ubuntu 22.04."
+            echo "Built fresh CUDA/PJRT test archives on Ubuntu 22.04."
           fi
-          du -sh "${CUDA_ARCHIVE}" target/ci 2>/dev/null || du -sh "${CUDA_ARCHIVE}" || true
+          du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" target/ci 2>/dev/null \
+            || du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" || true
           df -h .
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         # Self-hosted RunPod runners cannot restore the hosted-runner Actions cache;
-        # always publish the archive so run-gpu-tests can download it on cache miss.
+        # always publish the archives so run-gpu-tests can download them on cache miss.
         with:
           name: cuda-tests
-          path: tenferro-rs/${{ env.CUDA_ARCHIVE }}
+          path: |
+            tenferro-rs/${{ env.CUDA_ARCHIVE }}
+            tenferro-rs/${{ env.PJRT_ARCHIVE }}
           if-no-files-found: error
           retention-days: 7
 
@@ -904,11 +927,13 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Restore CUDA test archive
+      - name: Restore CUDA/PJRT test archives
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cuda_archive_restore
         with:
-          path: tenferro-rs/${{ env.CUDA_ARCHIVE }}
+          path: |
+            tenferro-rs/${{ env.CUDA_ARCHIVE }}
+            tenferro-rs/${{ env.PJRT_ARCHIVE }}
           key: ${{ needs.cuda-archive.outputs.archive_cache_key }}
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -917,14 +942,14 @@ jobs:
           name: cuda-tests
           path: tenferro-rs
 
-      - name: Log CUDA archive source
+      - name: Log CUDA/PJRT archive source
         run: |
           if [ "${{ steps.cuda_archive_restore.outputs.cache-hit }}" = "true" ]; then
-            echo "Using CUDA test archive restored from GitHub Actions cache."
+            echo "Using CUDA/PJRT test archives restored from GitHub Actions cache."
           else
-            echo "Using CUDA test archive downloaded from workflow artifact."
+            echo "Using CUDA/PJRT test archives downloaded from workflow artifact."
           fi
-          ls -lh "tenferro-rs/${CUDA_ARCHIVE}"
+          ls -lh "tenferro-rs/${CUDA_ARCHIVE}" "tenferro-rs/${PJRT_ARCHIVE}"
 
       - uses: taiki-e/install-action@3ad7ed62b9acd4b43f91777bf240fac23e489eac # nextest (resolved 2026-07-07)
         with:
@@ -1208,10 +1233,16 @@ jobs:
             --no-fail-fast \
             -j 1
 
-      - name: Run OpenXLA PJRT E2E tests
+      - name: Run OpenXLA PJRT E2E tests from archive
         working-directory: tenferro-rs
+        env:
+          NEXTEST_TEST_THREADS: "1"
         run: |
           set -euo pipefail
+          if [ ! -f "${PJRT_ARCHIVE}" ]; then
+            echo "Missing PJRT archive: ${PJRT_ARCHIVE}"
+            exit 1
+          fi
           wheel_dir="${RUNNER_TEMP}/openxla-pjrt-wheels"
           unpack_dir="${RUNNER_TEMP}/openxla-pjrt"
           rm -rf "${wheel_dir}" "${unpack_dir}"
@@ -1252,10 +1283,17 @@ jobs:
           test -x "${cuda_nvcc_dir}/bin/ptxas"
           test -f "${cuda_nvcc_dir}/nvvm/libdevice/libdevice.10.bc"
           nm -D "${plugin_path}" | grep -q GetPjrtApi
+          # Runtime-only plugin setup; Rust binaries come from the hosted PJRT archive.
           XLA_FLAGS="--xla_gpu_cuda_data_dir=${cuda_nvcc_dir} ${XLA_FLAGS:-}" \
           TENFERRO_PJRT_PLUGIN="${plugin_path}" \
           LD_LIBRARY_PATH="${cudnn_lib}:${LD_LIBRARY_PATH:-}" \
-            cargo test -p tenferro-xla --features pjrt --test integration pjrt_execution -- --nocapture
+            cargo nextest run \
+              --archive-file "${PJRT_ARCHIVE}" \
+              --workspace-remap "${GITHUB_WORKSPACE}/tenferro-rs" \
+              --run-ignored all \
+              --no-fail-fast \
+              -j 1 \
+              -E 'test(pjrt_execution)'
 
       - name: GPU test complete
         run: echo "RUNPOD_TENFERRO_GPU_TEST_OK"

@@ -35,6 +35,7 @@ env:
   CARGO_TERM_COLOR: always
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
+  PJRT_ARCHIVE: pjrt-tests.tar.zst
   CUDA_RUNTIME_VERSION: "12.8"
   CUTENSOR_VERSION: "2.6.0.4"
   JAX_CUDA12_PJRT_VERSION: "0.10.2"
@@ -154,7 +155,7 @@ jobs:
             core.setFailed(`Timed out waiting for prerequisite checks: ${required.join(", ")}`);
 
   cuda-archive:
-    name: CUDA test archive
+    name: CUDA/PJRT test archive
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'pull_request' &&
@@ -171,23 +172,25 @@ jobs:
         with:
           ref: ${{ inputs.tenferro_ref || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Compute CUDA archive cache key
+      - name: Compute CUDA/PJRT archive cache key
         id: archive_key
         run: |
           set -euo pipefail
           rustc_hash="$(rustc --version --verbose | sha256sum | cut -c1-12)"
-          echo "key=cuda-archive-v5-ci-no-cuda-build-${rustc_hash}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '**/tests/**', '.github/workflows/CI_gpu.yml') }}" >> "${GITHUB_OUTPUT}"
-      - name: Cache CUDA test archive
+          echo "key=cuda-pjrt-archive-v6-ci-no-cuda-build-${rustc_hash}-${{ hashFiles('Cargo.lock', '**/Cargo.toml', '**/src/**', '**/tests/**', '.github/workflows/CI_gpu.yml') }}" >> "${GITHUB_OUTPUT}"
+      - name: Cache CUDA/PJRT test archives
         uses: actions/cache@v4
         id: cuda_archive_cache
         with:
-          path: ${{ env.CUDA_ARCHIVE }}
+          path: |
+            ${{ env.CUDA_ARCHIVE }}
+            ${{ env.PJRT_ARCHIVE }}
           key: ${{ steps.archive_key.outputs.key }}
       - uses: Swatinem/rust-cache@v2
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
         with:
-          prefix-key: v0-rust-cuda
-          shared-key: cuda-ci
+          prefix-key: v1-rust-cuda-pjrt
+          shared-key: cuda-pjrt-ci
           cache-all-crates: true
       - uses: taiki-e/install-action@nextest
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
@@ -206,7 +209,18 @@ jobs:
             -p tenferro-ad \
             -p tenferro-linalg \
             --features cuda
-      - name: Verify CUDA test archive
+      - name: Build PJRT test archive
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # Hosted CPU build only: pjrt feature is libloading + dynamic plugin load
+          # at GPU-runtime. Keep this archive separate from --features cuda.
+          cargo nextest archive \
+            --cargo-profile ci \
+            --archive-file "${PJRT_ARCHIVE}" \
+            -p tenferro-xla \
+            --features pjrt
+      - name: Verify CUDA/PJRT test archives
         env:
           ARCHIVE_CACHE_HIT: ${{ steps.cuda_archive_cache.outputs.cache-hit }}
         run: |
@@ -215,15 +229,22 @@ jobs:
             echo "Missing archive: ${CUDA_ARCHIVE}"
             exit 1
           fi
-          if [ "${ARCHIVE_CACHE_HIT}" = "true" ]; then
-            echo "Reusing cached CUDA test archive."
-          else
-            echo "Built fresh CUDA test archive."
+          if [ ! -f "${PJRT_ARCHIVE}" ]; then
+            echo "Missing archive: ${PJRT_ARCHIVE}"
+            exit 1
           fi
+          if [ "${ARCHIVE_CACHE_HIT}" = "true" ]; then
+            echo "Reusing cached CUDA/PJRT test archives."
+          else
+            echo "Built fresh CUDA/PJRT test archives."
+          fi
+          du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" || true
       - uses: actions/upload-artifact@v4
         with:
           name: cuda-tests
-          path: ${{ env.CUDA_ARCHIVE }}
+          path: |
+            ${{ env.CUDA_ARCHIVE }}
+            ${{ env.PJRT_ARCHIVE }}
           if-no-files-found: error
           retention-days: 7
 
@@ -471,9 +492,15 @@ jobs:
             --run-ignored all \
             --no-fail-fast \
             -j 1
-      - name: Run OpenXLA PJRT E2E tests
+      - name: Run OpenXLA PJRT E2E tests from archive
+        env:
+          NEXTEST_TEST_THREADS: "1"
         run: |
           set -euo pipefail
+          if [ ! -f "${PJRT_ARCHIVE}" ]; then
+            echo "Missing PJRT archive: ${PJRT_ARCHIVE}"
+            exit 1
+          fi
           wheel_dir="${RUNNER_TEMP}/openxla-pjrt-wheels"
           unpack_dir="${RUNNER_TEMP}/openxla-pjrt"
           rm -rf "${wheel_dir}" "${unpack_dir}"
@@ -513,10 +540,17 @@ jobs:
           test -x "${cuda_nvcc_dir}/bin/ptxas"
           test -f "${cuda_nvcc_dir}/nvvm/libdevice/libdevice.10.bc"
           nm -D "${plugin_path}" | grep -q GetPjrtApi
+          # Runtime-only plugin setup; Rust binaries come from the hosted PJRT archive.
           XLA_FLAGS="--xla_gpu_cuda_data_dir=${cuda_nvcc_dir} ${XLA_FLAGS:-}" \
           TENFERRO_PJRT_PLUGIN="${plugin_path}" \
           LD_LIBRARY_PATH="${cudnn_lib}:${LD_LIBRARY_PATH:-}" \
-            cargo test -p tenferro-xla --features pjrt --test integration pjrt_execution -- --nocapture
+            cargo nextest run \
+              --archive-file "${PJRT_ARCHIVE}" \
+              --workspace-remap "${GITHUB_WORKSPACE}" \
+              --run-ignored all \
+              --no-fail-fast \
+              -j 1 \
+              -E 'test(pjrt_execution)'
 
   cuda-gate:
     name: CI GPU gate
