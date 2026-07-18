@@ -74,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           rustc_version="$(rustc -V | awk '{print $2}')"
-          key="cuda-pjrt-archive-v13-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*') }}"
+          key="cuda-pjrt-archive-v13-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/**/examples/**', 'tenferro-rs/**/benches/**', 'tenferro-rs/**/build.rs', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*') }}"
           {
             echo "key=${key}"
             echo "artifact_name=${key}"

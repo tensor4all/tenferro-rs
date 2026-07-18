@@ -47,7 +47,10 @@ artifact lookup). These invariants are contract-tested.
 
 The CUDA/PJRT archive key is derived from material compilation inputs only:
 
-- `Cargo.lock`, every `Cargo.toml`, `src/**`, `tests/**` (hashed),
+- `Cargo.lock`, every `Cargo.toml`, `src/**`, `tests/**`, `examples/**`,
+  `benches/**`, and every `build.rs` (hashed) — everything
+  `cargo nextest archive` compiles, including required-feature CUDA
+  examples that no non-GPU lane checks,
 - `scripts/ci/**`, `.cargo/**`, and `rust-toolchain*` (hashed) — these are
   executed or read from the PR checkout during the archive build, so a key
   match must prove they were identical; without this, a PR that only edits
