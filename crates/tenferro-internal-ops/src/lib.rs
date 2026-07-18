@@ -37,7 +37,9 @@ pub mod shape_extent;
 pub mod std_tensor_op;
 pub mod sym_dim;
 
-pub use ad::context::{ShapeGuard, ShapeGuardContext, TensorMeta};
+pub use ad::context::{
+    ShapeGuard, ShapeGuardContext, ShapeGuardError, ShapeGuardFailure, ShapeGuardResult, TensorMeta,
+};
 #[cfg(feature = "autodiff")]
 pub use ext_op::{
     linearize_extension_rule, transpose_extension_rule, ExtensionLinearTransposeRule,

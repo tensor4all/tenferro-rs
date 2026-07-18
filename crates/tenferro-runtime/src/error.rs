@@ -275,6 +275,16 @@ pub enum Error {
         op: String,
     },
 
+    /// A typed AD rule source that crossed an external message-only callback.
+    #[error("{transform} AD rule failed: {source}")]
+    AdRuleSource {
+        /// AD transform that requested the rule.
+        transform: &'static str,
+        /// Original typed source from the AD rule context.
+        #[source]
+        source: BoxError,
+    },
+
     /// A symbolic extension shape equality evaluated to unequal dimensions.
     #[error(
         "extension family {family:?} shape constraint at instruction {instruction_index:?} failed: {lhs_expr} ({lhs_value}) {relation:?} {rhs_expr} ({rhs_value})"
@@ -530,6 +540,31 @@ impl Error {
         }
     }
 
+    /// Preserve a typed source returned by an AD rule through a callback
+    /// protocol that can carry only a rendered message.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::error::Error as _;
+    /// use tenferro_runtime::Error;
+    ///
+    /// let error = Error::ad_rule_source(
+    ///     "jvp",
+    ///     std::io::Error::other("shape metadata missing"),
+    /// );
+    /// assert!(error.source().is_some());
+    /// ```
+    pub fn ad_rule_source<E>(transform: &'static str, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::AdRuleSource {
+            transform,
+            source: Box::new(source),
+        }
+    }
+
     /// Construct an operation-level unsupported error with an explicit
     /// discovery phase.
     ///
@@ -580,6 +615,7 @@ impl Error {
             | Self::ContextMismatch { .. } => ErrorKind::RuntimeState,
             Self::NonScalarGrad { .. } => ErrorKind::Validation(ValidationKind::InvalidArgument),
             Self::Unsupported { .. } | Self::UnsupportedAdRule { .. } => ErrorKind::Unsupported,
+            Self::AdRuleSource { .. } => ErrorKind::Validation(ValidationKind::InvalidArgument),
             Self::TensorRuntime(error) => error.kind(),
             Self::Extension { kind, .. } => *kind,
             Self::RuntimeState { .. } | Self::RuntimeStateSource { .. } => ErrorKind::RuntimeState,
@@ -632,6 +668,7 @@ impl Error {
             Self::RuntimeState { phase, .. } | Self::RuntimeStateSource { phase, .. } => {
                 Some(*phase)
             }
+            Self::AdRuleSource { .. } => Some(ErrorPhase::GraphBuild),
             Self::PlaceholderDtypeMismatch { .. }
             | Self::PlaceholderShapeMismatch { .. }
             | Self::PlaceholderRankMismatch { .. }

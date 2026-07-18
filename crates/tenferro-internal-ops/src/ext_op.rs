@@ -29,7 +29,7 @@ use computegraph::graph::GraphBuilder;
 use computegraph::types::ValueRef;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::{DType, ErrorKind, Tensor, ValidationKind};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
@@ -168,10 +168,14 @@ pub enum ExtensionLoweringError {
     Message {
         /// Human-readable lowering detail.
         message: String,
+        /// Coarse classification supplied by the extension owner.
+        kind: ErrorKind,
     },
     /// A lowering failure retaining the domain source that caused it.
     #[error("{source}")]
     Source {
+        /// Coarse classification supplied by the extension owner.
+        kind: ErrorKind,
         /// Original typed lowering source.
         #[source]
         source: Box<dyn StdError + Send + Sync + 'static>,
@@ -190,8 +194,30 @@ impl ExtensionLoweringError {
     /// assert_eq!(err.to_string(), "shape must be static");
     /// ```
     pub fn new(message: impl Into<String>) -> Self {
+        Self::new_with_kind(
+            ErrorKind::Validation(ValidationKind::InvalidArgument),
+            message,
+        )
+    }
+
+    /// Create a lowering error with an explicit coarse classification.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ext_op::ExtensionLoweringError;
+    /// use tenferro_tensor::ErrorKind;
+    ///
+    /// let err = ExtensionLoweringError::new_with_kind(
+    ///     ErrorKind::Unsupported,
+    ///     "extension is not supported by this lowering target",
+    /// );
+    /// assert_eq!(err.kind(), ErrorKind::Unsupported);
+    /// ```
+    pub fn new_with_kind(kind: ErrorKind, message: impl Into<String>) -> Self {
         Self::Message {
             message: message.into(),
+            kind,
         }
     }
 
@@ -211,8 +237,54 @@ impl ExtensionLoweringError {
     where
         E: StdError + Send + Sync + 'static,
     {
+        Self::from_source_with_kind(
+            ErrorKind::Validation(ValidationKind::InvalidArgument),
+            source,
+        )
+    }
+
+    /// Create a lowering error with a typed source and explicit classification.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ext_op::ExtensionLoweringError;
+    /// use tenferro_tensor::ErrorKind;
+    ///
+    /// let err = ExtensionLoweringError::from_source_with_kind(
+    ///     ErrorKind::BackendFailure,
+    ///     std::io::Error::other("backend rejected lowering"),
+    /// );
+    /// assert_eq!(err.kind(), ErrorKind::BackendFailure);
+    /// assert!(std::error::Error::source(&err).is_some());
+    /// ```
+    pub fn from_source_with_kind<E>(kind: ErrorKind, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
         Self::Source {
+            kind,
             source: Box::new(source),
+        }
+    }
+
+    /// Return the stable classification carried by this lowering failure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ext_op::ExtensionLoweringError;
+    /// use tenferro_tensor::ErrorKind;
+    ///
+    /// let error = ExtensionLoweringError::new_with_kind(
+    ///     ErrorKind::Unsupported,
+    ///     "target has no lowering",
+    /// );
+    /// assert_eq!(error.kind(), ErrorKind::Unsupported);
+    /// ```
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Message { kind, .. } | Self::Source { kind, .. } => *kind,
         }
     }
 }

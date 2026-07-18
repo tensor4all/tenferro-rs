@@ -87,9 +87,7 @@ impl Error {
             Self::NonStaticShape { .. } => ErrorKind::Validation(ValidationKind::ShapeMismatch),
             Self::InvalidProgram { .. } => ErrorKind::Validation(ValidationKind::InvalidArgument),
             Self::Tensor(source) => source.kind(),
-            Self::ExtensionLowering { .. } => {
-                ErrorKind::Validation(ValidationKind::InvalidArgument)
-            }
+            Self::ExtensionLowering { source } => source.kind(),
             Self::PjrtFeatureDisabled | Self::PjrtPluginNotLoaded | Self::MissingEnv { .. } => {
                 ErrorKind::RuntimeState
             }
@@ -162,9 +160,12 @@ mod tests {
             ),
             (
                 Error::ExtensionLowering {
-                    source: ExtensionLoweringError::new("cannot lower"),
+                    source: ExtensionLoweringError::new_with_kind(
+                        ErrorKind::Unsupported,
+                        "cannot lower",
+                    ),
                 },
-                ErrorKind::Validation(ValidationKind::InvalidArgument),
+                ErrorKind::Unsupported,
             ),
             (Error::PjrtFeatureDisabled, ErrorKind::RuntimeState),
             (Error::PjrtPluginNotLoaded, ErrorKind::RuntimeState),
@@ -202,15 +203,36 @@ mod tests {
         assert!(StdError::source(&tensor).is_some());
 
         let lowering = Error::ExtensionLowering {
-            source: ExtensionLoweringError::from_source(std::io::Error::other("shape source")),
+            source: ExtensionLoweringError::from_source_with_kind(
+                ErrorKind::BackendFailure,
+                std::io::Error::other("shape source"),
+            ),
         };
+        assert_eq!(lowering.kind(), ErrorKind::BackendFailure);
         let source = StdError::source(&lowering).expect("lowering source should be retained");
-        assert!(source.source().is_some());
+        let typed_source = source
+            .source()
+            .expect("typed lowering source should remain in the chain");
+        assert!(typed_source.downcast_ref::<std::io::Error>().is_some());
 
         let plugin = Error::PluginLoad {
             path: PathBuf::from("plugin.so"),
             source: Box::new(std::io::Error::other("dlopen failed")),
         };
         assert!(StdError::source(&plugin).is_some());
+    }
+
+    #[test]
+    fn xla_extension_lowering_preserves_non_validation_kinds() {
+        for expected in [
+            ErrorKind::NumericalFailure,
+            ErrorKind::BackendFailure,
+            ErrorKind::RuntimeState,
+        ] {
+            let error = Error::ExtensionLowering {
+                source: ExtensionLoweringError::new_with_kind(expected, "typed failure"),
+            };
+            assert_eq!(error.kind(), expected);
+        }
     }
 }

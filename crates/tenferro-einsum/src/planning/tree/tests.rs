@@ -104,7 +104,7 @@ fn optimize_with_options_rejects_zero_trials() {
         Ok(_) => panic!("expected invalid ntrials to be rejected"),
         Err(err) => err,
     };
-    assert!(matches!(err, Error::Planning { message } if message.contains("ntrials")));
+    assert!(matches!(err, Error::Planning { source } if source.to_string().contains("ntrials")));
 }
 
 #[test]
@@ -120,7 +120,7 @@ fn optimizer_options_reject_nan_betas() {
         Ok(_) => panic!("expected NaN betas to be rejected"),
         Err(err) => err,
     };
-    assert!(matches!(err, Error::Planning { message } if message.contains("NaN")));
+    assert!(matches!(err, Error::Planning { source } if source.to_string().contains("NaN")));
 }
 
 #[test]
@@ -154,7 +154,7 @@ fn optimizer_options_reject_nan_score_fields() {
             Err(err) => err,
         };
         assert!(
-            matches!(err, Error::Planning { message } if message.contains("NaN")),
+            matches!(err, Error::Planning { source } if source.to_string().contains("NaN")),
             "expected InvalidArgument mentioning NaN for {field}"
         );
     }
@@ -173,7 +173,7 @@ fn single_operand_optimize_with_options_rejects_invalid_options() {
         Ok(_) => panic!("expected invalid single-operand options to be rejected"),
         Err(err) => err,
     };
-    assert!(matches!(err, Error::Planning { message } if message.contains("ntrials")));
+    assert!(matches!(err, Error::Planning { source } if source.to_string().contains("ntrials")));
 }
 
 #[test]
@@ -213,7 +213,7 @@ fn nested_to_pairs_rejects_non_binary_nodes() {
     let mut pairs = Vec::new();
 
     let err = nested_to_pairs(&nested, &mut next_operand, &mut pairs).unwrap_err();
-    assert!(matches!(err, Error::Planning { message } if message.contains("non-binary")));
+    assert!(matches!(err, Error::Planning { source } if source.to_string().contains("non-binary")));
 }
 
 #[test]
@@ -237,7 +237,7 @@ fn self_greedy_pair_optimizer_rejects_missing_needed_label() {
     let err = optimize_self_greedy_pairs(&subs, &size_dict).unwrap_err();
 
     assert!(
-        matches!(err, Error::Planning { message } if message.contains("unknown size for label 4"))
+        matches!(err, Error::Planning { source } if source.to_string().contains("unknown size for label 4"))
     );
 }
 
@@ -291,7 +291,7 @@ fn from_pairs_rejects_duplicate_pair_indices() {
     let shapes = [&[2, 3][..], &[3, 4][..]];
     let result = ContractionTree::from_pairs(&subs, &shapes, &[(0, 0)]);
     match result {
-        Err(Error::Planning { message: msg }) if msg.contains("distinct") => {}
+        Err(Error::Planning { source }) if source.to_string().contains("distinct") => {}
         other => panic!(
             "expected InvalidArgument with 'distinct', got: {:?}",
             other.as_ref().map(|_| "Ok").map_err(|e| e.to_string())
@@ -305,7 +305,7 @@ fn from_pairs_rejects_pair_referencing_nonexistent_operand() {
     let shapes = [&[2, 3][..], &[3, 4][..]];
     let result = ContractionTree::from_pairs(&subs, &shapes, &[(0, 5)]);
     match result {
-        Err(Error::Planning { message: msg }) if msg.contains("non-existent") => {}
+        Err(Error::Planning { source }) if source.to_string().contains("non-existent") => {}
         other => panic!(
             "expected InvalidArgument with 'non-existent', got: {:?}",
             other.as_ref().map(|_| "Ok").map_err(|e| e.to_string())
@@ -319,7 +319,7 @@ fn from_pairs_rejects_pair_referencing_dead_operand() {
     let shapes = [&[2, 2][..], &[2, 2][..], &[2, 2][..]];
     let result = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (0, 3)]);
     match result {
-        Err(Error::Planning { message: msg }) if msg.contains("no longer live") => {}
+        Err(Error::Planning { source }) if source.to_string().contains("no longer live") => {}
         other => panic!(
             "expected InvalidArgument with 'no longer live', got: {:?}",
             other.as_ref().map(|_| "Ok").map_err(|e| e.to_string())
@@ -333,7 +333,7 @@ fn from_pairs_rejects_wrong_step_count() {
     let shapes = [&[2, 2][..], &[2, 2][..], &[2, 2][..]];
     let result = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]);
     match result {
-        Err(Error::Planning { message: msg }) if msg.contains("must have") => {}
+        Err(Error::Planning { source }) if source.to_string().contains("must have") => {}
         other => panic!(
             "expected InvalidArgument with 'must have', got: {:?}",
             other.as_ref().map(|_| "Ok").map_err(|e| e.to_string())

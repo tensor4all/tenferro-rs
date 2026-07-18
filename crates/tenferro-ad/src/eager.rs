@@ -2313,8 +2313,20 @@ impl EagerTensor {
             return Err(err);
         }
         let cotangents = match (cotangents_result, callback_error) {
-            (_, Some(err)) => return Err(crate::ad_rule_error::ad_rule_error("backward", err)),
-            (Err(err), None) => return Err(crate::ad_rule_error::ad_rule_error("backward", err)),
+            (_, Some(err)) => {
+                return Err(crate::ad_rule_error::ad_rule_error_with_context(
+                    "backward",
+                    err,
+                    &mut ad_ctx,
+                ));
+            }
+            (Err(err), None) => {
+                return Err(crate::ad_rule_error::ad_rule_error_with_context(
+                    "backward",
+                    err,
+                    &mut ad_ctx,
+                ));
+            }
             (Ok(cotangents), None) => cotangents,
         };
         self.ctx.store_grads(&cotangents, &mut backend)?;

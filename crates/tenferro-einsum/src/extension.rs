@@ -301,10 +301,12 @@ impl ExtensionOp for EinsumExtensionOp {
         };
         let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
         let subs = Subscripts::from(&self.subscripts);
-        let tree = resolve_plan_spec(self.plan_spec(), &subs, &shape_refs)
-            .map_err(ExtensionLoweringError::from_source)?;
-        let output = build_einsum_graph(builder, &tree, inputs, &shapes)
-            .map_err(ExtensionLoweringError::from_source)?;
+        let tree = resolve_plan_spec(self.plan_spec(), &subs, &shape_refs).map_err(|source| {
+            ExtensionLoweringError::from_source_with_kind(source.kind(), source)
+        })?;
+        let output = build_einsum_graph(builder, &tree, inputs, &shapes).map_err(|source| {
+            ExtensionLoweringError::from_source_with_kind(source.kind(), source)
+        })?;
         Ok(Some(vec![output]))
     }
 }

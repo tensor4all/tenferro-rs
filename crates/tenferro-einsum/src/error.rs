@@ -19,6 +19,41 @@ use tenferro_tensor::{DType, ErrorKind, ShapeMismatch, ShapeVec, ValidationError
 
 use crate::EINSUM_EXTENSION_FAMILY_ID;
 
+/// Domain-specific cause of an einsum planning failure.
+///
+/// Caller-controlled expressions, shapes, and optimizer options use
+/// [`PlanningError::InvalidConfiguration`]. Runtime-state classification is
+/// reserved for an unavailable or poisoned planner state.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_einsum::{Error, PlanningError};
+///
+/// let error = Error::planning("the requested path is invalid");
+/// assert!(matches!(
+///     error,
+///     Error::Planning {
+///         source: PlanningError::InvalidConfiguration { .. }
+///     }
+/// ));
+/// ```
+#[derive(Debug, thiserror::Error)]
+pub enum PlanningError {
+    /// The requested expression, path, or planner option is invalid.
+    #[error("invalid einsum planning configuration: {message}")]
+    InvalidConfiguration {
+        /// Human-readable configuration detail.
+        message: String,
+    },
+    /// Planner state required by a valid request is unavailable.
+    #[error("einsum planning runtime state unavailable: {message}")]
+    RuntimeState {
+        /// Human-readable state detail.
+        message: String,
+    },
+}
+
 /// Errors produced while parsing, planning, lowering, or executing einsum
 /// expressions.
 ///
@@ -60,10 +95,11 @@ pub enum Error {
 
     /// No valid contraction plan could be constructed for the supplied
     /// expression or optimizer configuration.
-    #[error("einsum planning failed: {message}")]
+    #[error("einsum planning failed: {source}")]
     Planning {
-        /// Human-readable planning detail.
-        message: String,
+        /// Typed planning-domain cause.
+        #[source]
+        source: PlanningError,
     },
 
     /// A numerical contraction or backend accumulation failed to converge.
@@ -207,7 +243,34 @@ impl Error {
     /// ```
     pub fn planning(message: impl Into<String>) -> Self {
         Self::Planning {
-            message: message.into(),
+            source: PlanningError::InvalidConfiguration {
+                message: message.into(),
+            },
+        }
+    }
+
+    /// Construct a planning failure caused by unavailable planner state.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_einsum::{Error, PlanningError};
+    /// use tenferro_tensor::ErrorKind;
+    ///
+    /// let error = Error::planning_runtime_state("planner lock is poisoned");
+    /// assert_eq!(error.kind(), ErrorKind::RuntimeState);
+    /// assert!(matches!(
+    ///     error,
+    ///     Error::Planning {
+    ///         source: PlanningError::RuntimeState { .. }
+    ///     }
+    /// ));
+    /// ```
+    pub fn planning_runtime_state(message: impl Into<String>) -> Self {
+        Self::Planning {
+            source: PlanningError::RuntimeState {
+                message: message.into(),
+            },
         }
     }
 
@@ -247,7 +310,12 @@ impl Error {
             Self::InvalidSubscripts { .. } => {
                 ErrorKind::Validation(ValidationKind::InvalidArgument)
             }
-            Self::Planning { .. } => ErrorKind::RuntimeState,
+            Self::Planning { source } => match source {
+                PlanningError::InvalidConfiguration { .. } => {
+                    ErrorKind::Validation(ValidationKind::InvalidArgument)
+                }
+                PlanningError::RuntimeState { .. } => ErrorKind::RuntimeState,
+            },
             Self::Numerical { .. } => ErrorKind::NumericalFailure,
             Self::Tensor(error) => error.kind(),
             Self::Runtime(error) => error.kind(),
@@ -265,11 +333,14 @@ impl Error {
     /// ```rust
     /// use std::error::Error as _;
     /// use tenferro_einsum::Error;
-    /// use tenferro_tensor::{Error as TensorError, ErrorKind};
+    /// use tenferro_tensor::{Error as TensorError, ErrorKind, ValidationKind};
     ///
     /// let tensor_error = Error::planning("no valid contraction path")
     ///     .into_tensor_error("einsum_extension");
-    /// assert_eq!(tensor_error.kind(), ErrorKind::RuntimeState);
+    /// assert_eq!(
+    ///     tensor_error.kind(),
+    ///     ErrorKind::Validation(ValidationKind::InvalidArgument)
+    /// );
     /// assert!(matches!(tensor_error, TensorError::Extension { .. }));
     /// assert!(tensor_error.source().is_some());
     /// ```

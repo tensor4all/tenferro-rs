@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::ad_rule_error::ad_rule_error;
+use crate::ad_rule_error::{ad_rule_error, ad_rule_error_with_context};
 use computegraph::graph::Graph;
 use computegraph::resolve::resolve;
 use computegraph::resolve::{ResolvedView, ValueDef};
@@ -684,7 +684,7 @@ fn jvp_optional_impl(
                     &mut ad_ctx,
                     &aliases,
                 )
-                .map_err(|err| ad_rule_error("jvp", err))?;
+                .map_err(|err| ad_rule_error_with_context("jvp", err, &mut ad_ctx))?;
                 let linear = Arc::new(OptimizedLinearGraph::from_tidu(linear).into_cached());
                 cache.put_traced_linearized(key, Arc::clone(&linear))?;
                 linear
@@ -700,7 +700,7 @@ fn jvp_optional_impl(
                 &mut ad_ctx,
                 &aliases,
             )
-            .map_err(|err| ad_rule_error("jvp", err))?;
+            .map_err(|err| ad_rule_error_with_context("jvp", err, &mut ad_ctx))?;
             Arc::new(OptimizedLinearGraph::from_tidu(linear).into_cached())
         }
     };
@@ -823,7 +823,12 @@ fn compute_linear_vjp_transform(
         aliases,
     ) {
         Ok(linear) => linear,
-        Err(err) => return Ok(Err(err)),
+        Err(err) => {
+            if let Some(source) = linear_ad_ctx.take_deferred_shape_error() {
+                return Err(Error::ad_rule_source("vjp", source));
+            }
+            return Ok(Err(err));
+        }
     };
     if linear.tangent_outputs()[0].is_none() {
         return Ok(Ok(None));
@@ -840,7 +845,12 @@ fn compute_linear_vjp_transform(
     linear_ad_ctx.refresh_global_metadata();
     let transposed = match linear_transpose(&linear, &mut linear_ad_ctx) {
         Ok(transposed) => OptimizedLinearGraph::from_tidu(transposed).into_cached(),
-        Err(err) => return Ok(Err(err)),
+        Err(err) => {
+            if let Some(source) = linear_ad_ctx.take_deferred_shape_error() {
+                return Err(Error::ad_rule_source("vjp", source));
+            }
+            return Ok(Err(err));
+        }
     };
     let (_linear_graph, residual_graph) = linear.into_graphs();
     let residual_analysis =
@@ -923,9 +933,18 @@ fn vjp_optional_impl(
                 return Ok(None);
             }
             Err(err) if !is_not_applicable_custom_vjp(&err) => {
-                return Err(ad_rule_error(transform, err));
+                return Err(ad_rule_error_with_context(
+                    transform,
+                    err,
+                    &mut primal_ad_ctx,
+                ));
             }
-            Err(_) => {}
+            Err(err) => {
+                if let Some(source) = primal_ad_ctx.take_deferred_shape_error() {
+                    return Err(Error::ad_rule_source(transform, source));
+                }
+                let _ = err;
+            }
         }
     }
 

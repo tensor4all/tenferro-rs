@@ -13,7 +13,7 @@ use tidu::{
     PrimitiveValue,
 };
 
-use crate::ad_rule_error::{ad_rule_error, DeferredErrors};
+use crate::ad_rule_error::{ad_rule_error_with_context, DeferredErrors};
 use crate::eager_exec::exec_op_on_tensors_with_extension_executor;
 use crate::error::{Error, Result};
 use crate::extension_runtime::ExtensionExecutor;
@@ -64,8 +64,12 @@ pub(super) fn functional_vjp_optional(
     let callback_error = callbacks.take_error();
     let cotangents = match (callback_typed_error, cotangents_result, callback_error) {
         (Some(err), _, _) => return Err(err),
-        (_, _, Some(err)) => return Err(ad_rule_error("vjp", err)),
-        (_, Err(err), None) => return Err(ad_rule_error("vjp", err)),
+        (_, _, Some(err)) => {
+            return Err(ad_rule_error_with_context("vjp", err, &mut ad_ctx));
+        }
+        (_, Err(err), None) => {
+            return Err(ad_rule_error_with_context("vjp", err, &mut ad_ctx));
+        }
         (_, Ok(cotangents), None) => cotangents,
     };
 
@@ -110,8 +114,12 @@ pub(super) fn functional_jvp(
     let callback_error = callbacks.take_error();
     let tangent = match (callback_typed_error, tangent_result, callback_error) {
         (Some(err), _, _) => return Err(err),
-        (_, _, Some(err)) => return Err(ad_rule_error("jvp", err)),
-        (_, Err(err), None) => return Err(ad_rule_error("jvp", err)),
+        (_, _, Some(err)) => {
+            return Err(ad_rule_error_with_context("jvp", err, &mut ad_ctx));
+        }
+        (_, Err(err), None) => {
+            return Err(ad_rule_error_with_context("jvp", err, &mut ad_ctx));
+        }
         (_, Ok(tangent), None) => tangent,
     };
 

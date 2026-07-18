@@ -88,7 +88,7 @@ pub use concrete::{
 };
 #[cfg(feature = "autodiff")]
 pub use eager_ad::{EagerEinsumExt, EagerTensorEinsumExt};
-pub use error::{Error, Result};
+pub use error::{Error, PlanningError, Result};
 #[cfg(feature = "autodiff")]
 pub use extension::ad_rules;
 pub use extension::register_runtime;
