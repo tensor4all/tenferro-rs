@@ -124,5 +124,5 @@ path = "tests/integration.rs"
 
 [[test]]
 name = "install_allocation_tests"
-path = "tests/install_allocation_tests.rs"
+path = "tests/install_allocation_tests/main.rs"
 required-features = ["cpu-faer"]
