@@ -61,6 +61,18 @@ implicated mechanisms.
   byte-identical embedded script check
 - A follow-up live dispatch after merge revalidates end-to-end
 
+## Live-log confirmation and final fix
+
+A `keep`-free re-dispatch after the embed/GraphQL fix reached the pods and
+the RunPod console log gave the definitive root cause: on a driver-13.0 L4
+host, `cuda-nvrtc-12-8` was installed correctly but the smoke loaded
+NVRTC **11.8** — the bare `libnvrtc.so` from the pod image's CUDA 11.8
+toolkit shadows the selected tier because it sits in the default linker
+path. The version-consistency check then correctly failed the proof on
+every otherwise-compatible host. Fixed by ordering NVRTC load candidates
+most-specific-first (`/usr/local/cuda-X.Y/...`) and dropping the bare
+`libnvrtc.so` name entirely (`nvrtc_library_candidates`, unit-tested).
+
 ## Residual risks
 
 - If the live failure was not the raw fetch, the next dispatch will now

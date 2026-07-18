@@ -2,6 +2,7 @@ import unittest
 
 from scripts.ci.cuda_smoke_test import (
     EXPECTED_OUTPUT,
+    nvrtc_library_candidates,
     SmokeFailure,
     nvrtc_arch_option,
     nvrtc_package,
@@ -38,6 +39,24 @@ class VersionLogicTests(unittest.TestCase):
         )
         with self.assertRaises(SmokeFailure):
             select_runtime_version((12, 2), minimum=minimum, full=full)
+
+    def test_nvrtc_load_order_prefers_selected_runtime_paths(self) -> None:
+        """The image's older bare libnvrtc.so must never shadow the tier.
+
+        Observed live: bare "libnvrtc.so" resolved to the pod image's NVRTC
+        11.8 and failed the proof on every otherwise-compatible host.
+        """
+
+        candidates = nvrtc_library_candidates((12, 8))
+        self.assertEqual(
+            candidates,
+            [
+                "/usr/local/cuda-12.8/lib64/libnvrtc.so.12",
+                "/usr/local/cuda-12.8/targets/x86_64-linux/lib/libnvrtc.so.12",
+                "libnvrtc.so.12",
+            ],
+        )
+        self.assertNotIn("libnvrtc.so", candidates)
 
     def test_package_and_arch_option_naming(self) -> None:
         self.assertEqual(nvrtc_package((12, 8)), "cuda-nvrtc-12-8")
