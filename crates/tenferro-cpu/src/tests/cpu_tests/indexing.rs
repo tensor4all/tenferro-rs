@@ -455,8 +455,11 @@ fn test_backend_cast_rejects_nonfinite_or_out_of_range_float_to_int_values() {
         err,
         crate::Error::Validation {
             op: "cast",
-            source,
-        } if source.to_string().contains("finite") || source.to_string().contains("out of i32 range")
+            source: tenferro_tensor::ValidationError::InvalidArgument {
+                argument: "value",
+                message,
+            },
+        } if message.contains("finite") || message.contains("out of i32 range")
     ));
 
     let f32_bad =

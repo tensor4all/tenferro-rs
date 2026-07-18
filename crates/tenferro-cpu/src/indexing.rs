@@ -590,7 +590,7 @@ fn f32_index_to_i64(value: f32) -> crate::Result<i64> {
     if !value.is_finite() || value.fract() != 0.0 || value.abs() > F32_MAX_EXACT_INT {
         return Err(crate::Error::invalid_argument(
             "index_tensor",
-            "configuration",
+            "index",
             format!("index value {value} is not an exactly representable i64"),
         ));
     }
@@ -601,7 +601,7 @@ fn f64_index_to_i64(value: f64) -> crate::Result<i64> {
     if !value.is_finite() || value.fract() != 0.0 || value.abs() > F64_MAX_EXACT_INT {
         return Err(crate::Error::invalid_argument(
             "index_tensor",
-            "configuration",
+            "index",
             format!("index value {value} is not an exactly representable i64"),
         ));
     }
@@ -1255,14 +1255,14 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar>(
     if starts.shape.len() != 1 {
         return Err(crate::Error::invalid_argument(
             "dynamic_slice",
-            "configuration",
+            "starts",
             "starts must be a rank-1 tensor",
         ));
     }
     if starts.values.len() != input_shape.len() {
         return Err(crate::Error::invalid_argument(
             "dynamic_slice",
-            "configuration",
+            "starts",
             format!(
                 "starts length {} must match input rank {}",
                 starts.values.len(),

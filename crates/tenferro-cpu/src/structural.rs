@@ -585,7 +585,7 @@ fn validate_real_cast_to_i64(value: f64) -> crate::Result<()> {
 }
 
 fn invalid_cast_value(message: String) -> crate::Error {
-    crate::Error::invalid_argument("cast", "configuration", message)
+    crate::Error::invalid_argument("cast", "value", message)
 }
 
 #[cfg(test)]
