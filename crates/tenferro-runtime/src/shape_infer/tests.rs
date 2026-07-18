@@ -341,6 +341,7 @@ fn ordered_ops_reject_complex_dtypes() {
         ),
         (StdTensorOp::Maximum, vec![DType::C32, DType::C32]),
         (StdTensorOp::Minimum, vec![DType::C64, DType::C64]),
+        (StdTensorOp::Rem, vec![DType::C64, DType::C64]),
         (StdTensorOp::Clamp, vec![DType::C64, DType::C64, DType::C64]),
         (StdTensorOp::ReduceMax { axes: vec![0] }, vec![DType::C64]),
         (StdTensorOp::ReduceMin { axes: vec![0] }, vec![DType::C32]),
@@ -354,6 +355,22 @@ fn ordered_ops_reject_complex_dtypes() {
         assert!(message.contains("complex"), "{op:?}: {message}");
         assert!(message.contains("total order"), "{op:?}: {message}");
     }
+}
+
+#[test]
+fn ordered_dtype_rejection_uses_the_discovery_phase() {
+    let err = infer_output_dtype_at(
+        &StdTensorOp::Rem,
+        &[DType::C64, DType::C64],
+        ErrorPhase::GraphBuild,
+    )
+    .unwrap_err();
+
+    assert_eq!(err.kind(), ErrorKind::Unsupported);
+    assert_eq!(err.phase(), Some(ErrorPhase::GraphBuild));
+    assert!(err
+        .to_string()
+        .contains("Rem does not support complex dtypes"));
 }
 
 #[test]

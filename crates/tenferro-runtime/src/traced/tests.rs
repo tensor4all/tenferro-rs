@@ -1,4 +1,5 @@
 use num_complex::Complex64;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
 use crate::{DType, DotGeneralConfig, Error, ErrorPhase, TracedTensor};
@@ -261,6 +262,30 @@ fn ordered_binary_ops_reject_complex_dtype_without_panicking() {
 
     let err = lhs.maximum(&rhs).unwrap_err();
 
+    assert!(
+        err.to_string()
+            .contains("complex numbers have no total order"),
+        "{err}"
+    );
+}
+
+#[test]
+fn remainder_rejects_complex_dtype_at_graph_build_without_panicking() {
+    let lhs = TracedTensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![1], vec![Complex64::new(3.0, 4.0)]).unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| lhs.rem(&rhs)));
+    let result = result.expect("complex remainder validation must not panic");
+    let err = result.expect_err("complex remainder must return a typed error");
+
+    assert!(matches!(
+        &err,
+        Error::Unsupported {
+            op: "Rem",
+            phase: ErrorPhase::GraphBuild,
+            ..
+        }
+    ));
     assert!(
         err.to_string()
             .contains("complex numbers have no total order"),

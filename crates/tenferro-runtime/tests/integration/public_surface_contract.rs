@@ -129,9 +129,9 @@ fn context_id_pointer_constructor_is_not_public_api() {
 fn traced_dtype_inference_must_not_fall_back_in_release_builds() {
     let source = repo_file("crates/tenferro-runtime/src/traced.rs");
     let helper = source
-        .split_once("fn inferred_output_dtype")
+        .split_once("fn try_inferred_output_dtype")
         .and_then(|(_, rest)| {
-            rest.split_once("fn traced_input_shape_exprs")
+            rest.split_once("fn checked_shape_product_for_graph_build")
                 .map(|(body, _)| body)
         })
         .expect("traced dtype inference helper should exist");
@@ -143,6 +143,14 @@ fn traced_dtype_inference_must_not_fall_back_in_release_builds() {
     assert!(
         !helper.contains("fallback"),
         "traced dtype inference must not silently return a fallback dtype"
+    );
+    assert!(
+        helper.contains("infer_output_dtype_at") && helper.contains("ErrorPhase::GraphBuild"),
+        "traced dtype inference must preserve the graph-build discovery phase"
+    );
+    assert!(
+        !helper.contains("panic!("),
+        "traced dtype inference must return typed errors instead of panicking"
     );
 }
 

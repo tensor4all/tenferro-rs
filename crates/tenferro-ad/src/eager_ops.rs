@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use computegraph::GraphOperation;
 use tenferro_ops::broadcast::{
-    broadcast_input_plan, broadcast_shape, broadcast_shapes, BroadcastError,
+    broadcast_error_to_validation, broadcast_in_dim_extent_error, broadcast_input_plan,
+    broadcast_shape, broadcast_shapes,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -71,21 +72,8 @@ fn broadcast_to(
     source.broadcast_in_dim(target_shape, &plan.dims)
 }
 
-fn broadcast_error(op: &'static str, err: BroadcastError) -> Error {
-    match err {
-        BroadcastError::IncompatibleBinary { lhs, rhs } => {
-            tenferro_tensor::Error::shape_mismatch(op, lhs, rhs).into()
-        }
-        BroadcastError::IncompatibleInput { input, output }
-        | BroadcastError::RankTooLarge { input, output } => {
-            tenferro_tensor::Error::invalid_argument(
-                op,
-                "shape",
-                format!("cannot broadcast shape {input:?} to {output:?}"),
-            )
-            .into()
-        }
-    }
+fn broadcast_error(op: &'static str, err: tenferro_ops::broadcast::BroadcastError) -> Error {
+    tenferro_tensor::Error::validation(op, broadcast_error_to_validation(err)).into()
 }
 
 fn ensure_same_context(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<()> {
@@ -569,6 +557,9 @@ impl EagerTensor {
     /// `DuplicateAxis`, or `ShapeMismatch` when `shape`/`dims` cannot broadcast
     /// the input, or a typed backend/runtime-state error.
     pub fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Result<Self> {
+        if let Some(error) = broadcast_in_dim_extent_error(self.shape(), shape, dims) {
+            return Err(broadcast_error("EagerTensor::broadcast_in_dim", error));
+        }
         let op = StdTensorOp::BroadcastInDim {
             shape: DimExpr::from_concrete(shape),
             dims: dims.to_vec(),

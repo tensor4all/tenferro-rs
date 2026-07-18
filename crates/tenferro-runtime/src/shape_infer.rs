@@ -95,15 +95,21 @@ fn ordered_dtype_op_name(op: &StdTensorOp) -> Option<&'static str> {
     }
 }
 
-fn reject_complex_ordered_dtypes(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<()> {
+fn reject_complex_ordered_dtypes(
+    op: &StdTensorOp,
+    input_dtypes: &[DType],
+    phase: ErrorPhase,
+) -> Result<()> {
     let Some(op_name) = ordered_dtype_op_name(op) else {
         return Ok(());
     };
     if input_dtypes.iter().copied().any(is_complex_dtype) {
         return Err(Error::unsupported(
             op_name,
-            ErrorPhase::Compile,
-            "{op_name} does not support complex dtypes because complex numbers have no total order",
+            phase,
+            format!(
+                "{op_name} does not support complex dtypes because complex numbers have no total order"
+            ),
         ));
     }
     Ok(())
@@ -122,7 +128,16 @@ fn reject_complex_ordered_dtypes(op: &StdTensorOp, input_dtypes: &[DType]) -> Re
 /// receives a complex dtype, or [`Error::Extension`] when an extension's
 /// typed dtype inference fails.
 pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DType> {
-    reject_complex_ordered_dtypes(op, input_dtypes)?;
+    infer_output_dtype_at(op, input_dtypes, ErrorPhase::Compile)
+}
+
+/// Infer an operation's output dtype at a caller-selected discovery phase.
+pub(crate) fn infer_output_dtype_at(
+    op: &StdTensorOp,
+    input_dtypes: &[DType],
+    phase: ErrorPhase,
+) -> Result<DType> {
+    reject_complex_ordered_dtypes(op, input_dtypes, phase)?;
 
     let dtype = match op {
         StdTensorOp::Constant { dtype, .. } => *dtype,
@@ -131,10 +146,10 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DT
             return extension_first_output_dtype(ext.as_ref(), input_dtypes)
         }
         StdTensorOp::Compare(_) => DType::Bool,
-        StdTensorOp::Abs => real_dtype_for_abs(dtype_input(op, input_dtypes, 0)?),
+        StdTensorOp::Abs => real_dtype_for_abs(dtype_input(op, input_dtypes, 0, phase)?),
         StdTensorOp::Select => promote_dtype(
-            dtype_input(op, input_dtypes, 1)?,
-            dtype_input(op, input_dtypes, 2)?,
+            dtype_input(op, input_dtypes, 1, phase)?,
+            dtype_input(op, input_dtypes, 2, phase)?,
         ),
         StdTensorOp::Clamp => promote_dtypes(input_dtypes.iter().copied()),
         // Binary / ternary / N-ary ops — promote input dtypes.
@@ -147,20 +162,20 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DT
         | StdTensorOp::Minimum
         | StdTensorOp::DotGeneral { .. }
         | StdTensorOp::Concatenate { .. } => promote_dtype(
-            dtype_input(op, input_dtypes, 0)?,
-            dtype_input(op, input_dtypes, 1)?,
+            dtype_input(op, input_dtypes, 0, phase)?,
+            dtype_input(op, input_dtypes, 1, phase)?,
         ),
         StdTensorOp::Pow => promote_dtype_pow_like(
-            dtype_input(op, input_dtypes, 0)?,
-            dtype_input(op, input_dtypes, 1)?,
+            dtype_input(op, input_dtypes, 0, phase)?,
+            dtype_input(op, input_dtypes, 1, phase)?,
         ),
         StdTensorOp::Scatter(_) => promote_dtype(
-            dtype_input(op, input_dtypes, 0)?,
-            dtype_input(op, input_dtypes, 2)?,
+            dtype_input(op, input_dtypes, 0, phase)?,
+            dtype_input(op, input_dtypes, 2, phase)?,
         ),
         StdTensorOp::DynamicUpdateSlice => promote_dtype(
-            dtype_input(op, input_dtypes, 0)?,
-            dtype_input(op, input_dtypes, 1)?,
+            dtype_input(op, input_dtypes, 0, phase)?,
+            dtype_input(op, input_dtypes, 1, phase)?,
         ),
         // Unary / structural — output dtype equals input dtype.
         StdTensorOp::Neg
@@ -193,15 +208,22 @@ pub fn infer_output_dtype(op: &StdTensorOp, input_dtypes: &[DType]) -> Result<DT
         | StdTensorOp::PadToMatch { .. }
         | StdTensorOp::Slice(_)
         | StdTensorOp::Pad(_)
-        | StdTensorOp::Reverse { .. } => dtype_input(op, input_dtypes, 0)?,
+        | StdTensorOp::Reverse { .. } => dtype_input(op, input_dtypes, 0, phase)?,
         StdTensorOp::ShapeOf { .. } => DType::F64,
     };
     Ok(dtype)
 }
 
-fn dtype_input(op: &StdTensorOp, input_dtypes: &[DType], index: usize) -> Result<DType> {
+fn dtype_input(
+    op: &StdTensorOp,
+    input_dtypes: &[DType],
+    index: usize,
+    phase: ErrorPhase,
+) -> Result<DType> {
     input_dtypes.get(index).copied().ok_or_else(|| {
-        shape_infer_invalid_argument(
+        Error::invalid_argument(
+            "shape_infer",
+            phase,
             "input_dtypes",
             format!(
                 "{op:?} missing input dtype at index {index}; got {} input dtypes",

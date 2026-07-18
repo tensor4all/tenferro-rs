@@ -10,14 +10,15 @@ use computegraph::LocalValueId;
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::ad::context::GlobalMetadataScope;
 use tenferro_ops::broadcast::{
-    broadcast_input_plan, broadcast_shape, broadcast_shapes, BroadcastError,
+    broadcast_error_to_validation, broadcast_in_dim_extent_error, broadcast_input_plan,
+    broadcast_shape, broadcast_shapes, BroadcastError,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, Error as TensorError, GatherConfig, PadConfig,
-    ScatterConfig, ShapeMismatch, ShapeVec, SliceConfig, Tensor, TensorScalar, ValidationError,
+    ScatterConfig, ShapeMismatch, SliceConfig, Tensor, TensorScalar, ValidationError,
 };
 
 use super::error::{Error, ErrorPhase, Result};
@@ -154,29 +155,7 @@ fn graph_invalid_argument(
 }
 
 fn graph_broadcast_error(op: &'static str, error: BroadcastError) -> Error {
-    match error {
-        BroadcastError::IncompatibleBinary { lhs, rhs } => graph_validation(
-            op,
-            ShapeMismatch::IncompatibleShapes {
-                lhs: ShapeVec::from_vec(lhs),
-                rhs: ShapeVec::from_vec(rhs),
-            },
-        ),
-        BroadcastError::IncompatibleInput { input, output } => graph_validation(
-            op,
-            ShapeMismatch::ExpectedActual {
-                expected: ShapeVec::from_vec(output),
-                actual: ShapeVec::from_vec(input),
-            },
-        ),
-        BroadcastError::RankTooLarge { input, output } => graph_validation(
-            op,
-            ValidationError::RankMismatch {
-                expected: output.len(),
-                actual: input.len(),
-            },
-        ),
-    }
+    graph_validation(op, broadcast_error_to_validation(error))
 }
 
 fn graph_tensor_error(op: &'static str, error: TensorError) -> Error {
@@ -289,17 +268,8 @@ fn try_inferred_output_dtype(
     inputs: &[DType],
     context: &'static str,
 ) -> Result<DType> {
-    crate::shape_infer::infer_output_dtype(op, inputs)
+    crate::shape_infer::infer_output_dtype_at(op, inputs, ErrorPhase::GraphBuild)
         .map_err(|err| graph_error_with_context(context, err))
-}
-
-fn inferred_output_dtype(op: &StdTensorOp, inputs: &[DType], context: &'static str) -> DType {
-    match crate::shape_infer::infer_output_dtype(op, inputs) {
-        Ok(dtype) => dtype,
-        Err(err) => {
-            panic!("{context}: built-in traced dtype inference failed for {op:?}: {err}");
-        }
-    }
 }
 
 fn checked_shape_product_for_graph_build(
@@ -526,6 +496,23 @@ fn validate_broadcast_in_dim_args(
         ));
     }
 
+    let concrete_input_shape: Option<Vec<usize>> = input
+        .shape_hint
+        .as_ref()
+        .and_then(|shape| shape.iter().map(SymDim::constant_value).collect());
+    let concrete_output_shape = output_shape
+        .iter()
+        .map(SymDim::constant_value)
+        .collect::<Option<Vec<_>>>();
+    if let (Some(input_shape), Some(output_shape)) = (
+        concrete_input_shape.as_deref(),
+        concrete_output_shape.as_deref(),
+    ) {
+        if let Some(error) = broadcast_in_dim_extent_error(input_shape, output_shape, dims) {
+            return Err(graph_broadcast_error(op, error));
+        }
+    }
+
     let mut seen = vec![false; output_shape.len()];
     for &dim in dims {
         if dim >= output_shape.len() {
@@ -549,19 +536,21 @@ fn validate_broadcast_in_dim_args(
         seen[dim] = true;
     }
 
-    if let Some(input_shape) = input.shape_hint.as_ref() {
-        for (input_axis, &output_axis) in dims.iter().enumerate() {
-            let input_dim = &input_shape[input_axis];
-            let output_dim = &output_shape[output_axis];
-            if input_dim != output_dim && input_dim.constant_value() != Some(1) {
-                return Err(graph_invalid_argument(
-                    op,
-                    "shape",
-                    format!(
-                        "input axis {input_axis} with dim {input_dim:?} cannot broadcast to \
-                         output axis {output_axis} with dim {output_dim:?}"
-                    ),
-                ));
+    if concrete_output_shape.is_none() {
+        if let Some(input_shape) = input.shape_hint.as_ref() {
+            for (input_axis, &output_axis) in dims.iter().enumerate() {
+                let input_dim = &input_shape[input_axis];
+                let output_dim = &output_shape[output_axis];
+                if input_dim != output_dim && input_dim.constant_value() != Some(1) {
+                    return Err(graph_invalid_argument(
+                        op,
+                        "shape",
+                        format!(
+                            "input axis {input_axis} with dim {input_dim:?} cannot broadcast to \
+                             output axis {output_axis} with dim {output_dim:?}"
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -991,15 +980,36 @@ impl TracedTensor {
     ///
     /// Prefer using the `+` operator when it reads naturally.
     ///
+    /// A longer expression such as `a + b + c` does not compose because the
+    /// first `+` returns `Result<TracedTensor, Error>`, so the second `+`
+    /// would receive a result rather than a tensor. Use `?` at each step or
+    /// the explicit fallible method chain shown below when the operation
+    /// sequence is more important than notation:
+    ///
     /// # Examples
     ///
     /// ```rust
-    /// # use tenferro_runtime::TracedTensor;
+    /// # use tenferro_runtime::{Error, TracedTensor};
     /// # let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// # let z = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     /// let y = x.add(&z);
     /// let y2 = &x + &z;
+    /// # fn add_three(
+    /// #     a: &TracedTensor,
+    /// #     b: &TracedTensor,
+    /// #     c: &TracedTensor,
+    /// # ) -> Result<TracedTensor, Error> {
+    /// let ab = (a + b)?;
+    /// let sum = (&ab + c)?;
+    /// let method_chain = a.add(b)?.add(c)?;
+    /// let _ = method_chain;
+    /// # Ok(sum)
+    /// # }
     /// ```
+    ///
+    /// Tenferro prioritizes robust error handling over the conciseness of
+    /// chained operator notation; the explicit fallible methods are the
+    /// canonical form for longer sequences.
     ///
     /// # Errors
     ///
@@ -1011,9 +1021,7 @@ impl TracedTensor {
     ///
     /// If symbolic dimensions prevent shape comparison during graph
     /// construction, the same `ShapeMismatch` can be reported during
-    /// compilation or execution, with the corresponding [`ErrorPhase`]. A
-    /// backend-detected integer zero divisor is returned during execution as
-    /// [`Error::TensorRuntime`] with a typed `DivisionByZero` numerical source.
+    /// compilation or execution, with the corresponding [`ErrorPhase`].
     pub fn add(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         apply_binary(
@@ -1039,9 +1047,7 @@ impl TracedTensor {
     ///
     /// If symbolic dimensions prevent shape comparison during graph
     /// construction, the same `ShapeMismatch` can be reported during
-    /// compilation or execution, with the corresponding [`ErrorPhase`]. A
-    /// backend-detected integer zero divisor is returned during execution as
-    /// [`Error::TensorRuntime`] with a typed `DivisionByZero` numerical source.
+    /// compilation or execution, with the corresponding [`ErrorPhase`].
     pub fn sub(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         apply_binary(
@@ -2691,7 +2697,7 @@ pub(crate) fn apply_unary(
     out_rank: usize,
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> Result<TracedTensor> {
-    let out_dtype = inferred_output_dtype(&op, &[input.dtype], "apply_unary");
+    let out_dtype = try_inferred_output_dtype(&op, &[input.dtype], "apply_unary")?;
     apply_unary_with_dtype(op, input, out_rank, out_shape_hint, out_dtype)
 }
 
@@ -2845,7 +2851,7 @@ pub(crate) fn apply_binary(
     out_shape_hint: Option<Vec<SymDim>>,
 ) -> Result<TracedTensor> {
     let input_dtype = crate::shape_infer::promote_dtype_for_binary_op(&op, lhs.dtype, rhs.dtype);
-    let out_dtype = inferred_output_dtype(&op, &[lhs.dtype, rhs.dtype], "apply_binary");
+    let out_dtype = try_inferred_output_dtype(&op, &[lhs.dtype, rhs.dtype], "apply_binary")?;
 
     // Insert Convert ops when an input dtype differs from the primitive input dtype.
     let lhs = if lhs.dtype != input_dtype {

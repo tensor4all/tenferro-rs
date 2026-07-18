@@ -1,3 +1,4 @@
+use tenferro_tensor::{ShapeMismatch, ShapeVec, ValidationError};
 use thiserror::Error;
 
 /// Lowering plan for broadcasting one input to an output shape.
@@ -27,6 +28,97 @@ pub enum BroadcastError {
         input: Vec<usize>,
         output: Vec<usize>,
     },
+}
+
+/// Convert a broadcast-planning failure to the shared validation vocabulary.
+///
+/// Every eager, traced, and direct broadcast surface uses this mapping so the
+/// same invalid shapes have the same machine-readable payload regardless of
+/// where the check is discovered.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ops::broadcast::{broadcast_error_to_validation, BroadcastError};
+/// use tenferro_tensor::{ShapeMismatch, ValidationError};
+///
+/// let error = broadcast_error_to_validation(BroadcastError::IncompatibleInput {
+///     input: vec![2, 3],
+///     output: vec![2, 4],
+/// });
+/// assert!(matches!(
+///     error,
+///     ValidationError::ShapeMismatch(source)
+///         if matches!(source.as_ref(), ShapeMismatch::ExpectedActual { expected, actual }
+///             if expected.as_slice() == [2, 4] && actual.as_slice() == [2, 3])
+/// ));
+/// ```
+pub fn broadcast_error_to_validation(error: BroadcastError) -> ValidationError {
+    match error {
+        BroadcastError::IncompatibleBinary { lhs, rhs } => ShapeMismatch::IncompatibleShapes {
+            lhs: ShapeVec::from_vec(lhs),
+            rhs: ShapeVec::from_vec(rhs),
+        }
+        .into(),
+        BroadcastError::IncompatibleInput { input, output } => ShapeMismatch::ExpectedActual {
+            expected: ShapeVec::from_vec(output),
+            actual: ShapeVec::from_vec(input),
+        }
+        .into(),
+        BroadcastError::RankTooLarge { input, output } => ValidationError::RankMismatch {
+            expected: output.len(),
+            actual: input.len(),
+        },
+    }
+}
+
+/// Find a broadcast extent failure for an already structurally validated
+/// `BroadcastInDim` mapping.
+///
+/// Structural mapping failures (wrong dimension count, an out-of-range axis,
+/// or a duplicate axis) remain the caller's axis/rank validation errors. This
+/// helper owns only the shared rank/extent cases represented by
+/// [`BroadcastError`], so eager and traced callers can feed the result through
+/// [`broadcast_error_to_validation`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ops::broadcast::{broadcast_in_dim_extent_error, BroadcastError};
+///
+/// let error = broadcast_in_dim_extent_error(&[2, 3], &[2, 4], &[0, 1]);
+/// assert!(matches!(error, Some(BroadcastError::IncompatibleInput { .. })));
+/// ```
+pub fn broadcast_in_dim_extent_error(
+    input: &[usize],
+    output: &[usize],
+    dims: &[usize],
+) -> Option<BroadcastError> {
+    if input.len() > output.len() {
+        return Some(BroadcastError::RankTooLarge {
+            input: input.to_vec(),
+            output: output.to_vec(),
+        });
+    }
+    if dims.len() != input.len()
+        || dims.iter().any(|&axis| axis >= output.len())
+        || dims
+            .iter()
+            .enumerate()
+            .any(|(index, &axis)| dims[..index].contains(&axis))
+    {
+        return None;
+    }
+    input
+        .iter()
+        .zip(dims)
+        .find_map(|(&input_dim, &output_axis)| {
+            let output_dim = output[output_axis];
+            (input_dim != output_dim && input_dim != 1).then(|| BroadcastError::IncompatibleInput {
+                input: input.to_vec(),
+                output: output.to_vec(),
+            })
+        })
 }
 
 /// Compute the NumPy-style broadcast shape for two concrete shapes.
