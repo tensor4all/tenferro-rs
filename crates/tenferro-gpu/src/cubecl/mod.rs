@@ -4759,7 +4759,7 @@ impl TensorIndexing for CudaBackend {
             (_, Tensor::C32(_) | Tensor::C64(_), _) => {
                 Err(unsupported_dtype("scatter", scatter_indices.dtype()))
             }
-            (Tensor::Bool(_), _, Tensor::Bool(_)) => Err(unsupported_operation(
+            (Tensor::Bool(_), _, _) => Err(unsupported_operation(
                 "scatter",
                 "Bool data tensors are not supported by additive scatter",
             )),

@@ -36,7 +36,8 @@ fn bool_structural_support_uses_copy_kernels_and_scatter_stays_excluded() {
     let scatter = source_section(&source, "    fn scatter(", "    fn slice(");
     assert!(
         scatter.contains("(Tensor::Bool(_), _, _)")
-            && scatter.contains("Err(unsupported_dtype(\"scatter\", operand.dtype()))")
+            && scatter.contains("Err(unsupported_operation(")
+            && scatter.contains("Bool data tensors are not supported by additive scatter")
     );
     assert!(!scatter.contains("scatter_bool_typed"));
 }
