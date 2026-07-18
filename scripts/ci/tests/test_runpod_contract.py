@@ -2,9 +2,12 @@ import unittest
 
 from scripts.ci.runpod_contract import (
     ContractError,
+    configured_cuda_versions,
     configured_gpu_tiers,
+    extract_allowed_cuda_versions,
     extract_gpu_type_ids,
     resolve_local_ref,
+    validate_cuda_versions,
     validate_gpu_type_ids,
 )
 
@@ -38,7 +41,11 @@ SCHEMA = {
                                 "NVIDIA GeForce RTX 4090",
                             ]
                         },
-                    }
+                    },
+                    "allowedCudaVersions": {
+                        "type": "array",
+                        "items": {"enum": ["13.0", "12.9", "12.8", "12.4"]},
+                    },
                 },
             }
         }
@@ -47,6 +54,17 @@ SCHEMA = {
 
 
 class RunPodContractTests(unittest.TestCase):
+    def test_configured_cuda_versions_are_required_and_unique(self) -> None:
+        self.assertEqual(
+            configured_cuda_versions(
+                {"allowed_cuda_versions": ["13.0", "12.9", "12.8"]}
+            ),
+            ("13.0", "12.9", "12.8"),
+        )
+        for value in ([], ["12.8", "12.8"], "12.8"):
+            with self.subTest(value=value), self.assertRaises(ContractError):
+                configured_cuda_versions({"allowed_cuda_versions": value})
+
     def test_configured_gpu_tiers_preserve_order(self) -> None:
         tiers = configured_gpu_tiers(
             {
@@ -92,12 +110,20 @@ class RunPodContractTests(unittest.TestCase):
             extract_gpu_type_ids(SCHEMA),
             frozenset({"NVIDIA A40", "NVIDIA GeForce RTX 4090"}),
         )
+        self.assertEqual(
+            extract_allowed_cuda_versions(SCHEMA),
+            frozenset({"13.0", "12.9", "12.8", "12.4"}),
+        )
 
     def test_validate_reports_every_invalid_configured_id(self) -> None:
         with self.assertRaisesRegex(
             ContractError, "Tesla T4.*Unknown GPU"
         ):
             validate_gpu_type_ids(SCHEMA, ["Tesla T4", "Unknown GPU"])
+
+    def test_validate_reports_unsupported_cuda_version(self) -> None:
+        with self.assertRaisesRegex(ContractError, "12.7"):
+            validate_cuda_versions(SCHEMA, ["12.8", "12.7"])
 
     def test_missing_post_schema_is_a_hard_error(self) -> None:
         with self.assertRaisesRegex(ContractError, "POST /pods"):
@@ -122,7 +148,7 @@ class RunPodContractTests(unittest.TestCase):
                 }
             },
         }
-        with self.assertRaisesRegex(ContractError, "string GPU IDs"):
+        with self.assertRaisesRegex(ContractError, "must contain strings"):
             extract_gpu_type_ids(schema)
 
 

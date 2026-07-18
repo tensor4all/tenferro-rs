@@ -277,7 +277,7 @@ jobs:
     steps:
       - name: Checkout trusted RunPod helpers
         uses: actions/checkout@v5
-      - name: Validate configured GPU IDs against live OpenAPI
+      - name: Validate GPU IDs and CUDA versions against live OpenAPI
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
         run: python3 scripts/ci/runpod_contract.py
