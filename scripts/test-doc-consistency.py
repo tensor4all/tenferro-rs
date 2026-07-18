@@ -303,6 +303,22 @@ def test_documentation_policy_matches_rendered_internals() -> None:
     assert "architecture, specification, and active design notes" in normalized
 
 
+def test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero() -> None:
+    text = read("crates/tenferro-runtime/src/traced.rs")
+    start = text.index("    /// Elementwise remainder")
+    end = text.index("    pub fn rem", start)
+    docs = " ".join(
+        line.removeprefix("    ///").strip() for line in text[start:end].splitlines()
+    )
+
+    assert (
+        "[`Error::Unsupported`] at [`ErrorPhase::GraphBuild`] when either operand "
+        "has a complex dtype"
+    ) in docs
+    assert "floating-point zero divisors follow their numeric semantics" in docs
+    assert "floating-point and complex zero divisors" not in docs
+
+
 def main() -> int:
     for test in [
         test_architecture_svg_lists_cpu_crate_xla_boundary_and_background,
@@ -319,6 +335,7 @@ def main() -> int:
         test_api_consistency_checker_rejects_public_try_compatibility_escape,
         test_removed_tensor_module_paths_do_not_compile,
         test_documentation_policy_matches_rendered_internals,
+        test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero,
     ]:
         test()
     return 0

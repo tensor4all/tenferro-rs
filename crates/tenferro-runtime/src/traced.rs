@@ -1125,8 +1125,9 @@ impl TracedTensor {
     /// # Errors
     ///
     /// Returns [`Error::Validation`] with `ShapeMismatch` when operand shapes
-    /// cannot be broadcast, or [`Error::RuntimeStateSource`] when graph
-    /// metadata registration fails.
+    /// cannot be broadcast, [`Error::Unsupported`] at
+    /// [`ErrorPhase::GraphBuild`] when either operand has a complex dtype, or
+    /// [`Error::RuntimeStateSource`] when graph metadata registration fails.
     ///
     /// # Deferred errors
     ///
@@ -1137,8 +1138,8 @@ impl TracedTensor {
     /// [`Error::TensorRuntime`] containing a
     /// [`tenferro_tensor::Error::Extension`] classified as
     /// `tenferro_tensor::ErrorKind::NumericalFailure` and retaining the typed
-    /// backend source; floating-point and complex zero divisors follow their
-    /// numeric semantics instead.
+    /// backend source; floating-point zero divisors follow their numeric
+    /// semantics.
     pub fn rem(&self, other: &TracedTensor) -> Result<TracedTensor> {
         let (lhs, rhs) = broadcast_binary(self, other)?;
         apply_binary(
