@@ -126,7 +126,9 @@ class WorkflowContractTests(unittest.TestCase):
     def test_runpod_cache_key_uses_content_not_ref_identity(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         key_line = next(
-            line for line in text.splitlines() if 'key="cuda-archive-' in line
+            line
+            for line in text.splitlines()
+            if 'key="cuda-pjrt-archive-' in line or 'key="cuda-archive-' in line
         )
         self.assertNotIn("TENFERRO_REF", key_line)
         self.assertIn("hashFiles(", key_line)
@@ -140,14 +142,28 @@ class WorkflowContractTests(unittest.TestCase):
             text = read(path)
             with self.subTest(path=path):
                 self.assertIn("cargo nextest archive", text)
-                self.assertIn("--cargo-profile ci", text)
-                archive = text[
-                    text.index("cargo nextest archive") : text.index(
-                        "cargo nextest archive"
-                    )
-                    + 200
-                ]
-                self.assertNotIn("--release", archive)
+                self.assertEqual(text.count("--cargo-profile ci"), text.count("cargo nextest archive"))
+                self.assertNotIn("nextest archive \\\n            --release", text)
+                self.assertNotIn("nextest archive \\\n              --release", text)
+                for match in re.finditer(r"cargo nextest archive[\s\S]{0,280}", text):
+                    self.assertNotIn("--release", match.group(0))
+
+    def test_pjrt_uses_hosted_archive_not_runpod_cargo(self) -> None:
+        for path in (
+            ".github/workflows/runpod-gpu-test.yml",
+            ".github/workflows/CI_gpu.yml",
+        ):
+            text = read(path)
+            with self.subTest(path=path):
+                self.assertIn("PJRT_ARCHIVE:", text)
+                self.assertIn("pjrt-tests.tar.zst", text)
+                self.assertIn("-p tenferro-xla", text)
+                self.assertIn("--features pjrt", text)
+                self.assertIn("Build PJRT test archive", text)
+                self.assertIn("Run OpenXLA PJRT E2E tests from archive", text)
+                self.assertIn("--archive-file \"${PJRT_ARCHIVE}\"", text)
+                self.assertIn("-E 'test(pjrt_execution)'", text)
+                self.assertNotIn("cargo test -p tenferro-xla", text)
 
     def test_runpod_cuda_runtime_matches_cudarc_floor(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")

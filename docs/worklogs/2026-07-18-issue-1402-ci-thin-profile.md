@@ -41,6 +41,9 @@ Switched hosted Rust CI from `--release` to workspace `[profile.ci]`:
 - Coverage with `debug=0` + strip must still pass thresholds on GitHub runners.
 - CUDA/PJRT archive wall-clock target (<10 minutes) is measured after merge into
   the GPU workflow path, not locally on macOS.
+- PJRT previously still compiled on RunPod; follow-up worklog
+  `2026-07-18-issue-1402-pjrt-archive.md` moves that binary into a hosted
+  archive.
 
 ## Follow-up fix
 
