@@ -139,6 +139,20 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("env -u RUNNER_JIT_CONFIG python3 /tmp/cuda_smoke_test.py", create)
         # Debug switch: keep smoke-rejected pods for console-log triage.
         self.assertIn("PROVISION_KEEP_FAILED_PODS: ${{ inputs.keep_failed_pods || 'false' }}", create)
+        # The stale fetch env must be fully gone: a leftover expansion under
+        # set -u would abort every provision run before pod creation.
+        whole = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertNotIn("SMOKE_SOURCE_URL", whole)
+        # Debug retention must also gate the workflow-side deletion paths,
+        # or the cleanup steps would delete the pod being inspected.
+        self.assertIn(
+            "if: failure() && steps.create_pod.outputs.pod_id != '' && inputs.keep_failed_pods != true",
+            whole,
+        )
+        self.assertIn(
+            "if: inputs.keep_failed_pods != true || needs.start-runpod.result == 'success'",
+            whole,
+        )
         # JIT configs are minted per candidate attempt inside the provision
         # loop; the workflow must not pre-mint a single shared config, and
         # run-gpu-tests must target the ACCEPTED attempt's label.

@@ -796,13 +796,14 @@ jobs:
             --startup-script /tmp/runpod-startup.sh \
             --image-name "${RUNPOD_IMAGE}" \
             --response-file /tmp/runpod-response.json \
-            --pod-env "SMOKE_SOURCE_URL=${SMOKE_SOURCE_URL}" \
             --pod-env "SMOKE_MIN_RUNTIME_VERSION=${CUDA_MIN_RUNTIME_VERSION}" \
             --pod-env "SMOKE_FULL_RUNTIME_VERSION=${CUDA_RUNTIME_VERSION}" \
             --pod-env "SMOKE_MIN_VRAM_GB=${smoke_min_vram_gb}"
 
       - name: Delete pod if runner startup failed
-        if: failure() && steps.create_pod.outputs.pod_id != ''
+        # keep_failed_pods debug dispatches preserve the last failed pod so
+        # its console logs stay readable in the RunPod dashboard.
+        if: failure() && steps.create_pod.outputs.pod_id != '' && inputs.keep_failed_pods != true
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           POD_ID: ${{ steps.create_pod.outputs.pod_id }}
@@ -1294,6 +1295,10 @@ jobs:
 
     steps:
       - name: Delete RunPod pod
+        # In a keep_failed_pods debug dispatch, a failed provision keeps its
+        # rejected pods for console-log triage; only an ACCEPTED pod (the
+        # start-runpod job succeeded) is still cleaned up unconditionally.
+        if: inputs.keep_failed_pods != true || needs.start-runpod.result == 'success'
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           POD_ID: ${{ needs.start-runpod.outputs.pod_id }}
