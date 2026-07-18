@@ -119,5 +119,15 @@ class BuildArtifactContracts(unittest.TestCase):
             {"driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12080"},
         )
 
+    def test_cubek_does_not_impose_a_cuda_runtime_floor(self) -> None:
+        manifest = tomllib.loads(
+            (ROOT / "crates" / "tenferro-gpu" / "Cargo.toml").read_text()
+        )
+        features = manifest["features"]
+
+        self.assertFalse(any("cubek" in item for item in features["cuda"]))
+        self.assertIn("dep:cubek-matmul", features["webgpu"])
+        self.assertIn("dep:cubek-std", features["webgpu"])
+
 if __name__ == "__main__":
     unittest.main()

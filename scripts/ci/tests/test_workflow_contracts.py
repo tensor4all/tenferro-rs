@@ -165,7 +165,9 @@ class WorkflowContractTests(unittest.TestCase):
                 self.assertIn("-E 'test(pjrt_execution)'", text)
                 self.assertNotIn("cargo test -p tenferro-xla", text)
 
-    def test_runpod_cuda_runtime_matches_cudarc_floor(self) -> None:
+    def test_runpod_cuda_runtime_adapts_without_lowering_cudarc_bindings(
+        self,
+    ) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         cargo = read("Cargo.toml")
         runpod_config = json.loads(read("scripts/ci/runpod_config.json"))
@@ -177,6 +179,11 @@ class WorkflowContractTests(unittest.TestCase):
             text,
             re.MULTILINE,
         )
+        minimum_runtime = re.search(
+            r'^  CUDA_MIN_RUNTIME_VERSION: "(\d+)\.(\d+)"$',
+            text,
+            re.MULTILINE,
+        )
         cargo_cudarc = re.search(
             r'^cudarc = \{[^\n]*features = \[[^\n]*"cuda-(\d+)"',
             cargo,
@@ -184,28 +191,40 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(workflow_cudarc)
         self.assertIsNotNone(runtime)
+        self.assertIsNotNone(minimum_runtime)
         self.assertIsNotNone(cargo_cudarc)
         assert workflow_cudarc is not None
         assert runtime is not None
+        assert minimum_runtime is not None
         assert cargo_cudarc is not None
         encoded_runtime = (
             int(runtime.group(1)) * 1000 + int(runtime.group(2)) * 10
         )
         self.assertEqual(int(workflow_cudarc.group(1)), encoded_runtime)
         self.assertEqual(workflow_cudarc.group(1), cargo_cudarc.group(1))
-        required_runtime = (int(runtime.group(1)), int(runtime.group(2)))
+        full_runtime = (int(runtime.group(1)), int(runtime.group(2)))
+        minimum = (
+            int(minimum_runtime.group(1)),
+            int(minimum_runtime.group(2)),
+        )
+        self.assertEqual(minimum, (12, 4))
         allowed_versions = [
             tuple(int(part) for part in version.split("."))
             for version in runpod_config["allowed_cuda_versions"]
         ]
-        self.assertIn(required_runtime, allowed_versions)
+        self.assertIn(minimum, allowed_versions)
+        self.assertIn(full_runtime, allowed_versions)
         self.assertTrue(
-            all(version >= required_runtime for version in allowed_versions)
+            all(version >= minimum for version in allowed_versions)
         )
+        self.assertIn("id: select_cuda_runtime", text)
+        self.assertIn("Selected CUDA runtime:", text)
+        self.assertIn("steps.select_cuda_runtime.outputs.runtime_version", text)
         self.assertIn("nvrtc.nvrtcVersion", text)
         self.assertIn("Loaded NVRTC version:", text)
-        self.assertIn("if loaded < required:", text)
-        self.assertIn("is older than required", text)
+        self.assertIn("if loaded < minimum:", text)
+        self.assertIn("if loaded > driver:", text)
+        self.assertIn("newer than driver", text)
 
     def test_manual_pr_recovery_is_authorized_and_head_stable(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")

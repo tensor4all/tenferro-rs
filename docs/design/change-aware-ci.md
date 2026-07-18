@@ -83,11 +83,13 @@ runner. Hosted archive builds produce separate `cuda-tests.tar.zst` and
 `pjrt-tests.tar.zst` nextest archives; the GPU node runs both from archive and
 does not compile Rust (PJRT plugin wheels remain a runtime download).
 
-The archive toolkit and external-runner CUDA runtime must match the workspace
-`cudarc` CUDA binding floor. The current floor is CUDA 12.8, which is required
-for NVRTC compilation of Blackwell `sm_120`/`sm_120a` kernels. Before running
-GPU tests, the external runner queries the dynamically loaded NVRTC library,
-logs its version, and rejects a version older than the configured floor.
+The archive is compiled with cudarc's CUDA 12.8 binding set, while CubeCL JITs
+PTX on the external runner. RunPod therefore accepts CUDA 12.4-or-newer hosts
+and chooses NVRTC after reading the assigned host's driver API: NVRTC 12.4 for
+the baseline tier and NVRTC 12.8 for hosts supporting CUDA 12.8 or newer. This
+keeps PTX compatible with older drivers while retaining all hardware-supported
+CubeCL features on the newer tier. Before tests, the runner logs both versions
+and rejects runtimes below 12.4 or NVRTC newer than the driver.
 
 ## Recovery
 

@@ -102,12 +102,17 @@ cargo check -p tenferro-gpu --features cuda --example cuda_quickstart
 Run it on a configured CUDA machine:
 
 ```bash
-CUDA_PATH=/usr/local/cuda-12.8 \
+CUDA_PATH=/usr/local/cuda-12.4 \
 LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH \
   cargo run -p tenferro-gpu --features cuda --example cuda_quickstart
 ```
 
 The example downloads the result back to CPU and asserts the expected values.
+CUDA 12.4 is the minimum supported driver/NVRTC runtime. CUDA 12.8 or newer
+enables all CubeCL features supported by the GPU, including the 12.8 tensor-map
+extensions. tenferro compiles against CUDA 12.8 cudarc bindings, but resolves
+driver functions dynamically and gates newer functions using the versions of
+the driver and NVRTC loaded at runtime.
 
 Use the installed CUDA root on your machine. If several roots exist, inspect
 them first:
@@ -120,7 +125,7 @@ If CUDA libraries or cuTENSOR are outside the standard dynamic-linker paths,
 set:
 
 ```bash
-export CUDA_PATH=/usr/local/cuda-12.8
+export CUDA_PATH=/usr/local/cuda-12.4
 export LD_LIBRARY_PATH=$CUDA_PATH/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH
 export TENFERRO_CUTENSOR_PATH=/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so.2
 export TENFERRO_CUSOLVER_PATH=$CUDA_PATH/lib64/libcusolver.so.12

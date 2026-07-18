@@ -432,16 +432,19 @@ The following are intentionally outside the current batch:
 ## Tests
 
 CUDA GPU tests are ignored so regular CPU-only test runs remain portable. Run
-them on a CUDA machine with:
+them on a CUDA 12.4-or-newer machine with:
 
 ```sh
 CUBECL_DEBUG_LOG=0 \
-CUDA_PATH=/usr/local/cuda-12.8 \
-LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
+CUDA_PATH=/usr/local/cuda-12.4 \
+LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12:$LD_LIBRARY_PATH \
   cargo test -p tenferro-gpu --features cuda -- --ignored
 ```
 
 These tests are correctness tests, not benchmarks.
+CUDA 12.8-or-newer driver and NVRTC libraries enable the complete CubeCL
+feature set. On CUDA 12.4 through 12.7, the runtime omits 12.8-only compiler
+and tensor-map capabilities while preserving the baseline CUDA backend.
 
 WebGPU provider tests should have two layers: portable source/feature contract
 tests that run in ordinary CI, and adapter-optional runtime tests that return

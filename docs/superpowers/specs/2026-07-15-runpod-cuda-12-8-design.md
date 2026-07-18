@@ -1,5 +1,9 @@
 # RunPod CUDA 12.8 alignment
 
+> Superseded on 2026-07-18 by
+> [CUDA 12.4 runtime compatibility with full CUDA 12.8 capabilities](2026-07-18-cuda-12-4-runtime-compatibility-design.md).
+> This document remains as the design record for the earlier 12.8-only repair.
+
 ## Problem
 
 The trusted post-merge RunPod run selected an NVIDIA GeForce RTX 5090 and
