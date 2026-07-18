@@ -48,12 +48,15 @@ removing CUDA 12.8-only CubeCL capabilities from newer environments.
   NVRTC 12.8, and mismatched driver/NVRTC pairs.
 - CubeCL cudarc feature and 12.8 symbol-guard source contracts.
 - `cargo check -p t4a-cubecl-cuda`.
+- CubeCL fork commit `792c5a722e9ccb0aa62b14529ddb088b5aeb546b`
+  pushed and fetched through tenferro's remote git dependency pin.
+- `cargo check -p tenferro-gpu --features cuda` using the remote pin without a
+  local path override.
 - 51 tenferro RunPod, workflow, artifact, and client contract tests.
 - CubeK CUDA dependency-path contract.
 
 ## Remaining acceptance work
 
-- Push the reviewed CubeCL fork commit and pin tenferro to that remote commit.
 - Run trusted RunPod GPU validation once on a CUDA 12.4 host and once on a CUDA
   12.8-or-newer host. The former must avoid unsupported PTX; the latter must
   retain the full hardware-supported CubeCL capability set.
