@@ -1026,6 +1026,23 @@ jobs:
             fi
           }
 
+          # A candidate tree must carry the full runtime library set the
+          # archived tests load, not just NVRTC: the pre-registration smoke
+          # proof (#1404) installs only cuda-nvrtc, which leaves a partial
+          # /usr/local/cuda-X.Y tree that must not shadow the full install.
+          cuda_tree_has_runtime_libs() {
+            local candidate="$1"
+            local lib
+            for lib in libcublas.so libcusolver.so libcusparse.so libnvrtc.so; do
+              if ! ls "${candidate}/lib64/${lib}"* >/dev/null 2>&1 \
+                && ! ls "${candidate}/targets/x86_64-linux/lib/${lib}"* >/dev/null 2>&1; then
+                echo "Skipping CUDA toolkit at ${candidate} (missing ${lib}; partial tree)."
+                return 1
+              fi
+            done
+            return 0
+          }
+
           accept_cuda_toolkit() {
             local candidate="$1"
             if [ ! -d "${candidate}" ]; then
@@ -1038,6 +1055,9 @@ jobs:
             local version
             version="$(cuda_toolkit_version "${candidate}")"
             if [ "${version}" = "${CUDA_RUNTIME_VERSION}" ]; then
+              if ! cuda_tree_has_runtime_libs "${candidate}"; then
+                return 1
+              fi
               cuda_path="${candidate}"
               echo "Using CUDA toolkit at ${candidate} (version ${version})."
               return 0
@@ -1071,7 +1091,8 @@ jobs:
             done
           fi
 
-          if [ -z "${cuda_path}" ] && [ -f "${cuda_runtime_cache}/.seed-complete" ] && [ -d "${cuda_runtime_cache}/lib64" ]; then
+          if [ -z "${cuda_path}" ] && [ -f "${cuda_runtime_cache}/.seed-complete" ] && [ -d "${cuda_runtime_cache}/lib64" ] \
+            && cuda_tree_has_runtime_libs "${cuda_runtime_cache}"; then
             echo "Using cached CUDA ${CUDA_RUNTIME_VERSION} minimal runtime tree from ${cuda_runtime_cache}."
             cuda_path="${cuda_runtime_cache}"
           fi

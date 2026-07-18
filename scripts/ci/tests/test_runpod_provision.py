@@ -1,6 +1,8 @@
 import json
 import unittest
+from unittest import mock
 
+import scripts.ci.runpod_provision as provision_module
 from scripts.ci.runpod_client import (
     AssignedGpuError,
     CreateResult,
@@ -9,6 +11,7 @@ from scripts.ci.runpod_client import (
 from scripts.ci.runpod_provision import (
     PodLeakError,
     ProvisionExhaustedError,
+    _pod_api,
     parse_cost_per_hr,
     provision,
 )
@@ -257,6 +260,25 @@ class ProvisionTests(unittest.TestCase):
             )
         self.assertEqual(len(calls), CONFIG["max_provision_attempts"])
         self.assertIn("capacity unavailable", str(caught.exception))
+
+
+class PodApiTransportTests(unittest.TestCase):
+    def test_transport_errors_are_transient_not_fatal(self) -> None:
+        """URLError/timeouts must not escape and abort the provision loop."""
+
+        import urllib.error
+
+        def failing_urlopen(*args, **kwargs):
+            raise urllib.error.URLError("dns hiccup")
+
+        pod_status, delete_pod = _pod_api("https://rest.example/v1/pods", "key")
+        with mock.patch.object(
+            provision_module.urllib.request, "urlopen", failing_urlopen
+        ), mock.patch.object(provision_module.time, "sleep"):
+            # status: transient -> None (keep waiting), no exception
+            self.assertIsNone(pod_status("pod-1"))
+            # delete: retries then reports unconfirmed -> False, no exception
+            self.assertFalse(delete_pod("pod-1"))
 
 
 if __name__ == "__main__":

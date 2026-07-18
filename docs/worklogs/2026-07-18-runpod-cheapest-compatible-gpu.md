@@ -72,6 +72,10 @@ addressed:
 - The secret-isolation claim was narrowed to the accurate invariant: only
   the single-use JIT runner config reaches the pod, and the smoke child
   runs with it stripped (`env -u RUNNER_JIT_CONFIG`).
+- The test job's CUDA runtime discovery rejects partial trees (the
+  smoke's NVRTC-only install) via a library-completeness check, and pod
+  API transport errors (URLError/timeout) are treated as transient polls
+  instead of aborting the provision loop.
 
 ## Verification
 

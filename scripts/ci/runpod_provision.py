@@ -265,6 +265,13 @@ def _pod_api(api_url: str, api_key: str):
                 return response.status, response.read()
         except urllib.error.HTTPError as error:
             return error.code, error.read()
+        except OSError as error:
+            # URLError, timeouts, DNS hiccups: transient. Status 0 makes
+            # status() report None (keep waiting) and delete() retry, so a
+            # single poll failure never aborts the bounded provision loop
+            # or condemns a healthy pod.
+            print(f"RunPod pod API transport failure (transient): {error}")
+            return 0, b""
 
     def status(pod_id: str) -> str | None:
         code, body = request(pod_id, "GET")

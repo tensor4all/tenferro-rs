@@ -129,6 +129,21 @@ class WorkflowContractTests(unittest.TestCase):
         # The single credential that reaches the pod (the one-shot JIT
         # runner config) must be stripped from the smoke child's env.
         self.assertIn("env -u RUNNER_JIT_CONFIG python3 /tmp/cuda_smoke_test.py", create)
+        # The smoke's NVRTC-only install leaves a partial /usr/local tree;
+        # the test job's runtime discovery must reject trees missing the
+        # full library set instead of skipping the real runtime install.
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        configure = text[
+            text.index("      - name: Configure CUDA runtime libraries") : text.index(
+                "      - name: Verify loaded NVRTC version"
+            )
+        ]
+        self.assertIn("cuda_tree_has_runtime_libs", configure)
+        for lib in ("libcublas.so", "libcusolver.so", "libcusparse.so", "libnvrtc.so"):
+            self.assertIn(lib, configure)
+        # Both acceptance paths (discovered toolkit and cached seed tree)
+        # must run the completeness check.
+        self.assertGreaterEqual(configure.count("cuda_tree_has_runtime_libs "), 2)
         self.assertIn("${{ github.sha }}/scripts/ci/cuda_smoke_test.py", create)
         self.assertNotIn("TENFERRO_REF", create)
         # Smoke parameters flow through non-secret pod env only.
