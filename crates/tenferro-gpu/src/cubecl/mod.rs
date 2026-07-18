@@ -136,7 +136,7 @@ use dispatch::{
     ternary_dtype_mismatch, typed_tensor_array_arg, typed_tensor_array_arg_as,
     typed_tensor_binding, typed_view_array_arg, typed_view_mut_array_arg,
 };
-use error::{unsupported_dtype, unsupported_operation};
+use error::{unexpected_validation_flag_dtype, unsupported_dtype, unsupported_operation};
 
 pub use capability::cuda_capabilities;
 pub use memory::{device_ptr, download_tensor, upload_tensor};
@@ -343,10 +343,11 @@ impl CudaExtensionCache {
     /// assert!(cache.is_empty()?);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    /// # Errors
     ///
-    /// This constructor is infallible; later cache operations return
-    /// [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
+    /// The cache retains at most 16 extension states by default. Use
+    /// [`Self::with_max_entries`] to choose a different bound. Later cache
+    /// operations return [`crate::Error::RuntimeState`] if the cache mutex is
+    /// poisoned.
     pub fn new() -> Self {
         let max_entries = NonZeroUsize::new(DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES)
             .unwrap_or(NonZeroUsize::MIN);
@@ -378,6 +379,10 @@ impl CudaExtensionCache {
     }
 
     /// Remove every cached CUDA extension state value.
+    ///
+    /// This operation returns a runtime-state error if the cache mutex is
+    /// poisoned.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
@@ -2622,6 +2627,7 @@ macro_rules! impl_cuda_cast_float {
                 }
             }
             fn read_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+                let expected = Tensor::$variant(flag.clone()).dtype();
                 match download_tensor(backend.runtime(), &Tensor::$variant(flag.clone()))? {
                     Tensor::$variant(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
                         crate::Error::invalid_argument(
@@ -2630,8 +2636,10 @@ macro_rules! impl_cuda_cast_float {
                             "validation flag was malformed",
                         )
                     }),
-                    _ => Err(crate::Error::Internal(
-                        "cast validation flag had unexpected dtype".to_string(),
+                    other => Err(unexpected_validation_flag_dtype(
+                        "cast",
+                        expected,
+                        other.dtype(),
                     )),
                 }
             }
@@ -2759,12 +2767,18 @@ fn checked_integer_domain_error(
     }
 }
 
-fn read_checked_integer_flag(backend: &CudaBackend, flag: &TypedTensor<i32>) -> crate::Result<i32> {
+fn read_checked_integer_flag(
+    backend: &CudaBackend,
+    flag: &TypedTensor<i32>,
+    op: &'static str,
+) -> crate::Result<i32> {
     let host = download_tensor(backend.runtime(), &Tensor::I32(flag.clone()))?;
     match host {
         Tensor::I32(flag) => Ok(flag.as_slice()?.first().copied().unwrap_or_default()),
-        _ => Err(crate::Error::Internal(
-            "integer domain flag download returned unexpected dtype".to_string(),
+        other => Err(unexpected_validation_flag_dtype(
+            op,
+            crate::DType::I32,
+            other.dtype(),
         )),
     }
 }
@@ -2821,6 +2835,7 @@ impl CudaFloatIndex for f32 {
     }
 
     fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+        let expected = Tensor::F32(flag.clone()).dtype();
         match download_tensor(backend.runtime(), &Tensor::F32(flag.clone()))? {
             Tensor::F32(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
                 crate::Error::invalid_argument(
@@ -2829,8 +2844,10 @@ impl CudaFloatIndex for f32 {
                     "validation flag was malformed",
                 )
             }),
-            _ => Err(crate::Error::Internal(
-                "index_tensor validation flag had unexpected dtype".to_string(),
+            other => Err(unexpected_validation_flag_dtype(
+                "index_tensor",
+                expected,
+                other.dtype(),
             )),
         }
     }
@@ -2844,6 +2861,7 @@ impl CudaFloatIndex for f64 {
     }
 
     fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+        let expected = Tensor::F64(flag.clone()).dtype();
         match download_tensor(backend.runtime(), &Tensor::F64(flag.clone()))? {
             Tensor::F64(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
                 crate::Error::invalid_argument(
@@ -2852,8 +2870,10 @@ impl CudaFloatIndex for f64 {
                     "validation flag was malformed",
                 )
             }),
-            _ => Err(crate::Error::Internal(
-                "index_tensor validation flag had unexpected dtype".to_string(),
+            other => Err(unexpected_validation_flag_dtype(
+                "index_tensor",
+                expected,
+                other.dtype(),
             )),
         }
     }
@@ -2996,7 +3016,7 @@ where
         flag_arg,
     );
 
-    if read_checked_integer_flag(backend, &flag)? != 0 {
+    if read_checked_integer_flag(backend, &flag, op)? != 0 {
         return Err(checked_integer_domain_error(domain, op, dtype));
     }
     Ok(output)
@@ -3202,7 +3222,7 @@ where
         flag_arg,
         lhs_scalar,
     );
-    if read_checked_integer_flag(backend, &flag)? != 0 {
+    if read_checked_integer_flag(backend, &flag, op)? != 0 {
         return Err(checked_integer_domain_error(domain, op, dtype));
     }
     Ok(output)

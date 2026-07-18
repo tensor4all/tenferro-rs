@@ -31,6 +31,14 @@ pub(crate) enum CudaError {
     /// Integer power received a negative exponent.
     #[error("{op} received a negative integer exponent for dtype {dtype:?} on CUDA")]
     NegativeIntegerExponent { op: &'static str, dtype: DType },
+    /// A backend validation flag was returned with a dtype different from the
+    /// one used to allocate it.
+    #[error("{op} validation flag returned dtype {actual:?}, expected {expected:?} on CUDA")]
+    UnexpectedValidationFlagDType {
+        op: &'static str,
+        expected: DType,
+        actual: DType,
+    },
 }
 
 /// Construct an operation-level unsupported-dtype error without pretending it
@@ -103,6 +111,25 @@ pub(crate) fn negative_integer_exponent(op: &'static str, dtype: DType) -> crate
     )
 }
 
+/// Preserve an impossible validation-flag dtype change as a typed backend
+/// source instead of exposing an unstructured internal string.
+pub(crate) fn unexpected_validation_flag_dtype(
+    op: &'static str,
+    expected: DType,
+    actual: DType,
+) -> crate::Error {
+    crate::Error::extension(
+        op,
+        "cuda",
+        ErrorKind::BackendFailure,
+        CudaError::UnexpectedValidationFlagDType {
+            op,
+            expected,
+            actual,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error as _;
@@ -160,6 +187,26 @@ mod tests {
             CudaError::WorkspaceSizeOverflow {
                 op: "dot_general",
                 size: u64::MAX,
+            }
+        ));
+    }
+
+    #[test]
+    fn unexpected_validation_flag_dtype_preserves_classification_and_source() {
+        let error = unexpected_validation_flag_dtype("cast", DType::F32, DType::I32);
+
+        assert_eq!(error.kind(), ErrorKind::BackendFailure);
+        let source = error
+            .source()
+            .expect("CUDA validation errors have a source")
+            .downcast_ref::<CudaError>()
+            .expect("CUDA validation errors keep their typed source");
+        assert!(matches!(
+            source,
+            CudaError::UnexpectedValidationFlagDType {
+                op: "cast",
+                expected: DType::F32,
+                actual: DType::I32,
             }
         ));
     }

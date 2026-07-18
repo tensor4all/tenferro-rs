@@ -570,6 +570,44 @@ cargo clippy --manifest-path ext/sparse/Cargo.toml --features autodiff --all-tar
 # exit 0
 ```
 
+## CUDA validation-flag source follow-up on 2026-07-18
+
+The rerun of the hosted repository-rules review identified three CUDA
+validation-flag branches that had been converted to `Error::Internal(String)`
+during the structured migration. The same boundary also contained an integer
+domain flag branch with the same erasure, although the model did not report it.
+These are backend invariant failures: the host download returned a dtype other
+than the dtype used to allocate the typed validation flag. They are not caller
+configuration errors, so the canonical mapping is `BackendFailure` with a
+typed `CudaError::UnexpectedValidationFlagDType` source. The operation name,
+expected dtype, and actual dtype remain machine-readable through the source
+chain; no message parsing or compatibility variant was added.
+
+`CudaExtensionCache::new` now documents its default 16-entry bound, and
+`clear` states its poisoned-lock runtime-state condition. The six
+`EagerTensor` methods named by the same review already contain concrete
+`# Errors` sections in the branch source; the deterministic public-error audit
+passes, so no duplicate or boilerplate documentation was added for the
+review bot's contradictory LLM output.
+
+Focused verification:
+
+```text
+cargo test -p tenferro-gpu --features cuda --lib cubecl::error::tests -- --nocapture
+# exit 0; 4 typed CUDA error/source tests passed
+cargo check -p tenferro-gpu --features cuda --lib --message-format=short
+# exit 0
+cargo clippy -p tenferro-gpu --features cuda --lib -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+# not a passing gate: the current toolchain reports 22 unscoped CUDA-module
+# lint findings across dispatch/FFI/fusion/kernel code; none are silenced by
+# this change
+```
+
+The hosted rerun of the review bot still reported a changing set of false
+missing-`# Errors` findings despite the sections being present. This remains a
+review-service limitation rather than a source omission; the local
+deterministic review and public-error audit are the authoritative local gates.
+
 ## Residual risks
 
 Hardware-dependent CUDA/WebGPU/PJRT execution and hosted affinity/NUMA
