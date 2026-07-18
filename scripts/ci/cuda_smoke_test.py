@@ -122,20 +122,30 @@ def _load_library(names: list[str]) -> ctypes.CDLL:
     raise SmokeFailure(f"none of {names} could be loaded: {last_error}")
 
 
+def nvrtc_library_candidates(runtime: tuple[int, int]) -> list[str]:
+    """NVRTC load order for the SELECTED runtime, most specific first.
+
+    The pod image ships an older CUDA toolkit whose ``libnvrtc.so`` sits in
+    the default linker path, so generic names must never be tried before
+    the versioned install paths of the runtime tier the smoke selected:
+    loading the image's NVRTC (observed: 11.8 via bare ``libnvrtc.so``)
+    fails the proof on every otherwise-compatible host.
+    """
+
+    version = f"{runtime[0]}.{runtime[1]}"
+    major = runtime[0]
+    return [
+        f"/usr/local/cuda-{version}/lib64/libnvrtc.so.{major}",
+        f"/usr/local/cuda-{version}/targets/x86_64-linux/lib/libnvrtc.so.{major}",
+        f"libnvrtc.so.{major}",
+    ]
+
+
 class CudaBindings:
     """Thin ctypes wrapper; tests substitute a fake with the same surface."""
 
     def __init__(self, runtime: tuple[int, int]) -> None:
-        major = runtime[0]
-        self.nvrtc = _load_library(
-            [
-                f"libnvrtc.so.{major}",
-                "libnvrtc.so",
-                f"/usr/local/cuda-{runtime[0]}.{runtime[1]}/lib64/libnvrtc.so.{major}",
-                f"/usr/local/cuda-{runtime[0]}.{runtime[1]}"
-                f"/targets/x86_64-linux/lib/libnvrtc.so.{major}",
-            ]
-        )
+        self.nvrtc = _load_library(nvrtc_library_candidates(runtime))
         self.cuda = _load_library(["libcuda.so.1", "libcuda.so"])
 
     def nvrtc_version(self) -> tuple[int, int]:
