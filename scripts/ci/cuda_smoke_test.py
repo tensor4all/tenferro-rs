@@ -122,6 +122,18 @@ def _load_library(names: list[str]) -> ctypes.CDLL:
     raise SmokeFailure(f"none of {names} could be loaded: {last_error}")
 
 
+def _load_library_global(names: list[str]) -> ctypes.CDLL:
+    """Like _load_library but with RTLD_GLOBAL so soname dlopens resolve."""
+
+    last_error: OSError | None = None
+    for name in names:
+        try:
+            return ctypes.CDLL(name, mode=ctypes.RTLD_GLOBAL)
+        except OSError as error:
+            last_error = error
+    raise SmokeFailure(f"none of {names} could be loaded: {last_error}")
+
+
 def nvrtc_library_candidates(runtime: tuple[int, int]) -> list[str]:
     """NVRTC load order for the SELECTED runtime, most specific first.
 
@@ -141,10 +153,33 @@ def nvrtc_library_candidates(runtime: tuple[int, int]) -> list[str]:
     ]
 
 
+def nvrtc_builtins_candidates(runtime: tuple[int, int]) -> list[str]:
+    """Load order for libnvrtc-builtins, most specific first.
+
+    NVRTC dlopens ``libnvrtc-builtins.so.X.Y`` by soname at COMPILE time,
+    and the selected tier's install directory is not on the default linker
+    search path (observed live: ``failed to open libnvrtc-builtins.so.12.8``
+    with status 7). Preloading it with RTLD_GLOBAL from its absolute path
+    lets that soname lookup resolve against the already-loaded library.
+    """
+
+    version = f"{runtime[0]}.{runtime[1]}"
+    return [
+        f"/usr/local/cuda-{version}/lib64/libnvrtc-builtins.so.{version}",
+        f"/usr/local/cuda-{version}/targets/x86_64-linux/lib/libnvrtc-builtins.so.{version}",
+        f"libnvrtc-builtins.so.{version}",
+    ]
+
+
 class CudaBindings:
     """Thin ctypes wrapper; tests substitute a fake with the same surface."""
 
     def __init__(self, runtime: tuple[int, int]) -> None:
+        # Preload builtins BEFORE any NVRTC compilation with RTLD_GLOBAL so
+        # NVRTC's internal soname dlopen resolves to it.
+        self.nvrtc_builtins = _load_library_global(
+            nvrtc_builtins_candidates(runtime)
+        )
         self.nvrtc = _load_library(nvrtc_library_candidates(runtime))
         self.cuda = _load_library(["libcuda.so.1", "libcuda.so"])
 
