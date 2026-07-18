@@ -1,0 +1,250 @@
+name: CI cache publish
+
+# ---------------------------------------------------------------------------
+# Trusted shared-cache writer (#1403; see docs/design/ci-cache-trust.md).
+#
+#   * This workflow is the ONLY path that publishes into the main-scoped
+#     Actions cache namespace used by RunPod GPU CI. It runs exclusively on
+#     default-branch events (push to main, schedule, manual dispatch from
+#     main), so both the workflow definition and every byte it builds or
+#     downloads come from trusted default-branch content.
+#   * The consumer jobs in runpod-gpu-test.yml are restore-only: they build
+#     PR-controlled code or run on the self-hosted RunPod pod, so they must
+#     never hold a cache-write credential. Keep it that way.
+#   * Never add pull_request or workflow_run triggers here: that would let
+#     PR-influenced content publish into the trusted cache namespace.
+#   * Keys must stay byte-identical with the restore keys in
+#     runpod-gpu-test.yml; scripts/ci/tests/test_workflow_contracts.py
+#     enforces the pairing.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Weekly refresh so quiet weeks do not lose caches to 7-day eviction.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-cache-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CUBECL_DEBUG_LOG: "0"
+  CUDA_ARCHIVE: cuda-tests.tar.zst
+  PJRT_ARCHIVE: pjrt-tests.tar.zst
+  # Keep these in sync with runpod-gpu-test.yml (contract-tested).
+  CUDARC_CUDA_VERSION: "12080"
+  CUDA_MIN_RUNTIME_VERSION: "12.4"
+  CUDA_RUNTIME_VERSION: "12.8"
+  TENFERRO_CI_CACHE_ROOT: /opt/tenferro-ci
+  CUTENSOR_VERSION: "2.6.0.4"
+
+jobs:
+  publish-cuda-archive:
+    name: Publish CUDA/PJRT archive cache
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+
+    steps:
+      # Same checkout layout as runpod-gpu-test.yml so the hashFiles
+      # patterns and therefore the content key are byte-identical.
+      - name: Checkout tenferro-rs
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: tenferro-rs
+
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master (2026-07-07)
+        with:
+          toolchain: stable
+
+      - name: Compute CUDA/PJRT archive content key
+        id: archive_key
+        run: |
+          set -euo pipefail
+          rustc_version="$(rustc -V | awk '{print $2}')"
+          key="cuda-pjrt-archive-v12-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**') }}"
+          {
+            echo "key=${key}"
+            echo "artifact_name=${key}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "CUDA/PJRT archive content key: ${key}"
+
+      - name: Check for an existing archive cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: archive_lookup
+        with:
+          path: |
+            tenferro-rs/${{ env.CUDA_ARCHIVE }}
+            tenferro-rs/${{ env.PJRT_ARCHIVE }}
+          key: ${{ steps.archive_key.outputs.key }}
+          lookup-only: true
+
+      - name: Log archive publication plan
+        run: |
+          if [ "${{ steps.archive_lookup.outputs.cache-hit }}" = "true" ]; then
+            echo "Archive cache already published for this key; nothing to do."
+          else
+            echo "Archive cache missing for this key; building and publishing."
+          fi
+
+      - name: Install CUDA toolkit for archive PTX
+        if: steps.archive_lookup.outputs.cache-hit != 'true'
+        run: bash tenferro-rs/scripts/ci/install_cuda_toolkit_hosted.sh "${CUDA_RUNTIME_VERSION}"
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        if: steps.archive_lookup.outputs.cache-hit != 'true'
+        with:
+          # Same prefix/shared keys the restore-only consumer in
+          # runpod-gpu-test.yml reads; this trusted job owns the saves.
+          prefix-key: v7-rust-cuda-pjrt-ci-ubuntu22-ptx
+          shared-key: cuda-pjrt-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}
+          cache-all-crates: true
+          cache-workspace-crates: true
+          workspaces: tenferro-rs -> target
+
+      - uses: taiki-e/install-action@3ad7ed62b9acd4b43f91777bf240fac23e489eac # nextest (resolved 2026-07-07)
+        if: steps.archive_lookup.outputs.cache-hit != 'true'
+        with:
+          tool: nextest
+
+      - name: Build CUDA test archive
+        if: steps.archive_lookup.outputs.cache-hit != 'true'
+        working-directory: tenferro-rs
+        env:
+          CUDARC_CUDA_VERSION: ${{ env.CUDARC_CUDA_VERSION }}
+        run: |
+          set -euo pipefail
+          cargo nextest archive \
+            --cargo-profile ci \
+            --archive-file "${CUDA_ARCHIVE}" \
+            -p tenferro-gpu \
+            -p tenferro-ad \
+            -p tenferro-linalg \
+            --features cuda
+
+      - name: Build PJRT test archive
+        if: steps.archive_lookup.outputs.cache-hit != 'true'
+        working-directory: tenferro-rs
+        run: |
+          set -euo pipefail
+          cargo nextest archive \
+            --cargo-profile ci \
+            --archive-file "${PJRT_ARCHIVE}" \
+            -p tenferro-xla \
+            --features pjrt
+
+      - name: Log built archive sizes
+        if: steps.archive_lookup.outputs.cache-hit != 'true'
+        working-directory: tenferro-rs
+        run: |
+          set -euo pipefail
+          du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" target/ci 2>/dev/null \
+            || du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" || true
+          df -h .
+
+      - name: Publish archive cache
+        if: steps.archive_lookup.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            tenferro-rs/${{ env.CUDA_ARCHIVE }}
+            tenferro-rs/${{ env.PJRT_ARCHIVE }}
+          key: ${{ steps.archive_key.outputs.key }}
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        # Also publish the per-key artifact so manual main-revision GPU runs
+        # can reuse it through find_archive_artifact.py without a rebuild.
+        if: steps.archive_lookup.outputs.cache-hit != 'true'
+        with:
+          name: ${{ steps.archive_key.outputs.artifact_name }}
+          path: |
+            tenferro-rs/${{ env.CUDA_ARCHIVE }}
+            tenferro-rs/${{ env.PJRT_ARCHIVE }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-cuda-runtime-trees:
+    name: Publish CUDA runtime tree cache (${{ matrix.cuda }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both runtime tiers the RunPod driver selection can choose.
+        cuda: ["12.4", "12.8"]
+
+    steps:
+      - name: Checkout tenferro-rs
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Check for an existing runtime tree cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: runtime_lookup
+        with:
+          path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-${{ matrix.cuda }}
+          key: cuda-runtime-${{ runner.os }}-x86_64-${{ matrix.cuda }}-minimal-v6
+          lookup-only: true
+
+      - name: Build CUDA runtime tree
+        if: steps.runtime_lookup.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/ci/install_cuda_runtime_tree.sh \
+            "${{ matrix.cuda }}" \
+            "${TENFERRO_CI_CACHE_ROOT}/cuda-runtime-${{ matrix.cuda }}"
+          du -sh "${TENFERRO_CI_CACHE_ROOT}/cuda-runtime-${{ matrix.cuda }}"
+
+      - name: Publish runtime tree cache
+        if: steps.runtime_lookup.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-${{ matrix.cuda }}
+          key: cuda-runtime-${{ runner.os }}-x86_64-${{ matrix.cuda }}-minimal-v6
+
+  publish-cutensor:
+    name: Publish cuTENSOR cache
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write
+
+    steps:
+      - name: Checkout tenferro-rs
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Check for an existing cuTENSOR cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cutensor_lookup
+        with:
+          path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cutensor-${{ env.CUTENSOR_VERSION }}
+          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2
+          lookup-only: true
+
+      - name: Download cuTENSOR redistributable
+        if: steps.cutensor_lookup.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/ci/install_cutensor.sh \
+            "${CUTENSOR_VERSION}" \
+            "${TENFERRO_CI_CACHE_ROOT}/cutensor-${CUTENSOR_VERSION}"
+          du -sh "${TENFERRO_CI_CACHE_ROOT}/cutensor-${CUTENSOR_VERSION}"
+
+      - name: Publish cuTENSOR cache
+        if: steps.cutensor_lookup.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cutensor-${{ env.CUTENSOR_VERSION }}
+          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2

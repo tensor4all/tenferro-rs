@@ -26,6 +26,17 @@ name: RunPod tenferro-rs GPU Test
 #     become readable from, the pod itself. Automatic PR runs are started only
 #     by `workflow_run`, after `authorize` gates the run to same-repo
 #     maintainer/admin PRs.
+#   * Cache and artifact trust (#1403): every job in this workflow is a cache
+#     READER only (`actions/cache/restore`, rust-cache `save-if: false`).
+#     Jobs here either execute PR-controlled build code (cuda-archive) or run
+#     on the self-hosted pod (run-gpu-tests), so none of them may hold a
+#     cache-write credential for the main-scoped namespace: `workflow_run`
+#     runs on refs/heads/main, so any cache save from here would publish
+#     attacker-influenceable bytes into the trusted namespace. Shared cache
+#     publication is owned by `ci-cache-publish.yml`, which only ever builds
+#     default-branch code. GPU allocation retries reuse the immutable per-key
+#     archive artifact through scripts/ci/find_archive_artifact.py instead of
+#     rebuilding. See docs/design/ci-cache-trust.md.
 #   * This workflow owns the branch-protection-required `CI GPU gate` check for
 #     eligible same-repo maintainer PRs by publishing that check to the PR head
 #     SHA from a GitHub-hosted final gate job. Fork PRs keep using the legacy
@@ -76,6 +87,9 @@ env:
   CUDA_MIN_RUNTIME_VERSION: "12.4"
   CUDA_RUNTIME_VERSION: "12.8"
   ARCHIVE_WORKSPACE_ROOT: /home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
+  # Fixed cache root shared by GitHub-hosted writers (ci-cache-publish) and
+  # the RunPod pod so restored absolute paths line up on both runner kinds.
+  TENFERRO_CI_CACHE_ROOT: /opt/tenferro-ci
   CUTENSOR_VERSION: "2.6.0.4"
   JAX_CUDA12_PJRT_VERSION: "0.10.2"
   NVIDIA_CUDNN_CU12_VERSION: "9.23.2.1"
@@ -401,11 +415,21 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
 
+    # actions: read lets this job locate an existing per-key archive artifact
+    # from a prior trusted run so a GPU allocation retry never rebuilds it.
+    # This job builds PR-controlled code, so it must never hold cache-write
+    # or any other write scope: caches are restore-only here and shared cache
+    # publication belongs to the trusted ci-cache-publish workflow on main.
+    permissions:
+      contents: read
+      actions: read
+
     env:
       TENFERRO_REF: ${{ needs.authorize.outputs.tenferro_ref }}
 
     outputs:
       archive_cache_key: ${{ steps.archive_key.outputs.key }}
+      archive_artifact_name: ${{ steps.archive_key.outputs.artifact_name }}
 
     steps:
       - name: Checkout tenferro-rs
@@ -419,144 +443,28 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Install CUDA toolkit for archive PTX
-        run: |
-          set -euo pipefail
-          export DEBIAN_FRONTEND=noninteractive
-
-          cuda_toolkit_version() {
-            local root="$1"
-            if [ -f "${root}/version.json" ]; then
-              python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['cuda']['version'].rsplit('.', 1)[0])" "${root}/version.json" 2>/dev/null || true
-            elif [ -f "${root}/version.txt" ]; then
-              sed -n 's/.*CUDA Version \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' "${root}/version.txt" | head -1
-            else
-              basename "${root}" | sed -n 's/^cuda-\([0-9][0-9]*\.[0-9][0-9]*\)$/\1/p'
-            fi
-          }
-
-          cuda_version_ge() {
-            local version="$1"
-            local min_version="$2"
-            if [ -z "${version}" ]; then
-              return 1
-            fi
-            local ver_major="${version%%.*}"
-            local ver_minor="${version#*.}"
-            local min_major="${min_version%%.*}"
-            local min_minor="${min_version#*.}"
-            if [ "${ver_major}" -gt "${min_major}" ]; then
-              return 0
-            fi
-            if [ "${ver_major}" -lt "${min_major}" ]; then
-              return 1
-            fi
-            [ "${ver_minor}" -ge "${min_minor}" ]
-          }
-
-          accept_cuda_toolkit() {
-            local candidate="$1"
-            if [ ! -d "${candidate}" ]; then
-              return 1
-            fi
-            if [ ! -d "${candidate}/lib64" ] && [ ! -d "${candidate}/targets/x86_64-linux/lib" ]; then
-              echo "Skipping CUDA toolkit at ${candidate} (library directory not found)."
-              return 1
-            fi
-            local version
-            version="$(cuda_toolkit_version "${candidate}")"
-            if cuda_version_ge "${version}" "${CUDA_RUNTIME_VERSION}"; then
-              cuda_path="${candidate}"
-              echo "Using CUDA toolkit at ${candidate} (version ${version})."
-              return 0
-            fi
-            if [ -n "${version}" ]; then
-              echo "Skipping CUDA toolkit at ${candidate} (found ${version}, need >= ${CUDA_RUNTIME_VERSION})."
-            else
-              echo "Skipping CUDA toolkit at ${candidate} (version metadata not found, need >= ${CUDA_RUNTIME_VERSION})."
-            fi
-            return 1
-          }
-
-          cuda_path=""
-          if [ -n "${CUDA_PATH:-}" ]; then
-            accept_cuda_toolkit "${CUDA_PATH}" || cuda_path=""
-          fi
-          if [ -z "${cuda_path}" ] && command -v nvcc >/dev/null 2>&1; then
-            accept_cuda_toolkit "$(dirname "$(dirname "$(command -v nvcc)")")" || true
-          fi
-          if [ -z "${cuda_path}" ]; then
-            for candidate in \
-              "/usr/local/cuda-${CUDA_RUNTIME_VERSION}" \
-              /usr/local/cuda; do
-              if accept_cuda_toolkit "${candidate}"; then
-                break
-              fi
-            done
-          fi
-
-          if [ -z "${cuda_path}" ]; then
-            echo "Installing CUDA ${CUDA_RUNTIME_VERSION} toolkit packages for archive PTX..."
-            cuda_apt_suffix="${CUDA_RUNTIME_VERSION//./-}"
-            if ! ls /etc/apt/sources.list.d/cuda*.list >/dev/null 2>&1; then
-              tmpdir="$(mktemp -d)"
-              curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
-                -o "${tmpdir}/cuda-keyring.deb" \
-                https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-              sudo dpkg -i "${tmpdir}/cuda-keyring.deb"
-              rm -rf "${tmpdir}"
-            fi
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends \
-              "cuda-cudart-${cuda_apt_suffix}" \
-              "cuda-cudart-dev-${cuda_apt_suffix}" \
-              "cuda-nvcc-${cuda_apt_suffix}" \
-              "cuda-nvrtc-${cuda_apt_suffix}" \
-              "cuda-nvrtc-dev-${cuda_apt_suffix}" \
-              "libcublas-${cuda_apt_suffix}" \
-              "libcublas-dev-${cuda_apt_suffix}" \
-              "libcusparse-${cuda_apt_suffix}" \
-              "libnvjitlink-${cuda_apt_suffix}"
-            cuda_path=""
-            for candidate in "/usr/local/cuda-${CUDA_RUNTIME_VERSION}" /usr/local/cuda; do
-              if accept_cuda_toolkit "${candidate}"; then
-                break
-              fi
-            done
-          fi
-
-          if [ -z "${cuda_path}" ]; then
-            echo "CUDA toolkit path not found after CUDA ${CUDA_RUNTIME_VERSION} install on archive runner."
-            exit 1
-          fi
-
-          nvcc_bin="${cuda_path}/bin/nvcc"
-          if [ ! -x "${nvcc_bin}" ]; then
-            echo "nvcc not found at ${nvcc_bin}" >&2
-            ls -la "${cuda_path}/bin" || true
-            exit 1
-          fi
-
-          cuda_library_path="${cuda_path}/lib64"
-          if [ -d "${cuda_path}/targets/x86_64-linux/lib" ]; then
-            cuda_library_path="${cuda_library_path}:${cuda_path}/targets/x86_64-linux/lib"
-          fi
-
-          echo "CUDA_PATH=${cuda_path}" >> "${GITHUB_ENV}"
-          echo "${cuda_path}/bin" >> "${GITHUB_PATH}"
-          echo "LD_LIBRARY_PATH=${cuda_library_path}:${LD_LIBRARY_PATH:-}" >> "${GITHUB_ENV}"
-          "${nvcc_bin}" --version
-
-      - name: Compute CUDA/PJRT archive cache key
+      - name: Compute CUDA/PJRT archive content key
         id: archive_key
         run: |
           set -euo pipefail
-          key="cuda-pjrt-archive-v11-ci-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/scripts/ci/runpod_config.json', 'tenferro-rs/.github/workflows/runpod-gpu-test.yml') }}"
-          echo "key=${key}" >> "${GITHUB_OUTPUT}"
-          echo "CUDA/PJRT archive cache key: ${key}"
+          # Material build inputs only: lockfile, manifests, sources, tests,
+          # the Rust toolchain, and the CUDA binding/PTX versions in the key
+          # prefix. Bump the vN below when the archive build commands or
+          # toolkit selection change; unrelated workflow edits must not
+          # invalidate the key (#1403).
+          rustc_version="$(rustc -V | awk '{print $2}')"
+          key="cuda-pjrt-archive-v12-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**') }}"
+          {
+            echo "key=${key}"
+            echo "artifact_name=${key}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "CUDA/PJRT archive content key: ${key}"
 
-      - name: Cache CUDA/PJRT test archives
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore CUDA/PJRT archives from trusted cache
+        # Restore-only: this job executes PR-controlled build code and must
+        # never publish into the main-scoped cache namespace. The trusted
+        # ci-cache-publish workflow owns cache saves for this key family.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cuda_archive_cache
         with:
           path: |
@@ -564,30 +472,71 @@ jobs:
             tenferro-rs/${{ env.PJRT_ARCHIVE }}
           key: ${{ steps.archive_key.outputs.key }}
 
-      - name: Log CUDA/PJRT archive cache status
+      - name: Reuse archive artifact from a prior trusted run
+        id: archive_reuse
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_NAME: ${{ steps.archive_key.outputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          python3 tenferro-rs/scripts/ci/find_archive_artifact.py \
+            --repository "${GITHUB_REPOSITORY}" \
+            --artifact-name "${ARTIFACT_NAME}" \
+            --current-run-id "${GITHUB_RUN_ID}" \
+            --token "${GH_TOKEN}" \
+            --output /tmp/archive-reuse.txt
+          found="$(sed -n 's/^found=//p' /tmp/archive-reuse.txt | tail -1)"
+          reused=false
+          if [ "${found}" = "true" ]; then
+            artifact_id="$(sed -n 's/^artifact_id=//p' /tmp/archive-reuse.txt | tail -1)"
+            run_id="$(sed -n 's/^run_id=//p' /tmp/archive-reuse.txt | tail -1)"
+            if gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
+                > /tmp/archive-reuse.zip \
+              && unzip -o /tmp/archive-reuse.zip -d tenferro-rs \
+              && [ -f "tenferro-rs/${CUDA_ARCHIVE}" ] \
+              && [ -f "tenferro-rs/${PJRT_ARCHIVE}" ]; then
+              reused=true
+              echo "Reused immutable archive artifact ${artifact_id} from trusted run ${run_id}."
+            else
+              echo "Artifact ${artifact_id} download failed; falling back to build."
+              rm -f "tenferro-rs/${CUDA_ARCHIVE}" "tenferro-rs/${PJRT_ARCHIVE}"
+            fi
+          fi
+          echo "reused=${reused}" >> "${GITHUB_OUTPUT}"
+
+      - name: Log CUDA/PJRT archive source
         run: |
           if [ "${{ steps.cuda_archive_cache.outputs.cache-hit }}" = "true" ]; then
-            echo "CUDA/PJRT archive cache hit; skipping build."
+            echo "CUDA/PJRT archive source: trusted Actions cache (key hit)."
+          elif [ "${{ steps.archive_reuse.outputs.reused }}" = "true" ]; then
+            echo "CUDA/PJRT archive source: immutable artifact from a prior trusted run."
           else
-            echo "CUDA/PJRT archive cache miss; will build CUDA ${CUDA_RUNTIME_VERSION} PTX and PJRT archives."
+            echo "CUDA/PJRT archive cache and artifact miss; building CUDA ${CUDA_RUNTIME_VERSION} PTX and PJRT archives."
           fi
 
+      - name: Install CUDA toolkit for archive PTX
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true' && steps.archive_reuse.outputs.reused != 'true'
+        run: bash tenferro-rs/scripts/ci/install_cuda_toolkit_hosted.sh "${CUDA_RUNTIME_VERSION}"
+
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
-        if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true' && steps.archive_reuse.outputs.reused != 'true'
         with:
           prefix-key: v7-rust-cuda-pjrt-ci-ubuntu22-ptx
           shared-key: cuda-pjrt-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}
           cache-all-crates: true
           cache-workspace-crates: true
           workspaces: tenferro-rs -> target
+          # Restore-only for the same reason as the archive cache above.
+          save-if: false
 
       - uses: taiki-e/install-action@3ad7ed62b9acd4b43f91777bf240fac23e489eac # nextest (resolved 2026-07-07)
-        if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true' && steps.archive_reuse.outputs.reused != 'true'
         with:
           tool: nextest
 
       - name: Build CUDA test archive
-        if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true' && steps.archive_reuse.outputs.reused != 'true'
         working-directory: tenferro-rs
         env:
           CUDARC_CUDA_VERSION: ${{ env.CUDARC_CUDA_VERSION }}
@@ -602,7 +551,7 @@ jobs:
             --features cuda
 
       - name: Build PJRT test archive
-        if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
+        if: steps.cuda_archive_cache.outputs.cache-hit != 'true' && steps.archive_reuse.outputs.reused != 'true'
         working-directory: tenferro-rs
         run: |
           set -euo pipefail
@@ -618,6 +567,7 @@ jobs:
         working-directory: tenferro-rs
         env:
           ARCHIVE_CACHE_HIT: ${{ steps.cuda_archive_cache.outputs.cache-hit }}
+          ARCHIVE_REUSED: ${{ steps.archive_reuse.outputs.reused }}
         run: |
           set -euo pipefail
           if [ ! -f "${CUDA_ARCHIVE}" ]; then
@@ -629,22 +579,25 @@ jobs:
             exit 1
           fi
           echo "Build environment glibc: $(ldd --version | head -1)"
-          nvcc_bin="${CUDA_PATH}/bin/nvcc"
-          echo "Archive PTX toolkit: ${CUDA_PATH} ($("${nvcc_bin}" --version | head -1))"
           if [ "${ARCHIVE_CACHE_HIT}" = "true" ]; then
-            echo "Reusing cached CUDA/PJRT test archives."
+            echo "Archive source: trusted Actions cache."
+          elif [ "${ARCHIVE_REUSED}" = "true" ]; then
+            echo "Archive source: immutable artifact from a prior trusted run."
           else
-            echo "Built fresh CUDA/PJRT test archives on Ubuntu 22.04."
+            nvcc_bin="${CUDA_PATH}/bin/nvcc"
+            echo "Archive source: fresh build with PTX toolkit ${CUDA_PATH} ($("${nvcc_bin}" --version | head -1))."
           fi
           du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" target/ci 2>/dev/null \
             || du -sh "${CUDA_ARCHIVE}" "${PJRT_ARCHIVE}" || true
           df -h .
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        # Self-hosted RunPod runners cannot restore the hosted-runner Actions cache;
-        # always publish the archives so run-gpu-tests can download them on cache miss.
+        # Always publish the per-key archives to this run: the self-hosted
+        # RunPod runner downloads them by name, and later GPU allocation
+        # retries reuse them through find_archive_artifact.py instead of
+        # rebuilding (#1403).
         with:
-          name: cuda-tests
+          name: ${{ steps.archive_key.outputs.artifact_name }}
           path: |
             tenferro-rs/${{ env.CUDA_ARCHIVE }}
             tenferro-rs/${{ env.PJRT_ARCHIVE }}
@@ -941,7 +894,7 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         if: steps.cuda_archive_restore.outputs.cache-hit != 'true'
         with:
-          name: cuda-tests
+          name: ${{ needs.cuda-archive.outputs.archive_artifact_name }}
           path: tenferro-rs
 
       - name: Log CUDA/PJRT archive source
@@ -1019,17 +972,31 @@ jobs:
           echo "Driver CUDA API: ${driver_version}"
           echo "Selected CUDA runtime: ${runtime_version} (${capability_tier} CubeCL capabilities)"
 
-      - name: Cache cuTENSOR redistributable
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # Restore-only on the self-hosted pod: a cache-write credential must
+      # never be exposed to the RunPod runner (#1403). The trusted
+      # ci-cache-publish workflow on main owns publication of these caches.
+      - name: Restore cuTENSOR redistributable
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cutensor_cache
         with:
-          path: ${{ runner.temp }}/cutensor-${{ env.CUTENSOR_VERSION }}
-          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12
+          path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cutensor-${{ env.CUTENSOR_VERSION }}
+          key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2
 
-      - name: Cache CUDA minimal runtime tree
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore CUDA minimal runtime tree
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cuda_runtime_cache
         with:
-          path: ${{ runner.temp }}/cuda-runtime-${{ steps.select_cuda_runtime.outputs.runtime_version }}
-          key: cuda-runtime-${{ runner.os }}-x86_64-${{ steps.select_cuda_runtime.outputs.runtime_version }}-minimal-v5
+          path: ${{ env.TENFERRO_CI_CACHE_ROOT }}/cuda-runtime-${{ steps.select_cuda_runtime.outputs.runtime_version }}
+          key: cuda-runtime-${{ runner.os }}-x86_64-${{ steps.select_cuda_runtime.outputs.runtime_version }}-minimal-v6
+
+      - name: Log pod cache restore status
+        env:
+          CUTENSOR_HIT: ${{ steps.cutensor_cache.outputs.cache-hit }}
+          CUDA_RUNTIME_HIT: ${{ steps.cuda_runtime_cache.outputs.cache-hit }}
+        run: |
+          echo "cuTENSOR cache hit: ${CUTENSOR_HIT:-false}"
+          echo "CUDA runtime tree cache hit: ${CUDA_RUNTIME_HIT:-false}"
+          echo "Misses fall back to direct downloads on the pod; publication is owned by ci-cache-publish on main."
 
       - name: Configure CUDA runtime libraries
         env:
@@ -1078,7 +1045,7 @@ jobs:
             return 1
           }
 
-          cuda_runtime_cache="${RUNNER_TEMP}/cuda-runtime-${CUDA_RUNTIME_VERSION}"
+          cuda_runtime_cache="${TENFERRO_CI_CACHE_ROOT}/cuda-runtime-${CUDA_RUNTIME_VERSION}"
           cuda_path=""
           if [ -n "${CUDA_PATH:-}" ]; then
             accept_cuda_toolkit "${CUDA_PATH}" || cuda_path=""
@@ -1105,39 +1072,12 @@ jobs:
           fi
 
           if [ -z "${cuda_path}" ]; then
-            echo "Installing minimal CUDA ${CUDA_RUNTIME_VERSION} runtime packages without driver packages..."
-            cuda_apt_suffix="${CUDA_RUNTIME_VERSION//./-}"
-            if ! ls /etc/apt/sources.list.d/cuda*.list >/dev/null 2>&1; then
-              tmpdir="$(mktemp -d)"
-              curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
-                -o "${tmpdir}/cuda-keyring.deb" \
-                https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-              dpkg -i "${tmpdir}/cuda-keyring.deb"
-              rm -rf "${tmpdir}"
-            fi
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-              "cuda-cudart-${cuda_apt_suffix}" \
-              "cuda-cudart-dev-${cuda_apt_suffix}" \
-              "cuda-nvrtc-${cuda_apt_suffix}" \
-              "cuda-nvrtc-dev-${cuda_apt_suffix}" \
-              "libcublas-${cuda_apt_suffix}" \
-              "libcusolver-${cuda_apt_suffix}" \
-              "libcusparse-${cuda_apt_suffix}" \
-              "libnvjitlink-${cuda_apt_suffix}"
-            cuda_path=""
-            for candidate in "/usr/local/cuda-${CUDA_RUNTIME_VERSION}" /usr/local/cuda; do
-              if accept_cuda_toolkit "${candidate}"; then
-                break
-              fi
-            done
-            if [ -n "${cuda_path}" ]; then
-              echo "Seeding CUDA runtime cache at ${cuda_runtime_cache} for future runs..."
-              rm -rf "${cuda_runtime_cache}"
-              mkdir -p "${cuda_runtime_cache}"
-              cp -aL "${cuda_path}/." "${cuda_runtime_cache}/"
-              touch "${cuda_runtime_cache}/.seed-complete"
-            fi
+            # Cache miss fallback: install and seed the local tree. The
+            # seeded tree is NOT published from the pod; ci-cache-publish on
+            # main owns publication of the shared cache (#1403).
+            bash tenferro-rs/scripts/ci/install_cuda_runtime_tree.sh \
+              "${CUDA_RUNTIME_VERSION}" "${cuda_runtime_cache}"
+            cuda_path="${cuda_runtime_cache}"
           fi
 
           if [ -z "${cuda_path}" ]; then
@@ -1150,11 +1090,8 @@ jobs:
             cuda_library_path="${cuda_library_path}:${cuda_path}/targets/x86_64-linux/lib"
           fi
 
-          cutensor_root="${RUNNER_TEMP}/cutensor-${CUTENSOR_VERSION}"
+          cutensor_root="${TENFERRO_CI_CACHE_ROOT}/cutensor-${CUTENSOR_VERSION}"
           cutensor_lib="${cutensor_root}/lib"
-          cutensor_archive="libcutensor-linux-x86_64-${CUTENSOR_VERSION}_cuda12-archive.tar.xz"
-          cutensor_url="https://developer.download.nvidia.com/compute/cutensor/redist/libcutensor/linux-x86_64/${cutensor_archive}"
-          cutensor_min_bytes=400000000
 
           cutensor_path=""
           for candidate in \
@@ -1169,25 +1106,10 @@ jobs:
           done
 
           if [ -z "${cutensor_path}" ]; then
-            echo "Installing cuTENSOR ${CUTENSOR_VERSION} redistributable for CUDA 12..."
-            tmpdir="$(mktemp -d)"
-            archive_path="${tmpdir}/${cutensor_archive}"
-            curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors \
-              -o "${archive_path}" "${cutensor_url}"
-            archive_bytes="$(wc -c < "${archive_path}" | tr -d ' ')"
-            if [ "${archive_bytes}" -lt "${cutensor_min_bytes}" ]; then
-              echo "cuTENSOR download too small (${archive_bytes} bytes); expected at least ${cutensor_min_bytes}."
-              exit 1
-            fi
-            rm -rf "${cutensor_root}"
-            mkdir -p "${cutensor_root}"
-            tar -xJf "${archive_path}" -C "${cutensor_root}" \
-              --strip-components=1 \
-              "libcutensor-linux-x86_64-${CUTENSOR_VERSION}_cuda12-archive/lib"
-            rm -rf "${tmpdir}"
-          fi
-
-          if [ -z "${cutensor_path}" ]; then
+            # Cache miss fallback: download on the pod without publishing;
+            # ci-cache-publish on main owns the shared cache (#1403).
+            bash tenferro-rs/scripts/ci/install_cutensor.sh \
+              "${CUTENSOR_VERSION}" "${cutensor_root}"
             for candidate in \
               "${cutensor_lib}/libcutensor.so.2" \
               "${cutensor_lib}/libcutensor.so.2.6.0"; do
@@ -1200,7 +1122,7 @@ jobs:
 
           if [ -z "${cutensor_path}" ]; then
             echo "cuTENSOR shared library not found after redistributable install."
-            echo "Expected ${cutensor_lib}/libcutensor.so.2 under ${RUNNER_TEMP}."
+            echo "Expected ${cutensor_lib}/libcutensor.so.2 under ${TENFERRO_CI_CACHE_ROOT}."
             if [ -d "${cutensor_lib}" ]; then
               ls -la "${cutensor_lib}" || true
             else
