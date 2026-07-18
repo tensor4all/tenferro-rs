@@ -29,3 +29,10 @@ tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "57a2e7ebe7738
 [dev-dependencies]
 tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false, features = ["cpu-faer"] }
 tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false, features = ["cpu-faer"] }
+
+# Match workspace [profile.ci] used by scripts/ci/run_profile.py extensions.
+[profile.ci]
+inherits = "test"
+debug = 0
+incremental = false
+strip = "symbols"

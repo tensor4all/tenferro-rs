@@ -41,3 +41,10 @@ Switched hosted Rust CI from `--release` to workspace `[profile.ci]`:
 - Coverage with `debug=0` + strip must still pass thresholds on GitHub runners.
 - CUDA/PJRT archive wall-clock target (<10 minutes) is measured after merge into
   the GPU workflow path, not locally on macOS.
+
+## Follow-up fix
+
+Nested extension/sample workspaces (`ext/tropical`, `ext/sparse`,
+`samples/kdv-pinn`) do not see the root `[profile.ci]`. CI failed with
+`profile ci is not defined` until those manifests defined a matching profile
+(with explicit `debug = 0`, since nested defaults keep test debuginfo).

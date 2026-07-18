@@ -24,11 +24,25 @@ class RunProfileTests(unittest.TestCase):
         self.assertEqual(manifest["profile"]["test"], expected)
 
     def test_hosted_ci_profile_is_non_incremental_and_stripped(self) -> None:
-        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
-        ci = manifest["profile"]["ci"]
-        self.assertEqual(ci["inherits"], "test")
-        self.assertFalse(ci["incremental"])
-        self.assertEqual(ci["strip"], "symbols")
+        root = tomllib.loads((ROOT / "Cargo.toml").read_text())["profile"]["ci"]
+        self.assertEqual(root["inherits"], "test")
+        self.assertFalse(root["incremental"])
+        self.assertEqual(root["strip"], "symbols")
+
+        nested_expected = {
+            "inherits": "test",
+            "debug": 0,
+            "incremental": False,
+            "strip": "symbols",
+        }
+        for relative in (
+            "ext/tropical/Cargo.toml",
+            "ext/sparse/Cargo.toml",
+            "samples/kdv-pinn/Cargo.toml",
+        ):
+            manifest = tomllib.loads((ROOT / relative).read_text())
+            with self.subTest(manifest=relative):
+                self.assertEqual(manifest["profile"]["ci"], nested_expected)
 
     def test_non_incremental_local_gate_profile_is_removed(self) -> None:
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())

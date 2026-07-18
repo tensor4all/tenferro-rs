@@ -43,3 +43,10 @@ tenferro-cpu = { path = "../../crates/tenferro-cpu" }
 [[bench]]
 name = "tropical_matmul"
 harness = false
+
+# Match workspace [profile.ci] used by scripts/ci/run_profile.py extensions.
+[profile.ci]
+inherits = "test"
+debug = 0
+incremental = false
+strip = "symbols"
