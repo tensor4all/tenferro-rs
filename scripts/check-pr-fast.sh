@@ -7,6 +7,8 @@ DOC_SNIPPETS="auto"
 COVERAGE_REVIEWED=0
 FOCUSED_TESTS=()
 CI_PROFILES=()
+focused_test_count=0
+ci_profile_count=0
 CI_PROFILE_DRY_RUN=0
 
 usage() {
@@ -66,11 +68,13 @@ while [[ $# -gt 0 ]]; do
     --test)
       [[ $# -ge 2 ]] || die "--test requires a command"
       FOCUSED_TESTS+=("$2")
+      focused_test_count=$((focused_test_count + 1))
       shift 2
       ;;
     --ci-profile)
       [[ $# -ge 2 ]] || die "--ci-profile requires a name"
       CI_PROFILES+=("$2")
+      ci_profile_count=$((ci_profile_count + 1))
       shift 2
       ;;
     --ci-profile-dry-run)
@@ -208,16 +212,18 @@ else
   log "docs snippets: skipped"
 fi
 
-if [[ "${change_class}" != "docs-only" && "${#FOCUSED_TESTS[@]}" -eq 0 && "${#CI_PROFILES[@]}" -eq 0 ]]; then
+if [[ "${change_class}" != "docs-only" && "$focused_test_count" -eq 0 && "$ci_profile_count" -eq 0 ]]; then
   die "focused verification command required for ${change_class} changes; pass --test COMMAND or --ci-profile NAME"
 fi
 
-for command in "${FOCUSED_TESTS[@]}"; do
-  log "+ ${command}"
-  bash -lc "$command"
-done
+if [[ "$focused_test_count" -gt 0 ]]; then
+  for command in "${FOCUSED_TESTS[@]}"; do
+    log "+ ${command}"
+    bash -lc "$command"
+  done
+fi
 
-if [[ "${#CI_PROFILES[@]}" -gt 0 ]]; then
+if [[ "$ci_profile_count" -gt 0 ]]; then
   profile_args=("${CI_PROFILES[@]}")
   if [[ "$CI_PROFILE_DRY_RUN" -eq 1 ]]; then
     profile_args=(--dry-run "${profile_args[@]}")

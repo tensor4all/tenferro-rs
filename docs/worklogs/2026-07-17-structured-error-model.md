@@ -350,6 +350,73 @@ compatibility variants, deprecated aliases, or long-lived lint allowlists;
 staged file lists and `git diff --cached --check` were reviewed before each
 checkpoint commit.
 
+## Final review-fix gates after the latest-main rebase
+
+The branch was rebased from merge-base `1ec2062e` onto the current
+`origin/main` `83f7c48b` after local preflight rejected the stale base. The
+rebase had no conflicts; `git merge-base HEAD origin/main` now returns
+`83f7c48b`.
+
+The complete release and coverage gates passed:
+
+```text
+cargo test --workspace --release
+# exit 0; all workspace unit, integration, and doctests passed
+cargo llvm-cov --workspace --release --json --output-path coverage.json
+python3.11 scripts/check-coverage.py coverage.json
+# exit 0; Coverage check: 163/163 files passed (excluded: 3)
+```
+
+The optional compile gates also passed:
+
+```text
+cargo check -p tenferro-cpu --no-default-features --features cpu-blas --all-targets --message-format=short
+cargo check -p tenferro-linalg --no-default-features --features cpu-blas --all-targets
+cargo check -p tenferro-runtime --no-default-features --features cpu-blas --all-targets --message-format=short
+cargo check -p tenferro-gpu --no-default-features --features 'cuda cpu-faer' --all-targets --message-format=short
+cargo check -p tenferro-xla --no-default-features --features pjrt --all-targets --message-format=short
+```
+
+The CUDA feature's hardware-independent tests passed with 38 passed and 108
+ignored. The following BLAS test commands were run but are not claimed as
+passing: both stop at the arm64 linker because this host lacks matching BLAS
+and LAPACK symbols. The first causal symbols are `_cblas_ctrsm`,
+`_cblas_dtrsm`, `_cblas_strsm`, `_cblas_ztrsm`, `_cgetrf_`, and `_dgetrf_` for
+linalg; the runtime test additionally reports `_cblas_cgemm`,
+`_cblas_dgemm`, `_cblas_sgemm`, and `_cblas_zgemm`.
+
+```text
+cargo test -p tenferro-linalg --no-default-features --features cpu-blas --all-targets
+cargo test -p tenferro-runtime --no-default-features --features cpu-blas --all-targets
+```
+
+The current CI profiles were exercised with Python 3.11 on this macOS host:
+
+```text
+PATH=/Users/hiroshi/.local/share/uv/python/cpython-3.11-macos-aarch64-none/bin:$PATH bash scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -p tenferro-runtime remainder_rejects_complex_dtype_at_graph_build_without_panicking' --ci-profile docs
+# exit 0; docs-site and all 9 stages passed (optional Graphviz dependency graph skipped: dot not installed)
+PATH=/Users/hiroshi/.local/share/uv/python/cpython-3.11-macos-aarch64-none/bin:$PATH bash scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -p tenferro-runtime remainder_rejects_complex_dtype_at_graph_build_without_panicking' --ci-profile workspace-faer
+# exit 0; nextest 2243/2243 passed (one leaky test reported), workspace release doctests passed
+```
+
+The CI unit tests initially exposed a macOS Bash 3.2 bug in
+`check-pr-fast.sh`: `set -u` rejects the length expansion of an empty array.
+The script now tracks explicit focused-test/profile counts and only expands
+non-empty arrays. This keeps the existing CI policy intact while making the
+preflight portable. With the fix, the focused CI policy tests pass:
+
+```text
+PATH=/Users/hiroshi/.local/share/uv/python/cpython-3.11-macos-aarch64-none/bin:$PATH /Users/hiroshi/.local/bin/python3.11 -m unittest discover -s scripts/ci/tests -p 'test_change_policy.py' -v
+# exit 0; 15 tests passed
+```
+
+The full `ci-config` profile reaches its final `actionlint` step after 81 CI
+unit tests pass, but this host has no `actionlint` executable (`actionlint:
+command not found`). It is therefore an environmental limitation and is not
+claimed as a passing local gate. The obsolete `--ci-profile local-gate`
+argument was also verified to be rejected because current `origin/main`
+removed that profile; the current profiles above are authoritative.
+
 ## Residual risks
 
 Hardware-dependent CUDA/WebGPU/PJRT execution and hosted affinity/NUMA
