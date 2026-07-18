@@ -1011,9 +1011,11 @@ jobs:
             capability_tier="baseline"
           fi
 
-          echo "driver_version=${driver_version}" >> "${GITHUB_OUTPUT}"
-          echo "runtime_version=${runtime_version}" >> "${GITHUB_OUTPUT}"
-          echo "capability_tier=${capability_tier}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "driver_version=${driver_version}"
+            echo "runtime_version=${runtime_version}"
+            echo "capability_tier=${capability_tier}"
+          } >> "${GITHUB_OUTPUT}"
           echo "Driver CUDA API: ${driver_version}"
           echo "Selected CUDA runtime: ${runtime_version} (${capability_tier} CubeCL capabilities)"
 
