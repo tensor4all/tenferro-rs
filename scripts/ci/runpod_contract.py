@@ -66,6 +66,25 @@ def configured_gpu_tiers(
     return tiers
 
 
+def configured_cuda_versions(config: Mapping[str, object]) -> tuple[str, ...]:
+    """Validate and return the CUDA driver versions accepted for a pod."""
+
+    value = config.get("allowed_cuda_versions")
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes))
+        or not value
+        or any(not isinstance(version, str) or not version for version in value)
+    ):
+        raise ContractError(
+            "runpod_config.json allowed_cuda_versions must be a nonempty "
+            "array of strings"
+        )
+    if len(set(value)) != len(value):
+        raise ContractError("allowed_cuda_versions must not contain duplicates")
+    return tuple(value)
+
+
 def resolve_local_ref(
     document: Mapping[str, object], ref: str
 ) -> Mapping[str, object]:
@@ -96,9 +115,9 @@ def _property(value: Mapping[str, object], name: str, context: str) -> object:
     return value[name]
 
 
-def extract_gpu_type_ids(document: Mapping[str, object]) -> frozenset[str]:
-    """Extract the accepted ``gpuTypeIds`` enum from ``POST /pods``."""
-
+def _pod_create_properties(
+    document: Mapping[str, object],
+) -> Mapping[str, object]:
     try:
         paths = _mapping(_property(document, "paths", "document"), "paths")
         pods = _mapping(_property(paths, "/pods", "paths"), "POST /pods")
@@ -133,23 +152,48 @@ def extract_gpu_type_ids(document: Mapping[str, object]) -> frozenset[str]:
         _property(schema, "properties", "POST /pods schema"),
         "POST /pods properties",
     )
-    gpu_types = _mapping(
-        _property(properties, "gpuTypeIds", "POST /pods properties"),
-        "POST /pods gpuTypeIds",
+    return properties
+
+
+def _extract_string_enum_property(
+    document: Mapping[str, object], property_name: str
+) -> frozenset[str]:
+    properties = _pod_create_properties(document)
+    property_schema = _mapping(
+        _property(properties, property_name, "POST /pods properties"),
+        f"POST /pods {property_name}",
     )
     items = _mapping(
-        _property(gpu_types, "items", "POST /pods gpuTypeIds"),
-        "POST /pods gpuTypeIds items",
+        _property(property_schema, "items", f"POST /pods {property_name}"),
+        f"POST /pods {property_name} items",
     )
-    enum_values = _property(items, "enum", "POST /pods gpuTypeIds items")
+    enum_values = _property(
+        items, "enum", f"POST /pods {property_name} items"
+    )
     if (
         not isinstance(enum_values, Sequence)
         or isinstance(enum_values, (str, bytes))
         or not enum_values
         or any(not isinstance(value, str) for value in enum_values)
     ):
-        raise ContractError("POST /pods gpuTypeIds enum must contain string GPU IDs")
+        raise ContractError(
+            f"POST /pods {property_name} enum must contain strings"
+        )
     return frozenset(enum_values)
+
+
+def extract_gpu_type_ids(document: Mapping[str, object]) -> frozenset[str]:
+    """Extract the accepted ``gpuTypeIds`` enum from ``POST /pods``."""
+
+    return _extract_string_enum_property(document, "gpuTypeIds")
+
+
+def extract_allowed_cuda_versions(
+    document: Mapping[str, object],
+) -> frozenset[str]:
+    """Extract accepted ``allowedCudaVersions`` values from ``POST /pods``."""
+
+    return _extract_string_enum_property(document, "allowedCudaVersions")
 
 
 def validate_gpu_type_ids(
@@ -162,6 +206,20 @@ def validate_gpu_type_ids(
     if invalid:
         raise ContractError(
             "configured RunPod GPU IDs absent from POST /pods schema: "
+            + ", ".join(invalid)
+        )
+
+
+def validate_cuda_versions(
+    document: Mapping[str, object], configured_versions: Sequence[str]
+) -> None:
+    """Require every configured CUDA version to occur in the current schema."""
+
+    accepted = extract_allowed_cuda_versions(document)
+    invalid = sorted(set(configured_versions) - accepted)
+    if invalid:
+        raise ContractError(
+            "configured RunPod CUDA versions absent from POST /pods schema: "
             + ", ".join(invalid)
         )
 
@@ -209,6 +267,7 @@ def main() -> int:
     try:
         config = _load_json(args.config)
         tiers = configured_gpu_tiers(config)
+        cuda_versions = configured_cuda_versions(config)
         configured_ids = [
             gpu_id for _name, gpu_ids in tiers for gpu_id in gpu_ids
         ]
@@ -225,8 +284,10 @@ def main() -> int:
                 raise ContractError("runpod_config.json openapi_url must be a string")
             schema = fetch_openapi(openapi_url, api_key)
         validate_gpu_type_ids(schema, configured_ids)
+        validate_cuda_versions(schema, cuda_versions)
         print(
-            f"RunPod OpenAPI accepts all {len(configured_ids)} configured GPU IDs."
+            f"RunPod OpenAPI accepts all {len(configured_ids)} configured GPU "
+            f"IDs and CUDA versions {', '.join(cuda_versions)}."
         )
     except ContractError as error:
         print(f"RunPod contract error: {error}", file=sys.stderr)

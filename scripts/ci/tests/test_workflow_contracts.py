@@ -1,3 +1,4 @@
+import json
 import re
 import unittest
 from pathlib import Path
@@ -151,6 +152,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_runpod_cuda_runtime_matches_cudarc_floor(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         cargo = read("Cargo.toml")
+        runpod_config = json.loads(read("scripts/ci/runpod_config.json"))
         workflow_cudarc = re.search(
             r'^  CUDARC_CUDA_VERSION: "(\d+)"$', text, re.MULTILINE
         )
@@ -175,6 +177,15 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertEqual(int(workflow_cudarc.group(1)), encoded_runtime)
         self.assertEqual(workflow_cudarc.group(1), cargo_cudarc.group(1))
+        required_runtime = (int(runtime.group(1)), int(runtime.group(2)))
+        allowed_versions = [
+            tuple(int(part) for part in version.split("."))
+            for version in runpod_config["allowed_cuda_versions"]
+        ]
+        self.assertIn(required_runtime, allowed_versions)
+        self.assertTrue(
+            all(version >= required_runtime for version in allowed_versions)
+        )
         self.assertIn("nvrtc.nvrtcVersion", text)
         self.assertIn("Loaded NVRTC version:", text)
         self.assertIn("if loaded < required:", text)

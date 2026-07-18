@@ -116,6 +116,7 @@ def build_pod_payload(
     return {
         "cloudType": config["cloud_type"],
         "computeType": config["compute_type"],
+        "allowedCudaVersions": config["allowed_cuda_versions"],
         "name": f"tenferro-rs-gpu-ci-{os.environ.get('GITHUB_RUN_ID', 'local')}",
         "imageName": image_name,
         "gpuTypeIds": list(gpu_type_ids),
