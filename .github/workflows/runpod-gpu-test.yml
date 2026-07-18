@@ -525,7 +525,10 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true' && steps.archive_reuse.outputs.reused != 'true'
         with:
-          prefix-key: v7-rust-cuda-pjrt-ci-ubuntu22-ptx
+          # v8 rotated the namespace when ci-cache-publish took ownership:
+          # v7 entries could contain PR-built target artifacts saved by the
+          # previously write-capable workflow_run jobs.
+          prefix-key: v8-rust-cuda-pjrt-ci-ubuntu22-ptx
           shared-key: cuda-pjrt-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}
           cache-all-crates: true
           cache-workspace-crates: true

@@ -329,7 +329,7 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertEqual(key_line(consumer), key_line(publisher))
         for pair_line in (
-            "prefix-key: v7-rust-cuda-pjrt-ci-ubuntu22-ptx",
+            "prefix-key: v8-rust-cuda-pjrt-ci-ubuntu22-ptx",
             "shared-key: cuda-pjrt-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}",
             "key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2",
         ):

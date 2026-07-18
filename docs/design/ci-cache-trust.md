@@ -71,6 +71,12 @@ component version, and a manual `vN`. Their paths live under the fixed root
 `/opt/tenferro-ci` so absolute paths restored from hosted-runner saves line
 up on the pod.
 
+Every cache namespace was rotated (`vN` bumps across the archive, Rust
+build, runtime-tree, and cuTENSOR keys) when the trusted publisher took
+ownership: entries under the previous names could have been populated while
+write-capable jobs still built PR code, so consumers must never restore
+them.
+
 ## Immutable GPU artifact reuse across retries
 
 Every `cuda-archive` run uploads the two nextest archives as a per-run
