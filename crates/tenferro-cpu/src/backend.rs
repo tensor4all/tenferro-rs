@@ -616,7 +616,7 @@ impl CpuBackendState {
         }
     }
 
-    fn initialized_engines(&self) -> Vec<Arc<CpuEngine>> {
+    fn initialized_engines(&self, op: &'static str) -> crate::Result<Vec<Arc<CpuEngine>>> {
         let mut engines = vec![Arc::clone(&self.base_engine)];
         if let Some(engine) = self.all_allowed.get() {
             engines.push(Arc::clone(engine));
@@ -624,14 +624,28 @@ impl CpuBackendState {
         engines.extend(
             self.node_engines
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .map_err(|_| poisoned_cpu_lock(op, "CPU engine registry"))?
                 .values()
                 .cloned(),
         );
         engines.sort_unstable_by_key(|engine| Arc::as_ptr(engine) as usize);
         engines.dedup_by(|left, right| Arc::ptr_eq(left, right));
-        engines
+        Ok(engines)
     }
+}
+
+fn poisoned_cpu_lock(op: &'static str, lock: &'static str) -> crate::Error {
+    crate::Error::runtime_state(op, format!("{lock} lock poisoned"))
+}
+
+fn lock_engine_resources<'a>(
+    engine: &'a CpuEngine,
+    op: &'static str,
+) -> crate::Result<std::sync::MutexGuard<'a, EngineResources>> {
+    engine
+        .resources
+        .lock()
+        .map_err(|_| poisoned_cpu_lock(op, "CPU engine resources"))
 }
 
 /// A cheap cloneable handle to shared CPU execution coordination.
@@ -1308,21 +1322,24 @@ impl CpuBackend {
     /// use tenferro_cpu::CpuBackend;
     ///
     /// let backend = CpuBackend::new();
-    /// assert_eq!(backend.buffer_pool_len(), 0);
+    /// assert_eq!(backend.buffer_pool_len()?, 0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn buffer_pool_len(&self) -> usize {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when the engine registry or an
+    /// initialized engine's resources lock is poisoned.
+    pub fn buffer_pool_len(&self) -> crate::Result<usize> {
         self.shared
-            .initialized_engines()
-            .into_iter()
-            .map(|engine| {
-                engine
-                    .resources
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .buffers
-                    .len()
+            .initialized_engines("CpuBackend::buffer_pool_len")?
+            .iter()
+            .try_fold(0, |total, engine| {
+                Ok(total
+                    + lock_engine_resources(engine, "CpuBackend::buffer_pool_len")?
+                        .buffers
+                        .len())
             })
-            .sum()
     }
 
     /// Snapshot reusable typed host buffers currently retained by this backend.
@@ -1333,25 +1350,28 @@ impl CpuBackend {
     /// use tenferro_cpu::CpuBackend;
     ///
     /// let backend = CpuBackend::new();
-    /// let stats = backend.buffer_pool_stats();
+    /// let stats = backend.buffer_pool_stats()?;
     /// assert_eq!(stats.buffers, 0);
     /// assert_eq!(stats.capacity_bytes, 0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn buffer_pool_stats(&self) -> BufferPoolStats {
-        self.shared.initialized_engines().into_iter().fold(
-            BufferPoolStats::default(),
-            |mut total, engine| {
-                let stats = engine
-                    .resources
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when the engine registry or an
+    /// initialized engine's resources lock is poisoned.
+    pub fn buffer_pool_stats(&self) -> crate::Result<BufferPoolStats> {
+        self.shared
+            .initialized_engines("CpuBackend::buffer_pool_stats")?
+            .iter()
+            .try_fold(BufferPoolStats::default(), |mut total, engine| {
+                let stats = lock_engine_resources(engine, "CpuBackend::buffer_pool_stats")?
                     .buffers
                     .stats();
                 total.buffers += stats.buffers;
                 total.capacity_bytes += stats.capacity_bytes;
-                total
-            },
-        )
+                Ok(total)
+            })
     }
 
     /// Return cache-style stats for the CPU buffer pool.
@@ -1362,16 +1382,22 @@ impl CpuBackend {
     /// use tenferro_cpu::CpuBackend;
     ///
     /// let backend = CpuBackend::new();
-    /// let stats = backend.buffer_pool_cache_stats();
+    /// let stats = backend.buffer_pool_cache_stats()?;
     /// assert_eq!(stats.entries, 0);
     /// assert_eq!(stats.retained_bytes, 0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn buffer_pool_cache_stats(&self) -> CacheStats {
-        let stats = self.buffer_pool_stats();
-        CacheStats {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when the engine registry or an
+    /// initialized engine's resources lock is poisoned.
+    pub fn buffer_pool_cache_stats(&self) -> crate::Result<CacheStats> {
+        let stats = self.buffer_pool_stats()?;
+        Ok(CacheStats {
             entries: stats.buffers,
             retained_bytes: stats.capacity_bytes,
-        }
+        })
     }
 
     /// Current CPU buffer-pool retention limit in bytes.
@@ -1403,22 +1429,37 @@ impl CpuBackend {
     /// use tenferro_cpu::CpuBackend;
     ///
     /// let mut backend = CpuBackend::new();
-    /// backend.set_buffer_pool_limit_bytes(0);
+    /// backend.set_buffer_pool_limit_bytes(0)?;
     /// assert_eq!(backend.buffer_pool_limit_bytes(), 0);
-    /// assert_eq!(backend.buffer_pool_len(), 0);
+    /// assert_eq!(backend.buffer_pool_len()?, 0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn set_buffer_pool_limit_bytes(&mut self, max_retained_capacity_bytes: usize) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] without changing the configured
+    /// limit when the engine registry or any initialized engine's resources
+    /// lock is poisoned.
+    pub fn set_buffer_pool_limit_bytes(
+        &mut self,
+        max_retained_capacity_bytes: usize,
+    ) -> crate::Result<()> {
+        let engines = self
+            .shared
+            .initialized_engines("CpuBackend::set_buffer_pool_limit_bytes")?;
+        let mut resources = engines
+            .iter()
+            .map(|engine| lock_engine_resources(engine, "CpuBackend::set_buffer_pool_limit_bytes"))
+            .collect::<crate::Result<Vec<_>>>()?;
         self.shared
             .buffer_limit
             .store(max_retained_capacity_bytes, Ordering::Relaxed);
-        for engine in self.shared.initialized_engines() {
-            engine
-                .resources
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        for resource in &mut resources {
+            resource
                 .buffers
                 .set_max_retained_capacity_bytes(max_retained_capacity_bytes);
         }
+        Ok(())
     }
 
     /// Reset reusable typed host buffers currently retained by this backend.
@@ -1433,18 +1474,28 @@ impl CpuBackend {
     /// use tenferro_cpu::CpuBackend;
     ///
     /// let mut backend = CpuBackend::new();
-    /// backend.reset_buffer_pool();
-    /// assert_eq!(backend.buffer_pool_len(), 0);
+    /// backend.reset_buffer_pool()?;
+    /// assert_eq!(backend.buffer_pool_len()?, 0);
+    /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
-    pub fn reset_buffer_pool(&mut self) {
-        for engine in self.shared.initialized_engines() {
-            engine
-                .resources
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .buffers
-                .clear();
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] without clearing any initialized
+    /// engine when the engine registry or any engine's resources lock is
+    /// poisoned.
+    pub fn reset_buffer_pool(&mut self) -> crate::Result<()> {
+        let engines = self
+            .shared
+            .initialized_engines("CpuBackend::reset_buffer_pool")?;
+        let mut resources = engines
+            .iter()
+            .map(|engine| lock_engine_resources(engine, "CpuBackend::reset_buffer_pool"))
+            .collect::<crate::Result<Vec<_>>>()?;
+        for resource in &mut resources {
+            resource.buffers.clear();
         }
+        Ok(())
     }
 
     /// Run a closure in this backend's CPU execution scope.

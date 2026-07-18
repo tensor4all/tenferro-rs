@@ -220,7 +220,7 @@ fn eager_einsum_owned_matches_borrowed() {
         owned.as_slice::<f64>().unwrap(),
         borrowed.as_slice::<f64>().unwrap()
     );
-    assert!(owned_ctx.buffer_pool_len() >= 2);
+    assert!(owned_ctx.buffer_pool_len().unwrap() >= 2);
 }
 
 #[test]

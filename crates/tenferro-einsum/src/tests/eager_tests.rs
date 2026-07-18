@@ -293,7 +293,7 @@ fn eager_einsum_owned_reclaims_consumed_input_buffers() {
 
     assert_f64_tensor(&result, &[2, 2], &[22.0, 28.0, 49.0, 64.0]);
     assert!(
-        ctx.buffer_pool_len() >= 2,
+        ctx.buffer_pool_len().unwrap() >= 2,
         "owned input buffers should be reclaimed after their last use"
     );
 }
