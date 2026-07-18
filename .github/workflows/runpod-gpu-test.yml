@@ -70,8 +70,10 @@ env:
   CUBECL_DEBUG_LOG: "0"
   CUDA_ARCHIVE: cuda-tests.tar.zst
   PJRT_ARCHIVE: pjrt-tests.tar.zst
-  # Match the CUDA 12.8 cudarc bindings and CubeCL compiler API floor.
+  # Keep 12.8 bindings so newer runtimes retain every CubeCL CUDA feature.
   CUDARC_CUDA_VERSION: "12080"
+  # RunPod may select the 12.4 baseline; 12.8 enables the full CubeCL feature set.
+  CUDA_MIN_RUNTIME_VERSION: "12.4"
   CUDA_RUNTIME_VERSION: "12.8"
   ARCHIVE_WORKSPACE_ROOT: /home/runner/work/${{ github.event.repository.name }}/${{ github.event.repository.name }}
   CUTENSOR_VERSION: "2.6.0.4"
@@ -971,6 +973,52 @@ jobs:
           free -h
           nproc
 
+      - name: Select CUDA runtime for driver
+        id: select_cuda_runtime
+        run: |
+          set -euo pipefail
+          driver_version="$(nvidia-smi | sed -n 's/.*CUDA Version: \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1)"
+          if [ -z "${driver_version}" ]; then
+            echo "Could not determine the CUDA driver API version from nvidia-smi." >&2
+            exit 1
+          fi
+
+          cuda_version_ge() {
+            local version="$1"
+            local min_version="$2"
+            local ver_major="${version%%.*}"
+            local ver_minor="${version#*.}"
+            local min_major="${min_version%%.*}"
+            local min_minor="${min_version#*.}"
+            if [ "${ver_major}" -gt "${min_major}" ]; then
+              return 0
+            fi
+            if [ "${ver_major}" -lt "${min_major}" ]; then
+              return 1
+            fi
+            [ "${ver_minor}" -ge "${min_minor}" ]
+          }
+
+          if ! cuda_version_ge "${driver_version}" "${CUDA_MIN_RUNTIME_VERSION}"; then
+            echo "CUDA driver API ${driver_version} is below the ${CUDA_MIN_RUNTIME_VERSION} minimum." >&2
+            exit 1
+          fi
+          if cuda_version_ge "${driver_version}" "${CUDA_RUNTIME_VERSION}"; then
+            runtime_version="${CUDA_RUNTIME_VERSION}"
+            capability_tier="full"
+          else
+            runtime_version="${CUDA_MIN_RUNTIME_VERSION}"
+            capability_tier="baseline"
+          fi
+
+          {
+            echo "driver_version=${driver_version}"
+            echo "runtime_version=${runtime_version}"
+            echo "capability_tier=${capability_tier}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Driver CUDA API: ${driver_version}"
+          echo "Selected CUDA runtime: ${runtime_version} (${capability_tier} CubeCL capabilities)"
+
       - name: Cache cuTENSOR redistributable
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -980,10 +1028,13 @@ jobs:
       - name: Cache CUDA minimal runtime tree
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/cuda-runtime-${{ env.CUDA_RUNTIME_VERSION }}
-          key: cuda-runtime-${{ runner.os }}-x86_64-${{ env.CUDA_RUNTIME_VERSION }}-minimal-v4
+          path: ${{ runner.temp }}/cuda-runtime-${{ steps.select_cuda_runtime.outputs.runtime_version }}
+          key: cuda-runtime-${{ runner.os }}-x86_64-${{ steps.select_cuda_runtime.outputs.runtime_version }}-minimal-v5
 
       - name: Configure CUDA runtime libraries
+        env:
+          CUDA_DRIVER_VERSION: ${{ steps.select_cuda_runtime.outputs.driver_version }}
+          CUDA_RUNTIME_VERSION: ${{ steps.select_cuda_runtime.outputs.runtime_version }}
         run: |
           set -euo pipefail
           if ! command -v nvidia-smi >/dev/null 2>&1; then
@@ -1003,25 +1054,6 @@ jobs:
             fi
           }
 
-          cuda_version_ge() {
-            local version="$1"
-            local min_version="$2"
-            if [ -z "${version}" ]; then
-              return 1
-            fi
-            local ver_major="${version%%.*}"
-            local ver_minor="${version#*.}"
-            local min_major="${min_version%%.*}"
-            local min_minor="${min_version#*.}"
-            if [ "${ver_major}" -gt "${min_major}" ]; then
-              return 0
-            fi
-            if [ "${ver_major}" -lt "${min_major}" ]; then
-              return 1
-            fi
-            [ "${ver_minor}" -ge "${min_minor}" ]
-          }
-
           accept_cuda_toolkit() {
             local candidate="$1"
             if [ ! -d "${candidate}" ]; then
@@ -1033,15 +1065,15 @@ jobs:
             fi
             local version
             version="$(cuda_toolkit_version "${candidate}")"
-            if cuda_version_ge "${version}" "${CUDA_RUNTIME_VERSION}"; then
+            if [ "${version}" = "${CUDA_RUNTIME_VERSION}" ]; then
               cuda_path="${candidate}"
               echo "Using CUDA toolkit at ${candidate} (version ${version})."
               return 0
             fi
             if [ -n "${version}" ]; then
-              echo "Skipping CUDA toolkit at ${candidate} (found ${version}, need >= ${CUDA_RUNTIME_VERSION})."
+              echo "Skipping CUDA toolkit at ${candidate} (found ${version}, need exactly ${CUDA_RUNTIME_VERSION})."
             else
-              echo "Skipping CUDA toolkit at ${candidate} (version metadata not found, need >= ${CUDA_RUNTIME_VERSION})."
+              echo "Skipping CUDA toolkit at ${candidate} (version metadata not found, need exactly ${CUDA_RUNTIME_VERSION})."
             fi
             return 1
           }
@@ -1183,6 +1215,9 @@ jobs:
           echo "TENFERRO_CUTENSOR_PATH=${cutensor_path}" >> "${GITHUB_ENV}"
 
       - name: Verify loaded NVRTC version
+        env:
+          CUDA_DRIVER_VERSION: ${{ steps.select_cuda_runtime.outputs.driver_version }}
+          CUDA_RUNTIME_VERSION: ${{ steps.select_cuda_runtime.outputs.runtime_version }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -1196,15 +1231,41 @@ jobs:
           if status != 0:
               raise SystemExit(f"nvrtcVersion failed with status {status}")
           loaded = (major.value, minor.value)
-          required = tuple(
+          driver = tuple(
+              int(part) for part in os.environ["CUDA_DRIVER_VERSION"].split(".")
+          )
+          selected = tuple(
               int(part) for part in os.environ["CUDA_RUNTIME_VERSION"].split(".")
           )
+          minimum = tuple(
+              int(part)
+              for part in os.environ["CUDA_MIN_RUNTIME_VERSION"].split(".")
+          )
+          full = (12, 8)
+          print(f"Driver CUDA API version: {driver[0]}.{driver[1]}")
           print(f"Loaded NVRTC version: {loaded[0]}.{loaded[1]}")
-          if loaded < required:
+          if driver < minimum:
               raise SystemExit(
-                  f"NVRTC {loaded[0]}.{loaded[1]} is older than required "
-                  f"CUDA {required[0]}.{required[1]}"
+                  f"CUDA driver API {driver[0]}.{driver[1]} is older than minimum "
+                  f"CUDA {minimum[0]}.{minimum[1]}"
               )
+          if loaded < minimum:
+              raise SystemExit(
+                  f"NVRTC {loaded[0]}.{loaded[1]} is older than minimum "
+                  f"CUDA {minimum[0]}.{minimum[1]}"
+              )
+          if loaded > driver:
+              raise SystemExit(
+                  f"NVRTC {loaded[0]}.{loaded[1]} is newer than driver API "
+                  f"{driver[0]}.{driver[1]}"
+              )
+          if loaded != selected:
+              raise SystemExit(
+                  f"Loaded NVRTC {loaded[0]}.{loaded[1]} does not match selected "
+                  f"CUDA runtime {selected[0]}.{selected[1]}"
+              )
+          tier = "full" if loaded >= full and driver >= full else "baseline"
+          print(f"Expected CubeCL CUDA capability tier: {tier}")
           PY
 
       - name: Link archive build workspace path

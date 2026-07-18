@@ -6,9 +6,12 @@ If a CUDA run fails while loading cuTENSOR, cuSOLVER, or cuBLAS, first check
 that the CUDA runtime libraries are on the dynamic-linker path:
 
 ```bash
-CUDA_PATH=/usr/local/cuda-12.8
-LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:$LD_LIBRARY_PATH
+CUDA_PATH=/usr/local/cuda-12.4
+LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64:$LD_LIBRARY_PATH
 ```
+
+CUDA 12.4 is the minimum runtime. Use a CUDA 12.8-or-newer driver and NVRTC to
+enable the complete CubeCL capability set.
 
 For non-standard installs, set the exact library paths:
 
@@ -17,6 +20,14 @@ TENFERRO_CUTENSOR_PATH=/opt/cuda/lib64/libcutensor.so.2
 TENFERRO_CUSOLVER_PATH=/opt/cuda/lib64/libcusolver.so.12
 TENFERRO_CUBLAS_PATH=/opt/cuda/lib64/libcublas.so.12
 ```
+
+## Unsupported PTX Version
+
+`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` usually means the loaded NVRTC is newer
+than the host driver API. Check both versions with `nvidia-smi` and the NVRTC
+library selected by `LD_LIBRARY_PATH`. On a driver reporting CUDA 12.4, load
+NVRTC 12.4; on a driver reporting CUDA 12.8 or newer, load NVRTC 12.8 to retain
+the full CubeCL feature set.
 
 ## Expected GPU Tensor
 

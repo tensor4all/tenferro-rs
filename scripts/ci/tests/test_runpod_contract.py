@@ -57,9 +57,16 @@ class RunPodContractTests(unittest.TestCase):
     def test_configured_cuda_versions_are_required_and_unique(self) -> None:
         self.assertEqual(
             configured_cuda_versions(
-                {"allowed_cuda_versions": ["13.0", "12.9", "12.8"]}
+                {
+                    "allowed_cuda_versions": [
+                        "13.0",
+                        "12.9",
+                        "12.8",
+                        "12.4",
+                    ]
+                }
             ),
-            ("13.0", "12.9", "12.8"),
+            ("13.0", "12.9", "12.8", "12.4"),
         )
         for value in ([], ["12.8", "12.8"], "12.8"):
             with self.subTest(value=value), self.assertRaises(ContractError):
