@@ -412,14 +412,14 @@ mod provider_batch {
                         return Err(Error::invalid_argument(
                             "grouped_gemm",
                             "configuration",
-                            "BLAS grouped GEMM metadata is inconsistent".into(),
+                            "BLAS grouped GEMM metadata is inconsistent",
                         ));
                     };
                     *last_size = last_size.checked_add(1).ok_or_else(|| {
                         Error::invalid_argument(
                             "grouped_gemm",
                             "configuration",
-                            "BLAS grouped GEMM group_size overflows i32".into(),
+                            "BLAS grouped GEMM group_size overflows i32",
                         )
                     })?;
                 }
