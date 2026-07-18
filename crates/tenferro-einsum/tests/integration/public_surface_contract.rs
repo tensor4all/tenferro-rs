@@ -61,3 +61,57 @@ fn typed_einsum_view_inputs_use_read_suffix_and_typed_outputs_accept_views() {
         "borrowed typed inputs must not implement the unsuffixed einsum_into surface"
     );
 }
+
+#[test]
+fn gpu_dependency_is_owned_by_opt_in_backend_features() {
+    let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let manifest = std::fs::read_to_string(manifest_path).expect("read einsum manifest");
+    let dependencies = manifest
+        .split_once("[dependencies]")
+        .and_then(|(_, rest)| rest.split_once("[dev-dependencies]").map(|(body, _)| body))
+        .expect("manifest dependencies section");
+    let dev_dependencies = manifest
+        .split_once("[dev-dependencies]")
+        .map(|(_, rest)| rest)
+        .expect("manifest dev-dependencies section");
+
+    assert!(
+        dependencies.lines().any(|line| {
+            line.starts_with("tenferro-gpu = ") && line.contains("optional = true")
+        }),
+        "tenferro-gpu must be an optional normal dependency"
+    );
+    assert!(
+        !dev_dependencies
+            .lines()
+            .any(|line| line.starts_with("tenferro-gpu = ")),
+        "tenferro-gpu must not be an unconditional dev-dependency"
+    );
+
+    for feature in ["cuda", "webgpu", "rocm"] {
+        let feature_start = format!("{feature} = ");
+        let feature_body = manifest
+            .split_once(&feature_start)
+            .and_then(|(_, rest)| rest.split_once(']').map(|(body, _)| body))
+            .unwrap_or_else(|| panic!("missing or malformed {feature} feature"));
+        assert!(
+            feature_body.contains("dep:tenferro-gpu")
+                && feature_body.contains(&format!("tenferro-gpu/{feature}")),
+            "{feature} must explicitly activate tenferro-gpu and its matching backend feature"
+        );
+    }
+}
+
+#[test]
+fn eager_extension_registration_preserves_typed_source_errors() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/eager_ad.rs");
+    let source = std::fs::read_to_string(root).expect("read eager tensor source");
+    let registration = source
+        .split_once(".register_extension(register_runtime)")
+        .and_then(|(_, rest)| rest.split_once("let op =").map(|(body, _)| body))
+        .expect("eager extension registration source section");
+
+    assert!(registration.contains("runtime_extension_error("));
+    assert!(!registration.contains("Error::Internal"));
+    assert!(!registration.contains("to_string()"));
+}

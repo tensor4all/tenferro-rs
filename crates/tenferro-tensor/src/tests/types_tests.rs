@@ -16,6 +16,58 @@ use crate::{
 mod strided_dynamic;
 
 #[test]
+fn placement_default_is_the_canonical_host_placement() {
+    assert_eq!(
+        Placement::default(),
+        Placement {
+            memory_kind: MemoryKind::UnpinnedHost,
+            device: None,
+        }
+    );
+}
+
+#[test]
+fn tensor_view_mut_constructors_cover_every_dtype() {
+    let shape = [1];
+    let mut f32_data = [1.0_f32];
+    let mut f64_data = [1.0_f64];
+    let mut i32_data = [1_i32];
+    let mut i64_data = [1_i64];
+    let mut bool_data = [true];
+    let mut c32_data = [Complex32::new(1.0, 0.0)];
+    let mut c64_data = [Complex64::new(1.0, 0.0)];
+
+    assert_eq!(
+        TensorViewMut::f32(&shape, &mut f32_data).unwrap().dtype(),
+        DType::F32
+    );
+    assert_eq!(
+        TensorViewMut::f64(&shape, &mut f64_data).unwrap().dtype(),
+        DType::F64
+    );
+    assert_eq!(
+        TensorViewMut::i32(&shape, &mut i32_data).unwrap().dtype(),
+        DType::I32
+    );
+    assert_eq!(
+        TensorViewMut::i64(&shape, &mut i64_data).unwrap().dtype(),
+        DType::I64
+    );
+    assert_eq!(
+        TensorViewMut::bool(&shape, &mut bool_data).unwrap().dtype(),
+        DType::Bool
+    );
+    assert_eq!(
+        TensorViewMut::c32(&shape, &mut c32_data).unwrap().dtype(),
+        DType::C32
+    );
+    assert_eq!(
+        TensorViewMut::c64(&shape, &mut c64_data).unwrap().dtype(),
+        DType::C64
+    );
+}
+
+#[test]
 fn tensor_error_preserves_shared_validation_source() {
     let err = Error::validation(
         "add",
@@ -178,7 +230,7 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     assert_eq!(transposed.shape(), &[3, 2]);
     assert_eq!(transposed.strides(), &[2, 1]);
 
-    let reshaped = owned.reshape_view(&[6]).unwrap();
+    let reshaped = owned.reshape_view([6]).unwrap();
     assert_eq!(reshaped.shape(), &[6]);
 
     let sliced = owned
@@ -198,7 +250,7 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     }
 
     let vector = TensorOwnedView::from_parts(Arc::clone(&base), vec![2], vec![1], 0).unwrap();
-    let broadcast = vector.broadcast_in_dim_view(&[2, 3], &[0]).unwrap();
+    let broadcast = vector.broadcast_in_dim_view([2, 3], [0]).unwrap();
     assert_eq!(broadcast.shape(), &[2, 3]);
     assert_eq!(broadcast.strides(), &[1, 0]);
 
@@ -241,8 +293,8 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     let original_order = view_value.transpose_view([1, 0]).unwrap();
     assert_eq!(original_order.shape(), &[2, 3]);
 
-    let compact_view = value.reshape_view(&[6]).unwrap();
-    assert_eq!(compact_view.reshape_view(&[2, 3]).unwrap().shape(), &[2, 3]);
+    let compact_view = value.reshape_view([6]).unwrap();
+    assert_eq!(compact_view.reshape_view([2, 3]).unwrap().shape(), &[2, 3]);
     let sliced_value = compact_view
         .slice_view(&SliceConfig {
             starts: vec![1],
@@ -253,7 +305,7 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     assert_eq!(sliced_value.shape(), &[2]);
     assert_eq!(
         compact_view
-            .broadcast_in_dim_view(&[6, 2], &[0])
+            .broadcast_in_dim_view([6, 2], [0])
             .unwrap()
             .shape(),
         &[6, 2]

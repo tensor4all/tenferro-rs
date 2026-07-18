@@ -26,8 +26,8 @@ use tenferro_runtime::ad_support::ones_tensor;
 use tenferro_runtime::ErrorPhase;
 use tenferro_tensor::BackendSessionHost;
 use tenferro_tensor::{
-    CacheStats, DType, Tensor, TensorBackend, TensorElementwise, TensorRead, TensorValue,
-    TypedTensor,
+    CacheStats, DType, IntoShapeVec, Tensor, TensorBackend, TensorElementwise, TensorRead,
+    TensorScalar, TensorValue, TypedTensor,
 };
 use tidu::eager::{self, EagerInput, EagerOutput, KeySource, RecordedGraph, Recorder, Trace};
 use tidu::{ADRuleError, ADRuleKind, LinearizedGraph};
@@ -1615,6 +1615,25 @@ impl EagerTensor {
     /// while materializing the source value.
     pub fn from_tensor_in(tensor: Tensor, ctx: Arc<EagerRuntime>) -> Result<Self> {
         Self::new_leaf(ctx, tensor, false)
+    }
+
+    /// Create an untracked eager tensor from compact column-major data inside
+    /// an existing eager runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TensorRuntime`] with
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] when the shape and
+    /// data length disagree, or with
+    /// [`tenferro_tensor::ValidationError::IntegerOverflow`] when shape
+    /// arithmetic overflows. Returns [`Error::RuntimeState`] when eager
+    /// metadata cannot be registered.
+    pub fn from_vec_col_major_in<T: TensorScalar>(
+        shape: impl IntoShapeVec,
+        data: Vec<T>,
+        ctx: Arc<EagerRuntime>,
+    ) -> Result<Self> {
+        Self::from_tensor_in(Tensor::from_vec_col_major(shape, data)?, ctx)
     }
 
     /// Create a tracked eager leaf inside an existing eager context.

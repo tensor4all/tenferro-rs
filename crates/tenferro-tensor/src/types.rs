@@ -106,6 +106,12 @@ pub struct Placement {
     pub device: Option<DeviceId>,
 }
 
+impl Default for Placement {
+    fn default() -> Self {
+        default_placement()
+    }
+}
+
 /// Backend-owned buffer handle.
 ///
 /// `BufferHandle::new` creates an empty opaque handle. Use
@@ -2574,10 +2580,14 @@ impl TensorOwnedView {
     /// arithmetic overflow, or
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// reshaped view exceeds the base buffer.
-    pub fn reshape_view(&self, shape: &[usize]) -> crate::Result<Self> {
+    pub fn reshape_view(
+        &self,
+        shape: impl tenferro_tensor_core::IntoShapeVec,
+    ) -> crate::Result<Self> {
+        let shape = shape.into_shape_vec();
         let layout = reshape_layout_dyn(
             &self.layout,
-            shape,
+            &shape,
             tensor_buffer_len(&self.base),
             "TensorOwnedView::reshape_view",
         )?;
@@ -2685,14 +2695,15 @@ impl TensorOwnedView {
     /// result exceeds the base buffer, or
     /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
     /// arithmetic overflow.
-    pub fn broadcast_in_dim_view(&self, shape: &[usize], dims: &[usize]) -> crate::Result<Self> {
+    pub fn broadcast_in_dim_view(
+        &self,
+        shape: impl tenferro_tensor_core::IntoShapeVec,
+        dims: impl AsRef<[usize]>,
+    ) -> crate::Result<Self> {
+        let shape = shape.into_shape_vec();
         let layout = self
             .layout
-            .broadcast_in_dim_view::<DynRank>(
-                shape.to_vec().into(),
-                dims,
-                tensor_buffer_len(&self.base),
-            )
+            .broadcast_in_dim_view::<DynRank>(shape, dims, tensor_buffer_len(&self.base))
             .map_err(|err| tensor_layout_error("TensorOwnedView::broadcast_in_dim_view", err))?;
         Ok(Self {
             base: Arc::clone(&self.base),
@@ -2766,10 +2777,14 @@ impl TensorValue {
     /// arithmetic overflow, or
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// reshaped view exceeds the backing buffer.
-    pub fn reshape_view(&self, shape: &[usize]) -> crate::Result<Self> {
+    pub fn reshape_view(
+        &self,
+        shape: impl tenferro_tensor_core::IntoShapeVec,
+    ) -> crate::Result<Self> {
+        let shape = shape.into_shape_vec();
         match self {
             Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
-                .reshape_view(shape)
+                .reshape_view(shape.clone())
                 .map(Self::View),
             Self::View(view) => view.reshape_view(shape).map(Self::View),
         }
@@ -2810,10 +2825,16 @@ impl TensorValue {
     /// result exceeds the backing buffer, or
     /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
     /// arithmetic overflow.
-    pub fn broadcast_in_dim_view(&self, shape: &[usize], dims: &[usize]) -> crate::Result<Self> {
+    pub fn broadcast_in_dim_view(
+        &self,
+        shape: impl tenferro_tensor_core::IntoShapeVec,
+        dims: impl AsRef<[usize]>,
+    ) -> crate::Result<Self> {
+        let shape = shape.into_shape_vec();
+        let dims = dims.as_ref();
         match self {
             Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
-                .broadcast_in_dim_view(shape, dims)
+                .broadcast_in_dim_view(shape.clone(), dims)
                 .map(Self::View),
             Self::View(view) => view.broadcast_in_dim_view(shape, dims).map(Self::View),
         }
@@ -3287,18 +3308,33 @@ impl<'a> TensorView<'a> {
     }
 }
 
+macro_rules! tensor_view_mut_constructor {
+    ($name:ident, $variant:ident, $scalar:ty) => {
+        /// Create a dynamic mutable view over compact column-major host data.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`crate::Error::Validation`] with
+        /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+        /// compact layout arithmetic overflows, or
+        /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+        /// requested shape exceeds `data`.
+        pub fn $name(shape: &'a [usize], data: &'a mut [$scalar]) -> crate::Result<Self> {
+            Ok(Self::$variant(TypedTensorViewMut::from_col_major(
+                shape, data,
+            )?))
+        }
+    };
+}
+
 impl<'a> TensorViewMut<'a> {
-    /// Create a dynamic `f64` mutable view over compact column-major host data.
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] with
-    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
-    /// shape or offset arithmetic overflow, or
-    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
-    /// compact shape reaches beyond `data`.
-    pub fn f64(shape: &'a [usize], data: &'a mut [f64]) -> crate::Result<Self> {
-        Ok(Self::F64(TypedTensorViewMut::from_col_major(shape, data)?))
-    }
+    tensor_view_mut_constructor!(f32, F32, f32);
+    tensor_view_mut_constructor!(f64, F64, f64);
+    tensor_view_mut_constructor!(i32, I32, i32);
+    tensor_view_mut_constructor!(i64, I64, i64);
+    tensor_view_mut_constructor!(bool, Bool, bool);
+    tensor_view_mut_constructor!(c32, C32, Complex32);
+    tensor_view_mut_constructor!(c64, C64, Complex64);
 
     pub fn dtype(&self) -> DType {
         match self {
@@ -3432,6 +3468,17 @@ impl<'a> TensorRead<'a> {
 
     pub fn from_view(view: TensorView<'a>) -> Self {
         Self::View(view)
+    }
+
+    /// Convert this read target into a dtype-erased tensor view.
+    ///
+    /// Owned tensors are borrowed without copying their storage. Existing
+    /// views preserve their layout and placement metadata.
+    pub fn tensor_view(self) -> TensorView<'a> {
+        match self {
+            Self::Tensor(tensor) => tensor_view_with_layout(tensor, tensor_layout(tensor)),
+            Self::View(view) => view,
+        }
     }
 
     pub fn dtype(&self) -> DType {
@@ -4008,7 +4055,7 @@ fn reshape_layout_dyn<R: TensorRank>(
     buffer_len: usize,
     op: &'static str,
 ) -> crate::Result<TensorLayout<DynRank>> {
-    match layout.reshape_view_as::<DynRank>(shape.to_vec().into(), buffer_len) {
+    match layout.reshape_view_as::<DynRank>(shape.to_vec(), buffer_len) {
         Ok(layout) => Ok(layout),
         Err(err) => {
             if !relaxed_col_major_contiguous(layout.shape(), layout.strides(), op)? {
@@ -5000,10 +5047,10 @@ impl Tensor {
     /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
     /// arithmetic overflows.
     pub fn from_vec_col_major<T: TensorScalar>(
-        shape: Vec<usize>,
+        shape: impl tenferro_tensor_core::IntoShapeVec,
         data: Vec<T>,
     ) -> crate::Result<Self> {
-        T::into_tensor(shape, data)
+        T::into_tensor(shape.into_shape_vec().to_vec(), data)
     }
 
     /// Tensor shape.

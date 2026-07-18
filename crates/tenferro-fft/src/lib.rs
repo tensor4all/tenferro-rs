@@ -49,13 +49,15 @@
 //! ```
 
 use std::any::Any;
-use std::collections::HashMap;
-use std::hash::Hasher;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::mem::MaybeUninit;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+use lru::LruCache;
 use num_complex::Complex;
 use num_traits::{Float, FromPrimitive, Zero};
 use rustfft::{Fft, FftNum, FftPlanner};
@@ -73,10 +75,13 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOp, HostReference};
-use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
+use tenferro_runtime::{
+    Error, ErrorPhase, ExtensionCacheKey, ExtensionCacheSelector, ExtensionCacheStore, Result,
+    TracedTensor,
+};
 use tenferro_tensor::{
-    DType, DeviceKind, ErrorKind, MemoryKind, Placement, Tensor, TensorBackend, TensorRead,
-    TypedTensor, ValidationError,
+    CacheStats, DType, DeviceKind, ErrorKind, MemoryKind, Placement, RuntimeCacheControl, Tensor,
+    TensorBackend, TensorRead, TypedTensor, ValidationError,
 };
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
@@ -92,6 +97,290 @@ use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 /// );
 /// ```
 pub const FFT_EXTENSION_FAMILY_ID: &str = "tenferro-fft.fft.v1";
+
+/// Runtime cache namespace used for RustFFT plans.
+pub const FFT_PLAN_CACHE_NAME: &str = "rustfft-plans";
+
+/// Default number of plans retained by a caller-owned [`FftPlanCache`].
+pub const DEFAULT_FFT_PLAN_CACHE_CAPACITY: usize = 64;
+
+/// Select the FFT plan entries in an extension runtime cache.
+pub const fn fft_plan_cache_selector() -> ExtensionCacheSelector {
+    ExtensionCacheSelector::Cache {
+        family_id: FFT_EXTENSION_FAMILY_ID,
+        cache_name: FFT_PLAN_CACHE_NAME,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum FftPlanDType {
+    F32,
+    F64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct FftPlanKey {
+    len: usize,
+    forward: bool,
+    dtype: FftPlanDType,
+}
+
+enum CachedFftPlan {
+    F32(Arc<dyn Fft<f32>>),
+    F64(Arc<dyn Fft<f64>>),
+}
+
+/// Bounded, caller-owned LRU cache of RustFFT plans.
+///
+/// Retained-byte statistics include the cache-owned key and `Arc` handle for
+/// each entry. RustFFT does not expose the allocations owned by an opaque plan,
+/// so those allocations are intentionally excluded from the estimate.
+pub struct FftPlanCache {
+    entries: LruCache<FftPlanKey, CachedFftPlan>,
+}
+
+impl FftPlanCache {
+    /// Create an empty plan cache with an explicit maximum entry count.
+    pub fn with_capacity(capacity: NonZeroUsize) -> Self {
+        Self {
+            entries: LruCache::new(capacity),
+        }
+    }
+
+    /// Maximum number of retained plans.
+    pub fn capacity(&self) -> NonZeroUsize {
+        self.entries.cap()
+    }
+
+    /// Resize the cache, evicting least-recently-used plans when necessary.
+    pub fn set_capacity(&mut self, capacity: NonZeroUsize) {
+        self.entries.resize(capacity);
+    }
+
+    /// Remove every retained plan.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Snapshot the number of plans and known cache-owned bytes retained.
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            entries: self.entries.len(),
+            retained_bytes: self.entries.len().saturating_mul(fft_plan_retained_bytes()),
+        }
+    }
+
+    fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>> {
+        let key = FftPlanKey {
+            len,
+            forward,
+            dtype: FftPlanDType::F32,
+        };
+        if let Some(CachedFftPlan::F32(plan)) = self.entries.get(&key) {
+            return Arc::clone(plan);
+        }
+        let plan = build_fft_plan::<f32>(len, forward);
+        self.entries.put(key, CachedFftPlan::F32(Arc::clone(&plan)));
+        plan
+    }
+
+    fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>> {
+        let key = FftPlanKey {
+            len,
+            forward,
+            dtype: FftPlanDType::F64,
+        };
+        if let Some(CachedFftPlan::F64(plan)) = self.entries.get(&key) {
+            return Arc::clone(plan);
+        }
+        let plan = build_fft_plan::<f64>(len, forward);
+        self.entries.put(key, CachedFftPlan::F64(Arc::clone(&plan)));
+        plan
+    }
+
+    #[cfg(test)]
+    fn contains_f64(&self, len: usize, forward: bool) -> bool {
+        self.entries.contains(&FftPlanKey {
+            len,
+            forward,
+            dtype: FftPlanDType::F64,
+        })
+    }
+}
+
+impl Default for FftPlanCache {
+    fn default() -> Self {
+        Self::with_capacity(
+            NonZeroUsize::new(DEFAULT_FFT_PLAN_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN),
+        )
+    }
+}
+
+impl RuntimeCacheControl for FftPlanCache {
+    fn clear(&mut self) {
+        Self::clear(self);
+    }
+
+    fn stats(&self) -> CacheStats {
+        Self::stats(self)
+    }
+}
+
+/// Reusable concrete FFT executor with explicitly owned plan state.
+#[derive(Default)]
+pub struct FftExecutor {
+    plans: FftPlanCache,
+}
+
+impl FftExecutor {
+    /// Create an executor from a caller-configured plan cache.
+    pub fn new(plans: FftPlanCache) -> Self {
+        Self { plans }
+    }
+
+    /// Inspect the owned plan cache.
+    pub const fn plan_cache(&self) -> &FftPlanCache {
+        &self.plans
+    }
+
+    /// Mutably inspect or configure the owned plan cache.
+    pub fn plan_cache_mut(&mut self) -> &mut FftPlanCache {
+        &mut self.plans
+    }
+
+    /// Snapshot the owned plan cache statistics.
+    pub fn cache_stats(&self) -> CacheStats {
+        self.plans.stats()
+    }
+
+    /// Remove every retained plan from this executor.
+    pub fn clear_cache(&mut self) {
+        self.plans.clear();
+    }
+
+    /// Execute a complex or full-spectrum real FFT while reusing owned plans.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
+    /// `InvalidArgument` for invalid `axis`/`n`,
+    /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
+    /// for unsupported dtypes, or a typed backend source for execution.
+    pub fn fft<B: TensorBackend>(
+        &mut self,
+        input: &Tensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.execute(
+            input,
+            concrete_fft_kind("FftExecutor::fft", input.dtype())?,
+            "FftExecutor::fft",
+            n,
+            axis,
+            norm,
+            backend,
+        )
+    }
+
+    /// Execute an inverse complex FFT while reusing owned plans.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
+    /// `InvalidArgument` for invalid `axis`/`n`,
+    /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
+    /// for a non-complex input, or a typed backend source for execution.
+    pub fn ifft<B: TensorBackend>(
+        &mut self,
+        input: &Tensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.execute(
+            input,
+            concrete_ifft_kind("FftExecutor::ifft", input.dtype())?,
+            "FftExecutor::ifft",
+            n,
+            axis,
+            norm,
+            backend,
+        )
+    }
+
+    /// Execute a real FFT while reusing owned plans.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
+    /// `InvalidArgument` for invalid `axis`/`n`,
+    /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
+    /// for a non-real input, or a typed backend source for execution.
+    pub fn rfft<B: TensorBackend>(
+        &mut self,
+        input: &Tensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.execute(
+            input,
+            concrete_rfft_kind("FftExecutor::rfft", input.dtype())?,
+            "FftExecutor::rfft",
+            n,
+            axis,
+            norm,
+            backend,
+        )
+    }
+
+    /// Execute an inverse real FFT while reusing owned plans.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds`,
+    /// `InvalidArgument`, or spectrum-length details,
+    /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
+    /// for a non-complex input, or a typed backend source for execution.
+    pub fn irfft<B: TensorBackend>(
+        &mut self,
+        input: &Tensor,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        self.execute(
+            input,
+            concrete_irfft_kind("FftExecutor::irfft", input.dtype())?,
+            "FftExecutor::irfft",
+            n,
+            axis,
+            norm,
+            backend,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute<B: TensorBackend>(
+        &mut self,
+        input: &Tensor,
+        kind: FftKind,
+        op_name: &'static str,
+        n: Option<usize>,
+        axis: isize,
+        norm: FftNorm,
+        backend: &mut B,
+    ) -> tenferro_tensor::Result<Tensor> {
+        let op = concrete_fft_op(op_name, kind, input.shape(), n, axis, norm)?;
+        execute_concrete_fft_op_with_plans(input, &op, backend, &mut self.plans)
+    }
+}
 
 /// FFT extension methods for [`TracedTensor`].
 pub trait TracedTensorFftExt {
@@ -703,6 +992,15 @@ impl HostReference for FftOp {
 }
 
 fn execute_host_fft_op(op: &FftOp, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let mut plans = FftPlanCache::with_capacity(NonZeroUsize::MIN);
+    execute_host_fft_op_with_plans(op, inputs, &mut plans)
+}
+
+fn execute_host_fft_op_with_plans<P: FftPlanProvider + ?Sized>(
+    op: &FftOp,
+    inputs: &[&Tensor],
+    plans: &mut P,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
     if inputs.len() != 1 {
         return Err(tenferro_tensor::Error::invalid_argument(
             "tenferro-fft",
@@ -716,34 +1014,34 @@ fn execute_host_fft_op(op: &FftOp, inputs: &[&Tensor]) -> tenferro_tensor::Resul
         (FftKind::C2C { forward }, Tensor::C64(input)) => {
             Tensor::C64(TypedTensor::from_vec_col_major(
                 output_shape_c2c(input.shape(), op.axis, op.n)?,
-                execute_c2c(input, op.axis, op.n, forward, op.norm)?,
+                execute_c2c(input, op.axis, op.n, forward, op.norm, plans)?,
             )?)
         }
         (FftKind::C2C { forward }, Tensor::C32(input)) => {
             Tensor::C32(TypedTensor::from_vec_col_major(
                 output_shape_c2c(input.shape(), op.axis, op.n)?,
-                execute_c2c(input, op.axis, op.n, forward, op.norm)?,
+                execute_c2c(input, op.axis, op.n, forward, op.norm, plans)?,
             )?)
         }
         (FftKind::R2C { onesided }, Tensor::F64(input)) => {
             Tensor::C64(TypedTensor::from_vec_col_major(
                 output_shape_r2c(input.shape(), op.axis, op.n, onesided)?,
-                execute_r2c(input, op.axis, op.n, onesided, op.norm)?,
+                execute_r2c(input, op.axis, op.n, onesided, op.norm, plans)?,
             )?)
         }
         (FftKind::R2C { onesided }, Tensor::F32(input)) => {
             Tensor::C32(TypedTensor::from_vec_col_major(
                 output_shape_r2c(input.shape(), op.axis, op.n, onesided)?,
-                execute_r2c(input, op.axis, op.n, onesided, op.norm)?,
+                execute_r2c(input, op.axis, op.n, onesided, op.norm, plans)?,
             )?)
         }
         (FftKind::C2R, Tensor::C64(input)) => Tensor::F64(TypedTensor::from_vec_col_major(
             output_shape_c2r(input.shape(), op.axis, op.n)?,
-            execute_c2r(input, op.axis, op.n, op.norm)?,
+            execute_c2r(input, op.axis, op.n, op.norm, plans)?,
         )?),
         (FftKind::C2R, Tensor::C32(input)) => Tensor::F32(TypedTensor::from_vec_col_major(
             output_shape_c2r(input.shape(), op.axis, op.n)?,
-            execute_c2r(input, op.axis, op.n, op.norm)?,
+            execute_c2r(input, op.axis, op.n, op.norm, plans)?,
         )?),
         (kind, other) => {
             return Err(tensor_unsupported_dtype(
@@ -762,6 +1060,17 @@ fn execute_concrete_fft_op<B: TensorBackend>(
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
     backend.with_backend_session(|_exec| single_fft_output(execute_host_fft_op(op, &[input])?))
+}
+
+fn execute_concrete_fft_op_with_plans<B: TensorBackend, P: FftPlanProvider + ?Sized>(
+    input: &Tensor,
+    op: &FftOp,
+    backend: &mut B,
+    plans: &mut P,
+) -> tenferro_tensor::Result<Tensor> {
+    backend.with_backend_session(|_exec| {
+        single_fft_output(execute_host_fft_op_with_plans(op, &[input], plans)?)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1226,9 +1535,10 @@ pub fn ad_rules() -> std::result::Result<ExtensionRuleSet, ExtensionRegistryErro
 fn execute_fft_extension<B: TensorBackend + 'static>(
     op: &FftOp,
     inputs: &[&Tensor],
-    _ctx: &mut ExtensionExecutionContext<'_, B>,
+    ctx: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    execute_host_fft_op(op, inputs)
+    let mut plans = ExtensionFftPlanCache::new(ctx.caches_mut());
+    execute_host_fft_op_with_plans(op, inputs, &mut plans)
 }
 
 fn execute_fft_extension_reads<B: TensorBackend + 'static>(
@@ -1246,7 +1556,8 @@ fn execute_fft_extension_reads<B: TensorBackend + 'static>(
             .collect::<tenferro_tensor::Result<Vec<_>>>()
     })?;
     let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
-    execute_host_fft_op(op, &input_refs)
+    let mut plans = ExtensionFftPlanCache::new(ctx.caches_mut());
+    execute_host_fft_op_with_plans(op, &input_refs, &mut plans)
 }
 
 define_extension_runtime! {
@@ -1772,68 +2083,150 @@ unsafe fn assume_init_output_vec<T>(mut output: Vec<MaybeUninit<T>>) -> Vec<T> {
     unsafe { Vec::from_raw_parts(ptr, len, capacity) }
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct FftPlanKey {
-    len: usize,
-    forward: bool,
+fn build_fft_plan<T: FftNum + 'static>(len: usize, forward: bool) -> Arc<dyn Fft<T>> {
+    let mut planner = FftPlanner::<T>::new();
+    if forward {
+        planner.plan_fft_forward(len)
+    } else {
+        planner.plan_fft_inverse(len)
+    }
+}
+
+const fn fft_plan_retained_bytes() -> usize {
+    std::mem::size_of::<FftPlanKey>() + std::mem::size_of::<CachedFftPlan>()
+}
+
+trait FftPlanProvider: Send {
+    fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>>;
+    fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>>;
+}
+
+impl FftPlanProvider for FftPlanCache {
+    fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>> {
+        Self::plan_f32(self, len, forward)
+    }
+
+    fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>> {
+        Self::plan_f64(self, len, forward)
+    }
 }
 
 trait CachedFftPlanScalar: FftNum + Float + FromPrimitive + 'static {
-    fn cached_fft_plan(len: usize, forward: bool) -> tenferro_tensor::Result<Arc<dyn Fft<Self>>>;
+    fn plan<P: FftPlanProvider + ?Sized>(
+        plans: &mut P,
+        len: usize,
+        forward: bool,
+    ) -> Arc<dyn Fft<Self>>;
 }
 
-type FftPlanStore<T> = HashMap<FftPlanKey, Arc<dyn Fft<T>>>;
-type FftPlanCache<T> = OnceLock<Mutex<FftPlanStore<T>>>;
-
-static F32_FFT_PLAN_CACHE: FftPlanCache<f32> = OnceLock::new();
-static F64_FFT_PLAN_CACHE: FftPlanCache<f64> = OnceLock::new();
-
 impl CachedFftPlanScalar for f32 {
-    fn cached_fft_plan(len: usize, forward: bool) -> tenferro_tensor::Result<Arc<dyn Fft<Self>>> {
-        cached_fft_plan_from_cache(&F32_FFT_PLAN_CACHE, len, forward)
+    fn plan<P: FftPlanProvider + ?Sized>(
+        plans: &mut P,
+        len: usize,
+        forward: bool,
+    ) -> Arc<dyn Fft<Self>> {
+        plans.plan_f32(len, forward)
     }
 }
 
 impl CachedFftPlanScalar for f64 {
-    fn cached_fft_plan(len: usize, forward: bool) -> tenferro_tensor::Result<Arc<dyn Fft<Self>>> {
-        cached_fft_plan_from_cache(&F64_FFT_PLAN_CACHE, len, forward)
+    fn plan<P: FftPlanProvider + ?Sized>(
+        plans: &mut P,
+        len: usize,
+        forward: bool,
+    ) -> Arc<dyn Fft<Self>> {
+        plans.plan_f64(len, forward)
     }
 }
 
-fn cached_fft_plan<T: CachedFftPlanScalar>(
+fn cached_fft_plan<T: CachedFftPlanScalar, P: FftPlanProvider + ?Sized>(
+    plans: &mut P,
     len: usize,
     forward: bool,
-) -> tenferro_tensor::Result<Arc<dyn Fft<T>>> {
-    T::cached_fft_plan(len, forward)
+) -> Arc<dyn Fft<T>> {
+    T::plan(plans, len, forward)
 }
 
-fn cached_fft_plan_from_cache<T: FftNum + 'static>(
-    cache: &'static FftPlanCache<T>,
-    len: usize,
-    forward: bool,
-) -> tenferro_tensor::Result<Arc<dyn Fft<T>>> {
-    let key = FftPlanKey { len, forward };
-    let mut guard = cache
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .map_err(|_| {
-            tenferro_tensor::Error::runtime_state(
-                "fft_plan_cache",
-                "FFT plan cache lock is poisoned",
-            )
-        })?;
-    if let Some(plan) = guard.get(&key) {
-        return Ok(Arc::clone(plan));
+#[derive(Clone)]
+struct ExtensionF32Plan {
+    key: FftPlanKey,
+    plan: Arc<dyn Fft<f32>>,
+}
+
+#[derive(Clone)]
+struct ExtensionF64Plan {
+    key: FftPlanKey,
+    plan: Arc<dyn Fft<f64>>,
+}
+
+struct ExtensionFftPlanCache<'a> {
+    entries: &'a mut ExtensionCacheStore,
+}
+
+impl<'a> ExtensionFftPlanCache<'a> {
+    fn new(entries: &'a mut ExtensionCacheStore) -> Self {
+        Self { entries }
+    }
+}
+
+fn extension_plan_key(key: FftPlanKey) -> ExtensionCacheKey {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    ExtensionCacheKey::new(
+        FFT_EXTENSION_FAMILY_ID,
+        FFT_PLAN_CACHE_NAME,
+        hasher.finish(),
+    )
+}
+
+impl FftPlanProvider for ExtensionFftPlanCache<'_> {
+    fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>> {
+        let key = FftPlanKey {
+            len,
+            forward,
+            dtype: FftPlanDType::F32,
+        };
+        let cache_key = extension_plan_key(key);
+        if let Some(cached) = self.entries.get::<ExtensionF32Plan>(&cache_key) {
+            if cached.key == key {
+                return Arc::clone(&cached.plan);
+            }
+        }
+        let plan = build_fft_plan::<f32>(len, forward);
+        self.entries.put(
+            cache_key,
+            ExtensionF32Plan {
+                key,
+                plan: Arc::clone(&plan),
+            },
+            fft_plan_retained_bytes(),
+        );
+        plan
     }
 
-    let mut planner = FftPlanner::<T>::new();
-    let plan = if forward {
-        planner.plan_fft_forward(len)
-    } else {
-        planner.plan_fft_inverse(len)
-    };
-    guard.insert(key, Arc::clone(&plan));
-    Ok(plan)
+    fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>> {
+        let key = FftPlanKey {
+            len,
+            forward,
+            dtype: FftPlanDType::F64,
+        };
+        let cache_key = extension_plan_key(key);
+        if let Some(cached) = self.entries.get::<ExtensionF64Plan>(&cache_key) {
+            if cached.key == key {
+                return Arc::clone(&cached.plan);
+            }
+        }
+        let plan = build_fft_plan::<f64>(len, forward);
+        self.entries.put(
+            cache_key,
+            ExtensionF64Plan {
+                key,
+                plan: Arc::clone(&plan),
+            },
+            fft_plan_retained_bytes(),
+        );
+        plan
+    }
 }
 
 fn execute_c2c<T>(
@@ -1842,6 +2235,7 @@ fn execute_c2c<T>(
     n: Option<usize>,
     forward: bool,
     norm: FftNorm,
+    plans: &mut (impl FftPlanProvider + ?Sized),
 ) -> tenferro_tensor::Result<Vec<Complex<T>>>
 where
     T: CachedFftPlanScalar,
@@ -1853,8 +2247,7 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("fft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
-    // Propagate poisoned FFT plan-cache errors to the public caller.
-    let fft_plan = cached_fft_plan::<T>(fft_len, forward)?;
+    let fft_plan = cached_fft_plan::<T, _>(plans, fft_len, forward);
     let scale: T = scale_for(norm, forward, fft_len)?;
     let mut lane = vec![Complex::zero(); fft_len];
 
@@ -1898,6 +2291,7 @@ fn execute_r2c<T>(
     n: Option<usize>,
     onesided: bool,
     norm: FftNorm,
+    plans: &mut (impl FftPlanProvider + ?Sized),
 ) -> tenferro_tensor::Result<Vec<Complex<T>>>
 where
     T: CachedFftPlanScalar,
@@ -1909,8 +2303,7 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("rfft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
-    // Propagate poisoned FFT plan-cache errors to the public caller.
-    let fft_plan = cached_fft_plan::<T>(fft_len, true)?;
+    let fft_plan = cached_fft_plan::<T, _>(plans, fft_len, true);
     let scale: T = scale_for(norm, true, fft_len)?;
     let mut lane = vec![Complex::zero(); fft_len];
 
@@ -1953,6 +2346,7 @@ fn execute_c2r<T>(
     axis: usize,
     n: Option<usize>,
     norm: FftNorm,
+    plans: &mut (impl FftPlanProvider + ?Sized),
 ) -> tenferro_tensor::Result<Vec<T>>
 where
     T: CachedFftPlanScalar,
@@ -1964,8 +2358,7 @@ where
     let input_data = input.host_data()?;
     let output_len = checked_shape_product("irfft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
-    // Propagate poisoned FFT plan-cache errors to the public caller.
-    let fft_plan = cached_fft_plan::<T>(out_axis_len, false)?;
+    let fft_plan = cached_fft_plan::<T, _>(plans, out_axis_len, false);
     let scale: T = scale_for(norm, false, out_axis_len)?;
     let mut lane = vec![Complex::zero(); out_axis_len];
 

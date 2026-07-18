@@ -1,6 +1,6 @@
 use crate::backend::LinalgBackend;
 use tenferro_ad::EagerBackend;
-use tenferro_tensor::{Tensor, TensorView};
+use tenferro_tensor::{Tensor, TensorRead};
 
 macro_rules! dispatch_linalg {
     ($backend:expr, $method:ident($($arg:expr),* $(,)?)) => {
@@ -61,7 +61,7 @@ impl LinalgBackend for EagerBackend {
         dispatch_linalg!(self, svd_values(input))
     }
 
-    fn svd_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn svd_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         dispatch_linalg!(self, svd_read(input))
     }
 
@@ -69,7 +69,7 @@ impl LinalgBackend for EagerBackend {
         dispatch_linalg!(self, qr(input))
     }
 
-    fn qr_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn qr_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         dispatch_linalg!(self, qr_read(input))
     }
 
@@ -77,23 +77,23 @@ impl LinalgBackend for EagerBackend {
         dispatch_linalg!(self, eigh(input))
     }
 
-    fn eigh_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn eigh_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         dispatch_linalg!(self, eigh_read(input))
     }
 
-    fn cholesky_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Tensor> {
+    fn cholesky_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         dispatch_linalg!(self, cholesky_read(input))
     }
 
-    fn lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         dispatch_linalg!(self, lu_read(input))
     }
 
-    fn full_piv_lu_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn full_piv_lu_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         dispatch_linalg!(self, full_piv_lu_read(input))
     }
 
-    fn eig_read(&mut self, input: TensorView<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
+    fn eig_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         dispatch_linalg!(self, eig_read(input))
     }
 

@@ -18,6 +18,20 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 }
 
 #[test]
+fn eager_extension_registration_preserves_typed_source_errors() {
+    let source = crate_source("src/eager_ext.rs");
+    let registration = source_section(
+        &source,
+        ".register_extension(register_runtime)",
+        "apply_eager(Arc::new",
+    );
+
+    assert!(registration.contains("Error::runtime_state_source("));
+    assert!(!registration.contains("Error::Internal"));
+    assert!(!registration.contains("to_string()"));
+}
+
+#[test]
 fn traced_solve_builds_factor_then_prepared_solve() {
     let source = crate_source("src/traced.rs");
     let solve_source = source_section(

@@ -549,9 +549,10 @@ impl<R: TensorRank> TensorLayout<R> {
     /// overflows.
     pub fn reshape_view_as<R2: TensorRank>(
         &self,
-        shape: R2::Shape,
+        shape: impl Into<R2::Shape>,
         buffer_len: usize,
     ) -> Result<TensorLayout<R2>> {
+        let shape = shape.into();
         if !self.is_compact_col_major()? {
             return Err(ValidationError::NonContiguousViewAsSlice);
         }
@@ -587,10 +588,11 @@ impl<R: TensorRank> TensorLayout<R> {
     /// or [`ValidationError::ViewOutOfBounds`] for an invalid result layout.
     pub fn broadcast_in_dim_view<R2: TensorRank>(
         &self,
-        shape: R2::Shape,
+        shape: impl Into<R2::Shape>,
         broadcast_dims: impl AsRef<[usize]>,
         buffer_len: usize,
     ) -> Result<TensorLayout<R2>> {
+        let shape = shape.into();
         let broadcast_dims = broadcast_dims.as_ref();
         if broadcast_dims.len() != self.shape().len() {
             return Err(ValidationError::RankMismatch {

@@ -2,7 +2,7 @@ use num_complex::{Complex32, Complex64};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use tenferro_cpu::CpuBackend;
-use tenferro_fft::{FftNorm, TracedTensorFftExt};
+use tenferro_fft::{fft_plan_cache_selector, FftNorm, TracedTensorFftExt};
 use tenferro_runtime::{
     DType, Error as RuntimeError, ErrorPhase, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
 };
@@ -199,8 +199,8 @@ fn fft_cpu_execution_reuses_cached_rustfft_plans() {
     let c2r = source_section(source, "fn execute_c2r<T>(", "fn scale_for<T>(");
 
     assert!(
-        source.contains("fn cached_fft_plan<T: CachedFftPlanScalar>"),
-        "FFT CPU execution should centralize RustFFT plan reuse in cached_fft_plan"
+        source.contains("trait FftPlanProvider"),
+        "FFT CPU execution should obtain plans from an explicit owner"
     );
     for (name, section) in [
         ("execute_c2c", c2c),
@@ -215,7 +215,7 @@ fn fft_cpu_execution_reuses_cached_rustfft_plans() {
 }
 
 #[test]
-fn fft_cpu_execution_propagates_plan_cache_errors() {
+fn fft_cpu_execution_uses_explicit_plan_provider() {
     let source = include_str!("../src/lib.rs");
     let c2c = source_section(source, "fn execute_c2c<T>(", "fn execute_r2c<T>(");
     let r2c = source_section(source, "fn execute_r2c<T>(", "fn execute_c2r<T>(");
@@ -227,8 +227,8 @@ fn fft_cpu_execution_propagates_plan_cache_errors() {
         ("execute_c2r", c2r),
     ] {
         let call_start = section
-            .find("cached_fft_plan::<T>")
-            .unwrap_or_else(|| panic!("{name} must call cached_fft_plan::<T>"));
+            .find("cached_fft_plan::<T, _>(plans")
+            .unwrap_or_else(|| panic!("{name} must use its explicit plan provider"));
         let call_end = section[call_start..]
             .find(';')
             .map(|offset| call_start + offset + 1)
@@ -239,10 +239,58 @@ fn fft_cpu_execution_propagates_plan_cache_errors() {
             .join(" ");
 
         assert!(
-            normalized_call.ends_with("?;"),
-            "{name} must propagate its cached_fft_plan error: {normalized_call}"
+            normalized_call.ends_with(");"),
+            "unexpected plan call: {normalized_call}"
         );
     }
+}
+
+#[test]
+fn fft_source_has_no_process_global_plan_cache() {
+    let source = include_str!("../src/lib.rs");
+
+    assert!(!source.contains("static F32_FFT_PLAN_CACHE"));
+    assert!(!source.contains("static F64_FFT_PLAN_CACHE"));
+    assert!(!source.contains("OnceLock<Mutex"));
+}
+
+#[test]
+fn graph_runtime_owns_fft_plan_cache() {
+    let x = TracedTensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&y).unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor
+        .register_extension(tenferro_fft::register_runtime)
+        .unwrap();
+
+    executor.run(&program).unwrap();
+    let stats = executor
+        .extension_executor()
+        .caches()
+        .stats(fft_plan_cache_selector());
+    assert_eq!(stats.entries, 1);
+    assert!(stats.retained_bytes > 0);
+
+    executor.clear_extension_caches();
+    assert_eq!(
+        executor
+            .extension_executor()
+            .caches()
+            .stats(fft_plan_cache_selector())
+            .entries,
+        0
+    );
 }
 
 #[test]

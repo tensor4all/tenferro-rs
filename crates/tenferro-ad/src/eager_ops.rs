@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use computegraph::GraphOperation;
+use num_complex::{Complex32, Complex64};
 use tenferro_ops::broadcast::{
     broadcast_error_to_validation, broadcast_in_dim_extent_error, broadcast_input_plan,
     broadcast_shape, broadcast_shapes,
@@ -329,7 +330,7 @@ impl EagerTensor {
     pub fn dot_general_with_conj(
         &self,
         other: &Self,
-        config: &DotGeneralConfig,
+        config: DotGeneralConfig,
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> Result<Self> {
@@ -341,7 +342,7 @@ impl EagerTensor {
         }
         validate_eager_dot_general_config(
             "EagerTensor::dot_general_with_conj",
-            config,
+            &config,
             self.shape().len(),
             other.shape().len(),
         )?;
@@ -352,7 +353,7 @@ impl EagerTensor {
                 exec_dot_general_with_conj_on_tensor_reads(
                     self.tensor_read(),
                     other.tensor_read(),
-                    config,
+                    &config,
                     lhs_conj,
                     rhs_conj,
                     backend,
@@ -362,18 +363,75 @@ impl EagerTensor {
         }
 
         match (lhs_conj, rhs_conj) {
-            (false, false) => self.dot_general(other, config.clone()),
-            (true, false) => self.conj()?.dot_general(other, config.clone()),
+            (false, false) => self.dot_general(other, config),
+            (true, false) => self.conj()?.dot_general(other, config),
             (false, true) => {
                 let rhs = other.conj()?;
-                self.dot_general(&rhs, config.clone())
+                self.dot_general(&rhs, config)
             }
             (true, true) => {
                 let lhs = self.conj()?;
                 let rhs = other.conj()?;
-                lhs.dot_general(&rhs, config.clone())
+                lhs.dot_general(&rhs, config)
             }
         }
+    }
+
+    /// Scale by a real scalar: `y = factor * x`.
+    ///
+    /// Integer factors are rounded to the nearest integer before multiplication,
+    /// boolean factors map finite zero to `false` and other finite values to
+    /// `true`, and complex tensors receive a zero-imaginary scalar.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TensorRuntime`] with
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when an integer or
+    /// boolean factor is non-finite or outside the input dtype's range. Backend
+    /// and runtime execution failures retain their typed source variants.
+    pub fn scale_real(&self, factor: f64) -> Result<Self> {
+        let scalar = match self.dtype() {
+            DType::F64 => Tensor::from_vec_col_major(vec![], vec![factor])?,
+            DType::F32 => Tensor::from_vec_col_major(vec![], vec![factor as f32])?,
+            DType::I32 => Tensor::from_vec_col_major(vec![], vec![round_real_to_i32(factor)?])?,
+            DType::I64 => Tensor::from_vec_col_major(vec![], vec![round_real_to_i64(factor)?])?,
+            DType::Bool => Tensor::from_vec_col_major(vec![], vec![bool_from_real(factor)?])?,
+            DType::C64 => Tensor::from_vec_col_major(vec![], vec![Complex64::new(factor, 0.0)])?,
+            DType::C32 => {
+                Tensor::from_vec_col_major(vec![], vec![Complex32::new(factor as f32, 0.0)])?
+            }
+        };
+        let scalar = EagerTensor::from_tensor_in(scalar, Arc::clone(&self.ctx))?;
+        self.mul(&scalar)
+    }
+
+    /// Scale a complex tensor by a complex scalar: `y = factor * x`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TensorRuntime`] with
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] for a non-complex
+    /// input dtype. Backend and runtime execution failures retain their typed
+    /// source variants.
+    pub fn scale_complex(&self, factor: Complex64) -> Result<Self> {
+        let scalar = match self.dtype() {
+            DType::C64 => Tensor::from_vec_col_major(vec![], vec![factor])?,
+            DType::C32 => Tensor::from_vec_col_major(
+                vec![],
+                vec![Complex32::new(factor.re as f32, factor.im as f32)],
+            )?,
+            dtype => {
+                return Err(Error::TensorRuntime(
+                    tenferro_tensor::Error::invalid_argument(
+                        "scale_complex",
+                        "dtype",
+                        format!("requires complex tensor dtype, got {dtype:?}"),
+                    ),
+                ));
+            }
+        };
+        let scalar = EagerTensor::from_tensor_in(scalar, Arc::clone(&self.ctx))?;
+        self.mul(&scalar)
     }
 
     /// Matrix multiplication for rank-2 tensors.
@@ -1181,4 +1239,47 @@ fn eager_validation_op_name(op: &StdTensorOp) -> &'static str {
         StdTensorOp::Concatenate { .. } => "concatenate",
         _ => "eager_nary_op",
     }
+}
+
+fn finite_real_factor(value: f64) -> Result<f64> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(Error::TensorRuntime(
+            tenferro_tensor::Error::invalid_argument(
+                "scale_real",
+                "factor",
+                format!("real scalar must be finite, got {value}"),
+            ),
+        ))
+    }
+}
+
+fn round_real_to_i64(value: f64) -> Result<i64> {
+    let rounded = finite_real_factor(value)?.round();
+    if rounded < i64::MIN as f64 || rounded >= -(i64::MIN as f64) {
+        return Err(Error::TensorRuntime(
+            tenferro_tensor::Error::invalid_argument(
+                "scale_real",
+                "factor",
+                format!("rounded real scalar {rounded} is out of i64 range"),
+            ),
+        ));
+    }
+    Ok(rounded as i64)
+}
+
+fn round_real_to_i32(value: f64) -> Result<i32> {
+    let rounded = round_real_to_i64(value)?;
+    i32::try_from(rounded).map_err(|_| {
+        Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+            "scale_real",
+            "factor",
+            format!("rounded real scalar {rounded} is out of i32 range"),
+        ))
+    })
+}
+
+fn bool_from_real(value: f64) -> Result<bool> {
+    Ok(finite_real_factor(value)? != 0.0)
 }

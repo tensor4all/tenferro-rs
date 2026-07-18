@@ -51,6 +51,45 @@ fn default_backend_kind_prefers_blas_when_compiled() {
 }
 
 #[test]
+fn public_buffer_pool_controls_report_poisoned_engine_resources() {
+    let mut backend = CpuBackend::new();
+    let original_limit = backend.buffer_pool_limit_bytes();
+    let engine = Arc::clone(&backend.engine);
+    let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _resources = engine.resources.lock().unwrap();
+        panic!("poison CPU engine resources for regression test");
+    }));
+    assert!(poison.is_err());
+
+    for error in [
+        backend.buffer_pool_len().unwrap_err(),
+        backend.buffer_pool_stats().unwrap_err(),
+        backend.buffer_pool_cache_stats().unwrap_err(),
+        backend.set_buffer_pool_limit_bytes(0).unwrap_err(),
+        backend.reset_buffer_pool().unwrap_err(),
+    ] {
+        assert_eq!(error.kind(), tenferro_tensor::ErrorKind::RuntimeState);
+        assert!(error.to_string().contains("poison"));
+    }
+    assert_eq!(backend.buffer_pool_limit_bytes(), original_limit);
+}
+
+#[test]
+fn public_buffer_pool_controls_report_poisoned_engine_registry() {
+    let backend = CpuBackend::new();
+    let shared = Arc::clone(&backend.shared);
+    let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let _engines = shared.node_engines.lock().unwrap();
+        panic!("poison CPU engine registry for regression test");
+    }));
+    assert!(poison.is_err());
+
+    let error = backend.buffer_pool_len().unwrap_err();
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::RuntimeState);
+    assert!(error.to_string().contains("engine registry lock poisoned"));
+}
+
+#[test]
 fn explicit_backend_kind_constructor_records_selection() {
     let backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
 
@@ -76,7 +115,7 @@ fn placement_handle_clones_share_coordinator_engine_and_resources() {
     placed.with_linalg_pool(|pool| {
         <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
     });
-    assert_eq!(clone.buffer_pool_len(), 1);
+    assert_eq!(clone.buffer_pool_len().unwrap(), 1);
 }
 
 #[test]
@@ -714,7 +753,7 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
         pool.len()
     });
     assert_eq!(retained, 1);
-    assert_eq!(backend.buffer_pool_len(), 1);
+    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let lhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
@@ -784,21 +823,21 @@ fn with_linalg_pool_restores_backend_pool_and_context() {
     });
 
     assert_eq!(len_inside_pool, 1);
-    assert_eq!(backend.buffer_pool_len(), 1);
+    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     #[cfg(feature = "cpu-faer")]
     assert_eq!(backend.linalg_context().num_threads(), 1);
 }
 
 #[test]
-fn linalg_pool_acquire_then_panic_replenishes_retained_buffer() {
+fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
     backend.with_linalg_pool(|pool| {
         <f64 as PoolScalar>::pool_release(pool, Vec::with_capacity(1024));
     });
-    assert_eq!(backend.buffer_pool_len(), 1);
+    assert_eq!(backend.buffer_pool_len().unwrap(), 1);
     assert_eq!(
-        backend.buffer_pool_stats().capacity_bytes,
+        backend.buffer_pool_stats().unwrap().capacity_bytes,
         1024 * std::mem::size_of::<f64>()
     );
 
@@ -811,10 +850,16 @@ fn linalg_pool_acquire_then_panic_replenishes_retained_buffer() {
     }));
 
     assert!(result.is_err());
-    assert_eq!(backend.buffer_pool_len(), 1);
+    let resources = backend.engine.resources.lock().unwrap_err().into_inner();
+    assert_eq!(resources.buffers.len(), 1);
     assert_eq!(
-        backend.buffer_pool_stats().capacity_bytes,
+        resources.buffers.stats().capacity_bytes,
         1024 * std::mem::size_of::<f64>()
+    );
+    drop(resources);
+    assert_eq!(
+        backend.buffer_pool_len().unwrap_err().kind(),
+        tenferro_tensor::ErrorKind::RuntimeState
     );
 }
 

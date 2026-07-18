@@ -36,7 +36,7 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let result1 = engine.run(&program1).unwrap();
     assert_eq!(get_f64_data(&result1), &[517.0, 766.0, 625.0, 926.0]);
 
-    let pooled_after_first = engine.backend().buffer_pool_len();
+    let pooled_after_first = engine.backend().buffer_pool_len().unwrap();
     assert!(pooled_after_first > 0);
 
     let ta2 = TracedTensor::from_tensor_concrete_shape(a).unwrap();
@@ -49,6 +49,6 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
 
     let result2 = engine.run(&program2).unwrap();
     assert_eq!(get_f64_data(&result2), &[517.0, 766.0, 625.0, 926.0]);
-    let pooled_after_second = engine.backend().buffer_pool_len();
+    let pooled_after_second = engine.backend().buffer_pool_len().unwrap();
     assert!(pooled_after_second < pooled_after_first * 2);
 }

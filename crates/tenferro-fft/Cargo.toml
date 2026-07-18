@@ -37,6 +37,7 @@ tidu = { workspace = true, optional = true }
 computegraph.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
+lru.workspace = true
 rustfft = "6"
 thiserror.workspace = true
 

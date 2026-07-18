@@ -47,6 +47,12 @@ rules from `tensor4all-agent-rules`.
 - Tensor operation names are public vocabulary. Use unsuffixed operation names
   for owned compact tensor inputs, and add a `_read` suffix only for APIs that
   explicitly accept borrowed views or `TensorRead`-style input references.
+- Public shape parameters use `impl Into<R::Shape>` when the rank type owns the
+  representation and `impl IntoShapeVec` at dynamic-rank boundaries, so arrays,
+  vectors, slices, and `ShapeVec` values are accepted consistently. Axis lists,
+  dimension mappings, and other borrowed parameter collections use
+  `impl AsRef<[T]>` unless ownership or iteration semantics require a different
+  contract.
 - Metadata-only layout/view operations must use a `_view` suffix, for example
   `transpose_view`, `slice_view`, or `reshape_view`. Do not use `_view` for
   operations that allocate, canonicalize, execute kernels, or transfer data.

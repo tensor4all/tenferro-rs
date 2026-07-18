@@ -40,12 +40,16 @@
 /// Execution-capable tensors and backends in this crate remain separate from
 /// the host-only core model during the crate-boundary split.
 pub mod core {
-    pub use tenferro_tensor_core::*;
+    pub use tenferro_tensor_core::{
+        col_major_strides, DType, DynRank, ErrorKind, HostTensor, HostTensorView, IntoShapeVec,
+        Rank, Result, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, Tensor, TensorLayout,
+        TensorRank, TensorRef, TensorScalar, TensorView, ValidationError, ValidationKind,
+    };
 }
 
 pub use tenferro_tensor_core::{
-    ErrorKind, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, TensorRef, ValidationError,
-    ValidationKind,
+    ErrorKind, IntoShapeVec, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, TensorRef,
+    ValidationError, ValidationKind,
 };
 
 pub mod backend;
@@ -69,9 +73,17 @@ pub use capability::{
     capability_output_dtype, BackendId, CapabilityAxis, CapabilityQuery, OperationCapability,
     SupportLevel, TensorBackendCapability,
 };
-pub use config::*;
-pub use error::*;
-pub use types::*;
+pub use config::{
+    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+};
+pub use error::{BoxError, Error, Result};
+pub use types::{
+    col_major_strides, BackendBuffer, Buffer, BufferHandle, DType, DeviceId, DeviceKind, DynRank,
+    GpuBackendKind, MemoryKind, Placement, Rank, StridedSliceSpec, Tensor, TensorBufferRef,
+    TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank, TensorRead, TensorScalar,
+    TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView,
+    TypedTensorViewMut, TypedTensorViewMutPair, TypedTensorWrite,
+};
 
 pub(crate) fn core_dtype(dtype: DType) -> tenferro_tensor_core::DType {
     match dtype {

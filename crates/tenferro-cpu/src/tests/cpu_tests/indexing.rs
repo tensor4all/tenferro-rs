@@ -553,7 +553,7 @@ fn test_cpu_supports_i32_and_bool_structural_paths() {
 fn test_backend_default_and_buffer_pool_len() {
     let backend = CpuBackend::default();
     assert!(backend.num_threads() >= 1);
-    assert_eq!(backend.buffer_pool_len(), 0);
+    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
 }
 
 #[test]
@@ -563,18 +563,18 @@ fn test_backend_buffer_pool_controls_report_and_update_limits() {
 
     assert_eq!(backend.num_threads(), 1);
     assert_eq!(backend.buffer_pool_limit_bytes(), 64);
-    assert_eq!(backend.buffer_pool_len(), 0);
-    let stats = backend.buffer_pool_stats();
+    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
+    let stats = backend.buffer_pool_stats().unwrap();
     assert_eq!(stats.buffers, 0);
     assert_eq!(stats.capacity_bytes, 0);
-    let cache_stats = backend.buffer_pool_cache_stats();
+    let cache_stats = backend.buffer_pool_cache_stats().unwrap();
     assert_eq!(cache_stats.entries, 0);
     assert_eq!(cache_stats.retained_bytes, 0);
 
-    backend.set_buffer_pool_limit_bytes(0);
+    backend.set_buffer_pool_limit_bytes(0).unwrap();
     assert_eq!(backend.buffer_pool_limit_bytes(), 0);
-    backend.reset_buffer_pool();
-    assert_eq!(backend.buffer_pool_len(), 0);
+    backend.reset_buffer_pool().unwrap();
+    assert_eq!(backend.buffer_pool_len().unwrap(), 0);
 }
 
 #[test]
