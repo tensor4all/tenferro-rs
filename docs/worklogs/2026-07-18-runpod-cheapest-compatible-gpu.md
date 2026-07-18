@@ -76,6 +76,13 @@ addressed:
   smoke's NVRTC-only install) via a library-completeness check, and pod
   API transport errors (URLError/timeout) are treated as transient polls
   instead of aborting the provision loop.
+- Each provision attempt mints its own single-use JIT config under a
+  fresh per-attempt runner label, closing the stale-label acceptance race
+  and the JIT-replay dead end after a registered candidate dies;
+  run-gpu-tests targets the accepted attempt's label.
+- zstd is installed on the pod before any cache restore so the
+  actions/cache version hash matches the hosted publisher's entries
+  (found by inspecting live run logs: exact-key "Cache not found").
 
 ## Verification
 

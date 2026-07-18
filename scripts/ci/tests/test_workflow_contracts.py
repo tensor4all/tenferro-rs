@@ -129,6 +129,17 @@ class WorkflowContractTests(unittest.TestCase):
         # The single credential that reaches the pod (the one-shot JIT
         # runner config) must be stripped from the smoke child's env.
         self.assertIn("env -u RUNNER_JIT_CONFIG python3 /tmp/cuda_smoke_test.py", create)
+        # JIT configs are minted per candidate attempt inside the provision
+        # loop; the workflow must not pre-mint a single shared config, and
+        # run-gpu-tests must target the ACCEPTED attempt's label.
+        text_full = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertNotIn("- name: Generate JIT runner config", text_full)
+        self.assertNotIn("RUNNER_JIT_CONFIG: ${{", text_full)
+        self.assertIn(
+            "runner_label: ${{ steps.create_pod.outputs.runner_label }}",
+            text_full,
+        )
+        self.assertIn("PROVISION_RUNNER_GROUP_ID:", create)
         # zstd on the pod keeps the actions/cache version hash compatible
         # with the zstd-equipped hosted publisher; without it every pod
         # restore misses exact-match keys.

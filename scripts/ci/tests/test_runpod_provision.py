@@ -66,7 +66,7 @@ class ProvisionTests(unittest.TestCase):
         clock = Clock()
         online_after = {"count": 3}
 
-        def runner_online() -> bool:
+        def runner_online(label: str) -> bool:
             online_after["count"] -= 1
             return online_after["count"] <= 0
 
@@ -74,7 +74,9 @@ class ProvisionTests(unittest.TestCase):
         result = provision(
             CONFIG,
             PLAN,
-            create=lambda req: created("pod-1", "NVIDIA A40", req.tier_name),
+            label_prefix="runpod-1-1",
+            mint_runner=lambda label: f"jit-{label}",
+            create=lambda req, jit: created("pod-1", "NVIDIA A40", req.tier_name),
             runner_online=runner_online,
             pod_status=lambda pod_id: "RUNNING",
             delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
@@ -101,7 +103,7 @@ class ProvisionTests(unittest.TestCase):
         published: list[str] = []
         current: dict[str, str] = {}
 
-        def create(req):
+        def create(req, jit):
             pod = next(pods)
             current["id"] = pod.pod_id
             return pod
@@ -109,8 +111,10 @@ class ProvisionTests(unittest.TestCase):
         result = provision(
             CONFIG,
             PLAN,
+            label_prefix="runpod-1-1",
+            mint_runner=lambda label: f"jit-{label}",
             create=create,
-            runner_online=lambda: current["id"] in accepted,
+            runner_online=lambda label: current["id"] in accepted,
             pod_status=lambda pod_id: statuses[pod_id],
             delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
             publish_pod_id=published.append,
@@ -129,8 +133,10 @@ class ProvisionTests(unittest.TestCase):
             provision(
                 {**CONFIG, "max_provision_attempts": 1},
                 PLAN,
-                create=lambda req: created("pod-slow", "NVIDIA A40", req.tier_name),
-                runner_online=lambda: False,
+                label_prefix="runpod-1-1",
+                mint_runner=lambda label: f"jit-{label}",
+                create=lambda req, jit: created("pod-slow", "NVIDIA A40", req.tier_name),
+                runner_online=lambda label: False,
                 pod_status=lambda pod_id: "RUNNING",
                 delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
                 monotonic=clock.monotonic,
@@ -142,7 +148,7 @@ class ProvisionTests(unittest.TestCase):
         clock = Clock()
         calls: list[str] = []
 
-        def create(req):
+        def create(req, jit):
             calls.append(req.tier_name)
             if len(calls) < 3:
                 raise RetryableRunPodError("RunPod capacity unavailable")
@@ -151,8 +157,10 @@ class ProvisionTests(unittest.TestCase):
         result = provision(
             CONFIG,
             PLAN,
+            label_prefix="runpod-1-1",
+            mint_runner=lambda label: f"jit-{label}",
             create=create,
-            runner_online=lambda: True,
+            runner_online=lambda label: True,
             pod_status=lambda pod_id: "RUNNING",
             delete_pod=lambda pod_id: self.fail("no pod to delete"),
             monotonic=clock.monotonic,
@@ -161,13 +169,52 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(result.attempts, 3)
         self.assertEqual(calls, [name for name, _ in PLAN[:3]])
 
+    def test_each_attempt_mints_a_fresh_label_and_jit_config(self) -> None:
+        clock = Clock()
+        pods = iter(
+            [
+                created("pod-bad", "NVIDIA A40", "a"),
+                created("pod-good", "NVIDIA GeForce RTX 4090", "b"),
+            ]
+        )
+        statuses = {"pod-bad": "EXITED", "pod-good": "RUNNING"}
+        minted: list[str] = []
+        jits: list[str] = []
+        waited: list[str] = []
+
+        def mint_runner(label: str) -> str:
+            minted.append(label)
+            return f"jit-{label}"
+
+        def runner_online(label: str) -> bool:
+            waited.append(label)
+            return label == "runpod-1-1-c2"
+
+        result = provision(
+            CONFIG,
+            PLAN,
+            label_prefix="runpod-1-1",
+            mint_runner=mint_runner,
+            create=lambda req, jit: (jits.append(jit), next(pods))[1],
+            runner_online=runner_online,
+            pod_status=lambda pod_id: statuses[pod_id],
+            delete_pod=lambda pod_id: True,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        self.assertEqual(result.runner_label, "runpod-1-1-c2")
+        self.assertEqual(minted, ["runpod-1-1-c1", "runpod-1-1-c2"])
+        self.assertEqual(jits, ["jit-runpod-1-1-c1", "jit-runpod-1-1-c2"])
+        # The wait for attempt 2 must never look at attempt 1's label.
+        self.assertNotIn("runpod-1-1-c1", waited)
+
     def test_unverifiable_gpu_pod_is_published_deleted_and_skipped(self) -> None:
         clock = Clock()
         deleted: list[str] = []
         published: list[str] = []
         calls = {"n": 0}
 
-        def create(req):
+        def create(req, jit):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise AssignedGpuError(
@@ -179,8 +226,10 @@ class ProvisionTests(unittest.TestCase):
         result = provision(
             CONFIG,
             PLAN,
+            label_prefix="runpod-1-1",
+            mint_runner=lambda label: f"jit-{label}",
             create=create,
-            runner_online=lambda: True,
+            runner_online=lambda label: True,
             pod_status=lambda pod_id: "RUNNING",
             delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
             publish_pod_id=published.append,
@@ -195,7 +244,7 @@ class ProvisionTests(unittest.TestCase):
         clock = Clock()
         calls = {"n": 0}
 
-        def create(req):
+        def create(req, jit):
             calls["n"] += 1
             return created("pod-stuck", "NVIDIA A40", req.tier_name)
 
@@ -203,8 +252,10 @@ class ProvisionTests(unittest.TestCase):
             provision(
                 CONFIG,
                 PLAN,
+                label_prefix="runpod-1-1",
+                mint_runner=lambda label: f"jit-{label}",
                 create=create,
-                runner_online=lambda: False,
+                runner_online=lambda label: False,
                 pod_status=lambda pod_id: "EXITED",
                 delete_pod=lambda pod_id: False,
                 monotonic=clock.monotonic,
@@ -226,11 +277,13 @@ class ProvisionTests(unittest.TestCase):
         result = provision(
             CONFIG,
             PLAN,
-            create=lambda req: next(pods),
+            label_prefix="runpod-1-1",
+            mint_runner=lambda label: f"jit-{label}",
+            create=lambda req, jit: next(pods),
             # The runner registry reports online the whole time (stale or
             # died-after-registering record); the dead pod must still be
             # rejected.
-            runner_online=lambda: True,
+            runner_online=lambda label: True,
             pod_status=lambda pod_id: statuses[pod_id],
             delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
             monotonic=clock.monotonic,
@@ -243,7 +296,7 @@ class ProvisionTests(unittest.TestCase):
         clock = Clock()
         calls: list[str] = []
 
-        def create(req):
+        def create(req, jit):
             calls.append(req.tier_name)
             raise RetryableRunPodError("RunPod capacity unavailable")
 
@@ -251,8 +304,10 @@ class ProvisionTests(unittest.TestCase):
             provision(
                 CONFIG,
                 PLAN,
+                label_prefix="runpod-1-1",
+                mint_runner=lambda label: f"jit-{label}",
                 create=create,
-                runner_online=lambda: True,
+                runner_online=lambda label: True,
                 pod_status=lambda pod_id: "RUNNING",
                 delete_pod=lambda pod_id: True,
                 monotonic=clock.monotonic,

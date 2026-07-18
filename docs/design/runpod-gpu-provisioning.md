@@ -57,6 +57,11 @@ the container stops, and the pod never becomes a runner.
 `runpod_provision.py` runs in the trusted `start-runpod` job (all
 credentials stay GitHub-hosted):
 
+- mint one single-use JIT runner config per attempt under a fresh
+  per-attempt label (`<prefix>-cN`): a JIT config cannot be replayed after
+  an earlier candidate registered with it, and a shared label would let a
+  stale online record from a rejected pod accept an unproven new pod;
+  `run-gpu-tests` targets the accepted attempt's label;
 - create one candidate pod at a time, cheapest first;
 - watch two signals: the org runner registry (runner online = smoke proof
   passed) and the pod status (`EXITED`/`TERMINATED` before registration =

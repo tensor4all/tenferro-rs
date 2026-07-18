@@ -73,6 +73,7 @@ class ProvisionResult:
     pod_id: str
     gpu_type_id: str
     gpu_tier: str
+    runner_label: str
     cost_per_hr: float | None
     startup_seconds: float
     attempts: int
@@ -97,8 +98,10 @@ def provision(
     config: Mapping[str, Any],
     plan: Sequence[tuple[str, Sequence[str]]],
     *,
-    create: Callable[[CreateRequest], CreateResult],
-    runner_online: Callable[[], bool],
+    label_prefix: str,
+    mint_runner: Callable[[str], str],
+    create: Callable[[CreateRequest, str], CreateResult],
+    runner_online: Callable[[str], bool],
     pod_status: Callable[[str], str | None],
     delete_pod: Callable[[str], bool],
     publish_pod_id: Callable[[str], None] = lambda pod_id: None,
@@ -106,6 +109,12 @@ def provision(
     sleep: Callable[[float], None] = time.sleep,
 ) -> ProvisionResult:
     """Try candidates in order until one passes the runtime smoke proof.
+
+    Every attempt mints its OWN single-use JIT runner config under a fresh
+    per-attempt label (``mint_runner(label)``): JIT configs cannot be
+    replayed after a previous candidate registered with them, and a shared
+    label would let a stale ``online`` record from an earlier pod accept a
+    new pod that never passed the smoke proof.
 
     ``delete_pod`` must return True only when deletion is confirmed; an
     unconfirmed deletion stops the loop with :class:`PodLeakError` so a
@@ -131,13 +140,17 @@ def provision(
         if attempts >= max_attempts:
             break
         attempts += 1
+        label = f"{label_prefix}-c{attempts}"
         print(
             f"Provision attempt {attempts}/{max_attempts}: "
-            f"candidate {tier_name} ({', '.join(gpu_type_ids)})"
+            f"candidate {tier_name} ({', '.join(gpu_type_ids)}) "
+            f"as runner {label}"
         )
+        jit_config = mint_runner(label)
         try:
             result = create(
-                CreateRequest(tier_name, b"", tuple(gpu_type_ids))
+                CreateRequest(tier_name, b"", tuple(gpu_type_ids)),
+                jit_config,
             )
         except AssignedGpuError as error:
             # The pod exists but its assigned GPU could not be verified:
@@ -177,17 +190,18 @@ def provision(
                     "CUDA smoke proof or startup failed"
                 )
                 break
-            if runner_online() and status is not None:
+            if runner_online(label) and status is not None:
                 startup_seconds = monotonic() - started
                 print(
-                    f"Runner online: pod {result.pod_id} passed the CUDA "
-                    f"smoke proof in {startup_seconds:.0f}s "
+                    f"Runner {label} online: pod {result.pod_id} passed the "
+                    f"CUDA smoke proof in {startup_seconds:.0f}s "
                     f"(GPU {result.gpu_type_id or 'unknown'}, {cost_text})."
                 )
                 return ProvisionResult(
                     pod_id=result.pod_id,
                     gpu_type_id=result.gpu_type_id,
                     gpu_tier=result.gpu_tier,
+                    runner_label=label,
                     cost_per_hr=cost,
                     startup_seconds=startup_seconds,
                     attempts=attempts,
@@ -216,10 +230,8 @@ def provision(
     )
 
 
-def _runner_online_checker(
-    token: str, org: str, label: str
-) -> Callable[[], bool]:
-    def check() -> bool:
+def _runner_online_checker(token: str, org: str) -> Callable[[str], bool]:
+    def check(label: str) -> bool:
         request = urllib.request.Request(
             f"https://api.github.com/orgs/{org}/actions/runners?per_page=100",
             headers={
@@ -247,6 +259,56 @@ def _runner_online_checker(
         return False
 
     return check
+
+
+def _runner_minter(
+    token: str, org: str, runner_group_id: int
+) -> Callable[[str], str]:
+    """Mint one single-use JIT runner config per provision attempt."""
+
+    def mint(label: str) -> str:
+        body = json.dumps(
+            {
+                "name": label,
+                "runner_group_id": runner_group_id,
+                "labels": ["self-hosted", label],
+                "work_folder": "_work",
+            }
+        ).encode()
+        request = urllib.request.Request(
+            f"https://api.github.com/orgs/{org}/actions/runners/generate-jitconfig",
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "Content-Type": "application/json",
+                "User-Agent": "tenferro-ci-runpod-provision/1",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30.0) as response:
+                payload = json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            raise PermanentRunPodError(
+                f"generate-jitconfig returned HTTP {error.code}"
+            ) from error
+        except (OSError, json.JSONDecodeError) as error:
+            raise PermanentRunPodError(
+                f"generate-jitconfig failed: {error}"
+            ) from error
+        jit_config = payload.get("encoded_jit_config")
+        if not isinstance(jit_config, str) or not jit_config:
+            raise PermanentRunPodError(
+                "generate-jitconfig response is missing encoded_jit_config"
+            )
+        # Mask before the value can appear in any later log line.
+        print(f"::add-mask::{jit_config}")
+        print(f"Minted JIT runner config for {label}.")
+        return jit_config
+
+    return mint
 
 
 def _pod_api(api_url: str, api_key: str):
@@ -310,13 +372,19 @@ def _pod_api(api_url: str, api_key: str):
 def _publish(result: ProvisionResult) -> None:
     output_path = os.environ.get("GITHUB_OUTPUT")
     if output_path:
-        for value in (result.pod_id, result.gpu_type_id, result.gpu_tier):
+        for value in (
+            result.pod_id,
+            result.gpu_type_id,
+            result.gpu_tier,
+            result.runner_label,
+        ):
             if "\n" in value or "\r" in value:
                 raise PermanentRunPodError("unsafe GitHub output value")
         with open(output_path, "a", encoding="utf-8") as output:
             output.write(f"pod_id={result.pod_id}\n")
             output.write(f"gpu_type_id={result.gpu_type_id}\n")
             output.write(f"gpu_tier={result.gpu_tier}\n")
+            output.write(f"runner_label={result.runner_label}\n")
             if result.cost_per_hr is not None:
                 output.write(f"gpu_cost_per_hr={result.cost_per_hr:.4f}\n")
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -355,15 +423,13 @@ def main() -> int:
     try:
         config = _load_config(args.config)
         api_key = os.environ.get("RUNPOD_API_KEY")
-        jit_config = os.environ.get("RUNNER_JIT_CONFIG")
         gh_token = os.environ.get("PROVISION_GH_TOKEN")
         org = os.environ.get("PROVISION_ORG")
-        label = os.environ.get("PROVISION_RUNNER_LABEL")
-        if not api_key or not jit_config:
-            raise PermanentRunPodError(
-                "RUNPOD_API_KEY and RUNNER_JIT_CONFIG are required"
-            )
-        if not gh_token or not org or not label:
+        label_prefix = os.environ.get("PROVISION_RUNNER_LABEL")
+        runner_group_id = int(os.environ.get("PROVISION_RUNNER_GROUP_ID", "1"))
+        if not api_key:
+            raise PermanentRunPodError("RUNPOD_API_KEY is required")
+        if not gh_token or not org or not label_prefix:
             raise PermanentRunPodError(
                 "PROVISION_GH_TOKEN, PROVISION_ORG, and "
                 "PROVISION_RUNNER_LABEL are required"
@@ -380,7 +446,7 @@ def main() -> int:
         plan = candidate_plan(config, list(configured_gpu_tiers(config)))
         transport = _http_transport(str(config["api_url"]), api_key)
 
-        def create(request: CreateRequest) -> CreateResult:
+        def create(request: CreateRequest, jit_config: str) -> CreateResult:
             payload = build_pod_payload(
                 config,
                 args.image_name,
@@ -417,8 +483,10 @@ def main() -> int:
         result = provision(
             config,
             plan,
+            label_prefix=label_prefix,
+            mint_runner=_runner_minter(gh_token, org, runner_group_id),
             create=create,
-            runner_online=_runner_online_checker(gh_token, org, label),
+            runner_online=_runner_online_checker(gh_token, org),
             pod_status=pod_status,
             delete_pod=delete_pod,
             publish_pod_id=publish_pod_id,

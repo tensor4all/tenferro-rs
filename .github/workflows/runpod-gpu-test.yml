@@ -638,7 +638,10 @@ jobs:
 
     outputs:
       pod_id: ${{ steps.create_pod.outputs.pod_id }}
-      runner_label: ${{ steps.vars.outputs.runner_label }}
+      # Per-attempt label of the ACCEPTED runner: each provision candidate
+      # mints its own single-use JIT config under a fresh label so a stale
+      # online record from a rejected pod can never satisfy the wait.
+      runner_label: ${{ steps.create_pod.outputs.runner_label }}
       gpu_type_id: ${{ steps.create_pod.outputs.gpu_type_id }}
       gpu_tier: ${{ steps.create_pod.outputs.gpu_tier }}
       gpu_cost_per_hr: ${{ steps.create_pod.outputs.gpu_cost_per_hr }}
@@ -661,86 +664,36 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: ${{ env.ORG_NAME }}
 
-      # JIT (just-in-time) runner config replaces the old org-level
+      # JIT (just-in-time) runner configs replace the old org-level
       # registration-token + `config.sh` flow (see issue #1, finding 1). A JIT
       # config is single-runner, single-job, cannot be replayed, and is scoped
       # to the runner group below, so a leaked config has far smaller blast
       # radius than the old org-wide reusable registration token.
+      #
+      # The provision loop mints one JIT config PER CANDIDATE ATTEMPT under a
+      # fresh per-attempt label: a JIT config cannot be replayed after an
+      # earlier candidate registered with it, and a shared label would let a
+      # stale online record from a rejected pod satisfy the wait for a new
+      # pod that never passed the smoke proof (#1404).
       #
       # runner_group_id defaults to 1 (the org's "Default" runner group, which
       # every repo in the org can use). To actually restrict which repos may
       # consume these runners, create a dedicated restricted runner group in
       # the organization settings and set the `RUNPOD_RUNNER_GROUP_ID` repo
       # variable to its id.
-      - name: Generate JIT runner config
-        id: jit_config
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          ORG_NAME: ${{ env.ORG_NAME }}
-          RUNNER_LABEL: ${{ steps.vars.outputs.runner_label }}
-          RUNNER_GROUP_ID: ${{ vars.RUNPOD_RUNNER_GROUP_ID || '1' }}
-        run: |
-          set -euo pipefail
-
-          request_body="$(
-            jq -n \
-              --arg name "$RUNNER_LABEL" \
-              --arg label "$RUNNER_LABEL" \
-              --argjson runner_group_id "$RUNNER_GROUP_ID" \
-              '{
-                name: $name,
-                runner_group_id: $runner_group_id,
-                labels: ["self-hosted", $label],
-                work_folder: "_work"
-              }'
-          )"
-
-          response_file=/tmp/github-jit-config.json
-          status="$(
-            curl -sS \
-              -X POST \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/orgs/${ORG_NAME}/actions/runners/generate-jitconfig" \
-              -d "${request_body}" \
-              --output "$response_file" \
-              --write-out "%{http_code}"
-          )"
-
-          echo "GitHub generate-jitconfig HTTP status: ${status}"
-
-          if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
-            jq . "$response_file" || cat "$response_file"
-            echo "Failed to generate JIT runner config" >&2
-            exit 1
-          fi
-
-          jit_config="$(jq -r .encoded_jit_config "$response_file")"
-
-          if [ -z "$jit_config" ] || [ "$jit_config" = "null" ]; then
-            jq 'del(.encoded_jit_config)' "$response_file" || cat "$response_file"
-            echo "Failed to generate JIT runner config: missing encoded_jit_config" >&2
-            exit 1
-          fi
-
-          echo "::add-mask::$jit_config"
-          echo "jit_config=${jit_config}" >> "$GITHUB_OUTPUT"
-
       - name: Provision cheapest compatible RunPod pod
         id: create_pod
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
-          RUNNER_JIT_CONFIG: ${{ steps.jit_config.outputs.jit_config }}
           RUNPOD_IMAGE: ${{ env.RUNPOD_IMAGE }}
           PROVISION_GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PROVISION_ORG: ${{ env.ORG_NAME }}
           PROVISION_RUNNER_LABEL: ${{ steps.vars.outputs.runner_label }}
+          PROVISION_RUNNER_GROUP_ID: ${{ vars.RUNPOD_RUNNER_GROUP_ID || '1' }}
           SMOKE_SOURCE_URL: https://raw.githubusercontent.com/${{ env.TENFERRO_REPO }}/${{ github.sha }}/scripts/ci/cuda_smoke_test.py
         run: |
           set -euo pipefail
 
-          echo "::add-mask::${RUNNER_JIT_CONFIG}"
           smoke_min_vram_gb="$(jq -r '.min_vram_gb' scripts/ci/runpod_config.json)"
           cat > /tmp/runpod-startup.sh <<'EOS'
           set -euo pipefail
