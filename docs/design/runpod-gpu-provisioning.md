@@ -47,10 +47,11 @@ before any dependency setup or test execution:
    readback,
 6. VRAM check against `min_vram_gb`.
 
-The script is fetched at the trusted default-branch SHA
-(`${{ github.sha }}`), never from the PR ref, and receives its parameters
-through non-secret pod environment variables. On failure it exits nonzero,
-the container stops, and the pod never becomes a runner.
+The script is embedded into the startup script by the trusted
+start-runpod job from its own checkout (no pod-side network fetch), and
+receives its parameters through non-secret pod environment variables. On
+failure it exits nonzero, the container stops, and the pod never becomes a
+runner.
 
 ## Bounded provision loop
 
@@ -64,8 +65,10 @@ credentials stay GitHub-hosted):
   `run-gpu-tests` targets the accepted attempt's label;
 - create one candidate pod at a time, cheapest first;
 - watch two signals: the org runner registry (runner online = smoke proof
-  passed) and the pod status (`EXITED`/`TERMINATED` before registration =
-  smoke or startup failure);
+  passed) and the pod's container state via GraphQL (`desiredStatus` plus
+  the `runtime` object — RunPod keeps `desiredStatus` at RUNNING after the
+  container exits, so a null runtime after boot is the authoritative
+  startup-failure signal);
 - delete a rejected or timed-out pod immediately and move to the next
   candidate, reusing the same immutable per-run archive (#1403) — retries
   never compile Rust;
@@ -105,3 +108,7 @@ plane in `change_policy.py`, so changing them requires the GPU gate.
   promptly; the per-candidate timeout bounds the damage.
 - End-to-end behavior on paid hardware (smoke rejection, candidate
   failover, cost logging) can only be demonstrated in live CI runs.
+- Pod logs are not exposed by any RunPod API; the `keep_failed_pods`
+  dispatch input keeps rejected pods alive (billing!) so their console
+  logs can be read in the RunPod dashboard when a smoke failure needs
+  manual triage.
