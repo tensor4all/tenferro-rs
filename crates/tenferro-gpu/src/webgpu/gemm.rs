@@ -10,9 +10,10 @@ use smallvec::SmallVec;
 
 use super::{
     alloc_output, comptime_sequence, cube_count_for_len, cube_dim_1d, ensure_resident_on_runtime,
-    kernels, typed_tensor_binding_with_layout, WebGpuBackend,
+    kernels, typed_tensor_binding_with_layout, unsupported_dtype, unsupported_operation,
+    WebGpuBackend,
 };
-use crate::{col_major_strides, DotGeneralConfig, Error, Tensor, TypedTensor};
+use crate::{col_major_strides, DotGeneralConfig, Error, ShapeMismatch, Tensor, TypedTensor};
 
 const DOT_GENERAL_OP: &str = "webgpu_dot_general";
 
@@ -44,18 +45,15 @@ struct PreparedOperand<T> {
 }
 
 fn dtype_mismatch(op: &'static str, lhs: &Tensor, rhs: &Tensor) -> Error {
-    Error::DTypeMismatch {
-        op,
-        lhs: lhs.dtype(),
-        rhs: rhs.dtype(),
-    }
+    Error::dtype_mismatch(op, lhs.dtype(), rhs.dtype())
 }
 
 fn checked_product(label: &str, dims: &[usize]) -> crate::Result<usize> {
     dims.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim).ok_or_else(|| {
-            Error::backend_failure(
+            Error::invalid_argument(
                 DOT_GENERAL_OP,
+                "shape",
                 format!("{label} product overflow for dimensions {dims:?}"),
             )
         })
@@ -77,10 +75,9 @@ fn dense_strides(shape: &[usize]) -> crate::Result<Vec<usize>> {
         .into_iter()
         .map(|stride| {
             usize::try_from(stride).map_err(|_| {
-                Error::backend_failure(
-                    DOT_GENERAL_OP,
-                    format!("negative stride is not valid for dense shape {shape:?}"),
-                )
+                Error::Internal(format!(
+                    "negative stride is not valid for dense shape {shape:?}"
+                ))
             })
         })
         .collect()
@@ -130,8 +127,9 @@ fn dense_layout_strides(shape: &[usize]) -> crate::Result<Vec<usize>> {
 
 fn output_cubek_strides(m: usize, n: usize, batch_shape: &[usize]) -> crate::Result<Vec<usize>> {
     let mn = m.checked_mul(n).ok_or_else(|| {
-        Error::backend_failure(
+        Error::invalid_argument(
             DOT_GENERAL_OP,
+            "shape",
             format!("output matrix product overflow for M={m} N={n}"),
         )
     })?;
@@ -140,8 +138,9 @@ fn output_cubek_strides(m: usize, n: usize, batch_shape: &[usize]) -> crate::Res
     for &dim in batch_shape {
         strides.push(next_batch_stride);
         next_batch_stride = next_batch_stride.checked_mul(dim).ok_or_else(|| {
-            Error::backend_failure(
+            Error::invalid_argument(
                 DOT_GENERAL_OP,
+                "shape",
                 format!("output batch stride overflow for batch shape {batch_shape:?}"),
             )
         })?;
@@ -164,12 +163,7 @@ fn build_dot_general_plan(
     rhs_shape: &[usize],
     config: &DotGeneralConfig,
 ) -> crate::Result<DotGeneralPlan> {
-    config
-        .validate_dims_with_ranks(lhs_shape.len(), rhs_shape.len())
-        .map_err(|err| Error::InvalidConfig {
-            op: DOT_GENERAL_OP,
-            message: err.to_string(),
-        })?;
+    config.validate_dims_with_ranks(lhs_shape.len(), rhs_shape.len())?;
 
     let lhs_free = free_axes(
         lhs_shape.len(),
@@ -190,24 +184,30 @@ fn build_dot_general_plan(
         let lhs_dim = lhs_shape[lhs_axis];
         let rhs_dim = rhs_shape[rhs_axis];
         if lhs_dim != rhs_dim {
-            return Err(Error::InvalidConfig {
-                op: DOT_GENERAL_OP,
-                message: format!(
-                    "contracting dim size mismatch: lhs axis {lhs_axis}={lhs_dim} rhs axis {rhs_axis}={rhs_dim}"
-                ),
-            });
+            return Err(Error::validation(
+                DOT_GENERAL_OP,
+                ShapeMismatch::ContractedDimensions {
+                    lhs_axis,
+                    lhs_size: lhs_dim,
+                    rhs_axis,
+                    rhs_size: rhs_dim,
+                }
+                .into(),
+            ));
         }
     }
     for (&lhs_axis, &rhs_axis) in lhs_batch.iter().zip(&rhs_batch) {
         let lhs_dim = lhs_shape[lhs_axis];
         let rhs_dim = rhs_shape[rhs_axis];
         if lhs_dim != rhs_dim {
-            return Err(Error::InvalidConfig {
-                op: DOT_GENERAL_OP,
-                message: format!(
-                    "batch dim size mismatch: lhs axis {lhs_axis}={lhs_dim} rhs axis {rhs_axis}={rhs_dim}"
-                ),
-            });
+            return Err(Error::validation(
+                DOT_GENERAL_OP,
+                ShapeMismatch::IncompatibleShapes {
+                    lhs: ShapeVec::from_vec(vec![lhs_dim]),
+                    rhs: ShapeVec::from_vec(vec![rhs_dim]),
+                }
+                .into(),
+            ));
         }
     }
 
@@ -407,9 +407,9 @@ fn dot_general_f32(
         return Ok(output);
     }
     if plan.k == 0 {
-        return Err(Error::backend_failure(
+        return Err(unsupported_operation(
             DOT_GENERAL_OP,
-            "WebGPU CubeK matmul does not support zero-sized contracting dimensions yet",
+            "CubeK matmul does not support zero-sized contracting dimensions yet",
         ));
     }
     let lhs = prepare_lhs_operand(backend, lhs, &plan)?;
@@ -440,7 +440,7 @@ fn dot_general_f32(
         output_binding,
         &mut dtypes,
     )
-    .map_err(|err| Error::backend_failure(DOT_GENERAL_OP, format!("{err:?}")))?;
+    .map_err(|err| Error::backend_source(DOT_GENERAL_OP, err))?;
 
     Ok(output)
 }
@@ -462,9 +462,9 @@ fn dot_general_c32(
         return Ok(output);
     }
     if plan.k == 0 {
-        return Err(Error::backend_failure(
+        return Err(unsupported_operation(
             DOT_GENERAL_OP,
-            "WebGPU CubeK matmul does not support zero-sized contracting dimensions yet",
+            "CubeK matmul does not support zero-sized contracting dimensions yet",
         ));
     }
     let lhs = prepare_lhs_operand(backend, lhs, &plan)?;
@@ -496,7 +496,7 @@ fn dot_general_c32(
         &mut dtypes,
         ComplexMatmulOptions { lhs_conj, rhs_conj },
     )
-    .map_err(|err| Error::backend_failure(DOT_GENERAL_OP, format!("{err:?}")))?;
+    .map_err(|err| Error::backend_source(DOT_GENERAL_OP, err))?;
 
     Ok(output)
 }
@@ -513,17 +513,15 @@ pub(super) fn dot_general_with_conj(
         (Tensor::F32(lhs), Tensor::F32(rhs)) => {
             dot_general_f32(backend, lhs, rhs, config).map(Tensor::F32)
         }
-        (Tensor::F64(_), Tensor::F64(_)) => Err(Error::backend_failure(
-            DOT_GENERAL_OP,
-            "WebGPU CubeK matmul currently supports f32 real inputs; f64 is not available in the initial WebGPU path",
-        )),
+        (Tensor::F64(_), Tensor::F64(_)) => {
+            Err(unsupported_dtype(DOT_GENERAL_OP, crate::DType::F64))
+        }
         (Tensor::C32(lhs), Tensor::C32(rhs)) => {
             dot_general_c32(backend, lhs, rhs, config, lhs_conj, rhs_conj).map(Tensor::C32)
         }
-        (Tensor::C64(_), Tensor::C64(_)) => Err(Error::backend_failure(
-            DOT_GENERAL_OP,
-            "WebGPU complex64 matmul requires f64 support and is not available in the initial WebGPU path",
-        )),
+        (Tensor::C64(_), Tensor::C64(_)) => {
+            Err(unsupported_dtype(DOT_GENERAL_OP, crate::DType::C64))
+        }
         _ => Err(dtype_mismatch(DOT_GENERAL_OP, lhs, rhs)),
     }
 }

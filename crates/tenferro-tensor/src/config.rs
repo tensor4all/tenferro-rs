@@ -1,12 +1,9 @@
-use crate::{Error, Result};
+use crate::{Error, Result, ValidationError};
 
 const DOT_GENERAL_OP: &str = "dot_general";
 
 fn invalid_dot_general_config(message: impl Into<String>) -> Error {
-    Error::InvalidConfig {
-        op: DOT_GENERAL_OP,
-        message: message.into(),
-    }
+    Error::invalid_argument(DOT_GENERAL_OP, "dot_general_config", message)
 }
 
 /// DotGeneral dimension configuration.
@@ -42,14 +39,17 @@ pub struct DotGeneralConfig {
 }
 
 impl DotGeneralConfig {
-    fn check_no_duplicates(dims: &[usize], label: &str) -> Result<()> {
+    fn check_no_duplicates(dims: &[usize], label: &'static str) -> Result<()> {
         let mut seen = std::collections::HashSet::new();
         for &d in dims {
             if !seen.insert(d) {
-                return Err(invalid_dot_general_config(format!(
-                    "{} contains duplicate dim {}",
-                    label, d
-                )));
+                return Err(Error::validation(
+                    DOT_GENERAL_OP,
+                    ValidationError::DuplicateAxis {
+                        axis: d,
+                        role: label,
+                    },
+                ));
             }
         }
         Ok(())
@@ -74,37 +74,53 @@ impl DotGeneralConfig {
     /// };
     /// config.validate_dims_with_ranks(2, 2).unwrap();
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with an axis, duplicate-axis,
+    /// or configuration source when the dimension roles are invalid.
     pub fn validate_dims_with_ranks(&self, lhs_rank: usize, rhs_rank: usize) -> Result<()> {
         for &d in &self.lhs_contracting_dims {
             if d >= lhs_rank {
-                return Err(invalid_dot_general_config(format!(
-                    "lhs_contracting_dim {} out of bounds for lhs_rank {}",
-                    d, lhs_rank
-                )));
+                return Err(Error::validation(
+                    DOT_GENERAL_OP,
+                    ValidationError::AxisOutOfBounds {
+                        axis: d,
+                        rank: lhs_rank,
+                    },
+                ));
             }
         }
         for &d in &self.rhs_contracting_dims {
             if d >= rhs_rank {
-                return Err(invalid_dot_general_config(format!(
-                    "rhs_contracting_dim {} out of bounds for rhs_rank {}",
-                    d, rhs_rank
-                )));
+                return Err(Error::validation(
+                    DOT_GENERAL_OP,
+                    ValidationError::AxisOutOfBounds {
+                        axis: d,
+                        rank: rhs_rank,
+                    },
+                ));
             }
         }
         for &d in &self.lhs_batch_dims {
             if d >= lhs_rank {
-                return Err(invalid_dot_general_config(format!(
-                    "lhs_batch_dim {} out of bounds for lhs_rank {}",
-                    d, lhs_rank
-                )));
+                return Err(Error::validation(
+                    DOT_GENERAL_OP,
+                    ValidationError::AxisOutOfBounds {
+                        axis: d,
+                        rank: lhs_rank,
+                    },
+                ));
             }
         }
         for &d in &self.rhs_batch_dims {
             if d >= rhs_rank {
-                return Err(invalid_dot_general_config(format!(
-                    "rhs_batch_dim {} out of bounds for rhs_rank {}",
-                    d, rhs_rank
-                )));
+                return Err(Error::validation(
+                    DOT_GENERAL_OP,
+                    ValidationError::AxisOutOfBounds {
+                        axis: d,
+                        rank: rhs_rank,
+                    },
+                ));
             }
         }
         Self::check_no_duplicates(&self.lhs_contracting_dims, "lhs_contracting_dims")?;
@@ -113,18 +129,26 @@ impl DotGeneralConfig {
         Self::check_no_duplicates(&self.rhs_batch_dims, "rhs_batch_dims")?;
         for &d in &self.lhs_contracting_dims {
             if self.lhs_batch_dims.contains(&d) {
-                return Err(invalid_dot_general_config(format!(
-                    "lhs dim {} appears in both contracting and batch dims",
-                    d
-                )));
+                return Err(Error::validation(
+                    DOT_GENERAL_OP,
+                    ValidationError::AxisRoleConflict {
+                        axis: d,
+                        first_role: "lhs contracting",
+                        second_role: "lhs batch",
+                    },
+                ));
             }
         }
         for &d in &self.rhs_contracting_dims {
             if self.rhs_batch_dims.contains(&d) {
-                return Err(invalid_dot_general_config(format!(
-                    "rhs dim {} appears in both contracting and batch dims",
-                    d
-                )));
+                return Err(Error::validation(
+                    DOT_GENERAL_OP,
+                    ValidationError::AxisRoleConflict {
+                        axis: d,
+                        first_role: "rhs contracting",
+                        second_role: "rhs batch",
+                    },
+                ));
             }
         }
         if self.lhs_contracting_dims.len() != self.rhs_contracting_dims.len() {

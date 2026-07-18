@@ -38,10 +38,7 @@ fn complex_gesdd_rwork_len(jobz: u8, m: usize, n: usize) -> tenferro_tensor::Res
     let square_term = checked_product("svd", "real workspace square term", &[5, mn, mn])?;
     let linear_term = checked_product("svd", "real workspace linear term", &[5, mn])?;
     let small_shape_len = square_term.checked_add(linear_term).ok_or_else(|| {
-        tenferro_tensor::Error::InvalidConfig {
-            op: "svd",
-            message: "real workspace length overflow".into(),
-        }
+        tenferro_tensor::Error::validation("svd", tenferro_tensor::ValidationError::IntegerOverflow)
     })?;
     if mx > threshold {
         return Ok(small_shape_len);
@@ -52,9 +49,11 @@ fn complex_gesdd_rwork_len(jobz: u8, m: usize, n: usize) -> tenferro_tensor::Res
     let large_shape_len = rectangular_term
         .checked_add(second_square_term)
         .and_then(|len| len.checked_add(mn))
-        .ok_or_else(|| tenferro_tensor::Error::InvalidConfig {
-            op: "svd",
-            message: "real workspace length overflow".into(),
+        .ok_or_else(|| {
+            tenferro_tensor::Error::validation(
+                "svd",
+                tenferro_tensor::ValidationError::IntegerOverflow,
+            )
         })?;
     Ok(small_shape_len.max(large_shape_len))
 }
@@ -631,9 +630,8 @@ pub(crate) fn svd_values<T: LapackSvd>(
         })?;
     match outputs.pop() {
         Some(values) if outputs.is_empty() => Ok(values),
-        _ => Err(tenferro_tensor::Error::InvalidConfig {
-            op: "svd_values",
-            message: "expected exactly one output from batched singular-value helper".into(),
-        }),
+        _ => Err(tenferro_tensor::Error::Internal(
+            "svd_values: expected exactly one output from batched singular-value helper".into(),
+        )),
     }
 }

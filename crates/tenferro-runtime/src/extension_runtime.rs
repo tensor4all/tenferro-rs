@@ -11,7 +11,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use tenferro_ops::ext_op::ExtensionOp;
-use tenferro_tensor::{CacheStats, Tensor, TensorBackend, TensorRead};
+use tenferro_tensor::{
+    CacheStats, Error as TensorError, ErrorKind, Tensor, TensorBackend, TensorRead,
+};
 
 use crate::extension_cache::{ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore};
 
@@ -25,6 +27,10 @@ pub enum ExtensionRuntimeRegistryError {
     /// A registry lock was poisoned by a panic in another thread.
     #[error("{name} poisoned")]
     PoisonedLock { name: &'static str },
+    /// A host-reference executor was asked to run an operation without a
+    /// host implementation.
+    #[error("extension family {family_id:?} has no host reference implementation")]
+    MissingHostReference { family_id: &'static str },
 }
 
 /// Backend and cache state passed to one extension execution.
@@ -109,6 +115,15 @@ impl<'a, B: TensorBackend> ExtensionExecutionContext<'a, B> {
     ///     .unwrap();
     /// assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[3.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// `ValidationError::InvalidArgument` when the program has an invalid
+    /// input/slot contract, [`crate::Error::Internal`] when it contains a
+    /// nested extension or violates an execution-IR invariant, and
+    /// [`crate::Error::TensorRuntime`] when backend execution returns a typed
+    /// validation, backend, or runtime-state source.
     pub fn execute_core_exec_program_unsegmented(
         &mut self,
         program: &crate::extension::ExecProgram,
@@ -136,6 +151,15 @@ pub trait ExtensionRuntime<B: TensorBackend + 'static>: Debug + Send + Sync + 's
     fn family_id(&self) -> &'static str;
 
     /// Execute the extension op with backend and cache state supplied by core.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with
+    /// `ValidationError::InvalidArgument` for an invalid input/output arity
+    /// or metadata contract, [`tenferro_tensor::Error::Unsupported`] when the
+    /// operation is not implemented, or a typed
+    /// [`tenferro_tensor::Error::BackendSource`] /
+    /// [`tenferro_tensor::Error::RuntimeStateSource`] from backend execution.
     fn execute(
         &self,
         op: &dyn ExtensionOp,
@@ -148,6 +172,14 @@ pub trait ExtensionRuntime<B: TensorBackend + 'static>: Debug + Send + Sync + 's
     /// Implementations that need compact tensors must materialize inputs here
     /// explicitly. Keeping this method required prevents implicit read-path
     /// fallbacks from hiding backend or view handling bugs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with
+    /// `ValidationError::InvalidArgument` for an invalid input/output arity
+    /// or metadata contract, [`tenferro_tensor::Error::RuntimeStateSource`]
+    /// when a borrowed view cannot be materialized, or a typed
+    /// [`tenferro_tensor::Error::BackendSource`] from execution.
     fn execute_reads(
         &self,
         op: &dyn ExtensionOp,
@@ -207,11 +239,16 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for HostReferenceRuntime<B>
         inputs: &[&Tensor],
         _ctx: &mut ExtensionExecutionContext<'_, B>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let host = op
-            .host_reference()
-            .ok_or(tenferro_tensor::Error::NoHostReference {
-                family_id: op.family_id(),
-            })?;
+        let host = op.host_reference().ok_or_else(|| {
+            TensorError::extension(
+                "extension",
+                op.family_id(),
+                ErrorKind::Unsupported,
+                ExtensionRuntimeRegistryError::MissingHostReference {
+                    family_id: op.family_id(),
+                },
+            )
+        })?;
         host.execute(inputs)
     }
 
@@ -239,15 +276,16 @@ fn validate_runtime_output_count(
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
     let expected = op.output_count();
     if outputs.len() != expected {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "extension",
-            message: format!(
+        return Err(TensorError::invalid_argument(
+            "extension",
+            "outputs",
+            format!(
                 "family_id {:?}: runtime returned {} outputs but op declared {} outputs",
                 op.family_id(),
                 outputs.len(),
                 expected
             ),
-        });
+        ));
     }
     Ok(outputs)
 }
@@ -258,15 +296,16 @@ fn validate_runtime_input_count(
 ) -> tenferro_tensor::Result<()> {
     let expected = op.input_count();
     if actual != expected {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "extension",
-            message: format!(
+        return Err(TensorError::invalid_argument(
+            "extension",
+            "inputs",
+            format!(
                 "family_id {:?}: op expects {} inputs, got {}",
                 op.family_id(),
                 expected,
                 actual
             ),
-        });
+        ));
     }
     Ok(())
 }
@@ -311,6 +350,11 @@ impl<B: TensorBackend + 'static> ExtensionRegistry<B> {
     /// Registration is idempotent by family id: registering the same extension
     /// family more than once succeeds and keeps the first runtime. This lets
     /// extension crates register their own dependency extensions defensively.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRuntimeRegistryError::MalformedFamilyId`] when the
+    /// executor advertises an invalid family identifier.
     pub fn register(
         &mut self,
         executor: Arc<dyn ExtensionRuntime<B>>,
@@ -420,6 +464,15 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     }
 
     /// Execute an extension using a registered runtime executor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with
+    /// `ValidationError::InvalidArgument` when the input/output count or
+    /// registered family is invalid, [`tenferro_tensor::Error::Extension`]
+    /// when the extension source fails, or a typed
+    /// [`tenferro_tensor::Error::BackendSource`] /
+    /// [`tenferro_tensor::Error::RuntimeStateSource`] from execution.
     pub fn execute(
         &mut self,
         backend: &mut B,
@@ -428,13 +481,14 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         validate_runtime_input_count(op, inputs.len())?;
         let Some(executor) = self.registry.get(op.family_id()) else {
-            return Err(tenferro_tensor::Error::InvalidConfig {
-                op: "extension",
-                message: format!(
+            return Err(TensorError::invalid_argument(
+                "extension",
+                "runtime",
+                format!(
                     "missing runtime for family_id {:?}; register the extension on this runtime owner, for example `executor.register_extension(<extension_crate>::register_runtime)` or `eager_runtime.register_extension(<extension_crate>::register_runtime)`",
                     op.family_id()
                 ),
-            });
+            ));
         };
         let mut ctx = ExtensionExecutionContext::new(backend, &mut self.caches);
         validate_runtime_output_count(op, executor.execute(op, inputs, &mut ctx)?)
@@ -516,6 +570,15 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     /// assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with
+    /// `ValidationError::InvalidArgument` when the input/output count or
+    /// registered family is invalid, [`tenferro_tensor::Error::Extension`]
+    /// when the extension source fails, or a typed
+    /// [`tenferro_tensor::Error::BackendSource`] /
+    /// [`tenferro_tensor::Error::RuntimeStateSource`] from execution.
     pub fn execute_reads(
         &mut self,
         backend: &mut B,
@@ -524,13 +587,14 @@ impl<B: TensorBackend + 'static> ExtensionExecutor<B> {
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         validate_runtime_input_count(op, inputs.len())?;
         let Some(executor) = self.registry.get(op.family_id()) else {
-            return Err(tenferro_tensor::Error::InvalidConfig {
-                op: "extension",
-                message: format!(
+            return Err(TensorError::invalid_argument(
+                "extension",
+                "runtime",
+                format!(
                     "missing runtime for family_id {:?}; register the extension on this runtime owner, for example `executor.register_extension(<extension_crate>::register_runtime)` or `eager_runtime.register_extension(<extension_crate>::register_runtime)`",
                     op.family_id()
                 ),
-            });
+            ));
         };
         let mut ctx = ExtensionExecutionContext::new(backend, &mut self.caches);
         validate_runtime_output_count(op, executor.execute_reads(op, inputs, &mut ctx)?)

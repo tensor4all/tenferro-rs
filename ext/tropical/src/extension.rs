@@ -26,6 +26,7 @@ use tenferro_tensor::{DType, Tensor, TensorBackend};
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 use crate::einsum::tropical_einsum_subscripts_with_argmax;
+use crate::error::unsupported_dtype;
 #[cfg(feature = "autodiff")]
 use crate::einsum::TropicalArgmaxStep;
 use crate::TropicalKind;
@@ -37,10 +38,7 @@ const TROPICAL_EINSUM_JVP_FAMILY_ID: &str = "tenferro-ext-tropical.einsum_jvp.v1
 const TROPICAL_EINSUM_VJP_FAMILY_ID: &str = "tenferro-ext-tropical.einsum_vjp.v1";
 
 fn invalid_config(op: &'static str, message: impl Into<String>) -> tenferro_tensor::Error {
-    tenferro_tensor::Error::InvalidConfig {
-        op,
-        message: message.into(),
-    }
+    tenferro_tensor::Error::invalid_argument(op, "configuration", message)
 }
 
 /// Register tropical extension runtimes on a graph or eager executor.
@@ -272,10 +270,7 @@ impl HostReference for TropicalEinsumJvpOp {
                 execute_jvp_typed::<f64>(inputs, &self.subscripts, step, &self.active_inputs)
                     .map(|tensor| vec![tensor])
             }
-            dtype => Err(invalid_config(
-                "tropical_einsum_jvp",
-                format!("unsupported output dtype {dtype:?}"),
-            )),
+            dtype => Err(unsupported_dtype("tropical_einsum_jvp", dtype)),
         }
     }
 }
@@ -362,19 +357,17 @@ impl ExtensionOp for TropicalEinsumVjpOp {
             "tropical_einsum_vjp",
         )?;
         if input_dtypes[2] != input_dtypes[self.active_input] {
-            return Err(invalid_config(
+            return Err(tenferro_tensor::Error::dtype_mismatch(
                 "tropical_einsum_vjp",
-                "cotangent dtype does not match active primal dtype",
+                input_dtypes[self.active_input],
+                input_dtypes[2],
             ));
         }
         if input_shapes[2].len() != primal_output_shape.len() {
-            return Err(invalid_config(
+            return Err(tenferro_tensor::Error::rank_mismatch(
                 "tropical_einsum_vjp",
-                format!(
-                    "cotangent rank {} does not match primal output rank {}",
-                    input_shapes[2].len(),
-                    primal_output_shape.len()
-                ),
+                primal_output_shape.len(),
+                input_shapes[2].len(),
             ));
         }
         for (cotangent_dim, output_dim) in input_shapes[2].iter().cloned().zip(primal_output_shape)
@@ -411,10 +404,7 @@ impl HostReference for TropicalEinsumVjpOp {
                 execute_vjp_typed::<f64>(inputs, &self.subscripts, step, self.active_input)
                     .map(|tensor| vec![tensor])
             }
-            dtype => Err(invalid_config(
-                "tropical_einsum_vjp",
-                format!("unsupported active input dtype {dtype:?}"),
-            )),
+            dtype => Err(unsupported_dtype("tropical_einsum_vjp", dtype)),
         }
     }
 }
@@ -573,23 +563,27 @@ fn infer_tropical_output_meta(
             ),
         ));
     }
-    if subscripts.inputs.len() != 2 || input_dtypes[0] != input_dtypes[1] {
-        return Err(invalid_config(
+    if subscripts.inputs.len() != 2 {
+        return Err(invalid_config(op, "tropical einsum requires two inputs"));
+    }
+    if input_dtypes[0] != input_dtypes[1] {
+        return Err(tenferro_tensor::Error::dtype_mismatch(
             op,
-            "tropical einsum requires two inputs with matching dtypes",
+            input_dtypes[0],
+            input_dtypes[1],
         ));
+    }
+    if !matches!(input_dtypes[0], DType::F32 | DType::F64) {
+        return Err(unsupported_dtype(op, input_dtypes[0]));
     }
 
     let mut label_dims: HashMap<u32, SymDim> = HashMap::new();
     for (labels, shape) in subscripts.inputs.iter().zip(input_shapes.iter()) {
         if labels.len() != shape.len() {
-            return Err(invalid_config(
+            return Err(tenferro_tensor::Error::rank_mismatch(
                 op,
-                format!(
-                    "subscript rank {} does not match input rank {}",
-                    labels.len(),
-                    shape.len()
-                ),
+                labels.len(),
+                shape.len(),
             ));
         }
         for (&label, dim) in labels.iter().zip(shape.iter()) {
@@ -626,35 +620,33 @@ fn validate_tropical_primal_host_meta(
         ));
     }
     let dtype = inputs[0].dtype();
-    if inputs[1].dtype() != dtype || !matches!(dtype, DType::F32 | DType::F64) {
-        return Err(invalid_config(
+    if inputs[1].dtype() != dtype {
+        return Err(tenferro_tensor::Error::dtype_mismatch(
             op,
-            format!(
-                "primal inputs must have matching F32 or F64 dtype, got {:?} and {:?}",
-                inputs[0].dtype(),
-                inputs[1].dtype()
-            ),
+            dtype,
+            inputs[1].dtype(),
         ));
+    }
+    if !matches!(dtype, DType::F32 | DType::F64) {
+        return Err(unsupported_dtype(op, dtype));
     }
 
     let mut label_dims = HashMap::new();
-    for (input_idx, (labels, input)) in subscripts.inputs.iter().zip(inputs).enumerate() {
+    for (labels, input) in subscripts.inputs.iter().zip(inputs) {
         if labels.len() != input.shape().len() {
-            return Err(invalid_config(
+            return Err(tenferro_tensor::Error::rank_mismatch(
                 op,
-                format!(
-                    "input {input_idx} subscript rank {} does not match tensor rank {}",
-                    labels.len(),
-                    input.shape().len()
-                ),
+                labels.len(),
+                input.shape().len(),
             ));
         }
         for (&label, &dim) in labels.iter().zip(input.shape()) {
             if let Some(existing) = label_dims.insert(label, dim) {
                 if existing != dim {
-                    return Err(invalid_config(
+                    return Err(tenferro_tensor::Error::shape_mismatch(
                         op,
-                        format!("label {label} has conflicting extents {existing} and {dim}"),
+                        vec![existing],
+                        vec![dim],
                     ));
                 }
             }
@@ -694,16 +686,18 @@ fn validate_tropical_jvp_inputs(
             ));
         }
         let tangent = inputs[2 + active_pos];
-        if tangent.dtype() != inputs[active].dtype() || tangent.shape() != inputs[active].shape() {
-            return Err(invalid_config(
+        if tangent.dtype() != inputs[active].dtype() {
+            return Err(tenferro_tensor::Error::dtype_mismatch(
                 "tropical_einsum_jvp",
-                format!(
-                    "tangent {active_pos} metadata {:?} {:?} does not match active input {active} {:?} {:?}",
-                    tangent.dtype(),
-                    tangent.shape(),
-                    inputs[active].dtype(),
-                    inputs[active].shape()
-                ),
+                inputs[active].dtype(),
+                tangent.dtype(),
+            ));
+        }
+        if tangent.shape() != inputs[active].shape() {
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "tropical_einsum_jvp",
+                inputs[active].shape().to_vec(),
+                tangent.shape().to_vec(),
             ));
         }
     }
@@ -731,16 +725,18 @@ fn validate_tropical_vjp_inputs(
     let output_shape =
         validate_tropical_primal_host_meta(&inputs[..2], subscripts, "tropical_einsum_vjp")?;
     let cotangent = inputs[2];
-    if cotangent.dtype() != inputs[active_input].dtype() || cotangent.shape() != output_shape {
-        return Err(invalid_config(
+    if cotangent.dtype() != inputs[active_input].dtype() {
+        return Err(tenferro_tensor::Error::dtype_mismatch(
             "tropical_einsum_vjp",
-            format!(
-                "cotangent metadata {:?} {:?} does not match output {:?} {:?}",
-                cotangent.dtype(),
-                cotangent.shape(),
-                inputs[active_input].dtype(),
-                output_shape
-            ),
+            inputs[active_input].dtype(),
+            cotangent.dtype(),
+        ));
+    }
+    if cotangent.shape() != output_shape {
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "tropical_einsum_vjp",
+            output_shape,
+            cotangent.shape().to_vec(),
         ));
     }
     Ok(())
@@ -813,7 +809,7 @@ where
     let output_len = element_count(&output_shape)?;
     let mut out = vec![T::default(); output_len];
     for (active_pos, &active_input) in active_inputs.iter().enumerate() {
-        let tangent = typed_slice::<T>(inputs[2 + active_pos], "tropical_einsum_jvp tangent")?;
+        let tangent = typed_slice::<T>(inputs[2 + active_pos])?;
         let labels = &subscripts.inputs[active_input];
         for (output_index, out_value) in out.iter_mut().enumerate() {
             let offset = routed_input_offset(
@@ -842,7 +838,7 @@ fn execute_vjp_typed<T>(
 where
     T: TensorScalar + Copy + Default + std::ops::AddAssign,
 {
-    let cotangent = typed_slice::<T>(inputs[2], "tropical_einsum_vjp cotangent")?;
+    let cotangent = typed_slice::<T>(inputs[2])?;
     let output_len = element_count(step.output_shape())?;
     if cotangent.len() != output_len {
         return Err(invalid_config(
@@ -923,16 +919,11 @@ fn routed_input_offset(
 }
 
 #[cfg(feature = "autodiff")]
-fn typed_slice<'a, T>(tensor: &'a Tensor, op: &'static str) -> tenferro_tensor::Result<&'a [T]>
+fn typed_slice<T>(tensor: &Tensor) -> tenferro_tensor::Result<&[T]>
 where
     T: TensorScalar,
 {
-    tensor.as_slice::<T>().map_err(|_| {
-        invalid_config(
-            op,
-            format!("expected compact host {:?} tensor", tensor.dtype()),
-        )
-    })
+    tensor.as_slice::<T>()
 }
 
 #[cfg(feature = "autodiff")]

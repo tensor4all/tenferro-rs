@@ -7,6 +7,8 @@ DOC_SNIPPETS="auto"
 COVERAGE_REVIEWED=0
 FOCUSED_TESTS=()
 CI_PROFILES=()
+focused_test_count=0
+ci_profile_count=0
 CI_PROFILE_DRY_RUN=0
 
 usage() {
@@ -66,11 +68,13 @@ while [[ $# -gt 0 ]]; do
     --test)
       [[ $# -ge 2 ]] || die "--test requires a command"
       FOCUSED_TESTS+=("$2")
+      focused_test_count=$((focused_test_count + 1))
       shift 2
       ;;
     --ci-profile)
       [[ $# -ge 2 ]] || die "--ci-profile requires a name"
       CI_PROFILES+=("$2")
+      ci_profile_count=$((ci_profile_count + 1))
       shift 2
       ;;
     --ci-profile-dry-run)
@@ -121,8 +125,10 @@ log "base:   ${BASE_REF} (${base_short})"
 log "head:   ${head_short}"
 
 changed_files=()
+changed_file_count=0
 while IFS= read -r path; do
   changed_files+=("$path")
+  changed_file_count=$((changed_file_count + 1))
 done < <(
   {
     git diff --name-only "${BASE_REF}...HEAD"
@@ -133,11 +139,13 @@ done < <(
 )
 
 untracked_files=()
+untracked_file_count=0
 while IFS= read -r path; do
   untracked_files+=("$path")
+  untracked_file_count=$((untracked_file_count + 1))
 done < <(git ls-files --others --exclude-standard | awk 'NF' | sort -u)
 
-if [[ "${#changed_files[@]}" -eq 0 ]]; then
+if [[ "$changed_file_count" -eq 0 ]]; then
   log "changed files: none"
 else
   log "changed files:"
@@ -145,9 +153,11 @@ else
 fi
 
 policy_args=(python3 scripts/ci/change_policy.py)
-for path in "${changed_files[@]}"; do
-  policy_args+=(--path "$path")
-done
+if [[ "$changed_file_count" -gt 0 ]]; then
+  for path in "${changed_files[@]}"; do
+    policy_args+=(--path "$path")
+  done
+fi
 policy_json="$("${policy_args[@]}")"
 policy_fields=()
 while IFS= read -r field; do
@@ -165,7 +175,7 @@ log "classification reason: ${change_reason}"
 run git diff --check "${BASE_REF}...HEAD"
 run git diff --cached --check
 run git diff --check
-if [[ "${#untracked_files[@]}" -gt 0 ]]; then
+if [[ "$untracked_file_count" -gt 0 ]]; then
   untracked_whitespace_errors=0
   for path in "${untracked_files[@]}"; do
     whitespace_output="$(git diff --no-index --check -- /dev/null "$path" 2>&1 || true)"
@@ -193,12 +203,14 @@ case "$DOC_SNIPPETS" in
     run_doc_snippets=0
     ;;
   auto)
-    for path in "${changed_files[@]}"; do
-      if [[ "$path" == docs/* || "$path" == README.md || "$path" == *.md || "$path" == *.qmd ]]; then
-        run_doc_snippets=1
-        break
-      fi
-    done
+    if [[ "$changed_file_count" -gt 0 ]]; then
+      for path in "${changed_files[@]}"; do
+        if [[ "$path" == docs/* || "$path" == README.md || "$path" == *.md || "$path" == *.qmd ]]; then
+          run_doc_snippets=1
+          break
+        fi
+      done
+    fi
     ;;
 esac
 
@@ -208,16 +220,18 @@ else
   log "docs snippets: skipped"
 fi
 
-if [[ "${change_class}" != "docs-only" && "${#FOCUSED_TESTS[@]}" -eq 0 && "${#CI_PROFILES[@]}" -eq 0 ]]; then
+if [[ "${change_class}" != "docs-only" && "$focused_test_count" -eq 0 && "$ci_profile_count" -eq 0 ]]; then
   die "focused verification command required for ${change_class} changes; pass --test COMMAND or --ci-profile NAME"
 fi
 
-for command in "${FOCUSED_TESTS[@]}"; do
-  log "+ ${command}"
-  bash -lc "$command"
-done
+if [[ "$focused_test_count" -gt 0 ]]; then
+  for command in "${FOCUSED_TESTS[@]}"; do
+    log "+ ${command}"
+    bash -lc "$command"
+  done
+fi
 
-if [[ "${#CI_PROFILES[@]}" -gt 0 ]]; then
+if [[ "$ci_profile_count" -gt 0 ]]; then
   profile_args=("${CI_PROFILES[@]}")
   if [[ "$CI_PROFILE_DRY_RUN" -eq 1 ]]; then
     profile_args=(--dry-run "${profile_args[@]}")

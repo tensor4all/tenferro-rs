@@ -1,7 +1,7 @@
 use computegraph::types::OperationRole;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
-use tenferro_tensor::DType;
+use tenferro_tensor::{DType, ValidationError};
 
 use super::*;
 
@@ -83,14 +83,18 @@ fn apply_returns_error_for_output_metadata_count_mismatch() {
     };
 
     match err {
-        Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig { op, message }) => {
+        Error::TensorRuntime(tenferro_tensor::Error::Validation { op, source }) => {
             assert_eq!(op, "extension");
-            assert_eq!(
-                message,
-                "family_id=\"test.extension\": infer_output_meta produced 1 output metadata entries; op declared 2 outputs"
-            );
+            assert!(matches!(
+                source,
+                ValidationError::InvalidArgument {
+                    argument: "output metadata",
+                    message,
+                } if message.contains("family_id=\"test.extension\"")
+                    && message.contains("declared 2 outputs")
+            ));
         }
-        other => panic!("expected structured extension InvalidConfig, got {other:?}"),
+        other => panic!("expected structured extension validation error, got {other:?}"),
     }
 }
 

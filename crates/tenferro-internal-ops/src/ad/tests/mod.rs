@@ -164,7 +164,11 @@ fn metadata_exact_shape_rejects_upper_bound() {
     assert_eq!(ctx.exact_shape_of(&value).unwrap(), None);
     assert!(matches!(
         ctx.shape_of(&value),
-        Err(crate::ad::context::ShapeGuardError::NonExactShape { .. })
+        Err(err)
+            if matches!(
+                err.typed_source(),
+                crate::ad::context::ShapeGuardError::NonExactShape { .. }
+            )
     ));
 }
 

@@ -1,6 +1,32 @@
 use thiserror::Error;
 
-use crate::{CpuBackendKind, CpuSet, CpuTopology, CpuTopologyError, NumaNodeId};
+use crate::{CpuBackendKind, CpuContextError, CpuSet, CpuTopology, CpuTopologyError, NumaNodeId};
+
+/// Typed failure raised while constructing a CPU execution engine.
+///
+/// The tensor-backed compatibility path and the managed engine path expose
+/// different concrete construction errors. This wrapper keeps both sources
+/// typed while allowing [`CpuPlacementError`] to present one public error
+/// shape.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{CpuEngineConstructionError, CpuContextError};
+/// use std::error::Error;
+///
+/// let error = CpuEngineConstructionError::Context(CpuContextError::InvalidThreadCount);
+/// assert!(error.source().is_some());
+/// ```
+#[derive(Debug, Error)]
+pub enum CpuEngineConstructionError {
+    /// A managed CPU context or pinned worker engine could not be built.
+    #[error("managed CPU engine construction failed: {0}")]
+    Context(#[source] CpuContextError),
+    /// The tensor-backed compatibility engine could not be built.
+    #[error("tensor CPU engine construction failed: {0}")]
+    Tensor(#[source] tenferro_tensor::Error),
+}
 
 /// Requested CPU execution placement.
 ///
@@ -110,7 +136,7 @@ impl ResolvedCpuPlacement {
 /// };
 /// assert!(error.to_string().contains("affinity"));
 /// ```
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[derive(Debug, Error)]
 pub enum CpuPlacementError {
     /// Process-visible topology discovery failed before placement resolution.
     #[error("cannot resolve {requested:?} for {backend:?}: topology discovery failed: {source}")]
@@ -162,14 +188,25 @@ pub enum CpuPlacementError {
         backend: CpuBackendKind,
     },
     /// A pinned engine could not be built for an otherwise valid placement.
-    #[error("cannot resolve {requested:?} for {backend:?}: engine construction failed: {message}")]
+    #[error("cannot resolve {requested:?} for {backend:?}: engine construction failed: {source}")]
     EngineConstruction {
         /// The placement requested by the caller.
         requested: CpuPlacement,
         /// The selected public backend kind.
         backend: CpuBackendKind,
-        /// Worker-pool construction or affinity verification detail.
-        message: String,
+        /// Typed worker-pool construction or affinity failure.
+        #[source]
+        source: CpuEngineConstructionError,
+    },
+    /// The placement state reached an impossible internal compatibility mode.
+    #[error("cannot resolve {requested:?} for {backend:?}: {message}")]
+    InternalState {
+        /// The placement requested by the caller.
+        requested: CpuPlacement,
+        /// The selected public backend kind.
+        backend: CpuBackendKind,
+        /// Stable internal-state diagnostic.
+        message: &'static str,
     },
 }
 

@@ -117,6 +117,13 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let compact = executor.materialize_value(&value).unwrap();
     /// assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TensorRuntime`] containing a typed
+    /// `BackendSource` when backend canonicalization fails, or
+    /// `RuntimeStateSource` when the value's placement/storage state cannot be
+    /// materialized.
     pub fn materialize_value(&mut self, value: &TensorValue) -> Result<Tensor> {
         if let Some(tensor) = value.as_tensor_arc() {
             return Ok(tensor.as_ref().clone());
@@ -220,6 +227,11 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     /// executor.register_extension(|_| Ok(())).unwrap();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRuntimeRegistryError::MalformedFamilyId`] when a
+    /// registered runtime advertises an invalid family identifier.
     pub fn register_extension(
         &mut self,
         register: impl FnOnce(
@@ -245,6 +257,12 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let out = executor.run(&program).unwrap();
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[-3.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnboundPlaceholder`] for a missing default input,
+    /// [`Error::TensorRuntime`] for typed backend/validation failures, or
+    /// [`Error::Internal`] when the program produces zero or multiple outputs.
     pub fn run(&mut self, program: &GraphProgram) -> Result<Tensor> {
         let mut outputs = self.run_many(program)?;
         expect_single_output(&mut outputs)
@@ -276,6 +294,12 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///     &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
     /// );
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnboundPlaceholder`] for a missing default input,
+    /// [`Error::TensorRuntime`] for typed backend/validation failures, or
+    /// [`Error::Internal`] when the program produces zero or multiple outputs.
     pub fn run_value(&mut self, program: &GraphProgram) -> Result<TensorValue> {
         let mut outputs = self.run_many_values(program)?;
         expect_single_value(&mut outputs)
@@ -297,6 +321,13 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let outputs = executor.run_many(&program).unwrap();
     /// assert_eq!(outputs.len(), 2);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnboundPlaceholder`] when a program input has no
+    /// default tensor, [`Error::ShapeConstraintViolation`] or
+    /// [`Error::ShapeConstraintEvaluation`] for failed symbolic guards, and
+    /// [`Error::TensorRuntime`] for typed backend execution failures.
     pub fn run_many(&mut self, program: &GraphProgram) -> Result<Vec<Tensor>> {
         self.run_many_with_inputs(program, &[])
     }
@@ -320,6 +351,13 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// assert!(matches!(&outputs[0], TensorValue::View(_)));
     /// assert_eq!(outputs[0].shape(), &[2, 2]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnboundPlaceholder`] when a program input has no
+    /// default tensor, [`Error::ShapeConstraintViolation`] or
+    /// [`Error::ShapeConstraintEvaluation`] for failed symbolic guards, and
+    /// [`Error::TensorRuntime`] for typed backend execution failures.
     pub fn run_many_values(&mut self, program: &GraphProgram) -> Result<Vec<TensorValue>> {
         self.run_many_values_with_inputs(program, &[])
     }
@@ -346,6 +384,18 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let out = executor.run_with_inputs(&program, &[(&x, &bound)]).unwrap();
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
+    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// [`Error::PlaceholderDtypeMismatch`],
+    /// [`Error::PlaceholderShapeMismatch`], or
+    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
+    /// [`Error::UnboundPlaceholder`] for a missing input, and
+    /// [`Error::ShapeConstraintViolation`],
+    /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
+    /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_with_inputs(
         &mut self,
         program: &GraphProgram,
@@ -376,6 +426,18 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// assert!(matches!(&value, TensorValue::View(_)));
     /// assert_eq!(executor.materialize_value(&value).unwrap().as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
+    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// [`Error::PlaceholderDtypeMismatch`],
+    /// [`Error::PlaceholderShapeMismatch`], or
+    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
+    /// [`Error::UnboundPlaceholder`] for a missing input, and
+    /// [`Error::ShapeConstraintViolation`],
+    /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
+    /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_value_with_inputs(
         &mut self,
         program: &GraphProgram,
@@ -413,6 +475,18 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let out = executor.run_with_input_reads(&program, &[(&x, read)]).unwrap();
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
+    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// [`Error::PlaceholderDtypeMismatch`],
+    /// [`Error::PlaceholderShapeMismatch`], or
+    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
+    /// [`Error::UnboundPlaceholder`] for a missing input, and
+    /// [`Error::ShapeConstraintViolation`],
+    /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
+    /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_with_input_reads<'a>(
         &mut self,
         program: &'a GraphProgram,
@@ -450,6 +524,18 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// assert!(matches!(&value, TensorValue::View(_)));
     /// assert_eq!(value.shape(), &[2, 2]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
+    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// [`Error::PlaceholderDtypeMismatch`],
+    /// [`Error::PlaceholderShapeMismatch`], or
+    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
+    /// [`Error::UnboundPlaceholder`] for a missing input, and
+    /// [`Error::ShapeConstraintViolation`],
+    /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
+    /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_value_with_input_reads<'a>(
         &mut self,
         program: &'a GraphProgram,
@@ -479,6 +565,18 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// assert_eq!(outputs.len(), 1);
     /// assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
+    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// [`Error::PlaceholderDtypeMismatch`],
+    /// [`Error::PlaceholderShapeMismatch`], or
+    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
+    /// [`Error::UnboundPlaceholder`] for a missing input, and
+    /// [`Error::ShapeConstraintViolation`],
+    /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
+    /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_many_with_inputs(
         &mut self,
         program: &GraphProgram,
@@ -511,6 +609,18 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// assert_eq!(outputs.len(), 1);
     /// assert!(matches!(&outputs[0], TensorValue::View(_)));
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
+    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// [`Error::PlaceholderDtypeMismatch`],
+    /// [`Error::PlaceholderShapeMismatch`], or
+    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
+    /// [`Error::UnboundPlaceholder`] for a missing input, and
+    /// [`Error::ShapeConstraintViolation`],
+    /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
+    /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_many_values_with_inputs(
         &mut self,
         program: &GraphProgram,
@@ -548,6 +658,18 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let outputs = executor.run_many_with_input_reads(&program, &[(&x, read)]).unwrap();
     /// assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
+    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// [`Error::PlaceholderDtypeMismatch`],
+    /// [`Error::PlaceholderShapeMismatch`], or
+    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
+    /// [`Error::UnboundPlaceholder`] for a missing input, and
+    /// [`Error::ShapeConstraintViolation`],
+    /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
+    /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_many_with_input_reads<'a>(
         &mut self,
         program: &'a GraphProgram,
@@ -585,6 +707,18 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// assert_eq!(outputs.len(), 1);
     /// assert!(matches!(&outputs[0], TensorValue::View(_)));
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
+    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// [`Error::PlaceholderDtypeMismatch`],
+    /// [`Error::PlaceholderShapeMismatch`], or
+    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
+    /// [`Error::UnboundPlaceholder`] for a missing input, and
+    /// [`Error::ShapeConstraintViolation`],
+    /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
+    /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_many_values_with_input_reads<'a>(
         &mut self,
         program: &'a GraphProgram,
@@ -613,6 +747,14 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let out = executor.run(&program).unwrap();
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[-2.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Internal`] when the input count does not match the
+    /// execution program, [`Error::ShapeConstraintViolation`] or
+    /// [`Error::ShapeConstraintEvaluation`] when symbolic guards fail, and
+    /// [`Error::TensorRuntime`] or [`Error::Extension`] when typed backend or
+    /// extension execution fails.
     pub fn eval_exec_ir(
         &mut self,
         program: &ExecProgram,
@@ -649,6 +791,14 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// assert!(matches!(&value, TensorValue::View(_)));
     /// assert_eq!(value.shape(), &[2, 2]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Internal`] when the input count does not match the
+    /// execution program, [`Error::ShapeConstraintViolation`] or
+    /// [`Error::ShapeConstraintEvaluation`] when symbolic guards fail, and
+    /// [`Error::TensorRuntime`] or [`Error::Extension`] when typed backend or
+    /// extension execution fails.
     pub fn eval_exec_ir_values(
         &mut self,
         program: &ExecProgram,
@@ -684,6 +834,14 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let out = executor.run(&program).unwrap();
     /// assert_eq!(out.shape(), &[1]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Internal`] when the input count does not match the
+    /// execution program, [`Error::ShapeConstraintViolation`] or
+    /// [`Error::ShapeConstraintEvaluation`] when symbolic guards fail, and
+    /// [`Error::TensorRuntime`] or [`Error::Extension`] when typed backend or
+    /// extension execution fails.
     pub fn eval_exec_ir_non_consuming(
         &mut self,
         program: &ExecProgram,
@@ -714,6 +872,14 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// assert!(matches!(&value, TensorValue::View(_)));
     /// assert_eq!(executor.materialize_value(&value).unwrap().shape(), &[2, 2]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Internal`] when the input count does not match the
+    /// execution program, [`Error::ShapeConstraintViolation`] or
+    /// [`Error::ShapeConstraintEvaluation`] when symbolic guards fail, and
+    /// [`Error::TensorRuntime`] or [`Error::Extension`] when typed backend or
+    /// extension execution fails.
     pub fn eval_exec_ir_non_consuming_values(
         &mut self,
         program: &ExecProgram,
@@ -1271,10 +1437,11 @@ fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
 
 fn checked_default_element_count(shape: &[usize]) -> Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim)
-            .ok_or_else(|| Error::InvalidCompiledGraph {
-                message: format!("deferred zero shape product overflows usize for shape {shape:?}"),
-            })
+        acc.checked_mul(dim).ok_or_else(|| {
+            Error::Internal(format!(
+                "deferred zero shape product overflows usize for shape {shape:?}"
+            ))
+        })
     })
 }
 

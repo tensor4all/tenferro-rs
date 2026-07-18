@@ -44,6 +44,15 @@ pub enum MetadataRegistryError {
 }
 
 /// Error returned when shape-guard metadata cannot be resolved.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ops::ShapeGuardError;
+///
+/// let error = ShapeGuardError::LocalWithoutAttachedGraph { local_id: 0 };
+/// assert!(error.to_string().contains("attached graph"));
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ShapeGuardError {
     /// A local graph value was queried before a graph was attached.
@@ -73,18 +82,114 @@ pub enum ShapeGuardError {
 }
 
 /// Result type used by shape-guard metadata queries.
-pub type ShapeGuardResult<T> = Result<T, ShapeGuardError>;
+///
+/// The error side preserves a [`ShapeGuardFailure`] wrapper so an AD callback
+/// can retain the original [`ShapeGuardError`] even when a foreign callback
+/// protocol accepts only a rendered message.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ops::ShapeGuardResult;
+///
+/// let result: ShapeGuardResult<()> = Ok(());
+/// assert!(result.is_ok());
+/// ```
+pub type ShapeGuardResult<T> = Result<T, ShapeGuardFailure>;
 
 #[cfg(feature = "autodiff")]
-impl From<ShapeGuardError> for tidu::ADRuleError {
-    fn from(err: ShapeGuardError) -> Self {
+impl From<ShapeGuardFailure> for tidu::ADRuleError {
+    fn from(err: ShapeGuardFailure) -> Self {
+        err.record_for_ad_boundary();
         tidu::ADRuleError::invalid_input(
             "tenferro.shape_guard",
             tidu::ADRuleKind::Jvp,
-            err.to_string(),
+            err.typed_source().to_string(),
         )
     }
 }
+
+/// Error returned by a shape-guard metadata query.
+///
+/// The public [`ShapeGuardError`] remains the typed source. The private side
+/// channel is shared with the owning [`ShapeGuardContext`] so an external
+/// message-only AD callback can report the same typed source at the runtime
+/// boundary without changing the callback protocol.
+///
+/// # Examples
+///
+/// ```
+/// use computegraph::types::{ValueKey, ValueRef};
+/// use tenferro_ops::input_key::TensorInputKey;
+/// use tenferro_ops::std_tensor_op::StdTensorOp;
+/// use tenferro_ops::{ShapeGuardContext, ShapeGuardError};
+///
+/// let key = ValueKey::<StdTensorOp>::Input(TensorInputKey::User { id: 8 });
+/// let value = ValueRef::External(key);
+/// let mut ctx = ShapeGuardContext::default();
+/// let failure = ctx.shape_of(&value).unwrap_err();
+/// assert!(matches!(
+///     failure.typed_source(),
+///     ShapeGuardError::MissingMetadata { .. }
+/// ));
+/// ```
+#[derive(Clone, Debug)]
+pub struct ShapeGuardFailure {
+    source: ShapeGuardError,
+    #[cfg(feature = "autodiff")]
+    deferred: Arc<Mutex<Option<ShapeGuardError>>>,
+}
+
+impl ShapeGuardFailure {
+    #[cfg(feature = "autodiff")]
+    fn new(source: ShapeGuardError, deferred: Arc<Mutex<Option<ShapeGuardError>>>) -> Self {
+        Self { source, deferred }
+    }
+
+    #[cfg(not(feature = "autodiff"))]
+    fn new(source: ShapeGuardError) -> Self {
+        Self { source }
+    }
+
+    /// Return the original typed shape-guard failure.
+    pub fn typed_source(&self) -> &ShapeGuardError {
+        &self.source
+    }
+
+    /// Consume this boundary error and return its original typed failure.
+    pub fn into_typed_source(self) -> ShapeGuardError {
+        self.source
+    }
+
+    #[cfg(feature = "autodiff")]
+    fn record_for_ad_boundary(&self) {
+        if let Ok(mut deferred) = self.deferred.lock() {
+            if deferred.is_none() {
+                *deferred = Some(self.source.clone());
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for ShapeGuardFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.source.fmt(f)
+    }
+}
+
+impl std::error::Error for ShapeGuardFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+impl PartialEq for ShapeGuardFailure {
+    fn eq(&self, other: &Self) -> bool {
+        self.source == other.source
+    }
+}
+
+impl Eq for ShapeGuardFailure {}
 
 /// Global metadata registry.
 ///
@@ -273,6 +378,8 @@ pub struct ShapeGuardContext {
     use_global_registry: bool,
     local_keys: Option<Vec<ValueKey<StdTensorOp>>>,
     #[cfg(feature = "autodiff")]
+    deferred_shape_error: Arc<Mutex<Option<ShapeGuardError>>>,
+    #[cfg(feature = "autodiff")]
     extension_rules: Option<ExtensionRuleSet>,
     #[cfg(feature = "autodiff")]
     active_value_keys: Option<std::sync::Arc<std::collections::HashSet<ValueKey<StdTensorOp>>>>,
@@ -455,6 +562,21 @@ impl ShapeGuardContext {
         self.guards.clear();
     }
 
+    /// Take the first typed shape-guard failure recorded while crossing an AD
+    /// callback boundary.
+    ///
+    /// `tidu` currently exposes only a message-bearing callback error. AD
+    /// frontends call this after the callback returns and attach the typed
+    /// value to their public runtime error.
+    #[doc(hidden)]
+    #[cfg(feature = "autodiff")]
+    pub fn take_deferred_shape_error(&mut self) -> Option<ShapeGuardError> {
+        self.deferred_shape_error
+            .lock()
+            .ok()
+            .and_then(|mut error| error.take())
+    }
+
     /// Return the shape metadata for a value reference.
     ///
     /// # Examples
@@ -474,15 +596,19 @@ impl ShapeGuardContext {
     /// let shape = ctx.shape_of(&value).unwrap();
     /// assert_eq!(shape, &[SymDim::from(4usize)]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved, metadata
+    /// is missing, or the metadata does not describe an exact shape.
     pub fn shape_of(&mut self, val: &ValueRef<StdTensorOp>) -> ShapeGuardResult<Vec<SymDim>> {
         let key = self.resolve_key(val)?.clone();
         self.ensure_metadata_loaded(&key);
-        let meta = self
-            .metadata
-            .get(&key)
-            .ok_or_else(|| ShapeGuardError::MissingMetadata { key: key.clone() })?;
+        let meta = self.metadata.get(&key).ok_or_else(|| {
+            self.shape_guard_failure(ShapeGuardError::MissingMetadata { key: key.clone() })
+        })?;
         meta.exact_shape()
-            .ok_or(ShapeGuardError::NonExactShape { key })
+            .ok_or_else(|| self.shape_guard_failure(ShapeGuardError::NonExactShape { key }))
     }
 
     /// Return the rank for a value reference without requiring exact extents.
@@ -511,6 +637,11 @@ impl ShapeGuardContext {
     ///
     /// assert_eq!(ctx.rank_of(&value).unwrap(), 1);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved or its
+    /// metadata is unavailable.
     pub fn rank_of(&mut self, val: &ValueRef<StdTensorOp>) -> ShapeGuardResult<usize> {
         self.metadata_of(val).map(TensorMeta::rank)
     }
@@ -537,6 +668,11 @@ impl ShapeGuardContext {
     /// let extents = ctx.extents_of(&value).unwrap();
     /// assert_eq!(extents[0], ShapeExtent::upper_bound(SymDim::from(8usize)));
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved or its
+    /// metadata is unavailable.
     pub fn extents_of(
         &mut self,
         val: &ValueRef<StdTensorOp>,
@@ -566,6 +702,11 @@ impl ShapeGuardContext {
     /// let maybe_shape = ctx.exact_shape_of(&value).unwrap();
     /// assert_eq!(maybe_shape, None);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved or its
+    /// metadata is unavailable.
     pub fn exact_shape_of(
         &mut self,
         val: &ValueRef<StdTensorOp>,
@@ -598,6 +739,11 @@ impl ShapeGuardContext {
     /// let dtype = ctx.dtype_of(&value).unwrap();
     /// assert_eq!(dtype, DType::F64);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved or its
+    /// metadata is unavailable.
     pub fn dtype_of(&mut self, val: &ValueRef<StdTensorOp>) -> ShapeGuardResult<DType> {
         self.metadata_of(val).map(|meta| meta.dtype)
     }
@@ -621,12 +767,17 @@ impl ShapeGuardContext {
     /// let meta = ctx.metadata_of(&value).unwrap();
     /// assert_eq!(meta.dtype, DType::F64);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShapeGuardError`] when the value cannot be resolved or its
+    /// metadata is unavailable.
     pub fn metadata_of(&mut self, val: &ValueRef<StdTensorOp>) -> ShapeGuardResult<&TensorMeta> {
         let key = self.resolve_key(val)?.clone();
         self.ensure_metadata_loaded(&key);
         self.metadata
             .get(&key)
-            .ok_or(ShapeGuardError::MissingMetadata { key })
+            .ok_or_else(|| self.shape_guard_failure(ShapeGuardError::MissingMetadata { key }))
     }
 
     #[doc(hidden)]
@@ -673,19 +824,30 @@ impl ShapeGuardContext {
     ) -> ShapeGuardResult<&'a ValueKey<StdTensorOp>> {
         match val {
             ValueRef::External(key) => Ok(key),
-            ValueRef::Local(local_id) if self.local_keys.is_none() => {
-                Err(ShapeGuardError::LocalWithoutAttachedGraph {
+            ValueRef::Local(local_id) if self.local_keys.is_none() => Err(self
+                .shape_guard_failure(ShapeGuardError::LocalWithoutAttachedGraph {
                     local_id: *local_id,
-                })
-            }
+                })),
             ValueRef::Local(local_id) => self
                 .local_keys
                 .as_ref()
                 .and_then(|keys| keys.get(*local_id))
-                .ok_or(ShapeGuardError::LocalOutOfBounds {
-                    local_id: *local_id,
+                .ok_or_else(|| {
+                    self.shape_guard_failure(ShapeGuardError::LocalOutOfBounds {
+                        local_id: *local_id,
+                    })
                 }),
         }
+    }
+
+    #[cfg(feature = "autodiff")]
+    fn shape_guard_failure(&self, source: ShapeGuardError) -> ShapeGuardFailure {
+        ShapeGuardFailure::new(source, Arc::clone(&self.deferred_shape_error))
+    }
+
+    #[cfg(not(feature = "autodiff"))]
+    fn shape_guard_failure(&self, source: ShapeGuardError) -> ShapeGuardFailure {
+        ShapeGuardFailure::new(source)
     }
 
     fn ensure_metadata_loaded(&mut self, key: &ValueKey<StdTensorOp>) {
@@ -713,6 +875,11 @@ impl ShapeGuardContext {
 /// let meta = lookup_global_metadata(&key).unwrap();
 /// assert!(meta.is_none());
 /// ```
+///
+/// # Errors
+///
+/// Returns [`MetadataRegistryError::LockPoisoned`] when the global metadata
+/// registry lock is poisoned.
 pub fn lookup_global_metadata(
     key: &ValueKey<StdTensorOp>,
 ) -> Result<Option<TensorMeta>, MetadataRegistryError> {
@@ -723,6 +890,11 @@ pub fn lookup_global_metadata(
 }
 
 #[doc(hidden)]
+///
+/// # Errors
+///
+/// Returns [`MetadataRegistryError::LockPoisoned`] when the global metadata
+/// registry lock is poisoned.
 pub fn register_scoped_global_metadata_batch<I>(
     entries: I,
 ) -> Result<GlobalMetadataScope, MetadataRegistryError>

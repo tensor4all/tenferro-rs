@@ -248,31 +248,36 @@ fn extension_error(
     ext: &dyn tenferro_ops::ext_op::ExtensionOp,
     err: tenferro_tensor::Error,
 ) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::backend_failure(
+    Error::extension(
         "extension",
-        format!("family_id={:?}: {err}", ext.family_id()),
-    ))
+        tenferro_runtime::ErrorPhase::Execution,
+        ext.family_id(),
+        err.kind(),
+        err,
+    )
 }
 
 fn missing_extension_executor_error(ext: &dyn tenferro_ops::ext_op::ExtensionOp) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-        op: "extension",
-        message: format!(
+    Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+        "extension",
+        "executor",
+        format!(
             "extension op for family_id {:?} requires an ExtensionExecutor; execute through EagerRuntime or register and pass the extension runtime owner",
             ext.family_id()
         ),
-    })
+    ))
 }
 
 fn axis_out_of_bounds(op: &'static str, axis: usize, rank: usize) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::AxisOutOfBounds { op, axis, rank })
+    Error::TensorRuntime(tenferro_tensor::Error::axis_out_of_bounds(op, axis, rank))
 }
 
 fn invalid_config(op: &'static str, message: impl Into<String>) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+    Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
         op,
-        message: message.into(),
-    })
+        "configuration",
+        message,
+    ))
 }
 
 fn pad_to_match_high_padding(target_size: usize, current_size: usize) -> Result<i64> {
@@ -296,11 +301,7 @@ fn upload_generated_host_tensor<B: TensorBackend>(
 
 fn shape_of_host_tensor(axis: usize, shape: &[usize]) -> Result<Tensor> {
     if axis >= shape.len() {
-        return Err(Error::Internal(format!(
-            "ShapeOf: axis {} out of bounds for rank {}",
-            axis,
-            shape.len()
-        )));
+        return Err(axis_out_of_bounds("ShapeOf", axis, shape.len()));
     }
     let size = shape[axis] as f64;
     Ok(Tensor::F64(TypedTensor::from_vec_col_major(
@@ -823,11 +824,9 @@ fn exec_standard_op_on_tensors<B: TensorBackend>(
 
 fn resolve_tensor_shape_exprs(inputs: &[&Tensor], exprs: &[DimExpr]) -> Result<Vec<usize>> {
     let input_shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    DimExpr::eval_all(exprs, &input_shapes).map_err(|err| {
-        invalid_config(
-            "eager shape expression",
-            format!("failed to resolve eager shape expression: {err}"),
-        )
+    DimExpr::eval_all(exprs, &input_shapes).map_err(|err| Error::ShapeExpressionEvaluation {
+        expression: format!("{exprs:?}"),
+        cause: err.into(),
     })
 }
 
@@ -836,11 +835,9 @@ fn resolve_tensor_read_shape_exprs(
     exprs: &[DimExpr],
 ) -> Result<Vec<usize>> {
     let input_shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    DimExpr::eval_all(exprs, &input_shapes).map_err(|err| {
-        invalid_config(
-            "eager shape expression",
-            format!("failed to resolve eager shape expression: {err}"),
-        )
+    DimExpr::eval_all(exprs, &input_shapes).map_err(|err| Error::ShapeExpressionEvaluation {
+        expression: format!("{exprs:?}"),
+        cause: err.into(),
     })
 }
 

@@ -146,6 +146,10 @@ impl CpuSet {
     /// assert_eq!(cpus.as_usize_vec(), vec![0, 2]);
     /// # Ok::<(), tenferro_cpu::CpuSetError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuSetError::Empty`] when the iterator yields no CPUs.
     pub fn new(cpus: impl IntoIterator<Item = CpuId>) -> Result<Self, CpuSetError> {
         let mut cpus: Vec<_> = cpus.into_iter().collect();
         cpus.sort_unstable();
@@ -452,6 +456,11 @@ pub(crate) fn parse_linux_cpu_list(input: &str) -> Result<CpuSet, CpuTopologyErr
 /// assert!(!topology.allowed_cpus().is_empty());
 /// # Ok::<(), tenferro_cpu::CpuTopologyError>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns [`CpuTopologyError`] when the process affinity or NUMA topology
+/// cannot be read or contains inconsistent CPU domains.
 pub fn discover_cpu_topology() -> Result<CpuTopology, CpuTopologyError> {
     #[cfg(target_os = "linux")]
     {

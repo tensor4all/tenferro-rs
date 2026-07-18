@@ -10,17 +10,19 @@ use super::helpers::{
 
 pub(crate) trait LapackSolve: Clone + Copy + PoolScalar {
     fn getrf(m: i32, n: i32, data: &mut [Self], lda: i32, ipiv: &mut [i32], info: &mut i32);
-    fn getrs(
-        trans: u8,
-        n: i32,
-        nrhs: i32,
-        a: &[Self],
-        lda: i32,
-        ipiv: &[i32],
-        b: &mut [Self],
-        ldb: i32,
-        info: &mut i32,
-    );
+    fn getrs(args: GetrsArgs<'_, Self>);
+}
+
+pub(crate) struct GetrsArgs<'a, T> {
+    trans: u8,
+    n: i32,
+    nrhs: i32,
+    a: &'a [T],
+    lda: i32,
+    ipiv: &'a [i32],
+    b: &'a mut [T],
+    ldb: i32,
+    info: &'a mut i32,
 }
 
 impl LapackSolve for f64 {
@@ -32,17 +34,18 @@ impl LapackSolve for f64 {
         }
     }
 
-    fn getrs(
-        trans: u8,
-        n: i32,
-        nrhs: i32,
-        a: &[Self],
-        lda: i32,
-        ipiv: &[i32],
-        b: &mut [Self],
-        ldb: i32,
-        info: &mut i32,
-    ) {
+    fn getrs(args: GetrsArgs<'_, Self>) {
+        let GetrsArgs {
+            trans,
+            n,
+            nrhs,
+            a,
+            lda,
+            ipiv,
+            b,
+            ldb,
+            info,
+        } = args;
         // SAFETY: `a` holds a prior getrf factorization, `ipiv` matches it,
         // `b` is a mutable `ldb x nrhs` RHS buffer, and all dims are validated.
         unsafe {
@@ -60,17 +63,18 @@ impl LapackSolve for f32 {
         }
     }
 
-    fn getrs(
-        trans: u8,
-        n: i32,
-        nrhs: i32,
-        a: &[Self],
-        lda: i32,
-        ipiv: &[i32],
-        b: &mut [Self],
-        ldb: i32,
-        info: &mut i32,
-    ) {
+    fn getrs(args: GetrsArgs<'_, Self>) {
+        let GetrsArgs {
+            trans,
+            n,
+            nrhs,
+            a,
+            lda,
+            ipiv,
+            b,
+            ldb,
+            info,
+        } = args;
         // SAFETY: `a` holds a prior getrf factorization, `ipiv` matches it,
         // `b` is a mutable `ldb x nrhs` RHS buffer, and all dims are validated.
         unsafe {
@@ -88,17 +92,18 @@ impl LapackSolve for Complex32 {
         }
     }
 
-    fn getrs(
-        trans: u8,
-        n: i32,
-        nrhs: i32,
-        a: &[Self],
-        lda: i32,
-        ipiv: &[i32],
-        b: &mut [Self],
-        ldb: i32,
-        info: &mut i32,
-    ) {
+    fn getrs(args: GetrsArgs<'_, Self>) {
+        let GetrsArgs {
+            trans,
+            n,
+            nrhs,
+            a,
+            lda,
+            ipiv,
+            b,
+            ldb,
+            info,
+        } = args;
         // SAFETY: `a` holds a prior getrf factorization, `ipiv` matches it,
         // `b` is a mutable `ldb x nrhs` RHS buffer, and all dims are validated.
         unsafe {
@@ -116,17 +121,18 @@ impl LapackSolve for Complex64 {
         }
     }
 
-    fn getrs(
-        trans: u8,
-        n: i32,
-        nrhs: i32,
-        a: &[Self],
-        lda: i32,
-        ipiv: &[i32],
-        b: &mut [Self],
-        ldb: i32,
-        info: &mut i32,
-    ) {
+    fn getrs(args: GetrsArgs<'_, Self>) {
+        let GetrsArgs {
+            trans,
+            n,
+            nrhs,
+            a,
+            lda,
+            ipiv,
+            b,
+            ldb,
+            info,
+        } = args;
         // SAFETY: `a` holds a prior getrf factorization, `ipiv` matches it,
         // `b` is a mutable `ldb x nrhs` RHS buffer, and all dims are validated.
         unsafe {
@@ -144,11 +150,11 @@ fn solve_2d<T: LapackSolve>(
     let n = square_matrix_dim(a, "solve")?;
     let (b_rows, b_cols) = matrix_dims(b, "solve")?;
     if b_rows != n {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op: "solve",
-            lhs: vec![n],
-            rhs: vec![b_rows],
-        });
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "solve",
+            vec![n],
+            vec![b_rows],
+        ));
     }
 
     let n_i32 = dim_i32(n, "solve")?;
@@ -159,25 +165,25 @@ fn solve_2d<T: LapackSolve>(
     T::getrf(n_i32, n_i32, &mut lu, n_i32, &mut ipiv, &mut info);
     check_lapack_info("solve", "getrf", info.min(0))?;
     if info > 0 {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(crate::error::into_tensor_error(
             "solve",
-            "matrix is singular",
+            crate::Error::Singular { op: "solve" },
         ));
     }
 
     let mut rhs = b.host_data()?.to_vec();
     let mut info = 0;
-    T::getrs(
-        if transpose_a { b'T' } else { b'N' },
-        n_i32,
-        b_cols_i32,
-        &lu,
-        n_i32,
-        &ipiv,
-        &mut rhs,
-        n_i32,
-        &mut info,
-    );
+    T::getrs(GetrsArgs {
+        trans: if transpose_a { b'T' } else { b'N' },
+        n: n_i32,
+        nrhs: b_cols_i32,
+        a: &lu,
+        lda: n_i32,
+        ipiv: &ipiv,
+        b: &mut rhs,
+        ldb: n_i32,
+        info: &mut info,
+    });
     check_lapack_info("solve", "getrs", info)?;
 
     tensor_from_vec_with_template(vec![n, b_cols], rhs, b)
@@ -193,18 +199,18 @@ pub(crate) fn solve<T: LapackSolve>(
         let (n, a_batch_shape) = square_core_and_batch_result(a, "solve")?;
         let (b_rows, _, b_batch_shape) = matrix_core_and_batch_result(b, "solve")?;
         if b_rows != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "solve",
-                lhs: vec![n],
-                rhs: vec![b_rows],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "solve",
+                vec![n],
+                vec![b_rows],
+            ));
         }
         if a_batch_shape != b_batch_shape {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "solve",
-                lhs: a_batch_shape.to_vec(),
-                rhs: b_batch_shape.to_vec(),
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "solve",
+                a_batch_shape.to_vec(),
+                b_batch_shape.to_vec(),
+            ));
         }
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b);
     }

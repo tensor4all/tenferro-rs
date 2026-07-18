@@ -198,7 +198,10 @@ fn eager_einsum_subscripts_and_read_views_use_integer_api() {
         borrowed.as_slice::<f64>().unwrap(),
         &[22.0, 28.0, 49.0, 64.0]
     );
-    assert_eq!(read.as_slice::<f64>(), borrowed.as_slice::<f64>());
+    assert_eq!(
+        read.as_slice::<f64>().unwrap(),
+        borrowed.as_slice::<f64>().unwrap()
+    );
 }
 
 #[test]
@@ -213,7 +216,10 @@ fn eager_einsum_owned_matches_borrowed() {
     let owned = eager_einsum_owned(&mut owned_ctx, vec![a, b], "ij,jk->ik").unwrap();
 
     assert_eq!(owned.shape(), borrowed.shape());
-    assert_eq!(owned.as_slice::<f64>(), borrowed.as_slice::<f64>());
+    assert_eq!(
+        owned.as_slice::<f64>().unwrap(),
+        borrowed.as_slice::<f64>().unwrap()
+    );
     assert!(owned_ctx.buffer_pool_len() >= 2);
 }
 
@@ -265,12 +271,32 @@ fn typed_einsum_reports_dtype_mismatch_from_backend_result() {
 
     assert!(matches!(
         err,
-        tenferro_tensor::Error::DTypeMismatch {
+        tenferro_tensor::Error::Validation {
             op: "typed_eager_einsum",
-            lhs: DType::F32,
-            rhs: DType::F64,
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         }
     ));
+}
+
+#[test]
+fn typed_einsum_preserves_typed_parser_source_for_invalid_notation() {
+    let mut ctx = CpuBackend::new();
+    let input = TypedTensor::<f64>::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap();
+
+    let error = typed_eager_einsum(&mut ctx, &[&input], "ij,(jk,kl)->il")
+        .expect_err("malformed notation must fail before backend execution");
+
+    assert!(matches!(
+        error,
+        tenferro_tensor::Error::Extension {
+            op: "typed_eager_einsum",
+            kind: tenferro_tensor::ErrorKind::Validation(
+                tenferro_tensor::ValidationKind::InvalidArgument
+            ),
+            ..
+        }
+    ));
+    assert!(std::error::Error::source(&error).is_some());
 }
 
 #[test]

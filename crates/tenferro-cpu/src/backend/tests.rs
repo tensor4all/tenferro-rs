@@ -682,7 +682,7 @@ fn with_threads_and_kind_records_selection_and_validates_threads() {
     };
     assert!(matches!(
         err,
-        CpuBackendError::Tensor(crate::Error::InvalidConfig {
+        CpuBackendError::Tensor(crate::Error::Validation {
             op: "CpuBackend::with_threads_and_kind",
             ..
         })
@@ -698,7 +698,7 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
     };
     assert!(matches!(
         err,
-        CpuBackendError::Tensor(crate::Error::InvalidConfig {
+        CpuBackendError::Tensor(crate::Error::Validation {
             op: "CpuBackend::with_kind",
             ..
         })
@@ -738,7 +738,7 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
         let err = result.unwrap_err();
         assert!(matches!(
             err,
-            crate::Error::InvalidConfig {
+            crate::Error::Validation {
                 op: "dot_general",
                 ..
             }
@@ -849,9 +849,9 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
     let dot_error = backend.dot_general_cached(&mut cache, Some(0), &lhs, &rhs, &config);
     assert!(matches!(
         dot_error,
-        Err(crate::Error::DTypeMismatch {
+        Err(crate::Error::Validation {
             op: "dot_general",
-            ..
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         })
     ));
 
@@ -859,9 +859,9 @@ fn cached_dot_dispatch_reports_dtype_mismatches() {
         backend.dot_general_with_conj_cached(&mut cache, Some(1), &lhs, &rhs, &config, true, false);
     assert!(matches!(
         dot_conj_error,
-        Err(crate::Error::DTypeMismatch {
+        Err(crate::Error::Validation {
             op: "dot_general",
-            ..
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         })
     ));
 }
@@ -872,7 +872,7 @@ fn with_threads_rejects_invalid_thread_count() {
     let error = result.unwrap_err();
     assert!(matches!(
         error,
-        CpuBackendError::Tensor(crate::Error::InvalidConfig {
+        CpuBackendError::Tensor(crate::Error::Validation {
             op: "CpuBackend::with_threads",
             ..
         })
@@ -881,17 +881,58 @@ fn with_threads_rejects_invalid_thread_count() {
 
 #[test]
 fn backend_error_keeps_placement_failure_typed() {
-    let placement = CpuPlacementError::TopologyDiscovery {
-        requested: CpuPlacement::Auto,
-        backend: CpuBackendKind::Faer,
-        source: CpuTopologyError::InvalidCpuList {
-            list: "bad".to_owned(),
-            reason: "test failure",
+    let error = CpuBackendError::placement(
+        "CpuBackend::try_new",
+        CpuPlacementError::TopologyDiscovery {
+            requested: CpuPlacement::Auto,
+            backend: CpuBackendKind::Faer,
+            source: CpuTopologyError::InvalidCpuList {
+                list: "bad".to_owned(),
+                reason: "test failure",
+            },
         },
-    };
+    );
+    assert!(matches!(
+        error.placement_error(),
+        Some(CpuPlacementError::TopologyDiscovery {
+            requested: CpuPlacement::Auto,
+            backend: CpuBackendKind::Faer,
+            source: CpuTopologyError::InvalidCpuList { .. },
+        })
+    ));
+}
 
-    let error = CpuBackendError::placement("CpuBackend::try_new", placement.clone());
-    assert_eq!(error.placement_error(), Some(&placement));
+#[test]
+fn placement_error_conversion_uses_runtime_state_for_environment_failures() {
+    let error = CpuBackendError::placement(
+        "CpuBackend::try_new",
+        CpuPlacementError::ManagedAffinityUnavailable {
+            requested: CpuPlacement::AllAllowed,
+            backend: CpuBackendKind::Faer,
+        },
+    );
+
+    let error: crate::Error = error.into();
+    assert_eq!(error.kind(), crate::ErrorKind::RuntimeState);
+    assert!(matches!(
+        std::error::Error::source(&error),
+        Some(source) if source.downcast_ref::<CpuPlacementError>().is_some()
+    ));
+}
+
+#[test]
+fn placement_error_conversion_keeps_unsupported_affinity_distinct() {
+    let error = CpuBackendError::placement(
+        "CpuBackend::with_placement",
+        CpuPlacementError::ExternalProviderAffinityUnmanaged {
+            requested: CpuPlacement::AllAllowed,
+            backend: CpuBackendKind::Blas,
+        },
+    );
+
+    let error: crate::Error = error.into();
+    assert_eq!(error.kind(), crate::ErrorKind::Unsupported);
+    assert!(std::error::Error::source(&error).is_some());
 }
 
 #[test]
@@ -901,15 +942,15 @@ fn fallible_backend_construction_preserves_topology_error_category() {
         reason: "component is not a CPU number",
     };
 
-    let error = resolve_discovered_topology(CpuBackendKind::Faer, Err(source.clone())).unwrap_err();
-    assert_eq!(
-        error,
+    let error = resolve_discovered_topology(CpuBackendKind::Faer, Err(source)).unwrap_err();
+    match error {
         CpuPlacementError::TopologyDiscovery {
             requested: CpuPlacement::Auto,
             backend: CpuBackendKind::Faer,
-            source,
-        }
-    );
+            source: CpuTopologyError::InvalidCpuList { list, .. },
+        } => assert_eq!(list, "not-a-cpu"),
+        other => panic!("unexpected placement error: {other:?}"),
+    }
 }
 
 #[test]

@@ -6,10 +6,12 @@ use computegraph::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, TensorMeta};
+use tenferro_runtime::{Error, ErrorPhase};
 use tenferro_tensor::{DType, Tensor, TensorBackend, TypedTensor};
 use tidu::eager::{BackwardExecutor, RecordedGraph};
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult, LinearizedGraph, PrimitiveGraph};
+use tidu::{ADRuleError, ADRuleResult, LinearizedGraph, PrimitiveGraph};
 
+use crate::ad_rule_error::DeferredErrors;
 use crate::eager_builder::EagerPrimitiveBuilder;
 use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
 use crate::extension_runtime::ExtensionExecutor;
@@ -20,12 +22,48 @@ use crate::metadata::{
 
 use super::{zero_like_tensor, EagerRuntime};
 
+#[derive(Debug)]
+pub(super) enum EagerAdFailure {
+    Rule(ADRuleError),
+    Runtime(Error),
+}
+
+impl std::fmt::Display for EagerAdFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Rule(error) => error.fmt(formatter),
+            Self::Runtime(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for EagerAdFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Rule(error) => Some(error),
+            Self::Runtime(error) => Some(error),
+        }
+    }
+}
+
+impl From<ADRuleError> for EagerAdFailure {
+    fn from(error: ADRuleError) -> Self {
+        Self::Rule(error)
+    }
+}
+
+impl From<Error> for EagerAdFailure {
+    fn from(error: Error) -> Self {
+        Self::Runtime(error)
+    }
+}
+
 pub(crate) struct TenferroBackwardCallbacks<'a, B: TensorBackend + 'static> {
     backend: &'a mut B,
     extension_executor: Option<&'a mut ExtensionExecutor<B>>,
     runtime: Option<&'a EagerRuntime>,
     metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
-    deferred_error: Option<ADRuleError>,
+    errors: DeferredErrors,
 }
 
 impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
@@ -49,17 +87,33 @@ impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
             extension_executor,
             runtime,
             metadata_scopes,
-            deferred_error: None,
+            errors: DeferredErrors::default(),
         }
     }
 
     pub(crate) fn take_error(&mut self) -> Option<ADRuleError> {
-        self.deferred_error.take()
+        self.errors.take_ad_rule()
+    }
+
+    pub(crate) fn take_typed_error(&mut self) -> Option<Error> {
+        self.errors.take_typed()
     }
 
     fn record_error(&mut self, err: ADRuleError) {
-        if self.deferred_error.is_none() {
-            self.deferred_error = Some(err);
+        self.errors.record_ad_rule(err);
+    }
+
+    fn runtime_error(&mut self, err: Error) -> ADRuleError {
+        self.errors.runtime("tenferro-ad.eager", err)
+    }
+
+    fn record_failure(&mut self, failure: EagerAdFailure) -> ADRuleError {
+        match failure {
+            EagerAdFailure::Rule(err) => {
+                self.record_error(err.clone());
+                err
+            }
+            EagerAdFailure::Runtime(err) => self.runtime_error(err),
         }
     }
 
@@ -68,7 +122,7 @@ impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
         graph: &Graph<StdTensorOp>,
         initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     ) -> HashMap<ValueKey<StdTensorOp>, Arc<Tensor>> {
-        if self.deferred_error.is_some() {
+        if self.errors.has_error() {
             return initial_data.clone();
         }
         let mut all_values = initial_data.clone();
@@ -79,7 +133,8 @@ impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
             match eager_forward_input_metadata(&key, initial_data) {
                 Ok(meta) => input_metadata.push((key, meta)),
                 Err(err) => {
-                    self.record_error(err);
+                    let ad_error = self.record_failure(err);
+                    self.record_error(ad_error);
                     return all_values;
                 }
             }
@@ -111,7 +166,8 @@ impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
                 match resolved {
                     Ok(value) => resolved_values.push(value),
                     Err(err) => {
-                        self.record_error(err);
+                        let ad_error = self.record_failure(err);
+                        self.record_error(ad_error);
                         return all_values;
                     }
                 }
@@ -132,10 +188,8 @@ impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
             let outputs = match outputs_result {
                 Ok(outputs) => outputs,
                 Err(err) => {
-                    self.record_error(eager_ad_invalid_input(format!(
-                        "eager forward exec failed for {:?}: {err}",
-                        op_node.operation
-                    )));
+                    let ad_error = self.runtime_error(err);
+                    self.record_error(ad_error);
                     return all_values;
                 }
             };
@@ -150,9 +204,8 @@ impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
             match register_scoped_live_graph_metadata(graph, &live_values, input_metadata) {
                 Ok(scope) => scope,
                 Err(err) => {
-                    self.record_error(eager_ad_invalid_input(format!(
-                        "eager replay metadata registration failed: {err}"
-                    )));
+                    let ad_error = self.runtime_error(err);
+                    self.record_error(ad_error);
                     return all_values;
                 }
             };
@@ -177,16 +230,24 @@ pub(super) fn missing_tangent_base_key(
 pub(super) fn eager_forward_input_metadata(
     key: &ValueKey<StdTensorOp>,
     initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
-) -> ADRuleResult<TensorMeta> {
+) -> Result<TensorMeta, EagerAdFailure> {
     if let Some(value) = initial_data.get(key) {
         return Ok(tensor_meta_from_tensor(value.as_ref()));
     }
 
     let base_key = missing_tangent_base_key(key).ok_or_else(|| {
-        eager_ad_invalid_input(format!("missing concrete eager value for {key:?}"))
+        EagerAdFailure::Runtime(Error::runtime_state(
+            "eager AD forward metadata",
+            ErrorPhase::Execution,
+            format!("missing concrete eager value for {key:?}"),
+        ))
     })?;
     let base = initial_data.get(&base_key).ok_or_else(|| {
-        eager_ad_invalid_input(format!("missing base eager value for {base_key:?}"))
+        EagerAdFailure::Runtime(Error::runtime_state(
+            "eager AD forward metadata",
+            ErrorPhase::Execution,
+            format!("missing base eager value for {base_key:?}"),
+        ))
     })?;
     Ok(tensor_meta_from_tensor(base.as_ref()))
 }
@@ -196,20 +257,27 @@ pub(super) fn eager_forward_value<B: TensorBackend>(
     key: &ValueKey<StdTensorOp>,
     initial_data: &HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     backend: &mut B,
-) -> ADRuleResult<Arc<Tensor>> {
+) -> Result<Arc<Tensor>, EagerAdFailure> {
     if let Some(value) = all_values.get(key) {
         return Ok(Arc::clone(value));
     }
 
     let base_key = missing_tangent_base_key(key).ok_or_else(|| {
-        eager_ad_invalid_input(format!("missing concrete eager value for {key:?}"))
+        EagerAdFailure::Runtime(Error::runtime_state(
+            "eager AD forward value",
+            ErrorPhase::Execution,
+            format!("missing concrete eager value for {key:?}"),
+        ))
     })?;
     let base = initial_data.get(&base_key).ok_or_else(|| {
-        eager_ad_invalid_input(format!("missing base eager value for {base_key:?}"))
+        EagerAdFailure::Runtime(Error::runtime_state(
+            "eager AD forward value",
+            ErrorPhase::Execution,
+            format!("missing base eager value for {base_key:?}"),
+        ))
     })?;
-    let value = Arc::new(zero_like_tensor(base.as_ref(), backend).map_err(|err| {
-        eager_ad_invalid_input(format!("failed to create eager tangent zero: {err}"))
-    })?);
+    let value =
+        Arc::new(zero_like_tensor(base.as_ref(), backend).map_err(EagerAdFailure::Runtime)?);
     all_values.insert(key.clone(), Arc::clone(&value));
     Ok(value)
 }
@@ -248,7 +316,7 @@ fn linear_op_depends_on_tangents(mode: &OperationRole) -> bool {
 pub(super) fn zero_from_exact_metadata<B: TensorBackend>(
     meta: &TensorMeta,
     backend: &mut B,
-) -> ADRuleResult<Option<Tensor>> {
+) -> Result<Option<Tensor>, EagerAdFailure> {
     let Some(shape) = meta.exact_shape() else {
         return Ok(None);
     };
@@ -259,37 +327,41 @@ pub(super) fn zero_from_exact_metadata<B: TensorBackend>(
     let Some(shape) = shape else {
         return Ok(None);
     };
-    let host =
-        match meta.dtype {
-            DType::F32 => Tensor::F32(TypedTensor::zeros(shape).map_err(|err| {
-                eager_ad_invalid_input(format!("failed to create F32 zero: {err}"))
-            })?),
-            DType::F64 => Tensor::F64(TypedTensor::zeros(shape).map_err(|err| {
-                eager_ad_invalid_input(format!("failed to create F64 zero: {err}"))
-            })?),
-            DType::I32 => Tensor::I32(TypedTensor::zeros(shape).map_err(|err| {
-                eager_ad_invalid_input(format!("failed to create I32 zero: {err}"))
-            })?),
-            DType::I64 => Tensor::I64(TypedTensor::zeros(shape).map_err(|err| {
-                eager_ad_invalid_input(format!("failed to create I64 zero: {err}"))
-            })?),
-            DType::Bool => {
-                let len = checked_zero_element_count(&shape)?;
-                Tensor::Bool(
-                    TypedTensor::from_vec_col_major(shape, vec![false; len]).map_err(|err| {
-                        eager_ad_invalid_input(format!("failed to create bool zero: {err}"))
-                    })?,
-                )
-            }
-            DType::C32 => Tensor::C32(TypedTensor::zeros(shape).map_err(|err| {
-                eager_ad_invalid_input(format!("failed to create C32 zero: {err}"))
-            })?),
-            DType::C64 => Tensor::C64(TypedTensor::zeros(shape).map_err(|err| {
-                eager_ad_invalid_input(format!("failed to create C64 zero: {err}"))
-            })?),
-        };
+    let host = match meta.dtype {
+        DType::F32 => Tensor::F32(
+            TypedTensor::zeros(shape)
+                .map_err(|err| EagerAdFailure::Runtime(Error::TensorRuntime(err)))?,
+        ),
+        DType::F64 => Tensor::F64(
+            TypedTensor::zeros(shape)
+                .map_err(|err| EagerAdFailure::Runtime(Error::TensorRuntime(err)))?,
+        ),
+        DType::I32 => Tensor::I32(
+            TypedTensor::zeros(shape)
+                .map_err(|err| EagerAdFailure::Runtime(Error::TensorRuntime(err)))?,
+        ),
+        DType::I64 => Tensor::I64(
+            TypedTensor::zeros(shape)
+                .map_err(|err| EagerAdFailure::Runtime(Error::TensorRuntime(err)))?,
+        ),
+        DType::Bool => {
+            let len = checked_zero_element_count(&shape)?;
+            Tensor::Bool(
+                TypedTensor::from_vec_col_major(shape, vec![false; len])
+                    .map_err(|err| EagerAdFailure::Runtime(Error::TensorRuntime(err)))?,
+            )
+        }
+        DType::C32 => Tensor::C32(
+            TypedTensor::zeros(shape)
+                .map_err(|err| EagerAdFailure::Runtime(Error::TensorRuntime(err)))?,
+        ),
+        DType::C64 => Tensor::C64(
+            TypedTensor::zeros(shape)
+                .map_err(|err| EagerAdFailure::Runtime(Error::TensorRuntime(err)))?,
+        ),
+    };
     Ok(Some(backend.upload_host_tensor(&host).map_err(|err| {
-        eager_ad_invalid_input(format!("failed to upload eager zero tensor: {err}"))
+        EagerAdFailure::Runtime(Error::TensorRuntime(err))
     })?))
 }
 
@@ -298,7 +370,7 @@ pub(super) fn prefill_missing_linear_zero_values<B: TensorBackend>(
     external_data: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     ctx: &mut ShapeGuardContext,
     backend: &mut B,
-) -> ADRuleResult<()> {
+) -> Result<(), EagerAdFailure> {
     for value in linear.as_graph().values() {
         if external_data.contains_key(&value.key) {
             continue;
@@ -322,7 +394,7 @@ pub(super) fn prefill_linear_residual_values<B: TensorBackend + 'static>(
     external_data: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     backend: &mut B,
     mut extension_executor: Option<&mut ExtensionExecutor<B>>,
-) -> ADRuleResult<()> {
+) -> Result<(), EagerAdFailure> {
     let mut visited = HashSet::new();
     prefill_residual_graph_values(
         linear.residual_graph(),
@@ -339,7 +411,7 @@ fn prefill_residual_graph_values<B: TensorBackend + 'static>(
     backend: &mut B,
     extension_executor: &mut Option<&mut ExtensionExecutor<B>>,
     visited: &mut HashSet<*const Graph<StdTensorOp>>,
-) -> ADRuleResult<()> {
+) -> Result<(), EagerAdFailure> {
     let graph_ptr: *const Graph<StdTensorOp> = graph;
     if !visited.insert(graph_ptr) {
         return Ok(());
@@ -378,12 +450,7 @@ fn prefill_residual_graph_values<B: TensorBackend + 'static>(
             ),
             None => exec_op_on_tensors(&op_node.operation, &resolved_inputs, backend),
         }
-        .map_err(|err| {
-            eager_ad_invalid_input(format!(
-                "eager residual exec failed for {:?}: {err}",
-                op_node.operation
-            ))
-        })?;
+        .map_err(EagerAdFailure::Runtime)?;
 
         for (output_id, output) in op_node.outputs.iter().zip(outputs) {
             let key = graph.values()[*output_id].key.clone();
@@ -398,40 +465,42 @@ pub(super) fn eager_residual_value<B: TensorBackend>(
     all_values: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     key: &ValueKey<StdTensorOp>,
     backend: &mut B,
-) -> ADRuleResult<Arc<Tensor>> {
+) -> Result<Arc<Tensor>, EagerAdFailure> {
     if let Some(value) = all_values.get(key) {
         return Ok(Arc::clone(value));
     }
 
     let base_key = missing_tangent_base_key(key).ok_or_else(|| {
-        eager_ad_invalid_input(format!("missing concrete eager residual value for {key:?}"))
+        EagerAdFailure::Runtime(Error::runtime_state(
+            "eager AD residual value",
+            ErrorPhase::Execution,
+            format!("missing concrete eager residual value for {key:?}"),
+        ))
     })?;
     let base = all_values.get(&base_key).ok_or_else(|| {
-        eager_ad_invalid_input(format!(
-            "missing base eager residual value for {base_key:?}"
+        EagerAdFailure::Runtime(Error::runtime_state(
+            "eager AD residual value",
+            ErrorPhase::Execution,
+            format!("missing base eager residual value for {base_key:?}"),
         ))
     })?;
-    let value = Arc::new(zero_like_tensor(base.as_ref(), backend).map_err(|err| {
-        eager_ad_invalid_input(format!(
-            "failed to create eager residual tangent zero: {err}"
-        ))
-    })?);
+    let value =
+        Arc::new(zero_like_tensor(base.as_ref(), backend).map_err(EagerAdFailure::Runtime)?);
     all_values.insert(key.clone(), Arc::clone(&value));
     Ok(value)
 }
 
-fn checked_zero_element_count(shape: &[usize]) -> ADRuleResult<usize> {
+fn checked_zero_element_count(shape: &[usize]) -> Result<usize, EagerAdFailure> {
     shape.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim).ok_or_else(|| {
-            eager_ad_invalid_input(format!(
-                "zero tensor shape product overflows for shape {shape:?}"
+            EagerAdFailure::Runtime(Error::invalid_argument(
+                "eager AD zero",
+                ErrorPhase::Execution,
+                "shape",
+                format!("zero tensor shape product overflows for shape {shape:?}"),
             ))
         })
     })
-}
-
-fn eager_ad_invalid_input(message: impl Into<String>) -> ADRuleError {
-    ADRuleError::invalid_input("tenferro-ad.eager", ADRuleKind::Transpose, message)
 }
 
 impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
@@ -473,9 +542,11 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
             &mut external_data,
             self.backend,
             self.extension_executor.as_deref_mut(),
-        )?;
+        )
+        .map_err(|err| self.record_failure(err))?;
         ctx.refresh_global_metadata();
-        prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend)?;
+        prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend)
+            .map_err(|err| self.record_failure(err))?;
 
         let mut builder = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
             EagerPrimitiveBuilder::with_extension_executor(self.backend, extension_executor)
@@ -494,26 +565,46 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
 
         let transpose_result =
             tidu::linear_transpose_with_builder(linear, &mut builder, &cotangent_seed_ids, ctx);
-        if let Some(err) = builder.take_error() {
-            return Err(err);
-        }
-        let cotangent_ids = transpose_result?;
-        cotangent_ids
+        let cotangent_ids = match transpose_result {
+            Ok(ids) => ids,
+            Err(err) => {
+                let builder_typed_error = builder.take_typed_error();
+                let builder_error = builder.take_error();
+                drop(builder);
+                if let Some(err) = builder_typed_error {
+                    return Err(self.runtime_error(err));
+                }
+                if let Some(err) = builder_error {
+                    return Err(err);
+                }
+                return Err(err);
+            }
+        };
+        let cotangent_tensors_result = cotangent_ids
             .into_iter()
             .map(|maybe_id| maybe_id.map(|id| builder.tensor(id)).transpose())
-            .collect()
+            .collect::<ADRuleResult<Vec<_>>>();
+        let builder_typed_error = builder.take_typed_error();
+        let builder_error = builder.take_error();
+        drop(builder);
+        if let Some(err) = builder_typed_error {
+            return Err(self.runtime_error(err));
+        }
+        if let Some(err) = builder_error {
+            return Err(err);
+        }
+        cotangent_tensors_result
     }
 
     fn add_operands(&mut self, a: &Arc<Tensor>, b: &Arc<Tensor>) -> Arc<Tensor> {
-        if self.deferred_error.is_some() {
+        if self.errors.has_error() {
             return Arc::clone(a);
         }
         match self.backend.add(a.as_ref(), b.as_ref()) {
             Ok(sum) => Arc::new(sum),
             Err(err) => {
-                self.record_error(eager_ad_invalid_input(format!(
-                    "eager cotangent add failed: {err}"
-                )));
+                let ad_error = self.runtime_error(Error::TensorRuntime(err));
+                self.record_error(ad_error);
                 Arc::clone(a)
             }
         }

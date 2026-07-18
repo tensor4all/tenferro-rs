@@ -3,9 +3,9 @@ use super::*;
 fn assert_ordered_complex_error<T>(result: crate::Result<T>, op: &'static str) {
     assert!(matches!(
         result,
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Unsupported {
             op: actual,
-            ref message,
+            message,
         }) if actual == op && message.contains("total order")
     ));
 }
@@ -181,7 +181,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             TensorRead::from_view(TensorView::Bool(bools.as_view())),
             &[0]
         ),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_sum",
             ..
         })
@@ -191,7 +191,7 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             TensorRead::from_view(TensorView::Bool(bools.as_view())),
             &[0]
         ),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_prod",
             ..
         })
@@ -206,17 +206,16 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
     );
     assert!(matches!(
         backend.reduce_min_read(TensorRead::from_view(TensorView::C32(c32s.as_view())), &[0]),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_min",
             ..
         })
     ));
     assert!(matches!(
         backend.reduce_sum_read(TensorRead::from_view(TensorView::F64(f64s.as_view())), &[2]),
-        Err(crate::Error::AxisOutOfBounds {
+        Err(crate::Error::Validation {
             op: "reduce_sum",
-            axis: 2,
-            rank: 2
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: 2, rank: 2 }
         })
     ));
     assert!(matches!(
@@ -224,10 +223,12 @@ fn reduce_read_views_cover_dtype_and_validation_branches() {
             TensorRead::from_view(TensorView::F64(f64s.as_view())),
             &[0, 0]
         ),
-        Err(crate::Error::DuplicateAxis {
+        Err(crate::Error::Validation {
             op: "reduce_prod",
-            axis: 0,
-            role: "axes"
+            source: tenferro_tensor::ValidationError::DuplicateAxis {
+                axis: 0,
+                role: "axes"
+            }
         })
     ));
 }
@@ -396,14 +397,14 @@ fn reduce_read_tensors_cover_host_dtype_dispatch() {
         Tensor::Bool(TypedTensor::<bool>::from_vec_col_major(vec![2], vec![true, false]).unwrap());
     assert!(matches!(
         backend.reduce_sum_read(TensorRead::from_tensor(&bools), &[0]),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_sum",
             ..
         })
     ));
     assert!(matches!(
         backend.reduce_prod_read(TensorRead::from_tensor(&bools), &[0]),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_prod",
             ..
         })
@@ -560,7 +561,10 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
             &lhs_f32,
             &Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap())
         ),
-        Err(crate::Error::DTypeMismatch { op: "div", .. })
+        Err(crate::Error::Validation {
+            op: "div",
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
     ));
     assert!(matches!(
         clamp(
@@ -568,7 +572,10 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
             &Tensor::F32(TypedTensor::from_vec_col_major(vec![1], vec![0.0f32]).unwrap()),
             &upper_f32
         ),
-        Err(crate::Error::ShapeMismatch { op: "clamp", .. })
+        Err(crate::Error::Validation {
+            op: "clamp",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        })
     ));
 }
 
@@ -579,14 +586,14 @@ fn equal_bool_add_and_mul_report_unsupported_dtype_not_mismatch() {
 
     assert!(matches!(
         add(&lhs, &rhs),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "add",
             message,
         }) if message == "unsupported dtype Bool"
     ));
     assert!(matches!(
         mul(&lhs, &rhs),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "mul",
             message,
         }) if message == "unsupported dtype Bool"
@@ -639,28 +646,28 @@ fn reduce_sum_zero_length_axis_is_rejected_like_other_reductions() {
 
     assert!(matches!(
         reduce_sum(&empty, &[0]),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Validation {
             op: "reduce_sum",
             ..
         })
     ));
     assert!(matches!(
         reduce_prod(&empty, &[0]),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Validation {
             op: "reduce_prod",
             ..
         })
     ));
     assert!(matches!(
         reduce_max(&empty, &[0]),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Validation {
             op: "reduce_max",
             ..
         })
     ));
     assert!(matches!(
         reduce_min(&empty, &[0]),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Validation {
             op: "reduce_min",
             ..
         })
@@ -861,71 +868,116 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
 
     assert!(matches!(
         add(&lhs_f32, &rhs_f64),
-        Err(crate::Error::DTypeMismatch { op: "add", .. })
+        Err(crate::Error::Validation {
+            op: "add",
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
     ));
     assert!(matches!(
         mul(&lhs_f32, &rhs_f64),
-        Err(crate::Error::DTypeMismatch { op: "mul", .. })
+        Err(crate::Error::Validation {
+            op: "mul",
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
     ));
     assert!(matches!(
         maximum(&lhs_f32, &rhs_f64),
-        Err(crate::Error::DTypeMismatch { op: "maximum", .. })
+        Err(crate::Error::Validation {
+            op: "maximum",
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
     ));
     assert!(matches!(
         minimum(&lhs_f32, &rhs_f64),
-        Err(crate::Error::DTypeMismatch { op: "minimum", .. })
+        Err(crate::Error::Validation {
+            op: "minimum",
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
     ));
     assert!(matches!(
         compare(&lhs_f32, &rhs_f64, &CompareDir::Eq),
-        Err(crate::Error::DTypeMismatch { op: "compare", .. })
+        Err(crate::Error::Validation {
+            op: "compare",
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
     ));
     assert!(matches!(
         select(&lhs_f32, &lhs_f32, &rhs_f64),
-        Err(crate::Error::DTypeMismatch { op: "select", .. })
+        Err(crate::Error::Validation {
+            op: "select",
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
     ));
     assert!(matches!(
         clamp(&lhs_f32, &lhs_f32, &rhs_f64),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Validation {
             op: "clamp",
-            message,
-        }) if message == "dtype mismatch"
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+        })
     ));
 
     assert!(matches!(
         add(&lhs_f64, &short_f64),
-        Err(crate::Error::ShapeMismatch { op: "add", .. })
+        Err(crate::Error::Validation {
+            op: "add",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        })
     ));
     assert!(matches!(
         mul(&lhs_f64, &short_f64),
-        Err(crate::Error::ShapeMismatch { op: "mul", .. })
+        Err(crate::Error::Validation {
+            op: "mul",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        })
     ));
     assert!(matches!(
         div(&lhs_f64, &short_f64),
-        Err(crate::Error::ShapeMismatch { op: "div", .. })
+        Err(crate::Error::Validation {
+            op: "div",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        })
     ));
     assert!(matches!(
         maximum(&lhs_f64, &short_f64),
-        Err(crate::Error::ShapeMismatch { op: "maximum", .. })
+        Err(crate::Error::Validation {
+            op: "maximum",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        })
     ));
     assert!(matches!(
         minimum(&lhs_f64, &short_f64),
-        Err(crate::Error::ShapeMismatch { op: "minimum", .. })
+        Err(crate::Error::Validation {
+            op: "minimum",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        })
     ));
     assert!(matches!(
         compare(&lhs_f64, &short_f64, &CompareDir::Eq),
-        Err(crate::Error::ShapeMismatch { op: "compare", .. })
+        Err(crate::Error::Validation {
+            op: "compare",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        })
     ));
     assert!(matches!(
         select(&pred_bool, &short_f64, &rhs_f64),
-        Err(crate::Error::ShapeMismatch { op: "select", .. })
+        Err(crate::Error::Validation {
+            op: "select",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        })
     ));
     assert!(matches!(
         select(&pred_bool, &rhs_f64, &short_f64),
-        Err(crate::Error::ShapeMismatch { op: "select", .. })
+        Err(crate::Error::Validation {
+            op: "select",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        })
     ));
     assert!(matches!(
         clamp(&lhs_f64, &lower_f64, &short_f64),
-        Err(crate::Error::ShapeMismatch { op: "clamp", .. })
+        Err(crate::Error::Validation {
+            op: "clamp",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        })
     ));
 }
 
@@ -955,9 +1007,9 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
             &Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap()),
             &[2]
         ),
-        Err(crate::Error::AxisOutOfBounds {
+        Err(crate::Error::Validation {
             op: "reduce_sum",
-            ..
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { .. },
         })
     ));
     assert!(matches!(
@@ -965,21 +1017,21 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
             &Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap()),
             &[0, 0]
         ),
-        Err(crate::Error::DuplicateAxis {
+        Err(crate::Error::Validation {
             op: "reduce_prod",
-            ..
+            source: tenferro_tensor::ValidationError::DuplicateAxis { .. },
         })
     ));
     assert!(matches!(
         reduce_max(&complex, &[0]),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_max",
             ..
         })
     ));
     assert!(matches!(
         reduce_min(&complex, &[0]),
-        Err(crate::Error::BackendFailure {
+        Err(crate::Error::Unsupported {
             op: "reduce_min",
             ..
         })
@@ -988,16 +1040,16 @@ fn test_reduction_helpers_cover_complex_and_error_paths() {
     let real = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap());
     assert!(matches!(
         reduce_max(&real, &[2]),
-        Err(crate::Error::AxisOutOfBounds {
+        Err(crate::Error::Validation {
             op: "reduce_max",
-            ..
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { .. },
         })
     ));
     assert!(matches!(
         reduce_min(&real, &[0, 0]),
-        Err(crate::Error::DuplicateAxis {
+        Err(crate::Error::Validation {
             op: "reduce_min",
-            ..
+            source: tenferro_tensor::ValidationError::DuplicateAxis { .. },
         })
     ));
 }
@@ -1035,16 +1087,16 @@ fn test_structural_helpers_cover_f32_success_and_error_paths() {
 
     assert!(matches!(
         transpose(&matrix, &[0]),
-        Err(crate::Error::RankMismatch {
+        Err(crate::Error::Validation {
             op: "transpose",
-            ..
+            source: tenferro_tensor::ValidationError::RankMismatch { .. },
         })
     ));
     assert!(matches!(
         transpose(&matrix, &[0, 0]),
-        Err(crate::Error::DuplicateAxis {
+        Err(crate::Error::Validation {
             op: "transpose",
-            ..
+            source: tenferro_tensor::ValidationError::DuplicateAxis { .. },
         })
     ));
     assert!(matches!(
@@ -1053,16 +1105,16 @@ fn test_structural_helpers_cover_f32_success_and_error_paths() {
             &[3, 2],
             &[0]
         ),
-        Err(crate::Error::ShapeMismatch {
+        Err(crate::Error::Validation {
             op: "broadcast_in_dim",
-            ..
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         })
     ));
     assert!(matches!(
         extract_diagonal(&matrix, 1, 1),
-        Err(crate::Error::DuplicateAxis {
+        Err(crate::Error::Validation {
             op: "extract_diagonal",
-            ..
+            source: tenferro_tensor::ValidationError::DuplicateAxis { .. },
         })
     ));
     assert!(matches!(
@@ -1071,18 +1123,24 @@ fn test_structural_helpers_cover_f32_success_and_error_paths() {
             0,
             2
         ),
-        Err(crate::Error::AxisOutOfBounds {
+        Err(crate::Error::Validation {
             op: "embed_diagonal",
-            ..
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { .. },
         })
     ));
     let vector = Tensor::F32(TypedTensor::from_vec_col_major(vec![2], vec![1.0f32, 2.0]).unwrap());
     assert!(matches!(
         tril(&vector, 0),
-        Err(crate::Error::RankMismatch { op: "tril", .. })
+        Err(crate::Error::Validation {
+            op: "tril",
+            source: tenferro_tensor::ValidationError::RankMismatch { .. },
+        })
     ));
     assert!(matches!(
         triu(&vector, 0),
-        Err(crate::Error::RankMismatch { op: "triu", .. })
+        Err(crate::Error::Validation {
+            op: "triu",
+            source: tenferro_tensor::ValidationError::RankMismatch { .. },
+        })
     ));
 }

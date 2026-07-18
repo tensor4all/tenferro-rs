@@ -23,6 +23,25 @@ const CUBLAS_DEFAULT_PATHS: &[&str] = &[
     "/usr/lib/x86_64-linux-gnu/libcublas.so",
 ];
 
+#[derive(Debug, thiserror::Error)]
+enum CudaLibraryLoadError {
+    #[error("failed to load {library} symbol {name}: {source}")]
+    Symbol {
+        library: &'static str,
+        name: String,
+        #[source]
+        source: libloading::Error,
+    },
+    #[error("failed to load {library} library (tried {paths}): {source}; attempts: {attempts}")]
+    Library {
+        library: &'static str,
+        paths: String,
+        attempts: String,
+        #[source]
+        source: libloading::Error,
+    },
+}
+
 pub type CusolverDnHandleRaw = *mut c_void;
 pub type CublasHandleRaw = *mut c_void;
 pub type CudaStream = *mut c_void;
@@ -966,12 +985,15 @@ unsafe fn load_symbol<T: Copy>(
     // SAFETY: `name` is a NUL-terminated CUDA library symbol and `T` is the
     // exact FFI function-pointer type declared in this module's vtables.
     let symbol = lib.get::<T>(name).map_err(|err| {
-        Error::backend_failure(
+        Error::io_source(
             "cubecl_linalg",
-            format!(
-                "failed to load {library_name} symbol {}: {err}",
-                String::from_utf8_lossy(name).trim_end_matches('\0')
-            ),
+            CudaLibraryLoadError::Symbol {
+                library: library_name,
+                name: String::from_utf8_lossy(name)
+                    .trim_end_matches('\0')
+                    .to_owned(),
+                source: err,
+            },
         )
     })?;
     Ok(*symbol)
@@ -997,11 +1019,13 @@ impl CusolverLibrary {
     fn load() -> Result<Arc<Self>> {
         let paths = library_search_paths("TENFERRO_CUSOLVER_PATH", CUSOLVER_DEFAULT_PATHS);
         let mut errors = Vec::new();
+        let mut last_source = None;
         for path in &paths {
             let lib = match unsafe { Library::new(path) } {
                 Ok(lib) => lib,
                 Err(err) => {
                     errors.push(format!("{path}: {err}"));
+                    last_source = Some(err);
                     continue;
                 }
             };
@@ -1025,14 +1049,24 @@ impl CusolverLibrary {
             }));
         }
 
-        Err(Error::backend_failure(
-            "cubecl_linalg",
-            format!(
-                "failed to load cuSOLVER library (tried {}): {}",
-                paths.join(", "),
-                errors.join("; ")
-            ),
-        ))
+        match last_source {
+            Some(source) => Err(Error::io_source(
+                "cubecl_linalg",
+                CudaLibraryLoadError::Library {
+                    library: "cuSOLVER",
+                    paths: paths.join(", "),
+                    attempts: errors.join("; "),
+                    source,
+                },
+            )),
+            None => Err(Error::io_source(
+                "cubecl_linalg",
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no cuSOLVER library search paths configured",
+                ),
+            )),
+        }
     }
 
     fn check_status(
@@ -1044,13 +1078,7 @@ impl CusolverLibrary {
         if status == CUSOLVER_STATUS_SUCCESS {
             return Ok(());
         }
-        Err(Error::backend_failure(
-            op,
-            format!(
-                "{call} failed with cuSOLVER {} ({status})",
-                cusolver_status_name(status)
-            ),
-        ))
+        Err(crate::error::backend_status(op, "cuSOLVER", call, status))
     }
 }
 
@@ -1070,11 +1098,13 @@ impl CublasLibrary {
     fn load() -> Result<Arc<Self>> {
         let paths = library_search_paths("TENFERRO_CUBLAS_PATH", CUBLAS_DEFAULT_PATHS);
         let mut errors = Vec::new();
+        let mut last_source = None;
         for path in &paths {
             let lib = match unsafe { Library::new(path) } {
                 Ok(lib) => lib,
                 Err(err) => {
                     errors.push(format!("{path}: {err}"));
+                    last_source = Some(err);
                     continue;
                 }
             };
@@ -1082,14 +1112,24 @@ impl CublasLibrary {
             return Ok(Arc::new(Self { _lib: lib, vtable }));
         }
 
-        Err(Error::backend_failure(
-            "triangular_solve",
-            format!(
-                "failed to load cuBLAS library (tried {}): {}",
-                paths.join(", "),
-                errors.join("; ")
-            ),
-        ))
+        match last_source {
+            Some(source) => Err(Error::io_source(
+                "triangular_solve",
+                CudaLibraryLoadError::Library {
+                    library: "cuBLAS",
+                    paths: paths.join(", "),
+                    attempts: errors.join("; "),
+                    source,
+                },
+            )),
+            None => Err(Error::io_source(
+                "triangular_solve",
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no cuBLAS library search paths configured",
+                ),
+            )),
+        }
     }
 
     fn check_status(
@@ -1101,13 +1141,7 @@ impl CublasLibrary {
         if status == CUBLAS_STATUS_SUCCESS {
             return Ok(());
         }
-        Err(Error::backend_failure(
-            op,
-            format!(
-                "{call} failed with cuBLAS {} ({status})",
-                cublas_status_name(status)
-            ),
-        ))
+        Err(crate::error::backend_status(op, "cuBLAS", call, status))
     }
 }
 
@@ -1216,6 +1250,13 @@ impl Drop for GesvdjInfo<'_> {
 }
 
 impl CusolverDnHandle {
+    /// Load cuSOLVER and create a native handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::IoSource` with the typed `CudaLibraryLoadError` when
+    /// the shared library or a required symbol cannot be loaded, and
+    /// `Error::BackendFailure` when `cusolverDnCreate` rejects handle creation.
     pub fn load() -> Result<Self> {
         let lib = CusolverLibrary::load()?;
         let mut raw = std::ptr::null_mut();
@@ -1224,11 +1265,23 @@ impl CusolverDnHandle {
         Ok(Self { lib, raw })
     }
 
+    /// Attach the native handle to a CUDA stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the stream or
+    /// reports a non-success status.
     pub fn set_stream(&self, stream: CudaStream, op: &'static str) -> Result<()> {
         let status = unsafe { (self.lib.vtable.set_stream)(self.raw, stream) };
         self.lib.check_status(status, op, "cusolverDnSetStream")
     }
 
+    /// Create the cuSOLVER parameters used by Jacobi SVD.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER cannot allocate the
+    /// parameter object or reports another non-success status.
     pub fn create_gesvdj_info(&self, op: &'static str) -> Result<GesvdjInfo<'_>> {
         let mut raw = std::ptr::null_mut();
         let status = unsafe { (self.lib.vtable.create_gesvdj_info)(&mut raw) };
@@ -1237,6 +1290,13 @@ impl CusolverDnHandle {
         Ok(GesvdjInfo { handle: self, raw })
     }
 
+    /// Query the workspace required by Cholesky factorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the dimensions,
+    /// leading dimension, pointer, dtype, or reports another non-success
+    /// status.
     pub fn potrf_buffer_size(
         &self,
         dtype: CudaDataType,
@@ -1288,6 +1348,17 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
+    /// Execute Cholesky factorization through cuSOLVER.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device pointers for `a`, `workspace`, and
+    /// `info`, with dimensions and workspace size accepted by cuSOLVER.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
+    /// reports a factorization/backend status such as a non-positive pivot.
     pub unsafe fn potrf(
         &self,
         dtype: CudaDataType,
@@ -1345,6 +1416,13 @@ impl CusolverDnHandle {
         self.lib.check_status(status, op, "cusolverDn*potrf")
     }
 
+    /// Query the workspace required by LU factorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the dimensions,
+    /// leading dimension, pointer, dtype, or reports another non-success
+    /// status.
     pub fn getrf_buffer_size(
         &self,
         dtype: CudaDataType,
@@ -1376,6 +1454,18 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
+    /// Execute LU factorization through cuSOLVER.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device pointers for `a`, `workspace`,
+    /// `pivots`, and `info`, with dimensions and workspace size accepted by
+    /// cuSOLVER.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
+    /// reports a non-success factorization status.
     pub unsafe fn getrf(
         &self,
         dtype: CudaDataType,
@@ -1433,6 +1523,13 @@ impl CusolverDnHandle {
         self.lib.check_status(status, op, "cusolverDn*getrf")
     }
 
+    /// Query the workspace required by QR factorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the dimensions,
+    /// leading dimension, pointer, dtype, or reports another non-success
+    /// status.
     pub fn geqrf_buffer_size(
         &self,
         dtype: CudaDataType,
@@ -1464,6 +1561,18 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
+    /// Execute QR factorization through cuSOLVER.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device pointers for `a`, `tau`,
+    /// `workspace`, and `info`, with dimensions and workspace size accepted by
+    /// cuSOLVER.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
+    /// reports a non-success factorization status.
     pub unsafe fn geqrf(
         &self,
         dtype: CudaDataType,
@@ -1526,6 +1635,13 @@ impl CusolverDnHandle {
         self.lib.check_status(status, op, "cusolverDn*geqrf")
     }
 
+    /// Query the workspace required to form the explicit Q factor.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the dimensions,
+    /// leading dimension, pointer, dtype, or reports another non-success
+    /// status.
     pub fn orgqr_buffer_size(
         &self,
         dtype: CudaDataType,
@@ -1587,6 +1703,18 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
+    /// Form the explicit Q factor from a QR factorization.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device pointers for `a`, `tau`,
+    /// `workspace`, and `info`, with dimensions and workspace size accepted by
+    /// cuSOLVER.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
+    /// reports a non-success factorization status.
     pub unsafe fn orgqr(
         &self,
         dtype: CudaDataType,
@@ -1654,6 +1782,12 @@ impl CusolverDnHandle {
         self.lib.check_status(status, op, "cusolverDn*orgqr")
     }
 
+    /// Query the workspace required by the standard SVD routine.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the dimensions,
+    /// dtype, or reports another non-success status.
     pub fn gesvd_buffer_size(
         &self,
         dtype: CudaDataType,
@@ -1683,6 +1817,13 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
+    /// Query the workspace required by the Jacobi SVD routine.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the dimensions,
+    /// leading dimensions, device pointers, Jacobi parameters, dtype, or
+    /// reports another non-success status.
     pub fn gesvdj_buffer_size(
         &self,
         dtype: CudaDataType,
@@ -1774,6 +1915,18 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
+    /// Execute the standard SVD routine through cuSOLVER.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device pointers for all matrix,
+    /// singular-value, workspace, and `info` arguments, with dimensions and
+    /// workspace size accepted by cuSOLVER.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
+    /// reports a non-success SVD status.
     pub unsafe fn gesvd(
         &self,
         dtype: CudaDataType,
@@ -1871,6 +2024,19 @@ impl CusolverDnHandle {
         self.lib.check_status(status, op, "cusolverDn*gesvd")
     }
 
+    /// Execute the Jacobi SVD routine through cuSOLVER.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device pointers for all matrix,
+    /// singular-value, workspace, and `info` arguments, and keep `params`
+    /// alive for the call. Dimensions and workspace size must be accepted by
+    /// cuSOLVER.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments,
+    /// Jacobi parameters, or reports a non-success SVD status.
     pub unsafe fn gesvdj(
         &self,
         dtype: CudaDataType,
@@ -1968,6 +2134,13 @@ impl CusolverDnHandle {
         self.lib.check_status(status, op, "cusolverDn*gesvdj")
     }
 
+    /// Query the workspace required by a symmetric/Hermitian eigensolver.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the dimensions,
+    /// leading dimension, device pointers, dtype, or reports another
+    /// non-success status.
     pub fn syevd_buffer_size(
         &self,
         dtype: CudaDataType,
@@ -2029,6 +2202,18 @@ impl CusolverDnHandle {
         Ok(lwork)
     }
 
+    /// Execute a symmetric/Hermitian eigendecomposition through cuSOLVER.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device pointers for the input matrix,
+    /// eigenvalues, workspace, and `info`, with dimensions and workspace size
+    /// accepted by cuSOLVER.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuSOLVER rejects the arguments or
+    /// reports a non-success eigensolver status, including non-convergence.
     pub unsafe fn syevd(
         &self,
         dtype: CudaDataType,
@@ -2122,6 +2307,13 @@ impl fmt::Debug for CublasHandle {
 unsafe impl Send for CublasHandle {}
 
 impl CublasHandle {
+    /// Load cuBLAS and create a native handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::IoSource` with the typed `CudaLibraryLoadError` when
+    /// the shared library or required symbol cannot be loaded, and
+    /// `Error::BackendFailure` when `cublasCreate_v2` rejects handle creation.
     pub fn load() -> Result<Self> {
         let lib = CublasLibrary::load()?;
         let mut raw = std::ptr::null_mut();
@@ -2130,11 +2322,28 @@ impl CublasHandle {
         Ok(Self { lib, raw })
     }
 
+    /// Attach the native cuBLAS handle to a CUDA stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuBLAS rejects the stream or
+    /// reports a non-success status.
     pub fn set_stream(&self, stream: CudaStream, op: &'static str) -> Result<()> {
         let status = unsafe { (self.lib.vtable.set_stream)(self.raw, stream) };
         self.lib.check_status(status, op, "cublasSetStream_v2")
     }
 
+    /// Execute a triangular solve through cuBLAS.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device pointers for `alpha`, `a`, and
+    /// `b`, with dimensions and leading dimensions accepted by cuBLAS.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuBLAS rejects the flags, dtype,
+    /// pointers, dimensions, or reports a singular/backend status.
     pub unsafe fn trsm(
         &self,
         dtype: CudaDataType,
@@ -2212,6 +2421,19 @@ impl CublasHandle {
         self.lib.check_status(status, op, "cublas*trsm_v2")
     }
 
+    /// Execute a batched triangular solve through cuBLAS.
+    ///
+    /// # Safety
+    ///
+    /// The caller must provide valid device arrays for `alpha`, `a_array`,
+    /// and `b_array`, with `batch_count`, dimensions, and leading dimensions
+    /// accepted by cuBLAS.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::BackendFailure` when cuBLAS rejects the flags, dtype,
+    /// pointers, batch count, dimensions, or reports a singular/backend
+    /// status.
     pub unsafe fn trsm_batched(
         &self,
         dtype: CudaDataType,
@@ -2317,6 +2539,12 @@ impl fmt::Debug for CudaLinalgHandles {
 }
 
 impl CudaLinalgHandles {
+    /// Load the cuSOLVER and cuBLAS handles used by CUDA linalg operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed `Error::IoSource` from either dynamic-library load,
+    /// or `Error::BackendFailure` from native handle creation.
     pub fn load() -> Result<Self> {
         Ok(Self {
             cusolver: CusolverDnHandle::load()?,

@@ -63,7 +63,7 @@ fn cpu_runtime_materialization_rejects_owned_host_buffer_with_device_placement()
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op: "CpuBackend::to_contiguous_read",
             ref message,
         } if message.contains("source host placement") && message.contains("Device")
@@ -82,7 +82,7 @@ fn cpu_runtime_materialization_rejects_host_view_with_device_placement() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op: "CpuBackend::to_contiguous_read",
             ref message,
         } if message.contains("source host placement") && message.contains("Device")
@@ -175,9 +175,9 @@ fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
             TensorRead::from_tensor(&src),
             TensorWrite::from_tensor(&mut wrong_dtype),
         ),
-        Err(Error::DTypeMismatch {
+        Err(Error::Validation {
             op: "CpuBackend::copy_read_into",
-            ..
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         })
     ));
 
@@ -187,9 +187,9 @@ fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
             TensorRead::from_tensor(&src),
             TensorWrite::from_tensor(&mut wrong_shape),
         ),
-        Err(Error::ShapeMismatch {
+        Err(Error::Validation {
             op: "CpuBackend::copy_read_into",
-            ..
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         })
     ));
 
@@ -203,7 +203,7 @@ fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
             TensorRead::from_tensor(&src),
             TensorWrite::from_tensor(&mut misplaced),
         ),
-        Err(Error::BackendFailure {
+        Err(Error::RuntimeState {
             op: "CpuBackend::copy_read_into",
             ref message,
         }) if message.contains("destination") && message.contains("host placement")
@@ -227,10 +227,10 @@ fn cpu_runtime_copy_reports_dtype_shape_placement_and_alias_errors() {
             TensorRead::from_tensor(&aliased_src),
             TensorWrite::from_tensor(&mut aliased_dst),
         ),
-        Err(Error::InvalidConfig {
+        Err(Error::Validation {
             op: "CpuBackend::copy_read_into",
-            ref message,
-        }) if message.contains("alias")
+            source,
+        }) if source.to_string().contains("alias")
     ));
 }
 
@@ -259,11 +259,10 @@ fn cpu_copy_into_reports_shape_mismatch_with_canonical_op_name() {
 
     assert!(matches!(
         err,
-        Error::ShapeMismatch {
+        Error::Validation {
             op: "CpuBackend::copy_into",
-            lhs,
-            rhs,
-        } if lhs == vec![2] && rhs == vec![3]
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        }
     ));
 }
 
@@ -284,7 +283,7 @@ fn cpu_copy_into_rejects_backend_source_without_download() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op: "CpuBackend::copy_into",
             ref message,
         } if message.contains("download")
@@ -308,7 +307,7 @@ fn cpu_copy_into_rejects_backend_destination_without_download() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op: "CpuBackend::copy_into",
             ref message,
         } if message.contains("download")
@@ -328,7 +327,7 @@ fn cpu_copy_into_rejects_host_source_with_device_placement() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op: "CpuBackend::copy_into",
             ref message,
         } if message.contains("source") && message.contains("host placement")
@@ -348,7 +347,7 @@ fn cpu_copy_into_rejects_host_destination_with_device_placement() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op: "CpuBackend::copy_into",
             ref message,
         } if message.contains("destination") && message.contains("host placement")
@@ -892,7 +891,8 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
         &[1],
     )
     .unwrap_err();
-    assert_eq!(view_transpose, owned_transpose);
+    assert_eq!(view_transpose.kind(), owned_transpose.kind());
+    assert_eq!(view_transpose.to_string(), owned_transpose.to_string());
 
     let owned_reshape = crate::structural::reshape(&input, &[3]).unwrap_err();
     let view_reshape = crate::structural::reshape_read_with_pool(
@@ -904,7 +904,8 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
         &[3],
     )
     .unwrap_err();
-    assert_eq!(view_reshape, owned_reshape);
+    assert_eq!(view_reshape.kind(), owned_reshape.kind());
+    assert_eq!(view_reshape.to_string(), owned_reshape.to_string());
 
     let owned_broadcast =
         crate::structural::broadcast_in_dim_with_pool(&mut buffers, &input, &[3], &[0])
@@ -919,7 +920,8 @@ fn cpu_structural_read_direct_helpers_match_owned_validation_errors() {
         &[0],
     )
     .unwrap_err();
-    assert_eq!(view_broadcast, owned_broadcast);
+    assert_eq!(view_broadcast.kind(), owned_broadcast.kind());
+    assert_eq!(view_broadcast.to_string(), owned_broadcast.to_string());
 }
 
 #[test]
@@ -946,10 +948,10 @@ fn cpu_structural_read_empty_pathological_layout_returns_typed_errors_without_pa
         .unwrap_err();
     assert!(matches!(
         transpose,
-        crate::Error::BackendFailure {
+        crate::Error::BackendSource {
             op: "transpose",
-            ref message,
-        } if message.contains("overflow")
+            ref source,
+        } if source.to_string().contains("overflow")
     ));
 
     let broadcast = std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -968,10 +970,10 @@ fn cpu_structural_read_empty_pathological_layout_returns_typed_errors_without_pa
         .unwrap_err();
     assert!(matches!(
         broadcast,
-        crate::Error::BackendFailure {
+        crate::Error::BackendSource {
             op: "broadcast_in_dim",
-            ref message,
-        } if message.contains("overflow")
+            ref source,
+        } if source.to_string().contains("overflow")
     ));
 }
 
@@ -1168,7 +1170,7 @@ fn cpu_view_materialization_rejects_backend_buffer_with_caller_operation_name() 
 
     assert!(matches!(
         error,
-        crate::Error::BackendFailure {
+        crate::Error::RuntimeState {
             op: "review_materialize_op",
             ref message,
         } if message.contains("download to host")
@@ -1679,12 +1681,10 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     )
     .unwrap_err();
     assert!(matches!(
-        add_view_err,
-        crate::Error::BackendFailure {
-            op: "add",
-            ref message,
-        } if message.contains("borrowed tensor views")
+        &add_view_err,
+        crate::Error::Unsupported { op: "add", .. }
     ));
+    assert_eq!(add_view_err.kind(), tenferro_tensor::ErrorKind::Unsupported);
 
     let reduce_input = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
     let reduce_view_shape = [2usize];
@@ -1780,11 +1780,8 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
         ),
     ] {
         assert!(matches!(
-            err,
-            crate::Error::BackendFailure {
-                op: actual_op,
-                ref message,
-            } if actual_op == op && message.contains("borrowed tensor views")
+            &err,
+            crate::Error::Unsupported { op: actual_op, .. } if *actual_op == op
         ));
     }
 
@@ -1815,11 +1812,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     )
     .unwrap_err();
     assert!(matches!(
-        read_views_err,
-        crate::Error::BackendFailure {
+        &read_views_err,
+        crate::Error::Unsupported {
             op: "to_contiguous_read",
-            ref message,
-        } if message.contains("borrowed tensor views")
+            ..
+        }
     ));
 
     let rhs_folded = BackendCachedDot::dot_general_with_conj_cached(
@@ -1877,11 +1874,11 @@ fn test_default_backend_session_methods_cover_cache_fallbacks() {
     )
     .unwrap_err();
     assert!(matches!(
-        exec_read_views_err,
-        crate::Error::BackendFailure {
+        &exec_read_views_err,
+        crate::Error::Unsupported {
             op: "to_contiguous_read",
-            ref message,
-        } if message.contains("borrowed tensor views")
+            ..
+        }
     ));
     let exec_no_conj =
         TensorDot::dot_general_with_conj(&mut exec, &lhs, &rhs, &config, false, false).unwrap();
@@ -1991,23 +1988,23 @@ fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
     );
     assert!(matches!(
         maximum(&a, &b),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Unsupported {
             op: "maximum",
-            ref message,
+            message,
         }) if message.contains("total order")
     ));
     assert!(matches!(
         minimum(&a, &b),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Unsupported {
             op: "minimum",
-            ref message,
+            message,
         }) if message.contains("total order")
     ));
     assert!(matches!(
         compare(&a, &b, &CompareDir::Ge),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Unsupported {
             op: "compare",
-            ref message,
+            message,
         }) if message.contains("total order")
     ));
     let pred = Tensor::Bool(TypedTensor::from_vec_col_major(vec![2], vec![true, true]).unwrap());
@@ -2017,9 +2014,9 @@ fn test_pool_backed_elementwise_public_paths_cover_dtypes_and_scalars() {
     );
     assert!(matches!(
         clamp(&a, &b, &a),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Unsupported {
             op: "clamp",
-            ref message,
+            message,
         }) if message.contains("total order")
     ));
 }
@@ -2089,10 +2086,10 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
     let int_tensor = Tensor::from_vec_col_major(vec![1], vec![1_i64]).unwrap();
     assert!(matches!(
         crate::analytic::exp(&int_tensor),
-        Err(crate::Error::UnsupportedOpDType {
+        Err(crate::Error::UnsupportedDType {
             op: "exp",
             dtype: DType::I64,
-            backend: tenferro_tensor::BackendId::Cpu,
+            ..
         })
     ));
     assert!(matches!(
@@ -2100,10 +2097,10 @@ fn test_pool_backed_analytic_public_paths_cover_supported_dtypes() {
             &mut crate::buffer_pool::BufferPool::new(),
             TensorRead::from_tensor(&int_tensor),
         ),
-        Err(crate::Error::UnsupportedOpDType {
+        Err(crate::Error::UnsupportedDType {
             op: "exp",
             dtype: DType::I64,
-            backend: tenferro_tensor::BackendId::Cpu,
+            ..
         })
     ));
     assert!(crate::analytic::pow(&real, &base).is_err());

@@ -91,6 +91,11 @@ impl AdContext {
     /// let ad = AdContext::builder().build().unwrap();
     /// assert!(ad.ad_transform_cache_limits().unwrap().max_entries().get() > 0);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the cache lock is
+    /// poisoned or its state cannot be inspected.
     pub fn ad_transform_cache_limits(&self) -> Result<AdTransformCacheLimits> {
         self.ad_transform_cache.limits()
     }
@@ -108,6 +113,11 @@ impl AdContext {
     /// ad.set_ad_transform_cache_limits(limits).unwrap();
     /// assert_eq!(ad.ad_transform_cache_limits().unwrap(), limits);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the cache lock is
+    /// poisoned while updating the limits.
     pub fn set_ad_transform_cache_limits(&self, limits: AdTransformCacheLimits) -> Result<()> {
         self.ad_transform_cache.set_limits(limits)
     }
@@ -123,6 +133,11 @@ impl AdContext {
     /// ad.clear_ad_transform_caches().unwrap();
     /// assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the cache lock is
+    /// poisoned while clearing entries.
     pub fn clear_ad_transform_caches(&self) -> Result<()> {
         self.ad_transform_cache.clear()
     }
@@ -137,6 +152,11 @@ impl AdContext {
     /// let ad = AdContext::builder().build().unwrap();
     /// assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the cache lock is
+    /// poisoned while collecting statistics.
     pub fn ad_transform_cache_stats(&self) -> Result<CacheStats> {
         self.ad_transform_cache.stats()
     }
@@ -152,6 +172,11 @@ impl AdContext {
     /// ad.clear_caches().unwrap();
     /// assert_eq!(ad.cache_stats().unwrap().ad_transforms.entries, 0);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if either owned cache
+    /// cannot be locked because its state is poisoned.
     pub fn clear_caches(&self) -> Result<()> {
         self.clear_ad_transform_caches()
     }
@@ -166,6 +191,11 @@ impl AdContext {
     /// let ad = AdContext::builder().build().unwrap();
     /// assert_eq!(ad.cache_stats().unwrap().ad_transforms.retained_bytes, 0);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if an owned cache lock
+    /// is poisoned while collecting statistics.
     pub fn cache_stats(&self) -> Result<AdContextCacheStats> {
         Ok(AdContextCacheStats {
             ad_transforms: self.ad_transform_cache_stats()?,
@@ -191,6 +221,13 @@ impl AdContext {
     /// let grad = ad.grad(&loss, &x).unwrap();
     /// assert_eq!(grad.rank, 0);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::NonScalarGrad`] when `output` is not
+    /// scalar, [`tenferro_runtime::Error::UnsupportedAdRule`] when a graph op
+    /// lacks a registered rule, or a typed [`tenferro_runtime::Error::Validation`]
+    /// / backend error when graph metadata or execution is invalid.
     pub fn grad(&self, output: &TracedTensor, wrt: &TracedTensor) -> Result<TracedTensor> {
         crate::traced::grad_with_rules_and_cache(
             output,
@@ -213,6 +250,14 @@ impl AdContext {
     /// let loss = (&x * &x).unwrap();
     /// assert!(ad.grad_optional(&loss, &x).unwrap().is_some());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::NonScalarGrad`] for a non-scalar
+    /// output, [`tenferro_runtime::Error::UnsupportedAdRule`] for an
+    /// unregistered AD rule, or a typed [`tenferro_runtime::Error::Validation`]
+    /// / backend error from graph construction and
+    /// execution.
     pub fn grad_optional(
         &self,
         output: &TracedTensor,
@@ -241,6 +286,13 @@ impl AdContext {
     /// let dy = ad.jvp(&y, &x, &dx).unwrap();
     /// assert_eq!(dy.rank, 0);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when the graph
+    /// has no JVP rule, [`tenferro_runtime::Error::Validation`] for
+    /// inconsistent tangent metadata, or a typed backend/runtime-state error
+    /// during evaluation.
     pub fn jvp(
         &self,
         output: &TracedTensor,
@@ -270,6 +322,13 @@ impl AdContext {
     /// let y = (&x * &x).unwrap();
     /// assert!(ad.jvp_optional(&y, &x, &dx).unwrap().is_some());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when the graph
+    /// has no JVP rule, [`tenferro_runtime::Error::Validation`] for
+    /// inconsistent tangent metadata, or a typed backend/runtime-state error
+    /// during evaluation.
     pub fn jvp_optional(
         &self,
         output: &TracedTensor,
@@ -305,6 +364,13 @@ impl AdContext {
     /// let dx = ad.vjp(&y, &x, &dy).unwrap();
     /// assert_eq!(dx.rank, 0);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::Validation`] when the cotangent
+    /// metadata is incompatible, [`tenferro_runtime::Error::UnsupportedAdRule`]
+    /// when a VJP rule is unavailable, or a typed backend/runtime-state error
+    /// during execution.
     pub fn vjp(
         &self,
         output: &TracedTensor,
@@ -334,6 +400,13 @@ impl AdContext {
     /// let y = (&x * &x).unwrap();
     /// assert!(ad.vjp_optional(&y, &x, &dy).unwrap().is_some());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::Validation`] when the cotangent
+    /// metadata is incompatible, [`tenferro_runtime::Error::UnsupportedAdRule`]
+    /// when a VJP rule is unavailable, or a typed backend/runtime-state error
+    /// during execution.
     pub fn vjp_optional(
         &self,
         output: &TracedTensor,
@@ -408,6 +481,12 @@ impl AdContextBuilder {
     /// let ad = AdContext::builder().build().unwrap();
     /// assert!(ad.extension_rules().lookup_linearize("example.missing.v1").is_none());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRegistryError::MalformedFamilyId`] for an invalid
+    /// family identifier or [`ExtensionRegistryError::DuplicateRule`] when
+    /// two supplied rule sets register the same role and family.
     pub fn build(self) -> std::result::Result<AdContext, ExtensionRegistryError> {
         let mut extension_rules = ExtensionRuleSet::new();
         for rules in self.extension_rule_sets {

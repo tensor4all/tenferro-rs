@@ -5,8 +5,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::config::SliceConfig;
-use tenferro_tensor_core::SliceSpec as CoreSliceSpec;
 pub use tenferro_tensor_core::{DynRank, Rank, TensorLayout, TensorRank};
+use tenferro_tensor_core::{SliceSpec as CoreSliceSpec, ValidationError};
 
 mod accessors;
 mod shape_packing;
@@ -460,6 +460,14 @@ impl<'a, T: 'static> TypedTensorView<'a, T, DynRank> {
     /// assert_eq!(view.strides(), &[1, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when compact
+    /// strides or reachable bounds overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// requested shape reaches beyond `data`.
     pub fn from_col_major(shape: &[usize], data: &'a [T]) -> crate::Result<Self> {
         let layout = TensorLayout::<DynRank>::compact(shape.to_vec().into())
             .map_err(|err| tensor_layout_error("TypedTensorView::from_col_major", err))?;
@@ -485,6 +493,16 @@ impl<'a, T: 'static> TypedTensorView<'a, T, DynRank> {
     /// assert_eq!(view.get(&[2]), Some(&1));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `shape` and
+    /// `strides` have different ranks,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// reachable layout exceeds `data`, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when layout
+    /// arithmetic overflows.
     pub fn from_slice(
         shape: impl AsRef<[usize]>,
         strides: impl AsRef<[isize]>,
@@ -515,6 +533,16 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// assert_eq!(view.get(&[1, 1]), Some(&4));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when the typed
+    /// rank does not match `shape` or `strides`,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// reachable layout exceeds `data`, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when layout
+    /// arithmetic overflows.
     pub fn from_slice_ranked(
         shape: impl Into<R::Shape>,
         strides: impl Into<R::Strides>,
@@ -612,10 +640,15 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// assert_eq!(view.host_storage()?, &[1, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when this view wraps a backend
+    /// buffer; backend storage must be downloaded before host inspection.
     pub fn host_storage(&self) -> crate::Result<&'a [T]> {
         match &self.buffer {
             TensorBufferRef::Host(data) => Ok(data),
-            TensorBufferRef::Backend(_) => Err(crate::Error::backend_failure(
+            TensorBufferRef::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensorView::host_storage",
                 "backend buffers cannot expose host storage; download explicitly first",
             )),
@@ -713,6 +746,15 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// assert_eq!(view.layout_linear_offset(&[2])?, 0);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         checked_view_offset_result(
             self.shape(),
@@ -735,6 +777,12 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// assert!(view.is_col_major_contiguous()?);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] if compactness
+    /// arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         self.layout
             .is_compact_col_major()
@@ -769,6 +817,14 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// view.assert_col_major_contiguous()?;
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// view is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         assert_layout_col_major_contiguous(
             self.is_col_major_contiguous()?,
@@ -816,11 +872,21 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// assert_eq!(view.as_slice()?, &[2, 3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when this view wraps a backend
+    /// buffer, [`tenferro_tensor_core::ValidationError::InvalidArgument`] when
+    /// the layout is not slice-contiguous or has a negative offset, or
+    /// [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when the
+    /// requested host range is invalid.
     pub fn as_slice(&self) -> crate::Result<&'a [T]> {
         let data =
             match &self.buffer {
                 TensorBufferRef::Host(data) => data,
-                TensorBufferRef::Backend(_) => return Err(crate::Error::backend_failure(
+                TensorBufferRef::Backend(_) => return Err(crate::Error::runtime_state(
                     "TypedTensorView::as_slice",
                     "backend buffers cannot be inspected as host slices; download explicitly first",
                 )),
@@ -841,6 +907,13 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// assert_eq!(transposed.shape(), &[3, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when `axes` is
+    /// not a valid permutation of the view rank.
     pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
         let layout = self
             .layout
@@ -866,6 +939,17 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// assert_eq!(reversed.get(&[0]), Some(&3));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when the slice
+    /// count differs from the view rank,
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceStep`] or
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for an
+    /// invalid slice, [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// for slice arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// resulting layout exceeds the backing buffer.
     pub fn try_slice(&self, slices: &[StridedSliceSpec]) -> crate::Result<Self> {
         let specs = core_slice_specs(slices, self.shape(), "TypedTensorView::try_slice")?;
         let layout = self
@@ -891,6 +975,16 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// assert_eq!(view.try_slice_axis(1, StridedSliceSpec::reverse())?.get(&[0, 0]), Some(&3));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`] when `axis`
+    /// is outside the view rank, [`tenferro_tensor_core::ValidationError::InvalidSliceStep`]
+    /// or [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for an
+    /// invalid slice, [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// for slice arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// resulting layout exceeds the backing buffer.
     pub fn try_slice_axis(&self, axis: usize, slice: StridedSliceSpec) -> crate::Result<Self> {
         let slices = slice_axis_specs(
             self.shape().len(),
@@ -913,6 +1007,18 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorView<'a, T, R> {
     /// assert_eq!(view.try_reshape(&[4])?.shape(), &[4]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
+    /// the source is not compact column-major,
+    /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
+    /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
+    /// records the counts) when element counts differ,
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for shape
+    /// arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// reshaped view exceeds the backing buffer.
     pub fn try_reshape(&self, shape: &[usize]) -> crate::Result<TypedTensorView<'a, T, DynRank>> {
         let layout = reshape_layout_dyn(
             &self.layout,
@@ -984,6 +1090,13 @@ impl<'a, T: 'static> TypedTensorViewMut<'a, T, DynRank> {
     /// assert_eq!(view.strides(), &[1, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn from_col_major(shape: &[usize], data: &'a mut [T]) -> crate::Result<Self> {
         let layout = TensorLayout::<DynRank>::compact(shape.to_vec().into())
             .map_err(|err| tensor_layout_error("TypedTensorViewMut::from_col_major", err))?;
@@ -1010,6 +1123,17 @@ impl<'a, T: 'static> TypedTensorViewMut<'a, T, DynRank> {
     /// let mut data = [1_i32, 2];
     /// assert!(TypedTensorViewMut::from_slice(vec![2], vec![0], 0, &mut data).is_err());
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `shape` and
+    /// `strides` have different ranks,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// layout reaches beyond `data`,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// logical elements alias, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn from_slice(
         shape: impl AsRef<[usize]>,
         strides: impl AsRef<[isize]>,
@@ -1040,6 +1164,17 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// assert_eq!(view.shape(), &[2, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when the typed
+    /// rank does not match `shape` or `strides`,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// layout reaches beyond `data`,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// logical elements alias, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn from_slice_ranked(
         shape: impl Into<R::Shape>,
         strides: impl Into<R::Strides>,
@@ -1141,10 +1276,14 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// assert_eq!(view.host_storage()?, &[1, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when this view wraps a backend
+    /// buffer; backend storage must be downloaded before host inspection.
     pub fn host_storage(&self) -> crate::Result<&[T]> {
         match &self.buffer {
             TensorBufferRefMut::Host(data) => Ok(data),
-            TensorBufferRefMut::Backend(_) => Err(crate::Error::backend_failure(
+            TensorBufferRefMut::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensorViewMut::host_storage",
                 "backend buffers cannot expose host storage; download explicitly first",
             )),
@@ -1168,10 +1307,14 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// assert_eq!(view.get(&[0]), Some(&3));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when this view wraps a backend
+    /// buffer; backend storage must be downloaded before host inspection.
     pub fn host_storage_mut(&mut self) -> crate::Result<&mut [T]> {
         match &mut self.buffer {
             TensorBufferRefMut::Host(data) => Ok(data),
-            TensorBufferRefMut::Backend(_) => Err(crate::Error::backend_failure(
+            TensorBufferRefMut::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensorViewMut::host_storage_mut",
                 "backend buffers cannot expose mutable host storage; download explicitly first",
             )),
@@ -1269,6 +1412,14 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// assert_eq!(view.layout_linear_offset(&[2])?, 0);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         checked_view_offset_result(
             self.shape(),
@@ -1291,6 +1442,11 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// assert!(view.is_col_major_contiguous()?);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         self.layout
             .is_compact_col_major()
@@ -1325,6 +1481,13 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// view.assert_col_major_contiguous()?;
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// view is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         assert_layout_col_major_contiguous(
             self.is_col_major_contiguous()?,
@@ -1437,6 +1600,16 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// assert_eq!(transposed.strides(), &[2, 1]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when `axes` is
+    /// not a valid permutation, [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`]
+    /// when the permutation creates aliases, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn transpose_view(
         self,
         axes: impl AsRef<[usize]>,
@@ -1479,6 +1652,19 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// assert_eq!(view.get(&[2]), Some(&30));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when the slice
+    /// count differs from the view rank,
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceStep`] or
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for an
+    /// invalid slice, [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`]
+    /// when the result exceeds the backing buffer,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// logical elements alias, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn try_slice(
         &mut self,
         slices: &[StridedSliceSpec],
@@ -1518,6 +1704,18 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// assert_eq!(view.try_slice_axis(1, StridedSliceSpec::reverse())?.get(&[0, 0]), Some(&3));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`] when `axis`
+    /// is outside the view rank, [`tenferro_tensor_core::ValidationError::InvalidSliceStep`]
+    /// or [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for an
+    /// invalid slice, [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`]
+    /// when the result exceeds the backing buffer,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// logical elements alias, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn try_slice_axis(
         &mut self,
         axis: usize,
@@ -1552,6 +1750,20 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// assert_eq!(right.shape(), &[2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] for either
+    /// slice count, [`tenferro_tensor_core::ValidationError::InvalidSliceStep`]
+    /// or [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for
+    /// invalid parameters, [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`]
+    /// when a result exceeds the backing buffer,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// a result aliases, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// for a negative reachable offset, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow. The method returns `Ok(None)` when the two ranges
+    /// overlap or the view uses backend storage.
     pub fn try_multi_slice_mut(
         &mut self,
         first: &[StridedSliceSpec],
@@ -1686,6 +1898,19 @@ impl<'a, T: 'static, R: TensorRank> TypedTensorViewMut<'a, T, R> {
     /// assert_eq!(view.try_reshape(&[4])?.shape(), &[4]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
+    /// the source is not compact column-major,
+    /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
+    /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
+    /// records the counts) when element counts differ,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// the reshaped layout aliases, [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// for shape or layout arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// reshaped view exceeds the backing buffer.
     pub fn try_reshape(
         &mut self,
         shape: &[usize],
@@ -1766,6 +1991,13 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     fn dtype() -> DType;
 
     /// Wrap typed column-major data into a [`Tensor`] enum variant.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when
+    /// the shape product differs from `data.len()`, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// arithmetic overflows.
     fn into_tensor(shape: Vec<usize>, data: Vec<Self>) -> crate::Result<Tensor>;
 
     /// Wrap a typed tensor into its dynamic [`Tensor`] enum variant.
@@ -1846,6 +2078,13 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     fn tensor_write(tensor: &mut TypedTensor<Self>) -> TensorWrite<'_>;
 
     /// Borrow the host data from a [`Tensor`].
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `tensor`
+    /// is not the scalar type represented by this implementation, or
+    /// [`crate::Error::RuntimeState`] when the matching tensor uses backend
+    /// storage that has not been downloaded.
     fn as_slice(tensor: &Tensor) -> crate::Result<&[Self]>;
 
     /// Mutably borrow the host data from a [`Tensor`].
@@ -1861,6 +2100,13 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// assert_eq!(tensor.as_slice::<f64>()?, &[3.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `tensor`
+    /// is not the scalar type represented by this implementation, or
+    /// [`crate::Error::RuntimeState`] when the matching tensor uses backend
+    /// storage that has not been downloaded.
     fn as_slice_mut(tensor: &mut Tensor) -> crate::Result<&mut [Self]>;
 
     /// Extract a [`TypedTensor<Self>`] from a dynamic [`Tensor`].
@@ -1876,6 +2122,11 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     /// assert_eq!(typed.as_slice()?, &[1.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `tensor`
+    /// is not the scalar type represented by this implementation.
     fn into_typed(tensor: Tensor) -> crate::Result<TypedTensor<Self>>;
 }
 
@@ -1928,11 +2179,13 @@ macro_rules! impl_tensor_scalar {
                 let actual = tensor.dtype();
                 match tensor {
                     Tensor::$variant(t) => t.host_data(),
-                    _ => Err(crate::Error::DTypeMismatch {
-                        op: "Tensor::as_slice",
-                        lhs: Self::dtype(),
-                        rhs: actual,
-                    }),
+                    _ => Err(crate::Error::validation(
+                        "Tensor::as_slice",
+                        ValidationError::DTypeMismatch {
+                            expected: crate::core_dtype(Self::dtype()),
+                            actual: crate::core_dtype(actual),
+                        },
+                    )),
                 }
             }
 
@@ -1940,11 +2193,13 @@ macro_rules! impl_tensor_scalar {
                 let actual = tensor.dtype();
                 match tensor {
                     Tensor::$variant(t) => t.host_data_mut(),
-                    _ => Err(crate::Error::DTypeMismatch {
-                        op: "Tensor::as_slice_mut",
-                        lhs: Self::dtype(),
-                        rhs: actual,
-                    }),
+                    _ => Err(crate::Error::validation(
+                        "Tensor::as_slice_mut",
+                        ValidationError::DTypeMismatch {
+                            expected: crate::core_dtype(Self::dtype()),
+                            actual: crate::core_dtype(actual),
+                        },
+                    )),
                 }
             }
 
@@ -1952,11 +2207,13 @@ macro_rules! impl_tensor_scalar {
                 let actual = tensor.dtype();
                 match tensor {
                     Tensor::$variant(inner) => Ok(inner),
-                    _ => Err(crate::Error::DTypeMismatch {
-                        op: "TensorScalar::into_typed",
-                        lhs: Self::dtype(),
-                        rhs: actual,
-                    }),
+                    _ => Err(crate::Error::validation(
+                        "TensorScalar::into_typed",
+                        ValidationError::DTypeMismatch {
+                            expected: crate::core_dtype(Self::dtype()),
+                            actual: crate::core_dtype(actual),
+                        },
+                    )),
                 }
             }
         }
@@ -2238,6 +2495,15 @@ impl TensorOwnedView {
     }
 
     /// Create an owned view with explicit layout metadata.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `shape` and
+    /// `strides` have different ranks,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// layout exceeds the base tensor buffer, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn from_parts(
         base: Arc<Tensor>,
         shape: Vec<usize>,
@@ -2278,6 +2544,13 @@ impl TensorOwnedView {
         TensorRead::from_view(self.tensor_view())
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when `axes` is
+    /// not a valid permutation of the view rank.
     pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
         let layout = self
             .layout
@@ -2289,6 +2562,18 @@ impl TensorOwnedView {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
+    /// the source is not compact column-major,
+    /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
+    /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
+    /// records the counts) when element counts differ,
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for shape
+    /// arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// reshaped view exceeds the base buffer.
     pub fn reshape_view(&self, shape: &[usize]) -> crate::Result<Self> {
         let layout = reshape_layout_dyn(
             &self.layout,
@@ -2302,28 +2587,47 @@ impl TensorOwnedView {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when a slice
+    /// vector does not match the view rank,
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when a bound
+    /// or stride cannot be represented or is invalid,
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceStep`] or
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for slice
+    /// parameters, [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// for slice arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// result exceeds the base buffer.
     pub fn slice_view(&self, config: &SliceConfig) -> crate::Result<Self> {
         let op = "TensorOwnedView::slice_view";
         if config.starts.len() != self.shape().len() {
-            return Err(crate::Error::RankMismatch {
+            return Err(crate::Error::validation(
                 op,
-                expected: self.shape().len(),
-                actual: config.starts.len(),
-            });
+                ValidationError::RankMismatch {
+                    expected: self.shape().len(),
+                    actual: config.starts.len(),
+                },
+            ));
         }
         if config.limits.len() != self.shape().len() {
-            return Err(crate::Error::RankMismatch {
+            return Err(crate::Error::validation(
                 op,
-                expected: self.shape().len(),
-                actual: config.limits.len(),
-            });
+                ValidationError::RankMismatch {
+                    expected: self.shape().len(),
+                    actual: config.limits.len(),
+                },
+            ));
         }
         if config.strides.len() != self.shape().len() {
-            return Err(crate::Error::RankMismatch {
+            return Err(crate::Error::validation(
                 op,
-                expected: self.shape().len(),
-                actual: config.strides.len(),
-            });
+                ValidationError::RankMismatch {
+                    expected: self.shape().len(),
+                    actual: config.strides.len(),
+                },
+            ));
         }
 
         let mut slices = Vec::with_capacity(self.shape().len());
@@ -2333,17 +2637,26 @@ impl TensorOwnedView {
             .zip(config.limits.iter())
             .zip(config.strides.iter())
         {
-            let start = isize::try_from(start).map_err(|_| crate::Error::InvalidConfig {
-                op,
-                message: format!("slice start {start} does not fit in isize"),
+            let start = isize::try_from(start).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "slice start",
+                    format!("slice start {start} does not fit in isize"),
+                )
             })?;
-            let limit = isize::try_from(limit).map_err(|_| crate::Error::InvalidConfig {
-                op,
-                message: format!("slice limit {limit} does not fit in isize"),
+            let limit = isize::try_from(limit).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "slice limit",
+                    format!("slice limit {limit} does not fit in isize"),
+                )
             })?;
-            let stride = isize::try_from(stride).map_err(|_| crate::Error::InvalidConfig {
-                op,
-                message: format!("slice stride {stride} does not fit in isize"),
+            let stride = isize::try_from(stride).map_err(|_| {
+                crate::Error::invalid_argument(
+                    op,
+                    "slice stride",
+                    format!("slice stride {stride} does not fit in isize"),
+                )
             })?;
             slices.push(StridedSliceSpec::new(start, Some(limit), stride));
         }
@@ -2359,6 +2672,19 @@ impl TensorOwnedView {
         })
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] for invalid
+    /// dimension mappings,
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] for
+    /// incompatible extents,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// result exceeds the base buffer, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn broadcast_in_dim_view(&self, shape: &[usize], dims: &[usize]) -> crate::Result<Self> {
         let layout = self
             .layout
@@ -2412,6 +2738,13 @@ impl TensorValue {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::InvalidPermutationLength`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] when `axes` is
+    /// not a valid permutation of the value rank.
     pub fn transpose_view(&self, axes: impl AsRef<[usize]>) -> crate::Result<Self> {
         match self {
             Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
@@ -2421,6 +2754,18 @@ impl TensorValue {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::NonContiguousViewAsSlice`] when
+    /// the source is not compact column-major,
+    /// [`tenferro_tensor_core::ValidationError::ShapeMismatch`] (whose
+    /// [`tenferro_tensor_core::ShapeMismatch::ReshapeElementCount`] source
+    /// records the counts) when element counts differ,
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for shape
+    /// arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// reshaped view exceeds the backing buffer.
     pub fn reshape_view(&self, shape: &[usize]) -> crate::Result<Self> {
         match self {
             Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
@@ -2430,6 +2775,19 @@ impl TensorValue {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when a slice
+    /// vector does not match the value rank,
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when a bound
+    /// or stride cannot be represented or is invalid,
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceStep`] or
+    /// [`tenferro_tensor_core::ValidationError::InvalidSliceBounds`] for slice
+    /// parameters, [`tenferro_tensor_core::ValidationError::IntegerOverflow`]
+    /// for slice arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// result exceeds the backing buffer.
     pub fn slice_view(&self, config: &SliceConfig) -> crate::Result<Self> {
         match self {
             Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
@@ -2439,6 +2797,19 @@ impl TensorValue {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`],
+    /// [`tenferro_tensor_core::ValidationError::AxisOutOfBounds`], or
+    /// [`tenferro_tensor_core::ValidationError::DuplicateAxis`] for invalid
+    /// dimension mappings,
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] for
+    /// incompatible extents,
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// result exceeds the backing buffer, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn broadcast_in_dim_view(&self, shape: &[usize], dims: &[usize]) -> crate::Result<Self> {
         match self {
             Self::Tensor(tensor) => TensorOwnedView::from_tensor(Arc::clone(tensor))
@@ -2652,6 +3023,13 @@ impl<'a> TensorView<'a> {
     /// assert_eq!(view.dtype(), DType::F32);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn f32(shape: &'a [usize], data: &'a [f32]) -> crate::Result<Self> {
         Ok(Self::F32(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -2668,6 +3046,13 @@ impl<'a> TensorView<'a> {
     /// assert_eq!(view.dtype(), DType::F64);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn f64(shape: &'a [usize], data: &'a [f64]) -> crate::Result<Self> {
         Ok(Self::F64(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -2684,6 +3069,13 @@ impl<'a> TensorView<'a> {
     /// assert_eq!(view.dtype(), DType::I64);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn i64(shape: &'a [usize], data: &'a [i64]) -> crate::Result<Self> {
         Ok(Self::I64(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -2700,6 +3092,13 @@ impl<'a> TensorView<'a> {
     /// assert_eq!(view.dtype(), DType::I32);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn i32(shape: &'a [usize], data: &'a [i32]) -> crate::Result<Self> {
         Ok(Self::I32(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -2716,6 +3115,13 @@ impl<'a> TensorView<'a> {
     /// assert_eq!(view.dtype(), DType::Bool);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn bool(shape: &'a [usize], data: &'a [bool]) -> crate::Result<Self> {
         Ok(Self::Bool(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -2733,6 +3139,13 @@ impl<'a> TensorView<'a> {
     /// assert_eq!(view.dtype(), DType::C32);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn c32(shape: &'a [usize], data: &'a [Complex32]) -> crate::Result<Self> {
         Ok(Self::C32(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -2750,6 +3163,13 @@ impl<'a> TensorView<'a> {
     /// assert_eq!(view.dtype(), DType::C64);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn c64(shape: &'a [usize], data: &'a [Complex64]) -> crate::Result<Self> {
         Ok(Self::C64(TypedTensorView::from_col_major(shape, data)?))
     }
@@ -2805,6 +3225,14 @@ impl<'a> TensorView<'a> {
     }
 
     /// Compute the physical element offset for a logical index.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         match self {
             Self::F32(t) => t.layout_linear_offset(indices),
@@ -2818,6 +3246,11 @@ impl<'a> TensorView<'a> {
     }
 
     /// Return whether this view is compact column-major.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         match self {
             Self::F32(t) => t.is_col_major_contiguous(),
@@ -2836,6 +3269,13 @@ impl<'a> TensorView<'a> {
     }
 
     /// Assert this view is compact column-major.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// view is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         assert_layout_col_major_contiguous(
             self.is_col_major_contiguous()?,
@@ -2849,6 +3289,13 @@ impl<'a> TensorView<'a> {
 
 impl<'a> TensorViewMut<'a> {
     /// Create a dynamic `f64` mutable view over compact column-major host data.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for compact
+    /// shape or offset arithmetic overflow, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// compact shape reaches beyond `data`.
     pub fn f64(shape: &'a [usize], data: &'a mut [f64]) -> crate::Result<Self> {
         Ok(Self::F64(TypedTensorViewMut::from_col_major(shape, data)?))
     }
@@ -2901,6 +3348,16 @@ impl<'a> TensorViewMut<'a> {
         }
     }
 
+    /// Compute the physical element offset for a logical index.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         match self {
             Self::F32(t) => t.layout_linear_offset(indices),
@@ -2913,6 +3370,13 @@ impl<'a> TensorViewMut<'a> {
         }
     }
 
+    /// Return whether this view is compact column-major.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         match self {
             Self::F32(t) => t.is_col_major_contiguous(),
@@ -2929,6 +3393,15 @@ impl<'a> TensorViewMut<'a> {
         layout_summary(self.shape(), self.strides(), self.offset())
     }
 
+    /// Assert this view is compact column-major.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// view is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         assert_layout_col_major_contiguous(
             self.is_col_major_contiguous()?,
@@ -2975,6 +3448,11 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// column-major stride arithmetic overflows.
     pub fn strides(&self) -> crate::Result<Vec<isize>> {
         match self {
             Self::Tensor(tensor) => col_major_strides(tensor.shape()),
@@ -2989,6 +3467,14 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         match self {
             Self::Tensor(tensor) => tensor.layout_linear_offset(indices),
@@ -2996,6 +3482,11 @@ impl<'a> TensorRead<'a> {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         match self {
             Self::Tensor(tensor) => tensor.is_col_major_contiguous(),
@@ -3011,6 +3502,13 @@ impl<'a> TensorRead<'a> {
         layout_summary(self.shape(), &strides, self.offset())
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// view is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         let strides = self.strides()?;
         assert_layout_col_major_contiguous(
@@ -3077,6 +3575,11 @@ impl<'a> TensorWrite<'a> {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// column-major stride arithmetic overflows.
     pub fn strides(&self) -> crate::Result<Vec<isize>> {
         match self {
             Self::Tensor(tensor) => col_major_strides(tensor.shape()),
@@ -3091,6 +3594,14 @@ impl<'a> TensorWrite<'a> {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         match self {
             Self::Tensor(tensor) => tensor.layout_linear_offset(indices),
@@ -3098,6 +3609,11 @@ impl<'a> TensorWrite<'a> {
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         match self {
             Self::Tensor(tensor) => tensor.is_col_major_contiguous(),
@@ -3113,6 +3629,13 @@ impl<'a> TensorWrite<'a> {
         layout_summary(self.shape(), &strides, self.offset())
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// view is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         let strides = self.strides()?;
         assert_layout_col_major_contiguous(
@@ -3135,21 +3658,22 @@ impl<'a> TensorWrite<'a> {
 /// assert_eq!(col_major_strides(&[2, 3])?, vec![1, 2]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with
+/// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when a
+/// column-major stride product overflows.
 pub fn col_major_strides(shape: &[usize]) -> crate::Result<Vec<isize>> {
     let mut strides = Vec::with_capacity(shape.len());
     let mut stride = 1isize;
     for &extent in shape {
         strides.push(stride);
-        let extent = isize::try_from(extent).map_err(|_| crate::Error::InvalidConfig {
-            op: "col_major_strides",
-            message: format!("shape extent {extent} does not fit in isize"),
+        let extent = isize::try_from(extent).map_err(|_| {
+            crate::Error::validation("col_major_strides", ValidationError::IntegerOverflow)
         })?;
-        stride = stride
-            .checked_mul(extent)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "col_major_strides",
-                message: format!("column-major stride overflows for shape {shape:?}"),
-            })?;
+        stride = stride.checked_mul(extent).ok_or_else(|| {
+            crate::Error::validation("col_major_strides", ValidationError::IntegerOverflow)
+        })?;
     }
     Ok(strides)
 }
@@ -3160,39 +3684,33 @@ fn try_linear_offset_for_shape(
     op: &'static str,
 ) -> crate::Result<usize> {
     if indices.len() != shape.len() {
-        return Err(crate::Error::RankMismatch {
+        return Err(crate::Error::validation(
             op,
-            expected: shape.len(),
-            actual: indices.len(),
-        });
+            ValidationError::RankMismatch {
+                expected: shape.len(),
+                actual: indices.len(),
+            },
+        ));
     }
     let mut offset = 0usize;
     let mut stride = 1usize;
     for (axis, (&idx, &extent)) in indices.iter().zip(shape).enumerate() {
         if idx >= extent {
-            return Err(crate::Error::InvalidConfig {
+            return Err(crate::Error::invalid_argument(
                 op,
-                message: format!("index {idx} out of bounds for axis {axis} extent {extent}"),
-            });
+                "index",
+                format!("index {idx} out of bounds for axis {axis} extent {extent}"),
+            ));
         }
-        offset = offset
-            .checked_add(
-                idx.checked_mul(stride)
-                    .ok_or_else(|| crate::Error::InvalidConfig {
-                        op,
-                        message: "linear offset multiply overflows".to_string(),
-                    })?,
-            )
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op,
-                message: "linear offset add overflows".to_string(),
-            })?;
+        offset =
+            offset
+                .checked_add(idx.checked_mul(stride).ok_or_else(|| {
+                    crate::Error::validation(op, ValidationError::IntegerOverflow)
+                })?)
+                .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
         stride = stride
             .checked_mul(extent)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op,
-                message: "linear offset stride overflows".to_string(),
-            })?;
+            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
     }
     Ok(offset)
 }
@@ -3205,28 +3723,25 @@ fn checked_view_offset_result(
     op: &'static str,
 ) -> crate::Result<usize> {
     if indices.len() != shape.len() {
-        return Err(crate::Error::RankMismatch {
+        return Err(crate::Error::validation(
             op,
-            expected: shape.len(),
-            actual: indices.len(),
-        });
+            ValidationError::RankMismatch {
+                expected: shape.len(),
+                actual: indices.len(),
+            },
+        ));
     }
     for (axis, (&index, &extent)) in indices.iter().zip(shape).enumerate() {
         if index >= extent {
-            return Err(crate::Error::InvalidConfig {
+            return Err(crate::Error::invalid_argument(
                 op,
-                message: format!("index {index} out of bounds for axis {axis} extent {extent}"),
-            });
+                "index",
+                format!("index {index} out of bounds for axis {axis} extent {extent}"),
+            ));
         }
     }
-    checked_view_offset(shape, strides, base_offset, indices).ok_or_else(|| {
-        crate::Error::InvalidConfig {
-            op,
-            message: format!(
-                "layout offset overflow for shape={shape:?} strides={strides:?} offset={base_offset} indices={indices:?}"
-            ),
-        }
-    })
+    checked_view_offset(shape, strides, base_offset, indices)
+        .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))
 }
 
 fn layout_summary(shape: &[usize], strides: &[isize], offset: isize) -> String {
@@ -3243,33 +3758,34 @@ fn assert_layout_col_major_contiguous(
     if is_contiguous {
         Ok(())
     } else {
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::invalid_argument(
             op,
-            message: format!(
+            "layout",
+            format!(
                 "expected compact column-major layout, got {}",
                 layout_summary(shape, strides, offset)
             ),
-        })
+        ))
     }
 }
 
 fn try_shape_product(shape: &[usize], op: &'static str) -> crate::Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op,
-                message: format!("shape product overflows for shape {shape:?}"),
-            })
+            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))
     })
 }
 
 fn try_checked_shape_len(shape: &[usize], data_len: usize, op: &'static str) -> crate::Result<()> {
     let n = try_shape_product(shape, op)?;
     if data_len != n {
-        return Err(crate::Error::InvalidConfig {
+        return Err(crate::Error::validation(
             op,
-            message: format!("data length {data_len} does not match shape product {n}"),
-        });
+            ValidationError::ShapeDataLengthMismatch {
+                expected: n,
+                actual: data_len,
+            },
+        ));
     }
     Ok(())
 }
@@ -3281,35 +3797,11 @@ fn try_compact_layout<R: TensorRank>(
     TensorLayout::compact(shape.into()).map_err(|err| tensor_layout_error(op, err))
 }
 
-fn tensor_layout_error(op: &'static str, err: tenferro_tensor_core::Error) -> crate::Error {
-    match err {
-        tenferro_tensor_core::Error::RankMismatch { expected, actual } => {
-            crate::Error::RankMismatch {
-                op,
-                expected,
-                actual,
-            }
-        }
-        tenferro_tensor_core::Error::AxisOutOfBounds { axis, rank } => {
-            crate::Error::AxisOutOfBounds { op, axis, rank }
-        }
-        tenferro_tensor_core::Error::DuplicateAxis { axis } => crate::Error::DuplicateAxis {
-            op,
-            axis,
-            role: "permutation",
-        },
-        tenferro_tensor_core::Error::InvalidPermutationLength { expected, actual } => {
-            crate::Error::RankMismatch {
-                op,
-                expected,
-                actual,
-            }
-        }
-        other => crate::Error::InvalidConfig {
-            op,
-            message: other.to_string(),
-        },
-    }
+fn tensor_layout_error(
+    op: &'static str,
+    err: tenferro_tensor_core::ValidationError,
+) -> crate::Error {
+    crate::Error::validation(op, err)
 }
 
 fn checked_view_element_count(shape: &[usize], op: &'static str) -> crate::Result<usize> {
@@ -3319,10 +3811,7 @@ fn checked_view_element_count(shape: &[usize], op: &'static str) -> crate::Resul
     shape.iter().try_fold(1usize, |product, &dim| {
         product
             .checked_mul(dim)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op,
-                message: format!("shape product overflows for shape {shape:?}"),
-            })
+            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))
     })
 }
 
@@ -3361,41 +3850,46 @@ fn reachable_layout_span(
     let mut min_offset = offset;
     let mut max_offset = offset;
     for (&extent, &stride) in shape.iter().zip(strides) {
-        let steps =
-            isize::try_from(extent.saturating_sub(1)).map_err(|_| crate::Error::InvalidConfig {
-                op: "TypedTensorViewMut::try_multi_slice_mut",
-                message: "shape extent does not fit in isize".to_string(),
-            })?;
-        let end = stride
-            .checked_mul(steps)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "TypedTensorViewMut::try_multi_slice_mut",
-                message: "stride span overflows".to_string(),
-            })?;
+        let steps = isize::try_from(extent.saturating_sub(1)).map_err(|_| {
+            crate::Error::validation(
+                "TypedTensorViewMut::try_multi_slice_mut",
+                ValidationError::IntegerOverflow,
+            )
+        })?;
+        let end = stride.checked_mul(steps).ok_or_else(|| {
+            crate::Error::validation(
+                "TypedTensorViewMut::try_multi_slice_mut",
+                ValidationError::IntegerOverflow,
+            )
+        })?;
         let (axis_min, axis_max) = if end < 0 { (end, 0) } else { (0, end) };
-        min_offset =
-            min_offset
-                .checked_add(axis_min)
-                .ok_or_else(|| crate::Error::InvalidConfig {
-                    op: "TypedTensorViewMut::try_multi_slice_mut",
-                    message: "minimum reachable offset overflows".to_string(),
-                })?;
-        max_offset =
-            max_offset
-                .checked_add(axis_max)
-                .ok_or_else(|| crate::Error::InvalidConfig {
-                    op: "TypedTensorViewMut::try_multi_slice_mut",
-                    message: "maximum reachable offset overflows".to_string(),
-                })?;
+        min_offset = min_offset.checked_add(axis_min).ok_or_else(|| {
+            crate::Error::validation(
+                "TypedTensorViewMut::try_multi_slice_mut",
+                ValidationError::IntegerOverflow,
+            )
+        })?;
+        max_offset = max_offset.checked_add(axis_max).ok_or_else(|| {
+            crate::Error::validation(
+                "TypedTensorViewMut::try_multi_slice_mut",
+                ValidationError::IntegerOverflow,
+            )
+        })?;
     }
 
-    let min_offset = usize::try_from(min_offset).map_err(|_| crate::Error::InvalidConfig {
-        op: "TypedTensorViewMut::try_multi_slice_mut",
-        message: "minimum reachable offset is negative".to_string(),
+    let min_offset = usize::try_from(min_offset).map_err(|_| {
+        crate::Error::invalid_argument(
+            "TypedTensorViewMut::try_multi_slice_mut",
+            "layout",
+            "minimum reachable offset is negative",
+        )
     })?;
-    let max_offset = usize::try_from(max_offset).map_err(|_| crate::Error::InvalidConfig {
-        op: "TypedTensorViewMut::try_multi_slice_mut",
-        message: "maximum reachable offset is negative".to_string(),
+    let max_offset = usize::try_from(max_offset).map_err(|_| {
+        crate::Error::invalid_argument(
+            "TypedTensorViewMut::try_multi_slice_mut",
+            "layout",
+            "maximum reachable offset is negative",
+        )
     })?;
     Ok(Some((min_offset, max_offset)))
 }
@@ -3423,16 +3917,18 @@ fn split_two_mut_ranges<T>(
 }
 
 fn adjusted_view_offset(offset: isize, span_start: usize) -> crate::Result<isize> {
-    let span_start = isize::try_from(span_start).map_err(|_| crate::Error::InvalidConfig {
-        op: "TypedTensorViewMut::try_multi_slice_mut",
-        message: "view span start does not fit in isize".to_string(),
+    let span_start = isize::try_from(span_start).map_err(|_| {
+        crate::Error::validation(
+            "TypedTensorViewMut::try_multi_slice_mut",
+            ValidationError::IntegerOverflow,
+        )
     })?;
-    offset
-        .checked_sub(span_start)
-        .ok_or_else(|| crate::Error::InvalidConfig {
-            op: "TypedTensorViewMut::try_multi_slice_mut",
-            message: "adjusted view offset overflows".to_string(),
-        })
+    offset.checked_sub(span_start).ok_or_else(|| {
+        crate::Error::validation(
+            "TypedTensorViewMut::try_multi_slice_mut",
+            ValidationError::IntegerOverflow,
+        )
+    })
 }
 
 fn view_mut_from_layout_and_slice<'a, T: 'static, R: TensorRank>(
@@ -3464,27 +3960,20 @@ fn contiguous_layout_slice<'a, T, R: TensorRank>(
         .is_compact_col_major()
         .map_err(|err| tensor_layout_error(op, err))?
     {
-        return Err(crate::Error::InvalidConfig {
+        return Err(crate::Error::invalid_argument(
             op,
-            message: "view is not contiguous column-major".to_string(),
-        });
+            "layout",
+            "view is not contiguous column-major",
+        ));
     }
     let len = checked_view_element_count(layout.shape(), op)?;
-    let start = usize::try_from(layout.offset()).map_err(|_| crate::Error::InvalidConfig {
-        op,
-        message: "view offset is negative".to_string(),
-    })?;
+    let start = usize::try_from(layout.offset())
+        .map_err(|_| crate::Error::invalid_argument(op, "layout", "view offset is negative"))?;
     let end = start
         .checked_add(len)
-        .ok_or_else(|| crate::Error::InvalidConfig {
-            op,
-            message: "contiguous view range overflows".to_string(),
-        })?;
+        .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
     data.get(start..end)
-        .ok_or_else(|| crate::Error::InvalidConfig {
-            op,
-            message: "contiguous view range is outside host buffer".to_string(),
-        })
+        .ok_or_else(|| crate::Error::validation(op, ValidationError::ViewOutOfBounds))
 }
 
 fn relaxed_col_major_contiguous(
@@ -3504,16 +3993,11 @@ fn relaxed_col_major_contiguous(
         if stride != expected {
             return Ok(false);
         }
-        let extent = isize::try_from(extent).map_err(|_| crate::Error::InvalidConfig {
-            op,
-            message: "shape extent does not fit in isize".to_string(),
-        })?;
+        let extent = isize::try_from(extent)
+            .map_err(|_| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
         expected = expected
             .checked_mul(extent)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op,
-                message: "contiguous stride overflows".to_string(),
-            })?;
+            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
     }
     Ok(true)
 }
@@ -3535,7 +4019,7 @@ fn reshape_layout_dyn<R: TensorRank>(
             if from != to {
                 return Err(tensor_layout_error(
                     op,
-                    tenferro_tensor_core::Error::ReshapeElementCountMismatch { from, to },
+                    tenferro_tensor_core::ShapeMismatch::ReshapeElementCount { from, to }.into(),
                 ));
             }
             TensorLayout::<DynRank>::compact(shape.to_vec().into())
@@ -3558,11 +4042,13 @@ fn core_slice_specs(
     op: &'static str,
 ) -> crate::Result<Vec<CoreSliceSpec>> {
     if slices.len() != shape.len() {
-        return Err(crate::Error::RankMismatch {
+        return Err(crate::Error::validation(
             op,
-            expected: shape.len(),
-            actual: slices.len(),
-        });
+            ValidationError::RankMismatch {
+                expected: shape.len(),
+                actual: slices.len(),
+            },
+        ));
     }
 
     let mut specs = Vec::with_capacity(slices.len());
@@ -3578,19 +4064,17 @@ fn core_slice_spec(
     op: &'static str,
 ) -> crate::Result<CoreSliceSpec> {
     if slice.step() == 0 {
-        return Err(crate::Error::InvalidConfig {
+        return Err(crate::Error::validation(
             op,
-            message: "slice step must not be zero".to_string(),
-        });
+            ValidationError::InvalidSliceStep { step: slice.step() },
+        ));
     }
 
     let start = normalize_strided_bound(slice.start(), axis_len, op, "slice start")?;
     let end = match slice.end() {
         Some(end) => normalize_strided_bound(end, axis_len, op, "slice end")?,
-        None => isize::try_from(axis_len).map_err(|_| crate::Error::InvalidConfig {
-            op,
-            message: format!("axis length {axis_len} does not fit in isize"),
-        })?,
+        None => isize::try_from(axis_len)
+            .map_err(|_| crate::Error::validation(op, ValidationError::IntegerOverflow))?,
     };
 
     if slice.step() > 0 {
@@ -3612,16 +4096,10 @@ fn core_slice_spec(
     Ok(CoreSliceSpec {
         start: end
             .checked_sub(1)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op,
-                message: "negative-step slice start overflows".to_string(),
-            })?,
+            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?,
         end: start
             .checked_sub(1)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op,
-                message: "negative-step slice end overflows".to_string(),
-            })?,
+            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?,
         step: slice.step(),
     })
 }
@@ -3632,25 +4110,30 @@ fn normalize_strided_bound(
     op: &'static str,
     role: &'static str,
 ) -> crate::Result<isize> {
-    let axis_len = isize::try_from(axis_len).map_err(|_| crate::Error::InvalidConfig {
-        op,
-        message: format!("axis length {axis_len} does not fit in isize"),
-    })?;
+    let original_axis_len = axis_len;
+    let axis_len = isize::try_from(axis_len)
+        .map_err(|_| crate::Error::validation(op, ValidationError::IntegerOverflow))?;
     let bound = if bound < 0 {
         axis_len
             .checked_add(bound)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op,
-                message: format!("{role} {bound} overflows"),
-            })?
+            .ok_or_else(|| crate::Error::validation(op, ValidationError::IntegerOverflow))?
     } else {
         bound
     };
     if !(0..=axis_len).contains(&bound) {
-        return Err(crate::Error::InvalidConfig {
+        let (start, end) = if role == "slice start" {
+            (bound, bound)
+        } else {
+            (0, bound)
+        };
+        return Err(crate::Error::validation(
             op,
-            message: format!("{role} {bound} is outside 0..={axis_len}"),
-        });
+            ValidationError::InvalidSliceBounds {
+                start,
+                end,
+                axis_len: original_axis_len,
+            },
+        ));
     }
     Ok(bound)
 }
@@ -3662,7 +4145,10 @@ fn slice_axis_specs(
     op: &'static str,
 ) -> crate::Result<Vec<StridedSliceSpec>> {
     if axis >= rank {
-        return Err(crate::Error::AxisOutOfBounds { op, axis, rank });
+        return Err(crate::Error::validation(
+            op,
+            ValidationError::AxisOutOfBounds { axis, rank },
+        ));
     }
 
     let mut slices = vec![StridedSliceSpec::all(); rank];
@@ -3769,6 +4255,11 @@ impl<T: Clone + Zero, R: TensorRank> TypedTensor<T, R> {
     /// let t = TypedTensor::<f64>::zeros(vec![2, 3]).unwrap();
     /// assert_eq!(t.n_elements(), 6);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// product or compact-stride arithmetic overflows.
     pub fn zeros(shape: impl Into<R::Shape>) -> crate::Result<Self> {
         typed_tensor_zeros(shape)
     }
@@ -3785,6 +4276,11 @@ impl<T: Clone + One + Zero, R: TensorRank> TypedTensor<T, R> {
     /// let t = TypedTensor::<f64>::ones(vec![2]).unwrap();
     /// assert_eq!(t.host_data().unwrap(), &[1.0, 1.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// product or compact-stride arithmetic overflows.
     pub fn ones(shape: impl Into<R::Shape>) -> crate::Result<Self> {
         typed_tensor_ones(shape)
     }
@@ -3812,6 +4308,15 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// .unwrap();
     /// assert_eq!(tensor.shape(), &[2]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when
+    /// the shape product differs from the buffer length,
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape or
+    /// stride arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when a supplied
+    /// rank-specific shape cannot be represented.
     pub fn from_buffer_col_major(
         shape: impl Into<R::Shape>,
         buffer: Buffer<T>,
@@ -3838,6 +4343,15 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(ranked.shape(), &[2, 3]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when the typed
+    /// rank does not match the existing shape,
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when compact
+    /// strides cannot be computed, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// preserved buffer cannot hold the rank-converted layout.
     pub fn try_into_rank<const N: usize>(self) -> crate::Result<TypedTensor<T, Rank<N>>> {
         let op = "TypedTensor::try_into_rank";
         let shape = <Rank<N> as TensorRank>::shape_from_vec(self.shape().to_vec().into())
@@ -4038,6 +4552,16 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// let err = host.backend_region_view(vec![2, 2], vec![1, 2], 0).unwrap_err();
     /// assert!(err.to_string().contains("backend"));
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when this tensor is host-backed;
+    /// backend region views require a backend buffer. It returns
+    /// [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] for incompatible
+    /// shape/stride ranks, [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`]
+    /// when the region exceeds the backend buffer, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn backend_region_view(
         &self,
         shape: Vec<usize>,
@@ -4049,7 +4573,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     {
         let op = "TypedTensor::backend_region_view";
         let Buffer::Backend(buffer) = &self.buffer else {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::runtime_state(
                 op,
                 "expected a backend (device) buffer; host tensors use \
                  TypedTensorView::from_slice over host storage",
@@ -4090,6 +4614,18 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// let err = host.backend_region_view_mut(vec![2, 2], vec![1, 2], 0).unwrap_err();
     /// assert!(err.to_string().contains("backend"));
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when this tensor is host-backed;
+    /// mutable backend region views require a backend buffer. It returns
+    /// [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] for incompatible
+    /// shape/stride ranks, [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`]
+    /// when the region exceeds the backend buffer,
+    /// [`tenferro_tensor_core::ValidationError::OverlappingMutableLayout`] when
+    /// logical elements alias, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] for layout
+    /// arithmetic overflow.
     pub fn backend_region_view_mut(
         &mut self,
         shape: Vec<usize>,
@@ -4101,7 +4637,7 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     {
         let op = "TypedTensor::backend_region_view_mut";
         let Buffer::Backend(buffer) = &self.buffer else {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::runtime_state(
                 op,
                 "expected a backend (device) buffer; mutable host regions use \
                  TypedTensorViewMut host constructors or try_multi_slice_mut",
@@ -4163,6 +4699,13 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.get(&[1, 0])?, &2.0);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when
+    /// the shape product differs from `data.len()`, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// arithmetic overflows.
     pub fn from_vec_col_major(shape: impl Into<R::Shape>, data: Vec<T>) -> crate::Result<Self> {
         typed_tensor_from_vec_col_major(shape, data, "from_vec_col_major")
     }
@@ -4179,11 +4722,15 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(shape, vec![2]);
     /// assert_eq!(data, vec![1.0, 2.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
+    /// storage; download it before exporting a host `Vec`.
     pub fn into_vec_col_major(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
         let shape = self.shape().to_vec();
         match self.buffer {
             Buffer::Host(data) => Ok((shape, data)),
-            Buffer::Backend(_) => Err(crate::Error::backend_failure(
+            Buffer::Backend(_) => Err(crate::Error::runtime_state(
                 "into_vec_col_major",
                 "backend buffers cannot be exported as host Vec",
             )),
@@ -4201,10 +4748,14 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.host_data()?, &[1.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
+    /// storage; download it before borrowing host data.
     pub fn host_data(&self) -> crate::Result<&[T]> {
         match &self.buffer {
             Buffer::Host(v) => Ok(v),
-            Buffer::Backend(_) => Err(crate::Error::backend_failure(
+            Buffer::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensor::host_data",
                 "backend buffers cannot be inspected as host slices; download explicitly first",
             )),
@@ -4225,6 +4776,10 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.as_slice()?, &[1.0, 2.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
+    /// storage; download it before borrowing it as a host slice.
     pub fn as_slice(&self) -> crate::Result<&[T]> {
         self.host_data()
     }
@@ -4241,10 +4796,14 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.host_data()?, &[3.0, 0.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] when this tensor uses backend
+    /// storage; download it before mutably borrowing host data.
     pub fn host_data_mut(&mut self) -> crate::Result<&mut [T]> {
         match &mut self.buffer {
             Buffer::Host(v) => Ok(v),
-            Buffer::Backend(_) => Err(crate::Error::backend_failure(
+            Buffer::Backend(_) => Err(crate::Error::runtime_state(
                 "TypedTensor::host_data_mut",
                 "backend buffers cannot be mutated as host slices; download explicitly first",
             )),
@@ -4262,6 +4821,14 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.linear_offset(&[1, 2])?, 5);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         try_linear_offset_for_shape(self.shape(), indices, "TypedTensor::linear_offset")
     }
@@ -4277,6 +4844,14 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.layout_linear_offset(&[1, 2])?, 5);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         try_linear_offset_for_shape(self.shape(), indices, "TypedTensor::layout_linear_offset")
     }
@@ -4292,6 +4867,11 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert!(t.is_col_major_contiguous()?);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         self.layout
             .is_compact_col_major()
@@ -4324,6 +4904,13 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// t.assert_col_major_contiguous()?;
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// tensor is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         assert_layout_col_major_contiguous(
             self.is_col_major_contiguous()?,
@@ -4345,14 +4932,20 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.get(&[1])?, &2.0);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// computed offset is outside the host buffer. It returns
+    /// [`crate::Error::RuntimeState`] when the tensor uses backend storage.
     pub fn get(&self, indices: &[usize]) -> crate::Result<&T> {
         let off = self.linear_offset(indices)?;
-        self.host_data()?
-            .get(off)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "TypedTensor::get",
-                message: format!("linear offset {off} is outside host buffer"),
-            })
+        self.host_data()?.get(off).ok_or_else(|| {
+            crate::Error::validation("TypedTensor::get", ValidationError::ViewOutOfBounds)
+        })
     }
 
     /// Mutably borrow a single element by multi-index.
@@ -4367,14 +4960,20 @@ impl<T: Clone, R: TensorRank> TypedTensor<T, R> {
     /// assert_eq!(t.host_data()?, &[7.0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
+    /// computed offset is outside the host buffer. It returns
+    /// [`crate::Error::RuntimeState`] when the tensor uses backend storage.
     pub fn get_mut(&mut self, indices: &[usize]) -> crate::Result<&mut T> {
         let off = self.linear_offset(indices)?;
-        self.host_data_mut()?
-            .get_mut(off)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "TypedTensor::get_mut",
-                message: format!("linear offset {off} is outside host buffer"),
-            })
+        self.host_data_mut()?.get_mut(off).ok_or_else(|| {
+            crate::Error::validation("TypedTensor::get_mut", ValidationError::ViewOutOfBounds)
+        })
     }
 }
 
@@ -4393,6 +4992,13 @@ impl Tensor {
     /// assert_eq!(t.shape(), &[2, 2]);
     /// assert_eq!(t.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::ShapeDataLengthMismatch`] when
+    /// the shape product differs from `data.len()`, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when shape
+    /// arithmetic overflows.
     pub fn from_vec_col_major<T: TensorScalar>(
         shape: Vec<usize>,
         data: Vec<T>,
@@ -4499,6 +5105,14 @@ impl Tensor {
     /// assert_eq!(t.layout_linear_offset(&[1])?, 1);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::RankMismatch`] when `indices`
+    /// has the wrong rank, [`tenferro_tensor_core::ValidationError::InvalidArgument`]
+    /// when an index is outside its axis extent, or
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when offset
+    /// arithmetic overflows.
     pub fn layout_linear_offset(&self, indices: &[usize]) -> crate::Result<usize> {
         match self {
             Tensor::F32(t) => t.layout_linear_offset(indices),
@@ -4522,6 +5136,11 @@ impl Tensor {
     /// assert!(t.is_col_major_contiguous()?);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows.
     pub fn is_col_major_contiguous(&self) -> crate::Result<bool> {
         match self {
             Tensor::F32(t) => t.is_col_major_contiguous(),
@@ -4561,6 +5180,13 @@ impl Tensor {
     /// t.assert_col_major_contiguous()?;
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::IntegerOverflow`] when
+    /// compactness arithmetic overflows, or
+    /// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+    /// tensor is not compact column-major.
     pub fn assert_col_major_contiguous(&self) -> crate::Result<()> {
         let layout = tensor_layout(self);
         assert_layout_col_major_contiguous(
@@ -4585,6 +5211,12 @@ impl Tensor {
     /// assert_eq!(t.as_slice::<f64>().unwrap(), [1.0, 2.0, 3.0].as_slice());
     /// assert!(t.as_slice::<f32>().is_err());
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `T` does
+    /// not match the tensor dtype, or [`crate::Error::RuntimeState`] when the
+    /// matching tensor uses backend storage that has not been downloaded.
     pub fn as_slice<T: TensorScalar>(&self) -> crate::Result<&[T]> {
         T::as_slice(self)
     }
@@ -4600,6 +5232,12 @@ impl Tensor {
     /// let t = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// assert_eq!(t.into_vec_col_major::<f64>().unwrap().1, vec![2.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with
+    /// [`tenferro_tensor_core::ValidationError::DTypeMismatch`] when `T` does
+    /// not match the tensor dtype, or [`crate::Error::RuntimeState`] when the
+    /// matching tensor uses backend storage that has not been downloaded.
     pub fn into_vec_col_major<T: TensorScalar>(self) -> crate::Result<(Vec<usize>, Vec<T>)> {
         let typed = T::into_typed(self)?;
         typed.into_vec_col_major()

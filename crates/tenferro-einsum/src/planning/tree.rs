@@ -59,13 +59,13 @@ impl ContractionOptimizerOptions {
 
     pub(crate) fn validate(&self) -> Result<()> {
         if self.ntrials == 0 {
-            return Err(Error::InvalidArgument(
-                "contraction optimizer ntrials must be at least 1".into(),
+            return Err(Error::planning(
+                "contraction optimizer ntrials must be at least 1",
             ));
         }
         if self.betas.iter().any(|value| value.is_nan()) {
-            return Err(Error::InvalidArgument(
-                "contraction optimizer betas must not contain NaN".into(),
+            return Err(Error::planning(
+                "contraction optimizer betas must not contain NaN",
             ));
         }
         if self.score.tc_weight.is_nan()
@@ -73,8 +73,8 @@ impl ContractionOptimizerOptions {
             || self.score.rw_weight.is_nan()
             || self.score.sc_target.is_nan()
         {
-            return Err(Error::InvalidArgument(
-                "contraction optimizer score fields must not contain NaN".into(),
+            return Err(Error::planning(
+                "contraction optimizer score fields must not contain NaN",
             ));
         }
         Ok(())
@@ -131,7 +131,9 @@ impl ContractionTree {
     ///
     /// # Errors
     ///
-    /// Returns an error if subscripts and shapes are inconsistent.
+    /// Returns [`Error::Validation`] when subscripts and shapes have different
+    /// ranks or incompatible dimensions, or [`Error::Planning`] when no valid
+    /// contraction order can be constructed.
     pub fn optimize(subscripts: &Subscripts, shapes: &[&[usize]]) -> Result<Self> {
         Self::optimize_with_options(subscripts, shapes, &ContractionOptimizerOptions::default())
     }
@@ -145,7 +147,9 @@ impl ContractionTree {
     ///
     /// # Errors
     ///
-    /// Returns an error if subscripts, shapes, or planner options are invalid.
+    /// Returns [`Error::Validation`] for rank, shape, or dimension mismatches,
+    /// or [`Error::Planning`] when planner options such as `ntrials` are
+    /// invalid or no contraction order can be constructed.
     pub fn optimize_with_options(
         subscripts: &Subscripts,
         shapes: &[&[usize]],
@@ -197,7 +201,9 @@ impl ContractionTree {
     ///
     /// # Errors
     ///
-    /// Returns an error if the pairs do not form a valid contraction sequence.
+    /// Returns [`Error::Planning`] when the pair count, operand indices, or
+    /// intermediate sequence is invalid, or [`Error::Validation`] when the
+    /// supplied shapes do not match the subscripts.
     pub fn from_pairs(
         subscripts: &Subscripts,
         shapes: &[&[usize]],
@@ -206,7 +212,7 @@ impl ContractionTree {
         let input_count = subscripts.inputs.len();
         let required_steps = input_count.saturating_sub(1);
         if pairs.len() != required_steps {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::planning(format!(
                 "explicit contraction path for {input_count} operands must have {required_steps} steps, got {}",
                 pairs.len()
             )));
@@ -223,17 +229,17 @@ impl ContractionTree {
         for (step_idx, &(left, right)) in pairs.iter().enumerate() {
             let next_idx = input_count + step_idx;
             if left == right {
-                return Err(Error::InvalidArgument(format!(
+                return Err(Error::planning(format!(
                     "pair ({left}, {right}) must reference two distinct live operands"
                 )));
             }
             if left >= next_idx || right >= next_idx {
-                return Err(Error::InvalidArgument(format!(
+                return Err(Error::planning(format!(
                     "pair ({left}, {right}) references non-existent operand"
                 )));
             }
             if !live[left] || !live[right] {
-                return Err(Error::InvalidArgument(format!(
+                return Err(Error::planning(format!(
                     "pair ({left}, {right}) references an operand or intermediate that is no longer live"
                 )));
             }
@@ -256,7 +262,7 @@ impl ContractionTree {
 
         let live_count = live.iter().filter(|&&is_live| is_live).count();
         if live_count != 1 {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::planning(format!(
                 "explicit contraction path must leave exactly one live result, got {live_count}"
             )));
         }
@@ -482,7 +488,7 @@ fn nested_to_pairs(
         NestedEinsum::Leaf { tensor_index } => Ok(*tensor_index),
         NestedEinsum::Node { args, .. } => {
             if args.len() != 2 {
-                return Err(Error::InvalidArgument(format!(
+                return Err(Error::planning(format!(
                     "omeco returned non-binary contraction node with {} children",
                     args.len()
                 )));
@@ -602,7 +608,7 @@ fn candidate_contraction_cost(
     let mut cost = 1usize;
     for &label in candidate_subs.iter() {
         let size = context.size_dict.get(&label).copied().ok_or_else(|| {
-            Error::InvalidArgument(format!(
+            Error::planning(format!(
                 "unknown size for label {label} in contraction cost"
             ))
         })?;

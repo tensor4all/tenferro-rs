@@ -70,7 +70,7 @@ pub(crate) fn require_gpu_descriptor(
     expected: GpuLaunchKind,
 ) -> crate::Result<GpuOpDescriptor> {
     let descriptor = gpu_descriptor(kind).ok_or_else(|| {
-        crate::Error::backend_failure(
+        crate::Error::unsupported(
             "gpu_dispatch",
             format!("primitive {kind:?} is not implemented by CubeCL dispatch"),
         )

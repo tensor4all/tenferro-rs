@@ -18,8 +18,11 @@ pub(super) fn test_dispatch_count() -> usize {
     DISPATCH_COUNT.load(Ordering::SeqCst)
 }
 
-fn map_strided_error(err: impl std::fmt::Display) -> Error {
-    Error::backend_failure("dot_general", err)
+fn map_strided_error<E>(err: E) -> Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    Error::backend_source("dot_general", err)
 }
 
 fn to_strided_config(config: &TensorDotGeneralConfig) -> strided_einsum2::DotGeneralConfig<'_> {
@@ -35,7 +38,13 @@ fn checked_product(shape: &[usize]) -> crate::Result<usize> {
     shape
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
-        .ok_or_else(|| Error::backend_failure("dot_general", "output element count overflow"))
+        .ok_or_else(|| {
+            Error::invalid_argument(
+                "dot_general",
+                "configuration",
+                "output element count overflow",
+            )
+        })
 }
 
 fn as_strided_view<'a, R, T>(read: &'a R) -> crate::Result<strided_einsum2::StridedView<'a, T>>
@@ -44,7 +53,7 @@ where
     T: 'static,
 {
     let Some(data) = read.host_data_opt()? else {
-        return Err(Error::backend_failure(
+        return Err(Error::runtime_state(
             "dot_general",
             "CPU dot_general requires host-backed inputs",
         ));
@@ -124,11 +133,11 @@ where
         .expected_output_shape(lhs.shape(), rhs.shape())
         .map_err(map_strided_error)?;
     if out.shape() != out_shape.as_slice() {
-        return Err(Error::ShapeMismatch {
-            op: "dot_general",
-            lhs: out.shape().to_vec(),
-            rhs: out_shape,
-        });
+        return Err(Error::shape_mismatch(
+            "dot_general",
+            out.shape().to_vec(),
+            out_shape,
+        ));
     }
 
     let out_shape = out.shape().to_vec();

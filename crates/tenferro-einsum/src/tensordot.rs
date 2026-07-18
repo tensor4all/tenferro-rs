@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
-use tenferro_runtime::error::{Error, Result};
+use tenferro_runtime::error::{Error, ErrorPhase, Result};
 use tenferro_runtime::{DotGeneralConfig, TracedTensor};
+use tenferro_tensor::{ShapeMismatch, ValidationError};
 
 /// Axis specification for [`TracedTensorEinsumExt::tensordot`](crate::TracedTensorEinsumExt::tensordot)
 /// contraction sugar.
@@ -46,20 +47,30 @@ pub(crate) fn dot_general_config(
     let (lhs_contracting_dims, rhs_contracting_dims) = match axes {
         TensorDotAxes::Count(count) => {
             if count > lhs_rank || count > rhs_rank {
-                return Err(contraction_error(format!(
-                    "TensorDotAxes::Count({count}) cannot contract {count} axes \
-                     for lhs rank {lhs_rank} and rhs rank {rhs_rank}"
-                )));
+                return Err(Error::invalid_argument(
+                    "tensordot",
+                    ErrorPhase::GraphBuild,
+                    "axes",
+                    format!(
+                        "TensorDotAxes::Count({count}) cannot contract {count} axes \
+                         for lhs rank {lhs_rank} and rhs rank {rhs_rank}"
+                    ),
+                ));
             }
             ((lhs_rank - count..lhs_rank).collect(), (0..count).collect())
         }
         TensorDotAxes::Axes { lhs, rhs } => {
             if lhs.len() != rhs.len() {
-                return Err(contraction_error(format!(
-                    "tensordot explicit axes must have matching lengths, got lhs {} and rhs {}",
-                    lhs.len(),
-                    rhs.len()
-                )));
+                return Err(Error::invalid_argument(
+                    "tensordot",
+                    ErrorPhase::GraphBuild,
+                    "axes",
+                    format!(
+                        "tensordot explicit axes must have matching lengths, got lhs {} and rhs {}",
+                        lhs.len(),
+                        rhs.len()
+                    ),
+                ));
             }
             (
                 normalize_axes(lhs, lhs_rank, "lhs")?,
@@ -76,7 +87,7 @@ pub(crate) fn dot_general_config(
     };
     config
         .validate_dims_with_ranks(lhs_rank, rhs_rank)
-        .map_err(|err| contraction_error(err.to_string()))?;
+        .map_err(|error| graph_build_tensor_error("tensordot", error))?;
     Ok(config)
 }
 
@@ -88,7 +99,7 @@ pub(crate) fn validate_concrete_contract_dims(
 ) -> Result<()> {
     config
         .validate_dims_with_ranks(lhs_shape.len(), rhs_shape.len())
-        .map_err(|err| contraction_error(err.to_string()))?;
+        .map_err(|error| graph_build_tensor_error("tensordot", error))?;
     for (&lhs_axis, &rhs_axis) in config
         .lhs_contracting_dims
         .iter()
@@ -110,7 +121,7 @@ pub(crate) fn validate_traced_contract_dims(
 ) -> Result<()> {
     config
         .validate_dims_with_ranks(lhs.rank, rhs.rank)
-        .map_err(|err| contraction_error(err.to_string()))?;
+        .map_err(|error| graph_build_tensor_error("tensordot", error))?;
     for (&lhs_axis, &rhs_axis) in config
         .lhs_contracting_dims
         .iter()
@@ -134,37 +145,51 @@ pub(crate) fn validate_traced_contract_dims(
     Ok(())
 }
 
-fn normalize_axes(axes: &[isize], rank: usize, operand: &str) -> Result<Vec<usize>> {
+fn normalize_axes(axes: &[isize], rank: usize, operand: &'static str) -> Result<Vec<usize>> {
     let mut normalized = Vec::with_capacity(axes.len());
     let mut seen = HashSet::with_capacity(axes.len());
     for &axis in axes {
         let normalized_axis = normalize_axis(axis, rank, operand)?;
         if !seen.insert(normalized_axis) {
-            return Err(contraction_error(format!(
-                "duplicate {operand} axis {normalized_axis} in tensordot axes"
-            )));
+            return Err(Error::validation(
+                "tensordot",
+                ErrorPhase::GraphBuild,
+                ValidationError::DuplicateAxis {
+                    axis: normalized_axis,
+                    role: operand,
+                },
+            ));
         }
         normalized.push(normalized_axis);
     }
     Ok(normalized)
 }
 
-fn normalize_axis(axis: isize, rank: usize, operand: &str) -> Result<usize> {
+fn normalize_axis(axis: isize, rank: usize, _operand: &'static str) -> Result<usize> {
     let rank_isize = isize::try_from(rank).map_err(|_| {
-        contraction_error(format!(
-            "{operand} rank {rank} is too large to normalize tensordot axes"
-        ))
+        Error::validation(
+            "tensordot",
+            ErrorPhase::GraphBuild,
+            ValidationError::IntegerOverflow,
+        )
     })?;
     let normalized = if axis < 0 { rank_isize + axis } else { axis };
     if normalized < 0 || normalized >= rank_isize {
-        return Err(contraction_error(format!(
-            "{operand} axis {axis} out of bounds for rank {rank}"
-        )));
+        return Err(Error::validation(
+            "tensordot",
+            ErrorPhase::GraphBuild,
+            ValidationError::AxisOutOfBounds {
+                axis: axis.unsigned_abs(),
+                rank,
+            },
+        ));
     }
     usize::try_from(normalized).map_err(|_| {
-        contraction_error(format!(
-            "{operand} axis {axis} could not be normalized for rank {rank}"
-        ))
+        Error::validation(
+            "tensordot",
+            ErrorPhase::GraphBuild,
+            ValidationError::IntegerOverflow,
+        )
     })
 }
 
@@ -174,14 +199,26 @@ fn contracted_dims_error(
     rhs_axis: usize,
     rhs_dim: usize,
 ) -> Error {
-    contraction_error(format!(
-        "contracted dimensions differ for lhs axis {lhs_axis} ({lhs_dim}) \
-         and rhs axis {rhs_axis} ({rhs_dim})"
-    ))
+    Error::validation(
+        "tensordot",
+        ErrorPhase::GraphBuild,
+        ShapeMismatch::ContractedDimensions {
+            lhs_axis,
+            lhs_size: lhs_dim,
+            rhs_axis,
+            rhs_size: rhs_dim,
+        }
+        .into(),
+    )
 }
 
-fn contraction_error(message: impl Into<String>) -> Error {
-    Error::ContractionError(message.into())
+fn graph_build_tensor_error(op: &'static str, error: tenferro_tensor::Error) -> Error {
+    match error {
+        tenferro_tensor::Error::Validation { source, .. } => {
+            Error::validation(op, ErrorPhase::GraphBuild, source)
+        }
+        error => Error::TensorRuntime(error),
+    }
 }
 
 #[cfg(test)]

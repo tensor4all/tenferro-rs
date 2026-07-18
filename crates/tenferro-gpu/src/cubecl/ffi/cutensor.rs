@@ -23,6 +23,23 @@ type CutensorStatus = i32;
 
 const CUTENSOR_STATUS_SUCCESS: CutensorStatus = 0;
 
+#[derive(Debug, thiserror::Error)]
+enum CutensorLoadError {
+    #[error("failed to load cuTENSOR symbol {name}: {source}")]
+    Symbol {
+        name: String,
+        #[source]
+        source: libloading::Error,
+    },
+    #[error("failed to load cuTENSOR library (tried {paths}): {source}; attempts: {attempts}")]
+    Library {
+        paths: String,
+        attempts: String,
+        #[source]
+        source: libloading::Error,
+    },
+}
+
 #[repr(i32)]
 #[derive(Clone, Copy)]
 pub(crate) enum CudaDataType {
@@ -172,13 +189,16 @@ impl CutensorVtable {
 unsafe fn load_symbol<T: Copy>(lib: &Library, name: &[u8]) -> crate::Result<T> {
     // SAFETY: `name` is a NUL-terminated cuTENSOR symbol and the requested
     // type `T` is the exact FFI function-pointer type declared in this module.
-    let symbol = lib.get::<T>(name).map_err(|err| {
-        crate::Error::backend_failure(
+    let symbol_name = String::from_utf8_lossy(name)
+        .trim_end_matches('\0')
+        .to_owned();
+    let symbol = lib.get::<T>(name).map_err(|source| {
+        crate::Error::io_source(
             OP,
-            format!(
-                "failed to load cuTENSOR symbol {}: {err}",
-                String::from_utf8_lossy(name).trim_end_matches('\0')
-            ),
+            CutensorLoadError::Symbol {
+                name: symbol_name,
+                source,
+            },
         )
     })?;
     Ok(*symbol)
@@ -190,24 +210,25 @@ unsafe fn load_data_symbol<T: Copy>(lib: &Library, name: &[u8]) -> crate::Result
         .to_owned();
     // SAFETY: cuTENSOR compute descriptors are exported as static data symbols
     // whose value is a process-lifetime pointer-like descriptor.
-    let symbol = lib.get::<*const T>(name).map_err(|err| {
-        crate::Error::backend_failure(
+    let symbol = lib.get::<*const T>(name).map_err(|source| {
+        crate::Error::io_source(
             OP,
-            format!("failed to load cuTENSOR data symbol {symbol_name}: {err}"),
+            CutensorLoadError::Symbol {
+                name: symbol_name.clone(),
+                source,
+            },
         )
     })?;
     let ptr = *symbol;
     if ptr.is_null() {
-        return Err(crate::Error::backend_failure(
-            OP,
-            format!("cuTENSOR data symbol {symbol_name} resolved to a null pointer"),
-        ));
+        return Err(crate::Error::Internal(format!(
+            "cuTENSOR data symbol {symbol_name} resolved to a null pointer"
+        )));
     }
     if !ptr.is_aligned() {
-        return Err(crate::Error::backend_failure(
-            OP,
-            format!("cuTENSOR data symbol {symbol_name} resolved to a misaligned pointer"),
-        ));
+        return Err(crate::Error::Internal(format!(
+            "cuTENSOR data symbol {symbol_name} resolved to a misaligned pointer"
+        )));
     }
     // SAFETY: null and alignment were checked above; cuTENSOR exports this as
     // static process-lifetime data and `T: Copy`, so reading copies the descriptor value.
@@ -231,11 +252,13 @@ impl CutensorLibrary {
     fn load() -> crate::Result<Arc<Self>> {
         let paths = super::library_search_paths("TENFERRO_CUTENSOR_PATH", CUTENSOR_DEFAULT_PATHS);
         let mut errors = Vec::new();
+        let mut last_source = None;
         for path in &paths {
             let lib = match unsafe { Library::new(path) } {
                 Ok(lib) => lib,
                 Err(err) => {
                     errors.push(format!("{path}: {err}"));
+                    last_source = Some(err);
                     continue;
                 }
             };
@@ -243,14 +266,23 @@ impl CutensorLibrary {
             return Ok(Arc::new(Self { _lib: lib, vtable }));
         }
 
-        Err(crate::Error::backend_failure(
-            OP,
-            format!(
-                "failed to load cuTENSOR library (tried {}): {}",
-                paths.join(", "),
-                errors.join("; ")
-            ),
-        ))
+        match last_source {
+            Some(source) => Err(crate::Error::io_source(
+                OP,
+                CutensorLoadError::Library {
+                    paths: paths.join(", "),
+                    attempts: errors.join("; "),
+                    source,
+                },
+            )),
+            None => Err(crate::Error::io_source(
+                OP,
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("no cuTENSOR library search paths configured for {OP}"),
+                ),
+            )),
+        }
     }
 
     fn status_message(&self, status: CutensorStatus) -> String {
@@ -276,12 +308,8 @@ impl CutensorLibrary {
         if status == CUTENSOR_STATUS_SUCCESS {
             return Ok(());
         }
-        Err(crate::Error::backend_failure(
-            op,
-            format!(
-                "{call} failed with cuTENSOR {} ({status})",
-                self.status_message(status)
-            ),
+        Err(super::super::error::provider_status(
+            op, "cuTENSOR", call, status,
         ))
     }
 }
@@ -405,7 +433,7 @@ impl TensorDescriptor {
         op: &'static str,
     ) -> crate::Result<Self> {
         let num_modes = u32::try_from(extents.len()).map_err(|_| {
-            crate::Error::backend_failure(op, "tensor rank exceeds cuTENSOR u32 limit")
+            crate::Error::invalid_argument(op, "rank", "tensor rank exceeds cuTENSOR u32 limit")
         })?;
         let mut raw = std::ptr::null_mut();
         let status = unsafe {

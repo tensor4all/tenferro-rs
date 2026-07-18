@@ -36,8 +36,8 @@ use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::{ShapeGuardContext, ShapeRelation, SymDim};
 use tenferro_runtime::extension::{apply, HostReferenceRuntime};
-use tenferro_runtime::{Error as RuntimeError, GraphExecutor, Tensor, TracedTensor};
-use tenferro_tensor::{DType, TensorBackend, TypedTensor};
+use tenferro_runtime::{Error as RuntimeError, ErrorPhase, GraphExecutor, Tensor, TracedTensor};
+use tenferro_tensor::{DType, TensorBackend, TypedTensor, ValidationError};
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 // ----------------------------------------------------------------------
@@ -420,10 +420,11 @@ impl ExtensionOp for TestSwap {
         let lhs_dtype = ctx.input_dtype(0)?;
         let rhs_dtype = ctx.input_dtype(1)?;
         if lhs_dtype != rhs_dtype {
-            return Err(tenferro_tensor::Error::InvalidConfig {
-                op: self.family_id(),
-                message: "TestSwap expects matching dtypes".into(),
-            });
+            return Err(tenferro_tensor::Error::invalid_argument(
+                self.family_id(),
+                "dtype",
+                "TestSwap expects matching dtypes",
+            ));
         }
         Ok(vec![
             (rhs_dtype, ctx.input_shape(1)?.to_vec()),

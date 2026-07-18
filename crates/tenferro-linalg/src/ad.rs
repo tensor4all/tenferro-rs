@@ -48,6 +48,12 @@ pub mod support;
 /// assert!(rules.is_linearize_registered(tenferro_linalg::LINALG_EXTENSION_FAMILY_ID));
 /// assert!(rules.is_linear_transpose_registered(tenferro_linalg::LINALG_EXTENSION_FAMILY_ID));
 /// ```
+///
+/// # Errors
+///
+/// Returns `ExtensionRegistryError::MalformedFamilyId` if the linalg family
+/// identifier is invalid, or `ExtensionRegistryError::DuplicateRule` if the
+/// rule set already contains a rule for this family and transform.
 pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
     ExtensionRuleSet::new()
         .with_linearize(Arc::new(LinalgAdRule))?

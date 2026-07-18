@@ -3,7 +3,9 @@
 //! `tenferro-tensor` owns storage and backend traits. This runtime crate
 //! provides backend-parametric operation methods through [`TensorOpsExt`].
 
-use tenferro_ops::broadcast::{broadcast_input_plan, broadcast_shape, broadcast_shapes};
+use tenferro_ops::broadcast::{
+    broadcast_error_to_validation, broadcast_input_plan, broadcast_shape, broadcast_shapes,
+};
 use tenferro_tensor::validate::matmul_config_for_shapes;
 use tenferro_tensor::{CompareDir, DType, Error, Result, TensorBackend};
 
@@ -497,6 +499,6 @@ fn broadcast_to(
     backend.with_backend_session(|exec| exec.broadcast_in_dim(&source, target_shape, &plan.dims))
 }
 
-fn broadcast_error(err: impl std::fmt::Display) -> Error {
-    Error::backend_failure("broadcast", err.to_string())
+fn broadcast_error(err: tenferro_ops::broadcast::BroadcastError) -> Error {
+    Error::validation("broadcast", broadcast_error_to_validation(err))
 }

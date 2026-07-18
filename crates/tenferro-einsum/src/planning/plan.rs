@@ -370,7 +370,7 @@ fn product_or_one_for_empty(sizes: &[usize], label: &'static str) -> EinsumResul
 fn checked_product(sizes: &[usize], label: &'static str) -> EinsumResult<usize> {
     sizes.iter().try_fold(1usize, |acc, &size| {
         acc.checked_mul(size).ok_or_else(|| {
-            crate::Error::InvalidArgument(format!(
+            crate::Error::planning(format!(
                 "dimension product overflow while fusing {label} dimensions {sizes:?}"
             ))
         })

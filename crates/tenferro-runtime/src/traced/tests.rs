@@ -1,7 +1,14 @@
 use num_complex::Complex64;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
-use crate::{DType, DotGeneralConfig, Error, TracedTensor};
+use crate::{
+    DType, DotGeneralConfig, Error, ErrorPhase, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
+};
+use tenferro_cpu::CpuBackend;
+use tenferro_tensor::{
+    Error as TensorError, ErrorKind, ShapeMismatch, ValidationError, ValidationKind,
+};
 
 #[test]
 fn traced_binary_reuses_input_map_when_rhs_is_already_present() {
@@ -61,11 +68,14 @@ fn dot_general_returns_error_for_invalid_config() {
         panic!("invalid dim config should be a typed runtime error");
     };
 
-    let message = err.to_string();
-    assert!(
-        message.contains("lhs_contracting_dim 2 out of bounds"),
-        "{message}"
-    );
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -156,13 +166,22 @@ fn broadcast_in_dim_sym_rejects_missing_shape_reference() {
         .broadcast_in_dim_sym(&target_shape, &[0], &[])
         .unwrap_err();
 
-    let message = err.to_string();
     assert!(
-        message.contains("broadcast_in_dim_sym")
-            && message.contains("unresolved symbolic dimension")
-            && message.contains("shape_refs"),
-        "{message}"
+        matches!(
+            &err,
+            Error::SymbolicShapeConversion {
+                op: "broadcast_in_dim_sym",
+                phase: ErrorPhase::GraphBuild,
+                source: tenferro_ops::SymDimConversionError { .. },
+            }
+        ),
+        "{err}"
     );
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
+    );
+    assert_eq!(err.phase(), Some(ErrorPhase::GraphBuild));
 }
 
 #[test]
@@ -170,30 +189,107 @@ fn broadcast_in_dim_rejects_invalid_dimension_mappings() {
     let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
 
     let rank_mismatch = x.broadcast_in_dim(&[2, 3, 4], &[0]).unwrap_err();
-    assert!(
-        rank_mismatch
-            .to_string()
-            .contains("dims length 1 must match input rank 2"),
-        "{rank_mismatch}"
-    );
+    assert!(matches!(
+        &rank_mismatch,
+        Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::RankMismatch {
+                expected: 2,
+                actual: 1,
+            },
+            ..
+        }
+    ));
 
     let out_of_bounds = x.broadcast_in_dim(&[2, 3, 4], &[0, 3]).unwrap_err();
-    assert!(
-        out_of_bounds
-            .to_string()
-            .contains("broadcast dim 3 out of bounds for output rank 3"),
-        "{out_of_bounds}"
-    );
+    assert!(matches!(
+        &out_of_bounds,
+        Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::AxisOutOfBounds { axis: 3, rank: 3 },
+            ..
+        }
+    ));
 
     let duplicate = x.broadcast_in_dim(&[2, 3, 4], &[1, 1]).unwrap_err();
-    assert!(
-        duplicate.to_string().contains("duplicate broadcast dim 1"),
-        "{duplicate}"
-    );
+    assert!(matches!(
+        &duplicate,
+        Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::DuplicateAxis {
+                axis: 1,
+                role: "broadcast",
+            },
+            ..
+        }
+    ));
 
     let valid = x.broadcast_in_dim(&[2, 3, 4], &[0, 1]).unwrap();
     assert_eq!(valid.rank, 3);
     assert_eq!(valid.try_concrete_shape().unwrap(), &[2, 3, 4]);
+}
+
+#[test]
+fn broadcast_in_dim_rejects_known_incompatible_extent_at_graph_build() {
+    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
+
+    let err = x.broadcast_in_dim(&[3], &[0]).unwrap_err();
+
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            op: "TracedTensor::broadcast_in_dim",
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::ShapeMismatch(source),
+        } if matches!(
+            source.as_ref(),
+            ShapeMismatch::ExpectedActual { expected, actual }
+                if expected.as_slice() == [3] && actual.as_slice() == [2]
+        )
+    ));
+}
+
+#[test]
+fn broadcast_in_dim_sym_defers_cross_tensor_symbolic_extent_validation() {
+    let input = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let shape_ref = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let target_shape = [shape_ref.axis_sym_dim(0).unwrap()];
+
+    let output = input
+        .broadcast_in_dim_sym(&target_shape, &[0], &[&shape_ref])
+        .expect("a symbolic extent from another tensor must remain deferred");
+    assert_eq!(output.try_concrete_shape(), None);
+
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&output, &[(&shape_ref, DType::F64, &[2])])
+        .unwrap();
+    let matching_shape_ref = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let result = executor
+        .run_with_inputs(&program, &[(&shape_ref, &matching_shape_ref)])
+        .unwrap();
+    assert_eq!(result.shape(), &[2]);
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
+
+    let mismatch_program = compiler
+        .compile_with_input_specs(&output, &[(&shape_ref, DType::F64, &[3])])
+        .unwrap();
+    let mismatched_shape_ref = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
+    let err = executor
+        .run_with_inputs(&mismatch_program, &[(&shape_ref, &mismatched_shape_ref)])
+        .unwrap_err();
+    assert!(matches!(
+        &err,
+        Error::TensorRuntime(TensorError::Validation {
+            source: ValidationError::ShapeMismatch(source),
+            ..
+        }) if matches!(
+            source.as_ref(),
+            ShapeMismatch::IncompatibleShapes { lhs, rhs }
+                if lhs.as_slice() == [2] && rhs.as_slice() == [3]
+        )
+    ));
 }
 
 #[test]
@@ -203,11 +299,16 @@ fn reshape_rejects_concrete_element_count_mismatch_at_graph_build() {
     let err = x.reshape(&[3]).unwrap_err();
 
     assert!(matches!(
-        err,
-        Error::InvalidGraphBuild {
+        &err,
+        Error::Validation {
             op: "TracedTensor::reshape",
-            ..
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::ShapeMismatch(source),
         }
+        if matches!(
+            source.as_ref(),
+            ShapeMismatch::ReshapeElementCount { from: 4, to: 3 }
+        )
     ));
     assert!(err.to_string().contains("element-count mismatch"), "{err}");
 }
@@ -229,6 +330,30 @@ fn ordered_binary_ops_reject_complex_dtype_without_panicking() {
 
     let err = lhs.maximum(&rhs).unwrap_err();
 
+    assert!(
+        err.to_string()
+            .contains("complex numbers have no total order"),
+        "{err}"
+    );
+}
+
+#[test]
+fn remainder_rejects_complex_dtype_at_graph_build_without_panicking() {
+    let lhs = TracedTensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]).unwrap();
+    let rhs = TracedTensor::from_vec_col_major(vec![1], vec![Complex64::new(3.0, 4.0)]).unwrap();
+
+    let result = catch_unwind(AssertUnwindSafe(|| lhs.rem(&rhs)));
+    let result = result.expect("complex remainder validation must not panic");
+    let err = result.expect_err("complex remainder must return a typed error");
+
+    assert!(matches!(
+        &err,
+        Error::Unsupported {
+            op: "Rem",
+            phase: ErrorPhase::GraphBuild,
+            ..
+        }
+    ));
     assert!(
         err.to_string()
             .contains("complex numbers have no total order"),

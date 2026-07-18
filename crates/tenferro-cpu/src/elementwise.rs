@@ -28,16 +28,32 @@ macro_rules! dispatch_ternary_result_with_pool {
         match ($a, $b, $c) {
             (Tensor::F32($x), Tensor::F32($y), Tensor::F32($z)) => Ok(Tensor::F32($body?)),
             (Tensor::F64($x), Tensor::F64($y), Tensor::F64($z)) => Ok(Tensor::F64($body?)),
-            _ => Err(crate::Error::backend_failure($op, "dtype mismatch")),
+            _ => Err(ternary_dtype_error(
+                $op,
+                [$a.dtype(), $b.dtype(), $c.dtype()],
+            )),
         }
     };
 }
 
+fn ternary_dtype_error(op: &'static str, dtypes: [DType; 3]) -> crate::Error {
+    if dtypes[0] != dtypes[1] {
+        dtype_pair_error(op, dtypes[0], dtypes[1])
+    } else if dtypes[0] != dtypes[2] {
+        dtype_pair_error(op, dtypes[0], dtypes[2])
+    } else {
+        crate::Error::unsupported(
+            op,
+            format!("unsupported dtype {:?} for all three inputs", dtypes[0]),
+        )
+    }
+}
+
 fn dtype_pair_error(op: &'static str, lhs: DType, rhs: DType) -> crate::Error {
     if lhs == rhs {
-        crate::Error::backend_failure(op, format!("unsupported dtype {lhs:?}"))
+        crate::Error::unsupported(op, format!("unsupported dtype {lhs:?}"))
     } else {
-        crate::Error::DTypeMismatch { op, lhs, rhs }
+        crate::Error::dtype_mismatch(op, lhs, rhs)
     }
 }
 
@@ -54,10 +70,10 @@ fn is_complex_dtype(dtype: DType) -> bool {
 }
 
 fn ordered_complex_error(op: &'static str) -> crate::Error {
-    crate::Error::InvalidConfig {
+    crate::Error::unsupported(
         op,
-        message: "complex tensors do not have a total order; compute abs/norm explicitly before ordered operations".into(),
-    }
+        "complex tensors do not have a total order; compute abs/norm explicitly before ordered operations",
+    )
 }
 
 fn reject_complex_ordered_dtypes(op: &'static str, dtypes: &[DType]) -> crate::Result<()> {
@@ -75,8 +91,9 @@ fn validate_elementwise_fusion_inputs(
     plan: &ElementwiseFusionPlan,
 ) -> crate::Result<bool> {
     if inputs.len() != plan.input_count() {
-        return Err(crate::Error::backend_failure(
+        return Err(crate::Error::invalid_argument(
             ELEMENTWISE_FUSION_OP,
+            "inputs",
             format!(
                 "plan expects {} inputs but backend received {}",
                 plan.input_count(),
@@ -85,8 +102,9 @@ fn validate_elementwise_fusion_inputs(
         ));
     }
     if plan.input_views().len() != plan.input_count() {
-        return Err(crate::Error::backend_failure(
+        return Err(crate::Error::invalid_argument(
             ELEMENTWISE_FUSION_OP,
+            "input_views",
             format!(
                 "plan has {} input views for {} inputs",
                 plan.input_views().len(),
@@ -99,11 +117,11 @@ fn validate_elementwise_fusion_inputs(
     }
     for input in inputs {
         if input.dtype() != plan.dtype() {
-            return Err(crate::Error::DTypeMismatch {
-                op: ELEMENTWISE_FUSION_OP,
-                lhs: input.dtype(),
-                rhs: plan.dtype(),
-            });
+            return Err(crate::Error::dtype_mismatch(
+                ELEMENTWISE_FUSION_OP,
+                input.dtype(),
+                plan.dtype(),
+            ));
         }
     }
     Ok(true)
@@ -366,7 +384,7 @@ where
     T: Copy + Send + Sync,
 {
     reduce(view, pred, |lhs, rhs| lhs || rhs, false)
-        .map_err(|err| crate::Error::backend_failure(op, err))
+        .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 fn ensure_no_zero_divisor<T>(op: &'static str, rhs: &StridedView<'_, T>) -> crate::Result<()>
@@ -374,7 +392,7 @@ where
     T: WrappingIntegerElem,
 {
     if strided_view_contains(op, rhs, |value| value == T::zero())? {
-        return Err(crate::Error::division_by_zero(op, T::dtype()));
+        return Err(crate::cpu_division_by_zero(op, T::dtype()));
     }
     Ok(())
 }
@@ -1000,11 +1018,11 @@ pub(crate) fn elementwise_fusion_with_pool(
                 .iter()
                 .map(|input| match input {
                     Tensor::F32(tensor) => Ok(tensor),
-                    _ => Err(crate::Error::DTypeMismatch {
-                        op: ELEMENTWISE_FUSION_OP,
-                        lhs: input.dtype(),
-                        rhs: plan.dtype(),
-                    }),
+                    _ => Err(crate::Error::dtype_mismatch(
+                        ELEMENTWISE_FUSION_OP,
+                        input.dtype(),
+                        plan.dtype(),
+                    )),
                 })
                 .collect::<crate::Result<Vec<_>>>()?;
             typed_elementwise_fusion_with_pool(buffers, &typed_inputs, plan, Tensor::F32)
@@ -1014,11 +1032,11 @@ pub(crate) fn elementwise_fusion_with_pool(
                 .iter()
                 .map(|input| match input {
                     Tensor::F64(tensor) => Ok(tensor),
-                    _ => Err(crate::Error::DTypeMismatch {
-                        op: ELEMENTWISE_FUSION_OP,
-                        lhs: input.dtype(),
-                        rhs: plan.dtype(),
-                    }),
+                    _ => Err(crate::Error::dtype_mismatch(
+                        ELEMENTWISE_FUSION_OP,
+                        input.dtype(),
+                        plan.dtype(),
+                    )),
                 })
                 .collect::<crate::Result<Vec<_>>>()?;
             typed_elementwise_fusion_with_pool(buffers, &typed_inputs, plan, Tensor::F64)
@@ -1031,11 +1049,11 @@ pub(crate) fn elementwise_fusion_with_pool(
                 .iter()
                 .map(|input| match input {
                     Tensor::C32(tensor) => Ok(tensor),
-                    _ => Err(crate::Error::DTypeMismatch {
-                        op: ELEMENTWISE_FUSION_OP,
-                        lhs: input.dtype(),
-                        rhs: plan.dtype(),
-                    }),
+                    _ => Err(crate::Error::dtype_mismatch(
+                        ELEMENTWISE_FUSION_OP,
+                        input.dtype(),
+                        plan.dtype(),
+                    )),
                 })
                 .collect::<crate::Result<Vec<_>>>()?;
             typed_elementwise_fusion_with_pool(buffers, &typed_inputs, plan, Tensor::C32)
@@ -1048,11 +1066,11 @@ pub(crate) fn elementwise_fusion_with_pool(
                 .iter()
                 .map(|input| match input {
                     Tensor::C64(tensor) => Ok(tensor),
-                    _ => Err(crate::Error::DTypeMismatch {
-                        op: ELEMENTWISE_FUSION_OP,
-                        lhs: input.dtype(),
-                        rhs: plan.dtype(),
-                    }),
+                    _ => Err(crate::Error::dtype_mismatch(
+                        ELEMENTWISE_FUSION_OP,
+                        input.dtype(),
+                        plan.dtype(),
+                    )),
                 })
                 .collect::<crate::Result<Vec<_>>>()?;
             typed_elementwise_fusion_with_pool(buffers, &typed_inputs, plan, Tensor::C64)
@@ -1154,7 +1172,7 @@ where
             .map(|output| output.view_mut())
             .collect::<Vec<_>>();
         fused_elementwise_into(&mut output_views, input_views, &fused_plan)
-            .map_err(|err| crate::Error::backend_failure(ELEMENTWISE_FUSION_OP, err))?;
+            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
     }
 
     Ok(Some(
@@ -1203,7 +1221,7 @@ where
         ),
         _ => return Ok(None),
     }
-    .map_err(|err| crate::Error::backend_failure(ELEMENTWISE_FUSION_OP, err))?;
+    .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
 
     Ok(Some(vec![wrap(tensor_from_array(out))]))
 }
@@ -1220,14 +1238,15 @@ where
         return Ok(base);
     };
     if dims.len() != input.shape().len() {
-        return Err(crate::Error::InvalidConfig {
-            op: ELEMENTWISE_FUSION_OP,
-            message: format!(
+        return Err(crate::Error::invalid_argument(
+            ELEMENTWISE_FUSION_OP,
+            "configuration",
+            format!(
                 "broadcast dims length {} does not match input rank {}",
                 dims.len(),
                 input.shape().len()
             ),
-        });
+        ));
     }
 
     let mut strides = vec![0; shape.len()];
@@ -1235,28 +1254,28 @@ where
     seen.resize(shape.len(), false);
     for (source_axis, &target_axis) in dims.iter().enumerate() {
         if target_axis >= shape.len() {
-            return Err(crate::Error::AxisOutOfBounds {
-                op: ELEMENTWISE_FUSION_OP,
-                axis: target_axis,
-                rank: shape.len(),
-            });
+            return Err(crate::Error::axis_out_of_bounds(
+                ELEMENTWISE_FUSION_OP,
+                target_axis,
+                shape.len(),
+            ));
         }
         if seen[target_axis] {
-            return Err(crate::Error::DuplicateAxis {
-                op: ELEMENTWISE_FUSION_OP,
-                axis: target_axis,
-                role: "broadcast dims",
-            });
+            return Err(crate::Error::duplicate_axis(
+                ELEMENTWISE_FUSION_OP,
+                target_axis,
+                "broadcast dims",
+            ));
         }
         seen[target_axis] = true;
         let source_dim = input.shape()[source_axis];
         let target_dim = shape[target_axis];
         if source_dim != target_dim && source_dim != 1 {
-            return Err(crate::Error::ShapeMismatch {
-                op: ELEMENTWISE_FUSION_OP,
-                lhs: shape.to_vec(),
-                rhs: input.shape().to_vec(),
-            });
+            return Err(crate::Error::shape_mismatch(
+                ELEMENTWISE_FUSION_OP,
+                shape.to_vec(),
+                input.shape().to_vec(),
+            ));
         }
         if source_dim == target_dim {
             strides[target_axis] = base.strides()[source_axis];
@@ -1264,7 +1283,7 @@ where
     }
 
     StridedView::new(base.data(), shape, &strides, base.offset())
-        .map_err(|err| crate::Error::backend_failure(ELEMENTWISE_FUSION_OP, err))
+        .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))
 }
 
 fn typed_binary_view_with_pool<T, L, R>(
@@ -1288,7 +1307,7 @@ where
             &typed_view_from_view(op, rhs)?,
             f,
         )
-        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, lhs)?.get(&[]);
@@ -1297,7 +1316,7 @@ where
         map_into(&mut out.view_mut(), &typed_view_from_view(op, rhs)?, |x| {
             f(scalar, x)
         })
-        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view(op, rhs)?.get(&[]);
@@ -1306,14 +1325,14 @@ where
         map_into(&mut out.view_mut(), &typed_view_from_view(op, lhs)?, |x| {
             f(x, scalar)
         })
-        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
         Ok(tensor_from_array(out))
     } else {
-        Err(crate::Error::ShapeMismatch {
+        Err(crate::Error::shape_mismatch(
             op,
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        })
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ))
     }
 }
 
@@ -1330,7 +1349,7 @@ where
     // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view_from_view(op, input)?, f)
-        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -1348,11 +1367,11 @@ where
     R: TensorRank,
 {
     if lhs.shape() != rhs.shape() {
-        return Err(crate::Error::ShapeMismatch {
+        return Err(crate::Error::shape_mismatch(
             op,
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        });
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ));
     }
     // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
@@ -1362,7 +1381,7 @@ where
         &typed_view_from_view(op, rhs)?,
         f,
     )
-    .map_err(|err| crate::Error::backend_failure(op, err))?;
+    .map_err(|err| crate::Error::backend_source(op, err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -1379,18 +1398,18 @@ where
     B: TensorRank,
 {
     if pred.shape() != on_true.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op: "select",
-            lhs: pred.shape().to_vec(),
-            rhs: on_true.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "select",
+            pred.shape().to_vec(),
+            on_true.shape().to_vec(),
+        ));
     }
     if pred.shape() != on_false.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op: "select",
-            lhs: pred.shape().to_vec(),
-            rhs: on_false.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "select",
+            pred.shape().to_vec(),
+            on_false.shape().to_vec(),
+        ));
     }
     // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, pred.shape()) }?;
@@ -1401,7 +1420,7 @@ where
         &typed_view_from_view("select", on_false)?,
         |p, t, f| if p { t } else { f },
     )
-    .map_err(|err| crate::Error::backend_failure("select", err))?;
+    .map_err(|err| crate::Error::backend_source("select", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -1418,18 +1437,18 @@ where
     U: TensorRank,
 {
     if input.shape() != lower.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op: "clamp",
-            lhs: input.shape().to_vec(),
-            rhs: lower.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "clamp",
+            input.shape().to_vec(),
+            lower.shape().to_vec(),
+        ));
     }
     if input.shape() != upper.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op: "clamp",
-            lhs: input.shape().to_vec(),
-            rhs: upper.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "clamp",
+            input.shape().to_vec(),
+            upper.shape().to_vec(),
+        ));
     }
     // SAFETY: the following kernel overwrites every output element before any read.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
@@ -1440,7 +1459,7 @@ where
         &typed_view_from_view("clamp", upper)?,
         |x, lo, hi| hi.min_elem(lo.max_elem(x)),
     )
-    .map_err(|err| crate::Error::backend_failure("clamp", err))?;
+    .map_err(|err| crate::Error::backend_source("clamp", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -1502,8 +1521,9 @@ where
     T: 'static,
 {
     axes.iter().try_fold(1usize, |acc, &axis| {
-        acc.checked_mul(view.shape()[axis])
-            .ok_or_else(|| crate::Error::backend_failure(op, "shape size overflows usize"))
+        acc.checked_mul(view.shape()[axis]).ok_or_else(|| {
+            crate::Error::invalid_argument(op, "shape", "shape size overflows usize")
+        })
     })
 }
 
@@ -1681,10 +1701,10 @@ where
                 .collect();
             let lhs_outer = lhs_view
                 .permute(&lhs_perm)
-                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+                .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
             let rhs_outer = rhs_view
                 .permute(&rhs_perm)
-                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+                .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
             batched_outer_product_into(
                 &mut out.view_mut(),
                 &lhs_outer,
@@ -1692,7 +1712,7 @@ where
                 plan.lhs_free_axes.len(),
                 plan.rhs_free_axes.len(),
             )
-            .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
         }
         SplitOuterProductLayout::RhsPrefix => {
             let lhs_perm: Vec<_> = plan
@@ -1709,10 +1729,10 @@ where
                 .collect();
             let lhs_outer = lhs_view
                 .permute(&lhs_perm)
-                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+                .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
             let rhs_outer = rhs_view
                 .permute(&rhs_perm)
-                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+                .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
             batched_outer_product_into(
                 &mut out.view_mut(),
                 &rhs_outer,
@@ -1720,7 +1740,7 @@ where
                 plan.rhs_free_axes.len(),
                 plan.lhs_free_axes.len(),
             )
-            .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
         }
     }
     Ok(Some(tensor_from_array(out)))
@@ -1760,17 +1780,17 @@ fn set_lazy_stride(
     let rank = logical_strides.len();
     let slot = logical_strides
         .get_mut(output_axis)
-        .ok_or(crate::Error::AxisOutOfBounds {
-            op: "broadcast_multiply",
-            axis: output_axis,
+        .ok_or(crate::Error::axis_out_of_bounds(
+            "broadcast_multiply",
+            output_axis,
             rank,
-        })?;
+        ))?;
     if slot.replace(stride).is_some() {
-        return Err(crate::Error::DuplicateAxis {
-            op: "broadcast_multiply",
-            axis: output_axis,
-            role: "lazy output layout",
-        });
+        return Err(crate::Error::duplicate_axis(
+            "broadcast_multiply",
+            output_axis,
+            "lazy output layout",
+        ));
     }
     Ok(())
 }
@@ -1812,8 +1832,9 @@ fn lazy_outer_product_strides(spec: LazyOuterProductStrideSpec<'_>) -> crate::Re
     for (&lhs_axis, &rhs_axis) in spec.lhs_batch_axes.iter().zip(spec.rhs_batch_axes.iter()) {
         let output_axis = spec.lhs_dims[lhs_axis];
         if spec.rhs_dims[rhs_axis] != output_axis {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::invalid_argument(
                 "broadcast_multiply",
+                "dimensions",
                 "batch axes disagree while building lazy outer-product layout",
             ));
         }
@@ -1825,8 +1846,9 @@ fn lazy_outer_product_strides(spec: LazyOuterProductStrideSpec<'_>) -> crate::Re
         .into_iter()
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::invalid_argument(
                 "broadcast_multiply",
+                "dimensions",
                 "lazy outer-product layout did not cover every output axis",
             )
         })
@@ -1885,10 +1907,10 @@ where
                 .collect();
             let lhs_outer = lhs_view
                 .permute(&lhs_perm)
-                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+                .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
             let rhs_outer = rhs_view
                 .permute(&rhs_perm)
-                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+                .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
 
             let mut base_shape = Vec::with_capacity(lhs_shape.len());
             append_axis_shapes(&mut base_shape, lhs, &lhs_free_axes);
@@ -1916,7 +1938,7 @@ where
                 lhs_free_axes.len(),
                 rhs_free_axes.len(),
             )
-            .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
             Ok(Some(LazyOuterProduct {
                 base: tensor_from_array(base),
                 shape: lhs_shape.to_vec(),
@@ -1936,10 +1958,10 @@ where
                 .collect();
             let lhs_outer = lhs_view
                 .permute(&lhs_perm)
-                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+                .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
             let rhs_outer = rhs_view
                 .permute(&rhs_perm)
-                .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+                .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
 
             let mut base_shape = Vec::with_capacity(lhs_shape.len());
             append_axis_shapes(&mut base_shape, rhs, &rhs_free_axes);
@@ -1967,7 +1989,7 @@ where
                 rhs_free_axes.len(),
                 lhs_free_axes.len(),
             )
-            .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+            .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
             Ok(Some(LazyOuterProduct {
                 base: tensor_from_array(base),
                 shape: lhs_shape.to_vec(),
@@ -1993,11 +2015,11 @@ where
     R: TensorRank,
 {
     if lhs_shape != rhs_shape {
-        return Err(crate::Error::ShapeMismatch {
-            op: "broadcast_multiply",
-            lhs: lhs_shape.to_vec(),
-            rhs: rhs_shape.to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "broadcast_multiply",
+            lhs_shape.to_vec(),
+            rhs_shape.to_vec(),
+        ));
     }
     let output_rank = lhs_shape.len();
     let lhs_is_scalar = lhs.shape().is_empty() && lhs_dims.is_empty();
@@ -2020,7 +2042,7 @@ where
             &typed_view_from_view("broadcast_multiply", rhs)?,
             |x| scalar * x,
         )
-        .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+        .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
         return Ok(tensor_from_array(out));
     }
     if rhs_is_scalar && lhs_is_full_output {
@@ -2032,7 +2054,7 @@ where
             &typed_view_from_view("broadcast_multiply", lhs)?,
             |x| x * scalar,
         )
-        .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+        .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
         return Ok(tensor_from_array(out));
     }
 
@@ -2047,7 +2069,7 @@ where
         &rhs_view,
         rhs_dims,
     )
-    .map_err(|err| crate::Error::backend_failure("broadcast_multiply", err))?;
+    .map_err(|err| crate::Error::backend_source("broadcast_multiply", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -2061,7 +2083,11 @@ where
 {
     let len = shape.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim).ok_or_else(|| {
-            crate::Error::backend_failure("broadcast_multiply", "output shape size overflows usize")
+            crate::Error::invalid_argument(
+                "broadcast_multiply",
+                "shape",
+                "output shape size overflows usize",
+            )
         })
     })?;
     // SAFETY: every pooled element is initialized with `fill` before tensor construction.
@@ -2211,11 +2237,11 @@ pub(crate) fn div_with_pool(
             let scalar = complex_scalar_tensor(typed_host_data("div", b)?[0])?;
             Ok(Tensor::C64(typed_div_with_pool(buffers, a, &scalar)?))
         }
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "div",
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        }),
+        _ => Err(crate::Error::dtype_mismatch(
+            "div",
+            lhs.dtype(),
+            rhs.dtype(),
+        )),
     }
 }
 
@@ -2305,11 +2331,7 @@ pub(crate) fn div_read_with_pool(
                 |x, y| x / y,
             )?))
         }
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "div",
-            lhs: lhs_dtype,
-            rhs: rhs_dtype,
-        }),
+        _ => Err(crate::Error::dtype_mismatch("div", lhs_dtype, rhs_dtype)),
     }
 }
 
@@ -2409,7 +2431,7 @@ pub(crate) fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
         Tensor::F64(t) => Ok(Tensor::F64(typed_neg_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_neg_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_neg_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::Bool(_) => Err(crate::Error::unsupported(
             "neg",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2460,7 +2482,7 @@ pub(crate) fn neg_read_with_pool(
             &t,
             |x| -x,
         )?)),
-        _ => Err(crate::Error::backend_failure(
+        _ => Err(crate::Error::unsupported(
             "neg",
             format!("unsupported dtype {dtype:?}"),
         )),
@@ -2490,7 +2512,7 @@ pub(crate) fn conj_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate:
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_conj_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_conj_with_pool(buffers, t)?)),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(crate::Error::unsupported(
             "conj",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2529,7 +2551,7 @@ pub(crate) fn conj_read_with_pool(
             &t,
             |x| x.conj_elem(),
         )?)),
-        _ => Err(crate::Error::backend_failure(
+        _ => Err(crate::Error::unsupported(
             "conj",
             format!("unsupported dtype {dtype:?}"),
         )),
@@ -2562,7 +2584,7 @@ pub(crate) fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
         Tensor::F64(t) => Ok(Tensor::F64(typed_abs_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_wrapping_abs_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_wrapping_abs_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::Bool(_) => Err(crate::Error::unsupported(
             "abs",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2603,7 +2625,7 @@ pub(crate) fn abs_read_with_pool(
         )?)),
         CpuReadView::C32(t) => Ok(Tensor::F32(typed_complex_abs_view_with_pool(buffers, &t)?)),
         CpuReadView::C64(t) => Ok(Tensor::F64(typed_complex_abs_view_with_pool(buffers, &t)?)),
-        _ => Err(crate::Error::backend_failure(
+        _ => Err(crate::Error::unsupported(
             "abs",
             format!("unsupported dtype {dtype:?}"),
         )),
@@ -2634,7 +2656,7 @@ pub(crate) fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate:
         Tensor::F64(t) => Ok(Tensor::F64(typed_sign_with_pool(buffers, t)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_integer_sign_with_pool(buffers, t)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_integer_sign_with_pool(buffers, t)?)),
-        Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::Bool(_) => Err(crate::Error::unsupported(
             "sign",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -2685,7 +2707,7 @@ pub(crate) fn sign_read_with_pool(
             &t,
             |x| x.sign_elem(),
         )?)),
-        _ => Err(crate::Error::backend_failure(
+        _ => Err(crate::Error::unsupported(
             "sign",
             format!("unsupported dtype {dtype:?}"),
         )),
@@ -2889,11 +2911,11 @@ pub(crate) fn compare_with_pool(
         (Tensor::Bool(a), Tensor::Bool(b)) => {
             Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
         }
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "compare",
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        }),
+        _ => Err(crate::Error::dtype_mismatch(
+            "compare",
+            lhs.dtype(),
+            rhs.dtype(),
+        )),
     }
 }
 
@@ -2933,11 +2955,9 @@ pub(crate) fn compare_read_with_pool(
                 x.compare_elem(y, dir)
             })?,
         )),
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "compare",
-            lhs: lhs_dtype,
-            rhs: rhs_dtype,
-        }),
+        _ => Err(crate::Error::dtype_mismatch(
+            "compare", lhs_dtype, rhs_dtype,
+        )),
     }
 }
 
@@ -2989,16 +3009,16 @@ pub(crate) fn select_with_pool(
         (Tensor::Bool(p), Tensor::C64(t), Tensor::C64(f)) => {
             Ok(Tensor::C64(typed_select_with_pool(buffers, p, t, f)?))
         }
-        (Tensor::Bool(_), _, _) => Err(crate::Error::DTypeMismatch {
-            op: "select",
-            lhs: on_true.dtype(),
-            rhs: on_false.dtype(),
-        }),
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "select",
-            lhs: pred.dtype(),
-            rhs: crate::DType::Bool,
-        }),
+        (Tensor::Bool(_), _, _) => Err(crate::Error::dtype_mismatch(
+            "select",
+            on_true.dtype(),
+            on_false.dtype(),
+        )),
+        _ => Err(crate::Error::dtype_mismatch(
+            "select",
+            pred.dtype(),
+            crate::DType::Bool,
+        )),
     }
 }
 
@@ -3037,16 +3057,16 @@ pub(crate) fn select_read_with_pool(
         (CpuReadView::Bool(p), CpuReadView::C64(t), CpuReadView::C64(f)) => Ok(Tensor::C64(
             typed_select_view_with_pool(buffers, &p, &t, &f)?,
         )),
-        (CpuReadView::Bool(_), _, _) => Err(crate::Error::DTypeMismatch {
-            op: "select",
-            lhs: true_dtype,
-            rhs: false_dtype,
-        }),
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "select",
-            lhs: pred_dtype,
-            rhs: crate::DType::Bool,
-        }),
+        (CpuReadView::Bool(_), _, _) => Err(crate::Error::dtype_mismatch(
+            "select",
+            true_dtype,
+            false_dtype,
+        )),
+        _ => Err(crate::Error::dtype_mismatch(
+            "select",
+            pred_dtype,
+            crate::DType::Bool,
+        )),
     }
 }
 
@@ -3105,11 +3125,11 @@ pub(crate) fn clamp_read_with_pool(
         (CpuReadView::F64(input), CpuReadView::F64(lower), CpuReadView::F64(upper)) => Ok(
             Tensor::F64(typed_clamp_view_with_pool(buffers, &input, &lower, &upper)?),
         ),
-        _ => Err(crate::Error::DTypeMismatch {
-            op: "clamp",
-            lhs: input_dtype,
-            rhs: lower_dtype,
-        }),
+        _ => Err(crate::Error::dtype_mismatch(
+            "clamp",
+            input_dtype,
+            lower_dtype,
+        )),
     }
 }
 
@@ -3130,7 +3150,7 @@ where
             &typed_view("add", rhs)?,
             |x, y| x + y,
         )
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data("add", lhs)?[0];
@@ -3139,7 +3159,7 @@ where
         map_into(&mut out.view_mut(), &typed_view("add", rhs)?, |x| {
             scalar + x
         })
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data("add", rhs)?[0];
@@ -3148,14 +3168,14 @@ where
         map_into(&mut out.view_mut(), &typed_view("add", lhs)?, |x| {
             x + scalar
         })
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else {
-        Err(crate::Error::ShapeMismatch {
-            op: "add",
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        })
+        Err(crate::Error::shape_mismatch(
+            "add",
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ))
     }
 }
 
@@ -3178,28 +3198,28 @@ where
             &typed_view(op, rhs)?,
             f,
         )
-        .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data(op, lhs)?[0];
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view(op, rhs)?, |x| f(scalar, x))
-            .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
+            .map_err(|err| crate::Error::backend_source(op, err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data(op, rhs)?[0];
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view(op, lhs)?, |x| f(x, scalar))
-            .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
+            .map_err(|err| crate::Error::backend_source(op, err))?;
         Ok(tensor_from_array(out))
     } else {
-        Err(crate::Error::ShapeMismatch {
+        Err(crate::Error::shape_mismatch(
             op,
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        })
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ))
     }
 }
 
@@ -3246,7 +3266,7 @@ where
             &typed_view_from_view("add", rhs)?,
             |x, y| x + y,
         )
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view("add", lhs)?.get(&[]);
@@ -3257,7 +3277,7 @@ where
             &typed_view_from_view("add", rhs)?,
             |x| scalar + x,
         )
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view("add", rhs)?.get(&[]);
@@ -3268,14 +3288,14 @@ where
             &typed_view_from_view("add", lhs)?,
             |x| x + scalar,
         )
-        .map_err(|err| crate::Error::backend_failure("add", err.to_string()))?;
+        .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
     } else {
-        Err(crate::Error::ShapeMismatch {
-            op: "add",
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        })
+        Err(crate::Error::shape_mismatch(
+            "add",
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ))
     }
 }
 
@@ -3343,7 +3363,7 @@ where
             &typed_view("mul", lhs)?,
             &typed_view("mul", rhs)?,
         )
-        .map_err(|err| crate::Error::backend_failure("mul", err))?;
+        .map_err(|err| crate::Error::backend_source("mul", err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data("mul", lhs)?[0];
@@ -3352,7 +3372,7 @@ where
         map_into(&mut out.view_mut(), &typed_view("mul", rhs)?, |x| {
             scalar * x
         })
-        .map_err(|err| crate::Error::backend_failure("mul", err))?;
+        .map_err(|err| crate::Error::backend_source("mul", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data("mul", rhs)?[0];
@@ -3361,14 +3381,14 @@ where
         map_into(&mut out.view_mut(), &typed_view("mul", lhs)?, |x| {
             x * scalar
         })
-        .map_err(|err| crate::Error::backend_failure("mul", err))?;
+        .map_err(|err| crate::Error::backend_source("mul", err))?;
         Ok(tensor_from_array(out))
     } else {
-        Err(crate::Error::ShapeMismatch {
-            op: "mul",
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        })
+        Err(crate::Error::shape_mismatch(
+            "mul",
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ))
     }
 }
 
@@ -3414,7 +3434,7 @@ where
             &typed_view_from_view("mul", lhs)?,
             &typed_view_from_view("mul", rhs)?,
         )
-        .map_err(|err| crate::Error::backend_failure("mul", err))?;
+        .map_err(|err| crate::Error::backend_source("mul", err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape().is_empty() {
         let scalar = typed_view_from_view("mul", lhs)?.get(&[]);
@@ -3425,7 +3445,7 @@ where
             &typed_view_from_view("mul", rhs)?,
             |x| scalar * x,
         )
-        .map_err(|err| crate::Error::backend_failure("mul", err))?;
+        .map_err(|err| crate::Error::backend_source("mul", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape().is_empty() {
         let scalar = typed_view_from_view("mul", rhs)?.get(&[]);
@@ -3436,14 +3456,14 @@ where
             &typed_view_from_view("mul", lhs)?,
             |x| x * scalar,
         )
-        .map_err(|err| crate::Error::backend_failure("mul", err))?;
+        .map_err(|err| crate::Error::backend_source("mul", err))?;
         Ok(tensor_from_array(out))
     } else {
-        Err(crate::Error::ShapeMismatch {
-            op: "mul",
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        })
+        Err(crate::Error::shape_mismatch(
+            "mul",
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ))
     }
 }
 
@@ -3464,7 +3484,7 @@ where
             &typed_view("div", rhs)?,
             |x, y| x / y,
         )
-        .map_err(|err| crate::Error::backend_failure("div", err))?;
+        .map_err(|err| crate::Error::backend_source("div", err))?;
         Ok(tensor_from_array(out))
     } else if lhs.shape().is_empty() {
         let scalar = typed_host_data("div", lhs)?[0];
@@ -3473,7 +3493,7 @@ where
         map_into(&mut out.view_mut(), &typed_view("div", rhs)?, |x| {
             scalar / x
         })
-        .map_err(|err| crate::Error::backend_failure("div", err))?;
+        .map_err(|err| crate::Error::backend_source("div", err))?;
         Ok(tensor_from_array(out))
     } else if rhs.shape().is_empty() {
         let scalar = typed_host_data("div", rhs)?[0];
@@ -3482,14 +3502,14 @@ where
         map_into(&mut out.view_mut(), &typed_view("div", lhs)?, |x| {
             x / scalar
         })
-        .map_err(|err| crate::Error::backend_failure("div", err))?;
+        .map_err(|err| crate::Error::backend_source("div", err))?;
         Ok(tensor_from_array(out))
     } else {
-        Err(crate::Error::ShapeMismatch {
-            op: "div",
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        })
+        Err(crate::Error::shape_mismatch(
+            "div",
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ))
     }
 }
 
@@ -3570,7 +3590,7 @@ where
     // SAFETY: map_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view("neg", input)?, |x| -x)
-        .map_err(|err| crate::Error::backend_failure("neg", err))?;
+        .map_err(|err| crate::Error::backend_source("neg", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3586,7 +3606,7 @@ where
     // SAFETY: map_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
     map_into(&mut out.view_mut(), &typed_view(op, input)?, f)
-        .map_err(|err| crate::Error::backend_failure(op, err))?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3622,7 +3642,7 @@ where
     map_into(&mut out.view_mut(), &typed_view("conj", input)?, |x| {
         x.conj_elem()
     })
-    .map_err(|err| crate::Error::backend_failure("conj", err))?;
+    .map_err(|err| crate::Error::backend_source("conj", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3638,7 +3658,7 @@ where
     map_into(&mut out.view_mut(), &typed_view("abs", input)?, |x| {
         x.abs_elem()
     })
-    .map_err(|err| crate::Error::backend_failure("abs", err))?;
+    .map_err(|err| crate::Error::backend_source("abs", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3654,7 +3674,7 @@ where
     map_into(&mut out.view_mut(), &typed_view("abs", input)?, |x| {
         x.norm()
     })
-    .map_err(|err| crate::Error::backend_failure("abs", err))?;
+    .map_err(|err| crate::Error::backend_source("abs", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3673,7 +3693,7 @@ where
         &typed_view_from_view("abs", input)?,
         |x| x.norm(),
     )
-    .map_err(|err| crate::Error::backend_failure("abs", err))?;
+    .map_err(|err| crate::Error::backend_source("abs", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3689,7 +3709,7 @@ where
     map_into(&mut out.view_mut(), &typed_view("sign", input)?, |x| {
         x.sign_elem()
     })
-    .map_err(|err| crate::Error::backend_failure("sign", err))?;
+    .map_err(|err| crate::Error::backend_source("sign", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3712,11 +3732,11 @@ where
     T: OrderedElem + PoolScalar,
 {
     if lhs.shape() != rhs.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op: "maximum",
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "maximum",
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ));
     }
     // SAFETY: zip_map2_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
@@ -3726,7 +3746,7 @@ where
         &typed_view("maximum", rhs)?,
         |x, y| x.max_elem(y),
     )
-    .map_err(|err| crate::Error::backend_failure("maximum", err))?;
+    .map_err(|err| crate::Error::backend_source("maximum", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3739,11 +3759,11 @@ where
     T: OrderedElem + PoolScalar,
 {
     if lhs.shape() != rhs.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op: "minimum",
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "minimum",
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ));
     }
     // SAFETY: zip_map2_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
@@ -3753,7 +3773,7 @@ where
         &typed_view("minimum", rhs)?,
         |x, y| x.min_elem(y),
     )
-    .map_err(|err| crate::Error::backend_failure("minimum", err))?;
+    .map_err(|err| crate::Error::backend_source("minimum", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3767,11 +3787,11 @@ where
     T: CompareElem,
 {
     if lhs.shape() != rhs.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op: "compare",
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "compare",
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ));
     }
     // SAFETY: zip_map2_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
@@ -3781,7 +3801,7 @@ where
         &typed_view("compare", rhs)?,
         |x, y| x.compare_elem(y, dir),
     )
-    .map_err(|err| crate::Error::backend_failure("compare", err))?;
+    .map_err(|err| crate::Error::backend_source("compare", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3795,18 +3815,18 @@ where
     T: Copy + PoolScalar,
 {
     if pred.shape() != on_true.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op: "select",
-            lhs: pred.shape().to_vec(),
-            rhs: on_true.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "select",
+            pred.shape().to_vec(),
+            on_true.shape().to_vec(),
+        ));
     }
     if pred.shape() != on_false.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op: "select",
-            lhs: pred.shape().to_vec(),
-            rhs: on_false.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "select",
+            pred.shape().to_vec(),
+            on_false.shape().to_vec(),
+        ));
     }
     // SAFETY: zip_map3_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, pred.shape()) }?;
@@ -3817,7 +3837,7 @@ where
         &typed_view("select", on_false)?,
         |p, t, f| if p { t } else { f },
     )
-    .map_err(|err| crate::Error::backend_failure("select", err))?;
+    .map_err(|err| crate::Error::backend_source("select", err))?;
     Ok(tensor_from_array(out))
 }
 
@@ -3831,18 +3851,18 @@ where
     T: OrderedElem + PoolScalar,
 {
     if input.shape() != lower.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op: "clamp",
-            lhs: input.shape().to_vec(),
-            rhs: lower.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "clamp",
+            input.shape().to_vec(),
+            lower.shape().to_vec(),
+        ));
     }
     if input.shape() != upper.shape() {
-        return Err(crate::Error::ShapeMismatch {
-            op: "clamp",
-            lhs: input.shape().to_vec(),
-            rhs: upper.shape().to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "clamp",
+            input.shape().to_vec(),
+            upper.shape().to_vec(),
+        ));
     }
     // SAFETY: zip_map3_into overwrites every output element.
     let mut out = unsafe { typed_array_uninit_from_pool(buffers, input.shape()) }?;
@@ -3853,7 +3873,7 @@ where
         &typed_view("clamp", upper)?,
         |x, lo, hi| hi.min_elem(lo.max_elem(x)),
     )
-    .map_err(|err| crate::Error::backend_failure("clamp", err))?;
+    .map_err(|err| crate::Error::backend_source("clamp", err))?;
     Ok(tensor_from_array(out))
 }
 

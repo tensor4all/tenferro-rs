@@ -71,6 +71,12 @@ pub const TENFERRO_PJRT_GPU_PLUGIN_ENV: &str = "TENFERRO_PJRT_GPU_PLUGIN";
 /// let module = lower_to_stablehlo(&program).unwrap();
 /// assert!(module.as_str().contains("stablehlo.negate"));
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::UnsupportedDType`, `Error::UnsupportedOp`, or
+/// `Error::NonStaticShape` for unsupported graph content, and
+/// `Error::InvalidProgram` for inconsistent graph metadata.
 pub fn lower_to_stablehlo(program: &tenferro_runtime::GraphProgram) -> Result<StableHloModule> {
     lowering::lower_to_stablehlo(program)
 }

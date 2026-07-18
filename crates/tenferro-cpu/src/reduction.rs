@@ -12,14 +12,10 @@ fn validate_axes(op: &'static str, axes: &[usize], rank: usize) -> crate::Result
     let mut seen = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
-            return Err(crate::Error::AxisOutOfBounds { op, axis, rank });
+            return Err(crate::Error::axis_out_of_bounds(op, axis, rank));
         }
         if seen[axis] {
-            return Err(crate::Error::DuplicateAxis {
-                op,
-                axis,
-                role: "axes",
-            });
+            return Err(crate::Error::duplicate_axis(op, axis, "axes"));
         }
         seen[axis] = true;
     }
@@ -53,10 +49,11 @@ fn validate_reduced_axes_nonempty(
     validate_axes(op, axes, shape.len())?;
     for &axis in axes {
         if shape[axis] == 0 {
-            return Err(crate::Error::InvalidConfig {
+            return Err(crate::Error::invalid_argument(
                 op,
-                message: format!("cannot reduce over zero-length axis {axis}"),
-            });
+                "configuration",
+                format!("cannot reduce over zero-length axis {axis}"),
+            ));
         }
     }
     Ok(())
@@ -145,6 +142,12 @@ macro_rules! impl_wrapping_reduction_elem {
 impl_wrapping_reduction_elem!(i32);
 impl_wrapping_reduction_elem!(i64);
 
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
+/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
+/// reductions, [`crate::Error::Unsupported`] for `Bool`, or a typed backend
+/// error when the input storage cannot be read.
 pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     if let Some(output) = reduction_empty_axes_noop("reduce_sum", input, axes)? {
         return Ok(output);
@@ -155,7 +158,7 @@ pub fn reduce_sum(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_sum(t, axes)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_sum_wrapping(t, axes)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_sum_wrapping(t, axes)?)),
-        Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::Bool(_) => Err(crate::Error::unsupported(
             "reduce_sum",
             "unsupported dtype Bool",
         )),
@@ -210,7 +213,7 @@ pub(crate) fn reduce_sum_read(
             i64::zero(),
             "reduce_sum",
         )?)),
-        TensorRead::View(TensorView::Bool(_)) => Err(crate::Error::backend_failure(
+        TensorRead::View(TensorView::Bool(_)) => Err(crate::Error::unsupported(
             "reduce_sum",
             "unsupported dtype Bool",
         )),
@@ -233,6 +236,12 @@ pub(crate) fn reduce_sum_read(
     }
 }
 
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
+/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
+/// reductions, [`crate::Error::Unsupported`] for `Bool`, or a typed backend
+/// error when the input storage cannot be read.
 pub fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     if let Some(output) = reduction_empty_axes_noop("reduce_prod", input, axes)? {
         return Ok(output);
@@ -243,7 +252,7 @@ pub fn reduce_prod(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         Tensor::F64(t) => Ok(Tensor::F64(typed_reduce_prod(t, axes)?)),
         Tensor::I32(t) => Ok(Tensor::I32(typed_reduce_prod_wrapping(t, axes)?)),
         Tensor::I64(t) => Ok(Tensor::I64(typed_reduce_prod_wrapping(t, axes)?)),
-        Tensor::Bool(_) => Err(crate::Error::backend_failure(
+        Tensor::Bool(_) => Err(crate::Error::unsupported(
             "reduce_prod",
             "unsupported dtype Bool",
         )),
@@ -298,7 +307,7 @@ pub(crate) fn reduce_prod_read(
             i64::one(),
             "reduce_prod",
         )?)),
-        TensorRead::View(TensorView::Bool(_)) => Err(crate::Error::backend_failure(
+        TensorRead::View(TensorView::Bool(_)) => Err(crate::Error::unsupported(
             "reduce_prod",
             "unsupported dtype Bool",
         )),
@@ -321,6 +330,12 @@ pub(crate) fn reduce_prod_read(
     }
 }
 
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
+/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
+/// reductions, [`crate::Error::Unsupported`] for `Bool` and complex dtypes, or
+/// a typed backend error when the input storage cannot be read.
 pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     if let Some(output) = reduction_empty_axes_noop("reduce_max", input, axes)? {
         return Ok(output);
@@ -331,7 +346,7 @@ pub fn reduce_max(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         Tensor::F64(tensor) => Ok(Tensor::F64(typed_reduce_max(tensor, axes)?)),
         Tensor::I32(tensor) => Ok(Tensor::I32(typed_reduce_max_integer(tensor, axes)?)),
         Tensor::I64(tensor) => Ok(Tensor::I64(typed_reduce_max_integer(tensor, axes)?)),
-        Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::backend_failure(
+        Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::unsupported(
             "reduce_max",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -396,13 +411,19 @@ pub(crate) fn reduce_max_read(
                 "reduce_max",
             )?))
         }
-        view => Err(crate::Error::backend_failure(
+        view => Err(crate::Error::unsupported(
             "reduce_max",
             format!("unsupported dtype {:?}", view.dtype()),
         )),
     }
 }
 
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
+/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
+/// reductions, [`crate::Error::Unsupported`] for `Bool` and complex dtypes, or
+/// a typed backend error when the input storage cannot be read.
 pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
     if let Some(output) = reduction_empty_axes_noop("reduce_min", input, axes)? {
         return Ok(output);
@@ -413,7 +434,7 @@ pub fn reduce_min(input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
         Tensor::F64(tensor) => Ok(Tensor::F64(typed_reduce_min(tensor, axes)?)),
         Tensor::I32(tensor) => Ok(Tensor::I32(typed_reduce_min_integer(tensor, axes)?)),
         Tensor::I64(tensor) => Ok(Tensor::I64(typed_reduce_min_integer(tensor, axes)?)),
-        Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::backend_failure(
+        Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::unsupported(
             "reduce_min",
             format!("unsupported dtype {:?}", input.dtype()),
         )),
@@ -478,7 +499,7 @@ pub(crate) fn reduce_min_read(
                 "reduce_min",
             )?))
         }
-        view => Err(crate::Error::backend_failure(
+        view => Err(crate::Error::unsupported(
             "reduce_min",
             format!("unsupported dtype {:?}", view.dtype()),
         )),
@@ -523,11 +544,11 @@ where
 
     let input_view = typed_view(label, input)?;
     let mut current = reduce_axis(&input_view, first_axis, map_fn, reduce_fn, init)
-        .map_err(|err| crate::Error::backend_failure(label, err))?;
+        .map_err(|err| crate::Error::backend_source(label, err))?;
 
     for &axis in remaining_axes {
         current = reduce_axis(&current.view(), axis, map_fn, reduce_fn, init)
-            .map_err(|err| crate::Error::backend_failure(label, err))?;
+            .map_err(|err| crate::Error::backend_source(label, err))?;
     }
 
     TypedTensor::from_vec_col_major(output_shape, current.into_data())
@@ -549,7 +570,7 @@ where
 {
     validate_reduced_axes_nonempty(label, input.shape(), axes)?;
     if axes.is_empty() {
-        return Err(crate::Error::backend_failure(
+        return Err(crate::Error::unsupported(
             label,
             "empty-axis view reductions require backend-owned materialization",
         ));
@@ -566,7 +587,7 @@ where
     let mut sorted_axes = axes.to_vec();
     sorted_axes.sort_unstable_by(|a, b| b.cmp(a));
     let Some((&first_axis, remaining_axes)) = sorted_axes.split_first() else {
-        return Err(crate::Error::backend_failure(
+        return Err(crate::Error::unsupported(
             label,
             "empty-axis view reductions require backend-owned materialization",
         ));
@@ -574,16 +595,21 @@ where
 
     let input_view = typed_view_from_view(label, input)?;
     let mut current = reduce_axis(&input_view, first_axis, map_fn, reduce_fn, init)
-        .map_err(|err| crate::Error::backend_failure(label, err))?;
+        .map_err(|err| crate::Error::backend_source(label, err))?;
 
     for &axis in remaining_axes {
         current = reduce_axis(&current.view(), axis, map_fn, reduce_fn, init)
-            .map_err(|err| crate::Error::backend_failure(label, err))?;
+            .map_err(|err| crate::Error::backend_source(label, err))?;
     }
 
     TypedTensor::from_vec_col_major(output_shape, current.into_data())
 }
 
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
+/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
+/// reductions, or a typed backend error while materializing the result.
 pub fn typed_reduce_sum<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Send + Sync + Zero + Add<Output = T>,
@@ -608,6 +634,11 @@ where
     )
 }
 
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
+/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
+/// reductions, or a typed backend error while materializing the result.
 pub fn typed_reduce_prod<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
     T: Copy + Clone + Send + Sync + One + Mul<Output = T>,
@@ -632,6 +663,11 @@ where
     )
 }
 
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
+/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
+/// reductions, or a typed backend error while materializing the result.
 pub fn typed_reduce_max<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
     T: Float + Send + Sync,
@@ -665,6 +701,11 @@ where
     )
 }
 
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds`,
+/// `DuplicateAxis`, or `InvalidArgument` for invalid axes or zero-length
+/// reductions, or a typed backend error while materializing the result.
 pub fn typed_reduce_min<T>(input: &TypedTensor<T>, axes: &[usize]) -> crate::Result<TypedTensor<T>>
 where
     T: Float + Send + Sync,

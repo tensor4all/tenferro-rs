@@ -19,6 +19,7 @@
 //!   Frontends carry them directly as `Arc<dyn ExtensionOp>`.
 
 use std::any::Any;
+use std::error::Error as StdError;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -28,7 +29,7 @@ use computegraph::graph::GraphBuilder;
 use computegraph::types::ValueRef;
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::{DType, ErrorKind, Tensor, ValidationKind};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
@@ -116,30 +117,32 @@ pub fn invoke_extension_shape_inference(
 ) -> tenferro_tensor::Result<ExtensionShapeInference> {
     let expected_inputs = op.input_count();
     if input_dtypes.len() != expected_inputs || input_shapes.len() != expected_inputs {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "extension",
-            message: format!(
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "extension",
+            "input metadata",
+            format!(
                 "family_id={:?}: infer_output_meta expects {expected_inputs} input metadata entries, got {} dtypes and {} shapes",
                 op.family_id(),
                 input_dtypes.len(),
                 input_shapes.len()
             ),
-        });
+        ));
     }
 
     let mut ctx =
         ExtensionShapeContext::new_for_inference(op.family_id(), input_dtypes, input_shapes);
     let output_metas = op.infer_output_meta(&mut ctx)?;
     if output_metas.len() != op.output_count() {
-        return Err(tenferro_tensor::Error::InvalidConfig {
-            op: "extension",
-            message: format!(
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "extension",
+            "output metadata",
+            format!(
                 "family_id={:?}: infer_output_meta produced {} output metadata entries; op declared {} outputs",
                 op.family_id(),
                 output_metas.len(),
                 op.output_count()
             ),
-        });
+        ));
     }
 
     Ok(ExtensionShapeInference {
@@ -158,10 +161,25 @@ pub fn invoke_extension_shape_inference(
 /// let err = ExtensionLoweringError::new("example extension cannot lower");
 /// assert!(err.to_string().contains("cannot lower"));
 /// ```
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("{message}")]
-pub struct ExtensionLoweringError {
-    message: String,
+#[derive(Debug, thiserror::Error)]
+pub enum ExtensionLoweringError {
+    /// A lowering failure that has no typed source.
+    #[error("{message}")]
+    Message {
+        /// Human-readable lowering detail.
+        message: String,
+        /// Coarse classification supplied by the extension owner.
+        kind: ErrorKind,
+    },
+    /// A lowering failure retaining the domain source that caused it.
+    #[error("{source}")]
+    Source {
+        /// Coarse classification supplied by the extension owner.
+        kind: ErrorKind,
+        /// Original typed lowering source.
+        #[source]
+        source: Box<dyn StdError + Send + Sync + 'static>,
+    },
 }
 
 impl ExtensionLoweringError {
@@ -176,8 +194,97 @@ impl ExtensionLoweringError {
     /// assert_eq!(err.to_string(), "shape must be static");
     /// ```
     pub fn new(message: impl Into<String>) -> Self {
-        Self {
+        Self::new_with_kind(
+            ErrorKind::Validation(ValidationKind::InvalidArgument),
+            message,
+        )
+    }
+
+    /// Create a lowering error with an explicit coarse classification.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ext_op::ExtensionLoweringError;
+    /// use tenferro_tensor::ErrorKind;
+    ///
+    /// let err = ExtensionLoweringError::new_with_kind(
+    ///     ErrorKind::Unsupported,
+    ///     "extension is not supported by this lowering target",
+    /// );
+    /// assert_eq!(err.kind(), ErrorKind::Unsupported);
+    /// ```
+    pub fn new_with_kind(kind: ErrorKind, message: impl Into<String>) -> Self {
+        Self::Message {
             message: message.into(),
+            kind,
+        }
+    }
+
+    /// Create a lowering error while retaining a typed source.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::error::Error as _;
+    /// use tenferro_ops::ext_op::ExtensionLoweringError;
+    ///
+    /// let source = std::io::Error::new(std::io::ErrorKind::Other, "shape unavailable");
+    /// let err = ExtensionLoweringError::from_source(source);
+    /// assert!(err.source().is_some());
+    /// ```
+    pub fn from_source<E>(source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::from_source_with_kind(
+            ErrorKind::Validation(ValidationKind::InvalidArgument),
+            source,
+        )
+    }
+
+    /// Create a lowering error with a typed source and explicit classification.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ext_op::ExtensionLoweringError;
+    /// use tenferro_tensor::ErrorKind;
+    ///
+    /// let err = ExtensionLoweringError::from_source_with_kind(
+    ///     ErrorKind::BackendFailure,
+    ///     std::io::Error::other("backend rejected lowering"),
+    /// );
+    /// assert_eq!(err.kind(), ErrorKind::BackendFailure);
+    /// assert!(std::error::Error::source(&err).is_some());
+    /// ```
+    pub fn from_source_with_kind<E>(kind: ErrorKind, source: E) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+    {
+        Self::Source {
+            kind,
+            source: Box::new(source),
+        }
+    }
+
+    /// Return the stable classification carried by this lowering failure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ext_op::ExtensionLoweringError;
+    /// use tenferro_tensor::ErrorKind;
+    ///
+    /// let error = ExtensionLoweringError::new_with_kind(
+    ///     ErrorKind::Unsupported,
+    ///     "target has no lowering",
+    /// );
+    /// assert_eq!(error.kind(), ErrorKind::Unsupported);
+    /// ```
+    pub fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Message { kind, .. } | Self::Source { kind, .. } => *kind,
         }
     }
 }
@@ -214,6 +321,13 @@ pub type ExtensionLoweringResult =
 /// ```
 pub trait HostReference: Debug + Send + Sync + 'static {
     /// Execute the extension op on host/reference tensors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for invalid input
+    /// shapes/dtypes or output arity, [`tenferro_tensor::Error::Unsupported`]
+    /// when the reference implementation does not support an operation, or a
+    /// typed [`tenferro_tensor::Error::BackendSource`] failure from execution.
     fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>>;
 }
 
@@ -346,6 +460,12 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
     /// On success, the returned vector MUST have length `self.output_count()`,
     /// one `(dtype, shape)` entry per output slot. Shapes use [`SymDim`] so
     /// extension ops compose with graph-global symbolic metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] for invalid rank, axis,
+    /// or dtype metadata, or [`tenferro_tensor::Error::RuntimeState`] when the
+    /// output contract cannot be inferred from unavailable metadata.
     fn infer_output_meta(
         &self,
         ctx: &mut ExtensionShapeContext<'_>,
@@ -376,6 +496,11 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
     /// The default implementation returns `Ok(None)` so existing extension
     /// runtimes keep their native dispatch behavior until their owning crate
     /// deliberately implements this hook.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionLoweringError`] when the payload or input metadata
+    /// cannot be lowered safely.
     fn lower_to_standard_ops(
         &self,
         _builder: &mut GraphBuilder<StdTensorOp>,
@@ -410,6 +535,13 @@ pub trait ExtensionLinearizeRule: Debug + Send + Sync + 'static {
     fn family_id(&self) -> &'static str;
 
     /// Emit the linear (JVP) rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ADRuleError::InvalidInput`] when the operation or graph
+    /// metadata is inconsistent, and [`ADRuleError::Unsupported`] when this
+    /// rule cannot provide a JVP for the operation. Implementations may return
+    /// more specific [`ADRuleError`] values for their own validation.
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
@@ -430,6 +562,14 @@ pub trait ExtensionLinearTransposeRule: Debug + Send + Sync + 'static {
     fn family_id(&self) -> &'static str;
 
     /// Emit cotangents for active linear inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ADRuleError::InvalidInput`] when the transpose inputs or
+    /// active mask do not match the operation, and
+    /// [`ADRuleError::Unsupported`] when the operation has no supported
+    /// transpose. Implementations may return more specific [`ADRuleError`]
+    /// values for their own validation.
     fn linear_transpose(
         &self,
         op: &dyn ExtensionOp,
@@ -451,6 +591,13 @@ pub trait ExtensionPrimalVjpRule: Debug + Send + Sync + 'static {
     fn family_id(&self) -> &'static str;
 
     /// Emit a direct VJP from the primal op.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ADRuleError::InvalidInput`] when the primal inputs or graph
+    /// metadata are inconsistent, and [`ADRuleError::Unsupported`] when this
+    /// rule cannot provide a VJP. Implementations may return more specific
+    /// [`ADRuleError`] values for their own validation.
     fn primal_vjp(
         &self,
         op: &dyn ExtensionOp,
@@ -579,6 +726,13 @@ impl ExtensionRuleSet {
     /// rules.register_linearize(Arc::new(Rule)).unwrap();
     /// assert!(rules.lookup_linearize("example.register_linearize.v1").is_some());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRegistryError::MalformedFamilyId`] when the rule's
+    /// family id is not namespaced, or
+    /// [`ExtensionRegistryError::DuplicateRule`] when a linearize rule for the
+    /// family is already registered.
     pub fn register_linearize(
         &mut self,
         rule: Arc<dyn ExtensionLinearizeRule>,
@@ -591,6 +745,13 @@ impl ExtensionRuleSet {
     }
 
     /// Add one linear-transpose rule to this owned set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRegistryError::MalformedFamilyId`] when the rule's
+    /// family id is not namespaced, or
+    /// [`ExtensionRegistryError::DuplicateRule`] when a linear-transpose rule
+    /// for the family is already registered.
     pub fn register_linear_transpose(
         &mut self,
         rule: Arc<dyn ExtensionLinearTransposeRule>,
@@ -603,6 +764,13 @@ impl ExtensionRuleSet {
     }
 
     /// Add one primal-VJP rule to this owned set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRegistryError::MalformedFamilyId`] when the rule's
+    /// family id is not namespaced, or
+    /// [`ExtensionRegistryError::DuplicateRule`] when a primal-VJP rule for
+    /// the family is already registered.
     pub fn register_primal_vjp(
         &mut self,
         rule: Arc<dyn ExtensionPrimalVjpRule>,
@@ -648,6 +816,13 @@ impl ExtensionRuleSet {
     /// let rules = ExtensionRuleSet::new().with_linearize(Arc::new(Rule)).unwrap();
     /// assert!(rules.is_linearize_registered("example.with_linearize.v1"));
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRegistryError::MalformedFamilyId`] when the rule's
+    /// family id is not namespaced, or
+    /// [`ExtensionRegistryError::DuplicateRule`] when that family already has
+    /// a linearize rule.
     pub fn with_linearize(
         mut self,
         rule: Arc<dyn ExtensionLinearizeRule>,
@@ -657,6 +832,13 @@ impl ExtensionRuleSet {
     }
 
     /// Return a new rule set containing a linear-transpose rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRegistryError::MalformedFamilyId`] when the rule's
+    /// family id is not namespaced, or
+    /// [`ExtensionRegistryError::DuplicateRule`] when that family already has
+    /// a linear-transpose rule.
     pub fn with_linear_transpose(
         mut self,
         rule: Arc<dyn ExtensionLinearTransposeRule>,
@@ -666,6 +848,12 @@ impl ExtensionRuleSet {
     }
 
     /// Return a new rule set containing a primal-VJP rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRegistryError::MalformedFamilyId`] when the rule's
+    /// family id is not namespaced, or [`ExtensionRegistryError::DuplicateRule`]
+    /// when that family already has a primal-VJP rule.
     pub fn with_primal_vjp(
         mut self,
         rule: Arc<dyn ExtensionPrimalVjpRule>,
@@ -688,6 +876,13 @@ impl ExtensionRuleSet {
     /// rules.merge(ExtensionRuleSet::new()).unwrap();
     /// assert!(!rules.is_linearize_registered("example.missing.v1"));
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionRegistryError::MalformedFamilyId`] when any rule in
+    /// `other` is not namespaced, or [`ExtensionRegistryError::DuplicateRule`]
+    /// when any rule duplicates a rule already present in `self` or another
+    /// role-equivalent rule in `other`. The receiver is unchanged on error.
     pub fn merge(&mut self, other: ExtensionRuleSet) -> Result<(), ExtensionRegistryError> {
         let mut linearize_rules = (*self.linearize_rules).clone();
         let mut linear_transpose_rules = (*self.linear_transpose_rules).clone();
@@ -877,6 +1072,12 @@ fn validate_primal_vjp_insert(
 }
 
 /// Emit a registered extension linearization rule.
+///
+/// # Errors
+///
+/// Returns [`ADRuleError::Unsupported`] when the extension family has no
+/// registered linearize rule. Otherwise propagates the rule's typed
+/// [`ADRuleError`] unchanged.
 #[cfg(feature = "autodiff")]
 pub fn linearize_extension_rule(
     op: &dyn ExtensionOp,
@@ -893,6 +1094,14 @@ pub fn linearize_extension_rule(
 }
 
 /// Emit a registered extension transpose rule.
+///
+/// # Errors
+///
+/// Returns [`ADRuleError::Unsupported`] when the operation role has no
+/// registered transpose or primal-VJP rule, and
+/// [`ADRuleError::InvalidInput`] when a primary transpose input cannot be
+/// represented as a value input. Errors returned by the selected rule are
+/// propagated unchanged.
 #[cfg(feature = "autodiff")]
 pub fn transpose_extension_rule(
     op: &dyn ExtensionOp,

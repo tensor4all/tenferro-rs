@@ -2,9 +2,10 @@ use crate::support;
 use support::{run_many_traced_with, RunTraced};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::traced::TracedTensor;
-use tenferro_runtime::DType;
-use tenferro_runtime::GraphExecutor;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
+use tenferro_runtime::{DType, Error as RuntimeError, GraphExecutor};
+use tenferro_tensor::{
+    DotGeneralConfig, ErrorKind, Tensor, TypedTensor, ValidationError, ValidationKind,
+};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -310,11 +311,18 @@ fn traced_stack_rejects_empty_mismatched_invalid_axis_and_symbolic_shapes() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2], vec![1.0, 2.0])).unwrap();
     let b =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![3.0, 4.0, 5.0])).unwrap();
-    let shape_err = TracedTensor::stack(&[&a, &b], -1)
-        .err()
-        .unwrap()
-        .to_string();
-    assert!(shape_err.contains("shape mismatch"), "got: {shape_err}");
+    let shape_err = TracedTensor::stack(&[&a, &b], -1).err().unwrap();
+    assert_eq!(
+        shape_err.kind(),
+        ErrorKind::Validation(ValidationKind::ShapeMismatch)
+    );
+    assert!(matches!(
+        shape_err,
+        RuntimeError::Validation {
+            source: ValidationError::ShapeMismatch(_),
+            ..
+        }
+    ));
 
     let axis_err = TracedTensor::stack(&[&a], 2).err().unwrap().to_string();
     assert!(axis_err.contains("axis"), "got: {axis_err}");

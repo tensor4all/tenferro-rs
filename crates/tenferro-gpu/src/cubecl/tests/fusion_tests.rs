@@ -3,8 +3,8 @@ use crate::backend::{ElementwiseFusionInst, ElementwiseFusionOp, ElementwiseFusi
 use tenferro_tensor::{TensorAnalytic, TensorElementwise, TensorFusion};
 
 use super::{
-    assert_tensor_close, cpu_backend, download, gpu_backend, tensor_c32, tensor_c64, tensor_f32,
-    tensor_f64, upload,
+    assert_tensor_close, assert_validation_kind, cpu_backend, download, gpu_backend, tensor_c32,
+    tensor_c64, tensor_f32, tensor_f64, upload,
 };
 
 /// Build a plan for: out = (a + b) * a
@@ -447,5 +447,9 @@ fn fusion_plan_runtime_dtype_descriptor_mismatch_remains_a_hard_error() {
     let err = gpu
         .execute_elementwise_fusion(&[&gpu_lhs, &gpu_rhs], &add_mul_plan())
         .expect_err("a runtime dtype mismatch must remain a typed hard error");
-    assert!(matches!(err, crate::Error::BackendFailure { .. }));
+    assert_validation_kind(
+        &err,
+        "fused_elementwise",
+        tenferro_tensor::ValidationKind::DTypeMismatch,
+    );
 }

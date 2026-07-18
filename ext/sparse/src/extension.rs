@@ -61,13 +61,26 @@ impl SparseMatmulPlan {
         right_shape: &[usize],
         right_entries: &[[usize; 2]],
     ) -> Result<Self> {
-        if left_shape.len() != 2 || right_shape.len() != 2 {
-            return Err(invalid("sparse matmul requires rank-2 operands"));
+        if left_shape.len() != 2 {
+            return Err(tenferro_tensor::Error::rank_mismatch(
+                OP,
+                2,
+                left_shape.len(),
+            ));
+        }
+        if right_shape.len() != 2 {
+            return Err(tenferro_tensor::Error::rank_mismatch(
+                OP,
+                2,
+                right_shape.len(),
+            ));
         }
         if left_shape[1] != right_shape[0] {
-            return Err(invalid(format!(
-                "shape mismatch for sparse matmul: lhs {left_shape:?}, rhs {right_shape:?}"
-            )));
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                OP,
+                vec![left_shape[1]],
+                vec![right_shape[0]],
+            ));
         }
 
         let mut raw = Vec::new();
@@ -128,7 +141,10 @@ impl SparseMatmulPlan {
 ///
 /// # Errors
 ///
-/// Returns an error if runtime registration fails.
+/// Returns [`ExtensionRuntimeRegistryError::MalformedFamilyId`] when a
+/// runtime family identifier is invalid, or
+/// [`ExtensionRuntimeRegistryError::PoisonedLock`] if registry state was
+/// poisoned while registering the family.
 ///
 /// # Examples
 ///
@@ -331,13 +347,17 @@ impl ExtensionOp for SparseMatmulJvpOp {
             }
             let tangent_idx = 2 + active_pos;
             if input_dtypes[tangent_idx] != input_dtypes[active] {
-                return Err(invalid(
-                    "sparse tangent dtype must match active input dtype",
+                return Err(Error::dtype_mismatch(
+                    OP,
+                    input_dtypes[active],
+                    input_dtypes[tangent_idx],
                 ));
             }
             if !is_rank1_shape(&input_shapes[tangent_idx]) {
-                return Err(invalid(
-                    "sparse tangent inputs must be rank-1 value tensors",
+                return Err(Error::rank_mismatch(
+                    OP,
+                    1,
+                    input_shapes[tangent_idx].len(),
                 ));
             }
             ctx.require_same_shape(tangent_idx, active)?;
@@ -420,14 +440,14 @@ impl ExtensionOp for SparseMatmulVjpOp {
         validate_primal_meta(&input_dtypes[..2], &primal_shapes)?;
         require_primal_shape_constraints(ctx, &self.plan)?;
         if input_dtypes[2] != input_dtypes[self.active_input] {
-            return Err(invalid(
-                "sparse VJP cotangent dtype does not match active input dtype",
+            return Err(Error::dtype_mismatch(
+                OP,
+                input_dtypes[self.active_input],
+                input_dtypes[2],
             ));
         }
         if !is_rank1_shape(&input_shapes[2]) {
-            return Err(invalid(
-                "sparse VJP cotangent must be a rank-1 value tensor",
-            ));
+            return Err(Error::rank_mismatch(OP, 1, input_shapes[2].len()));
         }
         ctx.require_equal(ctx.input_axis(2, 0)?, SymDim::from(self.plan.output_nnz()))?;
         Ok(vec![(
@@ -554,7 +574,9 @@ impl ExtensionLinearTransposeRule for SparseMatmulJvpAdRule {
 ///
 /// # Errors
 ///
-/// Returns an error if rule registration fails.
+/// Returns `ExtensionRegistryError::MalformedFamilyId` if a generated sparse
+/// family identifier is invalid, or `ExtensionRegistryError::DuplicateRule`
+/// if a sparse linearize or linear-transpose rule is already registered.
 ///
 /// # Examples
 ///
@@ -640,14 +662,25 @@ fn validate_primal_meta(input_dtypes: &[DType], input_shapes: &[&[SymDim]]) -> R
             input_shapes.len()
         )));
     }
-    if input_dtypes[0] != DType::F64 || input_dtypes[1] != DType::F64 {
-        return Err(invalid(format!(
-            "sparse matmul supports F64 values, got {:?} and {:?}",
-            input_dtypes[0], input_dtypes[1]
-        )));
+    if input_dtypes[0] != DType::F64 {
+        return Err(Error::dtype_mismatch(
+            OP,
+            DType::F64,
+            input_dtypes[0],
+        ));
     }
-    if !is_rank1_shape(input_shapes[0]) || !is_rank1_shape(input_shapes[1]) {
-        return Err(invalid("sparse matmul inputs must be rank-1 value tensors"));
+    if input_dtypes[1] != DType::F64 {
+        return Err(Error::dtype_mismatch(
+            OP,
+            DType::F64,
+            input_dtypes[1],
+        ));
+    }
+    if !is_rank1_shape(input_shapes[0]) {
+        return Err(Error::rank_mismatch(OP, 1, input_shapes[0].len()));
+    }
+    if !is_rank1_shape(input_shapes[1]) {
+        return Err(Error::rank_mismatch(OP, 1, input_shapes[1].len()));
     }
     Ok(())
 }
@@ -759,10 +792,7 @@ fn hash_plan(plan: &SparseMatmulPlan, hasher: &mut dyn Hasher) {
 }
 
 fn invalid(message: impl Into<String>) -> Error {
-    Error::InvalidConfig {
-        op: OP,
-        message: message.into(),
-    }
+    Error::invalid_argument(OP, "configuration", message)
 }
 
 #[cfg(all(test, feature = "autodiff"))]

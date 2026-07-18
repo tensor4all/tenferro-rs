@@ -3,11 +3,11 @@ use std::sync::{Arc, Mutex};
 
 use thiserror::Error as ThisError;
 
-use crate::affinity::{SystemThreadAffinity, ThreadAffinity};
+use crate::affinity::{CpuAffinityError, SystemThreadAffinity, ThreadAffinity};
 use crate::arbiter::{
     set_pool_execution_owner, with_execution_owner, with_pool_execution_owner, ResourceOwner,
 };
-use crate::{CpuId, CpuSet, Error, Result};
+use crate::{CpuId, CpuSet, Error, ErrorKind, Result, ValidationKind};
 
 #[derive(Debug, Default)]
 struct ExecutionOwnerState {
@@ -25,7 +25,7 @@ struct ExecutionOwnerState {
 /// let error = CpuContextError::InvalidThreadCount;
 /// assert!(error.to_string().contains("thread count"));
 /// ```
-#[derive(Clone, Debug, ThisError, PartialEq, Eq)]
+#[derive(Debug, ThisError)]
 pub enum CpuContextError {
     /// A context must contain at least one worker.
     #[error("thread count must be at least 1")]
@@ -39,24 +39,30 @@ pub enum CpuContextError {
         cpus: usize,
     },
     /// Rayon could not construct the custom thread pool.
-    #[error("failed to build pinned CPU thread pool: {message}")]
+    #[error("failed to build pinned CPU thread pool: {source}")]
     PoolBuild {
-        /// Rayon or OS thread-spawn error detail.
-        message: String,
+        /// Rayon or OS thread-spawn error.
+        #[source]
+        source: rayon::ThreadPoolBuildError,
     },
     /// A worker could not set or verify its assigned CPU affinity.
-    #[error("failed to pin worker {worker} to CPU {cpu}: {message}")]
+    #[error("failed to pin worker {worker} to CPU {cpu}: {source}")]
     WorkerPinning {
         /// Stable Rayon worker index.
         worker: usize,
         /// Assigned operating-system logical CPU.
         cpu: CpuId,
-        /// OS or verification failure detail.
-        message: String,
+        /// OS or verification failure.
+        #[source]
+        source: CpuAffinityError,
     },
     /// A worker terminated before reporting startup affinity.
-    #[error("worker startup channel closed before all workers reported")]
-    WorkerStartupClosed,
+    #[error("worker startup channel closed before all workers reported: {source}")]
+    WorkerStartupClosed {
+        /// Channel receive failure from the worker startup handshake.
+        #[source]
+        source: std::sync::mpsc::RecvError,
+    },
 }
 
 /// Reusable CPU execution context carrying CPU parallelism policy.
@@ -114,28 +120,38 @@ impl CpuContext {
     ///     .unwrap_or_else(|_| CpuContext::with_threads(1).unwrap());
     /// assert!(ctx.num_threads() >= 1);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuContextError`] when `RAYON_NUM_THREADS` is malformed or
+    /// requests an invalid worker count.
     pub fn try_from_env() -> Result<Self> {
         match env::var("RAYON_NUM_THREADS") {
             Ok(value) => {
-                let num_threads = value.parse::<usize>().map_err(|err| Error::InvalidConfig {
-                    op: "CpuContext::try_from_env",
-                    message: format!("invalid RAYON_NUM_THREADS value {value:?}: {err}"),
+                let num_threads = value.parse::<usize>().map_err(|err| {
+                    Error::extension(
+                        "CpuContext::try_from_env",
+                        "cpu",
+                        ErrorKind::Validation(ValidationKind::InvalidArgument),
+                        err,
+                    )
                 })?;
                 Self::with_threads(num_threads).map_err(|err| match err {
-                    Error::InvalidConfig { message, .. } => Error::InvalidConfig {
-                        op: "CpuContext::try_from_env",
-                        message: format!("invalid RAYON_NUM_THREADS value {value:?}: {message}"),
-                    },
+                    Error::Validation { source, .. } => {
+                        Error::validation("CpuContext::try_from_env", source)
+                    }
                     err => err,
                 })
             }
             Err(env::VarError::NotPresent) => {
                 Self::with_threads(super::affinity::available_parallelism())
             }
-            Err(err) => Err(Error::InvalidConfig {
-                op: "CpuContext::try_from_env",
-                message: format!("failed to read RAYON_NUM_THREADS: {err}"),
-            }),
+            Err(err) => Err(Error::extension(
+                "CpuContext::try_from_env",
+                "cpu",
+                ErrorKind::Validation(ValidationKind::InvalidArgument),
+                err,
+            )),
         }
     }
 
@@ -152,13 +168,16 @@ impl CpuContext {
     ///
     /// # Errors
     ///
-    /// Returns an error when `num_threads` is zero or Rayon rejects the pool.
+    /// Returns [`CpuContextError::InvalidThreadCount`] through
+    /// [`Error::Validation`] when `num_threads` is zero, or
+    /// [`Error::BackendSource`] when Rayon rejects the thread pool.
     pub fn with_threads(num_threads: usize) -> Result<Self> {
         if num_threads == 0 {
-            return Err(Error::InvalidConfig {
-                op: "CpuContext::with_threads",
-                message: "thread count must be at least 1".into(),
-            });
+            return Err(Error::invalid_argument(
+                "CpuContext::with_threads",
+                "configuration",
+                "thread count must be at least 1",
+            ));
         }
         let pool = if num_threads == 1 {
             None
@@ -167,10 +186,7 @@ impl CpuContext {
                 rayon::ThreadPoolBuilder::new()
                     .num_threads(num_threads)
                     .build()
-                    .map_err(|err| Error::InvalidConfig {
-                        op: "CpuContext::with_threads",
-                        message: format!("failed to build CPU thread pool: {err}"),
-                    })?,
+                    .map_err(|err| Error::backend_source("CpuContext::with_threads", err))?,
             ))
         };
         Ok(Self {
@@ -198,6 +214,12 @@ impl CpuContext {
     /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuContextError::InvalidThreadCount`] for zero workers,
+    /// [`CpuContextError::TooManyWorkers`] when the request exceeds the CPU
+    /// set, or an affinity error when workers cannot be pinned.
     pub fn with_pinned_cpus(
         cpus: CpuSet,
         num_threads: usize,
@@ -236,11 +258,8 @@ impl CpuContext {
                         let result = affinity.pin_current(cpu).and_then(|observed| {
                             (observed.len() == 1 && observed.contains(cpu))
                                 .then_some(())
-                                .ok_or_else(|| {
-                                    format!(
-                                        "verification returned affinity {:?}",
-                                        observed.as_usize_vec()
-                                    )
+                                .ok_or_else(|| CpuAffinityError::Verification {
+                                    observed: observed.as_slice().to_vec(),
                                 })
                         });
                         let _ = startup_tx.send((worker, cpu, result));
@@ -249,19 +268,17 @@ impl CpuContext {
                     .map(|_| ())
             })
             .build()
-            .map_err(|err| CpuContextError::PoolBuild {
-                message: err.to_string(),
-            })?;
+            .map_err(|source| CpuContextError::PoolBuild { source })?;
         let pool = Arc::new(pool);
         for _ in 0..num_threads {
             let (worker, cpu, result) = startup_rx
                 .recv()
-                .map_err(|_| CpuContextError::WorkerStartupClosed)?;
-            if let Err(message) = result {
+                .map_err(|source| CpuContextError::WorkerStartupClosed { source })?;
+            if let Err(source) = result {
                 return Err(CpuContextError::WorkerPinning {
                     worker,
                     cpu,
-                    message,
+                    source,
                 });
             }
         }

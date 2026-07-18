@@ -4,7 +4,7 @@ use computegraph::compile::{CompiledProgram, Instruction};
 use tenferro_ops::{
     dim_expr::DimExpr, ext_op::ExtensionOp, std_tensor_op::StdTensorOp, ShapeRelation, SymDim,
 };
-use tenferro_tensor::DType;
+use tenferro_tensor::{DType, ErrorKind, ValidationKind};
 
 use super::{compile_std_to_exec, dim_shape, make_std_instr};
 use crate::{Error, ShapeGuard};
@@ -363,7 +363,7 @@ fn compiler_rejects_duplicate_output_slot_producers_before_optimization() {
 
     assert!(matches!(
         compile_std_to_exec(&program, &[DType::F64], &[dim_shape(&[2])]),
-        Err(Error::InvalidCompiledGraph { ref message })
+        Err(Error::Internal(ref message))
             if message.contains("output slot 1")
                 && message.contains("instructions 0 and 1")
     ));
@@ -380,7 +380,7 @@ fn compiler_rejects_out_of_range_output_slot_before_optimization() {
 
     assert!(matches!(
         compile_std_to_exec(&program, &[DType::F64], &[dim_shape(&[2])]),
-        Err(Error::InvalidCompiledGraph { message })
+        Err(Error::Internal(message))
             if message == "output slot 2 is outside slot table of length 2"
     ));
 }
@@ -439,7 +439,7 @@ fn constraint_origin_without_outputs_hits_instruction_invariant_first() {
             &[DType::F64, DType::F64],
             &[dim_shape(&[2]), dim_shape(&[2])],
         ),
-        Err(Error::InvalidCompiledGraph { ref message })
+        Err(Error::Internal(ref message))
             if message == "instruction has no outputs"
     ));
 }
@@ -458,15 +458,10 @@ fn compiler_preserves_constraint_inference_errors() {
     };
 
     let error = compile_std_to_exec(&program, &[DType::F64], &[dim_shape(&[2])]).unwrap_err();
-    assert!(
-        matches!(
-            &error,
-            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-                op: "test.compiler-invalid-constraint-axis.v1",
-                message,
-            }) if message
-                == "extension family \"test.compiler-invalid-constraint-axis.v1\" axis 1 out of bounds for input 0 rank 1"
-        ),
+    assert_eq!(
+        error.kind(),
+        ErrorKind::Validation(ValidationKind::AxisOutOfBounds),
         "unexpected compiler error: {error:?}"
     );
+    assert!(std::error::Error::source(&error).is_some());
 }

@@ -102,7 +102,7 @@ pub struct TropicalGemmArgmax<T> {
 ///
 /// # Errors
 ///
-/// Returns [`tenferro_tensor::Error::InvalidConfig`] when input lengths do not
+/// Returns [`tenferro_tensor::Error::Validation`] when input lengths do not
 /// exactly match the provided dimensions, when `k == 0` with a non-empty
 /// output, or when `k` is too large to represent a winning contracted index as
 /// `u32`.
@@ -155,10 +155,11 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`tenferro_tensor::Error::InvalidConfig`] when input lengths do not
-/// exactly match the provided dimensions, when `k == 0` with a non-empty
-/// output, or when `k` is too large to represent a winning contracted index as
-/// `u32`.
+/// Returns a structured shape or argument validation error when input lengths
+/// do not exactly match the provided dimensions, when `k == 0` with a
+/// [`tenferro_tensor::Error::Validation`] when input lengths do not exactly
+/// match the provided dimensions, when `k == 0` with a non-empty output, or
+/// when `k` is too large to represent a winning contracted index as `u32`.
 ///
 /// # Examples
 ///
@@ -364,18 +365,24 @@ fn validate_inputs<T>(
 ) -> tenferro_tensor::Result<()> {
     let expected_a = checked_len(m, k, "a")?;
     if a.len() != expected_a {
-        return Err(invalid_config(format!(
-            "a length mismatch: expected {expected_a} elements for shape [{m}, {k}], got {}",
-            a.len()
-        )));
+        return Err(tenferro_tensor::Error::validation(
+            OP,
+            tenferro_tensor::ValidationError::ShapeDataLengthMismatch {
+                expected: expected_a,
+                actual: a.len(),
+            },
+        ));
     }
 
     let expected_b = checked_len(k, n, "b")?;
     if b.len() != expected_b {
-        return Err(invalid_config(format!(
-            "b length mismatch: expected {expected_b} elements for shape [{k}, {n}], got {}",
-            b.len()
-        )));
+        return Err(tenferro_tensor::Error::validation(
+            OP,
+            tenferro_tensor::ValidationError::ShapeDataLengthMismatch {
+                expected: expected_b,
+                actual: b.len(),
+            },
+        ));
     }
 
     let out_len = checked_len(m, n, "output")?;
@@ -383,14 +390,14 @@ fn validate_inputs<T>(
         if out_len == 0 {
             return Ok(());
         }
-        return Err(invalid_config(
+        return Err(invalid_argument(
             "contracting dimension k must be nonzero for non-empty outputs",
         ));
     }
 
     let max_argmax_len = (u32::MAX as usize).saturating_add(1);
     if k > max_argmax_len {
-        return Err(invalid_config(format!(
+        return Err(invalid_argument(format!(
             "contracting dimension k={k} cannot be represented as u32 argmax indices"
         )));
     }
@@ -398,17 +405,15 @@ fn validate_inputs<T>(
     Ok(())
 }
 
-fn checked_len(lhs: usize, rhs: usize, label: &str) -> tenferro_tensor::Result<usize> {
+fn checked_len(lhs: usize, rhs: usize, _label: &str) -> tenferro_tensor::Result<usize> {
     lhs.checked_mul(rhs).ok_or_else(|| {
-        invalid_config(format!(
-            "{label} element count overflows usize for dimensions {lhs} and {rhs}"
-        ))
+        tenferro_tensor::Error::validation(
+            OP,
+            tenferro_tensor::ValidationError::IntegerOverflow,
+        )
     })
 }
 
-fn invalid_config(message: impl Into<String>) -> tenferro_tensor::Error {
-    tenferro_tensor::Error::InvalidConfig {
-        op: OP,
-        message: message.into(),
-    }
+fn invalid_argument(message: impl Into<String>) -> tenferro_tensor::Error {
+    tenferro_tensor::Error::invalid_argument(OP, "configuration", message)
 }

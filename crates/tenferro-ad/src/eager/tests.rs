@@ -8,6 +8,7 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use crate::context::AdContext;
 use computegraph::graph::{Graph, GraphBuilder};
 use computegraph::resolve::resolve;
 use computegraph::types::ValueKey;
@@ -22,6 +23,7 @@ use tenferro_runtime::{Error, ExtensionExecutionContext, ExtensionExecutor, Exte
 use tenferro_tensor::Tensor;
 use tenferro_tensor::TypedTensorView;
 use tenferro_tensor::{DType, DotGeneralConfig, TensorBackend, TensorElementwise};
+use tenferro_tensor::{ErrorKind, ValidationKind};
 use tenferro_tensor::{TensorFusion, TensorRead, TensorStructural, TensorView, TensorWrite};
 use tidu::eager::BackwardExecutor;
 use tidu::{linearize, ADKey};
@@ -75,9 +77,13 @@ fn eager_runtime_synchronize_reports_poisoned_backend_lock() {
 
     let err = ctx.synchronize().unwrap_err();
 
+    assert_eq!(err.kind(), ErrorKind::RuntimeState);
     assert!(matches!(
         err,
-        Error::Internal(ref message) if message.contains("backend lock poisoned")
+        Error::RuntimeState {
+            phase: tenferro_runtime::ErrorPhase::Execution,
+            ..
+        }
     ));
 }
 
@@ -185,9 +191,13 @@ fn eager_runtime_backend_closure_reports_poisoned_backend_lock() {
 
     let err = ctx.with_backend_mut(|_| ()).unwrap_err();
 
+    assert_eq!(err.kind(), ErrorKind::RuntimeState);
     assert!(matches!(
         err,
-        Error::Internal(ref message) if message.contains("backend lock poisoned")
+        Error::RuntimeState {
+            phase: tenferro_runtime::ErrorPhase::Execution,
+            ..
+        }
     ));
 }
 
@@ -207,9 +217,13 @@ fn eager_index_select_reports_poisoned_backend_lock() {
 
     let err = x.index_select(0, &[0]).unwrap_err();
 
+    assert_eq!(err.kind(), ErrorKind::RuntimeState);
     assert!(matches!(
         err,
-        Error::Internal(ref message) if message.contains("backend lock poisoned")
+        Error::RuntimeState {
+            phase: tenferro_runtime::ErrorPhase::Execution,
+            ..
+        }
     ));
 }
 
@@ -342,8 +356,12 @@ impl<B: TensorBackend + 'static> ExtensionRuntime<B> for ReadPathFallbackRuntime
         _ctx: &mut ExtensionExecutionContext<'_, B>,
     ) -> tenferro_tensor::Result<Vec<Tensor>> {
         op.host_reference()
-            .ok_or(tenferro_tensor::Error::NoHostReference {
-                family_id: op.family_id(),
+            .ok_or_else(|| {
+                tenferro_tensor::Error::invalid_argument(
+                    "extension",
+                    "host_reference",
+                    format!("family {} has no host reference", op.family_id()),
+                )
             })?
             .execute(inputs)
     }
@@ -556,13 +574,18 @@ fn eager_backward_callbacks_record_add_errors_without_panicking() {
     let second = callbacks.add_operands(&a, &b);
     assert!(Arc::ptr_eq(&second, &a));
 
-    let err = callbacks
-        .take_error()
-        .expect("shape mismatch should be recorded");
-    assert!(
-        err.to_string().contains("eager cotangent add failed"),
-        "{err}"
+    let typed = callbacks
+        .take_typed_error()
+        .expect("shape mismatch should retain its typed runtime error");
+    assert_eq!(
+        typed.kind(),
+        ErrorKind::Validation(ValidationKind::ShapeMismatch)
     );
+    assert!(matches!(
+        typed,
+        Error::TensorRuntime(tenferro_tensor::Error::Validation { .. })
+    ));
+    assert!(callbacks.take_error().is_some());
     assert!(callbacks.take_error().is_none());
 }
 
@@ -861,10 +884,17 @@ fn eager_backward_with_rejects_mismatched_seed_shape() {
 
     let err = y.backward_with(&seed).unwrap_err();
 
-    assert!(
-        err.to_string().contains("shape mismatch"),
-        "unexpected error: {err}"
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::ShapeMismatch)
     );
+    assert!(matches!(
+        err,
+        Error::TensorRuntime(tenferro_tensor::Error::Validation {
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+            ..
+        })
+    ));
     assert!(x.grad().unwrap().is_none());
 }
 
@@ -891,6 +921,52 @@ fn eager_runtime_vjp_returns_composable_tensor_without_touching_grad_slot() {
         &[4.0, 12.0]
     );
     assert!(x.grad().unwrap().is_none());
+}
+
+#[test]
+fn eager_functional_ad_reports_inactive_inputs_and_accepts_explicit_rule_context() {
+    let ad = AdContext::builder().build().unwrap();
+    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    let active = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let inactive = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let seed = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 1.0]).unwrap(),
+        Arc::clone(&ctx),
+    )
+    .unwrap();
+    let loss = active.mul(&active).unwrap();
+
+    let inactive_vjp = ctx.vjp_optional(&loss, &inactive, &seed).unwrap();
+    let inactive_jvp = ctx.jvp_optional(&loss, &inactive, &seed).unwrap();
+    assert!(inactive_vjp.is_none());
+    assert!(inactive_jvp.is_none());
+
+    let active_vjp = ctx.vjp_optional(&loss, &active, &seed).unwrap().unwrap();
+    let active_jvp = ctx.jvp_optional(&loss, &active, &seed).unwrap().unwrap();
+    assert_eq!(
+        active_vjp
+            .materialized()
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
+        &[4.0, 6.0]
+    );
+    assert_eq!(
+        active_jvp
+            .materialized()
+            .unwrap()
+            .as_slice::<f64>()
+            .unwrap(),
+        &[4.0, 6.0]
+    );
 }
 
 #[test]

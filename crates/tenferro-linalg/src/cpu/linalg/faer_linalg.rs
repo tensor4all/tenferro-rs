@@ -151,11 +151,11 @@ fn matrix_dims<T>(
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize)> {
     if input.shape().len() != 2 {
-        return Err(tenferro_tensor::Error::RankMismatch {
+        return Err(tenferro_tensor::Error::rank_mismatch(
             op,
-            expected: 2,
-            actual: input.shape().len(),
-        });
+            2,
+            input.shape().len(),
+        ));
     }
     Ok((input.shape()[0], input.shape()[1]))
 }
@@ -166,11 +166,11 @@ fn square_matrix_dim<T>(
 ) -> tenferro_tensor::Result<usize> {
     let (rows, cols) = matrix_dims(input, op)?;
     if rows != cols {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
+        return Err(tenferro_tensor::Error::shape_mismatch(
             op,
-            lhs: vec![rows],
-            rhs: vec![cols],
-        });
+            vec![rows],
+            vec![cols],
+        ));
     }
     Ok(rows)
 }
@@ -288,14 +288,15 @@ impl_complex_faer_casts!(
 );
 
 fn decomposition_failed(op: &'static str) -> tenferro_tensor::Error {
-    tenferro_tensor::Error::backend_failure(op, "decomposition failed")
+    crate::error::into_tensor_error(op, crate::Error::NonConvergence { op })
+}
+
+fn singular_matrix(op: &'static str) -> tenferro_tensor::Error {
+    crate::error::into_tensor_error(op, crate::Error::Singular { op })
 }
 
 fn invalid_config(op: &'static str, message: impl Into<String>) -> tenferro_tensor::Error {
-    tenferro_tensor::Error::InvalidConfig {
-        op,
-        message: message.into(),
-    }
+    tenferro_tensor::Error::invalid_argument(op, "configuration", message)
 }
 
 fn eig_imag_is_effectively_zero(real: f64, imag: f64, eps: f64) -> bool {
@@ -578,11 +579,11 @@ fn split_shape_core_and_batch<'a>(
     op: &'static str,
 ) -> tenferro_tensor::Result<(&'a [usize], &'a [usize])> {
     if shape.len() < core_rank {
-        return Err(tenferro_tensor::Error::RankMismatch {
+        return Err(tenferro_tensor::Error::rank_mismatch(
             op,
-            expected: core_rank,
-            actual: shape.len(),
-        });
+            core_rank,
+            shape.len(),
+        ));
     }
     Ok(shape.split_at(core_rank))
 }
@@ -609,11 +610,11 @@ fn square_core_and_batch<'a, T>(
 ) -> tenferro_tensor::Result<(usize, &'a [usize])> {
     let (rows, cols, batch_shape) = matrix_core_and_batch(input, op)?;
     if rows != cols {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
+        return Err(tenferro_tensor::Error::shape_mismatch(
             op,
-            lhs: vec![rows],
-            rhs: vec![cols],
-        });
+            vec![rows],
+            vec![cols],
+        ));
     }
     Ok((rows, batch_shape))
 }
@@ -678,11 +679,11 @@ where
 
         if let Some(expected_shape) = &out_core_shape {
             if batch_output.shape() != expected_shape.as_slice() {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: op_name,
-                    lhs: batch_output.shape().to_vec(),
-                    rhs: expected_shape.clone(),
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    op_name,
+                    batch_output.shape().to_vec(),
+                    expected_shape.clone(),
+                ));
             }
         } else {
             let output_elements =
@@ -770,21 +771,21 @@ where
             out_data = pooled_outputs;
         } else {
             if batch_outputs.len() != out_shapes.len() {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: op_name,
-                    lhs: vec![batch_outputs.len()],
-                    rhs: vec![out_shapes.len()],
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    op_name,
+                    vec![batch_outputs.len()],
+                    vec![out_shapes.len()],
+                ));
             }
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
             if batch_output.shape() != out_shapes[idx].as_slice() {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: op_name,
-                    lhs: batch_output.shape().to_vec(),
-                    rhs: out_shapes[idx].clone(),
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    op_name,
+                    batch_output.shape().to_vec(),
+                    out_shapes[idx].clone(),
+                ));
             }
             out_data[idx].extend_from_slice(batch_output.host_data()?);
         }
@@ -860,21 +861,21 @@ where
             out_data = pooled_outputs;
         } else {
             if batch_outputs.len() != out_shapes.len() {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: op_name,
-                    lhs: vec![batch_outputs.len()],
-                    rhs: vec![out_shapes.len()],
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    op_name,
+                    vec![batch_outputs.len()],
+                    vec![out_shapes.len()],
+                ));
             }
         }
 
         for (idx, batch_output) in batch_outputs.iter().enumerate() {
             if batch_output.shape() != out_shapes[idx].as_slice() {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: op_name,
-                    lhs: batch_output.shape().to_vec(),
-                    rhs: out_shapes[idx].clone(),
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    op_name,
+                    batch_output.shape().to_vec(),
+                    out_shapes[idx].clone(),
+                ));
             }
             out_data[idx].extend_from_slice(batch_output.host_data()?);
         }
@@ -910,11 +911,11 @@ where
     let (a_core_shape, a_batch_shape) = split_core_and_batch(a, core_rank_a, op_name)?;
     let (b_core_shape, b_batch_shape) = split_core_and_batch(b, core_rank_b, op_name)?;
     if a_batch_shape != b_batch_shape {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op: op_name,
-            lhs: a_batch_shape.to_vec(),
-            rhs: b_batch_shape.to_vec(),
-        });
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            op_name,
+            a_batch_shape.to_vec(),
+            b_batch_shape.to_vec(),
+        ));
     }
 
     if a_batch_shape.is_empty() {
@@ -960,11 +961,11 @@ where
 
         if let Some(expected_shape) = &out_core_shape {
             if batch_output.shape() != expected_shape.as_slice() {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: op_name,
-                    lhs: batch_output.shape().to_vec(),
-                    rhs: expected_shape.clone(),
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch(
+                    op_name,
+                    batch_output.shape().to_vec(),
+                    expected_shape.clone(),
+                ));
             }
         } else {
             let output_elements =
@@ -1036,7 +1037,7 @@ macro_rules! impl_faer_linalg_for_real {
             stack,
             Default::default(),
         )
-        .map_err(|_| tenferro_tensor::Error::backend_failure("cholesky", "matrix is not positive definite"))?;
+        .map_err(|_| decomposition_failed("cholesky"))?;
         tensor_from_vec_with_template(
             vec![n, n],
             lower_triangle_vec_from_mat(l.as_ref())?,
@@ -1228,11 +1229,7 @@ macro_rules! impl_faer_linalg_for_real {
         let n = square_matrix_dim(a, "full_piv_lu_solve")?;
         let (b_rows, b_cols) = matrix_dims(b, "full_piv_lu_solve")?;
         if b_rows != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "full_piv_lu_solve",
-                lhs: vec![n],
-                rhs: vec![b_rows],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch("full_piv_lu_solve", vec![n], vec![b_rows]));
         }
 
         let mut lu = Mat::zeros(n, n);
@@ -1269,7 +1266,7 @@ macro_rules! impl_faer_linalg_for_real {
                 max_diagonal,
                 <$scalar>::EPSILON as f64,
             ) {
-                return Err(tenferro_tensor::Error::backend_failure("full_piv_lu_solve", "matrix is singular"));
+                return Err(singular_matrix("full_piv_lu_solve"));
             }
         }
 
@@ -1318,11 +1315,7 @@ macro_rules! impl_faer_linalg_for_real {
         let n = square_matrix_dim(a, "solve")?;
         let (b_rows, b_cols) = matrix_dims(b, "solve")?;
         if b_rows != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "solve",
-                lhs: vec![n],
-                rhs: vec![b_rows],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch("solve", vec![n], vec![b_rows]));
         }
 
         let mut lu = Mat::zeros(n, n);
@@ -1355,7 +1348,7 @@ macro_rules! impl_faer_linalg_for_real {
                 max_diagonal,
                 <$scalar>::EPSILON as f64,
             ) {
-                return Err(tenferro_tensor::Error::backend_failure("solve", "matrix is singular"));
+                return Err(singular_matrix("solve"));
             }
         }
 
@@ -1413,11 +1406,7 @@ macro_rules! impl_faer_linalg_for_real {
 
         if left_side {
             if b_rows != n {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: "triangular_solve",
-                    lhs: vec![n],
-                    rhs: vec![b_rows],
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch("triangular_solve", vec![n], vec![b_rows]));
             }
             let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
             rhs_data.extend_from_slice(b.host_data()?);
@@ -1483,11 +1472,7 @@ macro_rules! impl_faer_linalg_for_real {
             Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())?)
         } else {
             if b_cols != n {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: "triangular_solve",
-                    lhs: vec![n],
-                    rhs: vec![b_cols],
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch("triangular_solve", vec![n], vec![b_cols]));
             }
             let nrhs = b_rows;
             let mut rhs_transposed = transpose_col_major_data(buffers, b.host_data()?, nrhs, n);
@@ -1884,7 +1869,7 @@ macro_rules! impl_faer_linalg_for_complex {
             stack,
             Default::default(),
         )
-        .map_err(|_| tenferro_tensor::Error::backend_failure("cholesky", "matrix is not positive definite"))?;
+        .map_err(|_| decomposition_failed("cholesky"))?;
         tensor_from_vec_with_template(
             vec![n, n],
             $matrix_from_predicate(l.as_ref(), n, n, |row, col| row >= col)?,
@@ -2102,11 +2087,7 @@ macro_rules! impl_faer_linalg_for_complex {
         let n = square_matrix_dim(a, "full_piv_lu_solve")?;
         let (b_rows, b_cols) = matrix_dims(b, "full_piv_lu_solve")?;
         if b_rows != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "full_piv_lu_solve",
-                lhs: vec![n],
-                rhs: vec![b_rows],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch("full_piv_lu_solve", vec![n], vec![b_rows]));
         }
 
         let mut lu = Mat::zeros(n, n);
@@ -2152,7 +2133,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 max_diagonal,
                 <$real>::EPSILON as f64,
             ) {
-                return Err(tenferro_tensor::Error::backend_failure("full_piv_lu_solve", "matrix is singular"));
+                return Err(singular_matrix("full_piv_lu_solve"));
             }
         }
 
@@ -2205,11 +2186,7 @@ macro_rules! impl_faer_linalg_for_complex {
         let n = square_matrix_dim(a, "solve")?;
         let (b_rows, b_cols) = matrix_dims(b, "solve")?;
         if b_rows != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "solve",
-                lhs: vec![n],
-                rhs: vec![b_rows],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch("solve", vec![n], vec![b_rows]));
         }
 
         let mut lu = Mat::zeros(n, n);
@@ -2251,7 +2228,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 max_diagonal,
                 <$real>::EPSILON as f64,
             ) {
-                return Err(tenferro_tensor::Error::backend_failure("solve", "matrix is singular"));
+                return Err(singular_matrix("solve"));
             }
         }
 
@@ -2309,11 +2286,7 @@ macro_rules! impl_faer_linalg_for_complex {
 
         if left_side {
             if b_rows != n {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: "triangular_solve",
-                    lhs: vec![n],
-                    rhs: vec![b_rows],
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch("triangular_solve", vec![n], vec![b_rows]));
             }
             let mut rhs_data = buffers.acquire_with_capacity::<Self>(b.host_data()?.len());
             rhs_data.extend_from_slice(b.host_data()?);
@@ -2383,11 +2356,7 @@ macro_rules! impl_faer_linalg_for_complex {
             Ok(tensor_from_vec_with_template(vec![n, b_cols], rhs_data, b.placement())?)
         } else {
             if b_cols != n {
-                return Err(tenferro_tensor::Error::ShapeMismatch {
-                    op: "triangular_solve",
-                    lhs: vec![n],
-                    rhs: vec![b_cols],
-                });
+                return Err(tenferro_tensor::Error::shape_mismatch("triangular_solve", vec![n], vec![b_cols]));
             }
             let nrhs = b_rows;
             let mut rhs_transposed = transpose_col_major_data(buffers, b.host_data()?, nrhs, n);
@@ -2975,18 +2944,18 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
         let (n, a_batch_shape) = square_core_and_batch(a, "full_piv_lu_solve")?;
         let (b_rows, _, b_batch_shape) = matrix_core_and_batch(b, "full_piv_lu_solve")?;
         if b_rows != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "full_piv_lu_solve",
-                lhs: vec![n],
-                rhs: vec![b_rows],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "full_piv_lu_solve",
+                vec![n],
+                vec![b_rows],
+            ));
         }
         if a_batch_shape != b_batch_shape {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "full_piv_lu_solve",
-                lhs: a_batch_shape.to_vec(),
-                rhs: b_batch_shape.to_vec(),
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "full_piv_lu_solve",
+                a_batch_shape.to_vec(),
+                b_batch_shape.to_vec(),
+            ));
         }
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b.placement());
     }
@@ -3006,18 +2975,18 @@ pub(crate) fn solve<T: FaerLinalg>(
         let (n, a_batch_shape) = square_core_and_batch(a, "solve")?;
         let (b_rows, _, b_batch_shape) = matrix_core_and_batch(b, "solve")?;
         if b_rows != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "solve",
-                lhs: vec![n],
-                rhs: vec![b_rows],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "solve",
+                vec![n],
+                vec![b_rows],
+            ));
         }
         if a_batch_shape != b_batch_shape {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "solve",
-                lhs: a_batch_shape.to_vec(),
-                rhs: b_batch_shape.to_vec(),
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "solve",
+                a_batch_shape.to_vec(),
+                b_batch_shape.to_vec(),
+            ));
         }
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b.placement());
     }
@@ -3043,18 +3012,18 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
         let (b_rows, b_cols, b_batch_shape) = matrix_core_and_batch(b, "triangular_solve")?;
         let rhs_core_dim = if left_side { b_rows } else { b_cols };
         if rhs_core_dim != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "triangular_solve",
-                lhs: vec![n],
-                rhs: vec![rhs_core_dim],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "triangular_solve",
+                vec![n],
+                vec![rhs_core_dim],
+            ));
         }
         if a_batch_shape != b_batch_shape {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "triangular_solve",
-                lhs: a_batch_shape.to_vec(),
-                rhs: b_batch_shape.to_vec(),
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "triangular_solve",
+                a_batch_shape.to_vec(),
+                b_batch_shape.to_vec(),
+            ));
         }
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b.placement());
     }
@@ -3207,14 +3176,14 @@ fn host_base_ptr<T: 'static>(view: &TypedTensorView<'_, T>) -> tenferro_tensor::
     let storage = view.host_storage()?;
     let offset = view.offset();
     if offset < 0 {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(tenferro_tensor::Error::runtime_state(
             "faer_view",
             "view offset is negative",
         ));
     }
     let offset_usize = offset as usize;
     if !storage.is_empty() && offset_usize >= storage.len() {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(tenferro_tensor::Error::runtime_state(
             "faer_view",
             "view offset is outside host buffer",
         ));
@@ -3228,11 +3197,11 @@ fn matrix_dims_view<T: 'static>(
     op: &'static str,
 ) -> tenferro_tensor::Result<(usize, usize)> {
     if view.shape().len() != 2 {
-        return Err(tenferro_tensor::Error::RankMismatch {
+        return Err(tenferro_tensor::Error::rank_mismatch(
             op,
-            expected: 2,
-            actual: view.shape().len(),
-        });
+            2,
+            view.shape().len(),
+        ));
     }
     Ok((view.shape()[0], view.shape()[1]))
 }
@@ -3268,11 +3237,11 @@ pub(crate) fn eigh_view<T: FaerLinalg + 'static>(
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     let (m, n) = matrix_dims_view(&view, "eigh")?;
     if m != n {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op: "eigh",
-            lhs: vec![m],
-            rhs: vec![n],
-        });
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "eigh",
+            vec![m],
+            vec![n],
+        ));
     }
     let placement = view.placement().clone();
     let base = host_base_ptr(&view)?;
@@ -3288,11 +3257,11 @@ pub(crate) fn cholesky_view<T: FaerLinalg + 'static>(
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let (m, n) = matrix_dims_view(&view, "cholesky")?;
     if m != n {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op: "cholesky",
-            lhs: vec![m],
-            rhs: vec![n],
-        });
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "cholesky",
+            vec![m],
+            vec![n],
+        ));
     }
     let placement = view.placement().clone();
     let base = host_base_ptr(&view)?;
@@ -3321,11 +3290,11 @@ pub(crate) fn full_piv_lu_view<T: FaerLinalg + 'static>(
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
     let (m, n) = matrix_dims_view(&view, "full_piv_lu")?;
     if m != n {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op: "full_piv_lu",
-            lhs: vec![m],
-            rhs: vec![n],
-        });
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "full_piv_lu",
+            vec![m],
+            vec![n],
+        ));
     }
     let placement = view.placement().clone();
     let base = host_base_ptr(&view)?;
@@ -3568,11 +3537,11 @@ pub(crate) fn eig(
         let (matrix_shape, batch_shape) = split_shape_core_and_batch(input.shape(), 2, "eig")?;
         let n = matrix_shape[0];
         if matrix_shape[1] != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "eig",
-                lhs: vec![n],
-                rhs: vec![matrix_shape[1]],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "eig",
+                vec![n],
+                vec![matrix_shape[1]],
+            ));
         }
         let value_shape = vector_with_batch_shape(n, batch_shape);
         let vector_shape = matrix_with_batch_shape(n, n, batch_shape);
@@ -3585,10 +3554,7 @@ pub(crate) fn eig(
                 Tensor::C64(TypedTensor::from_vec_col_major(value_shape, Vec::new())?),
                 Tensor::C64(TypedTensor::from_vec_col_major(vector_shape, Vec::new())?),
             ]),
-            _ => Err(tenferro_tensor::Error::backend_failure(
-                "eig",
-                format!("unsupported dtype {:?}", input.dtype()),
-            )),
+            _ => Err(crate::error::unsupported_dtype("eig", input.dtype())),
         };
     }
 
@@ -3633,10 +3599,7 @@ pub(crate) fn eig(
                 .collect(),
             )
         }
-        _ => Err(tenferro_tensor::Error::backend_failure(
-            "eig",
-            format!("unsupported dtype {:?}", input.dtype()),
-        )),
+        _ => Err(crate::error::unsupported_dtype("eig", input.dtype())),
     }
 }
 
@@ -3650,11 +3613,11 @@ pub(crate) fn eig_values(
             split_shape_core_and_batch(input.shape(), 2, "eig_values")?;
         let n = matrix_shape[0];
         if matrix_shape[1] != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "eig_values",
-                lhs: vec![n],
-                rhs: vec![matrix_shape[1]],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "eig_values",
+                vec![n],
+                vec![matrix_shape[1]],
+            ));
         }
         let value_shape = vector_with_batch_shape(n, batch_shape);
         return match input {
@@ -3666,10 +3629,7 @@ pub(crate) fn eig_values(
                 value_shape,
                 Vec::new(),
             )?)),
-            _ => Err(tenferro_tensor::Error::backend_failure(
-                "eig_values",
-                format!("unsupported dtype {:?}", input.dtype()),
-            )),
+            _ => Err(crate::error::unsupported_dtype("eig_values", input.dtype())),
         };
     }
 
@@ -3702,10 +3662,7 @@ pub(crate) fn eig_values(
                 })?;
             Ok(Tensor::C64(outputs.remove(0)))
         }
-        _ => Err(tenferro_tensor::Error::backend_failure(
-            "eig_values",
-            format!("unsupported dtype {:?}", input.dtype()),
-        )),
+        _ => Err(crate::error::unsupported_dtype("eig_values", input.dtype())),
     }
 }
 

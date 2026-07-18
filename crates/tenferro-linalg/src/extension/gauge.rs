@@ -25,13 +25,14 @@ pub(crate) fn apply_qr_gauge(
 
 fn apply_canonical_pivot_eigh_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::Result<()> {
     if outputs.len() != 2 {
-        return Err(Error::InvalidConfig {
-            op: "tenferro-linalg.eigh",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "tenferro-linalg.eigh",
+            "outputs",
+            format!(
                 "canonical eigh gauge expected two outputs, got {}",
                 outputs.len()
             ),
-        });
+        ));
     }
 
     let (values_slice, vectors_slice) = outputs.split_at_mut(1);
@@ -39,22 +40,24 @@ fn apply_canonical_pivot_eigh_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::
     let vectors = &mut vectors_slice[0];
     let vectors_shape = vectors.shape().to_vec();
     if values_shape.is_empty() || vectors_shape.len() < 2 {
-        return Err(Error::InvalidConfig {
-            op: "tenferro-linalg.eigh",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "tenferro-linalg.eigh",
+            "outputs",
+            format!(
                 "canonical eigh gauge expected values rank >= 1 and vectors rank >= 2; got values={values_shape:?}, vectors={vectors_shape:?}"
             ),
-        });
+        ));
     }
 
     let n = vectors_shape[0];
     if vectors_shape[1] != n || values_shape[0] != n || values_shape[1..] != vectors_shape[2..] {
-        return Err(Error::InvalidConfig {
-            op: "tenferro-linalg.eigh",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "tenferro-linalg.eigh",
+            "outputs",
+            format!(
                 "canonical eigh gauge expected compatible eigendecomposition shapes, got values={values_shape:?}, vectors={vectors_shape:?}"
             ),
-        });
+        ));
     }
     let batch_count = checked_batch_count("tenferro-linalg.eigh", &vectors_shape[2..])?;
 
@@ -83,7 +86,7 @@ fn apply_canonical_pivot_eigh_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::
             batch_count,
             "tenferro-linalg.eigh",
         ),
-        vectors => Err(Error::backend_failure(
+        vectors => Err(Error::unsupported(
             "tenferro-linalg.eigh",
             format!("unsupported eigenvector dtype {:?}", vectors.dtype()),
         )),
@@ -92,13 +95,14 @@ fn apply_canonical_pivot_eigh_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::
 
 fn apply_positive_diagonal_qr_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::Result<()> {
     if outputs.len() != 2 {
-        return Err(Error::InvalidConfig {
-            op: "tenferro-linalg.qr",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "tenferro-linalg.qr",
+            "outputs",
+            format!(
                 "positive-diagonal QR gauge expected two outputs, got {}",
                 outputs.len()
             ),
-        });
+        ));
     }
 
     let (q_slice, r_slice) = outputs.split_at_mut(1);
@@ -107,24 +111,26 @@ fn apply_positive_diagonal_qr_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::
     let q_shape = q.shape().to_vec();
     let r_shape = r.shape().to_vec();
     if q_shape.len() < 2 || r_shape.len() < 2 {
-        return Err(Error::InvalidConfig {
-            op: "tenferro-linalg.qr",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "tenferro-linalg.qr",
+            "outputs",
+            format!(
                 "positive-diagonal QR gauge expected Q and R rank >= 2; got Q={q_shape:?}, R={r_shape:?}"
             ),
-        });
+        ));
     }
 
     let m = q_shape[0];
     let k = q_shape[1];
     let n = r_shape[1];
     if r_shape[0] != k || q_shape[2..] != r_shape[2..] {
-        return Err(Error::InvalidConfig {
-            op: "tenferro-linalg.qr",
-            message: format!(
+        return Err(Error::invalid_argument(
+            "tenferro-linalg.qr",
+            "outputs",
+            format!(
                 "positive-diagonal QR gauge expected compatible QR shapes, got Q={q_shape:?}, R={r_shape:?}"
             ),
-        });
+        ));
     }
     let batch_count = checked_batch_count("tenferro-linalg.qr", &q_shape[2..])?;
 
@@ -165,11 +171,11 @@ fn apply_positive_diagonal_qr_gauge(outputs: &mut [Tensor]) -> tenferro_tensor::
             batch_count,
             "tenferro-linalg.qr",
         ),
-        (q, r) => Err(Error::DTypeMismatch {
-            op: "tenferro-linalg.qr",
-            lhs: q.dtype(),
-            rhs: r.dtype(),
-        }),
+        (q, r) => Err(Error::dtype_mismatch(
+            "tenferro-linalg.qr",
+            q.dtype(),
+            r.dtype(),
+        )),
     }
 }
 
@@ -474,8 +480,5 @@ fn checked_batch_offset(
 }
 
 fn invalid_config(op: &'static str, message: &'static str) -> Error {
-    Error::InvalidConfig {
-        op,
-        message: message.to_string(),
-    }
+    Error::invalid_argument(op, "configuration", message)
 }

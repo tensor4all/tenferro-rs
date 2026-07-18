@@ -139,7 +139,11 @@ fn assert_invalid_ad_graph_build(
         .unwrap_or_else(|_| panic!("{linalg_op} {transform} should return Err, not panic"))
         .unwrap_err();
     match err {
-        Error::InvalidGraphBuild { op, message } => {
+        Error::Validation {
+            op,
+            phase: tenferro_runtime::ErrorPhase::GraphBuild,
+            source: tenferro_tensor::ValidationError::InvalidArgument { message, .. },
+        } => {
             assert_eq!(op, transform);
             assert!(
                 message.contains(linalg_op),
@@ -150,7 +154,7 @@ fn assert_invalid_ad_graph_build(
                 "expected {detail:?} in message, got: {message}"
             );
         }
-        other => panic!("expected InvalidGraphBuild, got {other:?}"),
+        other => panic!("expected graph-build validation, got {other:?}"),
     }
 }
 
@@ -164,10 +168,13 @@ fn assert_traced_op_rank_mismatch<T>(
         Err(err) => err,
     };
     match err {
-        Error::TensorRuntime(TensorError::RankMismatch {
+        Error::TensorRuntime(TensorError::Validation {
             op,
-            expected: 2,
-            actual: got,
+            source:
+                tenferro_tensor::ValidationError::RankMismatch {
+                    expected: 2,
+                    actual: got,
+                },
         }) => {
             assert_eq!(op, linalg_op);
             assert_eq!(got, actual);

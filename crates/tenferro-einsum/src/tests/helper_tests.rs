@@ -44,7 +44,7 @@ fn char_to_label_accepts_unicode_symbols() {
 fn char_to_label_rejects_reserved_syntax_chars() {
     let err = char_to_label('-').unwrap_err();
     match err {
-        Error::InvalidArgument(msg) => {
+        Error::InvalidSubscripts { message: msg } => {
             assert!(msg.contains("invalid einsum label character"));
             assert!(msg.contains("reserved syntax character"));
         }
@@ -70,11 +70,11 @@ fn split_and_validate_notation_rejects_missing_or_extra_arrow() {
     let extra = split_and_validate_notation("ij->jk->ik").unwrap_err();
 
     match missing {
-        Error::InvalidArgument(msg) => assert!(msg.contains("exactly one '->'")),
+        Error::InvalidSubscripts { message: msg } => assert!(msg.contains("exactly one '->'")),
         other => panic!("unexpected error: {other:?}"),
     }
     match extra {
-        Error::InvalidArgument(msg) => assert!(msg.contains("exactly one '->'")),
+        Error::InvalidSubscripts { message: msg } => assert!(msg.contains("exactly one '->'")),
         other => panic!("unexpected error: {other:?}"),
     }
 }
@@ -85,11 +85,11 @@ fn split_and_validate_notation_rejects_unbalanced_parentheses() {
     let unmatched_close = split_and_validate_notation("ij),jk->ik").unwrap_err();
 
     match unmatched_open {
-        Error::InvalidArgument(msg) => assert!(msg.contains("unmatched '('")),
+        Error::InvalidSubscripts { message: msg } => assert!(msg.contains("unmatched '('")),
         other => panic!("unexpected error: {other:?}"),
     }
     match unmatched_close {
-        Error::InvalidArgument(msg) => assert!(msg.contains("unmatched ')'")),
+        Error::InvalidSubscripts { message: msg } => assert!(msg.contains("unmatched ')'")),
         other => panic!("unexpected error: {other:?}"),
     }
 }

@@ -11,6 +11,8 @@ mod ad_optimizer;
 mod ad_structural_primitives;
 #[path = "integration/binding_validation.rs"]
 mod binding_validation;
+#[path = "integration/broadcast_error_parity.rs"]
+mod broadcast_error_parity;
 #[path = "integration/cache_management.rs"]
 mod cache_management;
 #[path = "integration/checkpoint.rs"]

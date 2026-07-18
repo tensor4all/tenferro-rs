@@ -366,10 +366,12 @@ fn traced_norm_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
         assert!(
             matches!(
                 err,
-                Error::TensorRuntime(TensorError::BackendFailure {
+                Error::TensorRuntime(TensorError::Extension {
                     op: "norm",
-                    ref message,
-                }) if message.contains("unsupported dtype")
+                    family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
+                    kind: tenferro_tensor::ErrorKind::Unsupported,
+                    ..
+                })
             ),
             "expected unsupported dtype error for {dtype:?}, got {err:?}"
         );
@@ -381,10 +383,12 @@ fn traced_norm_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
         assert!(
             matches!(
                 err,
-                Error::TensorRuntime(TensorError::BackendFailure {
+                Error::TensorRuntime(TensorError::Extension {
                     op: "pinv_with_rtol",
-                    ref message,
-                }) if message.contains("unsupported dtype")
+                    family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
+                    kind: tenferro_tensor::ErrorKind::Unsupported,
+                    ..
+                })
             ),
             "expected unsupported dtype error for {dtype:?}, got {err:?}"
         );
@@ -399,10 +403,12 @@ fn traced_inv_rejects_rank_less_than_two_without_panicking() {
 
     assert!(matches!(
         err,
-        Error::TensorRuntime(TensorError::RankMismatch {
+        Error::TensorRuntime(TensorError::Validation {
             op: "inv",
-            expected: 2,
-            actual: 0,
+            source: tenferro_tensor::ValidationError::RankMismatch {
+                expected: 2,
+                actual: 0,
+            },
         })
     ));
 }
@@ -415,10 +421,12 @@ fn assert_linalg_rank_mismatch<T>(name: &str, result: tenferro_runtime::Result<T
     assert!(
         matches!(
             err,
-            Error::TensorRuntime(TensorError::RankMismatch {
-                expected: 2,
-                actual: got,
-                ..
+            Error::TensorRuntime(TensorError::Validation {
+                op: _,
+                source: tenferro_tensor::ValidationError::RankMismatch {
+                    expected: 2,
+                    actual: got,
+                },
             }) if got == actual
         ),
         "expected rank mismatch for {name}, got {err:?}"
@@ -459,10 +467,13 @@ fn traced_linalg_helpers_reject_symbolic_shapes_without_panicking() {
         assert!(
             matches!(
                 err,
-                Error::TensorRuntime(TensorError::BackendFailure {
+                Error::TensorRuntime(TensorError::Validation {
                     op: actual_op,
-                    ref message,
-                }) if actual_op == op && message.contains("symbolic shape")
+                    source: tenferro_tensor::ValidationError::InvalidArgument {
+                        argument: "shape",
+                        ..
+                    },
+                }) if actual_op == op
             ),
             "expected symbolic-shape error for {op}, got {err:?}"
         );
@@ -477,10 +488,9 @@ fn traced_norm_rejects_out_of_range_axis_without_panicking() {
 
     assert!(matches!(
         err,
-        Error::TensorRuntime(TensorError::AxisOutOfBounds {
+        Error::TensorRuntime(TensorError::Validation {
             op: "norm",
-            axis: 5,
-            rank: 1,
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: 5, rank: 1 },
         })
     ));
 }
@@ -496,10 +506,12 @@ fn traced_pinv_rejects_integer_and_bool_dtypes_before_scalar_rounding() {
         assert!(
             matches!(
                 err,
-                Error::TensorRuntime(TensorError::BackendFailure {
+                Error::TensorRuntime(TensorError::Extension {
                     op: "pinv",
-                    ref message,
-                }) if message.contains("unsupported dtype")
+                    family: tenferro_linalg::LINALG_EXTENSION_FAMILY_ID,
+                    kind: tenferro_tensor::ErrorKind::Unsupported,
+                    ..
+                })
             ),
             "expected unsupported dtype error for {dtype:?}, got {err:?}"
         );

@@ -75,18 +75,40 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+      - name: Test public Result error documentation audit
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: python3 scripts/test-check-public-error-docs.py
+      - name: Audit public Result error documentation
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          python3 scripts/check-public-error-docs.py
+          if [ "${EVENT_NAME}" = pull_request ]; then
+            base_sha="${PR_BASE_SHA}"
+          else
+            base_sha="${PUSH_BASE_SHA}"
+          fi
+          python3 scripts/check-public-error-docs.py --changed-from "${base_sha}"
       - name: Run workspace clippy
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
       - name: Run tropical extension clippy
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
-        run: cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+      - name: Run sparse extension clippy
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: cargo clippy --manifest-path ext/sparse/Cargo.toml --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
       - name: Report clippy disposition
         if: always()
         env:

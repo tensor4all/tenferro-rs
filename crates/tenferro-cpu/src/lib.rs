@@ -88,7 +88,9 @@ extern crate lapack_src as _;
 #[cfg(feature = "cpu-tblis-linked")]
 extern crate tblis_src as _;
 
-pub use affinity::{available_parallelism, process_cpu_affinity, process_cpu_affinity_count};
+pub use affinity::{
+    available_parallelism, process_cpu_affinity, process_cpu_affinity_count, CpuAffinityError,
+};
 pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
     DotGeneralProvider,
@@ -96,7 +98,9 @@ pub use backend::{
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 pub use context::{CpuContext, CpuContextError};
-pub use placement::{CpuPlacement, CpuPlacementError, ResolvedCpuPlacement};
+pub use placement::{
+    CpuEngineConstructionError, CpuPlacement, CpuPlacementError, ResolvedCpuPlacement,
+};
 pub use topology::{
     discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
     NumaNodeId,
@@ -130,9 +134,35 @@ pub mod linalg_interop {
 }
 
 pub(crate) fn cpu_backend_buffer_error(op: &'static str) -> crate::Error {
-    crate::Error::backend_failure(
+    crate::Error::runtime_state(
         op,
         "CPU backend received backend buffer; download to host before CPU execution",
+    )
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CpuNumericalError {
+    #[error("{op} detected division by zero for dtype {dtype:?}")]
+    DivisionByZero { op: &'static str, dtype: DType },
+    #[error("{op} received a negative integer exponent for dtype {dtype:?}")]
+    NegativeIntegerExponent { op: &'static str, dtype: DType },
+}
+
+pub(crate) fn cpu_division_by_zero(op: &'static str, dtype: DType) -> crate::Error {
+    crate::Error::extension(
+        op,
+        "cpu",
+        ErrorKind::NumericalFailure,
+        CpuNumericalError::DivisionByZero { op, dtype },
+    )
+}
+
+pub(crate) fn cpu_negative_integer_exponent(op: &'static str, dtype: DType) -> crate::Error {
+    crate::Error::extension(
+        op,
+        "cpu",
+        ErrorKind::NumericalFailure,
+        CpuNumericalError::NegativeIntegerExponent { op, dtype },
     )
 }
 
@@ -182,7 +212,7 @@ pub(crate) fn typed_view<'a, T: Copy>(
         Buffer::Host(data) => {
             let strides = kernel_col_major_strides(tensor.shape());
             StridedView::new(data.as_slice(), tensor.shape(), &strides, 0)
-                .map_err(|err| crate::Error::backend_failure(op, err))
+                .map_err(|err| crate::Error::backend_source(op, err))
         }
         Buffer::Backend(_) => Err(cpu_backend_buffer_error(op)),
     }
@@ -201,7 +231,7 @@ pub(crate) fn typed_view_from_view<'a, T: Copy + 'static, R: TensorRank>(
         view.strides(),
         view.offset(),
     )
-    .map_err(|err| crate::Error::backend_failure(op, err))
+    .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 pub(crate) fn materialize_tensor_read(
@@ -233,11 +263,7 @@ pub(crate) fn copy_tensor_read_into(
                 TensorWrite::View(TensorViewMut::$variant(mut dst)) => {
                     structural::typed_copy_view_into(&src, &mut dst, op)
                 }
-                _ => Err(crate::Error::DTypeMismatch {
-                    op,
-                    lhs: src_dtype,
-                    rhs: dst_dtype,
-                }),
+                _ => Err(crate::Error::dtype_mismatch(op, src_dtype, dst_dtype)),
             }
         }};
     }
@@ -345,7 +371,7 @@ where
     // Invariant: callers pass validated tensor-derived or prechecked output
     // shapes, and `strides` is their compact column-major layout.
     StridedArray::from_parts(data, shape, &strides, 0)
-        .map_err(|err| crate::Error::backend_failure("typed_array_uninit_from_pool", err))
+        .map_err(|err| crate::Error::backend_source("typed_array_uninit_from_pool", err))
 }
 
 pub(crate) fn tensor_from_array<T: Clone>(array: StridedArray<T>) -> TypedTensor<T> {

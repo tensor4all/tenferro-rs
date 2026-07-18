@@ -538,7 +538,7 @@ fn broadcast_transpose_reduce_axes(
                     needs_input_shape_restore = true;
                 }
             }
-            Err(ShapeGuardError::MissingMetadata { .. }) => {}
+            Err(err) if matches!(err.typed_source(), ShapeGuardError::MissingMetadata { .. }) => {}
             Err(err) => return Err(err.into()),
         }
     }

@@ -221,6 +221,46 @@ fn gemm_analysis_cache_reuses_matching_direct_plan_and_reports_stats() {
 }
 
 #[test]
+fn gemm_analysis_cache_matches_view_layouts_before_reusing_a_plan() {
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();
+    let lhs_view = lhs.as_view();
+    let rhs_view = rhs.as_view();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let mut cache = GemmAnalysisCache::default();
+
+    let first = analyse_gemm_cached(
+        &mut cache,
+        Some(11),
+        GemmAnalysisCacheKind::Direct,
+        &lhs_view,
+        &rhs_view,
+        &config,
+    )
+    .unwrap()
+    .expect("view layout should be representable as GEMM");
+    let cached = analyse_gemm_cached(
+        &mut cache,
+        Some(11),
+        GemmAnalysisCacheKind::Direct,
+        &lhs_view,
+        &rhs_view,
+        &config,
+    )
+    .unwrap()
+    .expect("the matching view layout should reuse the cached analysis");
+
+    assert_eq!((first.m, first.n, first.k), (2, 2, 3));
+    assert_eq!((cached.m, cached.n, cached.k), (2, 2, 3));
+    assert_eq!(cache.stats().entries, 1);
+}
+
+#[test]
 fn gemm_analysis_cache_shrink_invalidates_entries_instead_of_truncating_by_slot() {
     let lhs = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
     let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![0.0; 6]).unwrap();
@@ -259,6 +299,21 @@ fn gemm_analysis_cache_shrink_invalidates_entries_instead_of_truncating_by_slot(
         0,
         "shrinking a direct-indexed cache should not retain arbitrary low-slot entries as a fake LRU"
     );
+}
+
+#[test]
+fn gemm_analysis_cache_exposes_debug_capacity_and_clear_contract() {
+    let mut cache = GemmAnalysisCache::with_capacity(2);
+
+    assert_eq!(cache.capacity(), 2);
+    let debug = format!("{cache:?}");
+    assert!(debug.contains("GemmAnalysisCache"));
+    assert!(debug.contains("max_slots"));
+
+    cache.set_capacity(0);
+    assert_eq!(cache.capacity(), 0);
+    cache.clear();
+    assert_eq!(cache.stats().entries, 0);
 }
 
 #[cfg(feature = "cpu-faer")]

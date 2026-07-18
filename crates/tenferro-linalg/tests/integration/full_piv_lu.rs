@@ -106,10 +106,11 @@ fn full_piv_lu_blas_rejects_singular_matrix() {
 
     assert!(matches!(
         err,
-        tenferro_tensor::Error::BackendFailure {
+        tenferro_tensor::Error::Extension {
             op: "full_piv_lu",
-            ref message,
-        } if message.contains("singular")
+            kind: tenferro_tensor::ErrorKind::NumericalFailure,
+            ..
+        }
     ));
 }
 

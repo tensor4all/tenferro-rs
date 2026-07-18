@@ -43,7 +43,7 @@
 //!
 //! let out = [&a, &b].einsum("ij,jk->ik", &mut backend)?;
 //! assert_eq!(out.shape(), &[2, 4]);
-//! # Ok::<(), tenferro_tensor::Error>(())
+//! # Ok::<(), tenferro_einsum::Error>(())
 //! ```
 //!
 //! ```
@@ -88,7 +88,7 @@ pub use concrete::{
 };
 #[cfg(feature = "autodiff")]
 pub use eager_ad::{EagerEinsumExt, EagerTensorEinsumExt};
-pub use error::{Error, Result};
+pub use error::{Error, PlanningError, Result};
 #[cfg(feature = "autodiff")]
 pub use extension::ad_rules;
 pub use extension::register_runtime;

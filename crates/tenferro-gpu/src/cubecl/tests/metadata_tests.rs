@@ -9,6 +9,7 @@ use crate::cubecl::CudaExtensionCache;
 use crate::{
     Buffer, CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TypedTensor,
 };
+use tenferro_tensor::{Error, ErrorKind, ValidationError, ValidationKind};
 
 #[test]
 fn scalar_reduction_shape_stays_separate_from_cubecl_launch_metadata() {
@@ -129,7 +130,7 @@ fn cuda_extension_cache_has_configurable_entry_bound() {
 
 #[test]
 fn typed_tensor_binding_accepts_valid_backend_metadata() {
-    let tensor = cubecl_tensor_with_len(vec![2, 3], 6);
+    let tensor = cubecl_tensor_with_len(vec![2, 3], 6).unwrap();
 
     typed_tensor_binding(&tensor, "metadata_test").unwrap();
     typed_tensor_array_arg(&tensor, "metadata_test").unwrap();
@@ -137,41 +138,45 @@ fn typed_tensor_binding_accepts_valid_backend_metadata() {
 
 #[test]
 fn from_buffer_col_major_rejects_backend_buffer_len_mismatch() {
-    let panic = constructor_panic_message(vec![2, 3], 5);
+    let error = cubecl_tensor_with_len(vec![2, 3], 5).unwrap_err();
 
-    assert!(panic.contains("from_buffer_col_major"));
-    assert!(panic.contains("data length 5 does not match shape product 6"));
+    assert_eq!(
+        error.kind(),
+        ErrorKind::Validation(ValidationKind::ShapeMismatch)
+    );
+    assert!(matches!(
+        error,
+        Error::Validation {
+            op: "from_buffer_col_major",
+            source: ValidationError::ShapeDataLengthMismatch {
+                expected: 6,
+                actual: 5,
+            },
+        }
+    ));
 }
 
 #[test]
 fn from_buffer_col_major_rejects_shape_product_overflow() {
-    let panic = constructor_panic_message(vec![usize::MAX, 2], 1);
+    let error = cubecl_tensor_with_len(vec![usize::MAX, 2], 1).unwrap_err();
 
-    assert!(
-        panic.contains("attempt to multiply with overflow")
-            || panic.contains("invalid compact tensor layout")
-            || panic.contains("from_buffer_col_major: data length")
-            || (panic.contains("integer overflow") && panic.contains("tensor metadata")),
-        "unexpected panic message: {panic}"
+    assert_eq!(
+        error.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
     );
+    assert!(matches!(
+        error,
+        Error::Validation {
+            op: "from_buffer_col_major",
+            source: ValidationError::IntegerOverflow,
+        }
+    ));
 }
 
-fn constructor_panic_message(shape: Vec<usize>, len: usize) -> String {
-    let panic = panic::catch_unwind(|| {
-        let _ = cubecl_tensor_with_len(shape, len);
-    })
-    .expect_err("expected TypedTensor::from_buffer_col_major to reject invalid metadata");
-
-    if let Some(message) = panic.downcast_ref::<String>() {
-        return message.clone();
-    }
-    if let Some(message) = panic.downcast_ref::<&'static str>() {
-        return (*message).to_string();
-    }
-    "non-string panic payload".to_string()
-}
-
-fn cubecl_tensor_with_len(shape: Vec<usize>, len: usize) -> TypedTensor<f32> {
+fn cubecl_tensor_with_len(
+    shape: Vec<usize>,
+    len: usize,
+) -> tenferro_tensor::Result<TypedTensor<f32>> {
     let handle = cubecl::server::Handle::new(
         StreamId::current(),
         (len * core::mem::size_of::<f32>()) as u64,
@@ -187,5 +192,4 @@ fn cubecl_tensor_with_len(shape: Vec<usize>, len: usize) -> TypedTensor<f32> {
             }),
         },
     )
-    .unwrap()
 }

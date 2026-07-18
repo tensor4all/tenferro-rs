@@ -125,7 +125,10 @@ fn eager_einsum_read_views_match_owned_inputs() {
     let read = eager_einsum_read_subscripts(&mut read_ctx, &inputs, &subscripts).unwrap();
 
     assert_eq!(read.shape(), owned.shape());
-    assert_eq!(read.as_slice::<f64>(), owned.as_slice::<f64>());
+    assert_eq!(
+        read.as_slice::<f64>().unwrap(),
+        owned.as_slice::<f64>().unwrap()
+    );
 }
 
 #[test]
@@ -182,7 +185,7 @@ fn eager_einsum_rejects_empty_inputs_and_operand_count_mismatch() {
     let empty = eager_einsum(&mut ctx, &[], "->").unwrap_err();
     assert!(matches!(
         empty,
-        tenferro_tensor::Error::InvalidConfig {
+        tenferro_tensor::Error::Validation {
             op: "eager_einsum",
             ..
         }
@@ -191,7 +194,7 @@ fn eager_einsum_rejects_empty_inputs_and_operand_count_mismatch() {
     let mismatch = eager_einsum(&mut ctx, &[&tensor], "i,j->ij").unwrap_err();
     assert!(matches!(
         mismatch,
-        tenferro_tensor::Error::InvalidConfig {
+        tenferro_tensor::Error::Validation {
             op: "eager_einsum",
             ..
         }
@@ -273,8 +276,8 @@ fn eager_einsum_owned_matches_borrowed_for_representative_cases() {
             "shape mismatch for {subscripts}"
         );
         assert_eq!(
-            owned.as_slice::<f64>(),
-            borrowed.as_slice::<f64>(),
+            owned.as_slice::<f64>().unwrap(),
+            borrowed.as_slice::<f64>().unwrap(),
             "values mismatch for {subscripts}"
         );
     }

@@ -160,7 +160,7 @@ fn bool_ones_tensor_rejects_shape_product_overflow_without_panicking() {
 
     assert!(matches!(
         err,
-        crate::Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+        crate::Error::TensorRuntime(tenferro_tensor::Error::Validation {
             op: "ones_tensor",
             ..
         })

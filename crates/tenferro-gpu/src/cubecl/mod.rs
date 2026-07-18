@@ -116,6 +116,7 @@ use crate::{
 
 mod capability;
 mod dispatch;
+mod error;
 mod ffi;
 mod fusion;
 mod gemm;
@@ -135,14 +136,11 @@ use dispatch::{
     ternary_dtype_mismatch, typed_tensor_array_arg, typed_tensor_array_arg_as,
     typed_tensor_binding, typed_view_array_arg, typed_view_mut_array_arg,
 };
+use error::{unexpected_validation_flag_dtype, unsupported_dtype, unsupported_operation};
 
 pub use capability::cuda_capabilities;
 pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime};
-
-fn unsupported_dtype(op: &'static str, dtype: crate::DType) -> crate::Error {
-    crate::Error::backend_failure(op, format!("unsupported dtype {dtype:?}"))
-}
 
 fn op_name(
     kind: PrimitiveOpKind,
@@ -164,9 +162,9 @@ fn ensure_atomic_add_supported<T: CubePrimitive>(
     {
         Ok(())
     } else {
-        Err(crate::Error::backend_failure(
+        Err(unsupported_operation(
             op,
-            format!("CubeCL runtime does not support atomic add for {elem:?}"),
+            "CubeCL runtime does not support atomic add",
         ))
     }
 }
@@ -178,8 +176,9 @@ fn checked_dim_product(
 ) -> crate::Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
         acc.checked_mul(dim).ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::invalid_argument(
                 op,
+                role,
                 format!("{role} product overflow for shape {shape:?}"),
             )
         })
@@ -191,8 +190,9 @@ fn view_strides_i64(strides: &[isize], op: &'static str) -> crate::Result<Vec<i6
         .iter()
         .map(|&stride| {
             i64::try_from(stride).map_err(|_| {
-                crate::Error::backend_failure(
+                crate::Error::invalid_argument(
                     op,
+                    "layout",
                     format!("view stride {stride} exceeds CubeCL i64 metadata limit"),
                 )
             })
@@ -202,8 +202,9 @@ fn view_strides_i64(strides: &[isize], op: &'static str) -> crate::Result<Vec<i6
 
 fn view_offset_i64(offset: isize, op: &'static str) -> crate::Result<i64> {
     i64::try_from(offset).map_err(|_| {
-        crate::Error::backend_failure(
+        crate::Error::invalid_argument(
             op,
+            "layout",
             format!("view offset {offset} exceeds CubeCL i64 metadata limit"),
         )
     })
@@ -214,8 +215,9 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
     let window_len =
         checked_dim_product("scatter", "window update shape", &meta.window_shape_updates)?;
     batch_len.checked_mul(window_len).ok_or_else(|| {
-        crate::Error::backend_failure(
+        crate::Error::invalid_argument(
             "scatter",
+            "shape",
             format!(
                 "scatter update domain product overflow for batch {:?} and window {:?}",
                 meta.batch_shape, meta.window_shape_updates
@@ -237,7 +239,7 @@ pub struct CudaBackend {
     // CUDA library handles are dropped before `rt`; Rust drops fields in
     // declaration order, so cache-owned handles release while the CUDA primary
     // context is still retained by `CudaRuntime`.
-    cutensor: OnceCell<crate::Result<ffi::cutensor::CutensorHandle>>,
+    cutensor: OnceCell<ffi::cutensor::CutensorHandle>,
     extension_cache: CudaExtensionCache,
     rt: CudaRuntime,
 }
@@ -323,7 +325,7 @@ impl CudaExtensionCacheInner {
 
 impl CudaExtensionCache {
     fn poisoned_lock_error() -> crate::Error {
-        crate::Error::backend_failure("cuda_extension_cache", "extension cache lock poisoned")
+        crate::Error::runtime_state("cuda_extension_cache", "extension cache lock poisoned")
     }
 
     fn lock_inner(&self) -> crate::Result<MutexGuard<'_, CudaExtensionCacheInner>> {
@@ -341,6 +343,11 @@ impl CudaExtensionCache {
     /// assert!(cache.is_empty()?);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    ///
+    /// The cache retains at most 16 extension states by default. Use
+    /// [`Self::with_max_entries`] to choose a different bound. Later cache
+    /// operations return [`crate::Error::RuntimeState`] if the cache mutex is
+    /// poisoned.
     pub fn new() -> Self {
         let max_entries = NonZeroUsize::new(DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES)
             .unwrap_or(NonZeroUsize::MIN);
@@ -364,11 +371,21 @@ impl CudaExtensionCache {
     /// assert!(CudaExtensionCache::new().is_empty()?);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
     pub fn is_empty(&self) -> crate::Result<bool> {
         Ok(self.lock_inner()?.entries.is_empty())
     }
 
     /// Remove every cached CUDA extension state value.
+    ///
+    /// This operation returns a runtime-state error if the cache mutex is
+    /// poisoned.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
     pub fn clear(&self) -> crate::Result<()> {
         let mut inner = self.lock_inner()?;
         inner.entries.clear();
@@ -378,6 +395,9 @@ impl CudaExtensionCache {
     }
 
     /// Snapshot the number of retained entries and logical retained bytes.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
     pub fn stats(&self) -> crate::Result<CacheStats> {
         let inner = self.lock_inner()?;
         Ok(CacheStats {
@@ -387,11 +407,18 @@ impl CudaExtensionCache {
     }
 
     /// Return the configured entry bound.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
     pub fn max_entries(&self) -> crate::Result<NonZeroUsize> {
         Ok(self.lock_inner()?.max_entries)
     }
 
     /// Replace the entry bound and evict oldest entries if needed.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned
+    /// while changing the bound.
     pub fn set_max_entries(&self, max_entries: NonZeroUsize) -> crate::Result<()> {
         let mut inner = self.lock_inner()?;
         inner.max_entries = max_entries;
@@ -410,6 +437,11 @@ impl CudaExtensionCache {
     /// let value = cache.get_or_try_init::<usize>(|| Ok(3)).unwrap();
     /// assert_eq!(*value, 3);
     /// ```
+    /// # Errors
+    ///
+    /// Propagates the initializer's typed error, returns
+    /// [`crate::Error::RuntimeState`] for a poisoned cache or a missing/wrongly
+    /// typed entry, and preserves backend errors from initialization.
     pub fn get_or_try_init<T>(
         &self,
         init: impl FnOnce() -> crate::Result<T>,
@@ -428,7 +460,7 @@ impl CudaExtensionCache {
             .and_then(|entry| entry.value.downcast_ref::<T>())
             .map(NonNull::from)
             .ok_or_else(|| {
-                crate::Error::backend_failure(
+                crate::Error::runtime_state(
                     "cuda_extension_cache",
                     format!(
                         "stored entry for {} is missing or has the wrong type",
@@ -496,6 +528,10 @@ impl CudaBackend {
     ///
     /// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaBackend> = CudaBackend::new;
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] when CUDA initialization,
+    /// context creation, or CubeCL client creation fails.
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
         Ok(Self {
             cutensor: OnceCell::new(),
@@ -518,13 +554,17 @@ impl CudaBackend {
     }
 
     fn cutensor_handle(&self) -> crate::Result<&ffi::cutensor::CutensorHandle> {
-        match self
-            .cutensor
-            .get_or_init(ffi::cutensor::CutensorHandle::load)
-        {
-            Ok(handle) => Ok(handle),
-            Err(err) => Err(err.clone()),
+        if let Some(handle) = self.cutensor.get() {
+            return Ok(handle);
         }
+        let handle = ffi::cutensor::CutensorHandle::load()?;
+        let _ = self.cutensor.set(handle);
+        self.cutensor.get().ok_or_else(|| {
+            crate::Error::runtime_state(
+                "dot_general",
+                "cuTENSOR handle initialization completed without a stored handle",
+            )
+        })
     }
 
     #[doc(hidden)]
@@ -533,21 +573,41 @@ impl CudaBackend {
     }
 
     /// Clear CUDA extension-owned backend state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
+    /// poisoned.
     pub fn clear_cuda_extension_cache(&self) -> crate::Result<()> {
         self.extension_cache.clear()
     }
 
     /// Return CUDA extension cache stats.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
+    /// poisoned.
     pub fn cuda_extension_cache_stats(&self) -> crate::Result<CacheStats> {
         self.extension_cache.stats()
     }
 
     /// Return the CUDA extension cache entry bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
+    /// poisoned.
     pub fn cuda_extension_cache_max_entries(&self) -> crate::Result<NonZeroUsize> {
         self.extension_cache.max_entries()
     }
 
     /// Configure the CUDA extension cache entry bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
+    /// poisoned while changing the bound.
     pub fn set_cuda_extension_cache_max_entries(
         &self,
         max_entries: NonZeroUsize,
@@ -727,18 +787,15 @@ impl CudaBackend {
     {
         let len = checked_dim_product(op, "output shape", shape)?;
         let bytes = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::invalid_argument(
                 op,
+                "shape",
                 format!("CubeCL output byte length overflow for shape {shape:?}"),
             )
         })?;
         let handle = self.runtime().client().empty(bytes);
-        let shape = R::shape_from_vec(shape.to_vec().into()).map_err(|err| {
-            crate::Error::InvalidConfig {
-                op,
-                message: format!("output rank mismatch: {err}"),
-            }
-        })?;
+        let shape = R::shape_from_vec(shape.to_vec().into())
+            .map_err(|err| crate::Error::validation(op, err))?;
         Ok(TypedTensor::from_buffer_col_major(
             shape,
             Buffer::Backend(Arc::new(crate::CubeclBuffer::new(handle, len))),
@@ -804,47 +861,43 @@ impl CudaBackend {
         ensure_view_resident_on_runtime(self.runtime(), src, op)?;
         ensure_view_mut_resident_on_runtime(self.runtime(), dst, op)?;
         if src.shape() != dst.shape() {
-            return Err(crate::Error::ShapeMismatch {
+            return Err(crate::Error::shape_mismatch(
                 op,
-                lhs: src.shape().to_vec(),
-                rhs: dst.shape().to_vec(),
-            });
+                src.shape().to_vec(),
+                dst.shape().to_vec(),
+            ));
         }
         let source_buffer = src.backend_buffer().ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::runtime_state(
                 op,
                 "CUDA backend expected a GPU source view; call upload_tensor() first",
             )
         })?;
         let destination_buffer = dst.backend_buffer().ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::runtime_state(
                 op,
                 "CUDA backend expected a GPU destination view; call upload_tensor() first",
             )
         })?;
         if Arc::ptr_eq(source_buffer, destination_buffer) {
-            return Err(crate::Error::InvalidConfig {
+            return Err(crate::Error::invalid_argument(
                 op,
-                message: "CUDA copy_into source and destination allocations must not alias"
-                    .to_string(),
-            });
+                "source/destination",
+                "CUDA copy_into source and destination allocations must not alias",
+            ));
         }
         if !src.is_col_major_contiguous()?
             || src.offset() != 0
             || source_buffer.len() != src.n_elements()
         {
-            return Err(crate::Error::InvalidConfig {
+            return Err(crate::Error::invalid_argument(
                 op,
-                message: "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization"
-                    .to_string(),
-            });
+                "source",
+                "CUDA copy_into requires a compact source view covering its full allocation; arbitrary-stride source views are unsupported without explicit canonicalization",
+            ));
         }
-        let source_shape = R::shape_from_vec(src.shape().to_vec().into()).map_err(|err| {
-            crate::Error::InvalidConfig {
-                op,
-                message: format!("source rank mismatch: {err}"),
-            }
-        })?;
+        let source_shape = R::shape_from_vec(src.shape().to_vec().into())
+            .map_err(|err| crate::Error::validation(op, err))?;
         let source_tensor: TypedTensor<T, R> = TypedTensor::from_buffer_col_major(
             source_shape,
             Buffer::Backend(Arc::clone(source_buffer)),
@@ -1050,7 +1103,7 @@ impl CudaBackend {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
         let n = input.n_elements();
         let part_len = n.checked_mul(2).ok_or_else(|| {
-            crate::Error::backend_failure("cast", "complex output part length overflow")
+            crate::Error::invalid_argument("cast", "shape", "complex output part length overflow")
         })?;
         let input_arg = bool_tensor_array_arg(input, "cast")?;
         let count = if n == 0 {
@@ -1100,7 +1153,7 @@ impl CudaBackend {
     {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
         let part_len = input.n_elements().checked_mul(2).ok_or_else(|| {
-            crate::Error::backend_failure("cast", "complex input part length overflow")
+            crate::Error::invalid_argument("cast", "shape", "complex input part length overflow")
         })?;
         let input_arg = typed_tensor_array_arg_as::<In, F>(input, part_len, "cast")?;
         let n = input.n_elements();
@@ -1249,7 +1302,11 @@ impl CudaBackend {
         let input_arg = typed_tensor_array_arg(input, "convert")?;
         let n = input.n_elements();
         let output_part_len = n.checked_mul(2).ok_or_else(|| {
-            crate::Error::backend_failure("convert", "complex output part length overflow")
+            crate::Error::invalid_argument(
+                "convert",
+                "shape",
+                "complex output part length overflow",
+            )
         })?;
         let count = if n == 0 {
             None
@@ -1349,7 +1406,7 @@ impl CudaBackend {
     {
         ensure_resident_on_runtime(self.runtime(), input, "cast")?;
         let parts = input.n_elements().checked_mul(2).ok_or_else(|| {
-            crate::Error::backend_failure("cast", "complex component length overflow")
+            crate::Error::invalid_argument("cast", "shape", "complex component length overflow")
         })?;
         let input_arg = typed_tensor_array_arg_as::<In, InFloat>(input, parts, "cast")?;
         let count = if parts == 0 {
@@ -1539,11 +1596,7 @@ impl CudaBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         if input.shape().len() < 2 {
-            return Err(crate::Error::RankMismatch {
-                op: "tril",
-                expected: 2,
-                actual: input.shape().len(),
-            });
+            return Err(crate::Error::rank_mismatch("tril", 2, input.shape().len()));
         }
         launch_unary_tensor(
             self.runtime(),
@@ -1565,11 +1618,7 @@ impl CudaBackend {
 
     fn tril_bool(&self, input: &TypedTensor<bool>, k: i64) -> crate::Result<TypedTensor<bool>> {
         if input.shape().len() < 2 {
-            return Err(crate::Error::RankMismatch {
-                op: "tril",
-                expected: 2,
-                actual: input.shape().len(),
-            });
+            return Err(crate::Error::rank_mismatch("tril", 2, input.shape().len()));
         }
         launch_unary_bool_tensor(
             self.runtime(),
@@ -1595,11 +1644,7 @@ impl CudaBackend {
         T: CubeElement + CubePrimitive + Clone,
     {
         if input.shape().len() < 2 {
-            return Err(crate::Error::RankMismatch {
-                op: "triu",
-                expected: 2,
-                actual: input.shape().len(),
-            });
+            return Err(crate::Error::rank_mismatch("triu", 2, input.shape().len()));
         }
         launch_unary_tensor(
             self.runtime(),
@@ -1621,11 +1666,7 @@ impl CudaBackend {
 
     fn triu_bool(&self, input: &TypedTensor<bool>, k: i64) -> crate::Result<TypedTensor<bool>> {
         if input.shape().len() < 2 {
-            return Err(crate::Error::RankMismatch {
-                op: "triu",
-                expected: 2,
-                actual: input.shape().len(),
-            });
+            return Err(crate::Error::rank_mismatch("triu", 2, input.shape().len()));
         }
         launch_unary_bool_tensor(
             self.runtime(),
@@ -1668,7 +1709,7 @@ impl CudaBackend {
 
         let output_binding = typed_tensor_binding(&output, op)?;
         launch(self.runtime().client(), input_binding, output_binding)
-            .map_err(|err| crate::Error::backend_failure(op, err.to_string()))?;
+            .map_err(|err| crate::Error::backend_source(op, err))?;
         Ok(output)
     }
 
@@ -1986,18 +2027,19 @@ impl CudaBackend {
         ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
         ensure_rank("dynamic_slice", 1, starts.shape().len())?;
         if starts.shape()[0] != input.shape().len() {
-            return Err(crate::Error::RankMismatch {
-                op: "dynamic_slice",
-                expected: input.shape().len(),
-                actual: starts.shape()[0],
-            });
+            return Err(crate::Error::rank_mismatch(
+                "dynamic_slice",
+                input.shape().len(),
+                starts.shape()[0],
+            ));
         }
         for (axis, (&window, &dim)) in slice_sizes.iter().zip(input.shape()).enumerate() {
             if window > dim {
-                return Err(crate::Error::InvalidConfig {
-                    op: "dynamic_slice",
-                    message: format!("slice size exceeds dimension on axis {axis}"),
-                });
+                return Err(crate::Error::invalid_argument(
+                    "dynamic_slice",
+                    "slice_sizes",
+                    format!("slice size exceeds dimension on axis {axis}"),
+                ));
             }
         }
         let output_len = checked_dim_product("dynamic_slice", "output shape", slice_sizes)?;
@@ -2040,27 +2082,30 @@ impl CudaBackend {
     {
         ensure_rank("dynamic_slice", input.shape().len(), slice_sizes.len())?;
         if starts.shape().len() != 1 {
-            return Err(crate::Error::InvalidConfig {
-                op: "dynamic_slice",
-                message: "starts must be a rank-1 tensor".into(),
-            });
+            return Err(crate::Error::invalid_argument(
+                "dynamic_slice",
+                "starts",
+                "starts must be a rank-1 tensor",
+            ));
         }
         if starts.shape()[0] != input.shape().len() {
-            return Err(crate::Error::InvalidConfig {
-                op: "dynamic_slice",
-                message: format!(
+            return Err(crate::Error::invalid_argument(
+                "dynamic_slice",
+                "starts",
+                format!(
                     "starts length {} must match input rank {}",
                     starts.shape()[0],
                     input.shape().len()
                 ),
-            });
+            ));
         }
         for (axis, (&window, &dim)) in slice_sizes.iter().zip(input.shape()).enumerate() {
             if window > dim {
-                return Err(crate::Error::InvalidConfig {
-                    op: "dynamic_slice",
-                    message: format!("slice size exceeds dimension on axis {axis}"),
-                });
+                return Err(crate::Error::invalid_argument(
+                    "dynamic_slice",
+                    "slice_sizes",
+                    format!("slice size exceeds dimension on axis {axis}"),
+                ));
             }
         }
         let output_len = checked_dim_product("dynamic_slice", "output shape", slice_sizes)?;
@@ -2434,10 +2479,18 @@ impl CudaBackend {
         let update_len = scatter_update_len(&meta)?;
         let output_len = checked_dim_product("scatter", "output shape", operand.shape())?;
         let output_part_len = output_len.checked_mul(2).ok_or_else(|| {
-            crate::Error::backend_failure("scatter", "complex output part length overflow")
+            crate::Error::invalid_argument(
+                "scatter",
+                "shape",
+                "complex output part length overflow",
+            )
         })?;
         let update_part_len = updates.n_elements().checked_mul(2).ok_or_else(|| {
-            crate::Error::backend_failure("scatter", "complex update part length overflow")
+            crate::Error::invalid_argument(
+                "scatter",
+                "shape",
+                "complex update part length overflow",
+            )
         })?;
         if output_len != 0 {
             cube_count_for_len(output_len)?;
@@ -2574,13 +2627,19 @@ macro_rules! impl_cuda_cast_float {
                 }
             }
             fn read_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+                let expected = Tensor::$variant(flag.clone()).dtype();
                 match download_tensor(backend.runtime(), &Tensor::$variant(flag.clone()))? {
                     Tensor::$variant(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
-                        crate::Error::backend_failure("cast", "validation flag was malformed")
+                        crate::Error::invalid_argument(
+                            "cast",
+                            "validation_flag",
+                            "validation flag was malformed",
+                        )
                     }),
-                    _ => Err(crate::Error::backend_failure(
+                    other => Err(unexpected_validation_flag_dtype(
                         "cast",
-                        "validation flag had unexpected dtype",
+                        expected,
+                        other.dtype(),
                     )),
                 }
             }
@@ -2600,10 +2659,7 @@ macro_rules! impl_cuda_cast_float {
                         self.cpu_real_display()
                     )
                 };
-                crate::Error::InvalidConfig {
-                    op: "cast",
-                    message,
-                }
+                crate::Error::invalid_argument("cast", "value", message)
             }
             fn is_nonfinite(self) -> bool {
                 !self.is_finite()
@@ -2634,18 +2690,24 @@ where
         return Ok(());
     }
     u32::try_from(n).map_err(|_| {
-        crate::Error::backend_failure("cast", "validation domain exceeds u32::MAX elements")
+        crate::Error::invalid_argument(
+            "cast",
+            "shape",
+            "validation domain exceeds u32::MAX elements",
+        )
     })?;
     let count = cube_count_for_len(n)?;
-    let input_parts = n
-        .checked_mul(stride)
-        .ok_or_else(|| crate::Error::backend_failure("cast", "validation input length overflow"))?;
+    let input_parts = n.checked_mul(stride).ok_or_else(|| {
+        crate::Error::invalid_argument("cast", "shape", "validation input length overflow")
+    })?;
     let input_arg = typed_tensor_array_arg_as::<S, F>(input, input_parts, "cast")?;
     let flag = alloc_output::<F>(backend.runtime(), &[2])?;
     let flag_u32_len = std::mem::size_of::<F>()
         .checked_mul(2)
         .and_then(|x| x.checked_div(std::mem::size_of::<u32>()))
-        .ok_or_else(|| crate::Error::backend_failure("cast", "validation flag size overflow"))?;
+        .ok_or_else(|| {
+            crate::Error::invalid_argument("cast", "shape", "validation flag size overflow")
+        })?;
     let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "cast")?;
     let flag_values = typed_tensor_array_arg(&flag, "cast")?;
     unsafe {
@@ -2700,10 +2762,8 @@ fn checked_integer_domain_error(
     dtype: crate::DType,
 ) -> crate::Error {
     match domain {
-        CheckedIntegerDomain::DivisionByZero => crate::Error::division_by_zero(op, dtype),
-        CheckedIntegerDomain::NegativeExponent => {
-            crate::Error::negative_integer_exponent(op, dtype)
-        }
+        CheckedIntegerDomain::DivisionByZero => error::division_by_zero(op, dtype),
+        CheckedIntegerDomain::NegativeExponent => error::negative_integer_exponent(op, dtype),
     }
 }
 
@@ -2715,9 +2775,10 @@ fn read_checked_integer_flag(
     let host = download_tensor(backend.runtime(), &Tensor::I32(flag.clone()))?;
     match host {
         Tensor::I32(flag) => Ok(flag.as_slice()?.first().copied().unwrap_or_default()),
-        _ => Err(crate::Error::backend_failure(
+        other => Err(unexpected_validation_flag_dtype(
             op,
-            "integer domain flag download returned unexpected dtype",
+            crate::DType::I32,
+            other.dtype(),
         )),
     }
 }
@@ -2774,13 +2835,19 @@ impl CudaFloatIndex for f32 {
     }
 
     fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+        let expected = Tensor::F32(flag.clone()).dtype();
         match download_tensor(backend.runtime(), &Tensor::F32(flag.clone()))? {
             Tensor::F32(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
-                crate::Error::backend_failure("index_tensor", "validation flag was malformed")
+                crate::Error::invalid_argument(
+                    "index_tensor",
+                    "validation_flag",
+                    "validation flag was malformed",
+                )
             }),
-            _ => Err(crate::Error::backend_failure(
+            other => Err(unexpected_validation_flag_dtype(
                 "index_tensor",
-                "validation flag had unexpected dtype",
+                expected,
+                other.dtype(),
             )),
         }
     }
@@ -2794,13 +2861,19 @@ impl CudaFloatIndex for f64 {
     }
 
     fn read_invalid_flag(backend: &CudaBackend, flag: &TypedTensor<Self>) -> crate::Result<Self> {
+        let expected = Tensor::F64(flag.clone()).dtype();
         match download_tensor(backend.runtime(), &Tensor::F64(flag.clone()))? {
             Tensor::F64(host) => host.as_slice()?.get(1).copied().ok_or_else(|| {
-                crate::Error::backend_failure("index_tensor", "validation flag was malformed")
+                crate::Error::invalid_argument(
+                    "index_tensor",
+                    "validation_flag",
+                    "validation flag was malformed",
+                )
             }),
-            _ => Err(crate::Error::backend_failure(
+            other => Err(unexpected_validation_flag_dtype(
                 "index_tensor",
-                "validation flag had unexpected dtype",
+                expected,
+                other.dtype(),
             )),
         }
     }
@@ -2819,8 +2892,9 @@ where
         return Ok(());
     }
     u32::try_from(indices.n_elements()).map_err(|_| {
-        crate::Error::backend_failure(
+        crate::Error::invalid_argument(
             "index_tensor",
+            "shape",
             "float index validation domain exceeds u32::MAX elements",
         )
     })?;
@@ -2828,7 +2902,9 @@ where
     let flag_u32_len = std::mem::size_of::<F>()
         .checked_mul(2)
         .and_then(|bytes| bytes.checked_div(std::mem::size_of::<u32>()))
-        .ok_or_else(|| crate::Error::backend_failure("index_tensor", "flag size overflow"))?;
+        .ok_or_else(|| {
+            crate::Error::invalid_argument("index_tensor", "shape", "flag size overflow")
+        })?;
     let flag = alloc_output::<F>(backend.runtime(), &[2])?;
     let flag_values = typed_tensor_array_arg(&flag, "index_tensor")?;
     let flag_atomic = typed_tensor_array_arg_as::<F, u32>(&flag, flag_u32_len, "index_tensor")?;
@@ -2874,10 +2950,11 @@ where
     }
     let invalid = F::read_invalid_flag(backend, &flag)?;
     if invalid.is_invalid_index() {
-        return Err(crate::Error::InvalidConfig {
-            op: "index_tensor",
-            message: format!("index value {invalid} is not an exactly representable i64"),
-        });
+        return Err(crate::Error::invalid_argument(
+            "index_tensor",
+            "index",
+            format!("index value {invalid} is not an exactly representable i64"),
+        ));
     }
     Ok(())
 }
@@ -2964,11 +3041,11 @@ where
     I: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
 {
     if !(lhs.shape().is_empty() ^ rhs.shape().is_empty()) {
-        return Err(crate::Error::ShapeMismatch {
+        return Err(crate::Error::shape_mismatch(
             op,
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        });
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ));
     }
     ensure_resident_on_runtime(backend.runtime(), lhs, op)?;
     ensure_resident_on_runtime(backend.runtime(), rhs, op)?;
@@ -3007,26 +3084,25 @@ where
     C: CubeComplex<FloatElem = R> + CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
 {
     if !real.shape().is_empty() {
-        return Err(crate::Error::ShapeMismatch {
+        return Err(crate::Error::shape_mismatch(
             op,
-            lhs: if real_lhs {
+            if real_lhs {
                 real.shape().to_vec()
             } else {
                 complex.shape().to_vec()
             },
-            rhs: if real_lhs {
+            if real_lhs {
                 complex.shape().to_vec()
             } else {
                 real.shape().to_vec()
             },
-        });
+        ));
     }
     ensure_resident_on_runtime(backend.runtime(), real, op)?;
     ensure_resident_on_runtime(backend.runtime(), complex, op)?;
-    let component_len = complex
-        .n_elements()
-        .checked_mul(2)
-        .ok_or_else(|| crate::Error::backend_failure(op, "complex component length overflow"))?;
+    let component_len = complex.n_elements().checked_mul(2).ok_or_else(|| {
+        crate::Error::invalid_argument(op, "shape", "complex component length overflow")
+    })?;
     let real_arg = typed_tensor_array_arg(real, op)?;
     // INVARIANT: `num_complex::Complex<T>` is `repr(C)` with interleaved `{ re, im }`
     // fields; the checked `2 * n_elements` length and binding validator prove this
@@ -3103,11 +3179,11 @@ where
     I: CubeElement + CubePrimitive + Clone + Send + Sync + 'static,
 {
     if !(lhs.shape().is_empty() ^ rhs.shape().is_empty()) {
-        return Err(crate::Error::ShapeMismatch {
+        return Err(crate::Error::shape_mismatch(
             op,
-            lhs: lhs.shape().to_vec(),
-            rhs: rhs.shape().to_vec(),
-        });
+            lhs.shape().to_vec(),
+            rhs.shape().to_vec(),
+        ));
     }
     ensure_resident_on_runtime(backend.runtime(), lhs, op)?;
     ensure_resident_on_runtime(backend.runtime(), rhs, op)?;
@@ -3547,11 +3623,7 @@ impl TensorElementwise for CudaBackend {
             )
             .map(Tensor::I64),
             (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
-                Err(crate::Error::unsupported_op_dtype(
-                    op,
-                    lhs.dtype(),
-                    tenferro_tensor::BackendId::Cuda,
-                ))
+                Err(unsupported_dtype(op, lhs.dtype()))
             }
             _ => Err(dtype_mismatch(op, lhs, rhs)),
         }
@@ -3601,11 +3673,7 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::F64),
-            Tensor::Bool(_) => Err(crate::Error::unsupported_op_dtype(
-                op,
-                input.dtype(),
-                tenferro_tensor::BackendId::Cuda,
-            )),
+            Tensor::Bool(_) => Err(unsupported_dtype(op, input.dtype())),
         }
     }
 
@@ -3723,9 +3791,9 @@ impl TensorElementwise for CudaBackend {
                 },
             )
             .map(Tensor::Bool),
-            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => Err(
-                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", lhs.dtype())),
-            ),
+            (Tensor::C32(_), Tensor::C32(_)) | (Tensor::C64(_), Tensor::C64(_)) => {
+                Err(unsupported_dtype(op, lhs.dtype()))
+            }
             _ => Err(dtype_mismatch(op, lhs, rhs)),
         }
     }
@@ -3806,9 +3874,9 @@ impl TensorElementwise for CudaBackend {
                 .map(Tensor::I64)
             }
             (Tensor::C32(_), Tensor::C32(_), Tensor::C32(_))
-            | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => Err(
-                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", pred.dtype())),
-            ),
+            | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => {
+                Err(unsupported_dtype(op, pred.dtype()))
+            }
             _ => Err(ternary_dtype_mismatch(op, pred, on_true, on_false)),
         }
     }
@@ -3848,9 +3916,9 @@ impl TensorElementwise for CudaBackend {
             )
             .map(Tensor::F64),
             (Tensor::C32(_), Tensor::C32(_), Tensor::C32(_))
-            | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => Err(
-                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", input.dtype())),
-            ),
+            | (Tensor::C64(_), Tensor::C64(_), Tensor::C64(_)) => {
+                Err(unsupported_dtype(op, input.dtype()))
+            }
             _ => Err(ternary_dtype_mismatch(op, input, lower, upper)),
         }
     }
@@ -4016,19 +4084,11 @@ impl TensorAnalytic for CudaBackend {
             .map(Tensor::I64),
             (Tensor::C32(lhs), Tensor::C32(rhs)) => {
                 dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
-                Err(crate::Error::unsupported_op_dtype(
-                    op,
-                    crate::DType::C32,
-                    tenferro_tensor::BackendId::Cuda,
-                ))
+                Err(unsupported_dtype(op, crate::DType::C32))
             }
             (Tensor::C64(lhs), Tensor::C64(rhs)) => {
                 dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
-                Err(crate::Error::unsupported_op_dtype(
-                    op,
-                    crate::DType::C64,
-                    tenferro_tensor::BackendId::Cuda,
-                ))
+                Err(unsupported_dtype(op, crate::DType::C64))
             }
             _ => {
                 dispatch::ensure_same_shape(op, lhs.shape(), rhs.shape())?;
@@ -4094,11 +4154,11 @@ impl TensorStructural for CudaBackend {
                     TensorWrite::View(TensorViewMut::$variant(mut dst)) => {
                         self.copy_view_to_view_typed(&src, &mut dst, "CudaBackend::copy_read_into")
                     }
-                    _ => Err(crate::Error::DTypeMismatch {
-                        op: "CudaBackend::copy_read_into",
-                        lhs: src_dtype,
-                        rhs: dst_dtype,
-                    }),
+                    _ => Err(crate::Error::dtype_mismatch(
+                        "CudaBackend::copy_read_into",
+                        src_dtype,
+                        dst_dtype,
+                    )),
                 }
             }};
         }
@@ -4110,11 +4170,11 @@ impl TensorStructural for CudaBackend {
                         "CudaBackend::copy_read_into",
                         crate::DType::Bool,
                     )),
-                    _ => Err(crate::Error::DTypeMismatch {
-                        op: "CudaBackend::copy_read_into",
-                        lhs: src_dtype,
-                        rhs: dst_dtype,
-                    }),
+                    _ => Err(crate::Error::dtype_mismatch(
+                        "CudaBackend::copy_read_into",
+                        src_dtype,
+                        dst_dtype,
+                    )),
                 }
             }};
         }
@@ -4153,11 +4213,14 @@ impl TensorStructural for CudaBackend {
         let old_n = checked_dim_product("reshape", "input shape", input.shape())?;
         let new_n = checked_dim_product("reshape", "output shape", shape)?;
         if old_n != new_n {
-            return Err(crate::Error::ShapeMismatch {
-                op: "reshape",
-                lhs: input.shape().to_vec(),
-                rhs: shape.to_vec(),
-            });
+            return Err(crate::Error::validation(
+                "reshape",
+                tenferro_tensor::ShapeMismatch::ReshapeElementCount {
+                    from: old_n,
+                    to: new_n,
+                }
+                .into(),
+            ));
         }
         match input {
             Tensor::F32(t) => Ok(Tensor::F32(TypedTensor::from_buffer_col_major(
@@ -4479,9 +4542,9 @@ impl TensorReduction for CudaBackend {
             Tensor::F64(t) => self.reduce_max_float_typed(t, axes).map(Tensor::F64),
             Tensor::I32(t) => self.reduce_max_int_typed(t, axes).map(Tensor::I32),
             Tensor::I64(t) => self.reduce_max_int_typed(t, axes).map(Tensor::I64),
-            Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(
-                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", input.dtype())),
-            ),
+            Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
+                Err(unsupported_dtype(op, input.dtype()))
+            }
         }
     }
 
@@ -4495,9 +4558,9 @@ impl TensorReduction for CudaBackend {
             Tensor::F64(t) => self.reduce_min_float_typed(t, axes).map(Tensor::F64),
             Tensor::I32(t) => self.reduce_min_int_typed(t, axes).map(Tensor::I32),
             Tensor::I64(t) => self.reduce_min_int_typed(t, axes).map(Tensor::I64),
-            Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => Err(
-                crate::Error::backend_failure(op, format!("unsupported dtype {:?}", input.dtype())),
-            ),
+            Tensor::Bool(_) | Tensor::C32(_) | Tensor::C64(_) => {
+                Err(unsupported_dtype(op, input.dtype()))
+            }
         }
     }
 }
@@ -4629,10 +4692,9 @@ impl TensorIndexing for CudaBackend {
                 self.gather_bool(operand, indices, config).map(Tensor::Bool)
             }
             (_, Tensor::Bool(_)) => Err(unsupported_dtype("gather", start_indices.dtype())),
-            (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::backend_failure(
-                "gather",
-                "complex index tensors are not supported",
-            )),
+            (_, Tensor::C32(_) | Tensor::C64(_)) => {
+                Err(unsupported_dtype("gather", start_indices.dtype()))
+            }
             (Tensor::I64(_), _) => Err(unsupported_dtype("gather", operand.dtype())),
         }
     }
@@ -4694,11 +4756,10 @@ impl TensorIndexing for CudaBackend {
                 .scatter_complex_typed::<_, f64, _>(operand, indices, updates, config)
                 .map(Tensor::C64),
             (_, Tensor::Bool(_), _) => Err(unsupported_dtype("scatter", scatter_indices.dtype())),
-            (_, Tensor::C32(_) | Tensor::C64(_), _) => Err(crate::Error::backend_failure(
-                "scatter",
-                "complex index tensors are not supported",
-            )),
-            (Tensor::Bool(_), _, _) => Err(crate::Error::backend_failure(
+            (_, Tensor::C32(_) | Tensor::C64(_), _) => {
+                Err(unsupported_dtype("scatter", scatter_indices.dtype()))
+            }
+            (Tensor::Bool(_), _, _) => Err(unsupported_operation(
                 "scatter",
                 "Bool data tensors are not supported by additive scatter",
             )),
@@ -4806,10 +4867,9 @@ impl TensorIndexing for CudaBackend {
                 .dynamic_slice_bool(input, starts, slice_sizes)
                 .map(Tensor::Bool),
             (_, Tensor::Bool(_)) => Err(unsupported_dtype("dynamic_slice", starts.dtype())),
-            (_, Tensor::C32(_) | Tensor::C64(_)) => Err(crate::Error::backend_failure(
-                "dynamic_slice",
-                "complex index tensors are not supported",
-            )),
+            (_, Tensor::C32(_) | Tensor::C64(_)) => {
+                Err(unsupported_dtype("dynamic_slice", starts.dtype()))
+            }
             (Tensor::I64(_), _) => Err(unsupported_dtype("dynamic_slice", input.dtype())),
         }
     }
@@ -4820,9 +4880,9 @@ impl TensorIndexing for CudaBackend {
         _update: &Tensor,
         _starts: &Tensor,
     ) -> crate::Result<Tensor> {
-        Err(crate::Error::backend_failure(
+        Err(unsupported_operation(
             "dynamic_update_slice",
-            "dynamic_update_slice is not implemented for the CubeCL backend",
+            "not implemented for the CubeCL backend",
         ))
     }
 
@@ -4839,13 +4899,13 @@ impl TensorIndexing for CudaBackend {
     }
 
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-        let first = inputs
-            .first()
-            .copied()
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "concatenate",
-                message: "concatenate requires at least one input".into(),
-            })?;
+        let first = inputs.first().copied().ok_or_else(|| {
+            crate::Error::invalid_argument(
+                "concatenate",
+                "inputs",
+                "concatenate requires at least one input",
+            )
+        })?;
         match first {
             Tensor::F32(_) => {
                 let typed: crate::Result<Vec<&TypedTensor<f32>>> = inputs
@@ -5073,11 +5133,11 @@ fn ensure_same_shape_for_broadcast_multiply(
     rhs_shape: &[usize],
 ) -> crate::Result<()> {
     if lhs_shape != rhs_shape {
-        return Err(crate::Error::ShapeMismatch {
-            op: "broadcast_multiply",
-            lhs: lhs_shape.to_vec(),
-            rhs: rhs_shape.to_vec(),
-        });
+        return Err(crate::Error::shape_mismatch(
+            "broadcast_multiply",
+            lhs_shape.to_vec(),
+            rhs_shape.to_vec(),
+        ));
     }
     Ok(())
 }
@@ -5203,21 +5263,21 @@ fn validate_broadcast_in_dim(
     for (src_axis, &dst_axis) in dims.iter().enumerate() {
         ensure_axis("broadcast_in_dim", dst_axis, shape.len())?;
         if seen[dst_axis] {
-            return Err(crate::Error::DuplicateAxis {
-                op: "broadcast_in_dim",
-                axis: dst_axis,
-                role: "dims",
-            });
+            return Err(crate::Error::duplicate_axis(
+                "broadcast_in_dim",
+                dst_axis,
+                "dims",
+            ));
         }
         seen[dst_axis] = true;
         let src = input_shape[src_axis];
         let dst = shape[dst_axis];
         if src != dst && src != 1 {
-            return Err(crate::Error::ShapeMismatch {
-                op: "broadcast_in_dim",
-                lhs: input_shape.to_vec(),
-                rhs: shape.to_vec(),
-            });
+            return Err(crate::Error::shape_mismatch(
+                "broadcast_in_dim",
+                input_shape.to_vec(),
+                shape.to_vec(),
+            ));
         }
     }
     Ok(())
@@ -5231,11 +5291,11 @@ fn extract_diagonal_shape(
     ensure_axis("extract_diagonal", axis_a, input_shape.len())?;
     ensure_axis("extract_diagonal", axis_b, input_shape.len())?;
     if axis_a == axis_b {
-        return Err(crate::Error::DuplicateAxis {
-            op: "extract_diagonal",
-            axis: axis_a,
-            role: "axes",
-        });
+        return Err(crate::Error::duplicate_axis(
+            "extract_diagonal",
+            axis_a,
+            "axes",
+        ));
     }
     let diag_output_axis = if axis_a < axis_b { axis_a } else { axis_a - 1 };
     let diag_dim = input_shape[axis_a].min(input_shape[axis_b]);
@@ -5252,11 +5312,11 @@ fn embed_diagonal_shape(
 ) -> crate::Result<Vec<usize>> {
     ensure_axis("embed_diagonal", axis_a, input_shape.len())?;
     if axis_b > input_shape.len() {
-        return Err(crate::Error::AxisOutOfBounds {
-            op: "embed_diagonal",
-            axis: axis_b,
-            rank: input_shape.len(),
-        });
+        return Err(crate::Error::axis_out_of_bounds(
+            "embed_diagonal",
+            axis_b,
+            input_shape.len(),
+        ));
     }
     let mut output_shape = input_shape.to_vec();
     output_shape.insert(axis_b, input_shape[axis_a]);
@@ -5286,17 +5346,22 @@ fn cubecl_reshape_metadata<T: CubeElement + Clone>(
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
         .ok_or_else(|| {
-            crate::Error::backend_failure(
+            crate::Error::invalid_argument(
                 op,
+                "shape",
                 format!("shape product overflow for CubeCL reshape shape {shape:?}"),
             )
         })?;
     let tensor_len = tensor.n_elements();
     if len != tensor_len {
-        return Err(crate::Error::backend_failure(op, format!(
-                "cannot reshape CubeCL output metadata from {:?} ({tensor_len} elements) to {:?} ({len} elements)",
-                tensor.shape(), shape
-            )));
+        return Err(crate::Error::validation(
+            op,
+            tenferro_tensor::ShapeMismatch::ReshapeElementCount {
+                from: tensor_len,
+                to: len,
+            }
+            .into(),
+        ));
     }
 
     let (buffer, _, placement) = tensor.into_parts();
@@ -5318,23 +5383,21 @@ fn validate_slice(input_shape: &[usize], config: &SliceConfig) -> crate::Result<
             let limit = config.limits[axis];
             let stride = config.strides[axis];
             if start > limit {
-                return Err(crate::Error::InvalidConfig {
-                    op: "slice",
-                    message: format!("start exceeds limit on axis {axis}"),
-                });
+                return Err(crate::Error::invalid_argument(
+                    "slice",
+                    "bounds",
+                    format!("start exceeds limit on axis {axis}"),
+                ));
             }
             if limit > dim {
-                return Err(crate::Error::AxisOutOfBounds {
-                    op: "slice",
-                    axis,
-                    rank,
-                });
+                return Err(crate::Error::axis_out_of_bounds("slice", axis, rank));
             }
             if stride == 0 {
-                return Err(crate::Error::InvalidConfig {
-                    op: "slice",
-                    message: format!("stride must be positive on axis {axis}"),
-                });
+                return Err(crate::Error::invalid_argument(
+                    "slice",
+                    "strides",
+                    format!("stride must be positive on axis {axis}"),
+                ));
             }
             let span = limit - start;
             Ok(span.div_ceil(stride))
@@ -5350,47 +5413,60 @@ fn pad_output_shape(input_shape: &[usize], config: &PadConfig) -> crate::Result<
     let mut out_shape = Vec::with_capacity(rank);
     for axis in 0..rank {
         if config.interior_padding[axis] < 0 {
-            return Err(crate::Error::InvalidConfig {
-                op: "pad",
-                message: format!("interior padding must be non-negative on axis {axis}"),
-            });
+            return Err(crate::Error::invalid_argument(
+                "pad",
+                "interior_padding",
+                format!("interior padding must be non-negative on axis {axis}"),
+            ));
         }
-        let input_dim =
-            i64::try_from(input_shape[axis]).map_err(|_| crate::Error::InvalidConfig {
-                op: "pad",
-                message: format!("input dimension on axis {axis} must fit in i64"),
-            })?;
+        let input_dim = i64::try_from(input_shape[axis]).map_err(|_| {
+            crate::Error::invalid_argument(
+                "pad",
+                "input_shape",
+                format!("input dimension on axis {axis} must fit in i64"),
+            )
+        })?;
         let base = if input_dim == 0 {
             0
         } else {
             let spacing = config.interior_padding[axis]
                 .checked_add(1)
-                .ok_or_else(|| crate::Error::InvalidConfig {
-                    op: "pad",
-                    message: format!("interior padding overflow on axis {axis}"),
+                .ok_or_else(|| {
+                    crate::Error::invalid_argument(
+                        "pad",
+                        "interior_padding",
+                        format!("interior padding overflow on axis {axis}"),
+                    )
                 })?;
             input_dim
                 .checked_sub(1)
                 .and_then(|extent| extent.checked_mul(spacing))
                 .and_then(|extent| extent.checked_add(1))
-                .ok_or_else(|| crate::Error::InvalidConfig {
-                    op: "pad",
-                    message: format!("padded interior extent overflow on axis {axis}"),
+                .ok_or_else(|| {
+                    crate::Error::invalid_argument(
+                        "pad",
+                        "interior_padding",
+                        format!("padded interior extent overflow on axis {axis}"),
+                    )
                 })?
         };
         let dim = config.edge_padding_low[axis]
             .checked_add(config.edge_padding_high[axis])
             .and_then(|edge| edge.checked_add(base))
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "pad",
-                message: format!("output dimension overflow on axis {axis}"),
+            .ok_or_else(|| {
+                crate::Error::invalid_argument(
+                    "pad",
+                    "padding",
+                    format!("output dimension overflow on axis {axis}"),
+                )
             })?;
-        out_shape.push(
-            usize::try_from(dim).map_err(|_| crate::Error::InvalidConfig {
-                op: "pad",
-                message: format!("negative output dimension on axis {axis}"),
-            })?,
-        );
+        out_shape.push(usize::try_from(dim).map_err(|_| {
+            crate::Error::invalid_argument(
+                "pad",
+                "padding",
+                format!("negative output dimension on axis {axis}"),
+            )
+        })?);
     }
     Ok(out_shape)
 }
@@ -5403,12 +5479,11 @@ fn validate_slice_sizes_within_operand(
     ensure_rank(op, operand_shape.len(), slice_sizes.len())?;
     for (axis, (&slice_size, &dim_size)) in slice_sizes.iter().zip(operand_shape).enumerate() {
         if slice_size > dim_size {
-            return Err(crate::Error::InvalidConfig {
+            return Err(crate::Error::invalid_argument(
                 op,
-                message: format!(
-                    "slice_sizes[{axis}]={slice_size} exceeds operand dimension {dim_size}"
-                ),
-            });
+                "slice_sizes",
+                format!("slice_sizes[{axis}]={slice_size} exceeds operand dimension {dim_size}"),
+            ));
         }
     }
     Ok(())
@@ -5453,18 +5528,19 @@ fn gather_launch_meta(
     ensure_rank("gather", operand_shape.len(), config.slice_sizes.len())?;
     validate_slice_sizes_within_operand("gather", operand_shape, &config.slice_sizes)?;
     if config.index_vector_dim > start_indices_shape.len() {
-        return Err(crate::Error::AxisOutOfBounds {
-            op: "gather",
-            axis: config.index_vector_dim,
-            rank: start_indices_shape.len(),
-        });
+        return Err(crate::Error::axis_out_of_bounds(
+            "gather",
+            config.index_vector_dim,
+            start_indices_shape.len(),
+        ));
     }
     let index_size = index_vector_size(start_indices_shape, config.index_vector_dim);
     if index_size != config.start_index_map.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "gather",
-            message: "start_index_map length mismatch".into(),
-        });
+        return Err(crate::Error::invalid_argument(
+            "gather",
+            "start_index_map",
+            "start_index_map length mismatch",
+        ));
     }
     ensure_axes_unique(
         "gather",
@@ -5474,13 +5550,14 @@ fn gather_launch_meta(
     )?;
     for &dim in &config.collapsed_slice_dims {
         if config.slice_sizes[dim] != 1 {
-            return Err(crate::Error::InvalidConfig {
-                op: "gather",
-                message: format!(
+            return Err(crate::Error::invalid_argument(
+                "gather",
+                "collapsed_slice_dims",
+                format!(
                     "collapsed slice dimension {dim} must have slice_size == 1, got {}",
                     config.slice_sizes[dim]
                 ),
-            });
+            ));
         }
     }
     ensure_axes_unique(
@@ -5491,10 +5568,11 @@ fn gather_launch_meta(
     )?;
     let window_dims = operand_window_dims(operand_shape.len(), &config.collapsed_slice_dims);
     if config.offset_dims.len() != window_dims.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "gather",
-            message: "offset_dims length mismatch".into(),
-        });
+        return Err(crate::Error::invalid_argument(
+            "gather",
+            "offset_dims",
+            "offset_dims length mismatch",
+        ));
     }
     let batch_shape = index_batch_shape(start_indices_shape, config.index_vector_dim);
     let out_rank = batch_shape.len() + config.offset_dims.len();
@@ -5533,18 +5611,19 @@ fn scatter_launch_meta(
     config: &ScatterConfig,
 ) -> crate::Result<ScatterLaunchMeta> {
     if config.index_vector_dim > scatter_indices_shape.len() {
-        return Err(crate::Error::AxisOutOfBounds {
-            op: "scatter",
-            axis: config.index_vector_dim,
-            rank: scatter_indices_shape.len(),
-        });
+        return Err(crate::Error::axis_out_of_bounds(
+            "scatter",
+            config.index_vector_dim,
+            scatter_indices_shape.len(),
+        ));
     }
     let index_size = index_vector_size(scatter_indices_shape, config.index_vector_dim);
     if index_size != config.scatter_dims_to_operand_dims.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "scatter",
-            message: "scatter_dims_to_operand_dims length mismatch".into(),
-        });
+        return Err(crate::Error::invalid_argument(
+            "scatter",
+            "scatter_dims_to_operand_dims",
+            "scatter_dims_to_operand_dims length mismatch",
+        ));
     }
     ensure_axes_unique(
         "scatter",
@@ -5567,16 +5646,19 @@ fn scatter_launch_meta(
     let batch_shape = index_batch_shape(scatter_indices_shape, config.index_vector_dim);
     let window_dims = operand_window_dims(operand_shape.len(), &config.inserted_window_dims);
     if config.update_window_dims.len() != window_dims.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "scatter",
-            message: "update_window_dims length mismatch".into(),
-        });
+        return Err(crate::Error::invalid_argument(
+            "scatter",
+            "update_window_dims",
+            "update_window_dims length mismatch",
+        ));
     }
-    if updates_shape.len() - config.update_window_dims.len() != batch_shape.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "scatter",
-            message: "updates batch rank mismatch".into(),
-        });
+    let updates_batch_rank = updates_shape.len() - config.update_window_dims.len();
+    if updates_batch_rank != batch_shape.len() {
+        return Err(crate::Error::rank_mismatch(
+            "scatter",
+            batch_shape.len(),
+            updates_batch_rank,
+        ));
     }
     let mut is_update_window_dim = vec![false; updates_shape.len()];
     for &axis in &config.update_window_dims {
@@ -5589,13 +5671,11 @@ fn scatter_launch_meta(
         }
         let expected = batch_shape[batch_axis];
         if actual != expected {
-            return Err(crate::Error::InvalidConfig {
-                op: "scatter",
-                message: format!(
-                    "updates batch dim {batch_axis} extent {actual} does not match \
-                     scatter batch extent {expected}"
-                ),
-            });
+            return Err(crate::Error::shape_mismatch(
+                "scatter",
+                vec![expected],
+                vec![actual],
+            ));
         }
         batch_axis += 1;
     }
@@ -5625,17 +5705,18 @@ fn concatenate_output_shape<T>(
         for dim in 0..rank {
             if dim == axis {
                 axis_extent = axis_extent.checked_add(input.shape()[dim]).ok_or_else(|| {
-                    crate::Error::backend_failure(
+                    crate::Error::invalid_argument(
                         "concatenate",
+                        "shape",
                         "concatenate axis extent overflows usize",
                     )
                 })?;
             } else if input.shape()[dim] != first.shape()[dim] {
-                return Err(crate::Error::ShapeMismatch {
-                    op: "concatenate",
-                    lhs: first.shape().to_vec(),
-                    rhs: input.shape().to_vec(),
-                });
+                return Err(crate::Error::shape_mismatch(
+                    "concatenate",
+                    first.shape().to_vec(),
+                    input.shape().to_vec(),
+                ));
             }
         }
     }

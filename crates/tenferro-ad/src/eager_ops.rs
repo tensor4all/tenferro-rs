@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use computegraph::GraphOperation;
 use tenferro_ops::broadcast::{
-    broadcast_input_plan, broadcast_shape, broadcast_shapes, BroadcastError,
+    broadcast_error_to_validation, broadcast_in_dim_extent_error, broadcast_input_plan,
+    broadcast_shape, broadcast_shapes,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -71,18 +72,8 @@ fn broadcast_to(
     source.broadcast_in_dim(target_shape, &plan.dims)
 }
 
-fn broadcast_error(op: &'static str, err: BroadcastError) -> Error {
-    match err {
-        BroadcastError::IncompatibleBinary { lhs, rhs } => {
-            tenferro_tensor::Error::ShapeMismatch { op, lhs, rhs }.into()
-        }
-        BroadcastError::IncompatibleInput { input, output }
-        | BroadcastError::RankTooLarge { input, output } => tenferro_tensor::Error::InvalidConfig {
-            op,
-            message: format!("cannot broadcast shape {input:?} to {output:?}"),
-        }
-        .into(),
-    }
+fn broadcast_error(op: &'static str, err: tenferro_ops::broadcast::BroadcastError) -> Error {
+    tenferro_tensor::Error::validation(op, broadcast_error_to_validation(err)).into()
 }
 
 fn ensure_same_context(lhs: &EagerTensor, rhs: &EagerTensor) -> Result<()> {
@@ -159,12 +150,26 @@ impl EagerTensor {
     ///
     /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, 6.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for tensors from different eager
+    /// runtimes, [`tenferro_tensor::Error::Validation`] with
+    /// `ShapeMismatch`/`DTypeMismatch` for incompatible operands, or a typed
+    /// backend/runtime-state error during execution.
     pub fn add(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("add", self, other)?;
         lhs.binary_op(&rhs, StdTensorOp::Add)
     }
 
     /// Elementwise subtraction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for tensors from different eager
+    /// runtimes, [`tenferro_tensor::Error::Validation`] with
+    /// `ShapeMismatch`/`DTypeMismatch` for incompatible operands, or a typed
+    /// backend/runtime-state error during execution.
     pub fn sub(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("sub", self, other)?;
         lhs.binary_op(&rhs, StdTensorOp::Sub)
@@ -185,6 +190,13 @@ impl EagerTensor {
     ///
     /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0, 8.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for tensors from different eager
+    /// runtimes, [`tenferro_tensor::Error::Validation`] with
+    /// `ShapeMismatch`/`DTypeMismatch` for incompatible operands, or a typed
+    /// backend/runtime-state error during execution.
     pub fn mul(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("mul", self, other)?;
         lhs.binary_op(&rhs, StdTensorOp::Mul)
@@ -204,6 +216,12 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[-1.0, 2.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the backend does
+    /// not implement negation for the dtype, or a typed backend/runtime-state
+    /// error during execution.
     pub fn neg(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Neg)
     }
@@ -222,6 +240,12 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the backend does
+    /// not implement exponentiation for the dtype, or a typed backend/
+    /// runtime-state error during execution.
     pub fn exp(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Exp)
     }
@@ -240,6 +264,12 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[10.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
+    /// `DuplicateAxis` for an invalid reduction axis, or a typed
+    /// unsupported/backend/runtime-state error for the selected dtype.
     pub fn reduce_sum(&self, axes: &[usize]) -> Result<Self> {
         validate_eager_axes("EagerTensor::reduce_sum", self.shape().len(), axes)?;
         self.unary_op(StdTensorOp::ReduceSum {
@@ -267,6 +297,13 @@ impl EagerTensor {
     ///
     /// assert_eq!(c.shape(), &[2, 2]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `RankMismatch`,
+    /// `AxisOutOfBounds`, `DuplicateAxis`, `ShapeMismatch`, or `DTypeMismatch`
+    /// when `config` or the operands are invalid; backend and runtime-state
+    /// failures retain their typed sources.
     pub fn dot_general(&self, other: &Self, config: DotGeneralConfig) -> Result<Self> {
         validate_eager_dot_general_config(
             "EagerTensor::dot_general",
@@ -283,6 +320,12 @@ impl EagerTensor {
     /// the conjugated operand does not need to be materialized. Tracked tensors
     /// fall back to explicit `Conj` plus `DotGeneral` so reverse-mode AD keeps
     /// the same graph semantics as the standard eager ops.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::ContextMismatch`] for operands from different eager
+    /// runtimes, [`tenferro_tensor::Error::Validation`] for rank/axis/shape or
+    /// dtype mismatches in `config`, or a typed backend/runtime-state error.
     pub fn dot_general_with_conj(
         &self,
         other: &Self,
@@ -359,32 +402,25 @@ impl EagerTensor {
     /// assert_eq!(c.shape(), &[2, 1]);
     /// assert_eq!(c.materialized().unwrap().as_slice::<f64>().unwrap(), &[23.0, 34.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::RankMismatch`] when either operand is
+    /// not rank 2, `ShapeMismatch` when the inner dimensions differ, or a typed
+    /// dtype/backend/runtime-state error during the contraction.
     pub fn matmul(&self, other: &Self) -> Result<Self> {
         let lhs_shape = self.shape();
         let rhs_shape = other.shape();
         if lhs_shape.len() != 2 {
-            return Err(tenferro_tensor::Error::RankMismatch {
-                op: "matmul",
-                expected: 2,
-                actual: lhs_shape.len(),
-            }
-            .into());
+            return Err(tenferro_tensor::Error::rank_mismatch("matmul", 2, lhs_shape.len()).into());
         }
         if rhs_shape.len() != 2 {
-            return Err(tenferro_tensor::Error::RankMismatch {
-                op: "matmul",
-                expected: 2,
-                actual: rhs_shape.len(),
-            }
-            .into());
+            return Err(tenferro_tensor::Error::rank_mismatch("matmul", 2, rhs_shape.len()).into());
         }
         if lhs_shape[1] != rhs_shape[0] {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "matmul",
-                lhs: lhs_shape.to_vec(),
-                rhs: rhs_shape.to_vec(),
-            }
-            .into());
+            return Err(
+                tenferro_tensor::Error::shape_mismatch("matmul", lhs_shape, rhs_shape).into(),
+            );
         }
         self.dot_general(
             other,
@@ -415,6 +451,12 @@ impl EagerTensor {
     /// assert_eq!(y.shape(), &[3, 2]);
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds`
+    /// or `DuplicateAxis` when `perm` is not a permutation, or a typed
+    /// backend/runtime-state error while creating the view.
     pub fn transpose(&self, perm: &[usize]) -> Result<Self> {
         let op = StdTensorOp::Transpose {
             perm: perm.to_vec(),
@@ -444,6 +486,12 @@ impl EagerTensor {
     /// assert_eq!(y.shape(), &[6]);
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::ShapeMismatch`] when the element count
+    /// changes, `InvalidArgument` when the target shape product overflows, or a
+    /// typed backend/runtime-state error.
     pub fn reshape(&self, shape: &[usize]) -> Result<Self> {
         let op = StdTensorOp::Reshape {
             to_shape: DimExpr::from_concrete(shape),
@@ -474,6 +522,12 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[2.0, 3.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with
+    /// `AxisOutOfBounds`/`InvalidArgument` when starts, limits, or strides are
+    /// invalid, or a typed backend/runtime-state error while creating the view.
     pub fn slice(&self, config: SliceConfig) -> Result<Self> {
         let value = self
             .value
@@ -496,7 +550,16 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.shape(), &[3, 2]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds`,
+    /// `DuplicateAxis`, or `ShapeMismatch` when `shape`/`dims` cannot broadcast
+    /// the input, or a typed backend/runtime-state error.
     pub fn broadcast_in_dim(&self, shape: &[usize], dims: &[usize]) -> Result<Self> {
+        if let Some(error) = broadcast_in_dim_extent_error(self.shape(), shape, dims) {
+            return Err(broadcast_error("EagerTensor::broadcast_in_dim", error));
+        }
         let op = StdTensorOp::BroadcastInDim {
             shape: DimExpr::from_concrete(shape),
             dims: dims.to_vec(),
@@ -528,9 +591,10 @@ impl EagerTensor {
     ///
     /// # Errors
     ///
-    /// Returns an error when the requested conversion is outside tenferro's
-    /// checked dtype-promotion lattice. Use [`cast`](Self::cast) for explicit
-    /// lossy dtype projection.
+    /// Returns [`tenferro_tensor::Error::UnsupportedDTypeConversion`] when the
+    /// requested pair is outside tenferro's checked dtype-promotion lattice.
+    /// Use [`cast`](Self::cast) for explicit lossy projection; backend
+    /// execution can additionally return a typed runtime-state error.
     pub fn convert(&self, to: DType) -> Result<Self> {
         tenferro_tensor::validate::validate_convert_dtype("EagerTensor::convert", self.dtype(), to)
             .map_err(Error::TensorRuntime)?;
@@ -555,6 +619,11 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<i32>().unwrap(), &[1, -2]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns a typed [`tenferro_tensor::Error::Unsupported`] when the eager
+    /// backend cannot project the requested dtype, or a backend/runtime-state
+    /// error during execution.
     pub fn cast(&self, to: DType) -> Result<Self> {
         self.unary_op(StdTensorOp::Convert {
             from: self.dtype(),
@@ -582,6 +651,16 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[0.0, 1.0, 0.0, 2.0, 0.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::TensorRuntime`] containing
+    /// [`tenferro_tensor::ValidationError::InvalidArgument`] when a
+    /// padding vector has a length different from the input rank, interior
+    /// padding is negative, or edge/interior padding produces a negative
+    /// dimension or checked output-size arithmetic overflows.
+    /// Backend execution and unavailable runtime state are propagated as their
+    /// typed [`tenferro_runtime::Error::TensorRuntime`] or
+    /// [`tenferro_runtime::Error::RuntimeState`] variants.
     pub fn pad(&self, config: PadConfig) -> Result<Self> {
         self.unary_op(StdTensorOp::Pad(config))
     }
@@ -600,6 +679,11 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, 3.0, 2.0, 1.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
+    /// `DuplicateAxis` for an invalid axis list, or a typed backend/
+    /// runtime-state error during execution.
     pub fn reverse(&self, axes: &[usize]) -> Result<Self> {
         validate_eager_axes("EagerTensor::reverse", self.shape().len(), axes)?;
         self.unary_op(StdTensorOp::Reverse {
@@ -636,6 +720,11 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[50.0, 20.0, 10.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] when the gather
+    /// configuration has an invalid rank, axis, shape, or index dtype, or a
+    /// typed backend/runtime-state error.
     pub fn gather(&self, indices: &Self, config: GatherConfig) -> Result<Self> {
         self.binary_op(indices, StdTensorOp::Gather(config))
     }
@@ -667,6 +756,11 @@ impl EagerTensor {
     ///
     /// assert_eq!(result.materialized().unwrap().as_slice::<f64>().unwrap(), &[0.0, 5.0, 0.0, 7.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] when the scatter
+    /// configuration, index/update shapes, or index dtype is invalid, or a
+    /// typed backend/runtime-state error.
     pub fn scatter(&self, indices: &Self, updates: &Self, config: ScatterConfig) -> Result<Self> {
         self.ternary_op(indices, updates, StdTensorOp::Scatter(config))
     }
@@ -686,6 +780,12 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] when `starts` has the
+    /// wrong dtype/shape or `sizes` exceeds the operand rank, including an
+    /// `AxisOutOfBounds` or `ShapeMismatch`, or a typed backend/runtime-state
+    /// error.
     pub fn dynamic_slice(&self, starts: &Self, sizes: &[usize]) -> Result<Self> {
         self.binary_op(
             starts,
@@ -710,6 +810,12 @@ impl EagerTensor {
     ///
     /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::InvalidArgument`] when `tensors` is
+    /// empty or `axis` is outside the rank, `ShapeMismatch`/`DTypeMismatch`
+    /// when inputs cannot be concatenated, or a typed backend/runtime-state
+    /// error.
     pub fn concatenate(tensors: &[&Self], axis: usize) -> Result<Self> {
         Self::nary_op(
             tensors,
@@ -737,6 +843,11 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 5.0, 9.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `RankMismatch`,
+    /// `AxisOutOfBounds`, or `DuplicateAxis` when the selected axes cannot form
+    /// a diagonal, or a typed backend/runtime-state error.
     pub fn extract_diag(&self, axis_a: usize, axis_b: usize) -> Result<Self> {
         self.unary_op(StdTensorOp::ExtractDiag { axis_a, axis_b })
     }
@@ -756,6 +867,11 @@ impl EagerTensor {
     /// assert_eq!(y.shape(), &[3, 3]);
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `RankMismatch`,
+    /// `AxisOutOfBounds`, or `DuplicateAxis` when the diagonal axes are not
+    /// valid for embedding, or a typed backend/runtime-state error.
     pub fn embed_diag(&self, axis_a: usize, axis_b: usize) -> Result<Self> {
         self.unary_op(StdTensorOp::EmbedDiag { axis_a, axis_b })
     }
@@ -774,6 +890,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0, 0.0, 4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::RankMismatch`] when the operand is not
+    /// a matrix, or a typed unsupported/backend/runtime-state error.
     pub fn tril(&self, k: i64) -> Result<Self> {
         self.unary_op(StdTensorOp::Tril { k })
     }
@@ -792,6 +912,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 0.0, 3.0, 4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::RankMismatch`] when the operand is not
+    /// a matrix, or a typed unsupported/backend/runtime-state error.
     pub fn triu(&self, k: i64) -> Result<Self> {
         self.unary_op(StdTensorOp::Triu { k })
     }
@@ -810,6 +934,11 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[24.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
+    /// `DuplicateAxis` for an invalid reduction axis, or a typed
+    /// unsupported/backend/runtime-state error for the selected dtype.
     pub fn reduce_prod(&self, axes: &[usize]) -> Result<Self> {
         validate_eager_axes("EagerTensor::reduce_prod", self.shape().len(), axes)?;
         self.unary_op(StdTensorOp::ReduceProd {
@@ -831,6 +960,11 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
+    /// `DuplicateAxis` for an invalid reduction axis, or a typed
+    /// unsupported/backend/runtime-state error for the selected dtype.
     pub fn reduce_max(&self, axes: &[usize]) -> Result<Self> {
         validate_eager_axes("EagerTensor::reduce_max", self.shape().len(), axes)?;
         self.unary_op(StdTensorOp::ReduceMax {
@@ -852,6 +986,11 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
+    /// `DuplicateAxis` for an invalid reduction axis, or a typed
+    /// unsupported/backend/runtime-state error for the selected dtype.
     pub fn reduce_min(&self, axes: &[usize]) -> Result<Self> {
         validate_eager_axes("EagerTensor::reduce_min", self.shape().len(), axes)?;
         self.unary_op(StdTensorOp::ReduceMin {
@@ -1011,33 +1150,30 @@ fn validate_eager_axes(op: &'static str, rank: usize, axes: &[usize]) -> Result<
 }
 
 fn validate_eager_dot_general_config(
-    op: &'static str,
+    _op: &'static str,
     config: &DotGeneralConfig,
     lhs_rank: usize,
     rhs_rank: usize,
 ) -> Result<()> {
     config
         .validate_dims_with_ranks(lhs_rank, rhs_rank)
-        .map_err(|err| {
-            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-                op,
-                message: err.to_string(),
-            })
-        })
+        .map_err(Error::TensorRuntime)
 }
 
 fn empty_nary_input_error(op: &StdTensorOp) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-        op: eager_validation_op_name(op),
-        message: "operation requires at least one input tensor".to_string(),
-    })
+    Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+        eager_validation_op_name(op),
+        "inputs",
+        "operation requires at least one input tensor",
+    ))
 }
 
 fn wrong_nary_input_count_error(op: &StdTensorOp, expected: usize, actual: usize) -> Error {
-    Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-        op: eager_validation_op_name(op),
-        message: format!("operation expects {expected} inputs, got {actual}"),
-    })
+    Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+        eager_validation_op_name(op),
+        "inputs",
+        format!("operation expects {expected} inputs, got {actual}"),
+    ))
 }
 
 fn eager_validation_op_name(op: &StdTensorOp) -> &'static str {

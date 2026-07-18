@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tenferro_ad::error::{Error, Result};
 use tenferro_ad::extension::apply_eager;
 use tenferro_ad::EagerTensor;
+use tenferro_runtime::ErrorPhase;
 
 use crate::extension::{
     validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
@@ -11,14 +12,48 @@ use crate::register_runtime;
 
 /// Linear algebra extension methods for [`EagerTensor`].
 pub trait EagerTensorLinalgExt {
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for an invalid rank, shape, or dtype,
+    /// `Error::Extension` with an unsupported-operation or unsupported-dtype
+    /// source when the selected backend cannot execute the decomposition, and
+    /// `Error::RuntimeState` when the eager runtime or backend is unavailable.
     fn svd(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` when `derivative_eps` is non-finite or
+    /// non-positive, `Error::Extension` for unsupported dtypes or numerical
+    /// non-convergence, and `Error::Internal` if the extension violates its
+    /// output-count contract.
     fn svd_with_options(
         &self,
         options: SvdOptions,
     ) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for invalid matrix rank or shape,
+    /// `Error::Extension` for unsupported dtypes or numerical failure, and
+    /// `Error::RuntimeState` when the eager runtime or backend is unavailable.
     fn qr(&self) -> Result<(EagerTensor, EagerTensor)>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for invalid matrix rank or shape,
+    /// `Error::Extension` for unsupported dtypes or numerical failure, and
+    /// `Error::Internal` if the extension violates its output-count contract.
     fn qr_with_options(&self, options: QrOptions) -> Result<(EagerTensor, EagerTensor)>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for an invalid matrix rank or shape,
+    /// `Error::Extension` for an unsupported dtype or singular numerical
+    /// result, and `Error::RuntimeState` when execution cannot access its
+    /// backend.
     fn lu(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for an invalid matrix rank or shape,
+    /// `Error::Extension` for unsupported dtypes or singular numerical
+    /// results, and `Error::Internal` if the extension violates its output
+    /// contract.
     fn full_piv_lu(
         &self,
     ) -> Result<(
@@ -28,12 +63,48 @@ pub trait EagerTensorLinalgExt {
         EagerTensor,
         EagerTensor,
     )>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` when `a` and `b` have incompatible matrix
+    /// or batch shapes, `Error::Extension` for an unsupported dtype or
+    /// singular system, and `Error::RuntimeState` when the backend is
+    /// unavailable.
     fn full_piv_lu_solve(&self, b: &EagerTensor) -> Result<EagerTensor>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for incompatible matrix, batch, or dtype
+    /// metadata, `Error::Extension` for an unsupported dtype or singular
+    /// system, and `Error::RuntimeState` when the backend is unavailable.
     fn solve(&self, b: &EagerTensor) -> Result<EagerTensor>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for a non-square or invalid-rank input,
+    /// `Error::Extension` for unsupported dtypes or a non-positive-definite
+    /// matrix, and `Error::RuntimeState` when the backend is unavailable.
     fn cholesky(&self) -> Result<EagerTensor>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for a non-square or invalid-rank input,
+    /// `Error::Extension` for unsupported dtypes or numerical non-convergence,
+    /// and `Error::RuntimeState` when the backend is unavailable.
     fn eigh(&self) -> Result<(EagerTensor, EagerTensor)>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for an invalid rank, shape, or
+    /// `derivative_eps`, `Error::Extension` for unsupported dtypes or
+    /// non-convergence, and `Error::Internal` for an output-count violation.
     fn eigh_with_options(&self, options: EighOptions) -> Result<(EagerTensor, EagerTensor)>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for a non-square or invalid-rank input,
+    /// `Error::Extension` for unsupported dtypes or numerical non-convergence,
+    /// and `Error::RuntimeState` when the backend is unavailable.
     fn eig(&self) -> Result<(EagerTensor, EagerTensor)>;
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for incompatible matrix, batch, or dtype
+    /// metadata, `Error::Extension` for unsupported dtypes or a singular
+    /// system, and `Error::RuntimeState` when the backend is unavailable.
     fn triangular_solve(
         &self,
         b: &EagerTensor,
@@ -121,7 +192,9 @@ fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<Eager
         first
             .runtime()
             .register_extension(register_runtime)
-            .map_err(|err| Error::Internal(err.to_string()))?;
+            .map_err(|source| {
+                Error::runtime_state_source("linalg", ErrorPhase::GraphBuild, source)
+            })?;
     }
     apply_eager(Arc::new(LinalgExtensionOp::new(op)), inputs)
 }
@@ -143,6 +216,13 @@ fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<Eager
 /// assert_eq!(s.shape(), &[2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for an invalid rank, matrix shape, or dtype,
+/// `Error::Extension` with an unsupported-dtype or non-convergence source when
+/// the backend cannot compute the decomposition, and `Error::RuntimeState`
+/// when the eager runtime or backend is unavailable.
 pub fn svd(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
     svd_with_options(a, SvdOptions::default())
 }
@@ -170,6 +250,13 @@ pub fn svd(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
 /// assert_eq!(s.shape(), &[2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` when `derivative_eps` is non-finite or
+/// non-positive, `Error::Extension` for unsupported dtypes or numerical
+/// non-convergence, and `Error::Internal` if the extension returns an
+/// unexpected number of outputs.
 pub fn svd_with_options(
     a: &EagerTensor,
     options: SvdOptions,
@@ -214,6 +301,12 @@ pub fn svd_with_options(
 /// assert_eq!(r.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for an invalid rank or matrix shape,
+/// `Error::Extension` for an unsupported dtype or numerical failure, and
+/// `Error::RuntimeState` when the eager runtime or backend is unavailable.
 pub fn qr(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
     qr_with_options(a, QrOptions::default())
 }
@@ -238,6 +331,12 @@ pub fn qr(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 /// assert_eq!(r.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for an invalid rank or matrix shape,
+/// `Error::Extension` for an unsupported dtype or numerical failure, and
+/// `Error::Internal` if the extension returns an unexpected number of outputs.
 pub fn qr_with_options(a: &EagerTensor, options: QrOptions) -> Result<(EagerTensor, EagerTensor)> {
     two_outputs(
         apply_linalg_eager(
@@ -269,6 +368,12 @@ pub fn qr_with_options(a: &EagerTensor, options: QrOptions) -> Result<(EagerTens
 /// assert_eq!(parity.shape(), &[] as &[usize]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for an invalid rank or matrix shape,
+/// `Error::Extension` for an unsupported dtype or singular numerical result,
+/// and `Error::RuntimeState` when the eager runtime or backend is unavailable.
 pub fn lu(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor, EagerTensor)> {
     let mut outputs = apply_linalg_eager(LinalgOp::Lu, &[a])?.into_iter();
     match (
@@ -309,6 +414,13 @@ pub fn lu(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor, Eag
 /// assert_eq!(parity.shape(), &[] as &[usize]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for an invalid rank or matrix shape,
+/// `Error::Extension` for an unsupported dtype or singular numerical result,
+/// and `Error::Internal` if the extension returns an unexpected number of
+/// outputs.
 pub fn full_piv_lu(
     a: &EagerTensor,
 ) -> Result<(
@@ -355,6 +467,12 @@ pub fn full_piv_lu(
 /// assert_eq!(x.shape(), &[2, 1]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` when `a` and `b` have incompatible matrix or
+/// batch shapes, `Error::Extension` for an unsupported dtype or singular
+/// system, and `Error::RuntimeState` when the backend is unavailable.
 pub fn full_piv_lu_solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
     one_output(
         apply_linalg_eager(LinalgOp::FullPivLuSolve { transpose_a: false }, &[a, b])?,
@@ -383,6 +501,12 @@ pub fn full_piv_lu_solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor
 /// assert_eq!(x.shape(), &[2, 1]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for incompatible matrix, batch, or dtype
+/// metadata, `Error::Extension` for an unsupported dtype or singular system,
+/// and `Error::RuntimeState` when the backend is unavailable.
 pub fn solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
     let mut factor_outputs = apply_linalg_eager(LinalgOp::LuFactor, &[a])?.into_iter();
     let (packed_lu, pivots) = match (
@@ -427,6 +551,12 @@ pub fn solve(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
 /// assert_eq!(l.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a non-square or invalid-rank input,
+/// `Error::Extension` for an unsupported dtype or a non-positive-definite
+/// matrix, and `Error::RuntimeState` when the backend is unavailable.
 pub fn cholesky(a: &EagerTensor) -> Result<EagerTensor> {
     one_output(apply_linalg_eager(LinalgOp::Cholesky, &[a])?, "cholesky")
 }
@@ -449,6 +579,12 @@ pub fn cholesky(a: &EagerTensor) -> Result<EagerTensor> {
 /// assert_eq!(vectors.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a non-square or invalid-rank input,
+/// `Error::Extension` for an unsupported dtype or numerical non-convergence,
+/// and `Error::RuntimeState` when the backend is unavailable.
 pub fn eigh(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
     eigh_with_options(a, EighOptions::default())
 }
@@ -479,6 +615,12 @@ pub fn eigh(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 /// assert_eq!(vectors.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for an invalid rank, shape, or
+/// `derivative_eps`, `Error::Extension` for unsupported dtypes or numerical
+/// non-convergence, and `Error::Internal` for an output-count violation.
 pub fn eigh_with_options(
     a: &EagerTensor,
     options: EighOptions,
@@ -514,6 +656,12 @@ pub fn eigh_with_options(
 /// assert_eq!(vectors.shape(), &[2, 2]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a non-square or invalid-rank input,
+/// `Error::Extension` for an unsupported dtype or numerical non-convergence,
+/// and `Error::RuntimeState` when the backend is unavailable.
 pub fn eig(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
     two_outputs(
         apply_linalg_eager(
@@ -547,6 +695,12 @@ pub fn eig(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
 /// assert_eq!(x.shape(), &[2, 1]);
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for incompatible matrix, batch, or dtype
+/// metadata, `Error::Extension` for an unsupported dtype or singular system,
+/// and `Error::RuntimeState` when the backend is unavailable.
 pub fn triangular_solve(
     a: &EagerTensor,
     b: &EagerTensor,

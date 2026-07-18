@@ -122,30 +122,65 @@ pub(crate) fn symbolic_input_meta(dtype: DType, tensor_id: u64, rank: usize) -> 
     )
 }
 
+/// Convert a tensor's concrete metadata into the runtime metadata form.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::ad_support::tensor_meta_from_tensor;
+/// use tenferro_tensor::Tensor;
+/// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+/// assert_eq!(tensor_meta_from_tensor(&tensor).rank(), 1);
+/// ```
 pub fn tensor_meta_from_tensor(tensor: &Tensor) -> TensorMeta {
     concrete_tensor_meta(tensor.dtype(), tensor.shape())
 }
 
+/// Register metadata for one value for the lifetime of the returned scope.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::RuntimeStateSource`] when the global metadata
+/// registry lock is poisoned while installing `meta`.
 pub fn register_scoped_value_metadata(
     key: ValueKey<StdTensorOp>,
     meta: TensorMeta,
 ) -> Result<GlobalMetadataScope> {
-    register_scoped_global_metadata_batch([(key, meta)])
-        .map_err(|err| metadata_error(err.to_string()))
+    register_scoped_global_metadata_batch([(key, meta)]).map_err(metadata_source)
 }
 
+/// Register a batch of value metadata for the lifetime of the returned scope.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::RuntimeStateSource`] when the global metadata
+/// registry lock is poisoned while installing one of the entries.
 pub fn register_scoped_metadata_batch(
     entries: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> Result<GlobalMetadataScope> {
-    register_scoped_global_metadata_batch(entries).map_err(|err| metadata_error(err.to_string()))
+    register_scoped_global_metadata_batch(entries).map_err(metadata_source)
 }
 
+/// Look up metadata registered for one graph value.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::RuntimeStateSource`] when the global metadata
+/// registry lock is poisoned, or [`crate::Error::RuntimeState`] when `key`
+/// has no registered metadata.
 pub fn registered_meta(key: &ValueKey<StdTensorOp>) -> Result<TensorMeta> {
     lookup_global_metadata(key)
-        .map_err(|err| metadata_error(err.to_string()))?
+        .map_err(metadata_source)?
         .ok_or_else(|| metadata_error(format!("missing registered metadata for {:?}", key)))
 }
 
+/// Register graph metadata for the lifetime of the returned scope.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `InvalidArgument` when graph
+/// metadata cannot be analyzed, or [`crate::Error::RuntimeStateSource`] when
+/// the metadata registry lock is poisoned.
 pub fn register_scoped_graph_metadata(
     graph: &Graph<StdTensorOp>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
@@ -195,19 +230,33 @@ impl std::fmt::Debug for RegisteredGraphAnalysis {
 /// let analysis = register_scoped_graph_analysis(input.graph(), []).unwrap();
 /// assert!(analysis.constraints.is_empty());
 /// ```
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `InvalidArgument` when graph
+/// metadata or a symbolic dimension cannot be analyzed, or
+/// [`crate::Error::RuntimeStateSource`] when the metadata registry lock is
+/// poisoned.
 pub fn register_scoped_graph_analysis(
     graph: &Graph<StdTensorOp>,
     seeded: impl IntoIterator<Item = (ValueKey<StdTensorOp>, TensorMeta)>,
 ) -> Result<RegisteredGraphAnalysis> {
     let analysis = graph_analysis_registrations(graph, None, seeded)?;
-    let metadata = register_scoped_global_metadata_batch(analysis.metadata)
-        .map_err(|err| metadata_error(err.to_string()))?;
+    let metadata =
+        register_scoped_global_metadata_batch(analysis.metadata).map_err(metadata_source)?;
     Ok(RegisteredGraphAnalysis {
         metadata,
         constraints: ShapeConstraintScope::new(analysis.constraints),
     })
 }
 
+/// Register metadata only for live values in a graph.
+///
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `InvalidArgument` when a live
+/// graph value has invalid metadata, or [`crate::Error::RuntimeStateSource`]
+/// when the metadata registry lock is poisoned.
 pub fn register_scoped_live_graph_metadata(
     graph: &Graph<StdTensorOp>,
     live_values: &HashSet<LocalValueId>,
@@ -216,7 +265,7 @@ pub fn register_scoped_live_graph_metadata(
     register_scoped_global_metadata_batch(
         graph_analysis_registrations(graph, Some(live_values), seeded)?.metadata,
     )
-    .map_err(|err| metadata_error(err.to_string()))
+    .map_err(metadata_source)
 }
 
 pub fn metadata_scopes_with_new<'a>(
@@ -344,9 +393,7 @@ fn append_graph_metadata_registrations(
             let mut registered_outputs = Vec::with_capacity(op_node.outputs.len());
             for &output_id in &op_node.outputs {
                 let key = graph.values()[output_id].key.clone();
-                let Some(meta) =
-                    lookup_global_metadata(&key).map_err(|err| metadata_error(err.to_string()))?
-                else {
+                let Some(meta) = lookup_global_metadata(&key).map_err(metadata_source)? else {
                     break;
                 };
                 registered_outputs.push((key, meta));
@@ -375,9 +422,7 @@ fn append_graph_metadata_registrations(
                 input_metas.push(meta);
                 continue;
             }
-            if let Some(meta) =
-                lookup_global_metadata(key).map_err(|err| metadata_error(err.to_string()))?
-            {
+            if let Some(meta) = lookup_global_metadata(key).map_err(metadata_source)? {
                 known.insert(key.clone(), meta.clone());
                 registrations.push((key.clone(), meta.clone()));
                 input_metas.push(meta);
@@ -523,7 +568,16 @@ fn resolved_bound_shapes(input_metas: &[TensorMeta]) -> Result<Vec<Vec<SymDim>>>
 }
 
 fn metadata_error(message: impl Into<String>) -> Error {
-    Error::InvalidCompiledGraph {
-        message: format!("metadata registration: {}", message.into()),
-    }
+    Error::runtime_state(
+        "metadata",
+        crate::ErrorPhase::Compile,
+        format!("metadata registration: {}", message.into()),
+    )
+}
+
+fn metadata_source<E>(error: E) -> Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    Error::runtime_state_source("metadata", crate::ErrorPhase::Compile, error)
 }

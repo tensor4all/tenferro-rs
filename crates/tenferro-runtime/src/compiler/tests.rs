@@ -5,12 +5,14 @@ use super::{
     slot_use_counts, transpose_folding, CompilerOptions, OptimizerConfig,
 };
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
-use crate::{Error, GraphExecutor};
+use crate::{Error, ErrorPhase, GraphExecutor};
 use computegraph::compile::{CompiledProgram, Instruction};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeExtent;
-use tenferro_tensor::{DType, DotGeneralConfig};
+use tenferro_tensor::{
+    DType, DotGeneralConfig, ErrorKind, ShapeMismatch, ValidationError, ValidationKind,
+};
 
 #[path = "tests/dot_decomposer_tests.rs"]
 mod dot_decomposer_tests;
@@ -133,7 +135,7 @@ fn compile_reports_missing_slot_metadata_as_error() {
 
     assert!(matches!(
         err,
-        Error::InvalidCompiledGraph { ref message }
+        Error::Internal(ref message)
             if message.contains("missing dtype for slot 1")
     ));
 }
@@ -155,10 +157,21 @@ fn compile_reports_incompatible_broadcast_as_error() {
     .unwrap_err();
 
     assert!(matches!(
-        err,
-        Error::InvalidCompiledGraph { ref message }
-            if message.contains("incompatible Add/Mul broadcast dimensions: 2 and 3")
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::Compile,
+            source: ValidationError::ShapeMismatch(source),
+            ..
+        } if matches!(
+            source.as_ref(),
+            ShapeMismatch::IncompatibleShapes { lhs, rhs }
+                if lhs.as_slice() == [2] && rhs.as_slice() == [3]
+        )
     ));
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::ShapeMismatch)
+    );
 }
 
 #[test]
@@ -167,7 +180,7 @@ fn resolve_slot_redirect_rejects_cycles() {
 
     assert!(matches!(
         err,
-        Error::InvalidCompiledGraph { ref message }
+        Error::Internal(ref message)
             if message.contains("redirect cycle") && message.contains("slot 0")
     ));
 }
@@ -181,7 +194,7 @@ fn record_producer_rejects_out_of_range_output_slot() {
 
     assert!(matches!(
         err,
-        Error::InvalidCompiledGraph { ref message }
+        Error::Internal(ref message)
             if message.contains("producer output slot 3")
     ));
 }
@@ -195,7 +208,7 @@ fn producer_index_by_slot_rejects_out_of_range_output_slot() {
 
     assert!(matches!(
         err,
-        Error::InvalidCompiledGraph { ref message }
+        Error::Internal(ref message)
             if message.contains("producer output slot 3")
     ));
 }
@@ -210,7 +223,7 @@ fn producer_index_by_slot_rejects_duplicate_output_slot() {
 
     assert!(matches!(
         err,
-        Error::InvalidCompiledGraph { ref message }
+        Error::Internal(ref message)
             if message == "producer output slot 1 has duplicate producers at instructions 0 and 1"
     ));
 }
@@ -224,7 +237,7 @@ fn slot_use_counts_rejects_out_of_range_slots() {
 
     assert!(matches!(
         err,
-        Error::InvalidCompiledGraph { ref message }
+        Error::Internal(ref message)
             if message.contains("use-count input slot 2")
     ));
 }
@@ -237,7 +250,7 @@ fn populate_last_use_rejects_out_of_range_output_slot() {
 
     assert!(matches!(
         err,
-        Error::InvalidCompiledGraph { ref message }
+        Error::Internal(ref message)
             if message.contains("last-use output slot 2")
     ));
 }

@@ -21,6 +21,11 @@ pub enum AxisError {
 /// assert_eq!(normalize_axis(-1, 3).unwrap(), 2);
 /// assert!(normalize_axis(3, 3).is_err());
 /// ```
+///
+/// # Errors
+///
+/// Returns [`AxisError::OutOfBounds`] when `axis` is outside the normalized
+/// range for `rank`.
 pub fn normalize_axis(axis: isize, rank: usize) -> Result<usize, AxisError> {
     let normalized = if axis >= 0 {
         axis as usize
@@ -44,6 +49,11 @@ pub fn normalize_axis(axis: isize, rank: usize) -> Result<usize, AxisError> {
 /// assert_eq!(normalize_axes(&[0, -1], 3).unwrap(), vec![0, 2]);
 /// assert!(normalize_axes(&[1, -2], 3).is_err());
 /// ```
+///
+/// # Errors
+///
+/// Returns [`AxisError::OutOfBounds`] for an invalid axis or
+/// [`AxisError::Duplicate`] when two axes normalize to the same position.
 pub fn normalize_axes(axes: &[isize], rank: usize) -> Result<Vec<usize>, AxisError> {
     let mut out = Vec::with_capacity(axes.len());
     let mut seen = vec![false; rank];

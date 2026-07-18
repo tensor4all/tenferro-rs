@@ -3,9 +3,12 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 use tenferro_cpu::CpuBackend;
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{
+    DType, Error as RuntimeError, ErrorPhase, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
+};
 use tenferro_tensor::{
-    Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TypedTensor,
+    Buffer, BufferHandle, DeviceId, DeviceKind, ErrorKind, GpuBackendKind, MemoryKind, Placement,
+    TypedTensor, ValidationError,
 };
 
 fn run(output: &TracedTensor) -> Tensor {
@@ -463,14 +466,30 @@ fn traced_fft_rejects_invalid_dtype_axis_and_length() {
         Ok(_) => panic!("expected fft to reject integer input"),
         Err(err) => err,
     };
-    assert!(err.to_string().contains("floating"), "{err}");
+    assert!(matches!(
+        err,
+        RuntimeError::Extension {
+            op: "fft",
+            phase: ErrorPhase::GraphBuild,
+            family: "tenferro-fft.fft.v1",
+            kind: ErrorKind::Unsupported,
+            ..
+        }
+    ));
 
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let err = match x.rfft(Some(0), -1, FftNorm::Backward) {
         Ok(_) => panic!("expected rfft to reject zero transform length"),
         Err(err) => err,
     };
-    assert!(err.to_string().contains("positive"), "{err}");
+    assert!(matches!(
+        err,
+        RuntimeError::Validation {
+            op: "rfft",
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::InvalidArgument { argument: "n", .. },
+        }
+    ));
 
     let zero_axis = TracedTensor::from_tensor_concrete_shape(Tensor::F64(
         TypedTensor::from_vec_col_major(vec![0], Vec::<f64>::new()).unwrap(),
@@ -480,13 +499,27 @@ fn traced_fft_rejects_invalid_dtype_axis_and_length() {
         Ok(_) => panic!("expected rfft to reject zero-length input axis"),
         Err(err) => err,
     };
-    assert!(err.to_string().contains("positive"), "{err}");
+    assert!(matches!(
+        err,
+        RuntimeError::Validation {
+            op: "rfft",
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::InvalidArgument { argument: "n", .. },
+        }
+    ));
 
     let err = match x.rfft(None, 3, FftNorm::Backward) {
         Ok(_) => panic!("expected rfft to reject out-of-bounds axis"),
         Err(err) => err,
     };
-    assert!(err.to_string().contains("out of bounds"), "{err}");
+    assert!(matches!(
+        err,
+        RuntimeError::Validation {
+            op: "rfft",
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::AxisOutOfBounds { axis: 3, rank: 1 },
+        }
+    ));
 }
 
 #[test]

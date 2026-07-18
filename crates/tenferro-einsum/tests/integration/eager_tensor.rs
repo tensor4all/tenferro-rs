@@ -6,7 +6,8 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{EagerEinsumExt, EagerTensorEinsumExt};
 use tenferro_einsum::{EinsumSubscripts, TensorDotAxes};
-use tenferro_runtime::Tensor;
+use tenferro_runtime::{Error as RuntimeError, ErrorPhase, Tensor};
+use tenferro_tensor::ValidationError;
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
     tensor.as_slice::<f64>().unwrap()
@@ -183,7 +184,14 @@ fn eager_tensor_tensordot_rejects_explicit_out_of_bounds_axis() {
         Err(err) => err,
     };
 
-    assert!(err.to_string().contains("lhs axis 2 out of bounds"));
+    assert!(matches!(
+        err,
+        tenferro_einsum::Error::Runtime(RuntimeError::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
+            ..
+        })
+    ));
 }
 
 #[test]

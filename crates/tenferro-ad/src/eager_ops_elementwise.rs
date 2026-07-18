@@ -20,6 +20,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when the dtype has no
+    /// absolute-value implementation, or a typed backend/runtime-state error.
     pub fn abs(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Abs)
     }
@@ -38,6 +42,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, -2.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when conjugation is not
+    /// defined for the dtype, or a typed backend/runtime-state error.
     pub fn conj(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Conj)
     }
@@ -56,6 +64,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[-1.0, 1.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when sign is not
+    /// defined for the dtype, or a typed backend/runtime-state error.
     pub fn sign(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Sign)
     }
@@ -74,6 +86,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[0.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
+    /// dtype, or a typed backend/runtime-state error during execution.
     pub fn log(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Log)
     }
@@ -92,6 +108,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[2.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
+    /// dtype, or a typed backend/runtime-state error during execution.
     pub fn sqrt(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Sqrt)
     }
@@ -110,6 +130,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[0.5]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
+    /// dtype, or a typed backend/runtime-state error during execution.
     pub fn rsqrt(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Rsqrt)
     }
@@ -128,6 +152,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[0.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
+    /// dtype, or a typed backend/runtime-state error during execution.
     pub fn sin(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Sin)
     }
@@ -146,6 +174,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
+    /// dtype, or a typed backend/runtime-state error during execution.
     pub fn cos(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Cos)
     }
@@ -164,6 +196,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[0.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
+    /// dtype, or a typed backend/runtime-state error during execution.
     pub fn tanh(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Tanh)
     }
@@ -182,6 +218,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[0.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
+    /// dtype, or a typed backend/runtime-state error during execution.
     pub fn expm1(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Expm1)
     }
@@ -200,6 +240,10 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[0.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] for an unsupported
+    /// dtype, or a typed backend/runtime-state error during execution.
     pub fn log1p(&self) -> Result<Self> {
         self.unary_op(StdTensorOp::Log1p)
     }
@@ -219,12 +263,28 @@ impl EagerTensor {
     ///
     /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0, -2.0, 3.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::ContextMismatch`] for different eager runtimes,
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] or
+    /// `ValidationError::DTypeMismatch` for
+    /// incompatible operands, or a typed backend/runtime-state error. Addition
+    /// does not have a zero-divisor failure; numerical zero-divisor errors are
+    /// specific to division and remainder.
     pub fn div(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("div", self, other)?;
         lhs.binary_op(&rhs, StdTensorOp::Div)
     }
 
     /// Elementwise remainder.
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::ContextMismatch`] for different eager runtimes,
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] or
+    /// `ValidationError::DTypeMismatch` for
+    /// incompatible operands, or a typed backend/runtime-state error.
+    /// Subtraction does not have a zero-divisor failure; numerical
+    /// zero-divisor errors are specific to division and remainder.
     pub fn rem(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("rem", self, other)?;
         lhs.binary_op(&rhs, StdTensorOp::Rem)
@@ -245,6 +305,13 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[8.0, 9.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::ContextMismatch`] for different eager runtimes,
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] or
+    /// `ValidationError::DTypeMismatch` for
+    /// incompatible operands, `NumericalFailure` for a checked invalid power,
+    /// or a typed backend/runtime-state error.
     pub fn pow(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("pow", self, other)?;
         lhs.binary_op(&rhs, StdTensorOp::Pow)
@@ -265,6 +332,13 @@ impl EagerTensor {
     ///
     /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0, 5.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::ContextMismatch`] for different eager runtimes,
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] or
+    /// `ValidationError::DTypeMismatch` for
+    /// incompatible operands, or a typed unsupported/backend/runtime-state
+    /// error.
     pub fn maximum(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("maximum", self, other)?;
         lhs.binary_op(&rhs, StdTensorOp::Maximum)
@@ -285,12 +359,26 @@ impl EagerTensor {
     ///
     /// assert_eq!(z.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::ContextMismatch`] for different eager runtimes,
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] or
+    /// `ValidationError::DTypeMismatch` for
+    /// incompatible operands, or a typed unsupported/backend/runtime-state
+    /// error.
     pub fn minimum(&self, other: &Self) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("minimum", self, other)?;
         lhs.binary_op(&rhs, StdTensorOp::Minimum)
     }
 
     /// Elementwise comparison.
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::ContextMismatch`] for different eager runtimes,
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] or
+    /// `ValidationError::DTypeMismatch` for
+    /// incompatible operands, or a typed unsupported/backend/runtime-state
+    /// error.
     pub fn compare(&self, other: &Self, dir: CompareDir) -> Result<Self> {
         let (lhs, rhs) = broadcast_binary("compare", self, other)?;
         lhs.binary_op(&rhs, StdTensorOp::Compare(dir))
@@ -312,11 +400,23 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 20.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::ContextMismatch`] for different eager runtimes,
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] when the three operands do not
+    /// broadcast, `DTypeMismatch` for incompatible value dtypes, or a typed
+    /// backend/runtime-state error.
     pub fn select(condition: &Self, on_true: &Self, on_false: &Self) -> Result<Self> {
         Self::where_select(condition, on_true, on_false)
     }
 
     /// Select values from `on_true` or `on_false` using `condition`.
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::ContextMismatch`] for different eager runtimes,
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] when the three operands do not
+    /// broadcast, `DTypeMismatch` for incompatible value dtypes, or a typed
+    /// backend/runtime-state error.
     pub fn where_select(condition: &Self, on_true: &Self, on_false: &Self) -> Result<Self> {
         let (condition, on_true, on_false) =
             broadcast_ternary("where_select", condition, on_true, on_false)?;
@@ -339,6 +439,12 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[-1.0, 0.5, 4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::ContextMismatch`] for different eager runtimes,
+    /// [`tenferro_tensor::ValidationError::ShapeMismatch`] when the three operands do not
+    /// broadcast, `DTypeMismatch` for incompatible bounds, or a typed
+    /// unsupported/backend/runtime-state error.
     pub fn clamp(&self, lower: &Self, upper: &Self) -> Result<Self> {
         let (input, lower, upper) = broadcast_ternary("clamp", self, lower, upper)?;
         input.ternary_op(&lower, &upper, StdTensorOp::Clamp)

@@ -11,7 +11,7 @@ use computegraph::{LocalValueId, ValueKey};
 use lru::LruCache;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::{CacheStats, Error, Result};
+use tenferro_runtime::{CacheStats, Error, ErrorPhase, Result};
 use tidu::eager::RecordedGraph;
 use tidu::LinearizedGraph;
 
@@ -399,9 +399,9 @@ impl AdTransformCache {
     }
 
     fn lock_store(&self) -> Result<MutexGuard<'_, AdTransformCacheStore>> {
-        self.store
-            .lock()
-            .map_err(|_| Error::Internal("AD transform cache lock poisoned".to_string()))
+        self.store.lock().map_err(|_| {
+            Error::runtime_state("ad_transform_cache", ErrorPhase::Compile, "lock poisoned")
+        })
     }
 }
 

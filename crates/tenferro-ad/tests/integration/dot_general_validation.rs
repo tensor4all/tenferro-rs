@@ -3,13 +3,17 @@ use support::RunTraced;
 
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::traced::TracedTensor;
-use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
+use tenferro_runtime::{Error as RuntimeError, ErrorPhase};
+use tenferro_tensor::{
+    DotGeneralConfig, Error as TensorError, ErrorKind, Tensor, TypedTensor, ValidationError,
+    ValidationKind,
+};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
-fn assert_error_contains(config: DotGeneralConfig, expected_substring: &str) {
+fn assert_validation_error(config: DotGeneralConfig, expected_kind: ValidationKind) {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]))
             .unwrap();
@@ -19,11 +23,13 @@ fn assert_error_contains(config: DotGeneralConfig, expected_substring: &str) {
     let err = a
         .dot_general(&b, config)
         .expect_err("invalid dot_general config should return an error");
-    let msg = err.to_string();
-    assert!(
-        msg.contains(expected_substring),
-        "expected message containing '{expected_substring}', got: {msg}"
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(expected_kind),
+        "unexpected structured classification: {err}"
     );
+    assert_eq!(err.phase(), Some(ErrorPhase::GraphBuild));
+    assert!(matches!(err, RuntimeError::Validation { .. }));
 }
 
 // Tests for stale lhs_rank/rhs_rank in config were removed after Task 4 of the
@@ -34,27 +40,27 @@ fn assert_error_contains(config: DotGeneralConfig, expected_substring: &str) {
 
 #[test]
 fn traced_dot_general_rejects_out_of_bounds_contracting_dim() {
-    assert_error_contains(
+    assert_validation_error(
         DotGeneralConfig {
             lhs_contracting_dims: vec![5],
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
         },
-        "out of bounds",
+        ValidationKind::AxisOutOfBounds,
     );
 }
 
 #[test]
 fn traced_dot_general_rejects_contracting_batch_overlap() {
-    assert_error_contains(
+    assert_validation_error(
         DotGeneralConfig {
             lhs_contracting_dims: vec![1],
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![1],
             rhs_batch_dims: vec![],
         },
-        "both contracting and batch",
+        ValidationKind::InvalidArgument,
     );
 }
 
@@ -99,7 +105,17 @@ fn dot_general_config_validate_dims_out_of_bounds() {
         rhs_batch_dims: vec![],
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
-    assert!(err.to_string().contains("out of bounds"));
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::AxisOutOfBounds)
+    );
+    assert!(matches!(
+        err,
+        TensorError::Validation {
+            source: ValidationError::AxisOutOfBounds { axis: 3, rank: 2 },
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -111,7 +127,10 @@ fn dot_general_config_validate_dims_contracting_count_mismatch() {
         rhs_batch_dims: vec![],
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
-    assert!(err.to_string().contains("contracting dim counts differ"));
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
+    );
 }
 
 #[test]
@@ -123,71 +142,74 @@ fn dot_general_config_validate_dims_batch_count_mismatch() {
         rhs_batch_dims: vec![],
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
-    assert!(err.to_string().contains("batch dim counts differ"));
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
+    );
 }
 
 #[test]
 fn traced_dot_general_rejects_rhs_out_of_bounds_contracting_dim() {
-    assert_error_contains(
+    assert_validation_error(
         DotGeneralConfig {
             lhs_contracting_dims: vec![1],
             rhs_contracting_dims: vec![5],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
         },
-        "out of bounds",
+        ValidationKind::AxisOutOfBounds,
     );
 }
 
 #[test]
 fn traced_dot_general_rejects_lhs_batch_out_of_bounds() {
-    assert_error_contains(
+    assert_validation_error(
         DotGeneralConfig {
             lhs_contracting_dims: vec![1],
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![5],
             rhs_batch_dims: vec![],
         },
-        "out of bounds",
+        ValidationKind::AxisOutOfBounds,
     );
 }
 
 #[test]
 fn traced_dot_general_rejects_rhs_batch_out_of_bounds() {
-    assert_error_contains(
+    assert_validation_error(
         DotGeneralConfig {
             lhs_contracting_dims: vec![1],
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![5],
         },
-        "out of bounds",
+        ValidationKind::AxisOutOfBounds,
     );
 }
 
 #[test]
 fn traced_dot_general_rejects_rhs_contracting_batch_overlap() {
-    assert_error_contains(
+    assert_validation_error(
         DotGeneralConfig {
             lhs_contracting_dims: vec![1],
             rhs_contracting_dims: vec![0],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![0],
         },
-        "both contracting and batch",
+        ValidationKind::InvalidArgument,
     );
 }
 
 #[test]
 fn traced_dot_general_rejects_duplicate_contracting_dims() {
-    assert_error_contains(
+    assert_validation_error(
         DotGeneralConfig {
             lhs_contracting_dims: vec![0, 0],
             rhs_contracting_dims: vec![0, 1],
             lhs_batch_dims: vec![],
             rhs_batch_dims: vec![],
         },
-        "duplicate dim",
+        ValidationKind::InvalidArgument,
     );
 }
 
@@ -200,7 +222,17 @@ fn dot_general_config_validate_dims_rhs_out_of_bounds() {
         rhs_batch_dims: vec![],
     };
     let err = config.validate_dims_with_ranks(2, 2).unwrap_err();
-    assert!(err.to_string().contains("out of bounds"));
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::AxisOutOfBounds)
+    );
+    assert!(matches!(
+        err,
+        TensorError::Validation {
+            source: ValidationError::AxisOutOfBounds { axis: 5, rank: 2 },
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -212,7 +244,17 @@ fn dot_general_config_validate_dims_duplicate_batch_dims() {
         rhs_batch_dims: vec![1, 1],
     };
     let err = config.validate_dims_with_ranks(3, 3).unwrap_err();
-    assert!(err.to_string().contains("duplicate dim"));
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
+    );
+    assert!(matches!(
+        err,
+        TensorError::Validation {
+            source: ValidationError::DuplicateAxis { axis: 0, .. },
+            ..
+        }
+    ));
 }
 
 #[test]

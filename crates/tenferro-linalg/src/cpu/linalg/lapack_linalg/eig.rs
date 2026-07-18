@@ -8,6 +8,7 @@ use super::helpers::{
     square_matrix_dim, tensor_from_vec_with_template, vector_with_batch_shape, work_len,
     zero_dim_eig_outputs,
 };
+use super::unsupported_dtype;
 
 fn eig_imag_is_effectively_zero(real: f64, imag: f64, eps: f64) -> bool {
     imag.abs() <= eps * real.abs().max(1.0)
@@ -422,29 +423,26 @@ pub(crate) fn eig(
             .into_iter()
             .map(Tensor::C64)
             .collect()),
-        _ => Err(tenferro_tensor::Error::backend_failure(
-            "eig",
-            format!("unsupported dtype {:?}", input.dtype()),
-        )),
+        _ => Err(unsupported_dtype("eig", input.dtype())),
     }
 }
 
 fn zero_dim_eig_values_output(input: &Tensor) -> tenferro_tensor::Result<Tensor> {
     let shape = input.shape();
     if shape.len() < 2 {
-        return Err(tenferro_tensor::Error::RankMismatch {
-            op: "eig_values",
-            expected: 2,
-            actual: shape.len(),
-        });
+        return Err(tenferro_tensor::Error::rank_mismatch(
+            "eig_values",
+            2,
+            shape.len(),
+        ));
     }
     let n = shape[0];
     if shape[1] != n {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op: "eig_values",
-            lhs: vec![n],
-            rhs: vec![shape[1]],
-        });
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "eig_values",
+            vec![n],
+            vec![shape[1]],
+        ));
     }
     let value_shape = vector_with_batch_shape(n, &shape[2..]);
     match input {
@@ -456,10 +454,7 @@ fn zero_dim_eig_values_output(input: &Tensor) -> tenferro_tensor::Result<Tensor>
             value_shape,
             Vec::new(),
         )?)),
-        _ => Err(tenferro_tensor::Error::backend_failure(
-            "eig_values",
-            format!("unsupported dtype {:?}", input.dtype()),
-        )),
+        _ => Err(unsupported_dtype("eig_values", input.dtype())),
     }
 }
 
@@ -496,9 +491,6 @@ pub(crate) fn eig_values(
             })?;
             Ok(Tensor::C64(outputs.remove(0)))
         }
-        _ => Err(tenferro_tensor::Error::backend_failure(
-            "eig_values",
-            format!("unsupported dtype {:?}", input.dtype()),
-        )),
+        _ => Err(unsupported_dtype("eig_values", input.dtype())),
     }
 }

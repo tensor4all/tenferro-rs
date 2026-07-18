@@ -6,9 +6,10 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::{ext_op::ExtensionOp, std_tensor_op::StdTensorOp, SymDim};
 use tenferro_runtime::{
-    CompareDir, DType, GraphCompiler, GraphExecutor, Tensor, TensorOpsExt, TracedTensor,
-    TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt,
+    CompareDir, DType, Error as RuntimeError, ErrorPhase, GraphCompiler, GraphExecutor, Tensor,
+    TensorOpsExt, TracedTensor, TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt,
 };
+use tenferro_tensor::ValidationError;
 
 #[derive(Clone, Debug)]
 struct TestExtensionOp;
@@ -286,12 +287,14 @@ fn eager_tensor_methods_cover_conversion_matmul_and_extension_standard_op() {
     )
     .err()
     .unwrap();
-    assert!(
-        extension_err
-            .to_string()
-            .contains("does not accept Extension ops"),
-        "got: {extension_err}"
-    );
+    assert!(matches!(
+        extension_err,
+        RuntimeError::Validation {
+            phase: ErrorPhase::Execution,
+            source: ValidationError::InvalidArgument { argument: "op", .. },
+            ..
+        }
+    ));
 
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap(),

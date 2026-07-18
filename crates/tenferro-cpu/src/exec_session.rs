@@ -41,7 +41,7 @@ impl CpuExecSession<'_> {
 impl TensorDeviceTransfer for CpuExecSession<'_> {
     fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
         if tensor.is_backend_buffer() {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::runtime_state(
                 "CpuBackend::download_to_host",
                 "CPU backend received a backend buffer; download the tensor to host with its owning backend before CPU execution",
             ));
@@ -51,7 +51,7 @@ impl TensorDeviceTransfer for CpuExecSession<'_> {
 
     fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
         if tensor.is_backend_buffer() {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::runtime_state(
                 "CpuBackend::upload_host_tensor",
                 "CPU backend upload_host_tensor expects a host tensor; download backend buffers to host before CPU execution",
             ));
@@ -407,11 +407,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                                 .map(|result| result.map(Tensor::C64))
                         }
                         _ if lhs.dtype() == rhs.dtype() => Ok(None),
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }?;
                     if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
                         return Ok(result);
@@ -473,11 +473,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                             config,
                         )
                         .map(Tensor::C64),
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }
                 }
                 #[cfg(not(feature = "cpu-faer"))]
@@ -528,11 +528,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                             config,
                         )
                         .map(Tensor::C64),
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }
                 }
                 #[cfg(not(feature = "cpu-blas"))]
@@ -606,11 +606,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                             .map(|result| result.map(Tensor::C64))
                         }
                         _ if lhs.dtype() == rhs.dtype() => Ok(None),
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }?;
                     if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
                         return Ok(result);
@@ -687,11 +687,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                             )
                             .map(Tensor::C64)
                         }
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }
                 }
                 #[cfg(not(feature = "cpu-faer"))]
@@ -758,11 +758,11 @@ impl SessionCachedDot for CpuExecSession<'_> {
                             )
                             .map(Tensor::C64)
                         }
-                        _ => Err(crate::Error::DTypeMismatch {
-                            op: "dot_general",
-                            lhs: lhs.dtype(),
-                            rhs: rhs.dtype(),
-                        }),
+                        _ => Err(crate::Error::dtype_mismatch(
+                            "dot_general",
+                            lhs.dtype(),
+                            rhs.dtype(),
+                        )),
                     }
                 }
                 #[cfg(not(feature = "cpu-blas"))]

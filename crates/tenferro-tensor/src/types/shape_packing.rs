@@ -1,4 +1,4 @@
-use crate::{GatherConfig, TensorBackend};
+use crate::{GatherConfig, ShapeMismatch, TensorBackend, ValidationError};
 
 use super::{Tensor, TypedTensor};
 
@@ -6,46 +6,61 @@ fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> crate:
     let normalized = if axis >= 0 {
         axis as usize
     } else {
-        rank.checked_sub(axis.unsigned_abs())
-            .ok_or(crate::Error::AxisOutOfBounds {
+        rank.checked_sub(axis.unsigned_abs()).ok_or_else(|| {
+            crate::Error::validation(
                 op,
-                axis: axis.unsigned_abs(),
-                rank,
-            })?
+                ValidationError::AxisOutOfBounds {
+                    axis: axis.unsigned_abs(),
+                    rank,
+                },
+            )
+        })?
     };
     if normalized >= rank {
-        return Err(crate::Error::AxisOutOfBounds {
+        return Err(crate::Error::validation(
             op,
-            axis: axis.unsigned_abs(),
-            rank,
-        });
+            ValidationError::AxisOutOfBounds {
+                axis: axis.unsigned_abs(),
+                rank,
+            },
+        ));
     }
     Ok(normalized)
 }
 
 fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> crate::Result<usize> {
-    let insert_rank = rank.checked_add(1).ok_or(crate::Error::AxisOutOfBounds {
-        op,
-        axis: axis.unsigned_abs(),
-        rank,
+    let insert_rank = rank.checked_add(1).ok_or_else(|| {
+        crate::Error::validation(
+            op,
+            ValidationError::AxisOutOfBounds {
+                axis: axis.unsigned_abs(),
+                rank,
+            },
+        )
     })?;
     let normalized = if axis >= 0 {
         axis as usize
     } else {
         insert_rank
             .checked_sub(axis.unsigned_abs())
-            .ok_or(crate::Error::AxisOutOfBounds {
-                op,
-                axis: axis.unsigned_abs(),
-                rank: insert_rank,
+            .ok_or_else(|| {
+                crate::Error::validation(
+                    op,
+                    ValidationError::AxisOutOfBounds {
+                        axis: axis.unsigned_abs(),
+                        rank: insert_rank,
+                    },
+                )
             })?
     };
     if normalized > rank {
-        return Err(crate::Error::AxisOutOfBounds {
+        return Err(crate::Error::validation(
             op,
-            axis: axis.unsigned_abs(),
-            rank: insert_rank,
-        });
+            ValidationError::AxisOutOfBounds {
+                axis: axis.unsigned_abs(),
+                rank: insert_rank,
+            },
+        ));
     }
     Ok(normalized)
 }
@@ -59,12 +74,13 @@ fn index_select_parts(
     let axis_extent = shape[axis];
     for &position in positions {
         if position >= axis_extent {
-            return Err(crate::Error::InvalidConfig {
-                op: "index_select",
-                message: format!(
+            return Err(crate::Error::invalid_argument(
+                "index_select",
+                "positions",
+                format!(
                     "position {position} out of bounds for axis {axis} with extent {axis_extent}"
                 ),
-            });
+            ));
         }
     }
 
@@ -75,9 +91,12 @@ fn index_select_parts(
     let index_data = positions
         .iter()
         .map(|&position| {
-            i64::try_from(position).map_err(|_| crate::Error::InvalidConfig {
-                op: "index_select",
-                message: format!("position {position} cannot be represented as i64"),
+            i64::try_from(position).map_err(|_| {
+                crate::Error::invalid_argument(
+                    "index_select",
+                    "positions",
+                    format!("position {position} cannot be represented as i64"),
+                )
             })
         })
         .collect::<crate::Result<Vec<_>>>()?;
@@ -112,6 +131,10 @@ impl Tensor {
     ///     x.index_select(-1, &[2, 0], backend)
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed shape, axis, or argument
+    /// source when the inputs cannot be packed without violating their metadata.
     pub fn index_select(
         &self,
         axis: isize,
@@ -137,27 +160,30 @@ impl Tensor {
     ///     Tensor::stack(&[a, b], -1, backend)
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed shape, axis, or argument
+    /// source when the inputs cannot be packed without violating their metadata.
     pub fn stack(
         tensors: &[&Self],
         dim: isize,
         ctx: &mut impl TensorBackend,
     ) -> crate::Result<Self> {
-        let first = tensors
-            .first()
-            .copied()
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "stack",
-                message: "stack requires at least one input".into(),
-            })?;
+        let first = tensors.first().copied().ok_or_else(|| {
+            crate::Error::invalid_argument("stack", "tensors", "requires at least one input")
+        })?;
         let axis = normalize_insert_axis("stack", dim, first.shape().len())?;
 
         for tensor in tensors.iter().copied().skip(1) {
             if tensor.shape() != first.shape() {
-                return Err(crate::Error::ShapeMismatch {
-                    op: "stack",
-                    lhs: first.shape().to_vec(),
-                    rhs: tensor.shape().to_vec(),
-                });
+                return Err(crate::Error::validation(
+                    "stack",
+                    ShapeMismatch::IncompatibleShapes {
+                        lhs: first.shape().to_vec().into(),
+                        rhs: tensor.shape().to_vec().into(),
+                    }
+                    .into(),
+                ));
             }
         }
 

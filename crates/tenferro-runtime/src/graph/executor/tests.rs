@@ -545,7 +545,7 @@ fn deferred_zero_tensor_covers_supported_dtypes_and_overflow() {
     }
 
     let err = super::zeros_tensor(DType::Bool, vec![usize::MAX, 2]).unwrap_err();
-    assert!(matches!(err, Error::InvalidCompiledGraph { .. }));
+    assert!(matches!(err, Error::Internal(_)));
 }
 
 #[test]

@@ -4,8 +4,10 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{
-    DType, DotGeneralConfig, GatherConfig, PadConfig, SliceConfig, Tensor, TensorRead, TensorView,
+    DType, DotGeneralConfig, Error as RuntimeError, ErrorPhase, GatherConfig, PadConfig,
+    SliceConfig, Tensor, TensorRead, TensorView,
 };
+use tenferro_tensor::{Error as TensorError, ErrorKind, ValidationError, ValidationKind};
 
 #[path = "eager_tensor/context_and_promotion.rs"]
 mod context_and_promotion;
@@ -223,7 +225,7 @@ fn eager_concatenate_empty_reports_typed_validation_error() {
 
     assert!(matches!(
         err,
-        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
+        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::Validation {
             op: "concatenate",
             ..
         })
@@ -242,10 +244,9 @@ fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
     let out_of_bounds = x.reduce_sum(&[2]).unwrap_err();
     assert!(matches!(
         out_of_bounds,
-        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::AxisOutOfBounds {
+        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::Validation {
             op: "EagerTensor::reduce_sum",
-            axis: 2,
-            rank: 2,
+            source: tenferro_tensor::ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
         })
     ));
 
@@ -259,10 +260,12 @@ fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
         assert!(
             matches!(
                 err,
-                tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::DuplicateAxis {
-                    axis: 0,
-                    role: "axis",
-                    ..
+                tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::Validation {
+                    op: _,
+                    source: tenferro_tensor::ValidationError::DuplicateAxis {
+                        axis: 0,
+                        role: "axis",
+                    },
                 })
             ),
             "{err}"
@@ -384,12 +387,14 @@ fn eager_dot_general_with_conj_validates_config_before_untracked_backend_dispatc
         .dot_general_with_conj(&rhs, &config, true, false)
         .unwrap_err();
 
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::AxisOutOfBounds)
+    );
+    assert_eq!(err.phase(), Some(ErrorPhase::Execution));
     assert!(matches!(
         err,
-        tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-            op: "EagerTensor::dot_general_with_conj",
-            ..
-        })
+        RuntimeError::TensorRuntime(TensorError::Validation { .. })
     ));
 }
 
@@ -506,8 +511,21 @@ fn eager_index_select_rejects_invalid_axis_and_position() {
 #[test]
 fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
     let empty: [&EagerTensor; 0] = [];
-    let empty_err = EagerTensor::stack(&empty, 0).err().unwrap().to_string();
-    assert!(empty_err.contains("stack requires at least one input"));
+    let empty_err = EagerTensor::stack(&empty, 0).err().unwrap();
+    assert_eq!(
+        empty_err.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
+    );
+    assert!(matches!(
+        empty_err,
+        RuntimeError::TensorRuntime(TensorError::Validation {
+            source: ValidationError::InvalidArgument {
+                argument: "inputs",
+                ..
+            },
+            ..
+        })
+    ));
 
     let a = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
@@ -519,11 +537,31 @@ fn eager_stack_rejects_empty_mismatched_shapes_and_invalid_axis() {
         test_ctx(),
     )
     .unwrap();
-    let shape_err = EagerTensor::stack(&[&a, &b], -1).err().unwrap().to_string();
-    assert!(shape_err.contains("shape mismatch"), "got: {shape_err}");
+    let shape_err = EagerTensor::stack(&[&a, &b], -1).err().unwrap();
+    assert_eq!(
+        shape_err.kind(),
+        ErrorKind::Validation(ValidationKind::ShapeMismatch)
+    );
+    assert!(matches!(
+        shape_err,
+        RuntimeError::TensorRuntime(TensorError::Validation {
+            source: ValidationError::ShapeMismatch(_),
+            ..
+        })
+    ));
 
-    let axis_err = EagerTensor::stack(&[&a], 2).err().unwrap().to_string();
-    assert!(axis_err.contains("axis"), "got: {axis_err}");
+    let axis_err = EagerTensor::stack(&[&a], 2).err().unwrap();
+    assert_eq!(
+        axis_err.kind(),
+        ErrorKind::Validation(ValidationKind::AxisOutOfBounds)
+    );
+    assert!(matches!(
+        axis_err,
+        RuntimeError::TensorRuntime(TensorError::Validation {
+            source: ValidationError::AxisOutOfBounds { .. },
+            ..
+        })
+    ));
 
     let c = EagerTensor::from_tensor_in(
         Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),

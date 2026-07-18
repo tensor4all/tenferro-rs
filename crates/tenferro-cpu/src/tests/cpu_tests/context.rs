@@ -1,5 +1,7 @@
 use super::*;
 
+use tenferro_tensor::{ErrorKind, ValidationKind};
+
 #[test]
 fn cpu_context_from_env_respects_rayon_num_threads() {
     with_rayon_num_threads(Some("3"), || {
@@ -41,10 +43,16 @@ fn cpu_context_try_from_env_rejects_non_unicode_rayon_num_threads() {
 
     let err = CpuContext::try_from_env().unwrap_err();
 
-    assert!(
-        err.to_string().contains("failed to read RAYON_NUM_THREADS"),
-        "{err}"
-    );
+    assert!(matches!(
+        &err,
+        Error::Extension {
+            op: "CpuContext::try_from_env",
+            family: "cpu",
+            kind: ErrorKind::Validation(ValidationKind::InvalidArgument),
+            ..
+        }
+    ));
+    assert!(std::error::Error::source(&err).is_some());
 }
 
 #[test]

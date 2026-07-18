@@ -1,4 +1,4 @@
-use tenferro_tensor::DType;
+use tenferro_tensor::{DType, Error as TensorError, ErrorKind, ValidationKind};
 
 use super::{ExtensionShapeContext, ExtensionShapeError, ShapeRelation};
 use crate::SymDim;
@@ -27,43 +27,50 @@ fn context_errors_compose_with_tensor_result_and_preserve_diagnostic() {
     let input_shapes: [&[SymDim]; 2] = [&lhs_shape, &rhs_shape];
     let mut ctx = inference_context(&input_dtypes, &input_shapes);
 
-    assert_eq!(
-        callback_with_tensor_result(&mut ctx),
-        Err(tenferro_tensor::Error::InvalidConfig {
-            op: "test.shape.v1",
-            message: "extension family \"test.shape.v1\" axis 0 out of bounds for input 1 rank 0"
-                .into(),
-        })
-    );
+    let error = callback_with_tensor_result(&mut ctx).unwrap_err();
+    assert!(matches!(
+        error,
+        TensorError::Extension {
+            op: "extension",
+            family: "test.shape.v1",
+            kind: ErrorKind::Validation(ValidationKind::AxisOutOfBounds),
+            ..
+        }
+    ));
 }
 
 #[test]
 fn tensor_error_conversion_preserves_input_and_rank_diagnostics() {
-    assert_eq!(
-        tenferro_tensor::Error::from(ExtensionShapeError::InputOutOfBounds {
-            family_id: "test.shape.v1",
-            input: 3,
-            input_count: 2,
-        }),
-        tenferro_tensor::Error::InvalidConfig {
-            op: "test.shape.v1",
-            message: "extension family \"test.shape.v1\" input index 3 out of bounds for 2 inputs"
-                .into(),
+    let input_error = tenferro_tensor::Error::from(ExtensionShapeError::InputOutOfBounds {
+        family_id: "test.shape.v1",
+        input: 3,
+        input_count: 2,
+    });
+    assert!(matches!(
+        input_error,
+        TensorError::Extension {
+            op: "extension",
+            family: "test.shape.v1",
+            kind: ErrorKind::Validation(ValidationKind::InvalidArgument),
+            ..
         }
-    );
-    assert_eq!(
-        tenferro_tensor::Error::from(ExtensionShapeError::RankMismatch {
-            family_id: "test.shape.v1",
-            lhs_input: 0,
-            lhs_rank: 1,
-            rhs_input: 1,
-            rhs_rank: 2,
-        }),
-        tenferro_tensor::Error::InvalidConfig {
-            op: "test.shape.v1",
-            message: "extension family \"test.shape.v1\" requires inputs 0 and 1 to have the same shape, but their ranks are 1 and 2".into(),
+    ));
+    let rank_error = tenferro_tensor::Error::from(ExtensionShapeError::RankMismatch {
+        family_id: "test.shape.v1",
+        lhs_input: 0,
+        lhs_rank: 1,
+        rhs_input: 1,
+        rhs_rank: 2,
+    });
+    assert!(matches!(
+        rank_error,
+        TensorError::Extension {
+            op: "extension",
+            family: "test.shape.v1",
+            kind: ErrorKind::Validation(ValidationKind::RankMismatch),
+            ..
         }
-    );
+    ));
 }
 
 #[test]

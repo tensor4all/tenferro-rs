@@ -162,6 +162,12 @@ def test_select_rule_sections_includes_performance_for_tensor_crates() -> None:
     assert "Unsafe Code Boundary" in sections
 
 
+def test_select_rule_sections_includes_public_boundary_audits() -> None:
+    mod = load_module()
+    sections = mod.select_rule_sections(["crates/tenferro-runtime/src/traced.rs"])
+    assert "Public Boundary Safety Audits" in sections
+
+
 def test_extract_json_payload_strips_fence() -> None:
     mod = load_module()
     parsed = mod.extract_json_payload(
@@ -489,6 +495,7 @@ def main() -> int:
         test_select_rule_sections_includes_ad_for_ad_paths,
         test_select_rule_sections_includes_ad_for_tenferro_ad_crate,
         test_select_rule_sections_includes_performance_for_tensor_crates,
+        test_select_rule_sections_includes_public_boundary_audits,
         test_extract_json_payload_strips_fence,
         test_extract_json_payload_reports_malformed_embedded_object,
         test_parse_findings_caps_model_output,

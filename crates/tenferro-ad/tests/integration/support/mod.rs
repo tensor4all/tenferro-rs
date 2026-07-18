@@ -4,11 +4,25 @@ use tenferro_runtime::error::Result;
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorBackend, TracedTensor};
 
 pub trait RunTraced {
+    /// Compile and execute one traced output.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`tenferro_runtime::Error::Validation`] for invalid graph
+    /// metadata, [`Error::RuntimeState`] for missing executor state, or a
+    /// typed backend error from execution.
     fn run_with<B: TensorBackend + 'static>(
         &self,
         executor: &mut GraphExecutor<B>,
     ) -> Result<Tensor>;
 
+    /// Compile and execute one traced output with automatic input specs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::Validation`] for dtype/rank/shape
+    /// binding mismatches, [`Error::RuntimeState`] for missing bindings or
+    /// executor state, or a typed backend error from execution.
     fn run_with_inputs_auto<B: TensorBackend + 'static>(
         &self,
         executor: &mut GraphExecutor<B>,
@@ -46,6 +60,13 @@ impl RunTraced for TracedTensor {
     }
 }
 
+/// Compile and execute several traced outputs with one executor.
+///
+/// # Errors
+///
+/// Returns [`tenferro_runtime::Error::Validation`] for inconsistent graph
+/// metadata or duplicate bindings, [`Error::RuntimeState`] for missing
+/// executor state, or a typed backend error from execution.
 pub fn run_many_traced_with<B: TensorBackend + 'static>(
     executor: &mut GraphExecutor<B>,
     outputs: &[&TracedTensor],

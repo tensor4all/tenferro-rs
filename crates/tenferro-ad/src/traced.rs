@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::ad_rule_error::ad_rule_error;
+use crate::ad_rule_error::{ad_rule_error, ad_rule_error_with_context};
 use computegraph::graph::Graph;
 use computegraph::resolve::resolve;
 use computegraph::resolve::{ResolvedView, ValueDef};
@@ -19,7 +19,7 @@ use tenferro_runtime::ad_support::{
     resolve_roots as tensor_resolve_roots, shape_hint as tensor_shape_hint, tensor_from_parts,
     tensor_meta_from_tensor, ConstraintScopeTransfer, RegisteredGraphAnalysis, TracedTensorParts,
 };
-use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Result, TracedTensor};
+use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, GraphExecutor, Result, TracedTensor};
 use tenferro_tensor::TensorBackend;
 use tidu::{linear_transpose, linearize, ADRuleError};
 
@@ -348,6 +348,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert_eq!(eval(&dx).as_slice::<f64>().unwrap(), &[6.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::NonScalarGrad`] for a non-scalar
+    /// output, [`tenferro_runtime::Error::UnsupportedAdRule`] when an AD rule
+    /// is unavailable, or a typed validation/backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn grad(&self, wrt: &TracedTensor) -> Result<TracedTensor>;
 
     /// Like [`grad`](Self::grad), but returns `None` when `wrt` is inactive.
@@ -364,6 +377,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert!(loss.grad_optional(&x).unwrap().is_none());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::NonScalarGrad`] for a non-scalar
+    /// output, [`Error::UnsupportedAdRule`] when an AD rule is unavailable, or
+    /// a typed validation/backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn grad_optional(&self, wrt: &TracedTensor) -> Result<Option<TracedTensor>>;
 
     /// Evaluate this tensor and replace its graph with a concrete leaf while
@@ -386,6 +412,12 @@ pub trait TracedTensorAdExt {
     /// let value = y.attached_data().unwrap();
     /// assert_eq!(value.as_slice::<f64>().unwrap(), &[9.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::Validation`] when checkpoint metadata
+    /// is invalid, [`Error::RuntimeState`] when graph metadata or executor
+    /// state is unavailable, or a typed backend error from evaluation.
     fn checkpoint<B: TensorBackend>(
         &mut self,
         compiler: &mut GraphCompiler,
@@ -415,6 +447,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert_eq!(eval(&dy).as_slice::<f64>().unwrap(), &[12.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when a JVP rule
+    /// is unavailable, [`Error::Validation`] for incompatible tangent metadata,
+    /// or a typed backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn jvp(&self, wrt: &TracedTensor, tangent: &TracedTensor) -> Result<TracedTensor>;
 
     /// Like [`jvp`](Self::jvp), but returns `None` when `wrt` is inactive.
@@ -432,6 +477,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert!(loss.jvp_optional(&x, &tangent).unwrap().is_none());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when a JVP rule
+    /// is unavailable, [`Error::Validation`] for incompatible tangent metadata,
+    /// or a typed backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn jvp_optional(
         &self,
         wrt: &TracedTensor,
@@ -466,6 +524,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert_eq!(eval(&dx).as_slice::<f64>().unwrap(), &[3.0]);
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when a VJP rule
+    /// is unavailable, [`Error::Validation`] for incompatible cotangent
+    /// metadata, or a typed backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn vjp(&self, wrt: &TracedTensor, cotangent: &TracedTensor) -> Result<TracedTensor>;
 
     /// Like [`vjp`](Self::vjp), but returns `None` when `wrt` is inactive.
@@ -483,6 +554,19 @@ pub trait TracedTensorAdExt {
     ///
     /// assert!(loss.vjp_optional(&x, &cotangent).unwrap().is_none());
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::UnsupportedAdRule`] when a VJP rule
+    /// is unavailable, [`Error::Validation`] for incompatible cotangent
+    /// metadata, or a typed backend/runtime-state error.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape constraints can later produce
+    /// [`tenferro_runtime::Error::ShapeConstraintViolation`] or
+    /// [`tenferro_runtime::Error::ShapeConstraintEvaluation`] during compile
+    /// or execution.
     fn vjp_optional(
         &self,
         wrt: &TracedTensor,
@@ -600,7 +684,7 @@ fn jvp_optional_impl(
                     &mut ad_ctx,
                     &aliases,
                 )
-                .map_err(|err| ad_rule_error("jvp", err))?;
+                .map_err(|err| ad_rule_error_with_context("jvp", err, &mut ad_ctx))?;
                 let linear = Arc::new(OptimizedLinearGraph::from_tidu(linear).into_cached());
                 cache.put_traced_linearized(key, Arc::clone(&linear))?;
                 linear
@@ -616,7 +700,7 @@ fn jvp_optional_impl(
                 &mut ad_ctx,
                 &aliases,
             )
-            .map_err(|err| ad_rule_error("jvp", err))?;
+            .map_err(|err| ad_rule_error_with_context("jvp", err, &mut ad_ctx))?;
             Arc::new(OptimizedLinearGraph::from_tidu(linear).into_cached())
         }
     };
@@ -624,14 +708,14 @@ fn jvp_optional_impl(
         return Ok(None);
     };
     let tangent_input_key = linear_input_key(linear.as_graph(), linear.tangent_inputs()[0].1)?;
-    let tangent_data =
-        tangent
-            .attached_data()
-            .cloned()
-            .ok_or_else(|| Error::InvalidGraphBuild {
-                op: "jvp",
-                message: "jvp tangent must have concrete tensor data".to_string(),
-            })?;
+    let tangent_data = tangent.attached_data().cloned().ok_or_else(|| {
+        Error::invalid_argument(
+            "jvp",
+            ErrorPhase::GraphBuild,
+            "tangent",
+            "jvp tangent must have concrete tensor data",
+        )
+    })?;
     let analysis = register_scoped_graph_analysis(
         linear.as_graph(),
         vec![(
@@ -739,7 +823,12 @@ fn compute_linear_vjp_transform(
         aliases,
     ) {
         Ok(linear) => linear,
-        Err(err) => return Ok(Err(err)),
+        Err(err) => {
+            if let Some(source) = linear_ad_ctx.take_deferred_shape_error() {
+                return Err(Error::ad_rule_source("vjp", source));
+            }
+            return Ok(Err(err));
+        }
     };
     if linear.tangent_outputs()[0].is_none() {
         return Ok(Ok(None));
@@ -756,7 +845,12 @@ fn compute_linear_vjp_transform(
     linear_ad_ctx.refresh_global_metadata();
     let transposed = match linear_transpose(&linear, &mut linear_ad_ctx) {
         Ok(transposed) => OptimizedLinearGraph::from_tidu(transposed).into_cached(),
-        Err(err) => return Ok(Err(err)),
+        Err(err) => {
+            if let Some(source) = linear_ad_ctx.take_deferred_shape_error() {
+                return Err(Error::ad_rule_source("vjp", source));
+            }
+            return Ok(Err(err));
+        }
     };
     let (_linear_graph, residual_graph) = linear.into_graphs();
     let residual_analysis =
@@ -839,9 +933,18 @@ fn vjp_optional_impl(
                 return Ok(None);
             }
             Err(err) if !is_not_applicable_custom_vjp(&err) => {
-                return Err(ad_rule_error(transform, err));
+                return Err(ad_rule_error_with_context(
+                    transform,
+                    err,
+                    &mut primal_ad_ctx,
+                ));
             }
-            Err(_) => {}
+            Err(err) => {
+                if let Some(source) = primal_ad_ctx.take_deferred_shape_error() {
+                    return Err(Error::ad_rule_source(transform, source));
+                }
+                let _ = err;
+            }
         }
     }
 
@@ -912,14 +1015,14 @@ fn build_vjp_tensor(
 ) -> Result<Option<TracedTensor>> {
     let cotangent_input_key =
         linear_input_key(transposed.as_graph(), transposed.tangent_inputs()[0].1)?;
-    let cotangent_data =
-        cotangent
-            .attached_data()
-            .cloned()
-            .ok_or_else(|| Error::InvalidGraphBuild {
-                op: "vjp",
-                message: "vjp cotangent must have concrete tensor data".to_string(),
-            })?;
+    let cotangent_data = cotangent.attached_data().cloned().ok_or_else(|| {
+        Error::invalid_argument(
+            "vjp",
+            ErrorPhase::GraphBuild,
+            "cotangent",
+            "vjp cotangent must have concrete tensor data",
+        )
+    })?;
     let transposed_analysis = register_scoped_graph_analysis(
         transposed.as_graph(),
         vec![(

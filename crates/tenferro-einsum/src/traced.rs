@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use computegraph::types::ValueRef;
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_runtime::error::{Error, Result};
 use tenferro_runtime::extension::{self, ExtensionCacheKey, ExtensionCacheStore};
 use tenferro_runtime::{GraphCompiler, SymDim, TracedTensor};
+use tenferro_tensor::{ShapeMismatch, ValidationError};
 
 use crate::binary_dot::{try_build_exact_output_binary_dot_plan, BinaryDotOperandOrder};
 use crate::builder::build_einsum_graph_dim_expr;
@@ -20,24 +20,89 @@ use crate::optimize::{
     resolve_einsum_strategy_with_spec, resolve_plan_spec, EinsumPlanSpec,
 };
 use crate::{
-    parse_einsum_subscripts, ContractionTree, EinsumOptimize, EinsumSubscripts,
-    Error as EinsumError, Result as EinsumResult, Subscripts, TensorDotAxes,
+    parse_einsum_subscripts, ContractionTree, EinsumOptimize, EinsumSubscripts, Error, Result,
+    Subscripts, TensorDotAxes,
 };
 
 /// Traced einsum extension methods for [`GraphCompiler`].
 pub trait GraphCompilerEinsumExt {
+    /// Build a traced einsum from textual subscripts using the default
+    /// optimizer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] with `InvalidArgument`, `RankMismatch`, or
+    /// `ShapeMismatch` for input-count/rank/label inconsistencies,
+    /// [`Error::Planning`] when no contraction plan is available, or
+    /// [`Error::Runtime`] for graph-build/lowering failures.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic label-dimension equalities that are not decidable during
+    /// graph construction are checked during compilation or execution and
+    /// retain the runtime [`ErrorPhase`](tenferro_runtime::ErrorPhase).
     fn einsum(&mut self, inputs: &[&TracedTensor], subscripts: &str) -> Result<TracedTensor>;
+
+    /// Build a traced einsum from parsed integer-label subscripts using the
+    /// default optimizer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with `InvalidArgument`, `RankMismatch`,
+    /// or `ShapeMismatch` for input-count/rank/label inconsistencies,
+    /// [`Error::Planning`] when no contraction plan is available, or
+    /// [`Error::Runtime`] for graph-build/lowering failures.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic label-dimension equalities that are not decidable during
+    /// graph construction are checked during compilation or execution and
+    /// retain the runtime [`ErrorPhase`](tenferro_runtime::ErrorPhase).
     fn einsum_subscripts(
         &mut self,
         inputs: &[&TracedTensor],
         subscripts: &EinsumSubscripts,
     ) -> Result<TracedTensor>;
+
+    /// Build a traced einsum from textual subscripts with an explicit
+    /// optimizer strategy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Planning`] when the requested strategy cannot be resolved,
+    /// [`Error::Validation`] with `InvalidArgument`, `RankMismatch`, or
+    /// `ShapeMismatch` for input/label inconsistencies, or [`Error::Runtime`]
+    /// for graph-build/lowering failures.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic label-dimension equalities that are not decidable during
+    /// graph construction are checked during compilation or execution and
+    /// retain the runtime [`ErrorPhase`](tenferro_runtime::ErrorPhase).
     fn einsum_with(
         &mut self,
         inputs: &[&TracedTensor],
         subscripts: &str,
         optimize: EinsumOptimize,
     ) -> Result<TracedTensor>;
+
+    /// Build a traced einsum from parsed integer-label subscripts with an
+    /// explicit optimizer strategy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Planning`] when the requested strategy cannot be
+    /// resolved, [`Error::Validation`] with `InvalidArgument`, `RankMismatch`,
+    /// or `ShapeMismatch` for input/label inconsistencies, or [`Error::Runtime`]
+    /// for graph-build/lowering failures.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic label-dimension equalities that are not decidable during
+    /// graph construction are checked during compilation or execution and
+    /// retain the runtime [`ErrorPhase`](tenferro_runtime::ErrorPhase).
     fn einsum_subscripts_with(
         &mut self,
         inputs: &[&TracedTensor],
@@ -80,6 +145,18 @@ impl GraphCompilerEinsumExt for GraphCompiler {
 
 /// Traced tensor contraction-sugar methods.
 pub trait TracedTensorEinsumExt {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with rank, axis, duplicate-axis, or
+    /// contracted-dimension payloads for invalid axes, or [`Error::Runtime`]
+    /// for graph-build failures.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic contracted-dimension equalities are checked during compilation
+    /// or execution and retain the runtime
+    /// [`ErrorPhase`](tenferro_runtime::ErrorPhase).
     fn tensordot(&self, rhs: &TracedTensor, axes: TensorDotAxes<'_>) -> Result<TracedTensor>;
 }
 
@@ -95,6 +172,17 @@ impl TracedTensorEinsumExt for TracedTensor {
 /// specification stored in the extension payload. That payload identity
 /// participates in traced extension-op equality and in compile/runtime einsum
 /// plan caches.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidSubscripts`] for malformed notation,
+/// [`Error::Validation`] for input-count or symbolic shape mismatches, or
+/// [`Error::Runtime`] for graph-build/lowering failures.
+///
+/// # Deferred errors
+///
+/// Symbolic shape constraints that cannot be decided during graph construction
+/// are checked during compile or execution and retain their runtime phase.
 pub fn einsum(
     compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
@@ -109,6 +197,17 @@ pub fn einsum(
 /// specification stored in the extension payload. That payload identity
 /// participates in traced extension-op equality and in compile/runtime einsum
 /// plan caches.
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] for input-count or symbolic shape mismatches,
+/// [`Error::Planning`] when no contraction plan can be built, or
+/// [`Error::Runtime`] for graph-build/lowering failures.
+///
+/// # Deferred errors
+///
+/// Symbolic shape constraints that cannot be decided during graph construction
+/// are checked during compile or execution and retain their runtime phase.
 pub fn einsum_subscripts(
     compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
@@ -130,6 +229,18 @@ pub fn einsum_subscripts(
 /// extension payload identity and the einsum compile/runtime plan caches.
 /// Different options or paths are therefore not treated as identical extension
 /// ops.
+///
+/// # Errors
+///
+/// Returns [`Error::InvalidSubscripts`] for malformed notation,
+/// [`Error::Validation`] for input-count or symbolic shape mismatches,
+/// [`Error::Planning`] when the strategy cannot be resolved, or
+/// [`Error::Runtime`] for graph-build/lowering failures.
+///
+/// # Deferred errors
+///
+/// Symbolic shape constraints that cannot be decided during graph construction
+/// are checked during compile or execution and retain their runtime phase.
 pub fn einsum_with(
     compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
@@ -153,6 +264,17 @@ pub fn einsum_with(
 /// extension payload identity and the einsum compile/runtime plan caches.
 /// Different options or paths are therefore not treated as identical extension
 /// ops.
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] for input-count or symbolic shape mismatches,
+/// [`Error::Planning`] when the strategy cannot be resolved, or
+/// [`Error::Runtime`] for graph-build/lowering failures.
+///
+/// # Deferred errors
+///
+/// Symbolic shape constraints that cannot be decided during graph construction
+/// are checked during compile or execution and retain their runtime phase.
 pub fn einsum_subscripts_with(
     compiler: &mut GraphCompiler,
     inputs: &[&TracedTensor],
@@ -160,16 +282,22 @@ pub fn einsum_subscripts_with(
     optimize: EinsumOptimize,
 ) -> Result<TracedTensor> {
     if inputs.is_empty() {
-        return Err(Error::ContractionError(
-            "einsum requires at least one input tensor".into(),
+        return Err(Error::invalid_argument(
+            "einsum",
+            "inputs",
+            "einsum requires at least one input tensor",
         ));
     }
     if subscripts.inputs.len() != inputs.len() {
-        return Err(Error::ContractionError(format!(
-            "einsum subscripts expect {} inputs, got {}",
-            subscripts.inputs.len(),
-            inputs.len()
-        )));
+        return Err(Error::invalid_argument(
+            "einsum",
+            "inputs",
+            format!(
+                "einsum subscripts expect {} inputs, got {}",
+                subscripts.inputs.len(),
+                inputs.len()
+            ),
+        ));
     }
 
     let output_shape_hint = infer_symbolic_output_shape(subscripts, inputs)?;
@@ -179,7 +307,8 @@ pub fn einsum_subscripts_with(
             output_shape_hint,
             EinsumPlanSpec::LeftToRight,
         );
-        return extension::attach_expanded_shape_contract(&contract_op, inputs, result);
+        return extension::attach_expanded_shape_contract(&contract_op, inputs, result)
+            .map_err(Error::Runtime);
     }
 
     let subs = Subscripts::from(subscripts);
@@ -192,8 +321,7 @@ pub fn einsum_subscripts_with(
                     EinsumOptimize::Tree(tree),
                     &subs,
                     &shape_refs,
-                )
-                .map_err(to_tenferro_error)?;
+                )?;
                 let tree = cached_static_tree(
                     compiler.extension_caches_mut(),
                     subscripts,
@@ -204,8 +332,7 @@ pub fn einsum_subscripts_with(
                 (plan_spec, tree)
             }
             optimize => {
-                let plan_spec =
-                    plan_spec_from_optimize(optimize, &subs).map_err(to_tenferro_error)?;
+                let plan_spec = plan_spec_from_optimize(optimize, &subs)?;
                 let tree = cached_static_tree(
                     compiler.extension_caches_mut(),
                     subscripts,
@@ -218,7 +345,7 @@ pub fn einsum_subscripts_with(
         };
         (plan_spec, Some(tree))
     } else {
-        let plan_spec = plan_spec_from_optimize(optimize, &subs).map_err(to_tenferro_error)?;
+        let plan_spec = plan_spec_from_optimize(optimize, &subs)?;
         let tree = symbolic_fixed_path_tree(&plan_spec, &subs, inputs)?;
         (plan_spec, tree.map(Arc::new))
     };
@@ -230,10 +357,11 @@ pub fn einsum_subscripts_with(
     let op =
         EinsumExtensionOp::with_output_shape_hint(subscripts.clone(), output_shape_hint, plan_spec);
     let outputs = extension::apply(Arc::new(op), inputs)?;
-    outputs
-        .into_iter()
-        .next()
-        .ok_or_else(|| Error::Internal("einsum extension produced no output".into()))
+    outputs.into_iter().next().ok_or_else(|| {
+        Error::Runtime(tenferro_runtime::Error::Internal(
+            "einsum extension produced no output".into(),
+        ))
+    })
 }
 
 fn tensordot(
@@ -243,7 +371,7 @@ fn tensordot(
 ) -> Result<TracedTensor> {
     let config = crate::tensordot::dot_general_config(axes, lhs.rank, rhs.rank)?;
     crate::tensordot::validate_traced_contract_dims(lhs, rhs, &config)?;
-    lhs.dot_general(rhs, config)
+    lhs.dot_general(rhs, config).map_err(Error::Runtime)
 }
 
 fn expand_traced_einsum_graph(
@@ -262,19 +390,28 @@ fn expand_traced_einsum_graph(
     let outputs =
         extension::apply_expanded_graph_with_shape_contract(&op, inputs, |builder, input_refs| {
             let result = build_einsum_graph_dim_expr(builder, tree, input_refs, &input_dim_shapes)
-                .map_err(|err| Error::ContractionError(err.to_string()))?;
+                .map_err(|error| {
+                    tenferro_runtime::Error::extension(
+                        "einsum",
+                        tenferro_runtime::ErrorPhase::GraphBuild,
+                        EINSUM_EXTENSION_FAMILY_ID,
+                        error.kind(),
+                        error,
+                    )
+                })?;
             let ValueRef::Local(local) = result else {
-                return Err(Error::Internal(
+                return Err(tenferro_runtime::Error::Internal(
                     "expanded einsum returned an external value".into(),
                 ));
             };
             Ok(vec![local])
         })?;
 
-    outputs
-        .into_iter()
-        .next()
-        .ok_or_else(|| Error::Internal("expanded einsum produced no output".into()))
+    outputs.into_iter().next().ok_or_else(|| {
+        Error::Runtime(tenferro_runtime::Error::Internal(
+            "expanded einsum produced no output".into(),
+        ))
+    })
 }
 
 fn traced_dim_expr_shapes(inputs: &[&TracedTensor]) -> Vec<Vec<DimExpr>> {
@@ -294,9 +431,7 @@ fn symbolic_fixed_path_tree(
     }
     let dummy_shapes = symbolic_dummy_shapes(inputs);
     let shape_refs: Vec<&[usize]> = dummy_shapes.iter().map(Vec::as_slice).collect();
-    resolve_plan_spec(plan_spec, subs, &shape_refs)
-        .map(Some)
-        .map_err(to_tenferro_error)
+    resolve_plan_spec(plan_spec, subs, &shape_refs).map(Some)
 }
 
 fn symbolic_dummy_shapes(inputs: &[&TracedTensor]) -> Vec<Vec<usize>> {
@@ -350,9 +485,14 @@ fn validate_direct_binary_dot_label_dims(
             };
             if let Some(existing) = label_dims.insert(label, dim) {
                 if existing != dim {
-                    return Err(Error::ContractionError(format!(
-                        "einsum label {label} has inconsistent dimensions {existing} and {dim}"
-                    )));
+                    return Err(Error::validation(
+                        "einsum",
+                        ShapeMismatch::ExpectedActual {
+                            expected: tenferro_tensor::ShapeVec::from_vec(vec![existing]),
+                            actual: tenferro_tensor::ShapeVec::from_vec(vec![dim]),
+                        }
+                        .into(),
+                    ));
                 }
             }
         }
@@ -363,7 +503,7 @@ fn validate_direct_binary_dot_label_dims(
 fn optimize_allows_direct_binary_dot(optimize: &EinsumOptimize) -> Result<bool> {
     match optimize {
         EinsumOptimize::Auto(options) => {
-            options.validate().map_err(to_tenferro_error)?;
+            options.validate()?;
             Ok(true)
         }
         EinsumOptimize::False => Ok(true),
@@ -401,7 +541,7 @@ fn cached_subscripts(
     }
 
     let parsed = Arc::new(ParsedEinsum {
-        subscripts: parse_einsum_subscripts(notation).map_err(to_tenferro_error)?,
+        subscripts: parse_einsum_subscripts(notation)?,
     });
     let entry = ParsedEinsumCacheEntry {
         notation: notation.to_owned(),
@@ -465,7 +605,7 @@ fn cached_static_tree(
     subscripts: &EinsumSubscripts,
     plan_spec: &EinsumPlanSpec,
     shapes: &[Vec<usize>],
-    build: impl FnOnce() -> EinsumResult<ContractionTree>,
+    build: impl FnOnce() -> Result<ContractionTree>,
 ) -> Result<Arc<ContractionTree>> {
     let plan_hash = plan_spec_hash(plan_spec);
     let key = ExtensionCacheKey::new(
@@ -480,7 +620,7 @@ fn cached_static_tree(
         }
     }
 
-    let tree = Arc::new(build().map_err(to_tenferro_error)?);
+    let tree = Arc::new(build()?);
     let key_data = StaticTreeCacheKeyData::new(subscripts, shapes, plan_spec);
     let retained_bytes = saturating_sum([
         key_data.retained_bytes(),
@@ -551,15 +691,17 @@ fn infer_symbolic_output_shape(
         let shape: Vec<_> = match tensor.sym_shape() {
             Some(shape) => shape.to_vec(),
             None => (0..tensor.rank)
-                .map(|axis| tensor.axis_sym_dim(axis))
+                .map(|axis| tensor.axis_sym_dim(axis).map_err(Error::Runtime))
                 .collect::<Result<_>>()?,
         };
         if labels.len() != shape.len() {
-            return Err(Error::ContractionError(format!(
-                "einsum input rank mismatch: labels={}, shape={}",
-                labels.len(),
-                shape.len()
-            )));
+            return Err(Error::validation(
+                "einsum",
+                ValidationError::RankMismatch {
+                    expected: labels.len(),
+                    actual: shape.len(),
+                },
+            ));
         }
         for (&label, dim) in labels.iter().zip(shape) {
             label_dims.entry(label).or_insert(dim);
@@ -570,16 +712,14 @@ fn infer_symbolic_output_shape(
         .iter()
         .map(|label| {
             label_dims.get(label).cloned().ok_or_else(|| {
-                Error::ContractionError(format!(
-                    "einsum output label {label} is missing from inputs"
-                ))
+                Error::invalid_argument(
+                    "einsum",
+                    "output",
+                    format!("einsum output label {label} is missing from inputs"),
+                )
             })
         })
         .collect()
-}
-
-fn to_tenferro_error(error: EinsumError) -> Error {
-    Error::ContractionError(error.to_string())
 }
 
 fn hash_value<T: Hash + ?Sized>(value: &T) -> u64 {

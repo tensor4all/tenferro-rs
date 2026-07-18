@@ -44,10 +44,10 @@ macro_rules! with_scalar {
             $crate::Tensor::I64($typed) => $body,
             $crate::Tensor::C32($typed) => $body,
             $crate::Tensor::C64($typed) => $body,
-            other => Err($crate::Error::unsupported_op_dtype(
+            other => Err($crate::Error::unsupported_dtype(
                 $op,
                 other.dtype(),
-                $backend,
+                format!("backend {} does not support this operation/dtype", $backend),
             )),
         }
     }};
@@ -57,10 +57,10 @@ macro_rules! with_scalar {
             $crate::Tensor::F64($typed) => $body,
             $crate::Tensor::C32($typed) => $body,
             $crate::Tensor::C64($typed) => $body,
-            other => Err($crate::Error::unsupported_op_dtype(
+            other => Err($crate::Error::unsupported_dtype(
                 $op,
                 other.dtype(),
-                $backend,
+                format!("backend {} does not support this operation/dtype", $backend),
             )),
         }
     }};
@@ -68,10 +68,10 @@ macro_rules! with_scalar {
         match $tensor {
             $crate::Tensor::F32($typed) => $body,
             $crate::Tensor::F64($typed) => $body,
-            other => Err($crate::Error::unsupported_op_dtype(
+            other => Err($crate::Error::unsupported_dtype(
                 $op,
                 other.dtype(),
-                $backend,
+                format!("backend {} does not support this operation/dtype", $backend),
             )),
         }
     }};
@@ -172,9 +172,11 @@ macro_rules! with_scalar_read {
                     let $view = tensor.as_view();
                     $body
                 }
-                $crate::Tensor::Bool(_) => {
-                    Err($crate::Error::unsupported_op_dtype($op, dtype, $backend))
-                }
+                $crate::Tensor::Bool(_) => Err($crate::Error::unsupported_dtype(
+                    $op,
+                    dtype,
+                    format!("backend {} does not support this operation/dtype", $backend),
+                )),
             },
             $crate::TensorRead::View(view) => match view {
                 $crate::TensorView::F32($view) => $body,
@@ -183,9 +185,11 @@ macro_rules! with_scalar_read {
                 $crate::TensorView::I64($view) => $body,
                 $crate::TensorView::C32($view) => $body,
                 $crate::TensorView::C64($view) => $body,
-                $crate::TensorView::Bool(_) => {
-                    Err($crate::Error::unsupported_op_dtype($op, dtype, $backend))
-                }
+                $crate::TensorView::Bool(_) => Err($crate::Error::unsupported_dtype(
+                    $op,
+                    dtype,
+                    format!("backend {} does not support this operation/dtype", $backend),
+                )),
             },
         }
     }};
@@ -211,7 +215,11 @@ macro_rules! with_scalar_read {
                     $body
                 }
                 $crate::Tensor::I32(_) | $crate::Tensor::I64(_) | $crate::Tensor::Bool(_) => {
-                    Err($crate::Error::unsupported_op_dtype($op, dtype, $backend))
+                    Err($crate::Error::unsupported_dtype(
+                        $op,
+                        dtype,
+                        format!("backend {} does not support this operation/dtype", $backend),
+                    ))
                 }
             },
             $crate::TensorRead::View(view) => match view {
@@ -221,9 +229,11 @@ macro_rules! with_scalar_read {
                 $crate::TensorView::C64($view) => $body,
                 $crate::TensorView::I32(_)
                 | $crate::TensorView::I64(_)
-                | $crate::TensorView::Bool(_) => {
-                    Err($crate::Error::unsupported_op_dtype($op, dtype, $backend))
-                }
+                | $crate::TensorView::Bool(_) => Err($crate::Error::unsupported_dtype(
+                    $op,
+                    dtype,
+                    format!("backend {} does not support this operation/dtype", $backend),
+                )),
             },
         }
     }};
@@ -244,9 +254,11 @@ macro_rules! with_scalar_read {
                 | $crate::Tensor::I64(_)
                 | $crate::Tensor::Bool(_)
                 | $crate::Tensor::C32(_)
-                | $crate::Tensor::C64(_) => {
-                    Err($crate::Error::unsupported_op_dtype($op, dtype, $backend))
-                }
+                | $crate::Tensor::C64(_) => Err($crate::Error::unsupported_dtype(
+                    $op,
+                    dtype,
+                    format!("backend {} does not support this operation/dtype", $backend),
+                )),
             },
             $crate::TensorRead::View(view) => match view {
                 $crate::TensorView::F32($view) => $body,
@@ -255,9 +267,11 @@ macro_rules! with_scalar_read {
                 | $crate::TensorView::I64(_)
                 | $crate::TensorView::Bool(_)
                 | $crate::TensorView::C32(_)
-                | $crate::TensorView::C64(_) => {
-                    Err($crate::Error::unsupported_op_dtype($op, dtype, $backend))
-                }
+                | $crate::TensorView::C64(_) => Err($crate::Error::unsupported_dtype(
+                    $op,
+                    dtype,
+                    format!("backend {} does not support this operation/dtype", $backend),
+                )),
             },
         }
     }};

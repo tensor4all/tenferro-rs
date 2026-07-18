@@ -265,12 +265,7 @@ fn lower_extension_instruction(
             &input_dtypes,
             &input_sym_shape_refs,
         )
-        .map_err(|err| Error::InvalidProgram {
-            message: format!(
-                "extension family {:?} standard-op lowering failed: {err}",
-                op.family_id()
-            ),
-        })?
+        .map_err(|source| Error::ExtensionLowering { source })?
     else {
         return Err(Error::UnsupportedOp {
             op: op.family_id(),
@@ -710,9 +705,7 @@ fn stablehlo_dot_shape(
 ) -> Result<Vec<usize>> {
     config
         .validate_dims_with_ranks(lhs_shape.len(), rhs_shape.len())
-        .map_err(|err| Error::InvalidProgram {
-            message: err.to_string(),
-        })?;
+        .map_err(Error::from)?;
     let lhs_free = free_dims(
         lhs_shape.len(),
         &config.lhs_contracting_dims,

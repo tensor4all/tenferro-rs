@@ -46,8 +46,8 @@ fn builder_reports_missing_output_label_instead_of_panicking() {
 
     assert!(matches!(
         err,
-        Error::InvalidArgument(message)
-            if message.contains("missing") && message.contains("label")
+        Error::Planning { source }
+            if source.to_string().contains("missing") && source.to_string().contains("label")
     ));
 }
 

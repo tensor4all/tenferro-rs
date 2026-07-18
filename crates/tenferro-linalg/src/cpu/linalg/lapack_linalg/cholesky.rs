@@ -63,9 +63,9 @@ fn cholesky_2d<T: LapackCholesky>(
     let mut info = 0;
     T::potrf(b'L', n_i32, &mut factor, n_i32, &mut info);
     if info > 0 {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(crate::error::into_tensor_error(
             "cholesky",
-            "matrix is not positive definite",
+            crate::Error::NonConvergence { op: "cholesky" },
         ));
     }
     check_lapack_info("cholesky", "dpotrf", info)?;

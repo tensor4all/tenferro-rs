@@ -81,11 +81,11 @@ macro_rules! dispatch_same_dtype_result {
             (Tensor::Bool($lhs_t), Tensor::Bool($rhs_t)) => Ok(Tensor::Bool($body?)),
             (Tensor::C32($lhs_t), Tensor::C32($rhs_t)) => Ok(Tensor::C32($body?)),
             (Tensor::C64($lhs_t), Tensor::C64($rhs_t)) => Ok(Tensor::C64($body?)),
-            _ => Err(crate::Error::DTypeMismatch {
-                op: $op,
-                lhs: $lhs.dtype(),
-                rhs: $rhs.dtype(),
-            }),
+            _ => Err(crate::Error::dtype_mismatch(
+                $op,
+                $lhs.dtype(),
+                $rhs.dtype(),
+            )),
         }
     };
 }
@@ -100,13 +100,13 @@ macro_rules! dispatch_same_dtype_without_bool_result {
             (Tensor::C32($lhs_t), Tensor::C32($rhs_t)) => Ok(Tensor::C32($body?)),
             (Tensor::C64($lhs_t), Tensor::C64($rhs_t)) => Ok(Tensor::C64($body?)),
             (Tensor::Bool(_), Tensor::Bool(_)) => {
-                Err(crate::Error::backend_failure($op, $bool_message))
+                Err(crate::Error::unsupported($op, $bool_message))
             }
-            _ => Err(crate::Error::DTypeMismatch {
-                op: $op,
-                lhs: $lhs.dtype(),
-                rhs: $rhs.dtype(),
-            }),
+            _ => Err(crate::Error::dtype_mismatch(
+                $op,
+                $lhs.dtype(),
+                $rhs.dtype(),
+            )),
         }
     };
 }
@@ -311,13 +311,13 @@ pub(crate) fn try_concatenate_with_pool(
     inputs: &[&Tensor],
     axis: usize,
 ) -> crate::Result<Tensor> {
-    let first = inputs
-        .first()
-        .copied()
-        .ok_or_else(|| crate::Error::InvalidConfig {
-            op: "concatenate",
-            message: "concatenate requires at least one input".into(),
-        })?;
+    let first = inputs.first().copied().ok_or_else(|| {
+        crate::Error::invalid_argument(
+            "concatenate",
+            "configuration",
+            "concatenate requires at least one input",
+        )
+    })?;
     dispatch_tensor_unary_result!(first, |t| typed_concatenate_from_dyn_inputs(
         buffers, t, inputs, axis
     ))
@@ -339,25 +339,25 @@ fn typed_slice<T: Copy + Clone + PoolScalar>(
     let input_shape = input.shape();
     let rank = input_shape.len();
     if config.starts.len() != rank {
-        return Err(crate::Error::RankMismatch {
-            op: "slice",
-            expected: rank,
-            actual: config.starts.len(),
-        });
+        return Err(crate::Error::rank_mismatch(
+            "slice",
+            rank,
+            config.starts.len(),
+        ));
     }
     if config.limits.len() != rank {
-        return Err(crate::Error::RankMismatch {
-            op: "slice",
-            expected: rank,
-            actual: config.limits.len(),
-        });
+        return Err(crate::Error::rank_mismatch(
+            "slice",
+            rank,
+            config.limits.len(),
+        ));
     }
     if config.strides.len() != rank {
-        return Err(crate::Error::RankMismatch {
-            op: "slice",
-            expected: rank,
-            actual: config.strides.len(),
-        });
+        return Err(crate::Error::rank_mismatch(
+            "slice",
+            rank,
+            config.strides.len(),
+        ));
     }
 
     let out_shape: Vec<usize> = input
@@ -369,23 +369,21 @@ fn typed_slice<T: Copy + Clone + PoolScalar>(
             let limit = config.limits[axis];
             let stride = config.strides[axis];
             if start > limit {
-                return Err(crate::Error::InvalidConfig {
-                    op: "slice",
-                    message: format!("start exceeds limit on axis {axis}"),
-                });
+                return Err(crate::Error::invalid_argument(
+                    "slice",
+                    "configuration",
+                    format!("start exceeds limit on axis {axis}"),
+                ));
             }
             if limit > dim {
-                return Err(crate::Error::AxisOutOfBounds {
-                    op: "slice",
-                    axis,
-                    rank,
-                });
+                return Err(crate::Error::axis_out_of_bounds("slice", axis, rank));
             }
             if stride == 0 {
-                return Err(crate::Error::InvalidConfig {
-                    op: "slice",
-                    message: format!("stride must be positive on axis {axis}"),
-                });
+                return Err(crate::Error::invalid_argument(
+                    "slice",
+                    "configuration",
+                    format!("stride must be positive on axis {axis}"),
+                ));
             }
             let span = limit - start;
             Ok(span.div_ceil(stride))
@@ -420,9 +418,12 @@ where
 {
     let first_dtype = inputs
         .first()
-        .ok_or_else(|| crate::Error::InvalidConfig {
-            op: "concatenate",
-            message: "concatenate requires at least one input".into(),
+        .ok_or_else(|| {
+            crate::Error::invalid_argument(
+                "concatenate",
+                "configuration",
+                "concatenate requires at least one input",
+            )
         })?
         .dtype();
     let typed_inputs = collect_typed_inputs(first_dtype, inputs)?;
@@ -439,10 +440,8 @@ where
     inputs
         .iter()
         .map(|tensor| {
-            TensorAsTyped::<T>::as_typed(*tensor).ok_or_else(|| crate::Error::DTypeMismatch {
-                op: "concatenate",
-                lhs: first_dtype,
-                rhs: tensor.dtype(),
+            TensorAsTyped::<T>::as_typed(*tensor).ok_or_else(|| {
+                crate::Error::dtype_mismatch("concatenate", first_dtype, tensor.dtype())
             })
         })
         .collect()
@@ -453,21 +452,17 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
     inputs: &[&TypedTensor<T>],
     axis: usize,
 ) -> crate::Result<TypedTensor<T>> {
-    let first = inputs
-        .first()
-        .copied()
-        .ok_or_else(|| crate::Error::InvalidConfig {
-            op: "concatenate",
-            message: "concatenate requires at least one input".into(),
-        })?;
+    let first = inputs.first().copied().ok_or_else(|| {
+        crate::Error::invalid_argument(
+            "concatenate",
+            "configuration",
+            "concatenate requires at least one input",
+        )
+    })?;
     let first_shape = first.shape();
     let rank = first_shape.len();
     if axis >= rank {
-        return Err(crate::Error::AxisOutOfBounds {
-            op: "concatenate",
-            axis,
-            rank,
-        });
+        return Err(crate::Error::axis_out_of_bounds("concatenate", axis, rank));
     }
 
     let mut out_shape = first_shape.to_vec();
@@ -475,26 +470,27 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
     for input in inputs {
         let input_shape = input.shape();
         if input_shape.len() != rank {
-            return Err(crate::Error::RankMismatch {
-                op: "concatenate",
-                expected: rank,
-                actual: input_shape.len(),
-            });
+            return Err(crate::Error::rank_mismatch(
+                "concatenate",
+                rank,
+                input_shape.len(),
+            ));
         }
         for dim in 0..rank {
             if dim == axis {
                 axis_extent = axis_extent.checked_add(input_shape[dim]).ok_or_else(|| {
-                    crate::Error::InvalidConfig {
-                        op: "concatenate",
-                        message: "concatenate axis extent overflows usize".to_string(),
-                    }
+                    crate::Error::invalid_argument(
+                        "concatenate",
+                        "configuration",
+                        "concatenate axis extent overflows usize".to_string(),
+                    )
                 })?;
             } else if input_shape[dim] != first_shape[dim] {
-                return Err(crate::Error::ShapeMismatch {
-                    op: "concatenate",
-                    lhs: first_shape.to_vec(),
-                    rhs: input_shape.to_vec(),
-                });
+                return Err(crate::Error::shape_mismatch(
+                    "concatenate",
+                    first_shape.to_vec(),
+                    input_shape.to_vec(),
+                ));
             }
         }
     }
@@ -505,9 +501,12 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
     for input in inputs {
         segment_end = segment_end
             .checked_add(input.shape()[axis])
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "concatenate",
-                message: "concatenate segment offset overflows usize".to_string(),
+            .ok_or_else(|| {
+                crate::Error::invalid_argument(
+                    "concatenate",
+                    "configuration",
+                    "concatenate segment offset overflows usize".to_string(),
+                )
             })?;
         segment_ends.push(segment_end);
     }
@@ -521,10 +520,11 @@ fn typed_concatenate<T: Copy + Clone + PoolScalar>(
         let concat_idx = out_idx[axis];
         let input_pos = segment_ends.partition_point(|&end| concat_idx >= end);
         if input_pos == segment_ends.len() {
-            return Err(crate::Error::InvalidConfig {
-                op: "concatenate",
-                message: "output index must map to an input".to_string(),
-            });
+            return Err(crate::Error::invalid_argument(
+                "concatenate",
+                "configuration",
+                "output index must map to an input".to_string(),
+            ));
         }
         let axis_base = if input_pos == 0 {
             0
@@ -551,11 +551,7 @@ fn typed_reverse<T: Copy + Clone + PoolScalar>(
     let mut reverse_axis = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
-            return Err(crate::Error::AxisOutOfBounds {
-                op: "reverse",
-                axis,
-                rank,
-            });
+            return Err(crate::Error::axis_out_of_bounds("reverse", axis, rank));
         }
         reverse_axis[axis] = true;
     }
@@ -592,20 +588,22 @@ const F64_MAX_EXACT_INT: f64 = 9_007_199_254_740_992.0;
 
 fn f32_index_to_i64(value: f32) -> crate::Result<i64> {
     if !value.is_finite() || value.fract() != 0.0 || value.abs() > F32_MAX_EXACT_INT {
-        return Err(crate::Error::InvalidConfig {
-            op: "index_tensor",
-            message: format!("index value {value} is not an exactly representable i64"),
-        });
+        return Err(crate::Error::invalid_argument(
+            "index_tensor",
+            "index",
+            format!("index value {value} is not an exactly representable i64"),
+        ));
     }
     Ok(value as i64)
 }
 
 fn f64_index_to_i64(value: f64) -> crate::Result<i64> {
     if !value.is_finite() || value.fract() != 0.0 || value.abs() > F64_MAX_EXACT_INT {
-        return Err(crate::Error::InvalidConfig {
-            op: "index_tensor",
-            message: format!("index value {value} is not an exactly representable i64"),
-        });
+        return Err(crate::Error::invalid_argument(
+            "index_tensor",
+            "index",
+            format!("index value {value} is not an exactly representable i64"),
+        ));
     }
     Ok(value as i64)
 }
@@ -643,63 +641,62 @@ fn try_index_tensor(tensor: &Tensor) -> crate::Result<IndexTensor> {
                 values: values?,
             })
         }
-        Tensor::Bool(_) => Err(crate::Error::InvalidConfig {
-            op: "index_tensor",
-            message: "bool index tensors are not supported".into(),
-        }),
-        Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::InvalidConfig {
-            op: "index_tensor",
-            message: "complex index tensors are not supported".into(),
-        }),
+        Tensor::Bool(_) => Err(crate::Error::invalid_argument(
+            "index_tensor",
+            "configuration",
+            "bool index tensors are not supported",
+        )),
+        Tensor::C32(_) | Tensor::C64(_) => Err(crate::Error::invalid_argument(
+            "index_tensor",
+            "configuration",
+            "complex index tensors are not supported",
+        )),
     }
 }
 
 fn checked_product(op: &'static str, role: &'static str, shape: &[usize]) -> crate::Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim)
-            .ok_or_else(|| crate::Error::InvalidConfig {
+        acc.checked_mul(dim).ok_or_else(|| {
+            crate::Error::invalid_argument(
                 op,
-                message: format!("{role} element count overflows usize"),
-            })
+                "configuration",
+                format!("{role} element count overflows usize"),
+            )
+        })
     })
 }
 
 fn linear_offset(op: &'static str, shape: &[usize], indices: &[usize]) -> crate::Result<usize> {
     if indices.len() != shape.len() {
-        return Err(crate::Error::RankMismatch {
-            op,
-            expected: shape.len(),
-            actual: indices.len(),
-        });
+        return Err(crate::Error::rank_mismatch(op, shape.len(), indices.len()));
     }
     let mut offset = 0usize;
     let mut stride = 1usize;
     for (axis, &index) in indices.iter().enumerate() {
         if index >= shape[axis] {
-            return Err(crate::Error::AxisOutOfBounds {
-                op,
-                axis,
-                rank: shape.len(),
-            });
+            return Err(crate::Error::axis_out_of_bounds(op, axis, shape.len()));
         }
-        let scaled = index
-            .checked_mul(stride)
-            .ok_or_else(|| crate::Error::InvalidConfig {
+        let scaled = index.checked_mul(stride).ok_or_else(|| {
+            crate::Error::invalid_argument(
                 op,
-                message: format!("linear index component overflows usize on axis {axis}"),
-            })?;
-        offset = offset
-            .checked_add(scaled)
-            .ok_or_else(|| crate::Error::InvalidConfig {
+                "configuration",
+                format!("linear index component overflows usize on axis {axis}"),
+            )
+        })?;
+        offset = offset.checked_add(scaled).ok_or_else(|| {
+            crate::Error::invalid_argument(
                 op,
-                message: format!("linear offset overflows usize on axis {axis}"),
-            })?;
-        stride = stride
-            .checked_mul(shape[axis])
-            .ok_or_else(|| crate::Error::InvalidConfig {
+                "configuration",
+                format!("linear offset overflows usize on axis {axis}"),
+            )
+        })?;
+        stride = stride.checked_mul(shape[axis]).ok_or_else(|| {
+            crate::Error::invalid_argument(
                 op,
-                message: format!("linear stride overflows usize after axis {axis}"),
-            })?;
+                "configuration",
+                format!("linear stride overflows usize after axis {axis}"),
+            )
+        })?;
     }
     Ok(offset)
 }
@@ -710,11 +707,11 @@ fn try_index_vector_size(
     index_vector_dim: usize,
 ) -> crate::Result<usize> {
     if index_vector_dim > shape.len() {
-        return Err(crate::Error::AxisOutOfBounds {
+        return Err(crate::Error::axis_out_of_bounds(
             op,
-            axis: index_vector_dim,
-            rank: shape.len(),
-        });
+            index_vector_dim,
+            shape.len(),
+        ));
     }
     Ok(if index_vector_dim == shape.len() {
         1
@@ -729,11 +726,11 @@ fn try_index_batch_shape(
     index_vector_dim: usize,
 ) -> crate::Result<Vec<usize>> {
     if index_vector_dim > shape.len() {
-        return Err(crate::Error::AxisOutOfBounds {
+        return Err(crate::Error::axis_out_of_bounds(
             op,
-            axis: index_vector_dim,
-            rank: shape.len(),
-        });
+            index_vector_dim,
+            shape.len(),
+        ));
     }
     if index_vector_dim == shape.len() {
         return Ok(shape.to_vec());
@@ -755,33 +752,36 @@ fn index_component(
 ) -> crate::Result<i64> {
     if index_vector_dim == indices.shape.len() {
         if component != 0 {
-            return Err(crate::Error::InvalidConfig {
+            return Err(crate::Error::invalid_argument(
                 op,
-                message: "implicit index_vector_dim only supports scalar index vectors".into(),
-            });
+                "configuration",
+                "implicit index_vector_dim only supports scalar index vectors",
+            ));
         }
         return Ok(indices.values[linear_offset(op, &indices.shape, batch_idx)?]);
     }
 
     if index_scratch.len() != indices.shape.len() {
-        return Err(crate::Error::InvalidConfig {
+        return Err(crate::Error::invalid_argument(
             op,
-            message: format!(
+            "configuration",
+            format!(
                 "index scratch length {} must match index tensor rank {}",
                 index_scratch.len(),
                 indices.shape.len()
             ),
-        });
+        ));
     }
     if batch_idx.len() + 1 != indices.shape.len() {
-        return Err(crate::Error::InvalidConfig {
+        return Err(crate::Error::invalid_argument(
             op,
-            message: format!(
+            "configuration",
+            format!(
                 "batch index rank {} must be one less than index tensor rank {}",
                 batch_idx.len(),
                 indices.shape.len()
             ),
-        });
+        ));
     }
     let mut batch_axis = 0usize;
     for (axis, slot) in index_scratch.iter_mut().enumerate() {
@@ -802,10 +802,11 @@ fn clamp_window_start(
     window_size: usize,
 ) -> crate::Result<usize> {
     if window_size > dim_size {
-        return Err(crate::Error::InvalidConfig {
+        return Err(crate::Error::invalid_argument(
             op,
-            message: format!("window size {window_size} exceeds dimension size {dim_size}"),
-        });
+            "configuration",
+            format!("window size {window_size} exceeds dimension size {dim_size}"),
+        ));
     }
     let max_start = dim_size.saturating_sub(window_size) as i64;
     Ok(start.clamp(0, max_start) as usize)
@@ -826,77 +827,75 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
     let operand_shape = operand.shape();
     let rank = operand_shape.len();
     if config.slice_sizes.len() != rank {
-        return Err(crate::Error::RankMismatch {
-            op: "gather",
-            expected: rank,
-            actual: config.slice_sizes.len(),
-        });
+        return Err(crate::Error::rank_mismatch(
+            "gather",
+            rank,
+            config.slice_sizes.len(),
+        ));
     }
 
     for &dim in &config.collapsed_slice_dims {
         if dim >= rank {
-            return Err(crate::Error::AxisOutOfBounds {
-                op: "gather",
-                axis: dim,
-                rank,
-            });
+            return Err(crate::Error::axis_out_of_bounds("gather", dim, rank));
         }
     }
     {
         let mut seen = vec![false; rank];
         for &dim in &config.collapsed_slice_dims {
             if seen[dim] {
-                return Err(crate::Error::DuplicateAxis {
-                    op: "gather",
-                    axis: dim,
-                    role: "collapsed_slice_dims",
-                });
+                return Err(crate::Error::duplicate_axis(
+                    "gather",
+                    dim,
+                    "collapsed_slice_dims",
+                ));
             }
             seen[dim] = true;
         }
     }
     for &dim in &config.collapsed_slice_dims {
         if config.slice_sizes[dim] != 1 {
-            return Err(crate::Error::InvalidConfig {
-                op: "gather",
-                message: format!(
+            return Err(crate::Error::invalid_argument(
+                "gather",
+                "configuration",
+                format!(
                     "collapsed slice dimension {dim} must have slice_size == 1, got {}",
                     config.slice_sizes[dim]
                 ),
-            });
+            ));
         }
     }
 
     let index_size =
         try_index_vector_size("gather", &start_indices.shape, config.index_vector_dim)?;
     if index_size != config.start_index_map.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "gather",
-            message: format!(
+        return Err(crate::Error::invalid_argument(
+            "gather",
+            "configuration",
+            format!(
                 "start_index_map length {} does not match index vector size {}",
                 config.start_index_map.len(),
                 index_size
             ),
-        });
+        ));
     }
     for &operand_dim in &config.start_index_map {
         if operand_dim >= rank {
-            return Err(crate::Error::AxisOutOfBounds {
-                op: "gather",
-                axis: operand_dim,
+            return Err(crate::Error::axis_out_of_bounds(
+                "gather",
+                operand_dim,
                 rank,
-            });
+            ));
         }
     }
     {
         let mut seen = vec![false; rank];
         for &operand_dim in &config.start_index_map {
             if seen[operand_dim] {
-                return Err(crate::Error::DuplicateAxis {
-                    op: "gather",
-                    axis: operand_dim,
-                    role: "start_index_map",
-                });
+                return Err(crate::Error::duplicate_axis(
+                    "gather",
+                    operand_dim,
+                    "start_index_map",
+                ));
             }
             seen[operand_dim] = true;
         }
@@ -904,14 +903,15 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
 
     let window_dims = operand_window_dims(rank, &config.collapsed_slice_dims);
     if config.offset_dims.len() != window_dims.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "gather",
-            message: format!(
+        return Err(crate::Error::invalid_argument(
+            "gather",
+            "configuration",
+            format!(
                 "offset_dims length {} does not match window dims count {}",
                 config.offset_dims.len(),
                 window_dims.len()
             ),
-        });
+        ));
     }
 
     let batch_shape =
@@ -919,22 +919,20 @@ fn typed_gather<T: Copy + Clone + PoolScalar>(
     let out_rank = batch_shape.len() + config.offset_dims.len();
     for &out_axis in &config.offset_dims {
         if out_axis >= out_rank {
-            return Err(crate::Error::AxisOutOfBounds {
-                op: "gather",
-                axis: out_axis,
-                rank: out_rank,
-            });
+            return Err(crate::Error::axis_out_of_bounds(
+                "gather", out_axis, out_rank,
+            ));
         }
     }
     {
         let mut seen = vec![false; out_rank];
         for &out_axis in &config.offset_dims {
             if seen[out_axis] {
-                return Err(crate::Error::DuplicateAxis {
-                    op: "gather",
-                    axis: out_axis,
-                    role: "offset_dims",
-                });
+                return Err(crate::Error::duplicate_axis(
+                    "gather",
+                    out_axis,
+                    "offset_dims",
+                ));
             }
             seen[out_axis] = true;
         }
@@ -1029,22 +1027,18 @@ where
     let op_rank = operand_shape.len();
     for &dim in &config.inserted_window_dims {
         if dim >= op_rank {
-            return Err(crate::Error::AxisOutOfBounds {
-                op: "scatter",
-                axis: dim,
-                rank: op_rank,
-            });
+            return Err(crate::Error::axis_out_of_bounds("scatter", dim, op_rank));
         }
     }
     {
         let mut seen = vec![false; op_rank];
         for &dim in &config.inserted_window_dims {
             if seen[dim] {
-                return Err(crate::Error::DuplicateAxis {
-                    op: "scatter",
-                    axis: dim,
-                    role: "inserted_window_dims",
-                });
+                return Err(crate::Error::duplicate_axis(
+                    "scatter",
+                    dim,
+                    "inserted_window_dims",
+                ));
             }
             seen[dim] = true;
         }
@@ -1053,33 +1047,34 @@ where
     let index_size =
         try_index_vector_size("scatter", &scatter_indices.shape, config.index_vector_dim)?;
     if index_size != config.scatter_dims_to_operand_dims.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "scatter",
-            message: format!(
+        return Err(crate::Error::invalid_argument(
+            "scatter",
+            "configuration",
+            format!(
                 "scatter_dims_to_operand_dims length {} does not match index vector size {}",
                 config.scatter_dims_to_operand_dims.len(),
                 index_size
             ),
-        });
+        ));
     }
     for &operand_dim in &config.scatter_dims_to_operand_dims {
         if operand_dim >= op_rank {
-            return Err(crate::Error::AxisOutOfBounds {
-                op: "scatter",
-                axis: operand_dim,
-                rank: op_rank,
-            });
+            return Err(crate::Error::axis_out_of_bounds(
+                "scatter",
+                operand_dim,
+                op_rank,
+            ));
         }
     }
     {
         let mut seen = vec![false; op_rank];
         for &operand_dim in &config.scatter_dims_to_operand_dims {
             if seen[operand_dim] {
-                return Err(crate::Error::DuplicateAxis {
-                    op: "scatter",
-                    axis: operand_dim,
-                    role: "scatter_dims_to_operand_dims",
-                });
+                return Err(crate::Error::duplicate_axis(
+                    "scatter",
+                    operand_dim,
+                    "scatter_dims_to_operand_dims",
+                ));
             }
             seen[operand_dim] = true;
         }
@@ -1089,56 +1084,61 @@ where
         try_index_batch_shape("scatter", &scatter_indices.shape, config.index_vector_dim)?;
     let window_dims = operand_window_dims(op_rank, &config.inserted_window_dims);
     if config.update_window_dims.len() != window_dims.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "scatter",
-            message: format!(
+        return Err(crate::Error::invalid_argument(
+            "scatter",
+            "configuration",
+            format!(
                 "update_window_dims length {} does not match window dims count {}",
                 config.update_window_dims.len(),
                 window_dims.len()
             ),
-        });
+        ));
     }
 
     let update_rank = updates_shape.len();
     let expected_batch_rank = update_rank
         .checked_sub(config.update_window_dims.len())
-        .ok_or_else(|| crate::Error::InvalidConfig {
-            op: "scatter",
-            message: format!(
-                "update_window_dims length {} exceeds update rank {}",
-                config.update_window_dims.len(),
-                update_rank
-            ),
+        .ok_or_else(|| {
+            crate::Error::invalid_argument(
+                "scatter",
+                "configuration",
+                format!(
+                    "update_window_dims length {} exceeds update rank {}",
+                    config.update_window_dims.len(),
+                    update_rank
+                ),
+            )
         })?;
     if expected_batch_rank != batch_shape.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "scatter",
-            message: format!(
+        return Err(crate::Error::invalid_argument(
+            "scatter",
+            "configuration",
+            format!(
                 "updates batch rank {} does not match index batch shape length {}",
                 expected_batch_rank,
                 batch_shape.len()
             ),
-        });
+        ));
     }
 
     for &axis in &config.update_window_dims {
         if axis >= update_rank {
-            return Err(crate::Error::AxisOutOfBounds {
-                op: "scatter",
+            return Err(crate::Error::axis_out_of_bounds(
+                "scatter",
                 axis,
-                rank: update_rank,
-            });
+                update_rank,
+            ));
         }
     }
     {
         let mut seen = vec![false; update_rank];
         for &axis in &config.update_window_dims {
             if seen[axis] {
-                return Err(crate::Error::DuplicateAxis {
-                    op: "scatter",
+                return Err(crate::Error::duplicate_axis(
+                    "scatter",
                     axis,
-                    role: "update_window_dims",
-                });
+                    "update_window_dims",
+                ));
             }
             seen[axis] = true;
         }
@@ -1154,16 +1154,13 @@ where
         for axis in 0..update_rank {
             if !is_update_window_dim[axis] {
                 if updates_shape[axis] != batch_shape[batch_axis] {
-                    return Err(crate::Error::InvalidConfig {
-                        op: "scatter",
-                        message: format!(
+                    return Err(crate::Error::invalid_argument("scatter", "configuration", format!(
                             "updates batch dim {} extent {} does not match index batch dim {} extent {}",
                             axis,
                             updates_shape[axis],
                             batch_axis,
                             batch_shape[batch_axis]
-                        ),
-                    });
+                        )));
                 }
                 batch_axis += 1;
             }
@@ -1249,27 +1246,29 @@ fn typed_dynamic_slice<T: Copy + Clone + PoolScalar>(
 ) -> crate::Result<TypedTensor<T>> {
     let input_shape = input.shape();
     if slice_sizes.len() != input_shape.len() {
-        return Err(crate::Error::RankMismatch {
-            op: "dynamic_slice",
-            expected: input_shape.len(),
-            actual: slice_sizes.len(),
-        });
+        return Err(crate::Error::rank_mismatch(
+            "dynamic_slice",
+            input_shape.len(),
+            slice_sizes.len(),
+        ));
     }
     if starts.shape.len() != 1 {
-        return Err(crate::Error::InvalidConfig {
-            op: "dynamic_slice",
-            message: "starts must be a rank-1 tensor".into(),
-        });
+        return Err(crate::Error::invalid_argument(
+            "dynamic_slice",
+            "starts",
+            "starts must be a rank-1 tensor",
+        ));
     }
     if starts.values.len() != input_shape.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "dynamic_slice",
-            message: format!(
+        return Err(crate::Error::invalid_argument(
+            "dynamic_slice",
+            "starts",
+            format!(
                 "starts length {} must match input rank {}",
                 starts.values.len(),
                 input_shape.len()
             ),
-        });
+        ));
     }
 
     let mut clamped_starts = vec![0usize; input_shape.len()];
@@ -1308,27 +1307,29 @@ fn typed_dynamic_update_slice<T: Copy + Clone + PoolScalar>(
     let operand_shape = operand.shape();
     let update_shape = update.shape();
     if update_shape.len() != operand_shape.len() {
-        return Err(crate::Error::RankMismatch {
-            op: "dynamic_update_slice",
-            expected: operand_shape.len(),
-            actual: update_shape.len(),
-        });
+        return Err(crate::Error::rank_mismatch(
+            "dynamic_update_slice",
+            operand_shape.len(),
+            update_shape.len(),
+        ));
     }
     if starts.shape.len() != 1 {
-        return Err(crate::Error::InvalidConfig {
-            op: "dynamic_update_slice",
-            message: "starts must be a rank-1 tensor".into(),
-        });
+        return Err(crate::Error::invalid_argument(
+            "dynamic_update_slice",
+            "configuration",
+            "starts must be a rank-1 tensor",
+        ));
     }
     if starts.values.len() != operand_shape.len() {
-        return Err(crate::Error::InvalidConfig {
-            op: "dynamic_update_slice",
-            message: format!(
+        return Err(crate::Error::invalid_argument(
+            "dynamic_update_slice",
+            "configuration",
+            format!(
                 "starts length {} must match operand rank {}",
                 starts.values.len(),
                 operand_shape.len()
             ),
-        });
+        ));
     }
 
     let mut clamped_starts = vec![0usize; operand_shape.len()];
@@ -1373,45 +1374,51 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
     let input_shape = input.shape();
     let rank = input_shape.len();
     if config.edge_padding_low.len() != rank {
-        return Err(crate::Error::RankMismatch {
-            op: "pad",
-            expected: rank,
-            actual: config.edge_padding_low.len(),
-        });
+        return Err(crate::Error::rank_mismatch(
+            "pad",
+            rank,
+            config.edge_padding_low.len(),
+        ));
     }
     if config.edge_padding_high.len() != rank {
-        return Err(crate::Error::RankMismatch {
-            op: "pad",
-            expected: rank,
-            actual: config.edge_padding_high.len(),
-        });
+        return Err(crate::Error::rank_mismatch(
+            "pad",
+            rank,
+            config.edge_padding_high.len(),
+        ));
     }
     if config.interior_padding.len() != rank {
-        return Err(crate::Error::RankMismatch {
-            op: "pad",
-            expected: rank,
-            actual: config.interior_padding.len(),
-        });
+        return Err(crate::Error::rank_mismatch(
+            "pad",
+            rank,
+            config.interior_padding.len(),
+        ));
     }
 
     let mut out_shape = Vec::with_capacity(input_shape.len());
     for (axis, &input_extent) in input_shape.iter().enumerate() {
         if config.interior_padding[axis] < 0 {
-            return Err(crate::Error::InvalidConfig {
-                op: "pad",
-                message: format!("interior padding must be non-negative on axis {axis}"),
-            });
+            return Err(crate::Error::invalid_argument(
+                "pad",
+                "configuration",
+                format!("interior padding must be non-negative on axis {axis}"),
+            ));
         }
-        let input_extent_i64 =
-            i64::try_from(input_extent).map_err(|_| crate::Error::InvalidConfig {
-                op: "pad",
-                message: format!("input extent on axis {axis} does not fit in i64"),
-            })?;
+        let input_extent_i64 = i64::try_from(input_extent).map_err(|_| {
+            crate::Error::invalid_argument(
+                "pad",
+                "configuration",
+                format!("input extent on axis {axis} does not fit in i64"),
+            )
+        })?;
         let spacing = config.interior_padding[axis]
             .checked_add(1)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "pad",
-                message: format!("interior padding overflow on axis {axis}"),
+            .ok_or_else(|| {
+                crate::Error::invalid_argument(
+                    "pad",
+                    "configuration",
+                    format!("interior padding overflow on axis {axis}"),
+                )
             })?;
         let base = if input_extent == 0 {
             0
@@ -1420,24 +1427,31 @@ fn typed_pad_with_fill<T: Copy + Clone + PoolScalar>(
                 .checked_sub(1)
                 .and_then(|extent| extent.checked_mul(spacing))
                 .and_then(|extent| extent.checked_add(1))
-                .ok_or_else(|| crate::Error::InvalidConfig {
-                    op: "pad",
-                    message: format!("padded input extent overflow on axis {axis}"),
+                .ok_or_else(|| {
+                    crate::Error::invalid_argument(
+                        "pad",
+                        "configuration",
+                        format!("padded input extent overflow on axis {axis}"),
+                    )
                 })?
         };
         let dim = config.edge_padding_low[axis]
             .checked_add(config.edge_padding_high[axis])
             .and_then(|edge| edge.checked_add(base))
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "pad",
-                message: format!("output dimension overflow on axis {axis}"),
+            .ok_or_else(|| {
+                crate::Error::invalid_argument(
+                    "pad",
+                    "configuration",
+                    format!("output dimension overflow on axis {axis}"),
+                )
             })?;
-        out_shape.push(
-            usize::try_from(dim).map_err(|_| crate::Error::InvalidConfig {
-                op: "pad",
-                message: format!("negative output dimension on axis {axis}"),
-            })?,
-        );
+        out_shape.push(usize::try_from(dim).map_err(|_| {
+            crate::Error::invalid_argument(
+                "pad",
+                "configuration",
+                format!("negative output dimension on axis {axis}"),
+            )
+        })?);
     }
 
     let mut out = pooled_filled_tensor(buffers, out_shape.clone(), fill)?;

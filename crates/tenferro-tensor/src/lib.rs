@@ -43,7 +43,10 @@ pub mod core {
     pub use tenferro_tensor_core::*;
 }
 
-pub use tenferro_tensor_core::{ShapeVec, SliceSpec, StrideVec, TensorRef};
+pub use tenferro_tensor_core::{
+    ErrorKind, ShapeMismatch, ShapeVec, SliceSpec, StrideVec, TensorRef, ValidationError,
+    ValidationKind,
+};
 
 pub mod backend;
 pub mod cache;
@@ -69,6 +72,18 @@ pub use capability::{
 pub use config::*;
 pub use error::*;
 pub use types::*;
+
+pub(crate) fn core_dtype(dtype: DType) -> tenferro_tensor_core::DType {
+    match dtype {
+        DType::F32 => tenferro_tensor_core::DType::F32,
+        DType::F64 => tenferro_tensor_core::DType::F64,
+        DType::I32 => tenferro_tensor_core::DType::I32,
+        DType::I64 => tenferro_tensor_core::DType::I64,
+        DType::Bool => tenferro_tensor_core::DType::Bool,
+        DType::C32 => tenferro_tensor_core::DType::C32,
+        DType::C64 => tenferro_tensor_core::DType::C64,
+    }
+}
 
 #[cfg(test)]
 mod tests;

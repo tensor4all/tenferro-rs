@@ -94,6 +94,7 @@ lapack-inject = { workspace = true, optional = true }
 libloading = { workspace = true, optional = true }
 num-complex.workspace = true
 num-traits.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

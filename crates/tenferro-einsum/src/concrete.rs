@@ -1,8 +1,8 @@
 //! Public concrete tensor einsum extension API.
 
 use tenferro_tensor::{
-    DType, DotGeneralAccumulation, Error, Result, Tensor, TensorBackend, TensorRead, TensorScalar,
-    TensorWrite, TypedTensor, TypedTensorView, TypedTensorWrite,
+    DType, DotGeneralAccumulation, Tensor, TensorBackend, TensorRead, TensorScalar, TensorWrite,
+    TypedTensor, TypedTensorView, TypedTensorWrite,
 };
 
 use crate::eager::{
@@ -10,7 +10,7 @@ use crate::eager::{
     eager_einsum_exec_read_into_accum, eager_einsum_read_subscripts, eager_einsum_subscripts,
     plan_subscripts,
 };
-use crate::{ContractionTree, EinsumSubscripts, Subscripts};
+use crate::{ContractionTree, EinsumSubscripts, Error, Result, Subscripts};
 
 const TENSOR_EINSUM_OP: &str = "TensorEinsumExt::einsum";
 const TENSOR_EINSUM_INTO_OP: &str = "TensorEinsumIntoExt::einsum_into";
@@ -42,13 +42,24 @@ const PLAN_EXECUTE_OP: &str = "ConcreteEinsumPlan::execute";
 ///
 /// let out = [&lhs, &rhs].einsum("ij,jk->ik", &mut backend)?;
 /// assert_eq!(out.shape(), &[2, 4]);
-/// # Ok::<(), tenferro_tensor::Error>(())
+/// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
 pub trait TensorEinsumExt {
     /// Execute an einsum from string notation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] with shape, rank, or dtype payloads for an invalid
+    /// contraction, or [`Error::Tensor`] for a typed backend failure.
     fn einsum<B: TensorBackend>(&self, subscripts: &str, backend: &mut B) -> Result<Tensor>;
 
     /// Execute an einsum from parsed integer-label subscripts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with shape, rank, or dtype payloads for an
+    /// invalid contraction, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_subscripts<B: TensorBackend>(
         &self,
         subscripts: &EinsumSubscripts,
@@ -59,7 +70,7 @@ pub trait TensorEinsumExt {
 impl TensorEinsumExt for [&Tensor] {
     fn einsum<B: TensorBackend>(&self, subscripts: &str, backend: &mut B) -> Result<Tensor> {
         let subscripts = parse_subscripts(subscripts, TENSOR_EINSUM_OP)?;
-        eager_einsum_subscripts(backend, self, &subscripts)
+        eager_einsum_subscripts(backend, self, &subscripts).map_err(Error::from)
     }
 
     fn einsum_subscripts<B: TensorBackend>(
@@ -68,7 +79,7 @@ impl TensorEinsumExt for [&Tensor] {
         backend: &mut B,
     ) -> Result<Tensor> {
         let subscripts = Subscripts::from(subscripts);
-        eager_einsum_subscripts(backend, self, &subscripts)
+        eager_einsum_subscripts(backend, self, &subscripts).map_err(Error::from)
     }
 }
 
@@ -89,6 +100,12 @@ impl<const N: usize> TensorEinsumExt for [&Tensor; N] {
 /// Backend-explicit preallocated-output einsum methods for dtype-erased tensors.
 pub trait TensorEinsumIntoExt {
     /// Execute an einsum from string notation into caller-provided output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
+    /// output do not match, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_into<B: TensorBackend>(
         &self,
         subscripts: &str,
@@ -97,6 +114,12 @@ pub trait TensorEinsumIntoExt {
     ) -> Result<()>;
 
     /// Execute an einsum from parsed integer-label subscripts into caller-provided output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
+    /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
+    /// failure.
     fn einsum_into_subscripts<B: TensorBackend>(
         &self,
         subscripts: &EinsumSubscripts,
@@ -166,14 +189,25 @@ impl<const N: usize> TensorEinsumIntoExt for [&Tensor; N] {
 ///
 /// let out = [&lhs, &rhs].einsum("ij,jk->ik", &mut backend)?;
 /// assert_eq!(out.shape(), &[2, 4]);
-/// # Ok::<(), tenferro_tensor::Error>(())
+/// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
 pub trait TypedTensorEinsumExt<T: TensorScalar> {
     /// Execute an einsum from string notation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] with shape or rank payloads for an invalid
+    /// contraction, or [`Error::Tensor`] for a typed backend failure.
     fn einsum<B: TensorBackend>(&self, subscripts: &str, backend: &mut B)
         -> Result<TypedTensor<T>>;
 
     /// Execute an einsum from parsed integer-label subscripts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with shape or rank payloads for an invalid
+    /// contraction, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_subscripts<B: TensorBackend>(
         &self,
         subscripts: &EinsumSubscripts,
@@ -237,7 +271,7 @@ impl<T: TensorScalar, const N: usize> TypedTensorEinsumExt<T> for [&TypedTensor<
 /// let mut backend = CpuBackend::new();
 /// let result = [lhs.as_view(), rhs.as_view()].einsum_read("i,i->", &mut backend)?;
 /// assert_eq!(result.as_slice()?, &[11.0]);
-/// # Ok::<(), tenferro_tensor::Error>(())
+/// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
 pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     /// Execute an einsum from string notation over typed borrowed views.
@@ -253,8 +287,14 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let result = [input.as_view()].einsum_read("i->i", &mut backend)?;
     /// assert_eq!(result.as_slice()?, &[2.0, 3.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] with shape or rank payloads for incompatible
+    /// views, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_read<B: TensorBackend>(
         &self,
         subscripts: &str,
@@ -276,8 +316,13 @@ pub trait TypedTensorReadEinsumExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// let result = [input.as_view()].einsum_read_subscripts(&subscripts, &mut backend)?;
     /// assert_eq!(result.as_slice()?, &[2.0, 3.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with shape or rank payloads for
+    /// incompatible views, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_read_subscripts<B: TensorBackend>(
         &self,
         subscripts: &EinsumSubscripts,
@@ -328,12 +373,24 @@ impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumExt<T>
 /// Backend-explicit preallocated-output einsum methods for typed concrete tensors.
 pub trait TypedTensorEinsumIntoExt<T: TensorScalar> {
     /// Execute an einsum from string notation into caller-provided typed output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
+    /// output do not match, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_into<'out, B, O>(&self, subscripts: &str, backend: &mut B, out: O) -> Result<()>
     where
         B: TensorBackend,
         O: Into<TypedTensorWrite<'out, T>>;
 
     /// Execute an einsum from parsed integer-label subscripts into caller-provided typed output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
+    /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
+    /// failure.
     fn einsum_into_subscripts<'out, B, O>(
         &self,
         subscripts: &EinsumSubscripts,
@@ -421,7 +478,7 @@ impl<T: TensorScalar, const N: usize> TypedTensorEinsumIntoExt<T> for [&TypedTen
 /// let mut backend = CpuBackend::new();
 /// [lhs.as_view(), rhs.as_view()].einsum_read_into("i,i->", &mut backend, &mut output)?;
 /// assert_eq!(output.as_slice()?, &[11.0]);
-/// # Ok::<(), tenferro_tensor::Error>(())
+/// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
 pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     /// Execute an einsum from string notation over typed borrowed views into a
@@ -439,8 +496,14 @@ pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// [input.as_view()].einsum_read_into("i->i", &mut backend, &mut output)?;
     /// assert_eq!(output.as_slice()?, &[2.0, 3.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
+    /// output do not match, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_read_into<'out, B, O>(&self, subscripts: &str, backend: &mut B, out: O) -> Result<()>
     where
         B: TensorBackend,
@@ -462,8 +525,14 @@ pub trait TypedTensorReadEinsumIntoExt<T: TensorScalar> {
     /// let mut backend = CpuBackend::new();
     /// [input.as_view()].einsum_read_into_subscripts(&subscripts, &mut backend, &mut output)?;
     /// assert_eq!(output.as_slice()?, &[2.0, 3.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
+    /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
+    /// failure.
     fn einsum_read_into_subscripts<'out, B, O>(
         &self,
         subscripts: &EinsumSubscripts,
@@ -562,14 +631,25 @@ impl<'a, T: TensorScalar, const N: usize> TypedTensorReadEinsumIntoExt<T>
 ///
 /// let out = inputs.einsum_read("ij,j->i", &mut backend)?;
 /// assert_eq!(out.shape(), &[2]);
-/// # Ok::<(), tenferro_tensor::Error>(())
+/// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
 pub trait TensorReadEinsumExt {
     /// Execute an einsum from string notation over read-only tensor inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] with shape, rank, or dtype payloads for an invalid
+    /// contraction, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_read<B: TensorBackend>(&self, subscripts: &str, backend: &mut B) -> Result<Tensor>;
 
     /// Execute an einsum from parsed integer-label subscripts over read-only
     /// tensor inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with shape, rank, or dtype payloads for an
+    /// invalid contraction, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_read_subscripts<B: TensorBackend>(
         &self,
         subscripts: &EinsumSubscripts,
@@ -580,7 +660,7 @@ pub trait TensorReadEinsumExt {
 impl<'a> TensorReadEinsumExt for [TensorRead<'a>] {
     fn einsum_read<B: TensorBackend>(&self, subscripts: &str, backend: &mut B) -> Result<Tensor> {
         let subscripts = parse_subscripts(subscripts, TENSOR_READ_EINSUM_OP)?;
-        eager_einsum_read_subscripts(backend, self, &subscripts)
+        eager_einsum_read_subscripts(backend, self, &subscripts).map_err(Error::from)
     }
 
     fn einsum_read_subscripts<B: TensorBackend>(
@@ -589,7 +669,7 @@ impl<'a> TensorReadEinsumExt for [TensorRead<'a>] {
         backend: &mut B,
     ) -> Result<Tensor> {
         let subscripts = Subscripts::from(subscripts);
-        eager_einsum_read_subscripts(backend, self, &subscripts)
+        eager_einsum_read_subscripts(backend, self, &subscripts).map_err(Error::from)
     }
 }
 
@@ -610,6 +690,12 @@ impl<'a, const N: usize> TensorReadEinsumExt for [TensorRead<'a>; N] {
 /// Backend-explicit preallocated-output einsum methods for [`TensorRead`] inputs.
 pub trait TensorReadEinsumIntoExt {
     /// Execute an einsum from string notation over read-only inputs into caller-provided output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] with a shape, rank, or dtype payload when inputs or
+    /// output do not match, or [`Error::Tensor`] for a typed backend failure.
     fn einsum_read_into<B: TensorBackend>(
         &self,
         subscripts: &str,
@@ -618,6 +704,12 @@ pub trait TensorReadEinsumIntoExt {
     ) -> Result<()>;
 
     /// Execute an einsum from parsed integer-label subscripts over read-only inputs into output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] with a shape, rank, or dtype payload when
+    /// inputs or output do not match, or [`Error::Tensor`] for a typed backend
+    /// failure.
     fn einsum_read_into_subscripts<B: TensorBackend>(
         &self,
         subscripts: &EinsumSubscripts,
@@ -702,7 +794,7 @@ impl<'a, const N: usize> TensorReadEinsumIntoExt for [TensorRead<'a>; N] {
 /// let mut backend = CpuBackend::new();
 /// let out = plan.execute([&lhs, &rhs], &mut backend)?;
 /// assert_eq!(out.shape(), &[2, 4]);
-/// # Ok::<(), tenferro_tensor::Error>(())
+/// # Ok::<(), tenferro_einsum::Error>(())
 /// ```
 #[derive(Debug)]
 pub struct ConcreteEinsumPlan {
@@ -713,6 +805,12 @@ pub struct ConcreteEinsumPlan {
 impl ConcreteEinsumPlan {
     /// Prepare a plan from dtype-erased concrete tensor inputs and string
     /// notation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] for rank, shape, or dtype contract violations, or
+    /// [`Error::Planning`] when no valid contraction tree can be built.
     pub fn prepare<'a, I>(inputs: I, subscripts: &str) -> Result<Self>
     where
         I: AsRef<[&'a Tensor]>,
@@ -723,6 +821,12 @@ impl ConcreteEinsumPlan {
 
     /// Prepare a plan from dtype-erased concrete tensor inputs and parsed
     /// integer-label subscripts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for rank, shape, or dtype contract
+    /// violations, or [`Error::Planning`] when no valid contraction tree can be
+    /// built.
     pub fn prepare_subscripts<'a, I>(inputs: I, subscripts: &EinsumSubscripts) -> Result<Self>
     where
         I: AsRef<[&'a Tensor]>,
@@ -732,6 +836,12 @@ impl ConcreteEinsumPlan {
     }
 
     /// Prepare a plan from typed concrete tensor inputs and string notation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] for rank or shape contract violations, or
+    /// [`Error::Planning`] when no valid contraction tree can be built.
     pub fn prepare_typed<'a, T, I>(inputs: I, subscripts: &str) -> Result<Self>
     where
         T: TensorScalar,
@@ -743,6 +853,11 @@ impl ConcreteEinsumPlan {
 
     /// Prepare a plan from typed concrete tensor inputs and parsed integer-label
     /// subscripts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for rank or shape contract violations, or
+    /// [`Error::Planning`] when no valid contraction tree can be built.
     pub fn prepare_typed_subscripts<'a, T, I>(
         inputs: I,
         subscripts: &EinsumSubscripts,
@@ -756,6 +871,12 @@ impl ConcreteEinsumPlan {
     }
 
     /// Prepare a plan from read-only tensor inputs and string notation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidSubscripts`] for malformed notation,
+    /// [`Error::Validation`] for rank, shape, or dtype contract violations, or
+    /// [`Error::Planning`] when no valid contraction tree can be built.
     pub fn prepare_read<'a, I>(inputs: I, subscripts: &str) -> Result<Self>
     where
         I: AsRef<[TensorRead<'a>]>,
@@ -766,6 +887,12 @@ impl ConcreteEinsumPlan {
 
     /// Prepare a plan from read-only tensor inputs and parsed integer-label
     /// subscripts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for rank, shape, or dtype contract
+    /// violations, or [`Error::Planning`] when no valid contraction tree can be
+    /// built.
     pub fn prepare_read_subscripts<'a, I>(inputs: I, subscripts: &EinsumSubscripts) -> Result<Self>
     where
         I: AsRef<[TensorRead<'a>]>,
@@ -775,6 +902,12 @@ impl ConcreteEinsumPlan {
     }
 
     /// Execute this plan on dtype-erased concrete tensor inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] when inputs differ from the prepared
+    /// rank, shape, or dtype contract, or [`Error::Tensor`] for a typed backend
+    /// failure.
     pub fn execute<'a, I, B>(&self, inputs: I, backend: &mut B) -> Result<Tensor>
     where
         I: AsRef<[&'a Tensor]>,
@@ -782,10 +915,17 @@ impl ConcreteEinsumPlan {
     {
         let inputs = inputs.as_ref();
         self.validate_inputs(&input_specs(inputs), PLAN_EXECUTE_OP)?;
-        backend.with_backend_session(|exec| eager_einsum_exec(exec, inputs, &self.tree))
+        backend
+            .with_backend_session(|exec| eager_einsum_exec(exec, inputs, &self.tree))
+            .map_err(Error::from)
     }
 
     /// Execute this plan on typed concrete tensor inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] when inputs differ from the prepared rank
+    /// or shape contract, or [`Error::Tensor`] for a typed backend failure.
     pub fn execute_typed<'a, T, I, B>(&self, inputs: I, backend: &mut B) -> Result<TypedTensor<T>>
     where
         T: TensorScalar,
@@ -801,6 +941,12 @@ impl ConcreteEinsumPlan {
     }
 
     /// Execute this plan on read-only tensor inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] when inputs differ from the prepared
+    /// rank, shape, or dtype contract, or [`Error::Tensor`] for a typed backend
+    /// failure.
     pub fn execute_read<'a, I, B>(&self, inputs: I, backend: &mut B) -> Result<Tensor>
     where
         I: AsRef<[TensorRead<'a>]>,
@@ -808,10 +954,17 @@ impl ConcreteEinsumPlan {
     {
         let inputs = inputs.as_ref();
         self.validate_inputs(&read_input_specs(inputs), PLAN_EXECUTE_OP)?;
-        backend.with_backend_session(|exec| eager_einsum_exec_read(exec, inputs, &self.tree))
+        backend
+            .with_backend_session(|exec| eager_einsum_exec_read(exec, inputs, &self.tree))
+            .map_err(Error::from)
     }
 
     /// Execute this plan on dtype-erased concrete tensor inputs into caller-provided output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for input or output rank, shape, or dtype
+    /// mismatches, or [`Error::Tensor`] for a typed backend failure.
     pub fn execute_into<'a, I, B>(
         &self,
         inputs: I,
@@ -832,9 +985,15 @@ impl ConcreteEinsumPlan {
             .collect();
         backend
             .with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &self.tree, out))
+            .map_err(Error::from)
     }
 
     /// Execute this plan on typed concrete tensor inputs into caller-provided output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for input or output rank or shape
+    /// mismatches, or [`Error::Tensor`] for a typed backend failure.
     pub fn execute_typed_into<'a, 'out, T, I, B, O>(
         &self,
         inputs: I,
@@ -855,9 +1014,15 @@ impl ConcreteEinsumPlan {
         let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
         backend
             .with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &self.tree, out))
+            .map_err(Error::from)
     }
 
     /// Execute this plan on read-only tensor inputs into caller-provided output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for input or output rank, shape, or dtype
+    /// mismatches, or [`Error::Tensor`] for a typed backend failure.
     pub fn execute_read_into<'a, I, B>(
         &self,
         inputs: I,
@@ -874,6 +1039,7 @@ impl ConcreteEinsumPlan {
         validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
         backend
             .with_backend_session(|exec| eager_einsum_exec_read_into(exec, inputs, &self.tree, out))
+            .map_err(Error::from)
     }
 
     /// Execute this plan on read-only inputs with scaled output accumulation.
@@ -902,8 +1068,14 @@ impl ConcreteEinsumPlan {
     ///     TensorWrite::from_tensor(&mut out),
     /// )?;
     /// assert_eq!(out.as_slice::<f64>()?, &[7.0]);
-    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// # Ok::<(), tenferro_einsum::Error>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Validation`] for input or output rank, shape, or dtype
+    /// mismatches, [`Error::Numerical`] for an invalid accumulation, or
+    /// [`Error::Tensor`] for a typed backend failure.
     pub fn execute_read_into_accum<'a, I, B>(
         &self,
         inputs: I,
@@ -919,9 +1091,11 @@ impl ConcreteEinsumPlan {
         let specs = read_input_specs(inputs);
         self.validate_inputs(&specs, PLAN_EXECUTE_OP)?;
         validate_output(&self.inputs, &self.tree, &out, PLAN_EXECUTE_OP)?;
-        backend.with_backend_session(|exec| {
-            eager_einsum_exec_read_into_accum(exec, inputs, &self.tree, accumulation, out)
-        })
+        backend
+            .with_backend_session(|exec| {
+                eager_einsum_exec_read_into_accum(exec, inputs, &self.tree, accumulation, out)
+            })
+            .map_err(Error::from)
     }
 
     fn prepare_subscripts_internal(
@@ -935,30 +1109,27 @@ impl ConcreteEinsumPlan {
 
     fn validate_inputs(&self, actual: &[ConcreteEinsumInputSpec], op: &'static str) -> Result<()> {
         if actual.len() != self.inputs.len() {
-            return Err(Error::InvalidConfig {
+            return Err(Error::invalid_argument(
                 op,
-                message: format!(
+                "inputs",
+                format!(
                     "prepared einsum expects {} inputs, got {}",
                     self.inputs.len(),
                     actual.len()
                 ),
-            });
+            ));
         }
 
         for (expected, actual) in self.inputs.iter().zip(actual.iter()) {
             if expected.dtype != actual.dtype {
-                return Err(Error::DTypeMismatch {
-                    op,
-                    lhs: expected.dtype,
-                    rhs: actual.dtype,
-                });
+                return Err(Error::dtype_mismatch(op, expected.dtype, actual.dtype));
             }
             if expected.shape != actual.shape {
-                return Err(Error::ShapeMismatch {
+                return Err(Error::shape_mismatch(
                     op,
-                    lhs: expected.shape.clone(),
-                    rhs: actual.shape.clone(),
-                });
+                    expected.shape.clone(),
+                    actual.shape.clone(),
+                ));
             }
         }
 
@@ -972,11 +1143,8 @@ struct ConcreteEinsumInputSpec {
     shape: Vec<usize>,
 }
 
-fn parse_subscripts(subscripts: &str, op: &'static str) -> Result<Subscripts> {
-    Subscripts::parse(subscripts).map_err(|err| Error::InvalidConfig {
-        op,
-        message: format!("invalid subscripts: {err}"),
-    })
+fn parse_subscripts(subscripts: &str, _op: &'static str) -> Result<Subscripts> {
+    Subscripts::parse(subscripts)
 }
 
 fn input_specs(inputs: &[&Tensor]) -> Vec<ConcreteEinsumInputSpec> {
@@ -1050,7 +1218,9 @@ fn tensor_einsum_into_subscripts(
         .iter()
         .map(|tensor| TensorRead::from_tensor(tensor))
         .collect();
-    backend.with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &plan.tree, out))
+    backend
+        .with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &plan.tree, out))
+        .map_err(Error::from)
 }
 
 fn typed_view_einsum_into_subscripts<T: TensorScalar>(
@@ -1069,7 +1239,9 @@ fn typed_view_einsum_into_subscripts<T: TensorScalar>(
         .cloned()
         .map(|view| TensorRead::from_view(T::tensor_view(view)))
         .collect();
-    backend.with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &plan.tree, out))
+    backend
+        .with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &plan.tree, out))
+        .map_err(Error::from)
 }
 
 fn typed_einsum_into_subscripts<T: TensorScalar>(
@@ -1084,7 +1256,9 @@ fn typed_einsum_into_subscripts<T: TensorScalar>(
     let out = out.into_tensor_write();
     validate_output(&specs, &plan.tree, &out, op)?;
     let reads: Vec<_> = inputs.iter().map(|tensor| T::tensor_read(tensor)).collect();
-    backend.with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &plan.tree, out))
+    backend
+        .with_backend_session(|exec| eager_einsum_exec_read_into(exec, &reads, &plan.tree, out))
+        .map_err(Error::from)
 }
 
 fn tensor_read_einsum_into_subscripts(
@@ -1097,7 +1271,9 @@ fn tensor_read_einsum_into_subscripts(
     let specs = read_input_specs(inputs);
     let plan = ConcreteEinsumPlan::prepare_subscripts_internal(specs.clone(), subscripts)?;
     validate_output(&specs, &plan.tree, &out, op)?;
-    backend.with_backend_session(|exec| eager_einsum_exec_read_into(exec, inputs, &plan.tree, out))
+    backend
+        .with_backend_session(|exec| eager_einsum_exec_read_into(exec, inputs, &plan.tree, out))
+        .map_err(Error::from)
 }
 
 fn validate_output(
@@ -1108,18 +1284,14 @@ fn validate_output(
 ) -> Result<()> {
     let expected = output_spec(inputs, tree, op)?;
     if out.dtype() != expected.dtype {
-        return Err(Error::DTypeMismatch {
-            op,
-            lhs: out.dtype(),
-            rhs: expected.dtype,
-        });
+        return Err(Error::dtype_mismatch(op, expected.dtype, out.dtype()));
     }
     if out.shape() != expected.shape.as_slice() {
-        return Err(Error::ShapeMismatch {
+        return Err(Error::shape_mismatch(
             op,
-            lhs: out.shape().to_vec(),
-            rhs: expected.shape,
-        });
+            out.shape().to_vec(),
+            expected.shape.clone(),
+        ));
     }
     Ok(())
 }
@@ -1131,18 +1303,13 @@ fn output_spec(
 ) -> Result<ConcreteEinsumInputSpec> {
     let dtype = inputs
         .first()
-        .ok_or_else(|| Error::InvalidConfig {
-            op,
-            message: "einsum requires at least one input tensor".to_string(),
+        .ok_or_else(|| {
+            Error::invalid_argument(op, "inputs", "einsum requires at least one input tensor")
         })?
         .dtype;
     for input in inputs {
         if input.dtype != dtype {
-            return Err(Error::DTypeMismatch {
-                op,
-                lhs: dtype,
-                rhs: input.dtype,
-            });
+            return Err(Error::dtype_mismatch(op, dtype, input.dtype));
         }
     }
 
@@ -1151,11 +1318,7 @@ fn output_spec(
         let mut found = None;
         for (input, labels) in inputs.iter().zip(tree.subscripts.inputs.iter()) {
             if labels.len() != input.shape.len() {
-                return Err(Error::RankMismatch {
-                    op,
-                    expected: labels.len(),
-                    actual: input.shape.len(),
-                });
+                return Err(Error::rank_mismatch(op, labels.len(), input.shape.len()));
             }
             if let Some(axis) = labels.iter().position(|candidate| *candidate == label) {
                 found = Some(input.shape[axis]);
@@ -1163,10 +1326,11 @@ fn output_spec(
             }
         }
         let Some(extent) = found else {
-            return Err(Error::InvalidConfig {
+            return Err(Error::invalid_argument(
                 op,
-                message: format!("output label {label} is missing from inputs"),
-            });
+                "output labels",
+                format!("output label {label} is missing from inputs"),
+            ));
         };
         output_shape.push(extent);
     }
@@ -1192,9 +1356,5 @@ pub(crate) fn into_typed_result<T: TensorScalar>(
     op: &'static str,
 ) -> Result<TypedTensor<T>> {
     let actual = result.dtype();
-    T::into_typed(result).map_err(|_| Error::DTypeMismatch {
-        op,
-        lhs: T::dtype(),
-        rhs: actual,
-    })
+    T::into_typed(result).map_err(|_| Error::dtype_mismatch(op, T::dtype(), actual))
 }

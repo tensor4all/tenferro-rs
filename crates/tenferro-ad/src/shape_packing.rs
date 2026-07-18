@@ -4,25 +4,20 @@ use tenferro_tensor::{GatherConfig, SliceConfig, Tensor, TensorDeviceTransfer, T
 
 use crate::eager::EagerTensor;
 use crate::error::{Error, Result};
+use tenferro_runtime::ErrorPhase;
 
 fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
     let normalized = if axis >= 0 {
         axis as usize
     } else {
-        rank.checked_sub(axis.unsigned_abs())
-            .ok_or(tenferro_tensor::Error::AxisOutOfBounds {
-                op,
-                axis: axis.unsigned_abs(),
-                rank,
-            })?
+        rank.checked_sub(axis.unsigned_abs()).ok_or_else(|| {
+            tenferro_tensor::Error::axis_out_of_bounds(op, axis.unsigned_abs(), rank)
+        })?
     };
     if normalized >= rank {
-        return Err(tenferro_tensor::Error::AxisOutOfBounds {
-            op,
-            axis: axis.unsigned_abs(),
-            rank,
-        }
-        .into());
+        return Err(
+            tenferro_tensor::Error::axis_out_of_bounds(op, axis.unsigned_abs(), rank).into(),
+        );
     }
     Ok(normalized)
 }
@@ -30,28 +25,22 @@ fn normalize_existing_axis(op: &'static str, axis: isize, rank: usize) -> Result
 fn normalize_insert_axis(op: &'static str, axis: isize, rank: usize) -> Result<usize> {
     let insert_rank = rank
         .checked_add(1)
-        .ok_or(tenferro_tensor::Error::AxisOutOfBounds {
-            op,
-            axis: axis.unsigned_abs(),
-            rank,
-        })?;
+        .ok_or_else(|| tenferro_tensor::Error::axis_out_of_bounds(op, axis.unsigned_abs(), rank))?;
     let normalized = if axis >= 0 {
         axis as usize
     } else {
-        insert_rank.checked_sub(axis.unsigned_abs()).ok_or(
-            tenferro_tensor::Error::AxisOutOfBounds {
-                op,
-                axis: axis.unsigned_abs(),
-                rank: insert_rank,
-            },
-        )?
+        insert_rank
+            .checked_sub(axis.unsigned_abs())
+            .ok_or_else(|| {
+                tenferro_tensor::Error::axis_out_of_bounds(op, axis.unsigned_abs(), insert_rank)
+            })?
     };
     if normalized > rank {
-        return Err(tenferro_tensor::Error::AxisOutOfBounds {
+        return Err(tenferro_tensor::Error::axis_out_of_bounds(
             op,
-            axis: axis.unsigned_abs(),
-            rank: insert_rank,
-        }
+            axis.unsigned_abs(),
+            insert_rank,
+        )
         .into());
     }
     Ok(normalized)
@@ -66,12 +55,13 @@ fn index_select_config(
     let axis_extent = shape[axis];
     for &position in positions {
         if position >= axis_extent {
-            return Err(tenferro_tensor::Error::InvalidConfig {
-                op: "index_select",
-                message: format!(
+            return Err(tenferro_tensor::Error::invalid_argument(
+                "index_select",
+                "position",
+                format!(
                     "position {position} out of bounds for axis {axis} with extent {axis_extent}"
                 ),
-            }
+            )
             .into());
         }
     }
@@ -83,9 +73,12 @@ fn index_select_config(
     let index_data = positions
         .iter()
         .map(|&position| {
-            i64::try_from(position).map_err(|_| tenferro_tensor::Error::InvalidConfig {
-                op: "index_select",
-                message: format!("position {position} cannot be represented as i64"),
+            i64::try_from(position).map_err(|_| {
+                tenferro_tensor::Error::invalid_argument(
+                    "index_select",
+                    "position",
+                    format!("position {position} cannot be represented as i64"),
+                )
             })
         })
         .collect::<tenferro_tensor::Result<Vec<_>>>()?;
@@ -107,20 +100,16 @@ fn index_select_config(
 
 fn validate_stack_shapes(op: &'static str, shapes: &[&[usize]]) -> Result<()> {
     let Some(first) = shapes.first() else {
-        return Err(tenferro_tensor::Error::InvalidConfig {
+        return Err(tenferro_tensor::Error::invalid_argument(
             op,
-            message: "stack requires at least one input".into(),
-        }
+            "inputs",
+            "stack requires at least one input",
+        )
         .into());
     };
     for shape in shapes.iter().skip(1) {
         if *shape != *first {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op,
-                lhs: first.to_vec(),
-                rhs: shape.to_vec(),
-            }
-            .into());
+            return Err(tenferro_tensor::Error::shape_mismatch(op, *first, *shape).into());
         }
     }
     Ok(())
@@ -146,15 +135,10 @@ fn validate_axis_selection(
     axis: usize,
 ) -> Result<()> {
     if axis >= rank {
-        return Err(tenferro_tensor::Error::AxisOutOfBounds { op, axis, rank }.into());
+        return Err(tenferro_tensor::Error::axis_out_of_bounds(op, axis, rank).into());
     }
     if seen[axis] {
-        return Err(tenferro_tensor::Error::DuplicateAxis {
-            op,
-            axis,
-            role: "selection",
-        }
-        .into());
+        return Err(tenferro_tensor::Error::duplicate_axis(op, axis, "selection").into());
     }
     seen[axis] = true;
     Ok(())
@@ -174,21 +158,23 @@ fn apply_slice_axis_config(
             continue;
         };
         if *step == 0 {
-            return Err(tenferro_tensor::Error::InvalidConfig {
+            return Err(tenferro_tensor::Error::invalid_argument(
                 op,
-                message: format!("axis {axis} has zero step"),
-            }
+                "step",
+                format!("axis {axis} has zero step"),
+            )
             .into());
         }
         let extent = shape[*axis];
         if range.start > range.end || range.end > extent {
-            return Err(tenferro_tensor::Error::InvalidConfig {
+            return Err(tenferro_tensor::Error::invalid_argument(
                 op,
-                message: format!(
+                "range",
+                format!(
                     "axis {axis} range {}..{} is out of bounds for extent {extent}",
                     range.start, range.end
                 ),
-            }
+            )
             .into());
         }
         starts[*axis] = range.start;
@@ -319,6 +305,12 @@ impl<'a> EagerSliceBuilder<'a> {
     /// let y = x.slice_builder().axis(0, 1..4).apply().unwrap();
     /// assert_eq!(y.shape(), &[3]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::AxisOutOfBounds`] or
+    /// `DuplicateAxis` when selections address an invalid/repeated axis,
+    /// `InvalidArgument` for zero steps or out-of-bounds ranges, or a typed
+    /// backend/runtime-state error while applying the selections.
     pub fn apply(self) -> Result<EagerTensor> {
         let shape = self.tensor.shape().to_vec();
         let mut seen = vec![false; shape.len()];
@@ -358,6 +350,11 @@ impl EagerTensor {
     /// let y = x.slice_axis(0, 1..3).unwrap();
     /// assert_eq!(y.shape(), &[2]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::AxisOutOfBounds`] when `axis` is not
+    /// present, `InvalidArgument` when `range` exceeds the axis extent, or a
+    /// typed backend/runtime-state error.
     pub fn slice_axis(&self, axis: usize, range: Range<usize>) -> Result<Self> {
         self.slice_builder().axis(axis, range).apply()
     }
@@ -401,12 +398,18 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::AxisOutOfBounds`] for an invalid axis,
+    /// `InvalidArgument` when an index is outside the axis extent or cannot fit
+    /// in the backend index dtype, or a typed backend/runtime-state error.
     pub fn take_axis(&self, axis: usize, indices: &[usize]) -> Result<Self> {
         let axis = isize::try_from(axis).map_err(|_| {
-            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-                op: "take_axis",
-                message: format!("axis {axis} cannot be represented as isize"),
-            })
+            Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+                "take_axis",
+                "axis",
+                format!("{axis} cannot be represented as isize"),
+            ))
         })?;
         self.index_select(axis, indices)
     }
@@ -429,6 +432,11 @@ impl EagerTensor {
     /// assert_eq!(y.shape(), &[1, 2]);
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::InvalidArgument`] for a row index
+    /// outside the matrix, or [`Error::Validation`] for a non-matrix input;
+    /// backend/runtime-state failures retain their typed source.
     pub fn take_rows(&self, rows: &[usize]) -> Result<Self> {
         self.take_axis(0, rows)
     }
@@ -451,6 +459,11 @@ impl EagerTensor {
     /// assert_eq!(y.shape(), &[2, 1]);
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::InvalidArgument`] for a column index
+    /// outside the matrix, or [`Error::Validation`] for a non-matrix input;
+    /// backend/runtime-state failures retain their typed source.
     pub fn take_cols(&self, cols: &[usize]) -> Result<Self> {
         self.take_axis(1, cols)
     }
@@ -477,6 +490,11 @@ impl EagerTensor {
     /// assert_eq!(y.shape(), &[1, 1]);
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[2.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Propagates [`tenferro_tensor::ValidationError::InvalidArgument`] for an out of
+    /// bounds row or column and [`Error::Validation`] for a non-matrix input;
+    /// backend/runtime-state failures retain their typed source.
     pub fn take_block(&self, rows: &[usize], cols: &[usize]) -> Result<Self> {
         self.take_rows(rows)?.take_cols(cols)
     }
@@ -498,14 +516,17 @@ impl EagerTensor {
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[30.0, 10.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::AxisOutOfBounds`] for an invalid
+    /// signed axis, `InvalidArgument` for an out-of-range position or integer
+    /// conversion overflow, or a typed backend/runtime-state error.
     pub fn index_select(&self, axis: isize, positions: &[usize]) -> Result<Self> {
         let (indices, config) = index_select_config(self.shape(), axis, positions)?;
         let indices = {
-            let mut backend = self
-                .ctx
-                .backend
-                .lock()
-                .map_err(|_| Error::Internal("backend lock poisoned".to_string()))?;
+            let mut backend = self.ctx.backend.lock().map_err(|_| {
+                Error::runtime_state("eager_backend", ErrorPhase::Execution, "lock poisoned")
+            })?;
             backend.upload_host_tensor(&indices)?
         };
         let indices = self.ctx.constant_from(indices)?;
@@ -531,12 +552,18 @@ impl EagerTensor {
     /// assert_eq!(out.shape(), &[2]);
     /// assert_eq!(out.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0, 2.0]);
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::ValidationError::InvalidArgument`] when `tensors` is
+    /// empty or `dim` is outside the insertion rank, `ShapeMismatch` when
+    /// inputs differ in shape, or a typed context/backend/runtime-state error.
     pub fn stack(tensors: &[&Self], dim: isize) -> Result<Self> {
         let first = tensors.first().copied().ok_or_else(|| {
-            Error::TensorRuntime(tenferro_tensor::Error::InvalidConfig {
-                op: "stack",
-                message: "stack requires at least one input".into(),
-            })
+            Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+                "stack",
+                "inputs",
+                "stack requires at least one input",
+            ))
         })?;
         let shapes = tensors
             .iter()

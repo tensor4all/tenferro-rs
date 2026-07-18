@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
 use tenferro_runtime::extension::apply;
-use tenferro_runtime::{CompareDir, DType, DotGeneralConfig, Error, Result, TracedTensor};
+use tenferro_runtime::{
+    CompareDir, DType, DotGeneralConfig, Error, ErrorPhase, Result, TracedTensor,
+};
 
 use crate::extension::{
     validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
@@ -10,17 +12,126 @@ use crate::extension::{
 
 /// Linear algebra extension methods for [`TracedTensor`].
 pub trait TracedTensorLinalgExt {
+    /// Build a traced SVD operation with default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
+    /// unsupported dtype, or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Backend numerical failures and concrete shape mismatches can be
+    /// reported as `Error::Extension` or `Error::Validation` during compile or
+    /// execution when symbolic inputs are bound.
     fn svd(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
+
+    /// Build a traced SVD operation with explicit derivative and gauge options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation::InvalidArgument` for a non-finite or
+    /// non-positive derivative epsilon, or `Error::Extension` for unsupported
+    /// dtype and graph registration failures.
+    ///
+    /// # Deferred errors
+    ///
+    /// Solver convergence and symbolic shape checks may be reported during
+    /// compile or execution.
     fn svd_with_options(
         &self,
         options: SvdOptions,
     ) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
+    /// Build a traced QR operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
+    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and backend QR failures may be reported at
+    /// compile or execution time for symbolic inputs.
     fn qr(&self) -> Result<(TracedTensor, TracedTensor)>;
+
+    /// Build a traced QR operation with explicit gauge options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
+    /// unsupported dtype, or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic shape checks and backend QR failures can be deferred to compile
+    /// or execution.
     fn qr_with_options(&self, options: QrOptions) -> Result<(TracedTensor, TracedTensor)>;
+
+    /// Build a traced Hermitian eigendecomposition operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
+    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete square-shape validation and solver failures may be reported at
+    /// compile or execution time.
     fn eigh(&self) -> Result<(TracedTensor, TracedTensor)>;
+
+    /// Build a traced Hermitian eigendecomposition with explicit options.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation::InvalidArgument` for an invalid derivative
+    /// epsilon, or `Error::Extension` for unsupported dtype and registration
+    /// failures.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic square-shape checks and numerical eigensolver failures may be
+    /// reported during compile or execution.
     fn eigh_with_options(&self, options: EighOptions) -> Result<(TracedTensor, TracedTensor)>;
+
+    /// Build a traced Cholesky factorization operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
+    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Non-square or non-positive-definite concrete inputs can produce
+    /// validation or numerical extension errors during compile or execution.
     fn cholesky(&self) -> Result<TracedTensor>;
+
+    /// Build a traced LU factorization operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
+    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape checks and backend factorization failures may be
+    /// reported during compile or execution.
     fn lu(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)>;
+
+    /// Build a traced complete-pivot LU factorization operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
+    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete square-shape checks and backend factorization failures may be
+    /// reported during compile or execution.
     fn full_piv_lu(
         &self,
     ) -> Result<(
@@ -30,9 +141,56 @@ pub trait TracedTensorLinalgExt {
         TracedTensor,
         TracedTensor,
     )>;
+    /// Build a traced general eigendecomposition operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Extension` with `ErrorKind::Unsupported` for an
+    /// unsupported dtype or `Error::Validation` for invalid graph metadata.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape validation and numerical eigensolver failures may be
+    /// reported during compile or execution.
     fn eig(&self) -> Result<(TracedTensor, TracedTensor)>;
+
+    /// Build a traced linear solve operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for incompatible coefficient/rhs metadata
+    /// and `Error::Extension` for unsupported dtype or registration failures.
+    ///
+    /// # Deferred errors
+    ///
+    /// Singular systems and concrete shape mismatches are reported as
+    /// numerical or validation errors during compile or execution.
     fn solve(&self, b: &TracedTensor) -> Result<TracedTensor>;
+
+    /// Build a traced complete-pivot LU solve operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for incompatible coefficient/rhs metadata
+    /// and `Error::Extension` for unsupported dtype or registration failures.
+    ///
+    /// # Deferred errors
+    ///
+    /// Singular systems and concrete shape mismatches may be reported during
+    /// compile or execution.
     fn full_piv_lu_solve(&self, b: &TracedTensor) -> Result<TracedTensor>;
+
+    /// Build a traced triangular solve operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for incompatible coefficient/rhs shapes or
+    /// invalid solve flags, and `Error::Extension` for unsupported dtype.
+    ///
+    /// # Deferred errors
+    ///
+    /// Singular or zero-diagonal systems can fail numerically during compile or
+    /// execution after symbolic inputs are bound.
     fn triangular_solve(
         &self,
         b: &TracedTensor,
@@ -41,13 +199,107 @@ pub trait TracedTensorLinalgExt {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> Result<TracedTensor>;
+    /// Build a traced sign/log-determinant operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for invalid matrix metadata or
+    /// `Error::Extension` for unsupported dtype and registration failures.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete singularity and shape failures can be reported during compile
+    /// or execution.
     fn slogdet(&self) -> Result<(TracedTensor, TracedTensor)>;
+
+    /// Build a traced determinant operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for invalid matrix metadata or
+    /// `Error::Extension` for unsupported dtype.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete singularity and shape failures may be reported during compile
+    /// or execution.
     fn det(&self) -> Result<TracedTensor>;
+
+    /// Build a traced matrix-inverse operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for incompatible rank/shape metadata or
+    /// `Error::Extension` for unsupported dtype.
+    ///
+    /// # Deferred errors
+    ///
+    /// Singular matrices produce a numerical error during compile or execution.
     fn inv(&self) -> Result<TracedTensor>;
+
+    /// Build a traced Hermitian eigenvalue-only operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for non-square metadata or
+    /// `Error::Extension` for unsupported dtype.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete square-shape and solver failures may be reported during compile
+    /// or execution.
     fn eigvalsh(&self) -> Result<TracedTensor>;
+
+    /// Build a traced general eigenvalue-only operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for invalid matrix metadata or
+    /// `Error::Extension` for unsupported dtype.
+    ///
+    /// # Deferred errors
+    ///
+    /// Concrete shape and eigensolver failures may be reported during compile
+    /// or execution.
     fn eigvals(&self) -> Result<TracedTensor>;
+
+    /// Build a traced pseudoinverse operation with the default tolerance.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for invalid rank/shape metadata or
+    /// `Error::Extension` for unsupported dtype.
+    ///
+    /// # Deferred errors
+    ///
+    /// SVD convergence and concrete shape failures may be reported during
+    /// compile or execution.
     fn pinv(&self) -> Result<TracedTensor>;
+
+    /// Build a traced pseudoinverse with an explicit relative tolerance.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation::InvalidArgument` when `rtol` is non-finite
+    /// or negative, or `Error::Extension` for unsupported dtype.
+    ///
+    /// # Deferred errors
+    ///
+    /// SVD convergence and concrete shape failures may be reported during
+    /// compile or execution.
     fn pinv_with_rtol(&self, rtol: f64) -> Result<TracedTensor>;
+
+    /// Build a traced vector/matrix norm operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for an invalid norm order or axis and
+    /// `Error::Extension` for unsupported dtype.
+    ///
+    /// # Deferred errors
+    ///
+    /// Symbolic axis and shape checks may be reported during compile or
+    /// execution.
     fn norm(&self, ord: Option<f64>, dim: Option<&[usize]>, keepdim: bool) -> Result<TracedTensor>;
 }
 
@@ -169,6 +421,19 @@ impl TracedTensorLinalgExt for TracedTensor {
 /// assert_eq!(s.rank, 1);
 /// assert_eq!(vt.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known invalid rank, matrix shape, or
+/// dtype, `Error::Extension` with an unsupported-dtype or non-convergence
+/// source when the registered linalg backend cannot construct the operation,
+/// and `Error::RuntimeState` when extension registration is unavailable.
+///
+/// # Deferred errors
+///
+/// A symbolic matrix or batch-shape mismatch is reported later as
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation` during compile or
+/// execution.
 pub fn svd(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
     svd_with_options(a, SvdOptions::default())
 }
@@ -191,6 +456,18 @@ pub fn svd(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor
 /// let (_u, s, _vt) = a.svd_with_options(options).unwrap();
 /// assert_eq!(s.rank, 1);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` when `derivative_eps` is non-finite or
+/// non-positive, `Error::Extension` for an unsupported dtype or numerical
+/// non-convergence, and `Error::Internal` if the extension output contract is
+/// violated.
+///
+/// # Deferred errors
+///
+/// Symbolic rank or shape constraints are checked later and can produce
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn svd_with_options(
     a: &TracedTensor,
     options: SvdOptions,
@@ -221,6 +498,17 @@ pub fn svd_with_options(
 /// assert_eq!(q.rank, 2);
 /// assert_eq!(r.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known invalid rank or matrix shape,
+/// `Error::Extension` for an unsupported dtype or numerical failure, and
+/// `Error::RuntimeState` when the linalg extension is not registered.
+///
+/// # Deferred errors
+///
+/// Unknown matrix or batch dimensions can fail later as
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn qr(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     qr_with_options(a, QrOptions::default())
 }
@@ -240,6 +528,17 @@ pub fn qr(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// assert_eq!(q.rank, 2);
 /// assert_eq!(r.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known invalid rank or matrix shape,
+/// `Error::Extension` for an unsupported dtype or numerical failure, and
+/// `Error::Internal` if the extension output contract is violated.
+///
+/// # Deferred errors
+///
+/// Symbolic matrix or batch constraints are checked later and can produce
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn qr_with_options(
     a: &TracedTensor,
     options: QrOptions,
@@ -268,6 +567,18 @@ pub fn qr_with_options(
 /// assert_eq!(values.rank, 1);
 /// assert_eq!(vectors.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known non-square or invalid-rank input,
+/// `Error::Extension` for an unsupported dtype or eigensolver
+/// non-convergence, and `Error::RuntimeState` when the extension is not
+/// registered.
+///
+/// # Deferred errors
+///
+/// Symbolic square-shape constraints can fail later as
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     eigh_with_options(a, EighOptions::default())
 }
@@ -293,6 +604,18 @@ pub fn eigh(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 ///     .unwrap();
 /// assert_eq!(values.rank, 1);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known non-square or invalid-rank input,
+/// or for non-finite/non-positive `derivative_eps`; `Error::Extension` for an
+/// unsupported dtype or eigensolver non-convergence; and `Error::Internal` for
+/// an output-count contract violation.
+///
+/// # Deferred errors
+///
+/// Symbolic square-shape constraints can fail later as
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn eigh_with_options(
     a: &TracedTensor,
     options: EighOptions,
@@ -322,6 +645,17 @@ pub fn eigh_with_options(
 /// let factor = a.cholesky().unwrap();
 /// assert_eq!(factor.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known non-square or invalid-rank input,
+/// `Error::Extension` for an unsupported dtype or a non-positive-definite
+/// matrix, and `Error::RuntimeState` when the extension is not registered.
+///
+/// # Deferred errors
+///
+/// Symbolic square-shape constraints can fail later as
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
     one_output(
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Cholesky)), &[a])?,
@@ -344,6 +678,17 @@ pub fn cholesky(a: &TracedTensor) -> Result<TracedTensor> {
 /// assert_eq!(u.rank, 2);
 /// assert_eq!(parity.rank, 0);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known invalid rank or matrix shape,
+/// `Error::Extension` for an unsupported dtype or singular numerical result,
+/// and `Error::RuntimeState` when the extension is not registered.
+///
+/// # Deferred errors
+///
+/// Symbolic square-shape constraints can fail later as
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn lu(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor, TracedTensor)> {
     four_outputs(
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::Lu)), &[a])?,
@@ -372,6 +717,17 @@ pub fn lu(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor,
 /// assert_eq!(q.rank, 2);
 /// assert_eq!(parity.rank, 0);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known invalid rank or matrix shape,
+/// `Error::Extension` for an unsupported dtype or singular numerical result,
+/// and `Error::Internal` for an output-count contract violation.
+///
+/// # Deferred errors
+///
+/// Symbolic square-shape constraints can fail later as
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn full_piv_lu(
     a: &TracedTensor,
 ) -> Result<(
@@ -400,6 +756,18 @@ pub fn full_piv_lu(
 /// assert_eq!(values.rank, 1);
 /// assert_eq!(vectors.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known non-square or invalid-rank input,
+/// `Error::Extension` for an unsupported dtype or eigensolver
+/// non-convergence, and `Error::RuntimeState` when the extension is not
+/// registered.
+///
+/// # Deferred errors
+///
+/// Symbolic square-shape constraints can fail later as
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     two_outputs(
         apply(
@@ -425,6 +793,18 @@ pub fn eig(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// let x = a.solve(&b).unwrap();
 /// assert_eq!(x.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for known incompatible matrix, batch, or dtype
+/// metadata, `Error::Extension` for an unsupported dtype or singular system,
+/// and `Error::RuntimeState` when the extension is not registered.
+///
+/// # Deferred errors
+///
+/// Symbolic matrix and batch constraints can fail later as
+/// `ShapeConstraintViolation`, `ShapeConstraintEvaluation`, or
+/// `ShapeExpressionEvaluation`.
 pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     let mut factor_outputs =
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a])?.into_iter();
@@ -462,6 +842,18 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
 /// let x = a.full_piv_lu_solve(&b).unwrap();
 /// assert_eq!(x.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for known incompatible matrix, batch, or dtype
+/// metadata, `Error::Extension` for an unsupported dtype or singular system,
+/// and `Error::RuntimeState` when the extension is not registered.
+///
+/// # Deferred errors
+///
+/// Symbolic matrix and batch constraints can fail later as
+/// `ShapeConstraintViolation`, `ShapeConstraintEvaluation`, or
+/// `ShapeExpressionEvaluation`.
 pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
     one_output(
         apply(
@@ -487,6 +879,18 @@ pub fn full_piv_lu_solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTen
 /// let x = a.triangular_solve(&b, true, true, false, false).unwrap();
 /// assert_eq!(x.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for incompatible matrix, batch, or dtype
+/// metadata, `Error::Extension` for an unsupported dtype or singular system,
+/// and `Error::RuntimeState` when the extension is not registered.
+///
+/// # Deferred errors
+///
+/// Symbolic matrix and batch constraints can fail later as
+/// `ShapeConstraintViolation`, `ShapeConstraintEvaluation`, or
+/// `ShapeExpressionEvaluation`.
 pub fn triangular_solve(
     a: &TracedTensor,
     b: &TracedTensor,
@@ -522,6 +926,17 @@ pub fn triangular_solve(
 /// assert_eq!(sign.rank, 0);
 /// assert_eq!(logabsdet.rank, 0);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known non-square or invalid-rank input,
+/// `Error::Extension` for an unsupported dtype or singular factorization, and
+/// `Error::Internal` if the factorization output contract is violated.
+///
+/// # Deferred errors
+///
+/// Symbolic square-shape constraints can fail later as
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
     let mut factor_outputs =
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a])?.into_iter();
@@ -553,6 +968,17 @@ pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// let determinant = a.det().unwrap();
 /// assert_eq!(determinant.rank, 0);
 /// ```
+///
+/// # Errors
+///
+/// Returns the same `Error::Validation`, `Error::Extension`, and
+/// `Error::RuntimeState` failures as [`slogdet`], including a singular
+/// factorization and an invalid matrix shape.
+///
+/// # Deferred errors
+///
+/// Symbolic shape checks can later produce `ShapeConstraintViolation`,
+/// `ShapeConstraintEvaluation`, or `ShapeExpressionEvaluation`.
 pub fn det(a: &TracedTensor) -> Result<TracedTensor> {
     let (sign, logabsdet) = slogdet(a)?;
     &sign * &logabsdet.exp()?
@@ -570,6 +996,17 @@ pub fn det(a: &TracedTensor) -> Result<TracedTensor> {
 /// let inverse = a.inv().unwrap();
 /// assert_eq!(inverse.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` when the input is not at least rank two or is
+/// not square, `Error::Extension` for an unsupported dtype or singular system,
+/// and `Error::RuntimeState` when the extension is not registered.
+///
+/// # Deferred errors
+///
+/// A symbolic shape that cannot provide the identity size fails later as
+/// `ShapeConstraintEvaluation` or `ShapeExpressionEvaluation`.
 pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
     ensure_min_rank("inv", a.rank, 2)?;
     let shape = require_concrete_shape("inv", a)?;
@@ -589,6 +1026,18 @@ pub fn inv(a: &TracedTensor) -> Result<TracedTensor> {
 /// let values = a.eigvalsh().unwrap();
 /// assert_eq!(values.rank, 1);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known non-square or invalid-rank input,
+/// `Error::Extension` for an unsupported dtype or eigensolver
+/// non-convergence, and `Error::RuntimeState` when the extension is not
+/// registered.
+///
+/// # Deferred errors
+///
+/// Symbolic square-shape constraints can fail later as
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn eigvalsh(a: &TracedTensor) -> Result<TracedTensor> {
     eigh_values(a)
 }
@@ -605,6 +1054,18 @@ pub fn eigvalsh(a: &TracedTensor) -> Result<TracedTensor> {
 /// let values = a.eigvals().unwrap();
 /// assert_eq!(values.rank, 1);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for a known non-square or invalid-rank input,
+/// `Error::Extension` for an unsupported dtype or eigensolver
+/// non-convergence, and `Error::RuntimeState` when the extension is not
+/// registered.
+///
+/// # Deferred errors
+///
+/// Symbolic square-shape constraints can fail later as
+/// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn eigvals(a: &TracedTensor) -> Result<TracedTensor> {
     eig_values(a)
 }
@@ -624,6 +1085,18 @@ pub fn eigvals(a: &TracedTensor) -> Result<TracedTensor> {
 /// let inverse = a.pinv().unwrap();
 /// assert_eq!(inverse.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for an invalid rank, shape, or negative/non-
+/// finite `rtol`, `Error::Extension` for unsupported integer or boolean dtypes,
+/// numerical non-convergence, or a backend failure, and `Error::RuntimeState`
+/// when the extension is not registered.
+///
+/// # Deferred errors
+///
+/// Symbolic shapes are materialized by this helper; failures are reported as
+/// `ShapeConstraintEvaluation` or `ShapeExpressionEvaluation`.
 pub fn pinv(a: &TracedTensor) -> Result<TracedTensor> {
     ensure_float_or_complex("pinv", a.dtype)?;
     let shape = require_concrete_shape("pinv", a)?;
@@ -650,6 +1123,18 @@ pub fn pinv(a: &TracedTensor) -> Result<TracedTensor> {
 /// let inverse = a.pinv_with_rtol(1e-12).unwrap();
 /// assert_eq!(inverse.rank, 2);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for an invalid rank, shape, or non-finite
+/// `rtol`, `Error::Extension` for unsupported integer or boolean dtypes,
+/// numerical non-convergence, or a backend failure, and `Error::RuntimeState`
+/// when the extension is not registered.
+///
+/// # Deferred errors
+///
+/// Symbolic shapes are materialized by this helper; failures are reported as
+/// `ShapeConstraintEvaluation` or `ShapeExpressionEvaluation`.
 pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
     ensure_float_or_complex("pinv_with_rtol", a.dtype)?;
     require_concrete_shape("pinv_with_rtol", a)?;
@@ -689,6 +1174,18 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
 /// let length = x.norm(Some(2.0), Some(&[0]), false).unwrap();
 /// assert_eq!(length.rank, 0);
 /// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for an invalid axis, rank, or norm order,
+/// `Error::Extension` for unsupported integer or boolean dtypes or a backend
+/// numerical failure, and `Error::RuntimeState` when the extension is not
+/// registered.
+///
+/// # Deferred errors
+///
+/// Symbolic shapes needed to restore `keepdim` are evaluated later and can
+/// produce `ShapeConstraintEvaluation` or `ShapeExpressionEvaluation`.
 pub fn norm(
     a: &TracedTensor,
     ord: Option<f64>,
@@ -819,18 +1316,16 @@ fn ensure_float_or_complex(op: &'static str, dtype: DType) -> Result<()> {
     match dtype {
         DType::F32 | DType::F64 | DType::C32 | DType::C64 => Ok(()),
         DType::I32 | DType::I64 | DType::Bool => Err(Error::TensorRuntime(
-            tenferro_tensor::Error::backend_failure(op, format!("unsupported dtype {dtype:?}")),
+            crate::error::unsupported_dtype(op, dtype),
         )),
     }
 }
 
 fn ensure_min_rank(op: &'static str, actual: usize, expected: usize) -> Result<()> {
     if actual < expected {
-        return Err(Error::TensorRuntime(tenferro_tensor::Error::RankMismatch {
-            op,
-            expected,
-            actual,
-        }));
+        return Err(Error::TensorRuntime(tenferro_tensor::Error::rank_mismatch(
+            op, expected, actual,
+        )));
     }
     Ok(())
 }
@@ -839,7 +1334,7 @@ fn validate_axes(op: &'static str, rank: usize, axes: &[usize]) -> Result<()> {
     for &axis in axes {
         if axis >= rank {
             return Err(Error::TensorRuntime(
-                tenferro_tensor::Error::AxisOutOfBounds { op, axis, rank },
+                tenferro_tensor::Error::axis_out_of_bounds(op, axis, rank),
             ));
         }
     }
@@ -848,8 +1343,9 @@ fn validate_axes(op: &'static str, rank: usize, axes: &[usize]) -> Result<()> {
 
 fn require_concrete_shape(op: &'static str, input: &TracedTensor) -> Result<Vec<usize>> {
     input.try_concrete_shape().ok_or_else(|| {
-        Error::TensorRuntime(tenferro_tensor::Error::backend_failure(
+        Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
             op,
+            "shape",
             "symbolic shape is not supported by this traced linalg helper",
         ))
     })
@@ -923,10 +1419,12 @@ fn frobenius_norm(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
 
 fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
     if !p.is_finite() || p == 0.0 {
-        return Err(Error::InvalidGraphBuild {
-            op: "norm",
-            message: format!("p-norm order must be finite and nonzero, got {p}"),
-        });
+        return Err(Error::invalid_argument(
+            "norm",
+            ErrorPhase::GraphBuild,
+            "p",
+            format!("p-norm order must be finite and nonzero, got {p}"),
+        ));
     }
     let power = abs.pow(&scalar_real(abs.dtype, p)?)?;
     let inv_p = scalar_real(abs.dtype, 1.0 / p)?;

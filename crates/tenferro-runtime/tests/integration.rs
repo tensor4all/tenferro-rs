@@ -4,6 +4,8 @@ mod extension_runtime;
 mod graph_default_input_placement;
 #[path = "integration/public_surface_contract.rs"]
 mod public_surface_contract;
+#[path = "integration/runtime_error_api.rs"]
+mod runtime_error_api;
 #[path = "integration/runtime_public_api.rs"]
 mod runtime_public_api;
 #[path = "integration/typed_tensor_contract.rs"]

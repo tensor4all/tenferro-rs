@@ -38,6 +38,7 @@ computegraph.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true
 rustfft = "6"
+thiserror.workspace = true
 
 [dev-dependencies]
 tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features = false }

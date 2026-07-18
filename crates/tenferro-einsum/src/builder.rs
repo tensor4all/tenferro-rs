@@ -78,7 +78,7 @@ fn localize_value_ref(
 }
 
 fn builder_invalid_argument(message: impl Into<String>) -> Error {
-    Error::InvalidArgument(format!("einsum builder: {}", message.into()))
+    Error::planning(format!("einsum builder: {}", message.into()))
 }
 
 fn find_label_axis(labels: &[u32], label: u32) -> Result<usize> {

@@ -41,6 +41,7 @@
 
 pub mod cpu;
 pub mod einsum;
+mod error;
 mod extension;
 pub mod newtype;
 pub mod traced;

@@ -1,5 +1,10 @@
 use std::{fs, path::Path};
 
+use std::error::Error as _;
+
+use tenferro_tensor::{ErrorKind, ValidationKind};
+use tenferro_xla::Error;
+
 fn lowering_program_source() -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -8,6 +13,17 @@ fn lowering_program_source() -> String {
             .join("program.rs"),
     )
     .unwrap_or_else(|err| panic!("XLA lowering source should be readable: {err}"))
+}
+
+#[test]
+fn xla_tensor_errors_preserve_kind_and_source_chain() {
+    let error = Error::from(tenferro_tensor::Error::rank_mismatch("input", 2, 1));
+
+    assert_eq!(
+        error.kind(),
+        ErrorKind::Validation(ValidationKind::RankMismatch)
+    );
+    assert!(error.source().is_some());
 }
 
 fn pjrt_execute_source() -> String {

@@ -53,7 +53,11 @@ impl DeviceByteBuffer {
 
 pub(crate) fn cuda_device_ptr_from_addr(addr: u64, op: &'static str) -> crate::Result<*mut c_void> {
     let addr = usize::try_from(addr).map_err(|_| {
-        crate::Error::backend_failure(op, format!("CUDA device address {addr} exceeds usize"))
+        crate::Error::invalid_argument(
+            op,
+            "device_address",
+            format!("CUDA device address {addr} exceeds usize"),
+        )
     })?;
     Ok(std::ptr::with_exposed_provenance_mut::<c_void>(addr))
 }
@@ -70,19 +74,32 @@ pub fn with_cubecl_client<R>(
 }
 
 /// Flush the CubeCL client after an unchecked kernel launch.
+/// # Errors
+///
+/// Returns [`crate::Error::BackendSource`] when CubeCL cannot flush the client.
 pub fn flush_cubecl_client(rt: &CudaRuntime, op: &'static str) -> crate::Result<()> {
     rt.client()
         .flush()
-        .map_err(|err| crate::Error::backend_failure(op, format!("CubeCL launch failed: {err:?}")))
+        .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 /// Return the CUDA stream pointer for libraries that must enqueue onto CubeCL's stream.
+/// # Errors
+///
+/// Returns [`crate::Error::BackendSource`] when CubeCL cannot expose the
+/// stream, or [`crate::Error::RuntimeState`] when its server is unavailable.
 pub fn raw_cuda_stream(rt: &CudaRuntime, op: &'static str) -> crate::Result<u64> {
     rt.raw_cuda_stream()
-        .map_err(|err| crate::Error::backend_failure(op, err.to_string()))
+        .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 /// Return the launch cube count for a one-dimensional kernel domain.
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] containing
+/// [`tenferro_tensor::ValidationError::InvalidArgument`] when the
+/// one-dimensional launch for `len` elements would require more than
+/// `u32::MAX` CubeCL workgroups.
 pub fn cube_count_for_len(len: usize) -> crate::Result<CubeCount> {
     dispatch::cube_count_for_len(len)
 }
@@ -93,6 +110,10 @@ pub fn cube_dim_1d() -> CubeDim {
 }
 
 /// Allocate a dense GPU tensor on the runtime's device.
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `InvalidArgument` when the shape
+/// product overflows, or [`crate::Error::BackendSource`] when allocation fails.
 pub fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
     rt: &CudaRuntime,
     shape: &[usize],
@@ -101,6 +122,10 @@ pub fn alloc_output<T: CubeElement + Clone + Send + Sync + 'static>(
 }
 
 /// Validate that a tensor is backed by a CubeCL buffer.
+/// # Errors
+///
+/// Returns [`crate::Error::RuntimeState`] when the tensor is host-backed,
+/// belongs to another GPU runtime, or has the wrong backend buffer family.
 pub fn ensure_typed_tensor_resident<T: 'static>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
@@ -110,6 +135,10 @@ pub fn ensure_typed_tensor_resident<T: 'static>(
 }
 
 /// Build a CubeCL tensor binding for operation-family kernels.
+/// # Errors
+///
+/// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
+/// resident, or [`crate::Error::Validation`] when its layout cannot be bound.
 pub fn typed_tensor_binding<T: CubeElement + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
@@ -118,6 +147,10 @@ pub fn typed_tensor_binding<T: CubeElement + Clone>(
 }
 
 /// Build a CubeCL array argument for operation-family kernels.
+/// # Errors
+///
+/// Returns [`crate::Error::RuntimeState`] when the tensor is not CubeCL
+/// resident, or [`crate::Error::Validation`] when its layout cannot be bound.
 pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
     tensor: &TypedTensor<T, impl TensorRank>,
     op: &'static str,
@@ -126,6 +159,11 @@ pub fn typed_tensor_array_arg<T: CubeElement + Clone>(
 }
 
 /// Return a raw CUDA device pointer for a CubeCL-backed tensor.
+/// # Errors
+///
+/// Returns [`crate::Error::RuntimeState`] for a non-resident or foreign tensor,
+/// [`crate::Error::BackendSource`] when its resource cannot be inspected, or
+/// [`crate::Error::Validation`] when the pointer address overflows `usize`.
 pub fn typed_device_ptr<T: 'static>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T, impl TensorRank>,
@@ -136,14 +174,17 @@ pub fn typed_device_ptr<T: 'static>(
     let resource = rt
         .client()
         .get_resource(buffer.handle().clone())
-        .map_err(|err| {
-            crate::Error::backend_failure(op, format!("failed to obtain CubeCL resource: {err:?}"))
-        })?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     // The residency check above ties this raw FFI pointer to the caller's runtime/device.
     cuda_device_ptr_from_addr(resource.resource().ptr, op)
 }
 
 /// Upload host data into a dense GPU tensor on the runtime's device.
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] when `shape` and `data` have different
+/// element counts, or [`crate::Error::BackendSource`] when device allocation
+/// fails.
 pub fn upload_typed_tensor<T>(
     rt: &CudaRuntime,
     shape: Vec<usize>,
@@ -162,6 +203,11 @@ where
 }
 
 /// Download a dense CubeCL-backed typed tensor to host memory.
+/// # Errors
+///
+/// Returns [`crate::Error::RuntimeState`] for a host-backed or foreign tensor,
+/// [`crate::Error::BackendSource`] when synchronization/readback fails, or a
+/// typed validation error when downloaded bytes do not form the declared shape.
 pub fn download_typed_tensor<T>(
     rt: &CudaRuntime,
     tensor: &TypedTensor<T, impl TensorRank>,
@@ -179,13 +225,16 @@ where
     let bytes = rt
         .client()
         .read_one(buffer.handle().clone())
-        .map_err(|err| {
-            crate::Error::backend_failure(op, format!("failed to download tensor: {err:?}"))
-        })?;
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     TypedTensor::from_vec_col_major(tensor.shape().to_vec(), T::from_bytes(&bytes).to_vec())
 }
 
 /// Allocate a CubeCL-owned byte workspace and return its CUDA pointer.
+/// # Errors
+///
+/// Returns [`crate::Error::BackendSource`] when CubeCL cannot allocate or
+/// inspect the workspace resource, or [`crate::Error::Validation`] when its
+/// pointer address cannot be represented as `usize`.
 pub fn alloc_device_bytes(
     rt: &CudaRuntime,
     nbytes: usize,
@@ -199,6 +248,10 @@ pub fn alloc_device_bytes(
 }
 
 /// Upload bytes into a CubeCL-owned workspace and return its CUDA pointer.
+/// # Errors
+///
+/// Returns [`crate::Error::BackendSource`] when CubeCL cannot upload or inspect
+/// the workspace resource, or [`crate::Error::Validation`] on pointer overflow.
 pub fn upload_device_bytes(
     rt: &CudaRuntime,
     bytes: &[u8],
@@ -216,9 +269,10 @@ fn device_bytes_from_handle(
     handle: cubecl_runtime::server::Handle,
     op: &'static str,
 ) -> crate::Result<DeviceByteBuffer> {
-    let resource = rt.client().get_resource(handle.clone()).map_err(|err| {
-        crate::Error::backend_failure(op, format!("failed to obtain CubeCL resource: {err:?}"))
-    })?;
+    let resource = rt
+        .client()
+        .get_resource(handle.clone())
+        .map_err(|err| crate::Error::backend_source(op, err))?;
     Ok(DeviceByteBuffer {
         handle: Some(handle),
         ptr: cuda_device_ptr_from_addr(resource.resource().ptr, op)?,

@@ -96,40 +96,36 @@ fn broadcast_shape_strides<T: 'static, R: TensorRank>(
     dims: &[usize],
 ) -> Result<(Vec<usize>, Vec<isize>)> {
     if dims.len() != view.shape().len() {
-        return Err(Error::RankMismatch {
-            op: EAGER_EINSUM_OP,
-            expected: view.shape().len(),
-            actual: dims.len(),
-        });
+        return Err(Error::rank_mismatch(
+            EAGER_EINSUM_OP,
+            view.shape().len(),
+            dims.len(),
+        ));
     }
 
     let mut seen = vec![false; shape.len()];
     let mut strides = vec![0isize; shape.len()];
     for (src_axis, &dst_axis) in dims.iter().enumerate() {
         if dst_axis >= shape.len() {
-            return Err(Error::AxisOutOfBounds {
-                op: EAGER_EINSUM_OP,
-                axis: dst_axis,
-                rank: shape.len(),
-            });
+            return Err(Error::axis_out_of_bounds(
+                EAGER_EINSUM_OP,
+                dst_axis,
+                shape.len(),
+            ));
         }
         if seen[dst_axis] {
-            return Err(Error::DuplicateAxis {
-                op: EAGER_EINSUM_OP,
-                axis: dst_axis,
-                role: "broadcast dims",
-            });
+            return Err(Error::duplicate_axis(
+                EAGER_EINSUM_OP,
+                dst_axis,
+                "broadcast dims",
+            ));
         }
         seen[dst_axis] = true;
 
         let source_dim = view.shape()[src_axis];
         let target_dim = shape[dst_axis];
         if source_dim != target_dim && source_dim != 1 {
-            return Err(Error::ShapeMismatch {
-                op: EAGER_EINSUM_OP,
-                lhs: view.shape().to_vec(),
-                rhs: shape.to_vec(),
-            });
+            return Err(Error::shape_mismatch(EAGER_EINSUM_OP, view.shape(), shape));
         }
         if source_dim == target_dim {
             strides[dst_axis] = view.strides()[src_axis];
@@ -261,10 +257,7 @@ fn execute_binary_dot_fast_plan<'a>(
 }
 
 fn eager_invalid_config(message: impl Into<String>) -> Error {
-    Error::InvalidConfig {
-        op: EAGER_EINSUM_OP,
-        message: message.into(),
-    }
+    Error::invalid_argument(EAGER_EINSUM_OP, "configuration", message)
 }
 
 pub(crate) fn plan_subscripts(
@@ -286,7 +279,7 @@ pub(crate) fn plan_subscripts(
     }
 
     ContractionTree::optimize(subs, input_shapes)
-        .map_err(|err| eager_invalid_config(format!("failed to optimize contraction tree: {err}")))
+        .map_err(|error| error.into_tensor_error(EAGER_EINSUM_OP))
 }
 
 fn take_labeled<'a>(
@@ -963,8 +956,8 @@ pub(crate) fn eager_einsum(
     inputs: &[&Tensor],
     subscripts: &str,
 ) -> Result<Tensor> {
-    let subscripts = Subscripts::parse(subscripts)
-        .map_err(|err| eager_invalid_config(format!("invalid subscripts: {err}")))?;
+    let subscripts =
+        Subscripts::parse(subscripts).map_err(|error| error.into_tensor_error(EAGER_EINSUM_OP))?;
     eager_einsum_subscripts(ctx, inputs, &subscripts)
 }
 
@@ -1067,8 +1060,8 @@ pub(crate) fn eager_einsum_owned(
     inputs: Vec<Tensor>,
     subscripts: &str,
 ) -> Result<Tensor> {
-    let subscripts = Subscripts::parse(subscripts)
-        .map_err(|err| eager_invalid_config(format!("invalid subscripts: {err}")))?;
+    let subscripts =
+        Subscripts::parse(subscripts).map_err(|error| error.into_tensor_error(EAGER_EINSUM_OP))?;
     eager_einsum_owned_subscripts(ctx, inputs, &subscripts)
 }
 

@@ -7,9 +7,9 @@ fn checked_matrix_element_count_reports_typed_overflow() {
 
     assert!(matches!(
         err,
-        tenferro_tensor::Error::InvalidConfig {
+        tenferro_tensor::Error::Validation {
             op: "test_lapack_allocation",
-            ..
+            source: tenferro_tensor::ValidationError::InvalidArgument { .. },
         }
     ));
 }

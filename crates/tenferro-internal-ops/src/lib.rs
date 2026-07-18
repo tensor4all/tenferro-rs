@@ -37,7 +37,9 @@ pub mod shape_extent;
 pub mod std_tensor_op;
 pub mod sym_dim;
 
-pub use ad::context::{ShapeGuard, ShapeGuardContext, TensorMeta};
+pub use ad::context::{
+    ShapeGuard, ShapeGuardContext, ShapeGuardError, ShapeGuardFailure, ShapeGuardResult, TensorMeta,
+};
 #[cfg(feature = "autodiff")]
 pub use ext_op::{
     linearize_extension_rule, transpose_extension_rule, ExtensionLinearTransposeRule,
@@ -48,7 +50,7 @@ pub use ext_op::{
 pub use ext_op::{ExtensionOp, HostReference};
 pub use shape_constraint::{ExtensionShapeContext, ExtensionShapeError, ShapeRelation};
 pub use shape_extent::ShapeExtent;
-pub use sym_dim::SymDim;
+pub use sym_dim::{SymDim, SymDimConversionError};
 pub use tenferro_extension_macros::ExtensionFamilyId;
 pub use tenferro_tensor::config;
 

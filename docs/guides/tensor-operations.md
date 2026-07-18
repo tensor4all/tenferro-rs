@@ -258,6 +258,35 @@ assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);
 ```
 
+### Fallible operator chains
+
+The overloaded operators are fallible: `a + b` returns a
+`Result<TracedTensor, Error>`. Therefore `a + b + c` parses as `(a + b) + c`,
+and the second operator receives a `Result`, not a tensor. It is not a
+composable chain for dynamic tensors.
+
+Unwrap each step with `?`, or use the explicit fallible method chain:
+
+```rust
+use tenferro_runtime::{Error, TracedTensor};
+
+fn add_three(
+    a: &TracedTensor,
+    b: &TracedTensor,
+    c: &TracedTensor,
+) -> Result<TracedTensor, Error> {
+    let ab = (a + b)?;
+    let sum = (&ab + c)?;
+    let canonical = a.add(b)?.add(c)?;
+    let _ = canonical;
+    Ok(sum)
+}
+```
+
+Tenferro prioritizes robust error handling over concise chained operator
+notation, so explicit fallible methods are the canonical choice for longer
+sequences and code that needs deferred graph errors to remain visible.
+
 ## Elementwise Math Functions
 
 ```rust

@@ -124,6 +124,13 @@ impl PrimitiveRuleBuilder for GraphBuilder<StdTensorOp> {
 /// Rules per op live in the category submodules (`semiring`, `analytic`,
 /// `elementwise`, `structural`, `contraction`, `indexing`, `diagonal`,
 /// `dynamic`). `StdTensorOp::Extension(_)` delegates to the trait.
+///
+/// # Errors
+///
+/// Returns [`ADRuleError::InvalidInput`] when the operation is not a known
+/// primitive or when a registered rule rejects the graph metadata. Returns
+/// [`ADRuleError::Unsupported`] when no AD rule is registered for the
+/// operation. Errors returned by an extension rule are propagated unchanged.
 #[cfg(feature = "autodiff")]
 pub fn linearize(
     op: &StdTensorOp,
@@ -158,6 +165,13 @@ pub fn linearize(
 ///
 /// See [`linearize`] for the category split; the same categories appear
 /// here.
+///
+/// # Errors
+///
+/// Returns [`ADRuleError::InvalidInput`] when the operation, transpose inputs,
+/// or graph metadata are inconsistent. Returns [`ADRuleError::Unsupported`]
+/// when the required primitive or extension transpose rule is unavailable.
+/// Errors returned by a registered rule are propagated unchanged.
 #[cfg(feature = "autodiff")]
 pub fn transpose_rule(
     op: &StdTensorOp,

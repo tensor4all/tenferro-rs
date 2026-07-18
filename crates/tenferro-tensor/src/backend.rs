@@ -6,14 +6,25 @@ use crate::types::{
     TypedTensorViewMut,
 };
 use crate::validate::validate_convert_dtype;
-use crate::{DType, RuntimeCacheControl, Tensor, TensorRead, TensorValue, TensorWrite};
+use crate::{
+    DType, Error, RuntimeCacheControl, ShapeMismatch, Tensor, TensorRead, TensorValue, TensorWrite,
+    ValidationError,
+};
 use num_complex::{Complex32, Complex64};
 
 fn read_boundary_error(op: &'static str) -> crate::Error {
-    crate::Error::backend_failure(
+    crate::Error::unsupported(
         op,
         "backend does not accept borrowed tensor views at this execution boundary",
     )
+}
+
+fn validation(op: &'static str, source: ValidationError) -> crate::Error {
+    Error::validation(op, source)
+}
+
+fn invalid_argument(op: &'static str, argument: &'static str, message: impl Into<String>) -> Error {
+    Error::invalid_argument(op, argument, message)
 }
 
 fn read_tensor<'a>(op: &'static str, input: TensorRead<'a>) -> crate::Result<&'a Tensor> {
@@ -29,10 +40,16 @@ fn validate_axis_list(
     let mut seen = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
-            return Err(crate::Error::AxisOutOfBounds { op, axis, rank });
+            return Err(validation(
+                op,
+                ValidationError::AxisOutOfBounds { axis, rank },
+            ));
         }
         if seen[axis] {
-            return Err(crate::Error::DuplicateAxis { op, axis, role });
+            return Err(validation(
+                op,
+                ValidationError::DuplicateAxis { axis, role },
+            ));
         }
         seen[axis] = true;
     }
@@ -48,12 +65,14 @@ fn validate_role_disjoint(
 ) -> crate::Result<()> {
     for &axis in first_axes {
         if second_axes.contains(&axis) {
-            return Err(crate::Error::AxisRoleConflict {
+            return Err(validation(
                 op,
-                axis,
-                first_role,
-                second_role,
-            });
+                ValidationError::AxisRoleConflict {
+                    axis,
+                    first_role,
+                    second_role,
+                },
+            ));
         }
     }
     Ok(())
@@ -68,16 +87,18 @@ pub fn dot_general_output_shape(
     op: &'static str,
 ) -> crate::Result<Vec<usize>> {
     if config.lhs_contracting_dims.len() != config.rhs_contracting_dims.len() {
-        return Err(crate::Error::InvalidConfig {
+        return Err(invalid_argument(
             op,
-            message: "lhs/rhs contracting dim counts differ".into(),
-        });
+            "contracting_dims",
+            "lhs/rhs contracting dim counts differ",
+        ));
     }
     if config.lhs_batch_dims.len() != config.rhs_batch_dims.len() {
-        return Err(crate::Error::InvalidConfig {
+        return Err(invalid_argument(
             op,
-            message: "lhs/rhs batch dim counts differ".into(),
-        });
+            "batch_dims",
+            "lhs/rhs batch dim counts differ",
+        ));
     }
 
     let lhs_rank = lhs_shape.len();
@@ -117,20 +138,30 @@ pub fn dot_general_output_shape(
         .zip(&config.rhs_contracting_dims)
     {
         if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
-            return Err(crate::Error::ShapeMismatch {
+            return Err(validation(
                 op,
-                lhs: lhs_shape.to_vec(),
-                rhs: rhs_shape.to_vec(),
-            });
+                ShapeMismatch::ContractedDimensions {
+                    lhs_axis,
+                    lhs_size: lhs_shape[lhs_axis],
+                    rhs_axis,
+                    rhs_size: rhs_shape[rhs_axis],
+                }
+                .into(),
+            ));
         }
     }
     for (&lhs_axis, &rhs_axis) in config.lhs_batch_dims.iter().zip(&config.rhs_batch_dims) {
         if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
-            return Err(crate::Error::ShapeMismatch {
+            return Err(validation(
                 op,
-                lhs: lhs_shape.to_vec(),
-                rhs: rhs_shape.to_vec(),
-            });
+                ShapeMismatch::ContractedDimensions {
+                    lhs_axis,
+                    lhs_size: lhs_shape[lhs_axis],
+                    rhs_axis,
+                    rhs_size: rhs_shape[rhs_axis],
+                }
+                .into(),
+            ));
         }
     }
 
@@ -159,26 +190,33 @@ pub fn validate_dot_general_read_into(
     op: &'static str,
 ) -> crate::Result<Vec<usize>> {
     if lhs.dtype() != rhs.dtype() {
-        return Err(crate::Error::DTypeMismatch {
+        return Err(validation(
             op,
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        });
+            ValidationError::DTypeMismatch {
+                expected: crate::core_dtype(lhs.dtype()),
+                actual: crate::core_dtype(rhs.dtype()),
+            },
+        ));
     }
     if out.dtype() != lhs.dtype() {
-        return Err(crate::Error::DTypeMismatch {
+        return Err(validation(
             op,
-            lhs: out.dtype(),
-            rhs: lhs.dtype(),
-        });
+            ValidationError::DTypeMismatch {
+                expected: crate::core_dtype(out.dtype()),
+                actual: crate::core_dtype(lhs.dtype()),
+            },
+        ));
     }
     let expected = dot_general_output_shape(lhs.shape(), rhs.shape(), config, op)?;
     if out.shape() != expected.as_slice() {
-        return Err(crate::Error::ShapeMismatch {
+        return Err(validation(
             op,
-            lhs: out.shape().to_vec(),
-            rhs: expected.clone(),
-        });
+            ShapeMismatch::ExpectedActual {
+                expected: expected.clone().into(),
+                actual: out.shape().to_vec().into(),
+            }
+            .into(),
+        ));
     }
     Ok(expected)
 }
@@ -234,17 +272,25 @@ impl ContractionScalar {
     /// assert_eq!(ContractionScalar::one(DType::F64).unwrap(), ContractionScalar::F64(1.0));
     /// assert!(ContractionScalar::one(DType::I32).is_err());
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     pub fn one(dtype: DType) -> crate::Result<Self> {
         match dtype {
             DType::F32 => Ok(Self::F32(1.0)),
             DType::F64 => Ok(Self::F64(1.0)),
             DType::C32 => Ok(Self::C32(Complex32::new(1.0, 0.0))),
             DType::C64 => Ok(Self::C64(Complex64::new(1.0, 0.0))),
-            DType::I32 | DType::I64 | DType::Bool => Err(crate::Error::DTypeMismatch {
-                op: "dot_general",
-                lhs: dtype,
-                rhs: DType::F32,
-            }),
+            DType::I32 | DType::I64 | DType::Bool => Err(validation(
+                "dot_general",
+                ValidationError::DTypeMismatch {
+                    expected: crate::core_dtype(dtype),
+                    actual: crate::core_dtype(DType::F32),
+                },
+            )),
         }
     }
 
@@ -257,17 +303,25 @@ impl ContractionScalar {
     ///
     /// assert_eq!(ContractionScalar::zero(DType::F64).unwrap(), ContractionScalar::F64(0.0));
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     pub fn zero(dtype: DType) -> crate::Result<Self> {
         match dtype {
             DType::F32 => Ok(Self::F32(0.0)),
             DType::F64 => Ok(Self::F64(0.0)),
             DType::C32 => Ok(Self::C32(Complex32::new(0.0, 0.0))),
             DType::C64 => Ok(Self::C64(Complex64::new(0.0, 0.0))),
-            DType::I32 | DType::I64 | DType::Bool => Err(crate::Error::DTypeMismatch {
-                op: "dot_general",
-                lhs: dtype,
-                rhs: DType::F32,
-            }),
+            DType::I32 | DType::I64 | DType::Bool => Err(validation(
+                "dot_general",
+                ValidationError::DTypeMismatch {
+                    expected: crate::core_dtype(dtype),
+                    actual: crate::core_dtype(DType::F32),
+                },
+            )),
         }
     }
 }
@@ -381,6 +435,12 @@ impl<'a> GroupedGemmConfig<'a> {
 
 impl DotGeneralAccumulation {
     /// Return overwrite semantics, `out = lhs dot rhs`, for `dtype`.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     pub fn overwrite(dtype: DType) -> crate::Result<Self> {
         Ok(Self {
             lhs_conj: false,
@@ -402,6 +462,12 @@ impl DotGeneralAccumulation {
     /// assert_eq!(accum.beta, ContractionScalar::F64(1.0));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     pub fn add_to(dtype: DType) -> crate::Result<Self> {
         Ok(Self {
             lhs_conj: false,
@@ -425,13 +491,21 @@ impl DotGeneralAccumulation {
     /// assert_eq!(accum.alpha, ContractionScalar::F32(0.5));
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     pub fn scaled(alpha: ContractionScalar, beta: ContractionScalar) -> crate::Result<Self> {
         if alpha.dtype() != beta.dtype() {
-            return Err(crate::Error::DTypeMismatch {
-                op: "dot_general",
-                lhs: alpha.dtype(),
-                rhs: beta.dtype(),
-            });
+            return Err(validation(
+                "dot_general",
+                ValidationError::DTypeMismatch {
+                    expected: crate::core_dtype(alpha.dtype()),
+                    actual: crate::core_dtype(beta.dtype()),
+                },
+            ));
         }
         Ok(Self {
             lhs_conj: false,
@@ -444,11 +518,13 @@ impl DotGeneralAccumulation {
     fn validate_for_dtype(self, dtype: DType) -> crate::Result<()> {
         for scalar in [self.alpha, self.beta] {
             if scalar.dtype() != dtype {
-                return Err(crate::Error::DTypeMismatch {
-                    op: "dot_general",
-                    lhs: scalar.dtype(),
-                    rhs: dtype,
-                });
+                return Err(validation(
+                    "dot_general",
+                    ValidationError::DTypeMismatch {
+                        expected: crate::core_dtype(scalar.dtype()),
+                        actual: crate::core_dtype(dtype),
+                    },
+                ));
             }
         }
         Ok(())
@@ -495,11 +571,13 @@ fn grouped_checked_product(
     dims: &[usize],
 ) -> crate::Result<usize> {
     dims.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim)
-            .ok_or_else(|| crate::Error::InvalidConfig {
+        acc.checked_mul(dim).ok_or_else(|| {
+            invalid_argument(
                 op,
-                message: format!("{role} logical element count overflows usize for shape {dims:?}"),
-            })
+                role,
+                format!("logical element count overflows usize for shape {dims:?}"),
+            )
+        })
     })
 }
 
@@ -510,23 +588,23 @@ fn checked_gemm_span(
     rows: usize,
     cols: usize,
 ) -> crate::Result<Option<std::ops::Range<usize>>> {
-    let len = rows
-        .checked_mul(cols)
-        .ok_or_else(|| crate::Error::InvalidConfig {
+    let len = rows.checked_mul(cols).ok_or_else(|| {
+        invalid_argument(
             op,
-            message: format!(
-                "{role} matrix element count overflows usize: rows={rows} cols={cols}"
-            ),
-        })?;
+            role,
+            format!("matrix element count overflows usize: rows={rows} cols={cols}"),
+        )
+    })?;
     if len == 0 {
         return Ok(None);
     }
-    let end = offset
-        .checked_add(len)
-        .ok_or_else(|| crate::Error::InvalidConfig {
+    let end = offset.checked_add(len).ok_or_else(|| {
+        invalid_argument(
             op,
-            message: format!("{role} matrix range overflows usize: offset={offset} len={len}"),
-        })?;
+            role,
+            format!("matrix range overflows usize: offset={offset} len={len}"),
+        )
+    })?;
     Ok(Some(offset..end))
 }
 
@@ -540,13 +618,14 @@ fn validate_grouped_gemm_range(
         return Ok(());
     };
     if range.end > len {
-        return Err(crate::Error::InvalidConfig {
+        return Err(invalid_argument(
             op,
-            message: format!(
-                "{role} matrix range {}..{} exceeds shared buffer logical length {len}",
+            role,
+            format!(
+                "matrix range {}..{} exceeds shared buffer logical length {len}",
                 range.start, range.end
             ),
-        });
+        ));
     }
     Ok(())
 }
@@ -560,18 +639,22 @@ pub fn validate_grouped_gemm(
     op: &'static str,
 ) -> crate::Result<()> {
     if lhs.dtype() != rhs.dtype() {
-        return Err(crate::Error::DTypeMismatch {
+        return Err(validation(
             op,
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        });
+            ValidationError::DTypeMismatch {
+                expected: crate::core_dtype(lhs.dtype()),
+                actual: crate::core_dtype(rhs.dtype()),
+            },
+        ));
     }
     if lhs.dtype() != out.dtype() {
-        return Err(crate::Error::DTypeMismatch {
+        return Err(validation(
             op,
-            lhs: lhs.dtype(),
-            rhs: out.dtype(),
-        });
+            ValidationError::DTypeMismatch {
+                expected: crate::core_dtype(lhs.dtype()),
+                actual: crate::core_dtype(out.dtype()),
+            },
+        ));
     }
     config.accumulation.validate_for_dtype(lhs.dtype())?;
 
@@ -607,13 +690,14 @@ pub fn validate_grouped_gemm(
         let (prev_idx, previous) = &pair[0];
         let (idx, current) = &pair[1];
         if previous.end > current.start {
-            return Err(crate::Error::InvalidConfig {
+            return Err(invalid_argument(
                 op,
-                message: format!(
+                "jobs",
+                format!(
                     "grouped GEMM output range for job {idx} overlaps job {prev_idx} range {}..{}",
                     previous.start, previous.end
                 ),
-            });
+            ));
         }
     }
     Ok(())
@@ -625,21 +709,25 @@ fn add_element_offsets(
     offset: usize,
     role: &'static str,
 ) -> crate::Result<isize> {
-    let offset = isize::try_from(offset).map_err(|_| crate::Error::InvalidConfig {
-        op,
-        message: format!("{role} offset {offset} does not fit in isize"),
+    let offset = isize::try_from(offset).map_err(|_| {
+        invalid_argument(op, role, format!("offset {offset} does not fit in isize"))
     })?;
-    base.checked_add(offset)
-        .ok_or_else(|| crate::Error::InvalidConfig {
+    base.checked_add(offset).ok_or_else(|| {
+        invalid_argument(
             op,
-            message: format!("{role} offset overflows isize: base={base} offset={offset}"),
-        })
+            role,
+            format!("offset overflows isize: base={base} offset={offset}"),
+        )
+    })
 }
 
 fn dim_stride(op: &'static str, dim: usize, role: &'static str) -> crate::Result<isize> {
-    isize::try_from(dim).map_err(|_| crate::Error::InvalidConfig {
-        op,
-        message: format!("{role} leading dimension {dim} does not fit in isize"),
+    isize::try_from(dim).map_err(|_| {
+        invalid_argument(
+            op,
+            role,
+            format!("leading dimension {dim} does not fit in isize"),
+        )
     })
 }
 
@@ -649,7 +737,7 @@ fn typed_read_storage<'a, T>(
 ) -> crate::Result<(&'a [T], isize)> {
     match tensor.buffer() {
         Buffer::Host(data) => Ok((data, 0)),
-        Buffer::Backend(_) => Err(crate::Error::backend_failure(
+        Buffer::Backend(_) => Err(crate::Error::runtime_state(
             op,
             "grouped GEMM default path requires host-backed tensor storage",
         )),
@@ -924,11 +1012,13 @@ where
     dispatch!(F64, GroupedF64);
     dispatch!(C32, GroupedC32);
     dispatch!(C64, GroupedC64);
-    Err(crate::Error::DTypeMismatch {
-        op: "grouped_gemm",
-        lhs: lhs.dtype(),
-        rhs: out.dtype(),
-    })
+    Err(validation(
+        "grouped_gemm",
+        ValidationError::DTypeMismatch {
+            expected: crate::core_dtype(lhs.dtype()),
+            actual: crate::core_dtype(out.dtype()),
+        },
+    ))
 }
 
 fn grouped_gemm_default<B>(
@@ -979,11 +1069,13 @@ pub fn accumulate_dot_result_into(
     dispatch!(C32, Complex32);
     dispatch!(C64, Complex64);
 
-    Err(crate::Error::DTypeMismatch {
-        op: "dot_general",
-        lhs: accumulation.alpha.dtype(),
-        rhs: dot.dtype(),
-    })
+    Err(validation(
+        "dot_general",
+        ValidationError::DTypeMismatch {
+            expected: crate::core_dtype(accumulation.alpha.dtype()),
+            actual: crate::core_dtype(dot.dtype()),
+        },
+    ))
 }
 
 fn accumulate_typed<T>(
@@ -1003,12 +1095,13 @@ where
     let beta_is_zero = beta == T::zero();
     for (linear, dot_value) in dot.iter().copied().enumerate() {
         let indices = flat_to_multi_for_shape(out.shape(), linear);
-        let output = out
-            .get_mut(&indices)
-            .ok_or_else(|| crate::Error::InvalidConfig {
-                op: "dot_general",
-                message: format!("output index {indices:?} is outside accumulation target"),
-            })?;
+        let output = out.get_mut(&indices).ok_or_else(|| {
+            invalid_argument(
+                "dot_general",
+                "output",
+                format!("index {indices:?} is outside accumulation target"),
+            )
+        })?;
         // INVARIANT: beta == 0 follows BLAS GEMM semantics and does not read
         // the existing output element; beta != 0 requires an initialized
         // TensorWrite target and performs a read-modify-write update.
@@ -1306,6 +1399,12 @@ impl ElementwiseFusionInst {
 /// fn accepts_elementwise<B: TensorElementwise>(_backend: &mut B) {}
 /// ```
 pub trait TensorElementwise: TensorStructural {
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn add(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
 
     /// Elementwise addition accepting either owned tensors or borrowed views.
@@ -1327,6 +1426,12 @@ pub trait TensorElementwise: TensorStructural {
     ///     backend.add_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.add(read_tensor("add", lhs)?, read_tensor("add", rhs)?)
     }
@@ -1350,6 +1455,12 @@ pub trait TensorElementwise: TensorStructural {
     ///     Ok(out)
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn add_into(&mut self, lhs: &Tensor, rhs: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
         self.add_read_into(
             TensorRead::from_tensor(lhs),
@@ -1374,6 +1485,12 @@ pub trait TensorElementwise: TensorStructural {
     ///     backend.add_read_into(lhs, rhs, out)
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn add_read_into(
         &mut self,
         lhs: TensorRead<'_>,
@@ -1384,6 +1501,12 @@ pub trait TensorElementwise: TensorStructural {
         self.copy_read_into(TensorRead::from_tensor(&result), out)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn sub(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
 
     /// Elementwise subtraction accepting either owned tensors or borrowed views.
@@ -1401,11 +1524,23 @@ pub trait TensorElementwise: TensorStructural {
     ///     backend.sub_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn sub_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.sub(read_tensor("sub", lhs)?, read_tensor("sub", rhs)?)
     }
 
     /// Overwrite caller-provided output with elementwise subtraction.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn sub_into(&mut self, lhs: &Tensor, rhs: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
         self.sub_read_into(
             TensorRead::from_tensor(lhs),
@@ -1415,6 +1550,12 @@ pub trait TensorElementwise: TensorStructural {
     }
 
     /// Overwrite caller-provided output with elementwise subtraction from reads.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn sub_read_into(
         &mut self,
         lhs: TensorRead<'_>,
@@ -1425,12 +1566,30 @@ pub trait TensorElementwise: TensorStructural {
         self.copy_read_into(TensorRead::from_tensor(&result), out)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn mul(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn mul_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.mul(read_tensor("mul", lhs)?, read_tensor("mul", rhs)?)
     }
 
     /// Overwrite caller-provided output with elementwise multiplication.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn mul_into(&mut self, lhs: &Tensor, rhs: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
         self.mul_read_into(
             TensorRead::from_tensor(lhs),
@@ -1440,6 +1599,12 @@ pub trait TensorElementwise: TensorStructural {
     }
 
     /// Overwrite caller-provided output with elementwise multiplication from reads.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn mul_read_into(
         &mut self,
         lhs: TensorRead<'_>,
@@ -1450,44 +1615,110 @@ pub trait TensorElementwise: TensorStructural {
         self.copy_read_into(TensorRead::from_tensor(&result), out)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn neg(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn neg_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.neg(read_tensor("neg", input)?)
     }
 
     /// Overwrite caller-provided output with elementwise negation.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn neg_into(&mut self, input: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
         self.neg_read_into(TensorRead::from_tensor(input), out)
     }
 
     /// Overwrite caller-provided output with elementwise negation from a read.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn neg_read_into(&mut self, input: TensorRead<'_>, out: TensorWrite<'_>) -> crate::Result<()> {
         let result = self.neg_read(input)?;
         self.copy_read_into(TensorRead::from_tensor(&result), out)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn conj(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn conj_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.conj(read_tensor("conj", input)?)
     }
 
     /// Overwrite caller-provided output with elementwise conjugation.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn conj_into(&mut self, input: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
         self.conj_read_into(TensorRead::from_tensor(input), out)
     }
 
     /// Overwrite caller-provided output with elementwise conjugation from a read.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn conj_read_into(&mut self, input: TensorRead<'_>, out: TensorWrite<'_>) -> crate::Result<()> {
         let result = self.conj_read(input)?;
         self.copy_read_into(TensorRead::from_tensor(&result), out)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn div(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn div_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.div(read_tensor("div", lhs)?, read_tensor("div", rhs)?)
     }
 
     /// Overwrite caller-provided output with elementwise division.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn div_into(&mut self, lhs: &Tensor, rhs: &Tensor, out: TensorWrite<'_>) -> crate::Result<()> {
         self.div_read_into(
             TensorRead::from_tensor(lhs),
@@ -1497,6 +1728,12 @@ pub trait TensorElementwise: TensorStructural {
     }
 
     /// Overwrite caller-provided output with elementwise division from reads.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn div_read_into(
         &mut self,
         lhs: TensorRead<'_>,
@@ -1525,8 +1762,14 @@ pub trait TensorElementwise: TensorStructural {
     ///     backend.rem(lhs, rhs)
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn rem(&mut self, lhs: &Tensor, _rhs: &Tensor) -> crate::Result<Tensor> {
-        Err(crate::Error::backend_failure(
+        Err(crate::Error::unsupported(
             "rem",
             format!("backend does not implement rem for dtype {:?}", lhs.dtype()),
         ))
@@ -1547,31 +1790,97 @@ pub trait TensorElementwise: TensorStructural {
     ///     backend.rem_read(TensorRead::from_tensor(lhs), TensorRead::from_tensor(rhs))
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn rem_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.rem(read_tensor("rem", lhs)?, read_tensor("rem", rhs)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn abs(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn abs_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.abs(read_tensor("abs", input)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn sign(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn sign_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.sign(read_tensor("sign", input)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn maximum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn maximum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.maximum(read_tensor("maximum", lhs)?, read_tensor("maximum", rhs)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn minimum(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn minimum_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.minimum(read_tensor("minimum", lhs)?, read_tensor("minimum", rhs)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn compare(&mut self, lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn compare_read(
         &mut self,
         lhs: TensorRead<'_>,
@@ -1585,12 +1894,24 @@ pub trait TensorElementwise: TensorStructural {
         )
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn select(
         &mut self,
         pred: &Tensor,
         on_true: &Tensor,
         on_false: &Tensor,
     ) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn select_read(
         &mut self,
         pred: TensorRead<'_>,
@@ -1604,7 +1925,19 @@ pub trait TensorElementwise: TensorStructural {
         )
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn clamp(&mut self, input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn clamp_read(
         &mut self,
         input: TensorRead<'_>,
@@ -1629,52 +1962,172 @@ pub trait TensorElementwise: TensorStructural {
 /// fn accepts_analytic<B: TensorAnalytic>(_backend: &mut B) {}
 /// ```
 pub trait TensorAnalytic {
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn exp(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn exp_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.exp(read_tensor("exp", input)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn log(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn log_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.log(read_tensor("log", input)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn sin(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn sin_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.sin(read_tensor("sin", input)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn cos(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn cos_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.cos(read_tensor("cos", input)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn tanh(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn tanh_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.tanh(read_tensor("tanh", input)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn sqrt(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn sqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.sqrt(read_tensor("sqrt", input)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn rsqrt(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn rsqrt_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.rsqrt(read_tensor("rsqrt", input)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn pow(&mut self, lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn pow_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
         self.pow(read_tensor("pow", lhs)?, read_tensor("pow", rhs)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn expm1(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn expm1_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.expm1(read_tensor("expm1", input)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn log1p(&mut self, input: &Tensor) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn log1p_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         self.log1p(read_tensor("log1p", input)?)
     }
@@ -1728,6 +2181,12 @@ pub trait TensorStructural {
     /// assert_eq!(output.as_slice::<i32>()?, &[1, 2]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
         let input = read_tensor("to_contiguous_read", input)?;
         if input.is_backend_buffer()
@@ -1736,7 +2195,7 @@ pub trait TensorStructural {
                 crate::MemoryKind::PinnedHost | crate::MemoryKind::UnpinnedHost
             )
         {
-            return Err(crate::Error::backend_failure(
+            return Err(crate::Error::runtime_state(
                 "to_contiguous_read",
                 "default materialization accepts only host-owned tensors; use the storage's owning backend",
             ));
@@ -1788,29 +2247,71 @@ pub trait TensorStructural {
     /// assert_eq!(dst.as_slice::<i32>()?, &[0, 0]);
     /// # Ok::<(), tenferro_tensor::Error>(())
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn copy_read_into(&mut self, _src: TensorRead<'_>, _dst: TensorWrite<'_>) -> crate::Result<()> {
-        Err(crate::Error::backend_failure(
+        Err(crate::Error::unsupported(
             "copy_read_into",
             "backend-owned runtime copy is unsupported by this backend",
         ))
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
         self.transpose(read_tensor("transpose", input)?, perm)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
         self.reshape(read_tensor("reshape", input)?, shape)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn broadcast_in_dim(
         &mut self,
         input: &Tensor,
         shape: &[usize],
         dims: &[usize],
     ) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn broadcast_in_dim_read(
         &mut self,
         input: TensorRead<'_>,
@@ -1837,6 +2338,12 @@ pub trait TensorStructural {
     ///     backend.cast(input, DType::I32)
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn cast(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor>;
 
     /// Convert a tensor to another dtype using checked dtype conversion.
@@ -1856,24 +2363,54 @@ pub trait TensorStructural {
     ///     backend.convert(input, DType::F64)
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn convert(&mut self, input: &Tensor, to: crate::DType) -> crate::Result<Tensor> {
         validate_convert_dtype("convert", input.dtype(), to)?;
         self.cast(input, to)
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn extract_diagonal(
         &mut self,
         input: &Tensor,
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn embed_diagonal(
         &mut self,
         input: &Tensor,
         axis_a: usize,
         axis_b: usize,
     ) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn tril(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn triu(&mut self, input: &Tensor, k: i64) -> crate::Result<Tensor>;
 }
 
@@ -1891,6 +2428,12 @@ pub trait TensorStructural {
 /// fn accepts_reduction<B: TensorReduction>(_backend: &mut B) {}
 /// ```
 pub trait TensorReduction {
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
     /// Sum elements across axes from an owned tensor or borrowed view.
@@ -1907,16 +2450,28 @@ pub trait TensorReduction {
     ///     backend.reduce_sum_read(TensorRead::from_tensor(input), &[0])
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_sum(input, axes),
-            None => Err(crate::Error::backend_failure(
+            None => Err(crate::Error::unsupported(
                 "reduce_sum",
                 "backend does not accept borrowed tensor views at this execution boundary",
             )),
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
     /// Multiply elements across axes from an owned tensor or borrowed view.
@@ -1933,16 +2488,28 @@ pub trait TensorReduction {
     ///     backend.reduce_prod_read(TensorRead::from_tensor(input), &[0])
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_prod(input, axes),
-            None => Err(crate::Error::backend_failure(
+            None => Err(crate::Error::unsupported(
                 "reduce_prod",
                 "backend does not accept borrowed tensor views at this execution boundary",
             )),
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
     /// Take maximum values across axes from an owned tensor or borrowed view.
@@ -1959,16 +2526,28 @@ pub trait TensorReduction {
     ///     backend.reduce_max_read(TensorRead::from_tensor(input), &[0])
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_max(input, axes),
-            None => Err(crate::Error::backend_failure(
+            None => Err(crate::Error::unsupported(
                 "reduce_max",
                 "backend does not accept borrowed tensor views at this execution boundary",
             )),
         }
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 
     /// Take minimum values across axes from an owned tensor or borrowed view.
@@ -1985,10 +2564,16 @@ pub trait TensorReduction {
     ///     backend.reduce_min_read(TensorRead::from_tensor(input), &[0])
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
         match input.as_tensor() {
             Some(input) => self.reduce_min(input, axes),
-            None => Err(crate::Error::backend_failure(
+            None => Err(crate::Error::unsupported(
                 "reduce_min",
                 "backend does not accept borrowed tensor views at this execution boundary",
             )),
@@ -2006,6 +2591,12 @@ pub trait TensorReduction {
 /// fn accepts_dot<B: TensorDot>(_backend: &mut B) {}
 /// ```
 pub trait TensorDot: TensorElementwise {
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn dot_general(
         &mut self,
         lhs: &Tensor,
@@ -2051,6 +2642,12 @@ pub trait TensorDot: TensorElementwise {
     ///     backend.dot_general_read_into(lhs, rhs, config, out)
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn dot_general_read_into(
         &mut self,
         lhs: TensorRead<'_>,
@@ -2146,6 +2743,12 @@ pub trait TensorDot: TensorElementwise {
     ///     backend.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn dot_general_read_into_accum(
         &mut self,
         lhs: TensorRead<'_>,
@@ -2275,6 +2878,12 @@ pub trait SessionCachedDot: TensorDot {
     ///     )
     /// }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn dot_general_read_into_accum_cached(
         &mut self,
         _cache_slot: Option<usize>,
@@ -2310,12 +2919,24 @@ pub trait SessionCachedDot: TensorDot {
 /// fn accepts_indexing<B: TensorIndexing>(_backend: &mut B) {}
 /// ```
 pub trait TensorIndexing {
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn gather(
         &mut self,
         operand: &Tensor,
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn scatter(
         &mut self,
         operand: &Tensor,
@@ -2323,21 +2944,57 @@ pub trait TensorIndexing {
         updates: &Tensor,
         config: &ScatterConfig,
     ) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn slice(&mut self, input: &Tensor, config: &SliceConfig) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn dynamic_slice(
         &mut self,
         input: &Tensor,
         starts: &Tensor,
         slice_sizes: &[usize],
     ) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn dynamic_update_slice(
         &mut self,
         operand: &Tensor,
         update: &Tensor,
         starts: &Tensor,
     ) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn pad(&mut self, input: &Tensor, config: &PadConfig) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor>;
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor>;
 }
 
@@ -2386,11 +3043,23 @@ pub trait TensorIndexing {
 /// }
 /// ```
 pub trait TensorViewCanonicalization<T: TensorScalar, R: TensorRank> {
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn to_contiguous(
         &mut self,
         view: &TypedTensorView<'_, T, R>,
     ) -> crate::Result<TypedTensor<T, R>>;
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn copy_into(
         &mut self,
         src: &TypedTensorView<'_, T, R>,
@@ -2470,10 +3139,22 @@ pub trait TensorBuffer {
 /// fn accepts_transfer<B: TensorDeviceTransfer>(_backend: &mut B) {}
 /// ```
 pub trait TensorDeviceTransfer {
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn download_to_host(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
         Ok(tensor.clone())
     }
 
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn upload_host_tensor(&mut self, tensor: &Tensor) -> crate::Result<Tensor> {
         Ok(tensor.clone())
     }
@@ -2623,6 +3304,12 @@ pub trait BackendCachedDot: BackendRuntimeCache + TensorDot {
     /// }
     /// ```
     #[allow(clippy::too_many_arguments)]
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::Validation`] with a typed `ValidationError` source
+    /// for invalid shapes, ranks, axes, dtypes, or output metadata. It returns
+    /// [`crate::Error::BackendFailure`] or [`crate::Error::BackendSource`] when
+    /// backend execution or storage access cannot provide the requested result.
     fn dot_general_read_into_accum_cached(
         &mut self,
         _cache: &mut Self::RuntimeCache,

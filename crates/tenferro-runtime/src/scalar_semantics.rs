@@ -1,13 +1,19 @@
 use tenferro_tensor::{DType, Tensor};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, ErrorPhase, Result};
 
 fn finite_real_scalar(op: &'static str, value: f64) -> Result<f64> {
+    finite_real_scalar_at(op, ErrorPhase::GraphBuild, value)
+}
+
+fn finite_real_scalar_at(op: &'static str, phase: ErrorPhase, value: f64) -> Result<f64> {
     if !value.is_finite() {
-        return Err(Error::InvalidGraphBuild {
+        return Err(Error::invalid_argument(
             op,
-            message: format!("real scalar value must be finite, got {value}"),
-        });
+            phase,
+            "value",
+            format!("real scalar value must be finite, got {value}"),
+        ));
     }
     Ok(value)
 }
@@ -19,19 +25,25 @@ pub(crate) fn round_real_to_i64(value: f64) -> Result<i64> {
 pub(crate) fn round_real_to_i64_for_op(op: &'static str, value: f64) -> Result<i64> {
     let rounded = finite_real_scalar(op, value)?.round();
     if rounded < i64::MIN as f64 || rounded > i64::MAX as f64 {
-        return Err(Error::InvalidGraphBuild {
+        return Err(Error::invalid_argument(
             op,
-            message: format!("rounded real scalar {rounded} is out of i64 range"),
-        });
+            ErrorPhase::GraphBuild,
+            "value",
+            format!("rounded real scalar {rounded} is out of i64 range"),
+        ));
     }
     Ok(rounded as i64)
 }
 
 pub(crate) fn round_real_to_i32_for_op(op: &'static str, value: f64) -> Result<i32> {
     let rounded = round_real_to_i64_for_op(op, value)?;
-    i32::try_from(rounded).map_err(|_| Error::InvalidGraphBuild {
-        op,
-        message: format!("rounded real scalar {rounded} is out of i32 range"),
+    i32::try_from(rounded).map_err(|_| {
+        Error::invalid_argument(
+            op,
+            ErrorPhase::GraphBuild,
+            "value",
+            format!("rounded real scalar {rounded} is out of i32 range"),
+        )
     })
 }
 
@@ -39,19 +51,29 @@ pub(crate) fn bool_from_real_for_op(op: &'static str, value: f64) -> Result<bool
     Ok(finite_real_scalar(op, value)? != 0.0)
 }
 
+/// Evaluate the scalar size supplied to a dynamic truncation operation.
+///
+/// # Errors
+///
+/// Returns `Validation(InvalidArgument)` when `size_tensor` is not scalar,
+/// `Unsupported` when its dtype is not `f32`, `f64`, or `i64`,
+/// `Validation(InvalidArgument)` for a non-finite floating value, and
+/// `RuntimeState` when the scalar's backend storage is unexpectedly empty.
 pub fn dynamic_truncate_size(size_tensor: &Tensor, axis_extent: usize) -> Result<usize> {
     if !size_tensor.shape().is_empty() {
-        return Err(Error::Internal(format!(
-            "DynamicTruncate size must be an f32, f64, or i64 scalar, got shape {:?}",
-            size_tensor.shape()
-        )));
+        return Err(Error::invalid_argument(
+            "dynamic_truncate",
+            ErrorPhase::Execution,
+            "size",
+            format!("size must be scalar, got shape {:?}", size_tensor.shape()),
+        ));
     }
     if let Tensor::I64(inner) = size_tensor {
         let value = scalar_host_value(inner.host_data()?, DType::I64)?;
         return Ok(truncate_i64_size(value, axis_extent));
     }
     let value = scalar_size_value(size_tensor)?;
-    let rounded = finite_real_scalar("DynamicTruncate", value)?.round();
+    let rounded = finite_real_scalar_at("dynamic_truncate", ErrorPhase::Execution, value)?.round();
     Ok(rounded.max(0.0).min(axis_extent as f64) as usize)
 }
 
@@ -64,26 +86,35 @@ fn truncate_i64_size(value: i64, axis_extent: usize) -> usize {
 
 fn scalar_size_value(size_tensor: &Tensor) -> Result<f64> {
     if !size_tensor.shape().is_empty() {
-        return Err(Error::Internal(format!(
-            "DynamicTruncate size must be an f32, f64, or i64 scalar, got shape {:?}",
-            size_tensor.shape()
-        )));
+        return Err(Error::invalid_argument(
+            "dynamic_truncate",
+            ErrorPhase::Execution,
+            "size",
+            format!("size must be scalar, got shape {:?}", size_tensor.shape()),
+        ));
     }
 
     match size_tensor {
         Tensor::F64(inner) => scalar_host_value(inner.host_data()?, DType::F64),
         Tensor::F32(inner) => Ok(scalar_host_value(inner.host_data()?, DType::F32)? as f64),
-        _ => Err(Error::Internal(
-            "DynamicTruncate size must be an f32, f64, or i64 scalar".into(),
+        _ => Err(Error::unsupported(
+            "dynamic_truncate",
+            ErrorPhase::Execution,
+            format!(
+                "dtype {:?} is not accepted for the size scalar",
+                size_tensor.dtype()
+            ),
         )),
     }
 }
 
 fn scalar_host_value<T: Copy>(data: &[T], dtype: DType) -> Result<T> {
     data.first().copied().ok_or_else(|| {
-        Error::Internal(format!(
-            "DynamicTruncate size scalar had empty {dtype:?} host buffer"
-        ))
+        Error::runtime_state(
+            "dynamic_truncate",
+            ErrorPhase::Execution,
+            format!("dynamic_truncate size scalar had empty {dtype:?} host buffer"),
+        )
     })
 }
 
@@ -93,7 +124,8 @@ mod tests {
         bool_from_real_for_op, dynamic_truncate_size, round_real_to_i32_for_op, round_real_to_i64,
         round_real_to_i64_for_op, scalar_host_value,
     };
-    use tenferro_tensor::{DType, Tensor, TypedTensor};
+    use crate::{Error, ErrorPhase};
+    use tenferro_tensor::{DType, ErrorKind, Tensor, TypedTensor};
 
     fn f64_scalar(value: f64) -> Tensor {
         Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![value]).unwrap())
@@ -170,10 +202,15 @@ mod tests {
         let bool_scalar =
             Tensor::Bool(TypedTensor::from_vec_col_major(vec![], vec![true]).unwrap());
         let err = dynamic_truncate_size(&bool_scalar, 4).unwrap_err();
-        assert!(
-            err.to_string().contains("f32, f64, or i64"),
-            "expected dtype error, got {err:?}"
-        );
+        assert!(matches!(
+            &err,
+            Error::Unsupported {
+                op: "dynamic_truncate",
+                phase: ErrorPhase::Execution,
+                ..
+            }
+        ));
+        assert_eq!(err.kind(), ErrorKind::Unsupported);
     }
 
     #[test]

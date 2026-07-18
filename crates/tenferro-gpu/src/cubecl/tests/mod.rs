@@ -1,9 +1,12 @@
+use std::error::Error as _;
+
 use num_complex::{Complex32, Complex64};
 
 use crate::config::{GatherConfig, ScatterConfig};
 use crate::cubecl::{download_tensor, upload_tensor, CudaBackend};
-use crate::{Error, Tensor, TypedTensor};
+use crate::{DType, Error, Tensor, TypedTensor};
 use tenferro_cpu::CpuBackend;
+use tenferro_tensor::{ErrorKind, ValidationError, ValidationKind};
 
 mod capability_tests;
 mod elementwise_tests;
@@ -60,6 +63,124 @@ fn tensor_c64(shape: Vec<usize>, data: Vec<Complex64>) -> Tensor {
     Tensor::C64(TypedTensor::from_vec_col_major(shape, data).unwrap())
 }
 
+fn assert_validation_kind(error: &Error, op: &'static str, kind: ValidationKind) {
+    assert_eq!(error.kind(), ErrorKind::Validation(kind));
+    assert!(matches!(
+        error,
+        Error::Validation {
+            op: actual,
+            source,
+        } if *actual == op && source.kind() == kind
+    ));
+}
+
+fn assert_dtype_mismatch(error: &Error, op: &'static str, expected: DType, actual: DType) {
+    assert_validation_kind(error, op, ValidationKind::DTypeMismatch);
+    let expected = core_dtype(expected);
+    let actual = core_dtype(actual);
+    assert!(matches!(
+        error,
+        Error::Validation {
+            source: ValidationError::DTypeMismatch {
+                expected: source_expected,
+                actual: source_actual,
+            },
+            ..
+        } if *source_expected == expected && *source_actual == actual
+    ));
+}
+
+fn core_dtype(dtype: DType) -> tenferro_tensor::core::DType {
+    match dtype {
+        DType::F32 => tenferro_tensor::core::DType::F32,
+        DType::F64 => tenferro_tensor::core::DType::F64,
+        DType::I32 => tenferro_tensor::core::DType::I32,
+        DType::I64 => tenferro_tensor::core::DType::I64,
+        DType::Bool => tenferro_tensor::core::DType::Bool,
+        DType::C32 => tenferro_tensor::core::DType::C32,
+        DType::C64 => tenferro_tensor::core::DType::C64,
+    }
+}
+
+fn assert_shape_mismatch(error: &Error, op: &'static str, lhs: &[usize], rhs: &[usize]) {
+    assert_validation_kind(error, op, ValidationKind::ShapeMismatch);
+    assert!(matches!(
+        error,
+        Error::Validation {
+            source: ValidationError::ShapeMismatch(source),
+            ..
+        } if matches!(
+            source.as_ref(),
+            tenferro_tensor::ShapeMismatch::IncompatibleShapes { lhs: source_lhs, rhs: source_rhs }
+                if source_lhs.as_slice() == lhs && source_rhs.as_slice() == rhs
+        )
+    ));
+}
+
+fn assert_runtime_state(error: &Error, op: &'static str, message: &str) {
+    assert!(matches!(
+        error,
+        Error::RuntimeState {
+            op: actual_op,
+            message: actual_message,
+        } if *actual_op == op && actual_message == message
+    ));
+}
+
+fn assert_unsupported(error: &Error, op: &'static str, message: &str) {
+    assert_eq!(error.kind(), ErrorKind::Unsupported);
+    assert!(error.to_string().contains(op));
+    assert!(error.to_string().contains(message));
+}
+
+fn assert_error_parity(expected: Error, actual: Error) {
+    assert_eq!(actual.kind(), expected.kind());
+    assert_eq!(actual.to_string(), expected.to_string());
+    assert_eq!(actual.source().is_some(), expected.source().is_some());
+}
+
+fn assert_cuda_unsupported_dtype(error: &Error, op: &'static str, dtype: DType) {
+    assert_eq!(error.kind(), ErrorKind::Unsupported);
+    let source = error
+        .source()
+        .expect("unsupported CUDA errors have a source");
+    let source = source
+        .downcast_ref::<super::error::CudaError>()
+        .expect("CUDA unsupported dtype keeps its typed source");
+    assert!(matches!(
+        source,
+        super::error::CudaError::UnsupportedDType {
+            op: actual_op,
+            dtype: actual_dtype,
+        } if *actual_op == op && *actual_dtype == dtype
+    ));
+}
+
+fn assert_cuda_numerical_error(error: &Error, op: &'static str, dtype: DType, negative: bool) {
+    assert_eq!(error.kind(), ErrorKind::NumericalFailure);
+    let source = error.source().expect("CUDA numerical errors have a source");
+    let source = source
+        .downcast_ref::<super::error::CudaError>()
+        .expect("CUDA numerical errors keep their typed source");
+    if negative {
+        assert!(matches!(
+            source,
+            super::error::CudaError::NegativeIntegerExponent {
+                op: actual_op,
+                dtype: actual_dtype,
+            } if *actual_op == op && *actual_dtype == dtype
+        ));
+    } else {
+        assert!(matches!(
+            source,
+            super::error::CudaError::DivisionByZero {
+                op: actual_op,
+                dtype: actual_dtype,
+            } if *actual_op == op && *actual_dtype == dtype
+        ));
+    }
+}
+
 #[test]
 fn gather_launch_meta_rejects_offset_dim_outside_output_rank() {
     let err = super::gather_launch_meta(
@@ -75,12 +196,15 @@ fn gather_launch_meta_rejects_offset_dim_outside_output_rank() {
     )
     .unwrap_err();
 
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::AxisOutOfBounds)
+    );
     assert!(matches!(
         err,
-        Error::AxisOutOfBounds {
+        Error::Validation {
             op: "gather",
-            axis: 1,
-            rank: 1
+            source: ValidationError::AxisOutOfBounds { axis: 1, rank: 1 },
         }
     ));
 }
@@ -100,10 +224,17 @@ fn gather_launch_meta_rejects_collapsed_non_unit_slice_sizes() {
     )
     .unwrap_err();
 
-    assert!(
-        matches!(err, Error::InvalidConfig { op: "gather", .. }),
-        "{err:?}"
-    );
+    assert_validation_kind(&err, "gather", ValidationKind::InvalidArgument);
+    assert!(matches!(
+        err,
+        Error::Validation {
+            source: ValidationError::InvalidArgument {
+                argument: "collapsed_slice_dims",
+                ..
+            },
+            ..
+        }
+    ));
     assert!(err.to_string().contains("slice_size == 1"), "{err}");
 }
 
@@ -122,14 +253,7 @@ fn scatter_launch_meta_rejects_mismatched_update_batch_extents() {
     )
     .unwrap_err();
 
-    assert!(
-        matches!(err, Error::InvalidConfig { op: "scatter", .. }),
-        "{err:?}"
-    );
-    assert!(
-        err.to_string().contains("updates batch dim 0 extent 3"),
-        "{err}"
-    );
+    assert_shape_mismatch(&err, "scatter", &[2], &[3]);
 }
 
 fn assert_tensor_close(actual: &Tensor, expected: &Tensor, tol: f64) {

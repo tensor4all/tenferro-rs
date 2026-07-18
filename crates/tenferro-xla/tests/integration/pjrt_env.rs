@@ -1,19 +1,13 @@
 #![cfg(feature = "pjrt")]
 
 use std::ffi::OsString;
-use std::sync::{Mutex, OnceLock};
 
 use tenferro_xla::{
     Error, PjrtPlugin, XlaExecutor, TENFERRO_PJRT_GPU_PLUGIN_ENV, TENFERRO_PJRT_PLUGIN_ENV,
 };
 
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-}
-
 fn with_env_var<T>(var: &'static str, value: Option<&str>, f: impl FnOnce() -> T) -> T {
-    let _guard = env_lock();
+    let _guard = super::pjrt_env_lock();
     let previous = std::env::var_os(var);
     match value {
         Some(value) => std::env::set_var(var, value),
@@ -94,7 +88,7 @@ fn empty_plugin_env_var_is_treated_as_missing() {
 
 #[test]
 fn env_restore_handles_non_utf8_values() {
-    let _guard = env_lock();
+    let _guard = super::pjrt_env_lock();
     let var = "__TENFERRO_XLA_PJRT_NON_UTF8";
     let previous = std::env::var_os(var);
     std::env::set_var(var, OsString::from("/tmp/non_utf8_marker"));

@@ -420,10 +420,9 @@ fn permutation_from_lapack_pivots(
         let pivot = match usize::try_from(pivot_one_based - 1) {
             Ok(pivot) if pivot < pivots.len() => pivot,
             _ => {
-                return Err(tenferro_tensor::Error::backend_failure(
-                    op,
-                    "LAPACK getc2 returned invalid pivot index",
-                ));
+                return Err(tenferro_tensor::Error::Internal(format!(
+                    "{op}: LAPACK getc2 returned an invalid pivot index"
+                )));
             }
         };
         if pivot != idx {
@@ -457,9 +456,9 @@ fn factor_getc2<T: LapackFullPivLu>(
     T::getc2(n_i32, data, n_i32, &mut ipiv, &mut jpiv, &mut info);
     check_lapack_info(op, "getc2", info.min(0))?;
     if info > 0 {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(crate::error::into_tensor_error(
             op,
-            "matrix is singular",
+            crate::Error::Singular { op },
         ));
     }
     Ok((ipiv, jpiv, info))
@@ -516,11 +515,11 @@ fn solve_2d<T: LapackFullPivLu>(
     let n = square_matrix_dim(a, "full_piv_lu_solve")?;
     let (b_rows, b_cols) = matrix_dims(b, "full_piv_lu_solve")?;
     if b_rows != n {
-        return Err(tenferro_tensor::Error::ShapeMismatch {
-            op: "full_piv_lu_solve",
-            lhs: vec![n],
-            rhs: vec![b_rows],
-        });
+        return Err(tenferro_tensor::Error::shape_mismatch(
+            "full_piv_lu_solve",
+            vec![n],
+            vec![b_rows],
+        ));
     }
 
     let mut lu = if transpose_a {
@@ -530,9 +529,11 @@ fn solve_2d<T: LapackFullPivLu>(
     };
     let (ipiv, jpiv, info) = factor_getc2("full_piv_lu_solve", &mut lu, n)?;
     if info > 0 {
-        return Err(tenferro_tensor::Error::backend_failure(
+        return Err(crate::error::into_tensor_error(
             "full_piv_lu_solve",
-            "matrix is singular",
+            crate::Error::Singular {
+                op: "full_piv_lu_solve",
+            },
         ));
     }
 
@@ -605,18 +606,18 @@ pub(crate) fn full_piv_lu_solve<T: LapackFullPivLu>(
         let (n, a_batch_shape) = square_core_and_batch_result(a, "full_piv_lu_solve")?;
         let (b_rows, _, b_batch_shape) = matrix_core_and_batch_result(b, "full_piv_lu_solve")?;
         if b_rows != n {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "full_piv_lu_solve",
-                lhs: vec![n],
-                rhs: vec![b_rows],
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "full_piv_lu_solve",
+                vec![n],
+                vec![b_rows],
+            ));
         }
         if a_batch_shape != b_batch_shape {
-            return Err(tenferro_tensor::Error::ShapeMismatch {
-                op: "full_piv_lu_solve",
-                lhs: a_batch_shape.to_vec(),
-                rhs: b_batch_shape.to_vec(),
-            });
+            return Err(tenferro_tensor::Error::shape_mismatch(
+                "full_piv_lu_solve",
+                a_batch_shape.to_vec(),
+                b_batch_shape.to_vec(),
+            ));
         }
         return tensor_from_vec_with_template(b.shape().to_vec(), Vec::new(), b);
     }

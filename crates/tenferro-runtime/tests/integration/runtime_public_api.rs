@@ -1,9 +1,10 @@
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{
-    DType, DotGeneralConfig, Error, GatherConfig, GraphCompiler, GraphExecutor, PadConfig,
-    ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TensorRead, TensorValue, TracedTensor,
+    DType, DotGeneralConfig, Error, ErrorPhase, GatherConfig, GraphCompiler, GraphExecutor,
+    PadConfig, ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TensorRead, TensorValue,
+    TracedTensor,
 };
-use tenferro_tensor::Error as TensorError;
+use tenferro_tensor::{Error as TensorError, ValidationError};
 
 #[test]
 fn runtime_crate_exposes_traced_graph_execution_api() {
@@ -56,10 +57,12 @@ fn concrete_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
 
     assert!(matches!(
         err,
-        TensorError::RankMismatch {
+        TensorError::Validation {
             op: "matmul",
-            expected: 2,
-            actual: 0,
+            source: ValidationError::RankMismatch {
+                expected: 2,
+                actual: 0,
+            },
         }
     ));
 }
@@ -77,10 +80,14 @@ fn traced_tensor_methods_cover_conversion_and_rank_errors() {
 
     let err = scalar.matmul(&vector).unwrap_err();
     assert!(matches!(
-        err,
-        Error::InvalidGraphBuild {
+        &err,
+        Error::Validation {
             op: "TracedTensor::matmul",
-            ..
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::RankMismatch {
+                expected: 2,
+                actual: 0,
+            },
         }
     ));
 }
@@ -231,15 +238,23 @@ fn traced_shape_packing_rejects_symbolic_shapes_as_graph_build_errors() {
 
     let err = x.index_select(0, &[0]).unwrap_err();
     assert!(matches!(
-        err,
-        Error::InvalidGraphBuild {
-            op: "index_select",
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::InvalidArgument { .. },
             ..
         }
     ));
 
     let err = TracedTensor::stack(&[&x], 0).unwrap_err();
-    assert!(matches!(err, Error::InvalidGraphBuild { op: "stack", .. }));
+    assert!(matches!(
+        &err,
+        Error::Validation {
+            phase: ErrorPhase::GraphBuild,
+            source: ValidationError::InvalidArgument { .. },
+            ..
+        }
+    ));
 }
 
 #[test]

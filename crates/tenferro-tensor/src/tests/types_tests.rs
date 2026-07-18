@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{error::Error as _, sync::Arc};
 
 use num_complex::{Complex32, Complex64};
 
@@ -9,9 +9,73 @@ use crate::types::{
     TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView,
     TypedTensorViewMut, TypedTensorWrite,
 };
-use crate::{Error, SliceConfig};
+use crate::{
+    Error, ErrorKind, ShapeMismatch, ShapeVec, SliceConfig, ValidationError, ValidationKind,
+};
 
 mod strided_dynamic;
+
+#[test]
+fn tensor_error_preserves_shared_validation_source() {
+    let err = Error::validation(
+        "add",
+        ShapeMismatch::IncompatibleShapes {
+            lhs: ShapeVec::from_vec(vec![2]),
+            rhs: ShapeVec::from_vec(vec![3]),
+        }
+        .into(),
+    );
+
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::ShapeMismatch)
+    );
+    assert!(err.source().is_some());
+    assert!(matches!(
+        err,
+        Error::Validation {
+            op: "add",
+            source: ValidationError::ShapeMismatch(_),
+        }
+    ));
+}
+
+#[test]
+fn typed_backend_source_is_not_formatted_away() {
+    let err = Error::backend_source("load", std::io::Error::other("device read failed"));
+    assert_eq!(err.kind(), ErrorKind::BackendFailure);
+    assert!(err.source().is_some());
+}
+
+#[test]
+fn typed_io_source_is_not_classified_as_backend_failure() {
+    let err = Error::io_source("load", std::io::Error::other("file read failed"));
+    assert_eq!(err.kind(), ErrorKind::Io);
+    assert!(err.source().is_some());
+}
+
+#[test]
+fn runtime_state_source_is_not_classified_as_backend_failure() {
+    let err = Error::runtime_state_source(
+        "execute",
+        std::io::Error::other("executor state is unavailable"),
+    );
+    assert_eq!(err.kind(), ErrorKind::RuntimeState);
+    assert!(err.source().is_some());
+}
+
+#[test]
+fn unsupported_operation_has_a_distinct_coarse_classification() {
+    let err = Error::unsupported("full_piv_lu", "backend has no implementation");
+    assert_eq!(err.kind(), ErrorKind::Unsupported);
+    assert!(matches!(
+        err,
+        Error::Unsupported {
+            op: "full_piv_lu",
+            ..
+        }
+    ));
+}
 
 #[derive(Debug)]
 struct NonCloneElement;
@@ -157,7 +221,10 @@ fn tensor_owned_view_and_tensor_value_cover_lazy_accessors_and_errors() {
     ] {
         assert!(matches!(
             owned.slice_view(&bad_config),
-            Err(Error::RankMismatch { .. })
+            Err(Error::Validation {
+                source: ValidationError::RankMismatch { .. },
+                ..
+            })
         ));
     }
 
@@ -200,7 +267,7 @@ fn col_major_helpers_cover_scalar_and_higher_rank_shapes() {
     assert_eq!(col_major_strides(&[2, 3, 4]).unwrap(), vec![1, 2, 6]);
     assert!(matches!(
         col_major_strides(&[usize::MAX, 2]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 
     let mut scalar_idx = [];
@@ -311,9 +378,11 @@ fn typed_tensor_try_into_rank_validates_rank() {
 
     assert!(matches!(
         err,
-        Error::RankMismatch {
-            expected: 3,
-            actual: 2,
+        Error::Validation {
+            source: ValidationError::RankMismatch {
+                expected: 3,
+                actual: 2,
+            },
             ..
         }
     ));
@@ -363,7 +432,7 @@ fn typed_tensor_as_view_preserves_rank_and_layout() {
 }
 
 #[test]
-fn typed_tensor_view_backend_as_slice_returns_backend_failure() {
+fn typed_tensor_view_backend_as_slice_returns_runtime_state() {
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2],
         Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(77, 2))),
@@ -381,7 +450,7 @@ fn typed_tensor_view_backend_as_slice_returns_backend_failure() {
 
     assert!(matches!(
         err,
-        Error::BackendFailure {
+        Error::RuntimeState {
             op: "TypedTensorView::as_slice",
             ..
         }
@@ -398,8 +467,9 @@ fn typed_tensor_view_as_slice_rejects_non_contiguous_layout() {
 
     assert!(matches!(
         err,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "TypedTensorView::as_slice",
+            source: ValidationError::InvalidArgument { .. },
             ..
         }
     ));
@@ -446,7 +516,7 @@ fn typed_tensor_backend_buffer_layout_length_mismatch_returns_error() {
     )
     .unwrap_err();
 
-    assert!(matches!(err, Error::InvalidConfig { .. }));
+    assert!(matches!(err, Error::Validation { .. }));
 }
 
 #[test]
@@ -455,7 +525,7 @@ fn typed_tensor_static_rank_shape_conversion_reports_rank_mismatch() {
 
     assert!(matches!(
         err,
-        tenferro_tensor_core::Error::RankMismatch {
+        tenferro_tensor_core::ValidationError::RankMismatch {
             expected: 2,
             actual: 3
         }
@@ -481,7 +551,13 @@ fn tensor_owned_export_reports_dtype_mismatch() {
         .into_vec_col_major::<f32>()
         .unwrap_err();
 
-    assert!(matches!(err, Error::DTypeMismatch { .. }));
+    assert!(matches!(
+        err,
+        Error::Validation {
+            source: ValidationError::DTypeMismatch { .. },
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -509,7 +585,7 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
     .unwrap();
     let col_err = tensor.clone().into_vec_col_major().unwrap_err();
 
-    assert!(matches!(col_err, Error::BackendFailure { .. }));
+    assert!(matches!(col_err, Error::RuntimeState { .. }));
     assert!(col_err
         .to_string()
         .contains("backend buffers cannot be exported"));
@@ -680,11 +756,14 @@ fn tensor_checked_accessors_are_typed_and_use_physical_order() {
     assert_eq!(tensor.get::<f64>(&[1, 2]).unwrap(), &6.0);
     assert!(matches!(
         tensor.get::<f32>(&[1, 2]),
-        Err(Error::DTypeMismatch { .. })
+        Err(Error::Validation {
+            source: ValidationError::DTypeMismatch { .. },
+            ..
+        })
     ));
     assert!(matches!(
         tensor.get::<f64>(&[2, 0]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 
     tensor.as_slice_mut::<f64>().unwrap()[0] = 10.0;
@@ -708,18 +787,21 @@ fn tensor_checked_accessors_are_typed_and_use_physical_order() {
 fn typed_tensor_accessors_report_length_and_indexing_errors() {
     assert!(matches!(
         TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 
     let tensor = TypedTensor::<f64>::zeros(vec![2, 3]).unwrap();
     assert!(matches!(
         tensor.linear_offset(&[0]),
-        Err(Error::RankMismatch { .. })
+        Err(Error::Validation {
+            source: ValidationError::RankMismatch { .. },
+            ..
+        })
     ));
 
     assert!(matches!(
         tensor.linear_offset(&[2, 0]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 }
 
@@ -727,19 +809,19 @@ fn typed_tensor_accessors_report_length_and_indexing_errors() {
 fn typed_tensor_apis_report_shape_arithmetic_errors() {
     assert!(matches!(
         TypedTensor::<f64>::from_vec_col_major(vec![usize::MAX, 2], Vec::new()),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     assert!(matches!(
         TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     assert!(matches!(
         TypedTensor::<f64>::zeros(vec![usize::MAX, 2]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     assert!(matches!(
         TypedTensor::<f64>::ones(vec![usize::MAX, 2]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 
     let tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![0.0; 6]).unwrap();
@@ -747,7 +829,7 @@ fn typed_tensor_apis_report_shape_arithmetic_errors() {
     assert_eq!(tensor.linear_offset(&[1, 2]).unwrap(), 5);
     assert!(matches!(
         tensor.linear_offset(&[2, 0]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 }
 
@@ -755,11 +837,11 @@ fn typed_tensor_apis_report_shape_arithmetic_errors() {
 fn tensor_constructors_report_shape_arithmetic_errors() {
     assert!(matches!(
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     assert!(matches!(
         Tensor::from_vec_col_major(vec![usize::MAX, 2], Vec::<f64>::new()),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 }
 
@@ -770,22 +852,19 @@ fn typed_tensor_ranked_accessors_return_errors_instead_of_panicking() {
     assert_eq!(tensor.linear_offset2(1, 2).unwrap(), 5);
     assert!(matches!(
         tensor.linear_offset2(10, 0),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
-    assert!(matches!(
-        tensor.get2(10, 0),
-        Err(Error::InvalidConfig { .. })
-    ));
+    assert!(matches!(tensor.get2(10, 0), Err(Error::Validation { .. })));
 
     let rank3 = TypedTensor::<f64>::from_vec_col_major(vec![2, 3, 2], vec![0.0; 12]).unwrap();
     assert_eq!(rank3.linear_offset3(1, 2, 1).unwrap(), 11);
     assert!(matches!(
         rank3.linear_offset3(1, 2, 99),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     assert!(matches!(
         rank3.get3(1, 2, 99),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 }
 
@@ -796,14 +875,14 @@ fn tensor_ranked_linear_offsets_return_errors_instead_of_panicking() {
     assert_eq!(tensor.linear_offset2(1, 2).unwrap(), 5);
     assert!(matches!(
         tensor.linear_offset2(10, 0),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 
     let rank3 = Tensor::from_vec_col_major(vec![2, 3, 2], vec![0.0_f64; 12]).unwrap();
     assert_eq!(rank3.linear_offset3(1, 2, 1).unwrap(), 11);
     assert!(matches!(
         rank3.linear_offset3(1, 2, 99),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 }
 
@@ -1013,7 +1092,7 @@ fn typed_tensor_view_validates_shape_and_exposes_slice() {
     assert_eq!(view.as_slice().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 
     let err = TypedTensorView::from_col_major(&shape, &data[..3]).unwrap_err();
-    assert!(matches!(err, Error::InvalidConfig { .. }));
+    assert!(matches!(err, Error::Validation { .. }));
 }
 
 #[test]
@@ -1136,7 +1215,7 @@ fn strided_tensor_view_mut_rejects_aliasing_layouts() {
 
     let mut data = [1_i32, 2, 3, 4];
     let err = TypedTensorViewMut::from_slice([2, 2], [1, 1], 0, &mut data).unwrap_err();
-    assert!(matches!(err, Error::InvalidConfig { .. }));
+    assert!(matches!(err, Error::Validation { .. }));
 
     let mut data = [1_i32, 2];
     assert!(TypedTensorViewMut::from_slice([2], [0], 0, &mut data).is_err());
@@ -1240,20 +1319,23 @@ fn strided_tensor_view_validation_covers_error_edges() {
     assert_eq!(empty.get(&[0, 0]), None);
     assert!(matches!(
         TypedTensorView::<i32>::from_slice([0], [1], 4, &data),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 
     assert!(matches!(
         TypedTensorView::<i32>::from_slice([2], [1, 1], 0, &data),
-        Err(Error::RankMismatch { .. })
+        Err(Error::Validation {
+            source: ValidationError::RankMismatch { .. },
+            ..
+        })
     ));
     assert!(matches!(
         TypedTensorView::<i32>::from_slice([2], [-1], 0, &data[..1]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     assert!(matches!(
         TypedTensorView::<i32>::from_slice([2], [2], 0, &data[..1]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 
     let view = TypedTensorView::from_slice([3], [1], 0, &data).unwrap();
@@ -1263,7 +1345,7 @@ fn strided_tensor_view_validation_covers_error_edges() {
 
     assert!(matches!(
         TypedTensorView::<i32>::from_slice([usize::MAX, 2], [1, 1], 0, &[]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     assert!(matches!(
         TypedTensorView::<i32>::from_slice(
@@ -1272,18 +1354,18 @@ fn strided_tensor_view_validation_covers_error_edges() {
             0,
             &[7],
         ),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     let empty_after_large_prefix =
         TypedTensorView::from_slice([2, usize::MAX, 0], [0, 0, 1], 0, &[7]).unwrap();
     assert_eq!(empty_after_large_prefix.n_elements(), 0);
     assert!(matches!(
         TypedTensorView::<i32>::from_slice([3], [isize::MAX], 0, &[]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     assert!(matches!(
         TypedTensorView::<i32>::from_slice([2, 2], [isize::MAX, 1], 0, &[]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 }
 
@@ -1294,39 +1376,54 @@ fn typed_tensor_view_slice_transpose_and_reshape_cover_boundaries() {
 
     assert!(matches!(
         view.transpose_view([0]),
-        Err(Error::RankMismatch { .. })
+        Err(Error::Validation {
+            source: ValidationError::InvalidPermutationLength { .. },
+            ..
+        })
     ));
     assert!(matches!(
         view.transpose_view([2, 0]),
-        Err(Error::AxisOutOfBounds { .. })
+        Err(Error::Validation {
+            source: ValidationError::AxisOutOfBounds { .. },
+            ..
+        })
     ));
     assert!(matches!(
         view.transpose_view([0, 0]),
-        Err(Error::DuplicateAxis { .. })
+        Err(Error::Validation {
+            source: ValidationError::DuplicateAxis { .. },
+            ..
+        })
     ));
 
     assert!(matches!(
         view.try_slice(&[StridedSliceSpec::all()]),
-        Err(Error::RankMismatch { .. })
+        Err(Error::Validation {
+            source: ValidationError::RankMismatch { .. },
+            ..
+        })
     ));
     assert!(matches!(
         view.try_slice_axis(2, StridedSliceSpec::all()),
-        Err(Error::AxisOutOfBounds { .. })
+        Err(Error::Validation {
+            source: ValidationError::AxisOutOfBounds { .. },
+            ..
+        })
     ));
     assert!(matches!(
         view.try_slice(&[StridedSliceSpec::all(), StridedSliceSpec::new(0, None, 0)]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     assert!(matches!(
         view.try_slice(&[StridedSliceSpec::all(), StridedSliceSpec::new(-4, None, 1)]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     assert!(matches!(
         view.try_slice(&[
             StridedSliceSpec::all(),
             StridedSliceSpec::new(0, Some(4), 1)
         ]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 
     let empty = view
@@ -1337,11 +1434,11 @@ fn typed_tensor_view_slice_transpose_and_reshape_cover_boundaries() {
 
     assert!(matches!(
         view.try_reshape(&[5]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
     assert!(matches!(
         TypedTensorView::<i32>::from_col_major(&[isize::MAX as usize, 2, 2], &[]),
-        Err(Error::InvalidConfig { .. })
+        Err(Error::Validation { .. })
     ));
 
     let scalar = TypedTensorView::from_col_major(&[], &data[..1]).unwrap();
@@ -1760,11 +1857,10 @@ fn memory_kind_variants_are_constructible() {
 
 #[test]
 fn runtime_error_formats_include_op_name() {
-    let err = Error::AxisOutOfBounds {
-        op: "dot_general",
-        axis: 2,
-        rank: 1,
-    };
+    let err = Error::validation(
+        "dot_general",
+        ValidationError::AxisOutOfBounds { axis: 2, rank: 1 },
+    );
 
     assert!(err.to_string().contains("dot_general"));
 }

@@ -12,7 +12,35 @@
 
 use num_complex::{Complex32, Complex64};
 
-use crate::{DType, DotGeneralConfig, Error, Result, Tensor, TypedTensor};
+use crate::{
+    DType, DotGeneralConfig, Error, ErrorKind, Result, ShapeMismatch, Tensor, TypedTensor,
+    ValidationError,
+};
+
+/// Domain-specific reasons reported by triangular-factor validation.
+///
+/// The outer tensor error classifies these failures as numerical or unsupported
+/// while retaining this value as its typed source.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::validate::DiagonalError;
+///
+/// let error = DiagonalError::SingularOrNonFinite {
+///     index: 1,
+/// };
+/// assert!(error.to_string().contains("position [1,1]"));
+/// ```
+#[derive(Debug, thiserror::Error)]
+pub enum DiagonalError {
+    #[error("singular or non-finite diagonal at position [{index},{index}]")]
+    SingularOrNonFinite { index: usize },
+    #[error("singular or non-finite diagonal at batch {batch}, position [{index},{index}]")]
+    BatchedSingularOrNonFinite { batch: usize, index: usize },
+    #[error("triangular solve does not support dtype {dtype:?}")]
+    UnsupportedDType { dtype: DType },
+}
 
 /// Promote two dtypes according to tenferro's public dtype-promotion lattice.
 ///
@@ -71,17 +99,22 @@ pub fn can_convert_dtype(from: DType, to: DType) -> bool {
 /// assert!(validate_convert_dtype("convert", DType::F32, DType::F64).is_ok());
 /// assert!(validate_convert_dtype("convert", DType::C64, DType::F64).is_err());
 /// ```
+/// # Errors
+///
+/// Returns [`crate::Error::UnsupportedDTypeConversion`] when the requested
+/// conversion is outside the checked promotion lattice. Use an explicit cast
+/// for lossy projections.
 pub fn validate_convert_dtype(op: &'static str, from: DType, to: DType) -> Result<()> {
     if can_convert_dtype(from, to) {
         return Ok(());
     }
 
-    Err(Error::UnsupportedDTypeConversion {
+    Err(Error::unsupported_dtype_conversion(
         op,
         from,
         to,
-        message: "checked convert only accepts conversions allowed by dtype promotion; use explicit cast for lossy dtype projection".to_string(),
-    })
+        "checked convert only accepts conversions allowed by dtype promotion; use explicit cast for lossy dtype projection",
+    ))
 }
 
 /// Compute a shape product with overflow reported as a typed tensor error.
@@ -94,6 +127,12 @@ pub fn validate_convert_dtype(op: &'static str, from: DType, to: DType) -> Resul
 /// assert_eq!(checked_shape_product("zeros", "shape", &[2, 3])?, 6);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] containing
+/// [`tenferro_tensor_core::ValidationError::InvalidArgument`] when the
+/// product of `shape` exceeds `usize::MAX`; `role` identifies the shape-like
+/// argument in the diagnostic.
 pub fn checked_shape_product(
     op: &'static str,
     role: &'static str,
@@ -102,9 +141,8 @@ pub fn checked_shape_product(
     shape
         .iter()
         .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
-        .ok_or_else(|| Error::InvalidConfig {
-            op,
-            message: format!("{role} product overflows for shape {shape:?}"),
+        .ok_or_else(|| {
+            Error::invalid_argument(op, role, format!("product overflows for shape {shape:?}"))
         })
 }
 
@@ -118,26 +156,37 @@ pub fn checked_shape_product(
 /// validate_permutation_axes("transpose", 2, &[1, 0])?;
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `RankMismatch`,
+/// `AxisOutOfBounds`, or `DuplicateAxis` as appropriate.
 pub fn validate_permutation_axes(op: &'static str, rank: usize, perm: &[usize]) -> Result<()> {
     if perm.len() != rank {
-        return Err(Error::RankMismatch {
+        return Err(Error::validation(
             op,
-            expected: rank,
-            actual: perm.len(),
-        });
+            ValidationError::RankMismatch {
+                expected: rank,
+                actual: perm.len(),
+            },
+        ));
     }
 
     let mut seen = vec![false; rank];
     for &axis in perm {
         if axis >= rank {
-            return Err(Error::AxisOutOfBounds { op, axis, rank });
+            return Err(Error::validation(
+                op,
+                ValidationError::AxisOutOfBounds { axis, rank },
+            ));
         }
         if seen[axis] {
-            return Err(Error::DuplicateAxis {
+            return Err(Error::validation(
                 op,
-                axis,
-                role: "permutation",
-            });
+                ValidationError::DuplicateAxis {
+                    axis,
+                    role: "permutation",
+                },
+            ));
         }
         seen[axis] = true;
     }
@@ -156,6 +205,10 @@ pub fn validate_permutation_axes(op: &'static str, rank: usize, perm: &[usize]) 
 /// assert!(validate_unique_axes("reduce_sum", "axis", 2, &[0, 0]).is_err());
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `AxisOutOfBounds` for an invalid
+/// axis or `DuplicateAxis` when an axis occurs more than once.
 pub fn validate_unique_axes(
     op: &'static str,
     role: &'static str,
@@ -165,10 +218,16 @@ pub fn validate_unique_axes(
     let mut seen = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
-            return Err(Error::AxisOutOfBounds { op, axis, rank });
+            return Err(Error::validation(
+                op,
+                ValidationError::AxisOutOfBounds { axis, rank },
+            ));
         }
         if seen[axis] {
-            return Err(Error::DuplicateAxis { op, axis, role });
+            return Err(Error::validation(
+                op,
+                ValidationError::DuplicateAxis { axis, role },
+            ));
         }
         seen[axis] = true;
     }
@@ -186,31 +245,42 @@ pub fn validate_unique_axes(
 /// assert_eq!(config.lhs_contracting_dims, vec![1]);
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `RankMismatch` for a non-matrix
+/// input or `ShapeMismatch` when the contracting dimensions differ.
 pub fn matmul_config_for_shapes(
     op: &'static str,
     lhs_shape: &[usize],
     rhs_shape: &[usize],
 ) -> Result<DotGeneralConfig> {
     if lhs_shape.len() != 2 {
-        return Err(Error::RankMismatch {
+        return Err(Error::validation(
             op,
-            expected: 2,
-            actual: lhs_shape.len(),
-        });
+            ValidationError::RankMismatch {
+                expected: 2,
+                actual: lhs_shape.len(),
+            },
+        ));
     }
     if rhs_shape.len() != 2 {
-        return Err(Error::RankMismatch {
+        return Err(Error::validation(
             op,
-            expected: 2,
-            actual: rhs_shape.len(),
-        });
+            ValidationError::RankMismatch {
+                expected: 2,
+                actual: rhs_shape.len(),
+            },
+        ));
     }
     if lhs_shape[1] != rhs_shape[0] {
-        return Err(Error::ShapeMismatch {
+        return Err(Error::validation(
             op,
-            lhs: lhs_shape.to_vec(),
-            rhs: rhs_shape.to_vec(),
-        });
+            ShapeMismatch::IncompatibleShapes {
+                lhs: lhs_shape.to_vec().into(),
+                rhs: rhs_shape.to_vec().into(),
+            }
+            .into(),
+        ));
     }
 
     Ok(DotGeneralConfig {
@@ -264,8 +334,10 @@ impl_diag_singularity_complex!(Complex64, Complex32);
 ///
 /// Iterates over all batch slices and inspects the diagonal entries
 /// `data[i + i * rows]` for `i` in `0..min(rows, cols)`. Returns
-/// [`Error::BackendFailure`] with `op: "solve"` on the first offending entry,
-/// or [`Error::RankMismatch`] when `t` has rank less than two.
+/// a numerical [`crate::Error::Extension`] carrying a typed
+/// [`DiagonalError::SingularOrNonFinite`] source for the first offending entry,
+/// or [`ValidationError::RankMismatch`] wrapped in [`Error::Validation`] when
+/// `t` has rank less than two.
 ///
 /// # Examples
 ///
@@ -276,15 +348,24 @@ impl_diag_singularity_complex!(Complex64, Complex32);
 /// let t = TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0f32, 0.0, 0.0, 2.0]).unwrap();
 /// assert!(check_singular_diagonal(&t).is_ok());
 /// ```
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with `RankMismatch` for a non-matrix
+/// tensor, a numerical [`crate::Error::Extension`] with a typed
+/// [`DiagonalError::SingularOrNonFinite`] source for a singular or non-finite
+/// diagonal, or an unsupported [`crate::Error::Extension`] with a typed
+/// [`DiagonalError::UnsupportedDType`] source for integer and boolean inputs.
 pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
     t: &TypedTensor<T>,
 ) -> Result<()> {
     if t.shape().len() < 2 {
-        return Err(Error::RankMismatch {
-            op: "solve",
-            expected: 2,
-            actual: t.shape().len(),
-        });
+        return Err(Error::validation(
+            "solve",
+            ValidationError::RankMismatch {
+                expected: 2,
+                actual: t.shape().len(),
+            },
+        ));
     }
     let rows = t.shape()[0];
     let cols = t.shape()[1];
@@ -297,18 +378,17 @@ pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
         for i in 0..n {
             let diag = batch[i + i * rows];
             if diag.is_singular_or_nonfinite() {
-                return Err(Error::backend_failure(
+                return Err(Error::extension(
                     "solve",
+                    "tensor-validation",
+                    ErrorKind::NumericalFailure,
                     if batch_total > 1 {
-                        format!(
-                            "singular matrix: non-finite or zero diagonal at batch {}, position [{},{}] = {:?}",
-                            batch_idx, i, i, diag
-                        )
+                        DiagonalError::BatchedSingularOrNonFinite {
+                            batch: batch_idx,
+                            index: i,
+                        }
                     } else {
-                        format!(
-                            "singular matrix: non-finite or zero diagonal at position [{},{}] = {:?}",
-                            i, i, diag
-                        )
+                        DiagonalError::SingularOrNonFinite { index: i }
                     },
                 ));
             }
@@ -332,15 +412,22 @@ pub fn check_singular_diagonal<T: DiagSingularity + Copy + std::fmt::Debug>(
 /// let t = Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 0.0, 0.0, 1.0]).unwrap());
 /// assert!(validate_nonsingular_u(&t).is_ok());
 /// ```
+/// # Errors
+///
+/// Returns [`crate::Error::Validation`] with the applicable typed shape, rank,
+/// axis, dtype, or argument source when validation fails. Singular or
+/// non-finite diagonal checks return [`crate::Error::BackendFailure`].
 pub fn validate_nonsingular_u(u: &Tensor) -> Result<()> {
     match u {
         Tensor::F64(t) => check_singular_diagonal(t),
         Tensor::F32(t) => check_singular_diagonal(t),
         Tensor::C64(t) => check_singular_diagonal(t),
         Tensor::C32(t) => check_singular_diagonal(t),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(Error::backend_failure(
+        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => Err(Error::extension(
             "solve",
-            format!("unsupported dtype {:?}", u.dtype()),
+            "tensor-validation",
+            ErrorKind::Unsupported,
+            DiagonalError::UnsupportedDType { dtype: u.dtype() },
         )),
     }
 }

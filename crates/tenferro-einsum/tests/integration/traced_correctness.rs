@@ -7,13 +7,14 @@ use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::EinsumOptimize;
 use tenferro_einsum::GraphCompilerEinsumExt;
+use tenferro_einsum::Result as EinsumResult;
 use tenferro_einsum::TracedTensorEinsumExt;
 use tenferro_einsum::{
     ContractionTree, NestedEinsum, Subscripts, TensorDotAxes, EINSUM_EXTENSION_FAMILY_ID,
 };
-use tenferro_runtime::error::Result;
+use tenferro_runtime::error::{Error as RuntimeError, Result as RuntimeResult};
 use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
-use tenferro_tensor::TypedTensor;
+use tenferro_tensor::{TypedTensor, ValidationError};
 
 #[path = "traced_correctness/ported_and_paths.rs"]
 mod ported_and_paths;
@@ -34,17 +35,26 @@ fn get_f64_data(t: &Tensor) -> &[f64] {
 }
 
 trait TestEinsumContext {
-    fn with_compiler<R>(&mut self, f: impl FnOnce(&mut GraphCompiler) -> Result<R>) -> Result<R>;
+    fn with_compiler<R>(
+        &mut self,
+        f: impl FnOnce(&mut GraphCompiler) -> EinsumResult<R>,
+    ) -> EinsumResult<R>;
 }
 
 impl TestEinsumContext for GraphCompiler {
-    fn with_compiler<R>(&mut self, f: impl FnOnce(&mut GraphCompiler) -> Result<R>) -> Result<R> {
+    fn with_compiler<R>(
+        &mut self,
+        f: impl FnOnce(&mut GraphCompiler) -> EinsumResult<R>,
+    ) -> EinsumResult<R> {
         f(self)
     }
 }
 
 impl TestEinsumContext for GraphExecutor<CpuBackend> {
-    fn with_compiler<R>(&mut self, f: impl FnOnce(&mut GraphCompiler) -> Result<R>) -> Result<R> {
+    fn with_compiler<R>(
+        &mut self,
+        f: impl FnOnce(&mut GraphCompiler) -> EinsumResult<R>,
+    ) -> EinsumResult<R> {
         let mut compiler = GraphCompiler::new();
         f(&mut compiler)
     }
@@ -54,7 +64,7 @@ fn einsum<C: TestEinsumContext>(
     ctx: &mut C,
     inputs: &[&TracedTensor],
     subscripts: &str,
-) -> Result<TracedTensor> {
+) -> EinsumResult<TracedTensor> {
     ctx.with_compiler(|compiler| compiler.einsum(inputs, subscripts))
 }
 
@@ -63,16 +73,16 @@ fn einsum_with<C: TestEinsumContext>(
     inputs: &[&TracedTensor],
     subscripts: &str,
     optimize: EinsumOptimize,
-) -> Result<TracedTensor> {
+) -> EinsumResult<TracedTensor> {
     ctx.with_compiler(|compiler| compiler.einsum_with(inputs, subscripts, optimize))
 }
 
 trait RunTraced {
-    fn run_with(&self, executor: &mut GraphExecutor<CpuBackend>) -> Result<Tensor>;
+    fn run_with(&self, executor: &mut GraphExecutor<CpuBackend>) -> RuntimeResult<Tensor>;
 }
 
 impl RunTraced for TracedTensor {
-    fn run_with(&self, executor: &mut GraphExecutor<CpuBackend>) -> Result<Tensor> {
+    fn run_with(&self, executor: &mut GraphExecutor<CpuBackend>) -> RuntimeResult<Tensor> {
         if !executor
             .extension_executor()
             .registry()
@@ -213,13 +223,25 @@ fn traced_tensor_einsum_ext_tensordot_rejects_invalid_axes() {
         Ok(_) => panic!("expected duplicate tensordot axis error"),
         Err(err) => err,
     };
-    assert!(duplicate.to_string().contains("duplicate lhs axis"));
+    assert!(matches!(
+        duplicate,
+        tenferro_einsum::Error::Runtime(RuntimeError::Validation {
+            source: ValidationError::DuplicateAxis {
+                axis: 0,
+                role: "lhs"
+            },
+            ..
+        })
+    ));
 
     let out_of_bounds = match lhs.tensordot(&rhs, TensorDotAxes::Count(3)) {
         Ok(_) => panic!("expected Count(3) tensordot axis error"),
         Err(err) => err,
     };
-    assert!(out_of_bounds.to_string().contains("Count(3)"));
+    assert!(matches!(
+        out_of_bounds,
+        tenferro_einsum::Error::Runtime(RuntimeError::Validation { .. })
+    ));
 
     let explicit_out_of_bounds = match lhs.tensordot(
         &rhs,
@@ -231,9 +253,13 @@ fn traced_tensor_einsum_ext_tensordot_rejects_invalid_axes() {
         Ok(_) => panic!("expected explicit tensordot axis bounds error"),
         Err(err) => err,
     };
-    assert!(explicit_out_of_bounds
-        .to_string()
-        .contains("lhs axis 2 out of bounds"));
+    assert!(matches!(
+        explicit_out_of_bounds,
+        tenferro_einsum::Error::Runtime(RuntimeError::Validation {
+            source: ValidationError::AxisOutOfBounds { axis: 2, rank: 2 },
+            ..
+        })
+    ));
 }
 
 #[test]

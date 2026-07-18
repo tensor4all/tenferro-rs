@@ -25,15 +25,17 @@
 //! let layout = TensorLayout::<Rank<2>>::compact([2, 3])?;
 //! let transposed = layout.transpose_view([1, 0])?;
 //! assert_eq!(transposed.shape(), &[3, 2]);
-//! # Ok::<(), tenferro_tensor_core::Error>(())
+//! # Ok::<(), tenferro_tensor_core::ValidationError>(())
 //! ```
 
 use num_complex::{Complex32, Complex64};
 use smallvec::SmallVec;
 
+mod error;
 mod layout;
 mod rank;
 
+pub use error::{ErrorKind, ShapeMismatch, ValidationError, ValidationKind};
 pub use layout::TensorLayout;
 pub use rank::{DynRank, Rank, TensorRank};
 
@@ -66,59 +68,12 @@ pub type StrideVec = SmallVec<[isize; 8]>;
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_tensor_core::{Error, Result};
+/// use tenferro_tensor_core::{Result, ValidationError};
 ///
-/// let result: Result<()> = Err(Error::RankMismatch { expected: 2, actual: 1 });
+/// let result: Result<()> = Err(ValidationError::RankMismatch { expected: 2, actual: 1 });
 /// assert!(result.is_err());
 /// ```
-pub type Result<T> = std::result::Result<T, Error>;
-
-/// Data-model validation errors.
-///
-/// # Examples
-///
-/// ```rust
-/// use tenferro_tensor_core::Error;
-///
-/// let err = Error::ReshapeElementCountMismatch { from: 4, to: 5 };
-/// assert!(err.to_string().contains("reshape"));
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum Error {
-    #[error("shape product {expected} does not match data length {actual}")]
-    ShapeDataLengthMismatch { expected: usize, actual: usize },
-    #[error("rank mismatch: expected {expected}, actual {actual}")]
-    RankMismatch { expected: usize, actual: usize },
-    #[error("axis {axis} out of bounds for rank {rank}")]
-    AxisOutOfBounds { axis: usize, rank: usize },
-    #[error("duplicate axis {axis} in permutation")]
-    DuplicateAxis { axis: usize },
-    #[error("invalid permutation length: expected {expected}, actual {actual}")]
-    InvalidPermutationLength { expected: usize, actual: usize },
-    #[error("invalid slice step {step}; zero is invalid and this API may require a positive step")]
-    InvalidSliceStep { step: isize },
-    #[error(
-        "slice bounds are invalid or unsupported: start={start}, end={end}, axis_len={axis_len}"
-    )]
-    InvalidSliceBounds {
-        start: isize,
-        end: isize,
-        axis_len: usize,
-    },
-    #[error("reshape element-count mismatch: from {from} to {to}")]
-    ReshapeElementCountMismatch { from: usize, to: usize },
-    #[error("view is not slice-contiguous")]
-    NonContiguousViewAsSlice,
-    #[error("dtype mismatch: expected {expected:?}, actual {actual:?}")]
-    DTypeMismatch { expected: DType, actual: DType },
-    #[error("view metadata is out of borrowed-slice bounds")]
-    ViewOutOfBounds,
-    /// Mutable layout metadata may alias the same physical element.
-    #[error("mutable tensor layout may overlap physical elements")]
-    OverlappingMutableLayout,
-    #[error("integer overflow while validating tensor metadata")]
-    IntegerOverflow,
-}
+pub type Result<T> = std::result::Result<T, ValidationError>;
 
 /// Runtime scalar dtype tag.
 ///
@@ -174,8 +129,14 @@ pub trait TensorScalar: Copy + Clone + Send + Sync + 'static + private::Sealed {
     ///
     /// let tensor = <f64 as TensorScalar>::into_tensor(ShapeVec::from_slice(&[1]), vec![2.0])?;
     /// assert_eq!(tensor.dtype(), DType::F64);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::ShapeDataLengthMismatch`] when the shape
+    /// product differs from the data length, or [`ValidationError::IntegerOverflow`]
+    /// when validating the shape overflows.
     fn into_tensor(shape: ShapeVec, data: Vec<Self>) -> Result<Tensor>;
     fn tensor_slice(tensor: &Tensor) -> Option<&[Self]>;
     fn tensor_mut_slice(tensor: &mut Tensor) -> Option<&mut [Self]>;
@@ -269,7 +230,7 @@ pub struct SliceSpec {
 ///
 /// let tensor = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 /// assert_eq!(tensor.as_slice(), &[1.0, 2.0]);
-/// # Ok::<(), tenferro_tensor_core::Error>(())
+/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostTensor<T> {
@@ -286,7 +247,7 @@ pub struct HostTensor<T> {
 ///
 /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 /// assert_eq!(tensor.dtype(), DType::F64);
-/// # Ok::<(), tenferro_tensor_core::Error>(())
+/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub enum Tensor {
@@ -313,7 +274,7 @@ pub enum Tensor {
 /// let tensor = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
 /// let view = tensor.as_view();
 /// assert_eq!(view.shape(), &[2]);
-/// # Ok::<(), tenferro_tensor_core::Error>(())
+/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
 /// ```
 ///
 /// ```compile_fail
@@ -341,7 +302,7 @@ pub struct HostTensorView<'a, T> {
 /// let tensor = Tensor::from_vec_col_major(vec![1], vec![true])?;
 /// let view = tensor.as_view();
 /// assert_eq!(view.dtype(), DType::Bool);
-/// # Ok::<(), tenferro_tensor_core::Error>(())
+/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
 /// ```
 ///
 /// ```compile_fail
@@ -372,7 +333,7 @@ pub enum TensorView<'a> {
 /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f32])?;
 /// let reference = TensorRef::Tensor(&tensor);
 /// assert_eq!(reference.shape(), &[1]);
-/// # Ok::<(), tenferro_tensor_core::Error>(())
+/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
 /// ```
 #[derive(Clone, Debug)]
 pub enum TensorRef<'a> {
@@ -382,7 +343,7 @@ pub enum TensorRef<'a> {
 
 fn checked_product(shape: &[usize]) -> Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim).ok_or(Error::IntegerOverflow)
+        acc.checked_mul(dim).ok_or(ValidationError::IntegerOverflow)
     })
 }
 
@@ -397,7 +358,7 @@ fn checked_shape_len(shape: &[usize], data_len: usize) -> Result<usize> {
     validate_shape_metadata(shape)?;
     let expected = checked_product(shape)?;
     if expected != data_len {
-        return Err(Error::ShapeDataLengthMismatch {
+        return Err(ValidationError::ShapeDataLengthMismatch {
             expected,
             actual: data_len,
         });
@@ -424,22 +385,29 @@ fn compact_col_major_strides(shape: &[usize]) -> StrideVec {
 /// use tenferro_tensor_core::col_major_strides;
 ///
 /// assert_eq!(col_major_strides(&[2, 3])?.as_slice(), &[1, 2]);
-/// # Ok::<(), tenferro_tensor_core::Error>(())
+/// # Ok::<(), tenferro_tensor_core::ValidationError>(())
 /// ```
+///
+/// # Errors
+///
+/// Returns [`ValidationError::IntegerOverflow`] when a stride or extent
+/// cannot be represented by the metadata arithmetic.
 pub fn col_major_strides(shape: &[usize]) -> Result<StrideVec> {
     let mut strides = StrideVec::new();
     let mut stride = 1isize;
     for &extent in shape {
         strides.push(stride);
-        let extent = isize::try_from(extent).map_err(|_| Error::IntegerOverflow)?;
-        stride = stride.checked_mul(extent).ok_or(Error::IntegerOverflow)?;
+        let extent = isize::try_from(extent).map_err(|_| ValidationError::IntegerOverflow)?;
+        stride = stride
+            .checked_mul(extent)
+            .ok_or(ValidationError::IntegerOverflow)?;
     }
     Ok(strides)
 }
 
 fn validate_permutation(rank: usize, axes: &[usize]) -> Result<()> {
     if axes.len() != rank {
-        return Err(Error::InvalidPermutationLength {
+        return Err(ValidationError::InvalidPermutationLength {
             expected: rank,
             actual: axes.len(),
         });
@@ -447,10 +415,13 @@ fn validate_permutation(rank: usize, axes: &[usize]) -> Result<()> {
     let mut seen = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
-            return Err(Error::AxisOutOfBounds { axis, rank });
+            return Err(ValidationError::AxisOutOfBounds { axis, rank });
         }
         if seen[axis] {
-            return Err(Error::DuplicateAxis { axis });
+            return Err(ValidationError::DuplicateAxis {
+                axis,
+                role: "permutation",
+            });
         }
         seen[axis] = true;
     }
@@ -482,8 +453,10 @@ fn is_slice_contiguous(shape: &[usize], strides: &[isize]) -> Result<bool> {
         if stride != expected {
             return Ok(false);
         }
-        let extent = isize::try_from(extent).map_err(|_| Error::IntegerOverflow)?;
-        let next = expected.checked_mul(extent).ok_or(Error::IntegerOverflow)?;
+        let extent = isize::try_from(extent).map_err(|_| ValidationError::IntegerOverflow)?;
+        let next = expected
+            .checked_mul(extent)
+            .ok_or(ValidationError::IntegerOverflow)?;
         expected = next;
     }
     Ok(true)
@@ -499,8 +472,14 @@ impl<T> HostTensor<T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![2], vec![1_i64, 2])?;
     /// assert_eq!(tensor.shape(), &[2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::ShapeDataLengthMismatch`] when the shape
+    /// product differs from `data.len()`, or [`ValidationError::IntegerOverflow`]
+    /// when validating the shape overflows.
     pub fn from_vec_col_major(shape: impl Into<ShapeVec>, data: Vec<T>) -> Result<Self> {
         let shape = shape.into();
         checked_shape_len(&shape, data.len())?;
@@ -516,7 +495,7 @@ impl<T> HostTensor<T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![2], vec![true, false])?;
     /// assert_eq!(tensor.shape(), &[2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn shape(&self) -> &[usize] {
         &self.shape
@@ -531,7 +510,7 @@ impl<T> HostTensor<T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![2, 1], vec![1.0_f32, 2.0])?;
     /// assert_eq!(tensor.rank(), 2);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn rank(&self) -> usize {
         self.shape.len()
@@ -546,7 +525,7 @@ impl<T> HostTensor<T> {
     ///
     /// let tensor = HostTensor::<f64>::from_vec_col_major(vec![0], vec![])?;
     /// assert!(tensor.is_empty());
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
@@ -561,7 +540,7 @@ impl<T> HostTensor<T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![7_i32])?;
     /// assert_eq!(tensor.as_slice(), &[7]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn as_slice(&self) -> &[T] {
         &self.data
@@ -577,7 +556,7 @@ impl<T> HostTensor<T> {
     /// let mut tensor = HostTensor::from_vec_col_major(vec![1], vec![7_i32])?;
     /// tensor.as_mut_slice()[0] = 8;
     /// assert_eq!(tensor.as_slice(), &[8]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn as_mut_slice(&mut self) -> &mut [T] {
         &mut self.data
@@ -592,7 +571,7 @@ impl<T> HostTensor<T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
     /// assert!(tensor.as_view().is_zero_offset_col_major()?);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn as_view(&self) -> HostTensorView<'_, T> {
         HostTensorView {
@@ -612,7 +591,7 @@ impl<T> HostTensor<T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
     /// assert_eq!(tensor.into_vec_col_major().1, vec![3.0]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn into_vec_col_major(self) -> (ShapeVec, Vec<T>) {
         (self.shape, self.data)
@@ -627,14 +606,20 @@ impl<T> HostTensor<T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
     /// assert_eq!(tensor.into_reshaped(vec![2, 2])?.shape(), &[2, 2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::ShapeMismatch`] when the requested shape has
+    /// a different element count, or [`ValidationError::IntegerOverflow`] when
+    /// validating that count overflows.
     pub fn into_reshaped(self, shape: impl Into<ShapeVec>) -> Result<Self> {
         let shape = shape.into();
         let from = self.data.len();
         let to = checked_product(&shape)?;
         if from != to {
-            return Err(Error::ReshapeElementCountMismatch { from, to });
+            return Err(ShapeMismatch::ReshapeElementCount { from, to }.into());
         }
         validate_shape_metadata(&shape)?;
         Ok(Self {
@@ -655,8 +640,15 @@ impl<'a, T> HostTensorView<'a, T> {
     /// let data = [1.0_f64, 2.0, 3.0, 4.0];
     /// let view = HostTensorView::from_slice(vec![2], vec![1], 1, &data)?;
     /// assert_eq!(view.as_slice()?, &[2.0, 3.0]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::RankMismatch`] for shape/stride rank
+    /// disagreement, [`ValidationError::ViewOutOfBounds`] for an unreachable
+    /// view, or [`ValidationError::IntegerOverflow`] when bounds arithmetic
+    /// overflows.
     pub fn from_slice(
         shape: impl Into<ShapeVec>,
         strides: impl Into<StrideVec>,
@@ -683,7 +675,7 @@ impl<'a, T> HostTensorView<'a, T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
     /// assert_eq!(tensor.as_view().shape(), &[2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn shape(&self) -> &[usize] {
         &self.shape
@@ -698,7 +690,7 @@ impl<'a, T> HostTensorView<'a, T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![2, 3], vec![0_i32; 6])?;
     /// assert_eq!(tensor.as_view().strides(), &[1, 2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn strides(&self) -> &[isize] {
         &self.strides
@@ -713,7 +705,7 @@ impl<'a, T> HostTensorView<'a, T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![true])?;
     /// assert_eq!(tensor.as_view().offset(), 0);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn offset(&self) -> isize {
         self.offset
@@ -728,7 +720,7 @@ impl<'a, T> HostTensorView<'a, T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0])?;
     /// assert_eq!(tensor.as_view().rank(), 2);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn rank(&self) -> usize {
         self.shape.len()
@@ -744,7 +736,7 @@ impl<'a, T> HostTensorView<'a, T> {
     /// let data = [1.0_f64];
     /// let view = HostTensorView::from_slice(vec![0], vec![1], 0, &data)?;
     /// assert!(view.is_empty());
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn is_empty(&self) -> bool {
         self.shape.contains(&0)
@@ -759,8 +751,13 @@ impl<'a, T> HostTensorView<'a, T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![2, 2], vec![0_i32; 4])?;
     /// assert!(tensor.as_view().is_compact_col_major()?);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::IntegerOverflow`] if compactness validation
+    /// overflows metadata arithmetic.
     pub fn is_compact_col_major(&self) -> Result<bool> {
         is_slice_contiguous(&self.shape, &self.strides)
     }
@@ -774,8 +771,13 @@ impl<'a, T> HostTensorView<'a, T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![1], vec![1_i64])?;
     /// assert!(tensor.as_view().is_zero_offset_col_major()?);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::IntegerOverflow`] if compactness validation
+    /// overflows metadata arithmetic.
     pub fn is_zero_offset_col_major(&self) -> Result<bool> {
         Ok(self.offset == 0 && self.is_compact_col_major()?)
     }
@@ -790,16 +792,27 @@ impl<'a, T> HostTensorView<'a, T> {
     /// let data = [1_i32, 2, 3, 4];
     /// let view = HostTensorView::from_slice(vec![2], vec![1], 1, &data)?;
     /// assert_eq!(view.as_slice()?, &[2, 3]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::NonContiguousViewAsSlice`] for a view that
+    /// is not slice-contiguous, [`ValidationError::ViewOutOfBounds`] for an
+    /// invalid backing range, or [`ValidationError::IntegerOverflow`] when
+    /// range arithmetic overflows.
     pub fn as_slice(&self) -> Result<&'a [T]> {
         if !is_slice_contiguous(&self.shape, &self.strides)? {
-            return Err(Error::NonContiguousViewAsSlice);
+            return Err(ValidationError::NonContiguousViewAsSlice);
         }
         let len = checked_product(&self.shape)?;
-        let start = usize::try_from(self.offset).map_err(|_| Error::IntegerOverflow)?;
-        let end = start.checked_add(len).ok_or(Error::IntegerOverflow)?;
-        self.data.get(start..end).ok_or(Error::ViewOutOfBounds)
+        let start = usize::try_from(self.offset).map_err(|_| ValidationError::IntegerOverflow)?;
+        let end = start
+            .checked_add(len)
+            .ok_or(ValidationError::IntegerOverflow)?;
+        self.data
+            .get(start..end)
+            .ok_or(ValidationError::ViewOutOfBounds)
     }
 
     /// Return a metadata-only reshape of this compact column-major view.
@@ -811,17 +824,24 @@ impl<'a, T> HostTensorView<'a, T> {
     ///
     /// let tensor = HostTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?;
     /// assert_eq!(tensor.as_view().reshape_view(vec![2, 2])?.shape(), &[2, 2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::NonContiguousViewAsSlice`] for a view that
+    /// is not slice-contiguous, [`ValidationError::ShapeMismatch`] for a
+    /// different element count, or [`ValidationError::IntegerOverflow`] when
+    /// shape arithmetic overflows.
     pub fn reshape_view(&self, shape: impl Into<ShapeVec>) -> Result<Self> {
         if !self.is_compact_col_major()? {
-            return Err(Error::NonContiguousViewAsSlice);
+            return Err(ValidationError::NonContiguousViewAsSlice);
         }
         let shape = shape.into();
         let from = checked_product(&self.shape)?;
         let to = checked_product(&shape)?;
         if from != to {
-            return Err(Error::ReshapeElementCountMismatch { from, to });
+            return Err(ShapeMismatch::ReshapeElementCount { from, to }.into());
         }
         Self::from_slice(
             shape.clone(),
@@ -842,8 +862,16 @@ impl<'a, T> HostTensorView<'a, T> {
     /// let view = tensor.as_view().transpose_view(&[1, 0])?;
     /// assert_eq!(view.shape(), &[3, 2]);
     /// assert_eq!(view.strides(), &[2, 1]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::InvalidPermutationLength`],
+    /// [`ValidationError::AxisOutOfBounds`], or
+    /// [`ValidationError::DuplicateAxis`] when `axes` is not a permutation of
+    /// the view rank; it may also return [`ValidationError::ViewOutOfBounds`]
+    /// or [`ValidationError::IntegerOverflow`] while validating the result.
     pub fn transpose_view(&self, axes: &[usize]) -> Result<Self> {
         validate_permutation(self.rank(), axes)?;
         let shape = axes
@@ -869,11 +897,18 @@ impl<'a, T> HostTensorView<'a, T> {
     ///     .as_view()
     ///     .slice_view(&[SliceSpec { start: 1, end: 4, step: 2 }])?;
     /// assert_eq!(view.shape(), &[2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::RankMismatch`] when `spec` does not cover
+    /// every axis, [`ValidationError::InvalidSliceStep`] or
+    /// [`ValidationError::InvalidSliceBounds`] for invalid slice parameters,
+    /// or [`ValidationError::ViewOutOfBounds`] for an invalid result view.
     pub fn slice_view(&self, spec: &[SliceSpec]) -> Result<Self> {
         if spec.len() != self.rank() {
-            return Err(Error::RankMismatch {
+            return Err(ValidationError::RankMismatch {
                 expected: self.rank(),
                 actual: spec.len(),
             });
@@ -883,43 +918,44 @@ impl<'a, T> HostTensorView<'a, T> {
         let mut offset = self.offset;
         for ((&axis_len, &stride), slice) in self.shape.iter().zip(self.strides.iter()).zip(spec) {
             if slice.step <= 0 {
-                return Err(Error::InvalidSliceStep { step: slice.step });
+                return Err(ValidationError::InvalidSliceStep { step: slice.step });
             }
             if slice.start < 0 || slice.end < 0 {
-                return Err(Error::InvalidSliceBounds {
+                return Err(ValidationError::InvalidSliceBounds {
                     start: slice.start,
                     end: slice.end,
                     axis_len,
                 });
             }
-            let start = usize::try_from(slice.start).map_err(|_| Error::IntegerOverflow)?;
-            let end = usize::try_from(slice.end).map_err(|_| Error::IntegerOverflow)?;
+            let start =
+                usize::try_from(slice.start).map_err(|_| ValidationError::IntegerOverflow)?;
+            let end = usize::try_from(slice.end).map_err(|_| ValidationError::IntegerOverflow)?;
             if start > axis_len || end > axis_len {
-                return Err(Error::InvalidSliceBounds {
+                return Err(ValidationError::InvalidSliceBounds {
                     start: slice.start,
                     end: slice.end,
                     axis_len,
                 });
             }
-            let step = usize::try_from(slice.step).map_err(|_| Error::IntegerOverflow)?;
+            let step = usize::try_from(slice.step).map_err(|_| ValidationError::IntegerOverflow)?;
             let extent = if start >= end {
                 0
             } else {
                 end.checked_sub(start)
                     .and_then(|span| span.checked_add(step - 1))
-                    .ok_or(Error::IntegerOverflow)?
+                    .ok_or(ValidationError::IntegerOverflow)?
                     / step
             };
             let start_offset = isize::try_from(start)
-                .map_err(|_| Error::IntegerOverflow)?
+                .map_err(|_| ValidationError::IntegerOverflow)?
                 .checked_mul(stride)
-                .ok_or(Error::IntegerOverflow)?;
+                .ok_or(ValidationError::IntegerOverflow)?;
             offset = offset
                 .checked_add(start_offset)
-                .ok_or(Error::IntegerOverflow)?;
+                .ok_or(ValidationError::IntegerOverflow)?;
             let new_stride = stride
                 .checked_mul(slice.step)
-                .ok_or(Error::IntegerOverflow)?;
+                .ok_or(ValidationError::IntegerOverflow)?;
             shape.push(extent);
             strides.push(new_stride);
         }
@@ -937,8 +973,14 @@ impl Tensor {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![2.0_f32])?;
     /// assert_eq!(tensor.dtype(), DType::F32);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::ShapeDataLengthMismatch`] when the shape
+    /// product differs from `data.len()`, or [`ValidationError::IntegerOverflow`]
+    /// when validating the shape overflows.
     pub fn from_vec_col_major<T: TensorScalar>(
         shape: impl Into<ShapeVec>,
         data: Vec<T>,
@@ -955,7 +997,7 @@ impl Tensor {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![false])?;
     /// assert_eq!(tensor.dtype(), DType::Bool);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn dtype(&self) -> DType {
         match self {
@@ -978,7 +1020,7 @@ impl Tensor {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1_i32, 2])?;
     /// assert_eq!(tensor.shape(), &[2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn shape(&self) -> &[usize] {
         match self {
@@ -1001,7 +1043,7 @@ impl Tensor {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1, 1], vec![1_i64])?;
     /// assert_eq!(tensor.rank(), 2);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn rank(&self) -> usize {
         self.shape().len()
@@ -1016,7 +1058,7 @@ impl Tensor {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![0], Vec::<f64>::new())?;
     /// assert!(tensor.is_empty());
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn is_empty(&self) -> bool {
         match self {
@@ -1040,10 +1082,15 @@ impl Tensor {
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
     /// assert_eq!(tensor.as_slice::<f64>()?, &[3.0]);
     /// assert!(tensor.as_slice::<f32>().is_err());
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::DTypeMismatch`] when `T` does not match the
+    /// tensor's runtime dtype.
     pub fn as_slice<T: TensorScalar>(&self) -> Result<&[T]> {
-        T::tensor_slice(self).ok_or(Error::DTypeMismatch {
+        T::tensor_slice(self).ok_or(ValidationError::DTypeMismatch {
             expected: T::dtype(),
             actual: self.dtype(),
         })
@@ -1059,11 +1106,16 @@ impl Tensor {
     /// let mut tensor = Tensor::from_vec_col_major(vec![1], vec![3.0_f64])?;
     /// tensor.as_mut_slice::<f64>()?[0] = 4.0;
     /// assert_eq!(tensor.as_slice::<f64>()?, &[4.0]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::DTypeMismatch`] when `T` does not match the
+    /// tensor's runtime dtype.
     pub fn as_mut_slice<T: TensorScalar>(&mut self) -> Result<&mut [T]> {
         let actual = self.dtype();
-        T::tensor_mut_slice(self).ok_or(Error::DTypeMismatch {
+        T::tensor_mut_slice(self).ok_or(ValidationError::DTypeMismatch {
             expected: T::dtype(),
             actual,
         })
@@ -1078,7 +1130,7 @@ impl Tensor {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1_i64])?;
     /// assert_eq!(tensor.as_view().dtype(), DType::I64);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn as_view(&self) -> TensorView<'_> {
         match self {
@@ -1101,13 +1153,18 @@ impl Tensor {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![2.0_f32])?;
     /// assert_eq!(tensor.into_vec_col_major::<f32>()?.1, vec![2.0]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::DTypeMismatch`] when `T` does not match the
+    /// tensor's runtime dtype.
     pub fn into_vec_col_major<T: TensorScalar>(self) -> Result<(ShapeVec, Vec<T>)> {
         let actual = self.dtype();
         T::into_typed(self)
             .map(HostTensor::into_vec_col_major)
-            .ok_or(Error::DTypeMismatch {
+            .ok_or(ValidationError::DTypeMismatch {
                 expected: T::dtype(),
                 actual,
             })
@@ -1138,7 +1195,7 @@ impl<'a> TensorView<'a> {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f32])?;
     /// assert_eq!(tensor.as_view().dtype(), DType::F32);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn dtype(&self) -> DType {
         match self {
@@ -1161,7 +1218,7 @@ impl<'a> TensorView<'a> {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
     /// assert_eq!(tensor.as_view().shape(), &[1]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn shape(&self) -> &[usize] {
         match self {
@@ -1184,7 +1241,7 @@ impl<'a> TensorView<'a> {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1, 1], vec![1_i64])?;
     /// assert_eq!(tensor.as_view().rank(), 2);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn rank(&self) -> usize {
         self.shape().len()
@@ -1199,7 +1256,7 @@ impl<'a> TensorView<'a> {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![0], Vec::<f64>::new())?;
     /// assert!(tensor.as_view().is_empty());
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn is_empty(&self) -> bool {
         match self {
@@ -1222,8 +1279,15 @@ impl<'a> TensorView<'a> {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![4], vec![1_i32, 2, 3, 4])?;
     /// assert_eq!(tensor.as_view().reshape_view(vec![2, 2])?.shape(), &[2, 2]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying view's validation errors, including
+    /// [`ValidationError::ShapeMismatch`],
+    /// [`ValidationError::NonContiguousViewAsSlice`], or
+    /// [`ValidationError::IntegerOverflow`].
     pub fn reshape_view(&self, shape: impl Into<ShapeVec>) -> Result<Self> {
         let shape = shape.into();
         Ok(impl_dynamic_view!(self, reshape_view(shape) => view))
@@ -1238,8 +1302,15 @@ impl<'a> TensorView<'a> {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1, 2], vec![1_i64, 2])?;
     /// assert_eq!(tensor.as_view().transpose_view(&[1, 0])?.shape(), &[2, 1]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::InvalidPermutationLength`],
+    /// [`ValidationError::AxisOutOfBounds`], or
+    /// [`ValidationError::DuplicateAxis`] when `axes` is not a permutation of
+    /// the view rank.
     pub fn transpose_view(&self, axes: &[usize]) -> Result<Self> {
         Ok(impl_dynamic_view!(self, transpose_view(axes) => view))
     }
@@ -1256,8 +1327,14 @@ impl<'a> TensorView<'a> {
     ///     tensor.as_view().slice_view(&[SliceSpec { start: 1, end: 3, step: 1 }])?.shape(),
     ///     &[2],
     /// );
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidationError::RankMismatch`],
+    /// [`ValidationError::InvalidSliceStep`], or
+    /// [`ValidationError::InvalidSliceBounds`] for invalid slice parameters.
     pub fn slice_view(&self, spec: &[SliceSpec]) -> Result<Self> {
         Ok(impl_dynamic_view!(self, slice_view(spec) => view))
     }
@@ -1273,7 +1350,7 @@ impl<'a> TensorRef<'a> {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1_i64])?;
     /// assert_eq!(TensorRef::Tensor(&tensor).dtype(), DType::I64);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn dtype(&self) -> DType {
         match self {
@@ -1291,7 +1368,7 @@ impl<'a> TensorRef<'a> {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1], vec![1_i64])?;
     /// assert_eq!(TensorRef::Tensor(&tensor).shape(), &[1]);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn shape(&self) -> &[usize] {
         match self {
@@ -1309,7 +1386,7 @@ impl<'a> TensorRef<'a> {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![1, 1], vec![1_i64])?;
     /// assert_eq!(TensorRef::Tensor(&tensor).rank(), 2);
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn rank(&self) -> usize {
         self.shape().len()
@@ -1324,7 +1401,7 @@ impl<'a> TensorRef<'a> {
     ///
     /// let tensor = Tensor::from_vec_col_major(vec![0], Vec::<f64>::new())?;
     /// assert!(TensorRef::Tensor(&tensor).is_empty());
-    /// # Ok::<(), tenferro_tensor_core::Error>(())
+    /// # Ok::<(), tenferro_tensor_core::ValidationError>(())
     /// ```
     pub fn is_empty(&self) -> bool {
         match self {

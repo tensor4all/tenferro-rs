@@ -26,6 +26,7 @@ use tenferro_gpu::{download_tensor, CudaBackend, CudaRuntime};
 use tenferro_tensor::config::SliceConfig;
 use tenferro_tensor::{
     DType, Error, Tensor, TensorElementwise, TensorReduction, TensorStructural, TypedTensor,
+    ValidationError,
 };
 
 type Result<T> = tenferro_tensor::Result<T>;
@@ -127,16 +128,12 @@ fn select_svd_driver(m: usize, n: usize) -> SvdDriver {
 }
 
 fn unsupported_linalg_dtype(op: &'static str, input: &Tensor) -> Error {
-    Error::backend_failure(op, format!("unsupported dtype {:?}", input.dtype()))
+    crate::error::unsupported_dtype(op, input.dtype())
 }
 
 fn ensure_supported_linalg_pair(op: &'static str, lhs: &Tensor, rhs: &Tensor) -> Result<()> {
     if lhs.dtype() != rhs.dtype() {
-        return Err(Error::DTypeMismatch {
-            op,
-            lhs: lhs.dtype(),
-            rhs: rhs.dtype(),
-        });
+        return Err(Error::dtype_mismatch(op, lhs.dtype(), rhs.dtype()));
     }
     match lhs {
         Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_) => Ok(()),
@@ -223,14 +220,14 @@ pub(super) fn triangular_solve(
             triangular_solve_typed(backend, a, b, left_side, lower, transpose_a, unit_diagonal)
                 .map(Tensor::C64)
         }
-        _ if a.dtype() != b.dtype() => Err(Error::DTypeMismatch {
-            op: "triangular_solve",
-            lhs: a.dtype(),
-            rhs: b.dtype(),
-        }),
-        _ => Err(Error::backend_failure(
+        _ if a.dtype() != b.dtype() => Err(Error::dtype_mismatch(
             "triangular_solve",
-            format!("unsupported dtype {:?}", a.dtype()),
+            a.dtype(),
+            b.dtype(),
+        )),
+        _ => Err(crate::error::unsupported_dtype(
+            "triangular_solve",
+            a.dtype(),
         )),
     }
 }
@@ -312,7 +309,7 @@ pub(super) fn lu_factor(backend: &mut CudaBackend, input: &Tensor) -> Result<Vec
 }
 
 pub(super) fn full_piv_lu(_backend: &mut CudaBackend, _input: &Tensor) -> Result<Vec<Tensor>> {
-    Err(Error::backend_failure(
+    Err(Error::unsupported(
         "full_piv_lu",
         "complete-pivoting LU is not implemented for the CubeCL backend",
     ))
@@ -324,7 +321,7 @@ pub(super) fn full_piv_lu_solve(
     _b: &Tensor,
     _transpose_a: bool,
 ) -> Result<Tensor> {
-    Err(Error::backend_failure(
+    Err(Error::unsupported(
         "full_piv_lu_solve",
         "complete-pivoting LU solve is not implemented for the CubeCL backend",
     ))
@@ -395,7 +392,7 @@ pub(super) fn eigh_values(backend: &mut CudaBackend, input: &Tensor) -> Result<T
 }
 
 pub(super) fn eig(_backend: &mut CudaBackend, _input: &Tensor) -> Result<Vec<Tensor>> {
-    Err(Error::backend_failure(
+    Err(Error::unsupported(
         "eig",
         "non-symmetric eigendecomposition is not supported on the CubeCL GPU backend \
                   because cuSOLVER does not provide it. Download to CPU explicitly via \
@@ -426,9 +423,8 @@ pub(super) fn solve(backend: &mut CudaBackend, a: &Tensor, b: &Tensor) -> Result
 
     let factors = lu_factor(backend, a)?;
     let [packed_lu, pivots, _parity] = factors.as_slice() else {
-        return Err(Error::backend_failure(
-            OP,
-            "lu_factor returned an unexpected number of outputs",
+        return Err(Error::Internal(
+            "solve: lu_factor returned an unexpected number of outputs".into(),
         ));
     };
     let x = lu_solve_prepared(backend, a, packed_lu, pivots, &rhs, false, false)?;
@@ -458,11 +454,7 @@ pub(super) fn lu_solve_prepared(
     ensure_supported_linalg_pair(OP, a, b)?;
     ensure_supported_linalg_pair(OP, a, packed_lu)?;
     if !matches!(pivots, Tensor::I32(_)) {
-        return Err(Error::DTypeMismatch {
-            op: OP,
-            lhs: DType::I32,
-            rhs: pivots.dtype(),
-        });
+        return Err(Error::dtype_mismatch(OP, DType::I32, pivots.dtype()));
     }
     if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
         return zero_like_linalg_device_tensor(backend.runtime(), b, OP);
@@ -495,9 +487,8 @@ pub(super) fn lu_solve_prepared(
             lu_solve_prepared_typed(backend, lu, pivots, rhs, transpose_a, conjugate_a)
                 .map(Tensor::C64)
         }
-        _ => Err(Error::backend_failure(
-            OP,
-            "packed LU, pivots, and rhs dtypes are inconsistent",
+        _ => Err(Error::Internal(
+            "lu_solve_prepared: packed LU, pivots, and rhs dtypes are inconsistent".into(),
         )),
     }?;
 
@@ -831,8 +822,9 @@ where
     let host_info = download_device_tensor(backend.runtime(), &info, OP)?;
     for &info_value in host_info.host_data()? {
         if info_value < 0 {
-            return Err(Error::backend_failure(
+            return Err(Error::invalid_argument(
                 OP,
+                "cusolver_argument",
                 format!(
                     "cusolverDn*getrf reported invalid parameter {}",
                     -info_value
@@ -905,7 +897,7 @@ where
             )?;
             apply_lu_pivots_typed(backend.runtime(), &y, pivots, true)
         }
-        (false, true) => Err(Error::backend_failure(
+        (false, true) => Err(Error::unsupported(
             OP,
             "conjugate-only prepared LU solve is unsupported on CUDA; use transpose+conjugate or solve the conjugated matrix explicitly",
         )),
@@ -1885,9 +1877,8 @@ fn sync_stream(rt: &CudaRuntime, op: &'static str) -> Result<()> {
     let stream = raw_stream(rt, op)? as cudaStream_t;
     // SAFETY: `raw_stream` returns the live CUDA stream owned by this runtime's
     // current context; synchronizing it does not outlive the runtime.
-    unsafe { cuda_result::stream::synchronize(stream) }.map_err(|err| {
-        Error::backend_failure(op, format!("CUDA stream synchronize failed: {err:?}"))
-    })
+    unsafe { cuda_result::stream::synchronize(stream) }
+        .map_err(|err| Error::backend_source(op, err))
 }
 
 fn alloc_workspace_bytes(rt: &CudaRuntime, nbytes: usize, op: &'static str) -> Result<Workspace> {
@@ -1898,9 +1889,17 @@ fn alloc_workspace_elems<T>(rt: &CudaRuntime, len: i32, op: &'static str) -> Res
 where
     T: CubeElement + Clone,
 {
-    let len = usize::try_from(len)
-        .map_err(|_| Error::backend_failure(op, format!("workspace length was negative: {len}")))?;
-    alloc_workspace_bytes(rt, len * std::mem::size_of::<T>(), op)
+    let len = usize::try_from(len).map_err(|_| {
+        Error::invalid_argument(
+            op,
+            "workspace_length",
+            format!("must be non-negative, got {len}"),
+        )
+    })?;
+    let nbytes = len
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or_else(|| Error::invalid_argument(op, "workspace_length", "byte size overflowed"))?;
+    alloc_workspace_bytes(rt, nbytes, op)
 }
 
 fn typed_device_ptr<T: 'static>(
@@ -1973,7 +1972,7 @@ fn copy_device_to_device(
     // SAFETY: callers pass device pointers obtained from live tensors or
     // workspaces, `nbytes` is checked before zero-size return, and the stream is current.
     unsafe { cuda_result::memcpy_dtod_async(dst, src, nbytes, stream) }
-        .map_err(|err| Error::backend_failure(op, format!("cudaMemcpyAsync DtoD failed: {err:?}")))
+        .map_err(|err| Error::backend_source(op, err))
 }
 
 fn matrix_slice_config(shape: &[usize], row_limit: usize, col_limit: usize) -> SliceConfig {
@@ -1989,11 +1988,7 @@ fn matrix_slice_config(shape: &[usize], row_limit: usize, col_limit: usize) -> S
 
 fn matrix_dims(op: &'static str, shape: &[usize]) -> Result<(usize, usize)> {
     if shape.len() < 2 {
-        return Err(Error::RankMismatch {
-            op,
-            expected: 2,
-            actual: shape.len(),
-        });
+        return Err(Error::rank_mismatch(op, 2, shape.len()));
     }
     Ok((shape[0], shape[1]))
 }
@@ -2001,10 +1996,7 @@ fn matrix_dims(op: &'static str, shape: &[usize]) -> Result<(usize, usize)> {
 fn square_matrix_dim(op: &'static str, shape: &[usize]) -> Result<usize> {
     let (rows, cols) = matrix_dims(op, shape)?;
     if rows != cols {
-        return Err(Error::InvalidConfig {
-            op,
-            message: format!("expected square matrix, got shape {shape:?}"),
-        });
+        return Err(Error::shape_mismatch(op, [rows], [cols]));
     }
     Ok(rows)
 }
@@ -2018,23 +2010,17 @@ fn validate_triangular_rhs(
     let n = square_matrix_dim(op, a_shape)?;
     let (b_rows, b_cols) = matrix_dims(op, b_shape)?;
     if a_shape[2..] != b_shape[2..] {
-        return Err(Error::ShapeMismatch {
+        return Err(Error::shape_mismatch(
             op,
-            lhs: a_shape.to_vec(),
-            rhs: b_shape.to_vec(),
-        });
+            a_shape.to_vec(),
+            b_shape.to_vec(),
+        ));
     }
     if left_side && b_rows != n {
-        return Err(Error::InvalidConfig {
-            op,
-            message: format!("rhs row count mismatch: expected {n}, got {b_rows}"),
-        });
+        return Err(Error::shape_mismatch(op, [n], [b_rows]));
     }
     if !left_side && b_cols != n {
-        return Err(Error::InvalidConfig {
-            op,
-            message: format!("rhs column count mismatch: expected {n}, got {b_cols}"),
-        });
+        return Err(Error::shape_mismatch(op, [n], [b_cols]));
     }
     Ok(())
 }
@@ -2047,26 +2033,23 @@ fn validate_lu_solve_prepared_shapes(
     let n = square_matrix_dim("lu_solve_prepared", lu_shape)?;
     let (b_rows, _) = matrix_dims("lu_solve_prepared", b_shape)?;
     if b_rows != n {
-        return Err(Error::InvalidConfig {
-            op: "lu_solve_prepared",
-            message: format!("rhs row count mismatch: expected {n}, got {b_rows}"),
-        });
+        return Err(Error::shape_mismatch("lu_solve_prepared", [n], [b_rows]));
     }
     if lu_shape[2..] != b_shape[2..] {
-        return Err(Error::ShapeMismatch {
-            op: "lu_solve_prepared",
-            lhs: lu_shape.to_vec(),
-            rhs: b_shape.to_vec(),
-        });
+        return Err(Error::shape_mismatch(
+            "lu_solve_prepared",
+            lu_shape.to_vec(),
+            b_shape.to_vec(),
+        ));
     }
     let mut expected_pivots = vec![n];
     expected_pivots.extend_from_slice(&lu_shape[2..]);
     if pivots_shape != expected_pivots {
-        return Err(Error::ShapeMismatch {
-            op: "lu_solve_prepared",
-            lhs: expected_pivots,
-            rhs: pivots_shape.to_vec(),
-        });
+        return Err(Error::shape_mismatch(
+            "lu_solve_prepared",
+            expected_pivots,
+            pivots_shape.to_vec(),
+        ));
     }
     Ok(())
 }
@@ -2076,14 +2059,15 @@ fn check_solver_info(op: &'static str, call: &'static str, info: i32) -> Result<
         return Ok(());
     }
     if info < 0 {
-        return Err(Error::backend_failure(
+        return Err(Error::invalid_argument(
             op,
+            "cusolver_parameter",
             format!("{call} reported invalid parameter {}", -info),
         ));
     }
-    Err(Error::backend_failure(
+    Err(crate::error::into_tensor_error(
         op,
-        format!("{call} failed with info={info}"),
+        crate::Error::NonConvergence { op },
     ))
 }
 
@@ -2106,9 +2090,9 @@ fn has_zero_dim(shape: &[usize]) -> bool {
 
 fn checked_shape_product(op: &'static str, label: &'static str, shape: &[usize]) -> Result<usize> {
     shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim).ok_or_else(|| Error::InvalidConfig {
-            op,
-            message: format!("{label} element count overflows usize"),
+        acc.checked_mul(dim).ok_or_else(|| {
+            let _ = label;
+            Error::validation(op, ValidationError::IntegerOverflow)
         })
     })
 }
@@ -2124,9 +2108,9 @@ fn checked_mul_usize(
     lhs: usize,
     rhs: usize,
 ) -> Result<usize> {
-    lhs.checked_mul(rhs).ok_or_else(|| Error::InvalidConfig {
-        op,
-        message: format!("{label} overflows usize: {lhs} * {rhs}"),
+    lhs.checked_mul(rhs).ok_or_else(|| {
+        let _ = label;
+        Error::validation(op, ValidationError::IntegerOverflow)
     })
 }
 
@@ -2141,7 +2125,7 @@ fn checked_batch_offset(
 
 fn as_i32(value: usize, op: &'static str, label: &'static str) -> Result<i32> {
     i32::try_from(value)
-        .map_err(|_| Error::backend_failure(op, format!("{label} does not fit in i32: {value}")))
+        .map_err(|_| Error::invalid_argument(op, label, format!("{value} does not fit in i32")))
 }
 
 /// Offset a mutable device pointer by `offset` typed elements.
@@ -2226,9 +2210,9 @@ fn validate_nonsingular_gpu(backend: &mut CudaBackend, u: &Tensor) -> Result<()>
     let is_singular = !value.is_finite() || !max_magnitude.is_finite() || value <= tolerance;
 
     if is_singular {
-        Err(Error::backend_failure(
+        Err(crate::error::into_tensor_error(
             "solve",
-            "singular matrix: near-zero or non-finite diagonal entry in U",
+            crate::Error::Singular { op: "solve" },
         ))
     } else {
         Ok(())
@@ -2305,9 +2289,8 @@ fn host_min_max_magnitudes(host_min: &Tensor, host_max: &Tensor) -> Result<(f64,
             f64::from(min.host_data()?[0]),
             f64::from(max.host_data()?[0]),
         )),
-        _ => Err(Error::backend_failure(
-            "solve",
-            "unexpected dtype after magnitude reduction",
+        _ => Err(Error::Internal(
+            "solve: unexpected dtype after magnitude reduction".into(),
         )),
     }
 }

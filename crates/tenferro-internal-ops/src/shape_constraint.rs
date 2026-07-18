@@ -1,4 +1,4 @@
-use tenferro_tensor::DType;
+use tenferro_tensor::{DType, ErrorKind, ValidationKind};
 
 use crate::SymDim;
 
@@ -119,19 +119,21 @@ pub enum ExtensionShapeError {
 
 impl From<ExtensionShapeError> for tenferro_tensor::Error {
     fn from(error: ExtensionShapeError) -> Self {
-        // `tenferro_tensor::Error` has no source-carrying extension-config
-        // variant. Keep the context's native error typed, and cross the
-        // ExtensionOp callback boundary through its structured InvalidConfig
-        // carrier while retaining every field in the diagnostic.
-        let op = match &error {
-            ExtensionShapeError::InputOutOfBounds { family_id, .. }
-            | ExtensionShapeError::AxisOutOfBounds { family_id, .. }
-            | ExtensionShapeError::RankMismatch { family_id, .. } => *family_id,
+        let (family_id, kind) = match &error {
+            ExtensionShapeError::InputOutOfBounds { family_id, .. } => (
+                *family_id,
+                ErrorKind::Validation(ValidationKind::InvalidArgument),
+            ),
+            ExtensionShapeError::AxisOutOfBounds { family_id, .. } => (
+                *family_id,
+                ErrorKind::Validation(ValidationKind::AxisOutOfBounds),
+            ),
+            ExtensionShapeError::RankMismatch { family_id, .. } => (
+                *family_id,
+                ErrorKind::Validation(ValidationKind::RankMismatch),
+            ),
         };
-        Self::InvalidConfig {
-            op,
-            message: error.to_string(),
-        }
+        tenferro_tensor::Error::extension("extension", family_id, kind, error)
     }
 }
 
@@ -188,6 +190,11 @@ impl<'a> ExtensionShapeContext<'a> {
     ///     Ok(ctx.input_dtype(0)?)
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionShapeError::InputOutOfBounds`] when `input` is not
+    /// present in the extension metadata.
     pub fn input_dtype(&self, input: usize) -> Result<DType, ExtensionShapeError> {
         self.input_dtypes
             .get(input)
@@ -211,6 +218,11 @@ impl<'a> ExtensionShapeContext<'a> {
     ///     Ok(())
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionShapeError::InputOutOfBounds`] when `input` is not
+    /// present in the extension metadata.
     pub fn input_shape(&self, input: usize) -> Result<&[SymDim], ExtensionShapeError> {
         self.input_shapes
             .get(input)
@@ -234,6 +246,12 @@ impl<'a> ExtensionShapeContext<'a> {
     ///     Ok(ctx.input_axis(0, 0)?)
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionShapeError::InputOutOfBounds`] for an unknown input
+    /// or [`ExtensionShapeError::AxisOutOfBounds`] for an axis outside that
+    /// input's rank.
     pub fn input_axis(&self, input: usize, axis: usize) -> Result<SymDim, ExtensionShapeError> {
         let shape = self.input_shape(input)?;
         shape
@@ -263,6 +281,11 @@ impl<'a> ExtensionShapeContext<'a> {
     ///     Ok(())
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(())`; this method only records a symbolic equality and does
+    /// not evaluate it or produce an [`ExtensionShapeError`].
     pub fn require_equal(&mut self, lhs: SymDim, rhs: SymDim) -> Result<(), ExtensionShapeError> {
         self.constraints
             .push(ExtensionShapeConstraint::equal(lhs, rhs));
@@ -281,6 +304,12 @@ impl<'a> ExtensionShapeContext<'a> {
     ///     Ok(())
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionShapeError::InputOutOfBounds`] or
+    /// [`ExtensionShapeError::AxisOutOfBounds`] when either referenced axis is
+    /// absent from the extension metadata.
     pub fn require_axes_equal(
         &mut self,
         lhs: (usize, usize),
@@ -305,6 +334,12 @@ impl<'a> ExtensionShapeContext<'a> {
     ///     Ok(())
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionShapeError::InputOutOfBounds`] when an input is
+    /// absent, or [`ExtensionShapeError::RankMismatch`] when the two inputs do
+    /// not have the same rank.
     pub fn require_same_shape(
         &mut self,
         lhs_input: usize,

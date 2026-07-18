@@ -1,6 +1,6 @@
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{TypedTensor, TypedTensorOpsExt};
-use tenferro_tensor::Error as TensorError;
+use tenferro_runtime::{TensorOpsExt, TypedTensor, TypedTensorOpsExt};
+use tenferro_tensor::{Error as TensorError, ShapeMismatch, ValidationError};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -60,10 +60,30 @@ fn typed_tensor_matmul_rejects_non_matrix_inputs_without_rank_underflow() {
 
     assert!(matches!(
         err,
-        TensorError::RankMismatch {
+        TensorError::Validation {
             op: "matmul",
-            expected: 2,
-            actual: 0,
+            source: ValidationError::RankMismatch {
+                expected: 2,
+                actual: 0,
+            },
         }
+    ));
+}
+
+#[test]
+fn direct_tensor_broadcast_uses_the_shared_shape_payload() {
+    let mut backend = CpuBackend::new();
+    let lhs = tenferro_tensor::Tensor::from_vec_col_major(vec![2], vec![1.0_f64; 2]).unwrap();
+    let rhs = tenferro_tensor::Tensor::from_vec_col_major(vec![3], vec![1.0_f64; 3]).unwrap();
+
+    let error = lhs.add(&rhs, &mut backend).unwrap_err();
+
+    assert!(matches!(
+        error,
+        TensorError::Validation {
+            source: ValidationError::ShapeMismatch(shape),
+            ..
+        } if matches!(shape.as_ref(), ShapeMismatch::IncompatibleShapes { lhs, rhs }
+            if lhs.as_slice() == [2] && rhs.as_slice() == [3])
     ));
 }

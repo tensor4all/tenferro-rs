@@ -207,9 +207,7 @@ fn element_count(shape: &[usize]) -> Result<usize> {
 }
 
 fn tensor_slice<T: tenferro_tensor::TensorScalar>(tensor: &Tensor) -> Result<&[T]> {
-    tensor.as_slice::<T>().map_err(|err| Error::InvalidProgram {
-        message: format!("PJRT input tensor is not compact host data: {err}"),
-    })
+    tensor.as_slice::<T>().map_err(Error::from)
 }
 
 fn pjrt_error_message(api: &PJRT_Api, error: *mut PJRT_Error) -> String {
@@ -672,17 +670,13 @@ impl PjrtBuffer<'_> {
             DType::F32 => {
                 let col_major = self.download_host_vec::<f32>(&spec.shape)?;
                 let tensor = TypedTensor::from_vec_col_major(spec.shape.clone(), col_major)
-                    .map_err(|err| Error::InvalidProgram {
-                        message: format!("PJRT F32 output tensor construction failed: {err}"),
-                    })?;
+                    .map_err(Error::from)?;
                 Ok(Tensor::F32(tensor))
             }
             DType::F64 => {
                 let col_major = self.download_host_vec::<f64>(&spec.shape)?;
                 let tensor = TypedTensor::from_vec_col_major(spec.shape.clone(), col_major)
-                    .map_err(|err| Error::InvalidProgram {
-                        message: format!("PJRT F64 output tensor construction failed: {err}"),
-                    })?;
+                    .map_err(Error::from)?;
                 Ok(Tensor::F64(tensor))
             }
             other => Err(Error::UnsupportedDType {

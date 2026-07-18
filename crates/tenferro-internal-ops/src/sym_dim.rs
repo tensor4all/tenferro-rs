@@ -1,5 +1,7 @@
 use std::ops::{Add, Div, Mul, Sub};
 
+use thiserror::Error;
+
 use crate::dim_expr::DimExpr;
 
 /// A symbolic tensor dimension expression used to build shape-agnostic graphs.
@@ -18,6 +20,15 @@ use crate::dim_expr::DimExpr;
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymDim(pub(crate) RawSymDim);
+
+/// A symbolic dimension referenced a tensor that is not present in the
+/// conversion map supplied by the graph builder.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[error("unknown symbolic tensor id {tensor_id}")]
+pub struct SymDimConversionError {
+    /// Identifier of the missing symbolic tensor.
+    pub tensor_id: u64,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RawSymDim {
@@ -101,7 +112,10 @@ impl SymDim {
     }
 
     #[doc(hidden)]
-    pub fn to_dim_expr(&self, tensor_map: &[(u64, usize)]) -> std::result::Result<DimExpr, String> {
+    pub fn to_dim_expr(
+        &self,
+        tensor_map: &[(u64, usize)],
+    ) -> std::result::Result<DimExpr, SymDimConversionError> {
         raw_to_dim_expr(&self.0, tensor_map)
     }
 
@@ -175,7 +189,7 @@ impl From<usize> for SymDim {
 fn raw_to_dim_expr(
     raw: &RawSymDim,
     tensor_map: &[(u64, usize)],
-) -> std::result::Result<DimExpr, String> {
+) -> std::result::Result<DimExpr, SymDimConversionError> {
     Ok(match raw {
         RawSymDim::Const(value) => DimExpr::Const(*value),
         RawSymDim::TensorAxis { tensor_id, axis } => {
@@ -184,7 +198,9 @@ fn raw_to_dim_expr(
                 .find_map(|(candidate_id, input_idx)| {
                     (candidate_id == tensor_id).then_some(*input_idx)
                 })
-                .ok_or_else(|| format!("unknown symbolic tensor id {tensor_id}"))?;
+                .ok_or(SymDimConversionError {
+                    tensor_id: *tensor_id,
+                })?;
             DimExpr::InputDim {
                 input_idx,
                 axis: *axis,

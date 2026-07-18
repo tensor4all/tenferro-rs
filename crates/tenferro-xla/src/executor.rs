@@ -90,6 +90,12 @@ impl XlaExecutor {
     ///     assert!(matches!(err, Error::PjrtFeatureDisabled | Error::MissingEnv { .. } | Error::PluginLoad { .. }));
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Without `pjrt`, returns `Error::PjrtFeatureDisabled`. With `pjrt`,
+    /// returns `Error::MissingEnv` for an unset plugin path or
+    /// `Error::PluginLoad` with the typed dynamic-library source.
     #[cfg(not(feature = "pjrt"))]
     pub fn from_env() -> Result<Self> {
         Err(Error::PjrtFeatureDisabled)
@@ -104,6 +110,12 @@ impl XlaExecutor {
     ///
     /// let _ = XlaExecutor::from_env();
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::MissingEnv` when the configured plugin-path variable is
+    /// unset, or `Error::PluginLoad` with the typed dynamic-library source
+    /// when the path cannot be loaded.
     #[cfg(feature = "pjrt")]
     pub fn from_env() -> Result<Self> {
         Self::from_env_var(crate::TENFERRO_PJRT_PLUGIN_ENV)
@@ -119,6 +131,11 @@ impl XlaExecutor {
     ///
     /// let _ = XlaExecutor::from_env_var("__TENFERRO_XLA_DOCS_UNSET");
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::MissingEnv` when `var` is unset, or `Error::PluginLoad`
+    /// with the typed dynamic-library source when its value cannot be loaded.
     #[cfg(feature = "pjrt")]
     pub fn from_env_var(var: &'static str) -> Result<Self> {
         let plugin = crate::pjrt::PjrtPlugin::load_from_env(var)?;
@@ -176,6 +193,12 @@ impl XlaExecutor {
     /// let module = XlaExecutor::default().lower_to_stablehlo(&program).unwrap();
     /// assert!(module.as_str().contains("stablehlo.negate"));
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::UnsupportedDType`, `Error::UnsupportedOp`, or
+    /// `Error::NonStaticShape` for unsupported graph content, and
+    /// `Error::InvalidProgram` for inconsistent graph metadata.
     pub fn lower_to_stablehlo(&self, program: &GraphProgram) -> Result<StableHloModule> {
         lower_to_stablehlo(program)
     }
@@ -203,6 +226,13 @@ impl XlaExecutor {
     ///     .unwrap_err();
     /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::PjrtFeatureDisabled` or `Error::PjrtPluginNotLoaded`
+    /// when no PJRT executor is available, `Error::InvalidProgram` for input
+    /// count/dtype/shape mismatches, and `Error::PjrtCall` for vendor status
+    /// failures.
     pub fn run_many_with_inputs(
         &self,
         program: &GraphProgram,
@@ -239,6 +269,12 @@ impl XlaExecutor {
     /// let err = XlaExecutor::default().run_with_inputs(&program, &[&input]).unwrap_err();
     /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Propagates the `run_many_with_inputs` errors and returns
+    /// `Error::InvalidProgram` if the program does not have exactly one
+    /// output.
     pub fn run_with_inputs(&self, program: &GraphProgram, inputs: &[&Tensor]) -> Result<Tensor> {
         single_output_tensor(self.run_many_with_inputs(program, inputs)?)
     }

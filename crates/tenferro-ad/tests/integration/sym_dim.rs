@@ -4,6 +4,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::GraphExecutor;
 use tenferro_runtime::{SymDim, Tensor, TracedTensor, TypedTensor};
+use tenferro_tensor::{ErrorKind, ValidationKind};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -84,9 +85,12 @@ fn reshape_sym_rejects_symbolic_dims_from_another_tensor() {
         Ok(_) => panic!("reshape_sym should reject symbolic dimensions from another tensor"),
         Err(err) => err,
     };
-    assert!(
-        matches!(err, Error::Internal(message) if message.contains("unknown symbolic tensor id"))
+    assert_eq!(
+        err.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
     );
+    assert_eq!(err.phase(), Some(tenferro_runtime::ErrorPhase::GraphBuild));
+    assert!(matches!(err, Error::SymbolicShapeConversion { .. }));
 }
 
 #[test]

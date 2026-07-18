@@ -38,12 +38,12 @@ fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
         .unwrap_err();
 
     match err {
-        Error::BackendFailure { op, message } => {
+        Error::Unsupported { op, message } => {
             assert_eq!(op, "linalg_host_reference");
             assert!(message.contains("cuda feature"));
             assert!(message.contains("download"));
         }
-        other => panic!("expected BackendFailure, got {other:?}"),
+        other => panic!("expected Unsupported, got {other:?}"),
     }
 }
 
@@ -55,10 +55,10 @@ fn infer_output_meta_returns_error_on_input_count_mismatch() {
 
     assert!(matches!(
         err,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "extension",
-            ref message,
-        } if message.contains(LINALG_EXTENSION_FAMILY_ID)
+            source,
+        } if source.to_string().contains(LINALG_EXTENSION_FAMILY_ID)
     ));
 }
 
@@ -209,7 +209,7 @@ fn canonical_svd_gauge_rejects_batch_product_overflow() {
 
     assert!(matches!(
         error,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "tenferro-linalg.svd",
             ..
         }
@@ -224,7 +224,7 @@ fn canonical_svd_gauge_rejects_u_batch_span_overflow() {
 
     assert!(matches!(
         error,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "tenferro-linalg.svd",
             ..
         }
@@ -239,7 +239,7 @@ fn canonical_svd_gauge_rejects_vt_batch_span_overflow() {
 
     assert!(matches!(
         error,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "tenferro-linalg.svd",
             ..
         }
@@ -254,7 +254,7 @@ fn canonical_svd_gauge_rejects_u_storage_span_overflow() {
 
     assert!(matches!(
         error,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "tenferro-linalg.svd",
             ..
         }
@@ -269,7 +269,7 @@ fn canonical_svd_gauge_rejects_vt_storage_span_overflow() {
 
     assert!(matches!(
         error,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "tenferro-linalg.svd",
             ..
         }
@@ -286,7 +286,7 @@ fn canonical_svd_gauge_rejects_short_u_storage() {
 
     assert!(matches!(
         error,
-        Error::InvalidConfig {
+        Error::Validation {
             op: "tenferro-linalg.svd",
             ..
         }
@@ -701,7 +701,7 @@ fn gauge_validation_errors_cover_malformed_outputs() {
     ];
     assert!(matches!(
         apply_eigh_gauge(EighGauge::CanonicalPivot, &mut bad_eigh_dtype),
-        Err(Error::BackendFailure { .. })
+        Err(Error::Unsupported { .. })
     ));
 
     assert_invalid_config(apply_qr_gauge(QrGauge::PositiveDiagonal, &mut []));
@@ -724,7 +724,10 @@ fn gauge_validation_errors_cover_malformed_outputs() {
     ];
     assert!(matches!(
         apply_qr_gauge(QrGauge::PositiveDiagonal, &mut bad_qr_dtype),
-        Err(Error::DTypeMismatch { .. })
+        Err(Error::Validation {
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
+            ..
+        })
     ));
 }
 
@@ -811,5 +814,5 @@ fn assert_slice_close_c64(actual: &[Complex64], expected: &[Complex64], tol: f64
 }
 
 fn assert_invalid_config(result: tenferro_tensor::Result<()>) {
-    assert!(matches!(result, Err(Error::InvalidConfig { .. })));
+    assert!(matches!(result, Err(Error::Validation { .. })));
 }

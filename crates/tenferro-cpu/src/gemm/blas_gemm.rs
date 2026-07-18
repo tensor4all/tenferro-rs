@@ -159,19 +159,23 @@ pub(crate) trait BlasGemm: Sized + Copy {
 }
 
 fn dim_to_i32(name: &'static str, value: usize) -> crate::Result<i32> {
-    i32::try_from(value).map_err(|_| Error::InvalidConfig {
-        op: "dot_general",
-        message: format!("{name}={value} exceeds BLAS i32 range"),
+    i32::try_from(value).map_err(|_| {
+        Error::invalid_argument(
+            "dot_general",
+            "configuration",
+            format!("{name}={value} exceeds BLAS i32 range"),
+        )
     })
 }
 
 fn stride_to_i32(name: &'static str, value: isize) -> crate::Result<i32> {
     match i32::try_from(value) {
         Ok(value) if value > 0 => Ok(value),
-        _ => Err(Error::InvalidConfig {
-            op: "dot_general",
-            message: format!("{name}={value} must be a positive BLAS stride"),
-        }),
+        _ => Err(Error::invalid_argument(
+            "dot_general",
+            "configuration",
+            format!("{name}={value} must be a positive BLAS stride"),
+        )),
     }
 }
 
@@ -185,27 +189,30 @@ fn infer_a_layout(
         let lda = stride_to_i32("lda", a_cs)?;
         let min_lda = dim_to_i32("m", m)?;
         if lda < min_lda {
-            return Err(Error::InvalidConfig {
-                op: "dot_general",
-                message: format!("lda={lda} must be >= max(1, m)={min_lda} for NoTrans A"),
-            });
+            return Err(Error::invalid_argument(
+                "dot_general",
+                "configuration",
+                format!("lda={lda} must be >= max(1, m)={min_lda} for NoTrans A"),
+            ));
         }
         Ok((CBLAS_TRANSPOSE::CblasNoTrans, lda))
     } else if a_cs == 1 {
         let lda = stride_to_i32("lda", a_rs)?;
         let min_lda = dim_to_i32("k", k)?;
         if lda < min_lda {
-            return Err(Error::InvalidConfig {
-                op: "dot_general",
-                message: format!("lda={lda} must be >= max(1, k)={min_lda} for Trans A"),
-            });
+            return Err(Error::invalid_argument(
+                "dot_general",
+                "configuration",
+                format!("lda={lda} must be >= max(1, k)={min_lda} for Trans A"),
+            ));
         }
         Ok((CBLAS_TRANSPOSE::CblasTrans, lda))
     } else {
-        Err(Error::InvalidConfig {
-            op: "dot_general",
-            message: "BLAS requires unit stride on one axis of A".into(),
-        })
+        Err(Error::invalid_argument(
+            "dot_general",
+            "configuration",
+            "BLAS requires unit stride on one axis of A",
+        ))
     }
 }
 
@@ -219,44 +226,49 @@ fn infer_b_layout(
         let ldb = stride_to_i32("ldb", b_cs)?;
         let min_ldb = dim_to_i32("k", k)?;
         if ldb < min_ldb {
-            return Err(Error::InvalidConfig {
-                op: "dot_general",
-                message: format!("ldb={ldb} must be >= max(1, k)={min_ldb} for NoTrans B"),
-            });
+            return Err(Error::invalid_argument(
+                "dot_general",
+                "configuration",
+                format!("ldb={ldb} must be >= max(1, k)={min_ldb} for NoTrans B"),
+            ));
         }
         Ok((CBLAS_TRANSPOSE::CblasNoTrans, ldb))
     } else if b_cs == 1 {
         let ldb = stride_to_i32("ldb", b_rs)?;
         let min_ldb = dim_to_i32("n", n)?;
         if ldb < min_ldb {
-            return Err(Error::InvalidConfig {
-                op: "dot_general",
-                message: format!("ldb={ldb} must be >= max(1, n)={min_ldb} for Trans B"),
-            });
+            return Err(Error::invalid_argument(
+                "dot_general",
+                "configuration",
+                format!("ldb={ldb} must be >= max(1, n)={min_ldb} for Trans B"),
+            ));
         }
         Ok((CBLAS_TRANSPOSE::CblasTrans, ldb))
     } else {
-        Err(Error::InvalidConfig {
-            op: "dot_general",
-            message: "BLAS requires unit stride on one axis of B".into(),
-        })
+        Err(Error::invalid_argument(
+            "dot_general",
+            "configuration",
+            "BLAS requires unit stride on one axis of B",
+        ))
     }
 }
 
 fn infer_c_layout(m: usize, c_rs: isize, c_cs: isize) -> crate::Result<i32> {
     if c_rs != 1 {
-        return Err(Error::InvalidConfig {
-            op: "dot_general",
-            message: format!("BLAS output requires unit row stride, got {c_rs}"),
-        });
+        return Err(Error::invalid_argument(
+            "dot_general",
+            "configuration",
+            format!("BLAS output requires unit row stride, got {c_rs}"),
+        ));
     }
     let ldc = stride_to_i32("ldc", c_cs)?;
     let min_ldc = dim_to_i32("m", m)?;
     if ldc < min_ldc {
-        return Err(Error::InvalidConfig {
-            op: "dot_general",
-            message: format!("ldc={ldc} must be >= max(1, m)={min_ldc}"),
-        });
+        return Err(Error::invalid_argument(
+            "dot_general",
+            "configuration",
+            format!("ldc={ldc} must be >= max(1, m)={min_ldc}"),
+        ));
     }
     Ok(ldc)
 }
@@ -397,17 +409,19 @@ mod provider_batch {
             match self.groups.last().copied() {
                 Some(last) if same_group(last, group) => {
                     let Some(last_size) = self.group_size.last_mut() else {
-                        return Err(Error::InvalidConfig {
-                            op: "grouped_gemm",
-                            message: "BLAS grouped GEMM metadata is inconsistent".into(),
-                        });
+                        return Err(Error::invalid_argument(
+                            "grouped_gemm",
+                            "configuration",
+                            "BLAS grouped GEMM metadata is inconsistent".into(),
+                        ));
                     };
-                    *last_size = last_size
-                        .checked_add(1)
-                        .ok_or_else(|| Error::InvalidConfig {
-                            op: "grouped_gemm",
-                            message: "BLAS grouped GEMM group_size overflows i32".into(),
-                        })?;
+                    *last_size = last_size.checked_add(1).ok_or_else(|| {
+                        Error::invalid_argument(
+                            "grouped_gemm",
+                            "configuration",
+                            "BLAS grouped GEMM group_size overflows i32".into(),
+                        )
+                    })?;
                 }
                 _ => {
                     self.groups.push(group);

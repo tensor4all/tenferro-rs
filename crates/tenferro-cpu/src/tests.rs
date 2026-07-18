@@ -493,7 +493,7 @@ fn typed_array_uninit_from_pool_rejects_shape_product_overflow_without_panicking
     );
     assert!(matches!(
         result.unwrap(),
-        Err(tenferro_tensor::Error::InvalidConfig {
+        Err(tenferro_tensor::Error::Validation {
             op: "typed_array_uninit_from_pool",
             ..
         })

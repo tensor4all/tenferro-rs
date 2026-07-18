@@ -201,6 +201,9 @@ fn eager_binary_methods_return_shape_errors() {
 
     assert!(matches!(
         err,
-        tenferro_ad::Error::TensorRuntime(TensorError::ShapeMismatch { op: "add", .. })
+        tenferro_ad::Error::TensorRuntime(TensorError::Validation {
+            op: "add",
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+        })
     ));
 }

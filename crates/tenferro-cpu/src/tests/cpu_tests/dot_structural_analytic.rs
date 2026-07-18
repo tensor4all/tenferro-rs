@@ -219,9 +219,9 @@ fn test_dot_general_read_into_rejects_output_shape_and_dtype_mismatch() {
         .unwrap_err();
     assert!(matches!(
         shape_err,
-        Error::ShapeMismatch {
+        Error::Validation {
             op: "dot_general",
-            ..
+            source: tenferro_tensor::ValidationError::ShapeMismatch(_),
         }
     ));
 
@@ -236,10 +236,9 @@ fn test_dot_general_read_into_rejects_output_shape_and_dtype_mismatch() {
         .unwrap_err();
     assert!(matches!(
         dtype_err,
-        Error::DTypeMismatch {
+        Error::Validation {
             op: "dot_general",
-            lhs: DType::F32,
-            rhs: DType::F64,
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         }
     ));
 }
@@ -415,10 +414,9 @@ fn test_dot_general_read_into_accum_rejects_scalar_dtype_mismatch() {
 
     assert!(matches!(
         err,
-        Error::DTypeMismatch {
+        Error::Validation {
             op: "dot_general",
-            lhs: DType::F32,
-            rhs: DType::F64,
+            source: tenferro_tensor::ValidationError::DTypeMismatch { .. },
         }
     ));
 }
@@ -1140,16 +1138,16 @@ fn test_tier2_elementwise_ops_complex() {
 
     assert!(matches!(
         backend.maximum(&lhs, &rhs),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Unsupported {
             op: "maximum",
-            ref message,
+            message,
         }) if message.contains("total order")
     ));
     assert!(matches!(
         backend.minimum(&lhs, &rhs),
-        Err(crate::Error::InvalidConfig {
+        Err(crate::Error::Unsupported {
             op: "minimum",
-            ref message,
+            message,
         }) if message.contains("total order")
     ));
 }

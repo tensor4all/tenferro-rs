@@ -11,6 +11,7 @@ use super::dispatch::{
     ensure_view_mut_resident_on_runtime, ensure_view_resident_on_runtime, launch_nullary_into,
     typed_tensor_array_arg,
 };
+use super::error::{unsupported_dtype, unsupported_operation, workspace_size_overflow};
 use super::ffi::cutensor::{
     CudaDataType, CutensorComputeDescriptor, CutensorCudaStream, CutensorHandle, CutensorOperator,
     CutensorWorksizePreference, OperationDescriptor, Plan, PlanPreference, TensorDescriptor,
@@ -325,11 +326,11 @@ macro_rules! impl_from_contraction_scalar {
             fn from_contraction_scalar(value: ContractionScalar) -> crate::Result<Self> {
                 match value {
                     ContractionScalar::$variant(value) => Ok(value),
-                    other => Err(Error::DTypeMismatch {
-                        op: OP,
-                        lhs: <$ty as tenferro_tensor::TensorScalar>::dtype(),
-                        rhs: other.dtype(),
-                    }),
+                    other => Err(Error::dtype_mismatch(
+                        OP,
+                        <$ty as tenferro_tensor::TensorScalar>::dtype(),
+                        other.dtype(),
+                    )),
                 }
             }
         }
@@ -426,12 +427,7 @@ pub(super) fn dot_general_read_into_accum(
         DType::F64 => accum_erased::<f64>(backend, lhs, rhs, config, accumulation, out),
         DType::C32 => accum_erased::<Complex32>(backend, lhs, rhs, config, accumulation, out),
         DType::C64 => accum_erased::<Complex64>(backend, lhs, rhs, config, accumulation, out),
-        dtype => Err(Error::backend_failure(
-            OP,
-            format!(
-                "CUDA dot-general accumulation supports f32/f64/c32/c64 operands, got {dtype:?}"
-            ),
-        )),
+        dtype => Err(unsupported_dtype(OP, dtype)),
     }
 }
 
@@ -452,10 +448,12 @@ where
         read_operand::<T>(rhs),
         write_operand::<T>(out),
     ) else {
-        return Err(Error::backend_failure(
-            OP,
-            format!("dtype mismatch lhs={lhs_dtype:?} rhs={rhs_dtype:?} out={out_dtype:?}"),
-        ));
+        let (expected, actual) = if lhs_dtype != rhs_dtype {
+            (lhs_dtype, rhs_dtype)
+        } else {
+            (lhs_dtype, out_dtype)
+        };
+        return Err(Error::dtype_mismatch(OP, expected, actual));
     };
     dot_general_typed_into_accum(
         backend,
@@ -489,11 +487,11 @@ where
     validate_dot_general(lhs.shape(), rhs.shape(), config)?;
     let layout = build_layout(lhs.shape(), rhs.shape(), config)?;
     if out.shape() != layout.output_shape.as_slice() {
-        return Err(Error::ShapeMismatch {
-            op: OP,
-            lhs: out.shape().to_vec(),
-            rhs: layout.output_shape.clone(),
-        });
+        return Err(Error::shape_mismatch(
+            OP,
+            out.shape().to_vec(),
+            layout.output_shape.clone(),
+        ));
     }
     // Residency, buffer-family, stride-sign, and bounds validation for all
     // three slots happens here, before any degenerate-case early return.
@@ -513,11 +511,9 @@ where
                 } else {
                     // No strided in-place scale kernel exists yet; an explicit
                     // error is required instead of a silent wrong result.
-                    Err(Error::backend_failure(
+                    Err(unsupported_operation(
                         OP,
-                        "zero-sized contraction with beta != 1 is not supported for \
-                         borrowed view outputs on CUDA; use an owned output tensor \
-                         or scale the region explicitly",
+                        "zero-sized contraction with beta != 1 is not supported for borrowed view outputs",
                     ))
                 }
             }
@@ -655,8 +651,9 @@ fn resolve_device_region<T: 'static>(
     let mut strides_i64 = Vec::with_capacity(strides.len());
     for &stride in strides {
         if stride < 0 {
-            return Err(Error::backend_failure(
+            return Err(Error::invalid_argument(
                 OP,
+                "layout",
                 format!(
                     "cuTENSOR dot-general accumulation requires nonnegative view \
                      strides, got {strides:?}; canonicalize the view on device first"
@@ -666,8 +663,9 @@ fn resolve_device_region<T: 'static>(
         strides_i64.push(stride as i64);
     }
     let offset = usize::try_from(offset).map_err(|_| {
-        Error::backend_failure(
+        Error::invalid_argument(
             OP,
+            "layout",
             format!(
                 "view offset {offset} must be nonnegative for cuTENSOR dot-general accumulation"
             ),
@@ -680,11 +678,14 @@ fn resolve_device_region<T: 'static>(
             max_offset = (dim - 1)
                 .checked_mul(stride as usize)
                 .and_then(|span| max_offset.checked_add(span))
-                .ok_or_else(|| Error::backend_failure(OP, "view element span overflows usize"))?;
+                .ok_or_else(|| {
+                    Error::invalid_argument(OP, "layout", "view element span overflows usize")
+                })?;
         }
         if max_offset >= buffer.element_len() {
-            return Err(Error::backend_failure(
+            return Err(Error::invalid_argument(
                 OP,
+                "layout",
                 format!(
                     "view region reaches element offset {max_offset} but the device \
                      buffer holds only {} elements",
@@ -696,17 +697,17 @@ fn resolve_device_region<T: 'static>(
     let resource = rt
         .client()
         .get_resource(buffer.handle().clone())
-        .map_err(|err| {
-            Error::backend_failure(OP, format!("failed to obtain CubeCL resource: {err:?}"))
-        })?;
+        .map_err(|err| Error::backend_source(OP, err))?;
     let offset_bytes = (offset as u64)
         .checked_mul(std::mem::size_of::<T>() as u64)
-        .ok_or_else(|| Error::backend_failure(OP, "view byte offset overflows u64"))?;
+        .ok_or_else(|| Error::invalid_argument(OP, "layout", "view byte offset overflows u64"))?;
     let addr = resource
         .resource()
         .ptr
         .checked_add(offset_bytes)
-        .ok_or_else(|| Error::backend_failure(OP, "view device address overflows u64"))?;
+        .ok_or_else(|| {
+            Error::invalid_argument(OP, "layout", "view device address overflows u64")
+        })?;
     Ok(ResolvedOperand {
         ptr: cuda_device_ptr_from_addr(addr, OP)?,
         strides: strides_i64,
@@ -750,7 +751,7 @@ where
     let factor_host = T::wrap_tensor(TypedTensor::from_vec_col_major(vec![1], vec![beta])?);
     let factor_device = upload_tensor(rt, &factor_host)?;
     let factor_typed = T::unwrap_tensor(&factor_device)
-        .ok_or_else(|| Error::backend_failure(OP, "scale factor upload changed dtype"))?;
+        .ok_or_else(|| Error::Internal("scale factor upload changed dtype".to_string()))?;
     ensure_resident_on_runtime(rt, out, OP)?;
     ensure_resident_on_runtime(rt, factor_typed, OP)?;
     let out_arg = typed_tensor_array_arg(out, OP)?;
@@ -894,16 +895,13 @@ fn alloc_workspace(rt: &CudaRuntime, workspace_size: u64) -> crate::Result<Works
     if workspace_size == 0 {
         return Ok(Workspace::none());
     }
-    let workspace_len = usize::try_from(workspace_size).map_err(|_| {
-        crate::Error::backend_failure(
-            OP,
-            format!("workspace size {workspace_size} does not fit in usize"),
-        )
-    })?;
+    let workspace_len =
+        usize::try_from(workspace_size).map_err(|_| workspace_size_overflow(OP, workspace_size))?;
     let handle = rt.client().empty(workspace_len);
-    let resource = rt.client().get_resource(handle.clone()).map_err(|err| {
-        crate::Error::backend_failure(OP, format!("failed to obtain workspace resource: {err:?}"))
-    })?;
+    let resource = rt
+        .client()
+        .get_resource(handle.clone())
+        .map_err(|err| crate::Error::backend_source(OP, err))?;
     Ok(Workspace {
         _handle: Some(handle),
         ptr: cuda_device_ptr_from_addr(resource.resource().ptr, OP)?,
@@ -920,9 +918,7 @@ fn typed_device_ptr<T: 'static>(
     let resource = rt
         .client()
         .get_resource(buffer.handle().clone())
-        .map_err(|err| {
-            crate::Error::backend_failure(OP, format!("failed to obtain CubeCL resource: {err:?}"))
-        })?;
+        .map_err(|err| crate::Error::backend_source(OP, err))?;
     // The residency check above ties this raw FFI pointer to the caller's runtime/device.
     cuda_device_ptr_from_addr(resource.resource().ptr, OP)
 }
@@ -984,11 +980,14 @@ fn build_layout(
         rhs_modes[rhs_axis] = mode;
         contracting_elements = contracting_elements
             .checked_mul(lhs_shape[lhs_axis])
-            .ok_or_else(|| Error::InvalidConfig {
-                op: OP,
-                message: format!(
-                    "contracting dimension product overflows usize for lhs shape {lhs_shape:?}"
-                ),
+            .ok_or_else(|| {
+                Error::invalid_argument(
+                    OP,
+                    "shape",
+                    format!(
+                        "contracting dimension product overflows usize for lhs shape {lhs_shape:?}"
+                    ),
+                )
             })?;
     }
 
@@ -1045,9 +1044,12 @@ fn build_layout(
 fn dims_to_i64(dims: &[usize]) -> crate::Result<Vec<i64>> {
     dims.iter()
         .map(|&dim| {
-            i64::try_from(dim).map_err(|_| Error::InvalidConfig {
-                op: OP,
-                message: format!("extent {dim} exceeds cuTENSOR i64 limit"),
+            i64::try_from(dim).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "shape",
+                    format!("extent {dim} exceeds cuTENSOR i64 limit"),
+                )
             })
         })
         .collect()
@@ -1057,9 +1059,12 @@ fn strides_to_i64(strides: &[isize]) -> crate::Result<Vec<i64>> {
     strides
         .iter()
         .map(|&stride| {
-            i64::try_from(stride).map_err(|_| Error::InvalidConfig {
-                op: OP,
-                message: format!("stride {stride} exceeds cuTENSOR i64 limit"),
+            i64::try_from(stride).map_err(|_| {
+                Error::invalid_argument(
+                    OP,
+                    "stride",
+                    format!("stride {stride} exceeds cuTENSOR i64 limit"),
+                )
             })
         })
         .collect()
@@ -1080,10 +1085,10 @@ fn validate_axis_list(
     let mut seen = vec![false; rank];
     for &axis in axes {
         if axis >= rank {
-            return Err(Error::AxisOutOfBounds { op, axis, rank });
+            return Err(Error::axis_out_of_bounds(op, axis, rank));
         }
         if seen[axis] {
-            return Err(Error::DuplicateAxis { op, axis, role });
+            return Err(Error::duplicate_axis(op, axis, role));
         }
         seen[axis] = true;
     }
@@ -1099,12 +1104,14 @@ fn validate_role_disjoint(
 ) -> crate::Result<()> {
     for &axis in first_axes {
         if second_axes.contains(&axis) {
-            return Err(Error::AxisRoleConflict {
+            return Err(Error::validation(
                 op,
-                axis,
-                first_role,
-                second_role,
-            });
+                tenferro_tensor::ValidationError::AxisRoleConflict {
+                    axis,
+                    first_role,
+                    second_role,
+                },
+            ));
         }
     }
     Ok(())
@@ -1116,16 +1123,18 @@ fn validate_dot_general(
     config: &DotGeneralConfig,
 ) -> crate::Result<()> {
     if config.lhs_contracting_dims.len() != config.rhs_contracting_dims.len() {
-        return Err(Error::InvalidConfig {
-            op: OP,
-            message: "lhs/rhs contracting dim counts differ".into(),
-        });
+        return Err(Error::invalid_argument(
+            OP,
+            "contracting_dims",
+            "lhs/rhs contracting dim counts differ",
+        ));
     }
     if config.lhs_batch_dims.len() != config.rhs_batch_dims.len() {
-        return Err(Error::InvalidConfig {
-            op: OP,
-            message: "lhs/rhs batch dim counts differ".into(),
-        });
+        return Err(Error::invalid_argument(
+            OP,
+            "batch_dims",
+            "lhs/rhs batch dim counts differ",
+        ));
     }
 
     let lhs_rank = lhs_shape.len();
@@ -1166,25 +1175,26 @@ fn validate_dot_general(
         .zip(&config.rhs_contracting_dims)
     {
         if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
-            return Err(Error::InvalidConfig {
-                op: OP,
-                message: format!(
-                    "contracting dim size mismatch: lhs axis {lhs_axis}={} rhs axis {rhs_axis}={}",
-                    lhs_shape[lhs_axis], rhs_shape[rhs_axis]
-                ),
-            });
+            return Err(Error::validation(
+                OP,
+                tenferro_tensor::ShapeMismatch::ContractedDimensions {
+                    lhs_axis,
+                    lhs_size: lhs_shape[lhs_axis],
+                    rhs_axis,
+                    rhs_size: rhs_shape[rhs_axis],
+                }
+                .into(),
+            ));
         }
     }
 
     for (&lhs_axis, &rhs_axis) in config.lhs_batch_dims.iter().zip(&config.rhs_batch_dims) {
         if lhs_shape[lhs_axis] != rhs_shape[rhs_axis] {
-            return Err(Error::InvalidConfig {
-                op: OP,
-                message: format!(
-                    "batch dim size mismatch: lhs axis {lhs_axis}={} rhs axis {rhs_axis}={}",
-                    lhs_shape[lhs_axis], rhs_shape[rhs_axis]
-                ),
-            });
+            return Err(Error::shape_mismatch(
+                OP,
+                lhs_shape.to_vec(),
+                rhs_shape.to_vec(),
+            ));
         }
     }
 
