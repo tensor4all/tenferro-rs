@@ -123,7 +123,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("nvidia-smi --query-gpu=index,name", text)
         check_machine = text[
             text.index("      - name: Check machine") : text.index(
-                "      - name: Cache cuTENSOR redistributable"
+                "      - name: Restore cuTENSOR redistributable"
             )
         ]
         run_script = check_machine[check_machine.index("        run: |") :]
@@ -153,7 +153,26 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn("TENFERRO_REF", key_line)
         self.assertIn("hashFiles(", key_line)
-        self.assertIn("runpod_config.json", key_line)
+        # Material build inputs only (#1403): workflow YAML edits must not
+        # invalidate the archive key, but everything executed from the
+        # checkout during the build (scripts/ci/**, .cargo/**) MUST be
+        # hashed so an artifact name match proves those inputs were
+        # identical too.
+        self.assertNotIn(".github/workflows", key_line)
+        self.assertIn("rust${rustc_version}", key_line)
+        for material in (
+            "tenferro-rs/Cargo.lock",
+            "tenferro-rs/**/Cargo.toml",
+            "tenferro-rs/**/src/**",
+            "tenferro-rs/**/tests/**",
+            "tenferro-rs/**/examples/**",
+            "tenferro-rs/**/benches/**",
+            "tenferro-rs/**/build.rs",
+            "tenferro-rs/scripts/ci/**",
+            "tenferro-rs/.cargo/**",
+            "tenferro-rs/rust-toolchain*",
+        ):
+            self.assertIn(material, key_line)
 
     def test_cuda_archives_use_cargo_ci_profile_not_release(self) -> None:
         for path in (
@@ -264,6 +283,143 @@ class WorkflowContractTests(unittest.TestCase):
             gate,
         )
         self.assertNotIn("WORKFLOW_RUN_PULL_REQUESTS", gate)
+
+    def test_runpod_workflow_is_cache_reader_only(self) -> None:
+        """No job that builds PR code or runs on the pod may write caches (#1403)."""
+
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertNotIn("uses: actions/cache@", text)
+        self.assertNotIn("actions/cache/save", text)
+        rust_cache_uses = text.count("Swatinem/rust-cache")
+        self.assertEqual(
+            len(re.findall(r"(?m)^\s+save-if: false$", text)), rust_cache_uses
+        )
+        top = text[: text.index("jobs:")]
+        permissions = top[top.index("permissions:") :]
+        permissions = permissions[: permissions.index("\n\n")]
+        self.assertNotIn("write", permissions)
+        # The only extra job scope is actions: read for artifact lookup.
+        for match in re.finditer(r"(?m)^      actions: (\S+)$", text):
+            self.assertEqual(match.group(1), "read")
+
+    def test_cache_publish_is_default_branch_only(self) -> None:
+        text = read(".github/workflows/ci-cache-publish.yml")
+        triggers = text[text.index("on:") : text.index("concurrency:")]
+        self.assertIn("push:", triggers)
+        self.assertIn("branches: [main]", triggers)
+        self.assertNotIn("pull_request", triggers)
+        self.assertNotIn("workflow_run", triggers)
+        # The writer must only build code from the trusted default branch:
+        # its checkouts must not override the ref, and every job must refuse
+        # to run when a workflow_dispatch selected a non-main ref.
+        self.assertNotIn("ref:", text)
+        self.assertIn("actions: write", text)
+        job_count = len(re.findall(r"(?m)^  [a-z][a-z0-9-]*:$", text[text.index("jobs:") :]))
+        self.assertEqual(
+            text.count("if: github.ref == 'refs/heads/main'"), job_count
+        )
+
+    def test_archive_key_and_cache_ids_match_publisher_and_consumer(self) -> None:
+        consumer = read(".github/workflows/runpod-gpu-test.yml")
+        publisher = read(".github/workflows/ci-cache-publish.yml")
+
+        def key_line(text: str) -> str:
+            return next(
+                line.strip()
+                for line in text.splitlines()
+                if 'key="cuda-pjrt-archive-' in line
+            )
+
+        self.assertEqual(key_line(consumer), key_line(publisher))
+        for pair_line in (
+            "prefix-key: v8-rust-cuda-pjrt-ci-ubuntu22-ptx",
+            "shared-key: cuda-pjrt-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}",
+            "key: cutensor-${{ runner.os }}-x86_64-${{ env.CUTENSOR_VERSION }}-cuda12-v2",
+        ):
+            self.assertIn(pair_line, consumer)
+            self.assertIn(pair_line, publisher)
+        self.assertIn(
+            "key: cuda-runtime-${{ runner.os }}-x86_64-${{ steps.select_cuda_runtime.outputs.runtime_version }}-minimal-v6",
+            consumer,
+        )
+        self.assertIn(
+            "key: cuda-runtime-${{ runner.os }}-x86_64-${{ matrix.cuda }}-minimal-v6",
+            publisher,
+        )
+        for env_line in (
+            '  CUDARC_CUDA_VERSION: "12080"',
+            '  CUDA_MIN_RUNTIME_VERSION: "12.4"',
+            '  CUDA_RUNTIME_VERSION: "12.8"',
+            '  CUTENSOR_VERSION: "2.6.0.4"',
+            "  TENFERRO_CI_CACHE_ROOT: /opt/tenferro-ci",
+        ):
+            self.assertIn(env_line, consumer)
+            self.assertIn(env_line, publisher)
+
+    def test_gpu_retry_reuses_immutable_artifact(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        archive_block = text[
+            text.index("  cuda-archive:") : text.index("  start-runpod:")
+        ]
+        reuse = archive_block.index("find_archive_artifact.py")
+        build = archive_block.index("Build CUDA test archive")
+        self.assertLess(reuse, build)
+        # Every build-path step is skipped when the archives were restored
+        # or reused, so a retry performs no Cargo compilation.
+        self.assertEqual(
+            archive_block.count(
+                "if: steps.cuda_archive_cache.outputs.cache-hit != 'true' && steps.archive_reuse.outputs.reused != 'true'"
+            ),
+            5,
+        )
+        self.assertIn(
+            "name: ${{ steps.archive_key.outputs.artifact_name }}", archive_block
+        )
+        run_gpu = text[
+            text.index("  run-gpu-tests:") : text.index("  cleanup-runpod:")
+        ]
+        self.assertIn(
+            "name: ${{ needs.cuda-archive.outputs.archive_artifact_name }}",
+            run_gpu,
+        )
+
+    def test_archive_key_hashes_every_embedded_markdown_input(self) -> None:
+        """include_str! docs are compile-time inputs to archived binaries."""
+
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        key_line = next(
+            line for line in text.splitlines() if 'key="cuda-pjrt-archive-' in line
+        )
+        embeds: set[str] = set()
+        for rust_file in (ROOT / "crates").rglob("*.rs"):
+            source = rust_file.read_text()
+            if "include_str!" not in source and "include_bytes!" not in source:
+                continue
+            for quoted in re.findall(r'"([^"]+\.md)"', source):
+                repo_relative = re.sub(r"^(\.\./|/)+", "", quoted)
+                self.assertTrue(
+                    (ROOT / repo_relative).is_file(),
+                    f"{rust_file}: cannot resolve embedded path {quoted!r}",
+                )
+                embeds.add(repo_relative)
+        self.assertTrue(embeds, "expected at least one embedded markdown input")
+        for path in sorted(embeds):
+            self.assertIn(
+                f"tenferro-rs/{path}",
+                key_line,
+                f"embedded compile-time input {path} missing from archive key",
+            )
+
+    def test_finder_only_trusts_default_branch_workflow_definitions(self) -> None:
+        from scripts.ci.find_archive_artifact import (
+            TRUSTED_PRODUCER_EVENTS,
+            TRUSTED_WORKFLOW_PATHS,
+        )
+
+        self.assertNotIn("pull_request", TRUSTED_PRODUCER_EVENTS)
+        self.assertNotIn("pull_request_target", TRUSTED_PRODUCER_EVENTS)
+        for path in TRUSTED_WORKFLOW_PATHS:
+            self.assertTrue((ROOT / path).is_file(), path)
 
     def test_actionlint_knows_the_organization_gpu_runner(self) -> None:
         config = read(".github/actionlint.yaml")

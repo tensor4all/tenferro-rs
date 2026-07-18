@@ -38,6 +38,11 @@ class ChangePolicyTests(unittest.TestCase):
             "scripts/ci/runpod_config.json",
             ".github/workflows/runpod-gpu-test.yml",
             ".github/workflows/CI_gpu.yml",
+            ".github/workflows/ci-cache-publish.yml",
+            "scripts/ci/find_archive_artifact.py",
+            "scripts/ci/install_cuda_toolkit_hosted.sh",
+            "scripts/ci/install_cuda_runtime_tree.sh",
+            "scripts/ci/install_cutensor.sh",
         ):
             with self.subTest(path=path):
                 policy = classify_paths([path])

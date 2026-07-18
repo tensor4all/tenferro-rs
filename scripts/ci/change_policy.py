@@ -70,11 +70,16 @@ _GPU_CONTROL_FILES = frozenset(
     {
         ".github/workflows/CI_gpu.yml",
         ".github/workflows/runpod-gpu-test.yml",
+        ".github/workflows/ci-cache-publish.yml",
         "scripts/ci/change_policy.py",
         "scripts/ci/runpod_client.py",
         "scripts/ci/runpod_config.json",
         "scripts/ci/runpod_contract.py",
         "scripts/ci/recover_runpod_pr.py",
+        "scripts/ci/find_archive_artifact.py",
+        "scripts/ci/install_cuda_toolkit_hosted.sh",
+        "scripts/ci/install_cuda_runtime_tree.sh",
+        "scripts/ci/install_cutensor.sh",
     }
 )
 
