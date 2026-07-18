@@ -2,6 +2,7 @@ import unittest
 
 from scripts.ci.cuda_smoke_test import (
     EXPECTED_OUTPUT,
+    nvrtc_builtins_candidates,
     nvrtc_library_candidates,
     SmokeFailure,
     nvrtc_arch_option,
@@ -57,6 +58,19 @@ class VersionLogicTests(unittest.TestCase):
             ],
         )
         self.assertNotIn("libnvrtc.so", candidates)
+
+    def test_nvrtc_builtins_preload_order(self) -> None:
+        """NVRTC dlopens builtins by soname; absolute paths must come first."""
+
+        candidates = nvrtc_builtins_candidates((12, 8))
+        self.assertEqual(
+            candidates,
+            [
+                "/usr/local/cuda-12.8/lib64/libnvrtc-builtins.so.12.8",
+                "/usr/local/cuda-12.8/targets/x86_64-linux/lib/libnvrtc-builtins.so.12.8",
+                "libnvrtc-builtins.so.12.8",
+            ],
+        )
 
     def test_package_and_arch_option_naming(self) -> None:
         self.assertEqual(nvrtc_package((12, 8)), "cuda-nvrtc-12-8")

@@ -73,6 +73,19 @@ every otherwise-compatible host. Fixed by ordering NVRTC load candidates
 most-specific-first (`/usr/local/cuda-X.Y/...`) and dropping the bare
 `libnvrtc.so` name entirely (`nvrtc_library_candidates`, unit-tested).
 
+## Second live-log confirmation
+
+The next dispatch confirmed the NVRTC load-order fix (loaded 12.8 on a
+driver-13.0 RTX A4000 host, compute capability and VRAM checks passed)
+and exposed the final layer: NVRTC dlopens ``libnvrtc-builtins.so.12.8``
+by soname at compile time (status 7, ``failed to open``), and the tier's
+install directory is not on the default linker path. Fixed by preloading
+the builtins library from its absolute path with RTLD_GLOBAL before any
+compilation (``nvrtc_builtins_candidates``, unit-tested). The console log
+also confirmed RunPod restarts the container command on exit, so
+incompatible candidates surface as startup timeouts rather than
+container-stop events.
+
 ## Residual risks
 
 - If the live failure was not the raw fetch, the next dispatch will now
