@@ -17,12 +17,14 @@ def run_payload(
     path: str = ".github/workflows/runpod-gpu-test.yml",
     event: str = "workflow_run",
     head_repo: str = REPO,
+    head_branch: str = "main",
 ) -> dict:
     return {
         "id": run_id,
         "path": path,
         "event": event,
         "head_repository": {"full_name": head_repo},
+        "head_branch": head_branch,
     }
 
 
@@ -98,6 +100,44 @@ class TrustedProducerTests(unittest.TestCase):
         )
         self.assertFalse(trusted)
         self.assertIn("attacker/tenferro-rs", reason)
+
+    def test_dispatch_on_non_default_branch_is_rejected(self) -> None:
+        trusted, reason = is_trusted_producer_run(
+            run_payload(
+                7,
+                path=".github/workflows/ci-cache-publish.yml",
+                event="workflow_dispatch",
+                head_branch="attacker-branch",
+            ),
+            REPO,
+            current_run_id=99,
+        )
+        self.assertFalse(trusted)
+        self.assertIn("attacker-branch", reason)
+
+    def test_push_on_non_default_branch_is_rejected(self) -> None:
+        trusted, reason = is_trusted_producer_run(
+            run_payload(
+                7,
+                path=".github/workflows/ci-cache-publish.yml",
+                event="push",
+                head_branch="feature",
+            ),
+            REPO,
+            current_run_id=99,
+        )
+        self.assertFalse(trusted)
+        self.assertIn("default branch", reason)
+
+    def test_workflow_run_event_skips_branch_check(self) -> None:
+        # workflow_run definitions always resolve on the default branch, so
+        # a PR head branch on the producing run is still trusted.
+        trusted, reason = is_trusted_producer_run(
+            run_payload(7, head_branch="pr-branch"),
+            REPO,
+            current_run_id=99,
+        )
+        self.assertTrue(trusted, reason)
 
     def test_cache_publish_workflow_push_is_accepted(self) -> None:
         trusted, reason = is_trusted_producer_run(

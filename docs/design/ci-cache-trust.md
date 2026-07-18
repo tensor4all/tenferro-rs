@@ -48,13 +48,20 @@ artifact lookup). These invariants are contract-tested.
 The CUDA/PJRT archive key is derived from material compilation inputs only:
 
 - `Cargo.lock`, every `Cargo.toml`, `src/**`, `tests/**` (hashed),
+- `scripts/ci/**`, `.cargo/**`, and `rust-toolchain*` (hashed) — these are
+  executed or read from the PR checkout during the archive build, so a key
+  match must prove they were identical; without this, a PR that only edits
+  an install script could poison an artifact under an unchanged name,
 - the Rust toolchain version (`rustc -V`),
 - the cudarc binding and PTX toolkit versions (explicit key prefix),
 - a manually bumped `vN` component covering the archive build commands and
   toolkit selection themselves.
 
-Workflow YAML and RunPod scheduling configuration are deliberately excluded:
-editing them must not invalidate archives. The consumer
+Workflow YAML is deliberately excluded: PR-triggered runs always execute the
+default-branch workflow definition, so hashing it would only cause unrelated
+invalidation. (`runpod_config.json` is hashed as part of `scripts/ci/**`;
+the occasional spurious rebuild is accepted in exchange for the simpler
+"hash everything the checkout contributes to the build" rule.) The consumer
 (`runpod-gpu-test.yml`) and publisher (`ci-cache-publish.yml`) compute the
 key with byte-identical expressions over an identical checkout layout;
 a contract test compares the two lines.
@@ -80,7 +87,11 @@ The finder only accepts artifacts whose producing run:
   `ci-cache-publish.yml`),
 - was triggered by an event whose definition comes from the default branch
   (`workflow_run`, `workflow_dispatch`, `push`, `schedule`) — never
-  `pull_request`, whose definitions are PR-controlled.
+  `pull_request`, whose definitions are PR-controlled,
+- for directly-triggered events (`workflow_dispatch`, `push`, `schedule`),
+  ran on the default branch — a dispatch aimed at another ref is rejected,
+  and the `ci-cache-publish.yml` jobs additionally refuse to run at all off
+  `refs/heads/main`.
 
 Name-collision attacks fail on the producer check; content-substitution
 attacks fail because the key is computed by the trusted workflow from its own
@@ -113,3 +124,12 @@ no Cargo compilation happens on the retry path.
   write capability and the repository is public.
 - End-to-end cache-hit and retry behavior on paid RunPod hardware can only be
   demonstrated in live CI runs.
+- The manual PR-recovery path (`workflow_dispatch` with `pr_number`) builds
+  and runs PR-authored code in a run whose ref is `main`. If GitHub's cache
+  service granted that run an implicit main-scope cache-write credential
+  independent of `GITHUB_TOKEN` permissions, PR build scripts could attempt
+  cache poisoning from inside the job. Observed behavior contradicts this:
+  the read-only-token runs of this workflow had their cache saves rejected
+  (#1403), indicating cache writes follow token permissions here. This
+  pre-existing recovery path is tracked under the #1322 hardening umbrella;
+  revisit if GitHub's cache-credential model changes.

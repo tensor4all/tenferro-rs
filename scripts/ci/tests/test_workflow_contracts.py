@@ -153,9 +153,11 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn("TENFERRO_REF", key_line)
         self.assertIn("hashFiles(", key_line)
-        # Material build inputs only (#1403): unrelated workflow or RunPod
-        # configuration edits must not invalidate the archive key.
-        self.assertNotIn("runpod_config.json", key_line)
+        # Material build inputs only (#1403): workflow YAML edits must not
+        # invalidate the archive key, but everything executed from the
+        # checkout during the build (scripts/ci/**, .cargo/**) MUST be
+        # hashed so an artifact name match proves those inputs were
+        # identical too.
         self.assertNotIn(".github/workflows", key_line)
         self.assertIn("rust${rustc_version}", key_line)
         for material in (
@@ -163,6 +165,9 @@ class WorkflowContractTests(unittest.TestCase):
             "tenferro-rs/**/Cargo.toml",
             "tenferro-rs/**/src/**",
             "tenferro-rs/**/tests/**",
+            "tenferro-rs/scripts/ci/**",
+            "tenferro-rs/.cargo/**",
+            "tenferro-rs/rust-toolchain*",
         ):
             self.assertIn(material, key_line)
 
@@ -302,9 +307,14 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("pull_request", triggers)
         self.assertNotIn("workflow_run", triggers)
         # The writer must only build code from the trusted default branch:
-        # its checkouts must not override the ref.
+        # its checkouts must not override the ref, and every job must refuse
+        # to run when a workflow_dispatch selected a non-main ref.
         self.assertNotIn("ref:", text)
         self.assertIn("actions: write", text)
+        job_count = len(re.findall(r"(?m)^  [a-z][a-z0-9-]*:$", text[text.index("jobs:") :]))
+        self.assertEqual(
+            text.count("if: github.ref == 'refs/heads/main'"), job_count
+        )
 
     def test_archive_key_and_cache_ids_match_publisher_and_consumer(self) -> None:
         consumer = read(".github/workflows/runpod-gpu-test.yml")

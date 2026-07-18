@@ -48,6 +48,9 @@ env:
 jobs:
   publish-cuda-archive:
     name: Publish CUDA/PJRT archive cache
+    # Default-branch guard: a workflow_dispatch on any other ref must never
+    # build or publish (#1403 finding: dispatch is not implicitly main-only).
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     permissions:
@@ -71,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           rustc_version="$(rustc -V | awk '{print $2}')"
-          key="cuda-pjrt-archive-v12-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**') }}"
+          key="cuda-pjrt-archive-v13-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*') }}"
           {
             echo "key=${key}"
             echo "artifact_name=${key}"
@@ -174,6 +177,7 @@ jobs:
 
   publish-cuda-runtime-trees:
     name: Publish CUDA runtime tree cache (${{ matrix.cuda }})
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     permissions:
@@ -215,6 +219,7 @@ jobs:
 
   publish-cutensor:
     name: Publish cuTENSOR cache
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     permissions:

@@ -52,6 +52,22 @@ trusted run instead of rebuilding it.
 - In-run artifact download only (status quo): each retry dispatch rebuilt an
   identical archive for ~13 minutes before any GPU work.
 
+## External review follow-up
+
+A Codex security review of the initial diff produced three findings:
+
+- High: artifact-name hash did not cover checkout-executed build inputs
+  (`scripts/ci/**`, `.cargo/**`), so a PR editing only an install script
+  could poison an artifact under an unchanged name. Fixed by hashing those
+  paths in both workflows (key bumped to v13).
+- Medium: `ci-cache-publish.yml` dispatch was not ref-guarded and the finder
+  did not check the producing branch. Fixed with `github.ref` job guards and
+  a default-branch check for directly-triggered producer events.
+- Critical-rated but assessed as pre-existing and contradicted by observed
+  behavior: potential implicit cache-write credential in `workflow_dispatch`
+  recovery runs executing PR code. Documented as a residual risk in
+  `docs/design/ci-cache-trust.md` and left to the #1322 hardening tracker.
+
 ## Verification
 
 - `python3 -m unittest` over `scripts/ci/tests` (new finder tests plus new

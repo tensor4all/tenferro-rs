@@ -448,12 +448,15 @@ jobs:
         run: |
           set -euo pipefail
           # Material build inputs only: lockfile, manifests, sources, tests,
-          # the Rust toolchain, and the CUDA binding/PTX versions in the key
-          # prefix. Bump the vN below when the archive build commands or
-          # toolkit selection change; unrelated workflow edits must not
-          # invalidate the key (#1403).
+          # every checkout-executed CI script and Cargo configuration, the
+          # Rust toolchain, and the CUDA binding/PTX versions in the key
+          # prefix. scripts/ci/** and .cargo/** MUST stay hashed: they run
+          # inside this job from the PR checkout, so an artifact name match
+          # has to prove they were identical too. Bump the vN below when the
+          # archive build commands or toolkit selection change; unrelated
+          # workflow edits must not invalidate the key (#1403).
           rustc_version="$(rustc -V | awk '{print $2}')"
-          key="cuda-pjrt-archive-v12-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**') }}"
+          key="cuda-pjrt-archive-v13-ci-ubuntu22.04-rust${rustc_version}-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/scripts/ci/**', 'tenferro-rs/.cargo/**', 'tenferro-rs/rust-toolchain*') }}"
           {
             echo "key=${key}"
             echo "artifact_name=${key}"

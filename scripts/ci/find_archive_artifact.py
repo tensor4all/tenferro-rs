@@ -33,6 +33,12 @@ TRUSTED_WORKFLOW_PATHS = (
     ".github/workflows/ci-cache-publish.yml",
 )
 TRUSTED_PRODUCER_EVENTS = ("workflow_run", "workflow_dispatch", "push", "schedule")
+# For directly-triggered events the run's own branch is the workflow
+# definition source, so it must be the default branch. workflow_run events
+# always resolve their definition on the default branch regardless of the
+# reported head branch, so they are exempt from this check.
+DEFAULT_BRANCH = "main"
+BRANCH_CHECKED_EVENTS = ("workflow_dispatch", "push", "schedule")
 
 # One page of the newest artifacts is enough: reusable candidates are
 # recent by construction (7-day retention) and sorted newest-first.
@@ -80,8 +86,14 @@ def is_trusted_producer_run(
         return False, f"head repository {head_repository.get('full_name')!r} is not {repository!r}"
     if run.get("path") not in TRUSTED_WORKFLOW_PATHS:
         return False, f"workflow path {run.get('path')!r} is not trusted"
-    if run.get("event") not in TRUSTED_PRODUCER_EVENTS:
-        return False, f"producer event {run.get('event')!r} is not trusted"
+    event = run.get("event")
+    if event not in TRUSTED_PRODUCER_EVENTS:
+        return False, f"producer event {event!r} is not trusted"
+    if event in BRANCH_CHECKED_EVENTS and run.get("head_branch") != DEFAULT_BRANCH:
+        return (
+            False,
+            f"{event} run on branch {run.get('head_branch')!r} is not the default branch",
+        )
     return True, "trusted"
 
 
