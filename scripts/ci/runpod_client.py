@@ -110,8 +110,14 @@ def build_pod_payload(
     startup_script: str,
     jit_config: str,
     gpu_type_ids: Sequence[str],
+    extra_env: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    """Build the reviewed SECURE Cloud request from repository configuration."""
+    """Build the reviewed SECURE Cloud request from repository configuration.
+
+    ``extra_env`` carries non-secret startup-script configuration (for
+    example the CUDA smoke-proof parameters); credentials must never be
+    passed through it.
+    """
 
     return {
         "cloudType": config["cloud_type"],
@@ -130,6 +136,7 @@ def build_pod_payload(
         "dockerEntrypoint": ["bash", "-lc"],
         "dockerStartCmd": [startup_script],
         "env": {
+            **(dict(extra_env) if extra_env else {}),
             "RUNNER_JIT_CONFIG": jit_config,
             "RUNNER_ALLOW_RUNASROOT": "1",
         },

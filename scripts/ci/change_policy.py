@@ -80,6 +80,9 @@ _GPU_CONTROL_FILES = frozenset(
         "scripts/ci/install_cuda_toolkit_hosted.sh",
         "scripts/ci/install_cuda_runtime_tree.sh",
         "scripts/ci/install_cutensor.sh",
+        "scripts/ci/runpod_pricing.py",
+        "scripts/ci/runpod_provision.py",
+        "scripts/ci/cuda_smoke_test.py",
     }
 )
 

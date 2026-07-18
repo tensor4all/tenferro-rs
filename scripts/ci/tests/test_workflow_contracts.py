@@ -104,14 +104,57 @@ class WorkflowContractTests(unittest.TestCase):
     def test_runpod_creation_uses_status_aware_helper(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         create = text[
-            text.index("      - name: Create RunPod pod") : text.index(
-                "      - name: Wait for org runner to come online"
-            )
+            text.index(
+                "      - name: Provision cheapest compatible RunPod pod"
+            ) : text.index("      - name: Delete pod if runner startup failed")
         ]
-        self.assertIn("python3 -m scripts.ci.runpod_client create", create)
+        self.assertIn("python3 -m scripts.ci.runpod_provision", create)
         self.assertNotIn("python3 scripts/ci/runpod_client.py", create)
         self.assertNotIn("for attempt in $(seq 1 5)", create)
         self.assertNotIn("curl -sS", create)
+
+    def test_runpod_smoke_proof_gates_runner_registration(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        create = text[
+            text.index(
+                "      - name: Provision cheapest compatible RunPod pod"
+            ) : text.index("      - name: Delete pod if runner startup failed")
+        ]
+        # The smoke proof must run inside the startup script BEFORE the
+        # runner registers, and its script must be fetched at the trusted
+        # default-branch SHA — never from a PR-controlled ref.
+        smoke = create.index("cuda_smoke_test.py")
+        runner = create.index("./run.sh --jitconfig")
+        self.assertLess(smoke, runner)
+        self.assertIn("${{ github.sha }}/scripts/ci/cuda_smoke_test.py", create)
+        self.assertNotIn("TENFERRO_REF", create)
+        # Smoke parameters flow through non-secret pod env only.
+        for pod_env in (
+            "SMOKE_SOURCE_URL=",
+            "SMOKE_MIN_RUNTIME_VERSION=",
+            "SMOKE_FULL_RUNTIME_VERSION=",
+            "SMOKE_MIN_VRAM_GB=",
+        ):
+            self.assertIn(f'--pod-env "{pod_env}', create)
+        self.assertNotIn('--pod-env "RUNPOD_API_KEY', create)
+
+    def test_runpod_provision_is_bounded_and_price_ordered(self) -> None:
+        config = json.loads(read("scripts/ci/runpod_config.json"))
+        for key in (
+            "graphql_url",
+            "min_vram_gb",
+            "max_price_candidates",
+            "max_provision_attempts",
+            "startup_timeout_seconds",
+            "startup_poll_seconds",
+        ):
+            self.assertIn(key, config)
+        self.assertGreaterEqual(config["max_provision_attempts"], 1)
+        self.assertLessEqual(config["max_provision_attempts"], 8)
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        self.assertIn("gpu_cost_per_hr:", text)
+        self.assertIn("RunPod hourly price:", text)
+        self.assertIn("RunPod estimated paid cost:", text)
 
     def test_runpod_selected_gpu_is_forwarded_and_logged(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")

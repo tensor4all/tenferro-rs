@@ -46,6 +46,12 @@
     }
   ],
   "gpu_type_priority": "availability",
+  "graphql_url": "https://api.runpod.io/graphql",
+  "min_vram_gb": 8,
+  "max_price_candidates": 4,
+  "max_provision_attempts": 4,
+  "startup_timeout_seconds": 600,
+  "startup_poll_seconds": 10,
   "gpu_count": 1,
   "container_disk_gb": 100,
   "volume_gb": 20,
