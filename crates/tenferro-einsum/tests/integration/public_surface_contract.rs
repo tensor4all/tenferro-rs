@@ -101,3 +101,17 @@ fn gpu_dependency_is_owned_by_opt_in_backend_features() {
         );
     }
 }
+
+#[test]
+fn eager_extension_registration_preserves_typed_source_errors() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/eager_ad.rs");
+    let source = std::fs::read_to_string(root).expect("read eager tensor source");
+    let registration = source
+        .split_once(".register_extension(register_runtime)")
+        .and_then(|(_, rest)| rest.split_once("let op =").map(|(body, _)| body))
+        .expect("eager extension registration source section");
+
+    assert!(registration.contains("runtime_extension_error("));
+    assert!(!registration.contains("Error::Internal"));
+    assert!(!registration.contains("to_string()"));
+}

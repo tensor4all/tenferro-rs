@@ -350,7 +350,7 @@ fn eager_dot_general_with_conj_uses_untracked_fast_path() {
     let config = matmul_config();
 
     let fused = lhs
-        .dot_general_with_conj(&rhs, &config, true, false)
+        .dot_general_with_conj(&rhs, config.clone(), true, false)
         .unwrap();
     let explicit = lhs.conj().unwrap().dot_general(&rhs, config).unwrap();
 
@@ -384,7 +384,7 @@ fn eager_dot_general_with_conj_validates_config_before_untracked_backend_dispatc
     };
 
     let err = lhs
-        .dot_general_with_conj(&rhs, &config, true, false)
+        .dot_general_with_conj(&rhs, config, true, false)
         .unwrap_err();
 
     assert_eq!(
@@ -396,6 +396,74 @@ fn eager_dot_general_with_conj_validates_config_before_untracked_backend_dispatc
         err,
         RuntimeError::TensorRuntime(TensorError::Validation { .. })
     ));
+}
+
+#[test]
+fn eager_scalar_scaling_matches_traced_dtype_semantics() {
+    let ctx = test_ctx();
+    let real = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let scaled = real.scale_real(2.5).unwrap();
+    assert_eq!(
+        f64_data(scaled.materialized().unwrap().as_ref()),
+        &[2.5, -5.0]
+    );
+    assert!(real.scale_complex(Complex64::new(0.0, 1.0)).is_err());
+
+    let integer = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![3_i64]).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    assert_eq!(
+        integer
+            .scale_real(2.5)
+            .unwrap()
+            .materialized()
+            .unwrap()
+            .as_slice::<i64>()
+            .unwrap(),
+        &[9]
+    );
+    assert!(integer.scale_real(f64::NAN).is_err());
+
+    let complex = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![1], vec![Complex64::new(1.0, 2.0)]).unwrap(),
+        ctx,
+    )
+    .unwrap();
+    assert_eq!(
+        c64_data(
+            complex
+                .scale_complex(Complex64::new(0.0, 1.0))
+                .unwrap()
+                .materialized()
+                .unwrap()
+                .as_ref()
+        ),
+        &[Complex64::new(-2.0, 1.0)]
+    );
+
+    let ctx = test_ctx();
+    let tracked = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, -2.0]).unwrap(),
+        ctx,
+    )
+    .unwrap();
+    tracked
+        .scale_real(2.5)
+        .unwrap()
+        .reduce_sum(&[0])
+        .unwrap()
+        .backward()
+        .unwrap();
+    assert_eq!(
+        f64_data(tracked.grad().unwrap().unwrap().as_ref()),
+        &[2.5, 2.5]
+    );
 }
 
 #[test]

@@ -146,6 +146,10 @@ fn eager_dot_general_surfaces_validate_config_before_dispatch_source_contract() 
         })
         .expect("missing EagerTensor::dot_general_with_conj source section");
     assert!(
+        dot_general_with_conj.contains("config: DotGeneralConfig"),
+        "EagerTensor dot-general surfaces should consistently take owned configs"
+    );
+    assert!(
         dot_general_with_conj.contains("validate_eager_dot_general_config("),
         "EagerTensor::dot_general_with_conj must validate DotGeneralConfig before fast-path dispatch"
     );

@@ -144,6 +144,25 @@ fn tensor_scalar_helpers_do_not_expose_cpu_conjugation_hook() {
 }
 
 #[test]
+fn crate_root_reexports_are_explicit() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let source = fs::read_to_string(crate_dir.join("src/lib.rs"))
+        .expect("tenferro-tensor lib source must be readable");
+
+    for forbidden in [
+        "pub use config::*;",
+        "pub use error::*;",
+        "pub use types::*;",
+        "pub use tenferro_tensor_core::*;",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "crate-root public API must use deliberate explicit re-exports: {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn view_canonicalization_uses_symmetric_copy_into_contract() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = fs::read_to_string(crate_dir.join("src/backend.rs"))
