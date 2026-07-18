@@ -129,6 +129,10 @@ class WorkflowContractTests(unittest.TestCase):
         # The single credential that reaches the pod (the one-shot JIT
         # runner config) must be stripped from the smoke child's env.
         self.assertIn("env -u RUNNER_JIT_CONFIG python3 /tmp/cuda_smoke_test.py", create)
+        # zstd on the pod keeps the actions/cache version hash compatible
+        # with the zstd-equipped hosted publisher; without it every pod
+        # restore misses exact-match keys.
+        self.assertIn("zstd \\", create)
         # The smoke's NVRTC-only install leaves a partial /usr/local tree;
         # the test job's runtime discovery must reject trees missing the
         # full library set instead of skipping the real runtime install.

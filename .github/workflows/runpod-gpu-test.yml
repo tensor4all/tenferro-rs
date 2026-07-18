@@ -749,11 +749,17 @@ jobs:
           export RUNNER_ALLOW_RUNASROOT=1
 
           apt-get update
+          # zstd must be present BEFORE any actions/cache restore step runs
+          # on this pod: the cache version hash includes the available
+          # compression tool, so a pod without zstd can never hit entries
+          # saved by the zstd-equipped hosted publisher (observed as
+          # "Cache not found" for exact-match keys).
           apt-get install -y \
             curl \
             jq \
             tar \
             gzip \
+            zstd \
             ca-certificates \
             build-essential \
             pkg-config \
