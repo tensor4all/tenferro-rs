@@ -131,6 +131,23 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("hashFiles(", key_line)
         self.assertIn("runpod_config.json", key_line)
 
+    def test_cuda_archives_use_cargo_ci_profile_not_release(self) -> None:
+        for path in (
+            ".github/workflows/runpod-gpu-test.yml",
+            ".github/workflows/CI_gpu.yml",
+        ):
+            text = read(path)
+            with self.subTest(path=path):
+                self.assertIn("cargo nextest archive", text)
+                self.assertIn("--cargo-profile ci", text)
+                archive = text[
+                    text.index("cargo nextest archive") : text.index(
+                        "cargo nextest archive"
+                    )
+                    + 200
+                ]
+                self.assertNotIn("--release", archive)
+
     def test_runpod_cuda_runtime_matches_cudarc_floor(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         cargo = read("Cargo.toml")

@@ -10,28 +10,33 @@ import sys
 from collections.abc import Sequence
 from typing import TextIO
 
+# Hosted CI uses Cargo `[profile.ci]`: opt-level=0, debug=0, incremental=false,
+# strip="symbols". nextest takes `--cargo-profile`; cargo/llvm-cov take `--profile`.
+_CARGO_PROFILE = "ci"
+_NEXTEST_PROFILE = f"--cargo-profile {_CARGO_PROFILE}"
+_CARGO_TEST_PROFILE = f"--profile {_CARGO_PROFILE}"
 
 PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     "workspace-faer": (
-        "cargo nextest run --workspace --release --no-fail-fast",
-        "cargo test --doc --workspace --release",
+        f"cargo nextest run --workspace {_NEXTEST_PROFILE} --no-fail-fast",
+        f"cargo test --doc --workspace {_CARGO_TEST_PROFILE}",
     ),
     "workspace-blas": (
-        "cargo nextest run --workspace --release --no-default-features "
+        f"cargo nextest run --workspace {_NEXTEST_PROFILE} --no-default-features "
         "--features cpu-blas --no-fail-fast",
-        "cargo test --doc --workspace --release --no-default-features "
+        f"cargo test --doc --workspace {_CARGO_TEST_PROFILE} --no-default-features "
         "--features cpu-blas",
     ),
     "blas-inject": (
-        "cargo test -p tenferro-cpu --release --no-default-features "
+        f"cargo test -p tenferro-cpu {_CARGO_TEST_PROFILE} --no-default-features "
         '--features "cpu-blas,provider-inject" --test integration inject_tests',
     ),
     "extensions": (
-        "cargo test --manifest-path ext/tropical/Cargo.toml --release "
+        f"cargo test --manifest-path ext/tropical/Cargo.toml {_CARGO_TEST_PROFILE} "
         "--features autodiff",
-        "cargo test --manifest-path ext/sparse/Cargo.toml --release "
+        f"cargo test --manifest-path ext/sparse/Cargo.toml {_CARGO_TEST_PROFILE} "
         "--features autodiff",
-        "cargo check --manifest-path samples/kdv-pinn/Cargo.toml --release "
+        f"cargo check --manifest-path samples/kdv-pinn/Cargo.toml {_CARGO_TEST_PROFILE} "
         "--all-targets",
     ),
     "docs": (
@@ -43,7 +48,8 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
         "bash scripts/build_docs_site.sh",
     ),
     "coverage": (
-        "cargo llvm-cov --workspace --release --json --output-path coverage.json",
+        f"cargo llvm-cov --workspace {_CARGO_TEST_PROFILE} --json "
+        "--output-path coverage.json",
         "python3 scripts/check-coverage.py coverage.json",
     ),
     "ci-config": (

@@ -219,9 +219,10 @@ helper command through `--test`. The default dev/test profiles use
 assertions and overflow checks.
 
 Hosted CI owns complete workspace tests, coverage enforcement, backend matrix,
-docs-site builds, GPU validation, and clean builds with incremental compilation
-disabled. Do not require those comprehensive hosted-CI commands locally before
-every PR.
+docs-site builds, GPU validation, and clean builds through workspace
+`[profile.ci]` (`opt-level=0`, `debug=0`, `incremental=false`,
+`strip="symbols"`). Do not require those comprehensive hosted-CI commands
+locally before every PR.
 
 Run the relevant release test or benchmark locally when a change is
 performance-sensitive, reproduces a release-only bug, touches unsafe or
@@ -296,7 +297,7 @@ cargo fmt --check
 
 # Coverage check (per-file thresholds)
 # Target: 90%+ line coverage per file. Files below 90% should have tests added.
-cargo llvm-cov --workspace --release --json --output-path coverage.json
+cargo llvm-cov --workspace --profile ci --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 
 # Build rustdoc and docs site inputs

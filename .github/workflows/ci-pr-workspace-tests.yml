@@ -90,7 +90,6 @@ jobs:
         cfg: ${{ fromJSON(needs.changes.outputs.backends) }}
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/../target-${{ matrix.cfg.backend }}
-      CARGO_PROFILE_RELEASE_DEBUG: 0
       RUSTFLAGS: ${{ matrix.cfg.rustflags }}
     steps:
       - uses: actions/checkout@v6
@@ -112,6 +111,13 @@ jobs:
       - name: Run workspace profile
         if: matrix.cfg.profile != ''
         run: python3 scripts/ci/run_profile.py "${{ matrix.cfg.profile }}"
+      - name: Log CI target disk usage
+        if: always() && matrix.cfg.profile != ''
+        run: |
+          set -euo pipefail
+          echo "CARGO_TARGET_DIR=${CARGO_TARGET_DIR}"
+          du -sh "${CARGO_TARGET_DIR}" || true
+          df -h "${CARGO_TARGET_DIR}" || df -h .
       - name: Report workspace no-op
         if: matrix.cfg.profile == ''
         env:

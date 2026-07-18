@@ -548,7 +548,7 @@ jobs:
         id: archive_key
         run: |
           set -euo pipefail
-          key="cuda-archive-v9-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/scripts/ci/runpod_config.json', 'tenferro-rs/.github/workflows/runpod-gpu-test.yml') }}"
+          key="cuda-archive-v10-ci-ubuntu22.04-cuda${CUDARC_CUDA_VERSION}-ptx${CUDA_RUNTIME_VERSION}-${{ hashFiles('tenferro-rs/Cargo.lock', 'tenferro-rs/**/Cargo.toml', 'tenferro-rs/**/src/**', 'tenferro-rs/**/tests/**', 'tenferro-rs/scripts/ci/runpod_config.json', 'tenferro-rs/.github/workflows/runpod-gpu-test.yml') }}"
           echo "key=${key}" >> "${GITHUB_OUTPUT}"
           echo "CUDA archive cache key: ${key}"
 
@@ -570,8 +570,8 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
         if: steps.cuda_archive_cache.outputs.cache-hit != 'true'
         with:
-          prefix-key: v5-rust-cuda-ubuntu22-ptx
-          shared-key: cuda-release-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}
+          prefix-key: v6-rust-cuda-ci-ubuntu22-ptx
+          shared-key: cuda-ci-${{ env.CUDARC_CUDA_VERSION }}-ptx-${{ env.CUDA_RUNTIME_VERSION }}
           cache-all-crates: true
           cache-workspace-crates: true
           workspaces: tenferro-rs -> target
@@ -589,7 +589,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo nextest archive \
-            --release \
+            --cargo-profile ci \
             --archive-file "${CUDA_ARCHIVE}" \
             -p tenferro-gpu \
             -p tenferro-ad \
@@ -614,6 +614,8 @@ jobs:
           else
             echo "Built fresh CUDA test archive on Ubuntu 22.04."
           fi
+          du -sh "${CUDA_ARCHIVE}" target/ci 2>/dev/null || du -sh "${CUDA_ARCHIVE}" || true
+          df -h .
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         # Self-hosted RunPod runners cannot restore the hosted-runner Actions cache;

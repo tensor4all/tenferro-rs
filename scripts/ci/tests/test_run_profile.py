@@ -23,6 +23,13 @@ class RunProfileTests(unittest.TestCase):
         self.assertEqual(manifest["profile"]["dev"], expected)
         self.assertEqual(manifest["profile"]["test"], expected)
 
+    def test_hosted_ci_profile_is_non_incremental_and_stripped(self) -> None:
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
+        ci = manifest["profile"]["ci"]
+        self.assertEqual(ci["inherits"], "test")
+        self.assertFalse(ci["incremental"])
+        self.assertEqual(ci["strip"], "symbols")
+
     def test_non_incremental_local_gate_profile_is_removed(self) -> None:
         manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
         self.assertNotIn("local-gate", manifest["profile"])
@@ -36,12 +43,27 @@ class RunProfileTests(unittest.TestCase):
         self.assertEqual(
             commands_for("workspace-blas"),
             (
-                "cargo nextest run --workspace --release --no-default-features "
+                "cargo nextest run --workspace --cargo-profile ci --no-default-features "
                 "--features cpu-blas --no-fail-fast",
-                "cargo test --doc --workspace --release --no-default-features "
+                "cargo test --doc --workspace --profile ci --no-default-features "
                 "--features cpu-blas",
             ),
         )
+
+    def test_hosted_profiles_use_cargo_ci_profile_not_release(self) -> None:
+        for name in (
+            "workspace-faer",
+            "workspace-blas",
+            "blas-inject",
+            "extensions",
+            "coverage",
+        ):
+            joined = "\n".join(commands_for(name))
+            with self.subTest(profile=name):
+                self.assertNotIn("--release", joined)
+                self.assertTrue(
+                    "--cargo-profile ci" in joined or "--profile ci" in joined
+                )
 
     def test_full_profile_expands_named_profiles_once(self) -> None:
         expanded = expand_profiles(["full"])

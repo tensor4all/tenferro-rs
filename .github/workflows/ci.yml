@@ -162,6 +162,12 @@ jobs:
       - name: Generate and enforce coverage
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: python3 scripts/ci/run_profile.py coverage
+      - name: Log CI target disk usage
+        if: always() && needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: |
+          set -euo pipefail
+          du -sh target || true
+          df -h .
       - name: Report coverage disposition
         if: always()
         env:
