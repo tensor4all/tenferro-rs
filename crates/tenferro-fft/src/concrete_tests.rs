@@ -1,8 +1,9 @@
 use num_complex::Complex64;
+use std::num::NonZeroUsize;
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{ErrorKind, Tensor, TensorRead, TensorView, TypedTensorView};
 
-use crate::{cached_fft_plan_from_cache, FftNorm, FftPlanCache, TensorFftExt, TensorReadFftExt};
+use crate::{FftExecutor, FftNorm, FftPlanCache, TensorFftExt, TensorReadFftExt};
 
 fn assert_complex_close(actual: &[Complex64], expected: &[Complex64]) {
     assert_eq!(actual.len(), expected.len());
@@ -144,23 +145,50 @@ fn public_tensor_fft_ext_reports_invalid_dtype_and_shape_errors() {
 }
 
 #[test]
-fn poisoned_fft_plan_cache_returns_typed_error() {
-    let cache: &'static FftPlanCache<f64> = Box::leak(Box::default());
-    let mutex = cache.get_or_init(Default::default);
-    let _ = std::thread::spawn(move || {
-        let _guard = mutex.lock().unwrap();
-        panic!("poison FFT plan cache for regression test");
-    })
-    .join();
+fn fft_plan_cache_is_bounded_lru_and_reports_known_retention() {
+    let mut cache = FftPlanCache::with_capacity(NonZeroUsize::new(2).unwrap());
+    assert_eq!(cache.capacity().get(), 2);
+    let first = cache.plan_f64(4, true);
+    cache.plan_f64(8, true);
+    assert!(std::sync::Arc::ptr_eq(&first, &cache.plan_f64(4, true)));
+    cache.plan_f64(16, true);
 
-    let Err(err) = cached_fft_plan_from_cache(cache, 4, true) else {
-        panic!("poisoned FFT plan cache must return an error");
-    };
-    assert!(matches!(
-        err,
-        tenferro_tensor::Error::RuntimeState {
-            op: "fft_plan_cache",
-            ..
-        }
-    ));
+    assert!(cache.contains_f64(4, true));
+    assert!(!cache.contains_f64(8, true));
+    assert!(cache.contains_f64(16, true));
+    assert_eq!(cache.stats().entries, 2);
+    assert!(cache.stats().retained_bytes > 0);
+    assert!(std::sync::Arc::ptr_eq(&first, &cache.plan_f64(4, true)));
+
+    cache.clear();
+    assert_eq!(cache.stats(), tenferro_tensor::CacheStats::empty());
+    cache.set_capacity(NonZeroUsize::MIN);
+    assert_eq!(cache.capacity(), NonZeroUsize::MIN);
+}
+
+#[test]
+fn caller_owned_fft_executor_reuses_plans() {
+    let mut backend = CpuBackend::new();
+    let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let mut executor = FftExecutor::default();
+
+    let full = executor
+        .fft(&input, None, -1, FftNorm::Backward, &mut backend)
+        .unwrap();
+    executor
+        .ifft(&full, None, -1, FftNorm::Backward, &mut backend)
+        .unwrap();
+    let onesided = executor
+        .rfft(&input, None, -1, FftNorm::Backward, &mut backend)
+        .unwrap();
+    executor
+        .irfft(&onesided, Some(4), -1, FftNorm::Backward, &mut backend)
+        .unwrap();
+
+    assert_eq!(executor.cache_stats().entries, 2);
+    assert_eq!(executor.plan_cache().stats().entries, 2);
+    executor.plan_cache_mut().set_capacity(NonZeroUsize::MIN);
+    assert_eq!(executor.cache_stats().entries, 1);
+    executor.clear_cache();
+    assert_eq!(executor.cache_stats().entries, 0);
 }
