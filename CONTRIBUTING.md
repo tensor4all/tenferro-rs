@@ -92,10 +92,11 @@ compile Rust or require a coverage acknowledgement. CI-only changes require a
 focused CI helper command through `--test`.
 
 Hosted CI remains responsible for complete workspace tests, coverage, backend
-variants, documentation builds, GPU validation, and clean builds with
-incremental compilation disabled. Run release locally when validating
-performance, a release-only failure, unsafe or optimization-sensitive behavior,
-or an explicit maintainer request.
+variants, documentation builds, GPU validation, and clean builds through the
+workspace `[profile.ci]` (`opt-level=0`, `debug=0`, `incremental=false`,
+`strip="symbols"`). Local `dev`/`test` profiles stay incremental. Run release
+locally when validating performance, a release-only failure, unsafe or
+optimization-sensitive behavior, or an explicit maintainer request.
 
 The exact command groups used by hosted CI are available locally:
 

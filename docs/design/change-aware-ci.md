@@ -34,7 +34,9 @@ fallback.
 workspace-blas, provider injection, extensions, documentation, coverage, and
 CI configuration. Local and hosted execution call the same profile names.
 `full` is composition rather than another command list, so repeated profiles
-execute once.
+execute once. Hosted Rust compile/test commands use workspace `[profile.ci]`
+(`opt-level=0`, `debug=0`, `incremental=false`, `strip="symbols"`) rather than
+`--release`; local `dev`/`test` profiles stay incremental.
 
 ## RunPod trust boundary
 

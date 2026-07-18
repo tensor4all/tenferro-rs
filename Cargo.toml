@@ -95,3 +95,10 @@ debug = 0
 debug-assertions = true
 overflow-checks = true
 incremental = true
+
+# Hosted-CI cold builds only (`scripts/ci/run_profile.py`, CUDA archives).
+# Keep local [profile.dev]/[profile.test] incremental for edit-test loops.
+[profile.ci]
+inherits = "test"
+incremental = false
+strip = "symbols"

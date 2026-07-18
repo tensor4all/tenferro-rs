@@ -20,3 +20,10 @@ plotters = { version = "0.3", default-features = false, features = [
     "line_series",
 ] }
 rand = "0.8"
+
+# Match workspace [profile.ci] used by scripts/ci/run_profile.py extensions.
+[profile.ci]
+inherits = "test"
+debug = 0
+incremental = false
+strip = "symbols"
