@@ -84,11 +84,13 @@ Capacity failures move to the next candidate without creating a pod.
 ## Security invariants (unchanged)
 
 JIT runner registration, maintainer/admin authorization, fork rejection,
-read-only workflow permissions, secret isolation (no credential in pod env
-or startup script), and unconditional cleanup are preserved; the pricing
-query is unauthenticated and the smoke script receives no secrets. The new
-scripts are part of the GPU control plane in `change_policy.py`, so
-changing them requires the GPU gate.
+read-only workflow permissions, and unconditional cleanup are preserved.
+Secret isolation, precisely: the long-lived RunPod API key and GitHub App
+token never reach the pod; the single-use, single-job JIT runner config is
+the one credential that necessarily does, and the smoke child runs with it
+stripped from its environment (`env -u RUNNER_JIT_CONFIG`). The pricing
+query is unauthenticated. The new scripts are part of the GPU control
+plane in `change_policy.py`, so changing them requires the GPU gate.
 
 ## Residual risks
 

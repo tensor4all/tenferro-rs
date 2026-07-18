@@ -126,6 +126,9 @@ class WorkflowContractTests(unittest.TestCase):
         smoke = create.index("cuda_smoke_test.py")
         runner = create.index("./run.sh --jitconfig")
         self.assertLess(smoke, runner)
+        # The single credential that reaches the pod (the one-shot JIT
+        # runner config) must be stripped from the smoke child's env.
+        self.assertIn("env -u RUNNER_JIT_CONFIG python3 /tmp/cuda_smoke_test.py", create)
         self.assertIn("${{ github.sha }}/scripts/ci/cuda_smoke_test.py", create)
         self.assertNotIn("TENFERRO_REF", create)
         # Smoke parameters flow through non-secret pod env only.
@@ -151,10 +154,30 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(key, config)
         self.assertGreaterEqual(config["max_provision_attempts"], 1)
         self.assertLessEqual(config["max_provision_attempts"], 8)
+        # Live-priced candidates must never starve the reviewed static
+        # fallback tiers out of the bounded attempt budget.
+        self.assertGreaterEqual(
+            config["max_provision_attempts"],
+            config["max_price_candidates"] + len(config["gpu_tiers"]),
+        )
         text = read(".github/workflows/runpod-gpu-test.yml")
         self.assertIn("gpu_cost_per_hr:", text)
         self.assertIn("RunPod hourly price:", text)
         self.assertIn("RunPod estimated paid cost:", text)
+        # The job timeout must contain the worst-case provision budget so
+        # the loop reaches its explicit exhaustion error instead of being
+        # cancelled mid-attempt (60s deletion + 300s setup margins).
+        start_runpod = text[
+            text.index("  start-runpod:") : text.index("  run-gpu-tests:")
+        ]
+        timeout = re.search(r"timeout-minutes: (\d+)", start_runpod)
+        assert timeout is not None
+        worst_case = config["max_provision_attempts"] * (
+            config["create_deadline_seconds"]
+            + config["startup_timeout_seconds"]
+            + 60
+        )
+        self.assertGreaterEqual(int(timeout.group(1)) * 60, worst_case + 300)
 
     def test_runpod_selected_gpu_is_forwarded_and_logged(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")

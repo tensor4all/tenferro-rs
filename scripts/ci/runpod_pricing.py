@@ -103,7 +103,9 @@ def parse_gpu_offers(
         lowest = entry.get("lowestPrice")
         lowest = lowest if isinstance(lowest, Mapping) else {}
         stock = lowest.get("stockStatus")
-        if not isinstance(stock, str) or not stock:
+        # RunPod reports availability as High/Medium/Low and uses the
+        # literal string "None" (or a JSON null) for no stock.
+        if stock not in ("High", "Medium", "Low"):
             print(f"Pricing: {gpu_id} is out of stock; skipping.")
             continue
         price = _as_float(lowest.get("uninterruptablePrice"))

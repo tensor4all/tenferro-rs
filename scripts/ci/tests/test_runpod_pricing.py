@@ -82,6 +82,17 @@ class ParseGpuOffersTests(unittest.TestCase):
         )
         self.assertEqual(offers, [])
 
+    def test_none_stock_sentinel_string_is_out_of_stock(self) -> None:
+        offers = parse_gpu_offers(
+            body(
+                gpu_entry("NVIDIA A40", price=0.44, stock="None"),
+                gpu_entry("NVIDIA L40S", price=0.79, stock="Medium"),
+            ),
+            ELIGIBLE,
+            min_vram_gb=0,
+        )
+        self.assertEqual([o.gpu_type_id for o in offers], ["NVIDIA L40S"])
+
     def test_unusable_payloads_raise(self) -> None:
         for payload in (b"not json", b"{}", b'{"data": {}}'):
             with self.subTest(payload=payload):

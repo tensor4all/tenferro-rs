@@ -1,8 +1,13 @@
 import json
 import unittest
 
-from scripts.ci.runpod_client import CreateResult, RetryableRunPodError
+from scripts.ci.runpod_client import (
+    AssignedGpuError,
+    CreateResult,
+    RetryableRunPodError,
+)
 from scripts.ci.runpod_provision import (
+    PodLeakError,
     ProvisionExhaustedError,
     parse_cost_per_hr,
     provision,
@@ -69,7 +74,7 @@ class ProvisionTests(unittest.TestCase):
             create=lambda req: created("pod-1", "NVIDIA A40", req.tier_name),
             runner_online=runner_online,
             pod_status=lambda pod_id: "RUNNING",
-            delete_pod=deleted.append,
+            delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
             monotonic=clock.monotonic,
             sleep=clock.sleep,
         )
@@ -104,7 +109,7 @@ class ProvisionTests(unittest.TestCase):
             create=create,
             runner_online=lambda: current["id"] in accepted,
             pod_status=lambda pod_id: statuses[pod_id],
-            delete_pod=deleted.append,
+            delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
             publish_pod_id=published.append,
             monotonic=clock.monotonic,
             sleep=clock.sleep,
@@ -124,7 +129,7 @@ class ProvisionTests(unittest.TestCase):
                 create=lambda req: created("pod-slow", "NVIDIA A40", req.tier_name),
                 runner_online=lambda: False,
                 pod_status=lambda pod_id: "RUNNING",
-                delete_pod=deleted.append,
+                delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
             )
@@ -153,6 +158,84 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(result.attempts, 3)
         self.assertEqual(calls, [name for name, _ in PLAN[:3]])
 
+    def test_unverifiable_gpu_pod_is_published_deleted_and_skipped(self) -> None:
+        clock = Clock()
+        deleted: list[str] = []
+        published: list[str] = []
+        calls = {"n": 0}
+
+        def create(req):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise AssignedGpuError(
+                    "RunPod assigned GPU outside selected tier",
+                    created("pod-rogue", "NVIDIA H100 PCIe", req.tier_name),
+                )
+            return created("pod-ok", "NVIDIA GeForce RTX 4090", req.tier_name)
+
+        result = provision(
+            CONFIG,
+            PLAN,
+            create=create,
+            runner_online=lambda: True,
+            pod_status=lambda pod_id: "RUNNING",
+            delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
+            publish_pod_id=published.append,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        self.assertEqual(result.pod_id, "pod-ok")
+        self.assertEqual(deleted, ["pod-rogue"])
+        self.assertEqual(published, ["pod-rogue", "pod-ok"])
+
+    def test_unconfirmed_deletion_stops_creating_more_pods(self) -> None:
+        clock = Clock()
+        calls = {"n": 0}
+
+        def create(req):
+            calls["n"] += 1
+            return created("pod-stuck", "NVIDIA A40", req.tier_name)
+
+        with self.assertRaises(PodLeakError):
+            provision(
+                CONFIG,
+                PLAN,
+                create=create,
+                runner_online=lambda: False,
+                pod_status=lambda pod_id: "EXITED",
+                delete_pod=lambda pod_id: False,
+                monotonic=clock.monotonic,
+                sleep=clock.sleep,
+            )
+        self.assertEqual(calls["n"], 1)
+
+    def test_stale_online_runner_does_not_accept_a_dead_pod(self) -> None:
+        clock = Clock()
+        pods = iter(
+            [
+                created("pod-dead", "NVIDIA A40", "price-0.44-NVIDIA A40"),
+                created("pod-live", "NVIDIA GeForce RTX 4090", "x", cost=0.69),
+            ]
+        )
+        statuses = {"pod-dead": "EXITED", "pod-live": "RUNNING"}
+        deleted: list[str] = []
+
+        result = provision(
+            CONFIG,
+            PLAN,
+            create=lambda req: next(pods),
+            # The runner registry reports online the whole time (stale or
+            # died-after-registering record); the dead pod must still be
+            # rejected.
+            runner_online=lambda: True,
+            pod_status=lambda pod_id: statuses[pod_id],
+            delete_pod=lambda pod_id: (deleted.append(pod_id), True)[1],
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        self.assertEqual(result.pod_id, "pod-live")
+        self.assertEqual(deleted, ["pod-dead"])
+
     def test_exhaustion_is_explicit_and_bounded(self) -> None:
         clock = Clock()
         calls: list[str] = []
@@ -168,7 +251,7 @@ class ProvisionTests(unittest.TestCase):
                 create=create,
                 runner_online=lambda: True,
                 pod_status=lambda pod_id: "RUNNING",
-                delete_pod=lambda pod_id: None,
+                delete_pod=lambda pod_id: True,
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
             )

@@ -51,6 +51,28 @@ dependency setup.
 - A fixed premium GPU model: overpays and still does not guarantee a
   compatible driver.
 
+## External review follow-up
+
+A Codex review of the initial diff requested changes; all findings were
+addressed:
+
+- Unverifiable-GPU pods (`AssignedGpuError`) are now published for the
+  workflow safety net, deleted with confirmation, and skipped instead of
+  leaking.
+- Pod deletion is status-aware with bounded retries and a GET-404
+  confirmation; an unconfirmed deletion raises `PodLeakError` and stops
+  further pod creation.
+- The accept path checks the pod is alive before trusting the runner
+  registry, closing the stale-online-runner / dead-pod race.
+- Live-priced candidates are capped at 3 with a 6-attempt budget so the 3
+  static fallback tiers always remain reachable (contract-tested).
+- The start-runpod job timeout (70 min) now contains the worst-case
+  provision budget (contract-tested).
+- The `stockStatus` literal string "None" is treated as out of stock.
+- The secret-isolation claim was narrowed to the accurate invariant: only
+  the single-use JIT runner config reaches the pod, and the smoke child
+  runs with it stripped (`env -u RUNNER_JIT_CONFIG`).
+
 ## Verification
 
 - `python3 -m unittest` over `scripts/ci/tests`: new pricing, smoke-logic,

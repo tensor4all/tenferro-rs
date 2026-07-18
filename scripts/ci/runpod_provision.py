@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.ci.runpod_client import (
+    AssignedGpuError,
     CreateRequest,
     CreateResult,
     PermanentRunPodError,
@@ -55,6 +56,14 @@ _DEAD_POD_STATUSES = frozenset({"EXITED", "TERMINATED", "DEAD", "STOPPED"})
 
 class ProvisionExhaustedError(RunPodError):
     """Every bounded candidate attempt failed; failure is explicit."""
+
+
+class PodLeakError(RunPodError):
+    """A pod could not be confirmed deleted; creation must stop.
+
+    The leaked pod id stays published to GITHUB_OUTPUT so the workflow's
+    delete-on-failure safety net and cleanup job can still reach it.
+    """
 
 
 @dataclasses.dataclass(frozen=True)
@@ -91,18 +100,32 @@ def provision(
     create: Callable[[CreateRequest], CreateResult],
     runner_online: Callable[[], bool],
     pod_status: Callable[[str], str | None],
-    delete_pod: Callable[[str], None],
+    delete_pod: Callable[[str], bool],
     publish_pod_id: Callable[[str], None] = lambda pod_id: None,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
 ) -> ProvisionResult:
-    """Try candidates in order until one passes the runtime smoke proof."""
+    """Try candidates in order until one passes the runtime smoke proof.
+
+    ``delete_pod`` must return True only when deletion is confirmed; an
+    unconfirmed deletion stops the loop with :class:`PodLeakError` so a
+    possibly-alive paid pod is never followed by another creation.
+    """
 
     max_attempts = int(config.get("max_provision_attempts", 4))
     startup_timeout = float(config.get("startup_timeout_seconds", 600))
     poll_seconds = float(config.get("startup_poll_seconds", 10))
     attempts = 0
     last_reason = "no candidates attempted"
+
+    def reject_and_delete(pod_id: str, description: str) -> None:
+        if delete_pod(pod_id):
+            print(f"Deleted pod {pod_id} before any test setup.")
+            return
+        raise PodLeakError(
+            f"could not confirm deletion of pod {pod_id} ({description}); "
+            "stopping so the workflow safety net can clean it up"
+        )
 
     for tier_name, gpu_type_ids in plan:
         if attempts >= max_attempts:
@@ -116,6 +139,17 @@ def provision(
             result = create(
                 CreateRequest(tier_name, b"", tuple(gpu_type_ids))
             )
+        except AssignedGpuError as error:
+            # The pod exists but its assigned GPU could not be verified:
+            # publish it for the workflow safety net, then delete it here.
+            publish_pod_id(error.result.pod_id)
+            print(
+                f"Candidate {tier_name} created pod {error.result.pod_id} "
+                f"with an unverifiable GPU assignment: {error}"
+            )
+            reject_and_delete(error.result.pod_id, "unverifiable GPU assignment")
+            last_reason = f"unverifiable GPU assignment: {error}"
+            continue
         except RetryableRunPodError as error:
             last_reason = f"create failed: {error}"
             print(f"Candidate {tier_name} rejected before start: {last_reason}")
@@ -132,7 +166,18 @@ def provision(
         deadline = started + startup_timeout
         reason: str | None = None
         while True:
-            if runner_online():
+            # Check the pod BEFORE trusting the runner registry: the two
+            # signals are independently eventually consistent, and a stale
+            # online record (or a runner that registered and died) must not
+            # accept a dead pod.
+            status = pod_status(result.pod_id)
+            if status in _DEAD_POD_STATUSES:
+                reason = (
+                    f"pod exited before runner registration (status {status}); "
+                    "CUDA smoke proof or startup failed"
+                )
+                break
+            if runner_online() and status is not None:
                 startup_seconds = monotonic() - started
                 print(
                     f"Runner online: pod {result.pod_id} passed the CUDA "
@@ -148,13 +193,6 @@ def provision(
                     attempts=attempts,
                     body=result.body,
                 )
-            status = pod_status(result.pod_id)
-            if status in _DEAD_POD_STATUSES:
-                reason = (
-                    f"pod exited before runner registration (status {status}); "
-                    "CUDA smoke proof or startup failed"
-                )
-                break
             if monotonic() >= deadline:
                 reason = f"startup timed out after {startup_timeout:.0f}s"
                 break
@@ -170,8 +208,7 @@ def provision(
             f"Rejecting candidate {tier_name} (pod {result.pod_id}, GPU "
             f"{result.gpu_type_id or 'unknown'}): {reason}{estimate}"
         )
-        delete_pod(result.pod_id)
-        print(f"Deleted incompatible pod {result.pod_id} before any test setup.")
+        reject_and_delete(result.pod_id, reason or "startup failure")
         last_reason = reason or "unknown failure"
 
     raise ProvisionExhaustedError(
@@ -241,9 +278,24 @@ def _pod_api(api_url: str, api_key: str):
         value = payload.get("desiredStatus") if isinstance(payload, Mapping) else None
         return str(value) if value else None
 
-    def delete(pod_id: str) -> None:
-        code, _body = request(pod_id, "DELETE")
-        print(f"RunPod delete HTTP status for {pod_id}: {code}")
+    def delete(pod_id: str, *, retries: int = 3) -> bool:
+        """Delete a pod and only report success when it is confirmed gone."""
+
+        for attempt in range(1, retries + 1):
+            code, _body = request(pod_id, "DELETE")
+            print(
+                f"RunPod delete HTTP status for {pod_id}: {code} "
+                f"(attempt {attempt}/{retries})"
+            )
+            if 200 <= code < 300 or code == 404:
+                return True
+            get_code, _get_body = request(pod_id, "GET")
+            if get_code == 404:
+                print(f"Pod {pod_id} confirmed gone after delete attempt.")
+                return True
+            if attempt < retries:
+                time.sleep(5.0)
+        return False
 
     return status, delete
 
