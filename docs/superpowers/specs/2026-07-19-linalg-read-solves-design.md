@@ -34,7 +34,7 @@ The existing owned `solve` and `triangular_solve` methods remain unchanged.
 
 `CpuBackend` overrides both methods. It validates both read targets as host-accessible tensors, checks dtype pairs consistently with the owned path, and dispatches according to the configured linalg provider.
 
-For Faer, supported strided views use provider view entry points where the existing linalg layout contract permits them. For BLAS/LAPACK, and for Faer layouts outside that contract, the CPU backend explicitly canonicalizes each operand with its pooled materialization path before calling the existing owned implementation. Offset and transposed views must therefore match the owned path without introducing a trait-level hidden fallback.
+Faer's existing unary decomposition kernels expose `MatRef`-based view entry points, but its binary solve kernels and the BLAS/LAPACK ABI currently consume compact operands. Therefore both CPU providers borrow `TensorRead::Tensor` operands without copying and explicitly canonicalize `TensorRead::View` operands with the backend's pooled materialization path before calling the existing owned implementation. Offset and transposed views must match the owned path without introducing a trait-level hidden fallback. Adding provider-native binary view kernels is a separate performance refactor, not part of the public API change in #1267.
 
 Both operands are resolved before numerical execution. Invalid dtype pairs, incompatible shapes, singular systems, non-host placements, and provider failures retain the existing typed error vocabulary.
 

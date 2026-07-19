@@ -1,5 +1,92 @@
 use super::*;
 
+fn compiled_linalg_provider_kinds() -> Vec<tenferro_cpu::CpuBackendKind> {
+    vec![
+        #[cfg(feature = "cpu-faer")]
+        tenferro_cpu::CpuBackendKind::Faer,
+        #[cfg(feature = "cpu-blas")]
+        tenferro_cpu::CpuBackendKind::Blas,
+    ]
+}
+
+#[test]
+fn solve_read_accepts_owned_and_strided_inputs_for_compiled_providers() {
+    let a = Tensor::from_vec_col_major([2, 2], vec![3.0_f64, 1.0, 0.0, 2.0]).unwrap();
+    let b = Tensor::from_vec_col_major([2, 1], vec![7.0_f64, 4.0]).unwrap();
+    let a_storage = vec![-1.0, 3.0, -1.0, 1.0, -1.0, -1.0, 0.0, -1.0, 2.0];
+    let b_storage = vec![-1.0, 7.0, -1.0, 4.0];
+
+    for kind in compiled_linalg_provider_kinds() {
+        let mut backend = CpuBackend::with_kind(kind).unwrap();
+        let owned = backend
+            .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+            .unwrap();
+        let strided = backend
+            .solve_read(
+                TensorRead::from_view(TensorView::F64(
+                    TypedTensorView::from_slice(vec![2, 2], vec![2, 5], 1, &a_storage).unwrap(),
+                )),
+                TensorRead::from_view(TensorView::F64(
+                    TypedTensorView::from_slice(vec![2, 1], vec![2, 5], 1, &b_storage).unwrap(),
+                )),
+            )
+            .unwrap();
+
+        for row in 0..2 {
+            assert_f64_close(get_f64(&owned, &[row, 0]), get_f64(&strided, &[row, 0]));
+        }
+
+        let vector_b = Tensor::from_vec_col_major([2], vec![7.0_f64, 4.0]).unwrap();
+        let vector_x = backend
+            .solve_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&vector_b),
+            )
+            .unwrap();
+        assert_eq!(vector_x.shape(), &[2]);
+    }
+}
+
+#[test]
+fn triangular_solve_read_accepts_owned_and_strided_inputs_for_compiled_providers() {
+    let a = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]).unwrap();
+    let b = Tensor::from_vec_col_major([2, 1], vec![5.0_f64, 6.0]).unwrap();
+    let a_storage = vec![-1.0, 2.0, -1.0, 0.0, -1.0, -1.0, 1.0, -1.0, 3.0];
+    let b_storage = vec![-1.0, 5.0, -1.0, 6.0];
+
+    for kind in compiled_linalg_provider_kinds() {
+        let mut backend = CpuBackend::with_kind(kind).unwrap();
+        let owned = backend
+            .triangular_solve_read(
+                TensorRead::from_tensor(&a),
+                TensorRead::from_tensor(&b),
+                true,
+                false,
+                false,
+                false,
+            )
+            .unwrap();
+        let strided = backend
+            .triangular_solve_read(
+                TensorRead::from_view(TensorView::F64(
+                    TypedTensorView::from_slice(vec![2, 2], vec![2, 5], 1, &a_storage).unwrap(),
+                )),
+                TensorRead::from_view(TensorView::F64(
+                    TypedTensorView::from_slice(vec![2, 1], vec![2, 5], 1, &b_storage).unwrap(),
+                )),
+                true,
+                false,
+                false,
+                false,
+            )
+            .unwrap();
+
+        for row in 0..2 {
+            assert_f64_close(get_f64(&owned, &[row, 0]), get_f64(&strided, &[row, 0]));
+        }
+    }
+}
+
 #[test]
 fn svd_read_accepts_an_owned_tensor_read() {
     let input = Tensor::from_vec_col_major([2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
