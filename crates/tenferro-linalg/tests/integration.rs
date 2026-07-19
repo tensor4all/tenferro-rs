@@ -2,6 +2,8 @@
 mod ad_support_manifest;
 #[path = "integration/backend_errors.rs"]
 mod backend_errors;
+#[path = "integration/concrete_surface.rs"]
+mod concrete_surface;
 #[path = "integration/cpu_linalg_source_contract.rs"]
 mod cpu_linalg_source_contract;
 #[path = "integration/eager_surface_parity.rs"]

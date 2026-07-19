@@ -26,7 +26,9 @@ tenferro-linalg
 `tenferro-linalg` owns:
 
 - shape and option validation
-- public result structs and ergonomic APIs
+- `TensorLinalgExt`, `TensorReadLinalgExt`, and `TypedTensorLinalgExt` for
+  backend-explicit primal execution
+- fixed-arity result tuples and typed real/complex output mappings
 - composite lowering
 - traced extension op payloads and runtime registration
 - optional eager helpers and linalg AD rules behind `autodiff`
@@ -70,6 +72,21 @@ ops, scalar/analytic ops, and the kernel basis above:
 - `inv` and structured `*_ex` wrappers built from solve/factorization kernels
 
 The key rule is that public API breadth does not imply backend kernel breadth.
+
+## Concrete, Read, And Typed Boundary
+
+Owned dynamic tensors call the matching `LinalgBackend` owned hook. Borrowed
+tensor reads use the `_read` surface and preserve strided layouts until the
+selected provider performs documented same-placement canonicalization. Typed
+tensors erase only the borrowed input through `TensorScalar::tensor_read`, then
+validate each dynamic backend output while downcasting it to the fixed typed
+tuple.
+
+`LinalgScalar` is sealed to `f32`, `f64`, `Complex32`, and `Complex64`. It uses
+`TensorScalar::Real` for singular values, Hermitian eigenvalues, determinant
+log-magnitudes, and norms, and supplies a `Complex` associated type for general
+eigendecomposition. These adapters never perform an implicit device transfer;
+unsupported layout or placement combinations remain typed backend errors.
 
 ## Shape Convention
 
