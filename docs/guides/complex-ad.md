@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
     let z = TracedTensor::from_vec_col_major(vec![2], z_data.clone())?;
 
-    let holomorphic_loss = z.exp()?.reduce_sum(&[0])?;
+    let holomorphic_loss = z.exp()?.reduce_sum(Some(&[0]))?;
     let tenferro_grad = holomorphic_loss.grad(&z)?;
     let tenferro_grad_value = run(&tenferro_grad)?;
     let expected_grad: Vec<_> = z_data.iter().map(|z| z.exp().conj()).collect();
@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let magnitude = z.abs()?;
-    let real_loss = (&magnitude * &magnitude)?.reduce_sum(&[0]);
+    let real_loss = (&magnitude * &magnitude)?.reduce_sum(Some(&[0]));
     let real_loss_grad = real_loss?.grad(&z)?;
     let real_loss_grad_value = run(&real_loss_grad)?;
     let expected_real_loss_grad: Vec<_> = z_data.iter().map(|z| *z * 2.0).collect();

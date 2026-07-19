@@ -42,7 +42,7 @@ fn eval_many(outputs: &[&TracedTensor]) -> Vec<Tensor> {
 
 fn reduce_all(tensor: &TracedTensor) -> TracedTensor {
     let axes: Vec<usize> = (0..tensor.rank).collect();
-    tensor.reduce_sum(&axes).unwrap()
+    tensor.reduce_sum(Some(&axes)).unwrap()
 }
 
 fn graph_op_debugs(tensor: &TracedTensor) -> Vec<String> {
@@ -198,7 +198,7 @@ fn svd_singular_value_sum_jvp_uses_extension_ad_rule() {
     .unwrap();
 
     let (_u, s, _vt) = a.svd().unwrap();
-    let y = s.reduce_sum(&[0]).unwrap();
+    let y = s.reduce_sum(Some(&[0])).unwrap();
     let dy = ad.jvp(&y, &a, &da).unwrap();
     let out = eval(&dy);
 
@@ -216,7 +216,7 @@ fn full_piv_lu_solve_grad_uses_extension_ad_rule() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 1], vec![-1.0, 5.0])).unwrap();
 
     let x = a.full_piv_lu_solve(&b).unwrap();
-    let loss = x.reduce_sum(&[0, 1]).unwrap();
+    let loss = x.reduce_sum(Some(&[0, 1])).unwrap();
     let grad_b = ad.grad(&loss, &b).unwrap();
     let out = eval(&grad_b);
 
@@ -338,7 +338,7 @@ fn svd_values_grad_matches_finite_diff() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], data.clone())).unwrap();
 
     let (_u, s, _vt) = a.svd().unwrap();
-    let loss = s.reduce_sum(&[0]).unwrap();
+    let loss = s.reduce_sum(Some(&[0])).unwrap();
     let grad = ad.grad(&loss, &a).unwrap();
     let out = eval(&grad);
 
@@ -351,7 +351,7 @@ fn svd_values_grad_matches_finite_diff() {
                     TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec()))
                         .unwrap();
                 let (_u, s, _vt) = input.svd().unwrap();
-                get_f64_data(&eval(&s.reduce_sum(&[0]).unwrap()))[0]
+                get_f64_data(&eval(&s.reduce_sum(Some(&[0])).unwrap()))[0]
             },
             &data,
             idx,
@@ -1402,7 +1402,7 @@ fn complex_eigh_values_grad_executes_with_complex_input_dtype() {
     ))
     .unwrap();
     let (values, _vectors) = h.eigh().unwrap();
-    let loss = values.reduce_sum(&[0]).unwrap();
+    let loss = values.reduce_sum(Some(&[0])).unwrap();
 
     let grad = ad.grad(&loss, &h).unwrap();
     let out = eval(&grad);
@@ -1428,7 +1428,7 @@ fn batched_solve_sum_grad_wrt_matrix_uses_native_batch_layout() {
     .unwrap();
 
     let x = a.solve(&b).unwrap();
-    let loss = x.reduce_sum(&[0, 1, 2]).unwrap();
+    let loss = x.reduce_sum(Some(&[0, 1, 2])).unwrap();
     let grad_a = ad.grad(&loss, &a).unwrap();
     let out = eval(&grad_a);
 

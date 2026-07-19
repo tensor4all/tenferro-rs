@@ -138,7 +138,7 @@ fn sparse_matmul_sum_gradients_match_dense_reference() -> TestResult {
     let lhs = left_traced(&[2.0, 1.0, 3.0]);
     let rhs = right_traced(&[10.0, 70.0, 20.0]);
     let out = sparse_matmul(&lhs, &rhs)?;
-    let loss = out.values().reduce_sum(&[0])?;
+    let loss = out.values().reduce_sum(Some(&[0]))?;
     let ad = sparse_ad();
 
     let grad_lhs = ad.grad(&loss, lhs.values())?;

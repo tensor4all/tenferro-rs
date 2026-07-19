@@ -260,7 +260,7 @@ fn traced_shape_packing_rejects_symbolic_shapes_as_graph_build_errors() {
 #[test]
 fn graph_executor_runs_elementwise_and_reduction_with_borrowed_inputs() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let y = (&x + &x).unwrap().reduce_sum(&[0]).unwrap();
+    let y = (&x + &x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
@@ -300,7 +300,7 @@ fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
 fn traced_reduction_with_too_many_axes_returns_error_without_rank_underflow() {
     let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
 
-    let err = x.reduce_max(&[0, 1, 2]).unwrap_err().to_string();
+    let err = x.reduce_max(Some(&[0, 1, 2])).unwrap_err().to_string();
 
     assert!(err.contains("axis 2 out of bounds for rank 2"), "{err}");
 }

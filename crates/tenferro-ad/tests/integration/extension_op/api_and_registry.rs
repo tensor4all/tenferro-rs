@@ -202,7 +202,7 @@ fn scale_by_2_grad_through_symbolic_placeholder() {
         .into_iter()
         .next()
         .unwrap();
-    let loss = scaled.reduce_sum(&[0]).unwrap();
+    let loss = scaled.reduce_sum(Some(&[0])).unwrap();
 
     let g = scale_by_2_ad_context().grad(&loss, &x).expect("grad build");
     let bound =
@@ -253,7 +253,7 @@ fn swap_grad_routes_cotangents_across_inputs() {
     let out0 = iter.next().unwrap();
     let out1 = iter.next().unwrap();
     let combined = (&out0 + &out1).unwrap();
-    let loss = combined.reduce_sum(&[0]).unwrap();
+    let loss = combined.reduce_sum(Some(&[0])).unwrap();
 
     let ad = swap_ad_context();
     let grad_a = ad.grad(&loss, &a).expect("grad a");
@@ -277,7 +277,7 @@ fn swap_grad_routes_only_through_active_output() {
     let mut iter = swapped.into_iter();
     let _out0 = iter.next().unwrap();
     let out1 = iter.next().unwrap();
-    let loss = out1.reduce_sum(&[0]).unwrap();
+    let loss = out1.reduce_sum(Some(&[0])).unwrap();
 
     let ad = swap_ad_context();
     let grad_a = ad.grad(&loss, &a).expect("grad a");

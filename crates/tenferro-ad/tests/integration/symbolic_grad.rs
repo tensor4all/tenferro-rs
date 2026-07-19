@@ -28,7 +28,7 @@ fn grad_of_sum_of_squares_against_symbolic_input() {
     // f(x) = sum(x * x), df/dx = 2 * x
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let sq = (&x * &x).unwrap();
-    let loss = sq.reduce_sum(&[0]).unwrap();
+    let loss = sq.reduce_sum(Some(&[0])).unwrap();
 
     let g = loss.grad(&x).expect("grad build");
 
@@ -47,7 +47,7 @@ fn grad_evaluates_with_different_shapes_from_same_symbolic_graph() {
     // Same symbolic grad graph, eval with shape [3] then shape [5].
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let sq = (&x * &x).unwrap();
-    let loss = sq.reduce_sum(&[0]).unwrap();
+    let loss = sq.reduce_sum(Some(&[0])).unwrap();
     let g_template = loss.grad(&x).expect("grad build");
 
     let mut engine = GraphExecutor::new(CpuBackend::new());
@@ -73,7 +73,7 @@ fn grad_of_dot_product_against_two_symbolic_inputs() {
     // df/da = b, df/db = a
     let a = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let b = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let loss = (&a * &b).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (&a * &b).unwrap().reduce_sum(Some(&[0])).unwrap();
 
     let grad_a = loss.grad(&a).expect("grad a");
     let grad_b = loss.grad(&b).expect("grad b");
@@ -98,7 +98,7 @@ fn grad_with_concrete_shape_placeholder() {
     // input_concrete_shape placeholder works for AD too.
     let x = TracedTensor::input_concrete_shape(DType::F64, &[3]).unwrap();
     let sq = (&x * &x).unwrap();
-    let loss = sq.reduce_sum(&[0]).unwrap();
+    let loss = sq.reduce_sum(Some(&[0])).unwrap();
     let g = loss.grad(&x).expect("grad build");
 
     let mut engine = GraphExecutor::new(CpuBackend::new());

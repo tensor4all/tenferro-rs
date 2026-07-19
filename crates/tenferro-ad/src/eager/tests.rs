@@ -1234,7 +1234,7 @@ fn untracked_nary_ops_consume_lazy_views_without_materializing_inputs() {
         &[2.0, 6.0, 10.0, 4.0, 8.0, 12.0]
     );
 
-    let reduced = x_t.reduce_sum(&[0]).unwrap();
+    let reduced = x_t.reduce_sum(Some(&[0])).unwrap();
     assert!(!x_t.materialized_cache_is_initialized());
     assert_eq!(
         reduced.materialized().unwrap().as_slice::<f64>().unwrap(),

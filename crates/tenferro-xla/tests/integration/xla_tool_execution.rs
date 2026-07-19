@@ -119,7 +119,7 @@ fn stablehlo_dot_add_reduce_module() -> tenferro_xla::StableHloModule {
             },
         )
         .unwrap();
-    let y = (&dot + &dot).unwrap().reduce_sum(&[0]).unwrap();
+    let y = (&dot + &dot).unwrap().reduce_sum(Some(&[0])).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(

@@ -5,7 +5,7 @@ use tenferro_xla::lower_to_stablehlo;
 #[test]
 fn lowers_elementwise_reduce_and_static_shapes() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let y = (&x + &x).unwrap().reduce_sum(&[0]).unwrap();
+    let y = (&x + &x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2, 3])])

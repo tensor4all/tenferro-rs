@@ -60,7 +60,7 @@ fn weighted_square_sum(input: &EagerTensor, weights: Vec<f64>) -> EagerTensor {
     let squared = input.mul(input).unwrap();
     let weighted = squared.mul(&weights).unwrap();
     let axes: Vec<usize> = (0..input.shape().len()).collect();
-    weighted.reduce_sum(&axes).unwrap()
+    weighted.reduce_sum(Some(&axes)).unwrap()
 }
 
 fn matmul2(lhs: &[f64], rhs: &[f64]) -> [f64; 4] {
@@ -154,7 +154,7 @@ fn svd_singular_value_sum_backward_does_not_panic() {
     )
     .unwrap();
     let (_, s, _) = a.svd().unwrap();
-    let loss = s.reduce_sum(&[0]).unwrap();
+    let loss = s.reduce_sum(Some(&[0])).unwrap();
 
     loss.backward().unwrap();
 
@@ -319,7 +319,7 @@ fn batched_solve_sum_backward_wrt_matrix_uses_native_batch_layout() {
     .unwrap();
 
     let x = a.solve(&b).unwrap();
-    let loss = x.reduce_sum(&[0, 1, 2]).unwrap();
+    let loss = x.reduce_sum(Some(&[0, 1, 2])).unwrap();
     let _ = loss.backward().unwrap();
     let grad = a.grad().unwrap().unwrap();
 

@@ -122,7 +122,7 @@ fn checked_tropical_dot_general_impl(
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[23.0, 24.0, 43.0, 44.0]);
 /// ```
 pub fn tropical_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
-    checked_tropical_dot_general_impl(a, b, |sum| sum.reduce_max(&[1]), "tropical_dot_general")
+    checked_tropical_dot_general_impl(a, b, |sum| sum.reduce_max(Some(&[1])), "tropical_dot_general")
 }
 
 /// Min-plus matrix multiplication on rank-2 traced tensors.
@@ -160,7 +160,7 @@ pub fn tropical_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<Traced
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[6.0, 7.0, 8.0, 9.0]);
 /// ```
 pub fn min_plus_dot_general(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
-    checked_tropical_dot_general_impl(a, b, |sum| sum.reduce_min(&[1]), "min_plus_dot_general")
+    checked_tropical_dot_general_impl(a, b, |sum| sum.reduce_min(Some(&[1])), "min_plus_dot_general")
 }
 
 /// Fused binary tropical einsum over traced tensors.
@@ -511,7 +511,7 @@ fn validate_tropical_einsum_inputs(
 /// [`tenferro_runtime::Error::Internal`] if output metadata registration
 /// fails.
 pub fn tropical_reduce_sum(a: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
-    a.reduce_max(axes)
+    a.reduce_max(Some(axes))
 }
 
 #[cfg(test)]

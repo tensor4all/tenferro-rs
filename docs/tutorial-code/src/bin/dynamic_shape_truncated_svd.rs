@@ -66,7 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let keep_count = s
         .compare(&threshold, CompareDir::Gt)?
         .convert(DType::F64)?
-        .reduce_sum(&[0])?;
+        .reduce_sum(Some(&[0]))?;
 
     let u_truncated = u.dynamic_truncate(&keep_count, 1)?;
     let s_truncated = s.dynamic_truncate(&keep_count, 0)?;

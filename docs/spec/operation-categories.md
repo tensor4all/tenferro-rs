@@ -95,6 +95,18 @@ parallelize automatically. For user-supplied closures, parallelism is explicit:
 | `mean` | · | · |
 | `argmax` / `argmin` | · | · |
 
+Reduction axes use one convention on the eager and traced surfaces:
+
+- `None` reduces over every axis;
+- `Some(&[])` is the identity operation; and
+- `Some(axes)` reduces over exactly those validated axes.
+
+The public boundary normalizes `None` to the explicit axis list before graph or
+eager operation construction. Primitive IR and backend reduction contracts
+therefore always contain explicit axes rather than a second all-axes spelling.
+For a rank-zero tensor, `None` normalizes to an empty list and remains the
+identity.
+
 ## 5. Shape / structural
 
 | Operation | Eager | Traced | Notes |

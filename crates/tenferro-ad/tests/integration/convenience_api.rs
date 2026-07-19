@@ -53,9 +53,9 @@ fn traced_tensor_shape_helpers_and_aliases_cover_public_surface() {
     assert_eq!(broad.rank, 3);
 
     assert_eq!(a.broadcast_in_dim(&[2, 3], &[0, 1]).unwrap().rank, 2);
-    assert_eq!(a.reduce_max(&[0]).unwrap().rank, 1);
-    assert_eq!(a.reduce_min(&[1]).unwrap().rank, 1);
-    assert_eq!(a.reduce_prod(&[0, 1]).unwrap().rank, 0);
+    assert_eq!(a.reduce_max(Some(&[0])).unwrap().rank, 1);
+    assert_eq!(a.reduce_min(Some(&[1])).unwrap().rank, 1);
+    assert_eq!(a.reduce_prod(Some(&[0, 1])).unwrap().rank, 0);
 }
 
 #[test]

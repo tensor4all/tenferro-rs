@@ -103,7 +103,7 @@ fn eager_matmul_sum(lhs: &[f64], rhs: &[f64]) -> f64 {
     let loss = a
         .dot_general(&b, matmul_config())
         .unwrap()
-        .reduce_sum(&[0, 1])
+        .reduce_sum(Some(&[0, 1]))
         .unwrap();
     f64_data(loss.materialized().unwrap().as_ref())[0]
 }
@@ -241,7 +241,7 @@ fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
     )
     .unwrap();
 
-    let out_of_bounds = x.reduce_sum(&[2]).unwrap_err();
+    let out_of_bounds = x.reduce_sum(Some(&[2])).unwrap_err();
     assert!(matches!(
         out_of_bounds,
         tenferro_ad::Error::TensorRuntime(tenferro_tensor::Error::Validation {
@@ -251,10 +251,10 @@ fn eager_reductions_and_reverse_validate_axes_before_ad_recording() {
     ));
 
     for err in [
-        x.reduce_sum(&[0, 0]).unwrap_err(),
-        x.reduce_prod(&[0, 0]).unwrap_err(),
-        x.reduce_max(&[0, 0]).unwrap_err(),
-        x.reduce_min(&[0, 0]).unwrap_err(),
+        x.reduce_sum(Some(&[0, 0])).unwrap_err(),
+        x.reduce_prod(Some(&[0, 0])).unwrap_err(),
+        x.reduce_max(Some(&[0, 0])).unwrap_err(),
+        x.reduce_min(Some(&[0, 0])).unwrap_err(),
         x.reverse(&[0, 0]).unwrap_err(),
     ] {
         assert!(
@@ -305,7 +305,7 @@ fn untracked_eager_intermediate_can_later_feed_tracked_ad() {
         ctx,
     )
     .unwrap();
-    let loss = x.mul(&scale).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&scale).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss.backward().unwrap();
 
     assert_close_slice(
@@ -456,7 +456,7 @@ fn eager_scalar_scaling_matches_traced_dtype_semantics() {
     tracked
         .scale_real(2.5)
         .unwrap()
-        .reduce_sum(&[0])
+        .reduce_sum(Some(&[0]))
         .unwrap()
         .backward()
         .unwrap();
@@ -673,7 +673,11 @@ fn eager_index_select_repeated_positions_accumulates_grad() {
     .unwrap();
 
     let selected = x.index_select(0, &[1, 1, 2]).unwrap();
-    let loss = selected.mul(&weights).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = selected
+        .mul(&weights)
+        .unwrap()
+        .reduce_sum(Some(&[0]))
+        .unwrap();
     let _ = loss.backward().unwrap();
 
     assert_close_slice(
@@ -691,7 +695,7 @@ fn eager_x_squared_gradient_matches_finite_difference() {
         test_ctx(),
     )
     .unwrap();
-    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _cotangents = loss.backward().unwrap();
     let grad = x.grad().unwrap().unwrap();
 
@@ -716,7 +720,7 @@ fn eager_repeated_backward_accumulates_across_calls() {
     )
     .unwrap();
 
-    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss.backward().unwrap();
     assert_close_slice(
         f64_data(x.grad().unwrap().unwrap().as_ref()),
@@ -724,7 +728,7 @@ fn eager_repeated_backward_accumulates_across_calls() {
         TOL,
     );
 
-    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss.backward().unwrap();
     assert_close_slice(
         f64_data(x.grad().unwrap().unwrap().as_ref()),
@@ -751,7 +755,7 @@ fn eager_matmul_gradients_match_finite_difference() {
     let loss = a
         .dot_general(&b, matmul_config())
         .unwrap()
-        .reduce_sum(&[0, 1])
+        .reduce_sum(Some(&[0, 1]))
         .unwrap();
     let _cotangents = loss.backward().unwrap();
 
@@ -778,7 +782,7 @@ fn eager_exp_gradient_matches_primal() {
         test_ctx(),
     )
     .unwrap();
-    let loss = x.exp().unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
     let _cotangents = loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
@@ -793,7 +797,7 @@ fn eager_fan_out_accumulates_gradient() {
         test_ctx(),
     )
     .unwrap();
-    let loss = x.add(&x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.add(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _cotangents = loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
@@ -814,7 +818,7 @@ fn eager_clear_grad_resets_only_one_leaf() {
     )
     .unwrap();
 
-    let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss.backward().unwrap();
 
     x.clear_grad().unwrap();
@@ -826,7 +830,7 @@ fn eager_clear_grad_resets_only_one_leaf() {
         TOL,
     );
 
-    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss.backward().unwrap();
 
     assert_close_slice(
@@ -855,7 +859,7 @@ fn eager_context_clear_grads_resets_all_live_leaves() {
     )
     .unwrap();
 
-    let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss.backward().unwrap();
 
     ctx.clear_grads().unwrap();
@@ -863,7 +867,7 @@ fn eager_context_clear_grads_resets_all_live_leaves() {
     assert!(x.grad().unwrap().is_none());
     assert!(y.grad().unwrap().is_none());
 
-    let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss.backward().unwrap();
 
     assert_close_slice(
@@ -892,7 +896,7 @@ fn eager_unrelated_backward_keeps_existing_leaf_grad() {
     )
     .unwrap();
 
-    let loss_x = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss_x = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss_x.backward().unwrap();
     assert_close_slice(
         f64_data(x.grad().unwrap().unwrap().as_ref()),
@@ -900,7 +904,7 @@ fn eager_unrelated_backward_keeps_existing_leaf_grad() {
         TOL,
     );
 
-    let loss_y = y.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
+    let loss_y = y.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss_y.backward().unwrap();
 
     assert_close_slice(
@@ -950,7 +954,7 @@ fn eager_context_and_tensor_are_backend_erased_public_types() {
     let x = ctx
         .variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())
         .unwrap();
-    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     loss.backward().unwrap();
 
     assert_eq!(
@@ -967,7 +971,7 @@ fn eager_detach_cuts_one_gradient_path() {
     )
     .unwrap();
     let detached = x.detach();
-    let loss = detached.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = detached.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let _cotangents = loss.backward().unwrap();
 
     let grad = x.grad().unwrap().unwrap();
@@ -1068,7 +1072,7 @@ fn eager_tracked_structural_ops_return_lazy_views_and_backprop() {
         other => panic!("expected tracked transpose to remain a lazy f64 view, got {other:?}"),
     }
 
-    let loss = transposed.reduce_sum(&[0, 1]).unwrap();
+    let loss = transposed.reduce_sum(Some(&[0, 1])).unwrap();
     let _cotangents = loss.backward().unwrap();
     let grad = x.grad().unwrap().unwrap();
     assert_close_slice(f64_data(grad.as_ref()), &[1.0; 6], TOL);
@@ -1154,18 +1158,72 @@ fn eager_reduction_primal_ops_reduce_prod() {
     )
     .unwrap();
 
-    let prod = x.reduce_prod(&[0, 1]).unwrap();
+    let prod = x.reduce_prod(Some(&[0, 1])).unwrap();
     assert_close_slice(
         f64_data(prod.materialized().unwrap().as_ref()),
         &[24.0],
         TOL,
     );
 
-    let max = x.reduce_max(&[0, 1]).unwrap();
+    let max = x.reduce_max(Some(&[0, 1])).unwrap();
     assert_close_slice(f64_data(max.materialized().unwrap().as_ref()), &[4.0], TOL);
 
-    let min = x.reduce_min(&[0, 1]).unwrap();
+    let min = x.reduce_min(Some(&[0, 1])).unwrap();
     assert_close_slice(f64_data(min.materialized().unwrap().as_ref()), &[1.0], TOL);
+}
+
+#[test]
+fn eager_reductions_distinguish_all_axes_from_empty_axes() {
+    let x = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+        test_ctx(),
+    )
+    .unwrap();
+
+    let sum = x.reduce_sum(None).unwrap();
+    assert_close_slice(f64_data(sum.materialized().unwrap().as_ref()), &[10.0], TOL);
+
+    let product = x.reduce_prod(None).unwrap();
+    assert_close_slice(
+        f64_data(product.materialized().unwrap().as_ref()),
+        &[24.0],
+        TOL,
+    );
+
+    let identity = x.reduce_sum(Some(&[])).unwrap();
+    assert_eq!(identity.shape(), &[2, 2]);
+    assert_close_slice(
+        f64_data(identity.materialized().unwrap().as_ref()),
+        &[1.0, 2.0, 3.0, 4.0],
+        TOL,
+    );
+
+    let column_maxima = x.reduce_max(Some(&[0])).unwrap();
+    assert_close_slice(
+        f64_data(column_maxima.materialized().unwrap().as_ref()),
+        &[2.0, 4.0],
+        TOL,
+    );
+
+    let row_minima = x.reduce_min(Some(&[1])).unwrap();
+    assert_close_slice(
+        f64_data(row_minima.materialized().unwrap().as_ref()),
+        &[1.0, 2.0],
+        TOL,
+    );
+
+    let scalar = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
+        test_ctx(),
+    )
+    .unwrap();
+    let scalar_sum = scalar.reduce_sum(None).unwrap();
+    assert_eq!(scalar_sum.shape(), &[]);
+    assert_close_slice(
+        f64_data(scalar_sum.materialized().unwrap().as_ref()),
+        &[3.0],
+        TOL,
+    );
 }
 
 #[test]

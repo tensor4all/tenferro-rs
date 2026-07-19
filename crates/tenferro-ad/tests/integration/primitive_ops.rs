@@ -190,7 +190,7 @@ fn test_broadcast_reduce() {
     let v = f64_tensor(vec![3], vec![1.0, 2.0, 3.0]);
     let tv = TracedTensor::from_tensor_concrete_shape(v).unwrap();
     let tb = tv.broadcast_in_dim(&[3, 2], &[0]).unwrap();
-    let tr = tb.reduce_sum(&[1]).unwrap();
+    let tr = tb.reduce_sum(Some(&[1])).unwrap();
     let mut engine = GraphExecutor::new(CpuBackend::new());
     let result = tr.run_with(&mut engine).unwrap();
     assert_eq!(get_f64_data(&result), &[2.0, 4.0, 6.0]);

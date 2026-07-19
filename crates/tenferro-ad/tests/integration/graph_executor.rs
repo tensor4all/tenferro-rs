@@ -236,7 +236,7 @@ fn graph_executor_runtime_cache_controls_are_available() {
 #[test]
 fn graph_executor_synthesizes_deferred_zero_tangents_from_primal_binding() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let loss = (&x * &x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (&x * &x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let mut compiler = GraphCompiler::new();
@@ -255,7 +255,7 @@ fn graph_executor_synthesizes_deferred_zero_tangents_from_primal_binding() {
 #[test]
 fn graph_executor_synthesizes_deferred_zero_tangents_from_borrowed_primal_binding() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let loss = (&x * &x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (&x * &x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let mut compiler = GraphCompiler::new();

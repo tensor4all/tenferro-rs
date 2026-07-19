@@ -81,7 +81,7 @@ use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
 
 let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]);
-let loss = (&x * &x).reduce_sum(&[0]);
+let loss = (&x * &x).reduce_sum(Some(&[0]));
 let ad = AdContext::builder().build().unwrap();
 let grad = ad.grad(&loss, &x).unwrap();
 
@@ -108,7 +108,7 @@ let ad = AdContext::builder()
     .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
     .build()
     .unwrap();
-let loss = factor.reduce_sum(&[0, 1]);
+let loss = factor.reduce_sum(Some(&[0, 1]));
 let grad_a = ad.grad(&loss, &a).unwrap();
 let program = compiler.compile(&grad_a).unwrap();
 

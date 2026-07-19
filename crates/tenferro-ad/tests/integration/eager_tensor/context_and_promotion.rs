@@ -62,7 +62,7 @@ fn variable_from_creates_tracked_leaf() {
     assert_eq!(p.ctx_id(), ctx.id());
     assert!(p.tracks_grad());
     // backward should work on a tracked variable
-    let loss = p.exp().unwrap().reduce_sum(&[0]).unwrap();
+    let loss = p.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss.backward().unwrap();
     assert!(p.grad().unwrap().is_some());
 }
@@ -180,7 +180,7 @@ fn detach_into_still_accessible_in_original_context() {
     .unwrap();
     let d = x.detach_into(&ctx_b).unwrap();
     // Original tensor still in ctx_a, should work fine
-    let loss = x.exp().unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
     let _ = loss.backward().unwrap();
     assert!(x.grad().unwrap().is_some());
     // d is in ctx_b, x is in ctx_a

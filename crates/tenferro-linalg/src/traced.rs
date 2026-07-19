@@ -950,9 +950,9 @@ pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
         _ => return Err(unexpected_output_count("lu_factor", 3)),
     };
     let diag_u = packed_lu.extract_diag(0, 1)?;
-    let sign_u = diag_u.sign()?.reduce_prod(&[0])?;
+    let sign_u = diag_u.sign()?.reduce_prod(Some(&[0]))?;
     let sign = (&parity * &sign_u)?;
-    let logabsdet = diag_u.abs()?.log()?.reduce_sum(&[0])?;
+    let logabsdet = diag_u.abs()?.log()?.reduce_sum(Some(&[0]))?;
     Ok((sign, logabsdet))
 }
 
@@ -1140,7 +1140,7 @@ pub fn pinv_with_rtol(a: &TracedTensor, rtol: f64) -> Result<TracedTensor> {
     require_concrete_shape("pinv_with_rtol", a)?;
     let (u, s, vt) = svd(a)?;
     let abs_s = s.abs()?;
-    let s_max = abs_s.reduce_max(&[0])?;
+    let s_max = abs_s.reduce_max(Some(&[0]))?;
     let s_max_shape = s_max.concrete_shape()?;
     let threshold_scalar = broadcast_scalar(scalar_real(s.dtype, rtol.max(0.0))?, &s_max_shape)?;
     let threshold = (&s_max * &threshold_scalar)?;
@@ -1207,8 +1207,8 @@ pub fn norm(
             let abs = a.abs()?;
             match ord {
                 None => frobenius_norm(&abs, &axes)?,
-                Some(p) if p == f64::INFINITY => abs.reduce_max(&axes)?,
-                Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(&axes)?,
+                Some(p) if p == f64::INFINITY => abs.reduce_max(Some(&axes))?,
+                Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(Some(&axes))?,
                 Some(0.0) => count_nonzero(&abs, &axes)?,
                 Some(p) => p_norm(&abs, &axes, p)?,
             }
@@ -1414,7 +1414,7 @@ fn matrix_transpose_perm(rank: usize) -> Vec<usize> {
 
 fn frobenius_norm(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
     let squared = abs.pow(&scalar_real(abs.dtype, 2.0)?)?;
-    squared.reduce_sum(axes)?.sqrt()
+    squared.reduce_sum(Some(axes))?.sqrt()
 }
 
 fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
@@ -1428,7 +1428,7 @@ fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
     }
     let power = abs.pow(&scalar_real(abs.dtype, p)?)?;
     let inv_p = scalar_real(abs.dtype, 1.0 / p)?;
-    power.reduce_sum(axes)?.pow(&inv_p)
+    power.reduce_sum(Some(axes))?.pow(&inv_p)
 }
 
 fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {
@@ -1445,8 +1445,8 @@ fn vector_norm(a: &TracedTensor, axis: usize, ord: Option<f64>) -> Result<Traced
     match ord {
         None => frobenius_norm(&abs, &[axis]),
         Some(0.0) => count_nonzero(&abs, &[axis]),
-        Some(p) if p == f64::INFINITY => abs.reduce_max(&[axis]),
-        Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(&[axis]),
+        Some(p) if p == f64::INFINITY => abs.reduce_max(Some(&[axis])),
+        Some(p) if p == f64::NEG_INFINITY => abs.reduce_min(Some(&[axis])),
         Some(p) => p_norm(&abs, &[axis], p),
     }
 }
@@ -1462,11 +1462,11 @@ fn matrix_norm(a: &TracedTensor, axes: &[usize], ord: Option<f64>) -> Result<Tra
         Some(-1.0) => matrix_col_sum_norm(&abs, false),
         Some(2.0) => {
             let singular_values = svd_values(&matrix)?.abs()?;
-            singular_values.reduce_max(&[0])
+            singular_values.reduce_max(Some(&[0]))
         }
         Some(-2.0) => {
             let singular_values = svd_values(&matrix)?.abs()?;
-            singular_values.reduce_min(&[0])
+            singular_values.reduce_min(Some(&[0]))
         }
         Some(0.0) => count_nonzero(&abs, &[0, 1]),
         Some(p) => p_norm(&abs, &[0, 1], p),
@@ -1528,24 +1528,24 @@ fn scale_matrix_columns(matrix: &TracedTensor, scale: &TracedTensor) -> Result<T
 
 fn count_nonzero(abs: &TracedTensor, axes: &[usize]) -> Result<TracedTensor> {
     let mask = abs.compare(&zero_scalar(abs.dtype)?, CompareDir::Gt)?;
-    mask.convert(abs.dtype)?.reduce_sum(axes)
+    mask.convert(abs.dtype)?.reduce_sum(Some(axes))
 }
 
 fn matrix_row_sum_norm(abs: &TracedTensor, take_max: bool) -> Result<TracedTensor> {
-    let row_sums = abs.reduce_sum(&[1])?;
+    let row_sums = abs.reduce_sum(Some(&[1]))?;
     if take_max {
-        row_sums.reduce_max(&[0])
+        row_sums.reduce_max(Some(&[0]))
     } else {
-        row_sums.reduce_min(&[0])
+        row_sums.reduce_min(Some(&[0]))
     }
 }
 
 fn matrix_col_sum_norm(abs: &TracedTensor, take_max: bool) -> Result<TracedTensor> {
-    let col_sums = abs.reduce_sum(&[0])?;
+    let col_sums = abs.reduce_sum(Some(&[0]))?;
     if take_max {
-        col_sums.reduce_max(&[0])
+        col_sums.reduce_max(Some(&[0]))
     } else {
-        col_sums.reduce_min(&[0])
+        col_sums.reduce_min(Some(&[0]))
     }
 }
 

@@ -111,7 +111,7 @@ fn upper_matrix(n: usize) -> Vec<f64> {
 
 fn reduce_all(tensor: &EagerTensor) -> EagerTensor {
     let axes: Vec<usize> = (0..tensor.shape().len()).collect();
-    tensor.reduce_sum(&axes).unwrap()
+    tensor.reduce_sum(Some(&axes)).unwrap()
 }
 
 fn fixture(n: usize, threads: usize) -> Fixture {

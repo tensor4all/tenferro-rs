@@ -44,19 +44,19 @@ fn eager_axis_ops_validate_before_recording_source_contract() {
 
     for (method, op_variant) in [
         (
-            "pub fn reduce_sum(&self, axes: &[usize])",
+            "pub fn reduce_sum(&self, axes: Option<&[usize]>)",
             "StdTensorOp::ReduceSum",
         ),
         (
-            "pub fn reduce_prod(&self, axes: &[usize])",
+            "pub fn reduce_prod(&self, axes: Option<&[usize]>)",
             "StdTensorOp::ReduceProd",
         ),
         (
-            "pub fn reduce_max(&self, axes: &[usize])",
+            "pub fn reduce_max(&self, axes: Option<&[usize]>)",
             "StdTensorOp::ReduceMax",
         ),
         (
-            "pub fn reduce_min(&self, axes: &[usize])",
+            "pub fn reduce_min(&self, axes: Option<&[usize]>)",
             "StdTensorOp::ReduceMin",
         ),
         (
