@@ -642,6 +642,9 @@ fn execute_linalg_extension_reads<B: LinalgBackend + 'static>(
     inputs: &[TensorRead<'_>],
     ctx: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    if op.op() == LinalgOp::Cholesky {
+        return Ok(vec![ctx.backend_mut().cholesky_read(inputs[0].clone())?]);
+    }
     // Linalg backends currently operate on compact tensors; materialization is
     // explicit here so borrowed views cannot silently bypass backend errors.
     let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {

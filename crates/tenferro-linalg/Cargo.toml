@@ -71,6 +71,7 @@ cuda = [
     "tenferro-gpu/cuda",
 ]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
+webgpu = ["dep:tenferro-gpu", "tenferro-gpu/webgpu"]
 
 [dependencies]
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.2.0", default-features = false }
@@ -107,3 +108,8 @@ required-features = ["autodiff"]
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "apple_shared"
+path = "tests/apple_shared.rs"
+required-features = ["autodiff", "webgpu"]
