@@ -242,10 +242,9 @@ and spindle rely on the current or global Rayon context through
 
 The current faer backend runs GEMM work inside `CpuContext::install`.
 `CpuContext` stores the requested thread count, maps one thread to `Par::Seq`,
-and maps multi-threaded execution to `Par::rayon(0)` while executing inside the
-context-owned Rayon pool. faer expands `Par::rayon(0)` through
-`rayon::current_num_threads()`, so `CpuContext::with_threads(n)` still controls
-the faer parallelism degree for work run under the context.
+and maps multi-threaded execution to explicit `Par::rayon(n)`. The explicit
+degree keeps `CpuContext::with_threads(n)` authoritative even when a Faer plan
+or policy is created before entering the context-owned Rayon pool.
 
 The benchmark below is cached `site_update`, `Complex64`, `d = 2`, with all
 known BLAS/OpenMP thread pools set to one thread. Times are Criterion means in
@@ -269,14 +268,14 @@ each tiny GEMM parallel.
 
 The production policy keeps `CpuContext` as the owner of CPU execution scope.
 This preserves pool isolation for backends that enter through
-`CpuContext::install`; within that scope, faer uses `Par::rayon(0)` to read the
-current context pool size instead of receiving `n` as an independent count.
+`CpuContext::install`; Faer receives the same explicit configured degree both
+inside and outside that scope.
 
 Design implications:
 
 - For one-thread faer, `Par::Seq` avoids Rayon dispatch.
-- For multi-thread faer, call faer-backed kernels from within
-  `CpuContext::install` so `Par::rayon(0)` observes the configured context pool.
+- For multi-thread Faer, pass the configured context degree explicitly and run
+  faer-backed kernels from within `CpuContext::install` for pool isolation.
 - Add a small-shape policy that keeps tiny faer GEMMs sequential even when the
   backend context has more than one thread.
 - A true pool-handle patch would need changes across faer, spindle, and the
@@ -313,8 +312,8 @@ This preserves Rayon pool semantics, but it is expensive for tiny GEMMs.
   caller-thread pool wrapper. This covers `cholesky`, `triangular_solve`, `lu`,
   `full_piv_lu`, `full_piv_lu_solve`, `svd`, `qr`, `eigh`, and `eig`. The
   `cpu-faer` backend uses `CpuContext::install`; one-thread contexts pass
-  `Par::Seq`, and multi-thread contexts pass `Par::rayon(0)` so faer reads the
-  current context pool size.
+  `Par::Seq`, and multi-thread contexts pass explicit `Par::rayon(n)` using the
+  configured context degree.
 - The BLAS conjugation path now detects row-contiguous conjugated operands before
   acquiring an output buffer for a direct BLAS attempt that cannot succeed.
 

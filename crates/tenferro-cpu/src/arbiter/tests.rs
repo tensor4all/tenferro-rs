@@ -64,6 +64,21 @@ fn panic_releases_provider_exclusive_reservation() {
 }
 
 #[test]
+fn released_active_request_retains_reusable_storage() {
+    let arbiter = ResourceArbiter::new();
+    drop(arbiter.acquire(cpu_set([0, 1])).unwrap());
+    let warm_capacity = arbiter.inner.state.lock().unwrap().active.capacity();
+
+    for _ in 0..64 {
+        drop(arbiter.acquire(cpu_set([0, 1])).unwrap());
+    }
+
+    let state = arbiter.inner.state.lock().unwrap();
+    assert!(state.active.is_empty());
+    assert_eq!(state.active.capacity(), warm_capacity);
+}
+
+#[test]
 fn older_all_allowed_waiter_blocks_younger_disjoint_admission() {
     let arbiter = Arc::new(ResourceArbiter::new());
     let active = arbiter.acquire(cpu_set([0, 1])).unwrap();

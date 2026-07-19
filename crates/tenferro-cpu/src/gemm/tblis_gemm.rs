@@ -280,14 +280,14 @@ where
         return Err(Error::invalid_argument(
             OP,
             "configuration",
-            "TBLIS output offset must be non-negative".into(),
+            "TBLIS output offset must be non-negative",
         ));
     }
     let out_offset = usize::try_from(out.offset()).map_err(|_| {
         Error::invalid_argument(
             OP,
             "configuration",
-            "TBLIS output offset does not fit in usize".into(),
+            "TBLIS output offset does not fit in usize",
         )
     })?;
     let out_storage = out.host_storage_mut()?;
@@ -295,7 +295,7 @@ where
         return Err(Error::invalid_argument(
             OP,
             "configuration",
-            "TBLIS output offset is outside host storage".into(),
+            "TBLIS output offset is outside host storage",
         ));
     }
     let out_ptr = out_storage.as_mut_ptr();
@@ -306,11 +306,7 @@ where
         scalar: T::scalar(execution.alpha),
         data: lhs_ptr.cast_mut() as *mut c_void,
         ndim: c_int::try_from(plan.lhs_len.len()).map_err(|_| {
-            Error::invalid_argument(
-                OP,
-                "configuration",
-                "TBLIS lhs rank exceeds c_int range".into(),
-            )
+            Error::invalid_argument(OP, "configuration", "TBLIS lhs rank exceeds c_int range")
         })?,
         len: plan.lhs_len.as_mut_ptr(),
         stride: plan.lhs_stride.as_mut_ptr(),
@@ -321,11 +317,7 @@ where
         scalar: T::scalar(T::one()),
         data: rhs_ptr.cast_mut() as *mut c_void,
         ndim: c_int::try_from(plan.rhs_len.len()).map_err(|_| {
-            Error::invalid_argument(
-                OP,
-                "configuration",
-                "TBLIS rhs rank exceeds c_int range".into(),
-            )
+            Error::invalid_argument(OP, "configuration", "TBLIS rhs rank exceeds c_int range")
         })?,
         len: plan.rhs_len.as_mut_ptr(),
         stride: plan.rhs_stride.as_mut_ptr(),
@@ -336,11 +328,7 @@ where
         scalar: T::scalar(execution.beta),
         data: out_ptr.wrapping_add(out_offset) as *mut c_void,
         ndim: c_int::try_from(plan.out_len.len()).map_err(|_| {
-            Error::invalid_argument(
-                OP,
-                "configuration",
-                "TBLIS output rank exceeds c_int range".into(),
-            )
+            Error::invalid_argument(OP, "configuration", "TBLIS output rank exceeds c_int range")
         })?,
         len: plan.out_len.as_mut_ptr(),
         stride: plan.out_stride.as_mut_ptr(),
@@ -372,7 +360,7 @@ fn ensure_runtime_available() -> Result<()> {
         return Err(Error::invalid_argument(
             OP,
             "configuration",
-            "TBLIS runtime library is unavailable".into(),
+            "TBLIS runtime library is unavailable",
         ));
     }
     Ok(())
