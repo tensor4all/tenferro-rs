@@ -11,7 +11,7 @@ mod solve;
 mod svd;
 mod triangular_solve;
 
-pub(crate) use cholesky::cholesky;
+pub(crate) use cholesky::{cholesky, cholesky_compact_data};
 pub(crate) use eig::{eig, eig_values};
 pub(crate) use eigh::{eigh, eigh_values};
 pub(crate) use full_piv_lu::{full_piv_lu, full_piv_lu_solve};

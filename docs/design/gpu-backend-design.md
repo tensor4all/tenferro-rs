@@ -30,10 +30,13 @@ selected complex analytic or ordering operations.
 WebGPU is being introduced incrementally. The implemented path covers explicit
 transfer plus `F32` `dot_general` through a CubeK BGEMM planner. `C32` GEMM is
 implemented through a CubeK-owned complex GEMM launch API that lowers to real
-`F32` matmuls and handles conjugation flags. `F64`, `C64`,
-zero-contracting-size matmul, and non-matmul tensor ops remain explicit
-unsupported paths rather than CPU fallbacks. HIP/ROCm is still a reserved
-feature stub rather than a supported execution path.
+`F32` matmuls and handles conjugation flags. On Apple, `AppleContext` adds a
+host-visible shared-allocation domain for explicitly selected CPU RustFFT,
+CubeK Metal FFT, and CPU Cholesky. WebGPU matmul and CubeK Metal FFT remain
+`F32`/`C32` paths; `F64`, `C64`, zero-contracting-size matmul, and non-matmul
+tensor ops are not silently redirected to CPU. The explicitly selected mapped
+CPU RustFFT and Cholesky paths do support `F64`/`C64`. HIP/ROCm is still a
+reserved feature stub rather than a supported execution path.
 
 See also:
 
@@ -70,9 +73,11 @@ crates/tenferro-gpu/src/cubecl/
 
 crates/tenferro-gpu/src/webgpu/
     mod.rs                 WebGpuBackend provider facade and shared buffer helpers
+    apple.rs               Apple shared domain, paired backends, transfer counters
     runtime.rs             CubeCL-WGPU runtime initialization and synchronization
     memory.rs              upload_webgpu_tensor and download_webgpu_tensor
     gemm.rs                CubeK-backed F32/C32 dot_general planner and launch support
+    interop.rs             owner-scoped bridge for CubeK FFT launches
     kernels.rs             WebGPU-private dot_general pack kernels
 ```
 
@@ -103,13 +108,14 @@ WebGPU runtime dependencies are feature-owned by `tenferro-gpu`; the workspace
 dependency declaration must not force CUDA for WebGPU-only builds:
 
 ```toml
-cubecl = { package = "t4a-cubecl", version = "=0.10.0", default-features = false }
-cubecl-cuda = { package = "t4a-cubecl-cuda", version = "=0.10.0" }
-cubecl-common = { package = "t4a-cubecl-common", version = "=0.10.0" }
-cubecl-wgpu = { package = "t4a-cubecl-wgpu", version = "=0.10.0" }
-cubecl-runtime = { package = "t4a-cubecl-runtime", version = "=0.10.0" }
-cubek-matmul = { package = "t4a-cubek-matmul", version = "=0.2.0", default-features = false }
-cubek-std = { package = "t4a-cubek-std", version = "=0.2.0", default-features = false }
+cubecl = { package = "t4a-cubecl", git = "https://github.com/tensor4all/cubecl.git", rev = "11b52669f13e27bbe188f988fd696df6d989a562", version = "=0.10.0", default-features = false }
+cubecl-cuda = { package = "t4a-cubecl-cuda", git = "https://github.com/tensor4all/cubecl.git", rev = "11b52669f13e27bbe188f988fd696df6d989a562", version = "=0.10.0" }
+cubecl-common = { package = "t4a-cubecl-common", git = "https://github.com/tensor4all/cubecl.git", rev = "11b52669f13e27bbe188f988fd696df6d989a562", version = "=0.10.0" }
+cubecl-wgpu = { package = "t4a-cubecl-wgpu", git = "https://github.com/tensor4all/cubecl.git", rev = "11b52669f13e27bbe188f988fd696df6d989a562", version = "=0.10.0" }
+cubecl-runtime = { package = "t4a-cubecl-runtime", git = "https://github.com/tensor4all/cubecl.git", rev = "11b52669f13e27bbe188f988fd696df6d989a562", version = "=0.10.0" }
+cubek-matmul = { package = "t4a-cubek-matmul", git = "https://github.com/tensor4all/cubek.git", rev = "43e8521885f141cb8ccdf99a766bfde118412010", version = "=0.2.0", default-features = false }
+cubek-std = { package = "t4a-cubek-std", git = "https://github.com/tensor4all/cubek.git", rev = "43e8521885f141cb8ccdf99a766bfde118412010", version = "=0.2.0", default-features = false }
+cubek-fft = { package = "cubek-fft", git = "https://github.com/tensor4all/cubek.git", rev = "43e8521885f141cb8ccdf99a766bfde118412010", version = "=0.2.0", default-features = false }
 ```
 
 Keep these fork package dependencies until upstream CubeCL/CubeK have the
@@ -126,8 +132,28 @@ committed tenferro manifests should use the published `t4a-*` package aliases
 unless the PR deliberately targets a pre-publish staging branch. In that staging
 case, use Cargo's multiple-location form with `git`, `rev`, and `version` so CI
 uses the fork commit while the packaged manifest retains the registry version.
-After the `t4a-*` packages are on crates.io, remove the `git` and `rev` keys and
-keep the exact version requirements.
+Publishing is intentionally deferred. Keep the reviewed `git` and `rev` keys
+until a later release task deliberately migrates the workspace.
+
+## Apple Shared Allocation Domain
+
+`AppleContext` creates a fresh host-visible Metal client and pairs it with a
+domain-bound `CpuBackend` and the matching `WebGpuBackend`. Tensors created by
+`AppleContext::upload_tensor` retain their managed resource lease, allocation
+domain ID, and physical allocation ID. Guarded CPU reads/writes and Metal
+launches operate on that allocation without an implicit upload or download.
+
+Backend choice is still explicit. The CPU backend currently maps managed
+tensors only for RustFFT and rank-2 Cholesky. Other CPU tensor and linalg
+operations do not become general shared-memory fallbacks. The Metal FFT path is
+owned by `tenferro-fft`, uses CubeK's configured-client launch APIs, and supports
+only its documented F32/C32 power-of-two matrix. Foreign-domain and ordinary
+device-local WebGPU buffers are rejected at the boundary.
+
+The context's transfer counters record explicit creation uploads and explicit
+downloads. Mapping, CPU result writeback, synchronization, and Metal kernels do
+not count as transfers. Each independently created context has a distinct
+domain and rejects the other's tensors.
 
 ## Runtime And Library Loading
 

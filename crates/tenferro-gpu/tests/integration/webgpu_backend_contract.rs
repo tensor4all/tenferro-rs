@@ -1,8 +1,10 @@
 #![cfg(feature = "webgpu")]
 
-use tenferro_gpu::{download_webgpu_tensor, upload_webgpu_tensor, WebGpuBackend, WebGpuRuntime};
+use tenferro_gpu::{
+    download_webgpu_tensor, upload_webgpu_tensor, webgpu_interop, WebGpuBackend, WebGpuRuntime,
+};
 use tenferro_tensor::{
-    DotGeneralConfig, Result, Tensor, TensorBackend, TensorDeviceTransfer, TensorDot,
+    DotGeneralConfig, Error, Result, Tensor, TensorBackend, TensorDeviceTransfer, TensorDot,
 };
 
 fn assert_tensor_backend<B: TensorBackend>() {}
@@ -40,4 +42,35 @@ fn webgpu_download_checks_runtime_residency_before_reading_backend_handle() {
         residency_check < backend_read,
         "WebGPU download must reject non-resident buffers before reading from a runtime handle"
     );
+}
+
+#[test]
+fn webgpu_output_completion_rejects_undersized_f32_and_c32_ranges() {
+    let Ok(runtime) = WebGpuRuntime::new_default() else {
+        return;
+    };
+    let backend = WebGpuBackend::from_runtime(runtime);
+    let f32_handle = webgpu_interop::allocate_raw(&backend, 4);
+    let error =
+        webgpu_interop::finish_f32(&backend, vec![2], f32_handle, "test_finish_f32").unwrap_err();
+    assert!(matches!(error, Error::RuntimeState { .. }));
+
+    let c32_handle = webgpu_interop::allocate_raw(&backend, 4);
+    let error =
+        webgpu_interop::finish_c32(&backend, vec![1], c32_handle, "test_finish_c32").unwrap_err();
+    assert!(matches!(error, Error::RuntimeState { .. }));
+}
+
+#[test]
+fn webgpu_output_completion_rejects_surviving_raw_alias() {
+    let Ok(runtime) = WebGpuRuntime::new_default() else {
+        return;
+    };
+    let backend = WebGpuBackend::from_runtime(runtime);
+    let handle = webgpu_interop::allocate_raw(&backend, 8);
+    let alias = handle.clone();
+    let error =
+        webgpu_interop::finish_f32(&backend, vec![2], handle, "test_finish_alias").unwrap_err();
+    assert!(matches!(error, Error::RuntimeState { .. }));
+    drop(alias);
 }

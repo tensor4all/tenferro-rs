@@ -2,9 +2,15 @@
 //!
 //! This crate is an out-of-tree `ExtensionOp` package with an explicit
 //! [`FftBackend`] capability. [`tenferro_cpu::CpuBackend`] implements the
-//! capability through RustFFT. Metal/WebGPU and CUDA backends require separate
-//! explicit implementations; unsupported requests return an error and never
-//! fall back to CPU or transfer tensor data. Concrete non-AD execution uses
+//! capability through RustFFT. With the `webgpu` feature,
+//! `tenferro_gpu::WebGpuBackend` executes C32 CFFT, F32 one-sided RFFT, and
+//! C32-to-F32 IRFFT through CubeK on its existing WebGPU placement. That first
+//! GPU path supports power-of-two lengths only; unsupported operations and
+//! dtypes return an error and never fall back to CPU or transfer tensor data.
+//! On macOS, `tenferro_gpu::AppleContext` pairs that Metal backend with a
+//! domain-bound CPU RustFFT backend. Backend choice remains explicit, while
+//! matching managed tensors can be used without an intervening download.
+//! Concrete non-AD execution uses
 //! [`TensorFftExt`] and [`TensorReadFftExt`]. Traced graph construction uses
 //! [`TracedTensorFftExt`].
 //!
@@ -35,6 +41,38 @@
 //! let out = executor.run(&program).unwrap();
 //! assert_eq!(out.shape(), &[4]);
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
+//! ```
+//!
+//! ```
+//! # #[cfg(all(feature = "webgpu", target_os = "macos"))]
+//! # {
+//! use num_complex::Complex32;
+//! use tenferro_fft::{FftNorm, TensorFftExt};
+//! use tenferro_gpu::AppleContext;
+//! use tenferro_tensor::Tensor;
+//!
+//! if let Ok(context) = AppleContext::new() {
+//!     let host = Tensor::from_vec_col_major(
+//!         vec![4],
+//!         vec![Complex32::new(1.0, 0.0); 4],
+//!     ).unwrap();
+//!     let input = context.upload_tensor(&host).unwrap();
+//!     let after_creation = context.transfer_stats();
+//!     let mut cpu = context.cpu_backend().clone();
+//!     let cpu_output = input.fft(None, 0, FftNorm::Backward, &mut cpu).unwrap();
+//!     let mut metal = context.metal_backend().clone();
+//!     let output = input.fft(
+//!         None,
+//!         0,
+//!         FftNorm::Backward,
+//!         &mut metal,
+//!     ).unwrap();
+//!     metal.synchronize().unwrap();
+//!     assert_eq!(output.shape(), &[4]);
+//!     assert_eq!(cpu_output.shape(), output.shape());
+//!     assert_eq!(context.transfer_stats(), after_creation);
+//! }
+//! # }
 //! ```
 //!
 //! ```
@@ -80,6 +118,8 @@ mod backend;
 mod cache;
 mod cpu;
 mod spec;
+#[cfg(feature = "webgpu")]
+mod webgpu;
 
 pub use backend::{FftBackend, FftExecutionCache};
 pub use cache::{

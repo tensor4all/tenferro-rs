@@ -5,7 +5,7 @@ use num_complex::{Complex32, Complex64};
 use std::sync::Arc;
 
 use super::{
-    ensure_resident_on_runtime, webgpu_handle_from_backend, webgpu_placement, WebGpuBuffer,
+    ensure_resident_on_runtime, typed_from_webgpu, webgpu_handle_from_backend, WebGpuBuffer,
     WebGpuRuntime,
 };
 use crate::{Buffer, Tensor, TypedTensor};
@@ -28,19 +28,14 @@ use crate::{Buffer, Tensor, TypedTensor};
 /// a dtype unavailable in WebGPU, or [`crate::Error::BackendSource`] on
 /// allocation.
 pub fn upload_webgpu_tensor(rt: &WebGpuRuntime, tensor: &Tensor) -> crate::Result<Tensor> {
-    let client = rt.client();
     match tensor {
-        Tensor::F64(t) => upload_typed::<f64>(client, rt.device_ordinal(), t).map(Tensor::F64),
-        Tensor::F32(t) => upload_typed::<f32>(client, rt.device_ordinal(), t).map(Tensor::F32),
-        Tensor::I32(t) => upload_typed::<i32>(client, rt.device_ordinal(), t).map(Tensor::I32),
-        Tensor::I64(t) => upload_typed::<i64>(client, rt.device_ordinal(), t).map(Tensor::I64),
-        Tensor::Bool(t) => upload_bool(client, rt.device_ordinal(), t).map(Tensor::Bool),
-        Tensor::C64(t) => {
-            upload_typed::<Complex64>(client, rt.device_ordinal(), t).map(Tensor::C64)
-        }
-        Tensor::C32(t) => {
-            upload_typed::<Complex32>(client, rt.device_ordinal(), t).map(Tensor::C32)
-        }
+        Tensor::F64(t) => upload_typed::<f64>(rt, t).map(Tensor::F64),
+        Tensor::F32(t) => upload_typed::<f32>(rt, t).map(Tensor::F32),
+        Tensor::I32(t) => upload_typed::<i32>(rt, t).map(Tensor::I32),
+        Tensor::I64(t) => upload_typed::<i64>(rt, t).map(Tensor::I64),
+        Tensor::Bool(t) => upload_bool(rt, t).map(Tensor::Bool),
+        Tensor::C64(t) => upload_typed::<Complex64>(rt, t).map(Tensor::C64),
+        Tensor::C32(t) => upload_typed::<Complex32>(rt, t).map(Tensor::C32),
     }
 }
 
@@ -74,8 +69,7 @@ pub fn download_webgpu_tensor(rt: &WebGpuRuntime, tensor: &Tensor) -> crate::Res
 }
 
 pub(super) fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
-    client: &ComputeClient<WgpuRuntime>,
-    device_ordinal: usize,
+    rt: &WebGpuRuntime,
     typed: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>> {
     let host_data = match typed.buffer() {
@@ -91,12 +85,12 @@ pub(super) fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
         }
     };
 
-    let handle = client.create_from_slice(T::as_bytes(host_data));
-    Ok(TypedTensor::from_buffer_col_major(
-        typed.shape().to_vec(),
-        Buffer::Backend(Arc::new(WebGpuBuffer::new(handle, host_data.len()))),
-        webgpu_placement(device_ordinal),
-    )?)
+    let byte_len = T::as_bytes(host_data).len();
+    let handle = rt.client().create_from_slice(T::as_bytes(host_data));
+    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, host_data.len(), "webgpu_upload")?;
+    let tensor = typed_from_webgpu(typed.shape().to_vec(), buffer, rt)?;
+    rt.record_upload(byte_len);
+    Ok(tensor)
 }
 
 pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
@@ -116,27 +110,18 @@ pub(super) fn download_typed<T: CubeElement + Clone + 'static>(
     };
 
     if typed.n_elements() == 0 {
-        return Ok(TypedTensor::from_vec_col_major(
-            typed.shape().to_vec(),
-            Vec::new(),
-        )?);
+        return TypedTensor::from_vec_col_major(typed.shape().to_vec(), Vec::new());
     }
 
     let bytes = client
         .read_one(handle)
         .map_err(|err| crate::Error::backend_source("webgpu_download", err))?;
     let data = T::from_bytes(&bytes).to_vec();
-    Ok(TypedTensor::from_vec_col_major(
-        typed.shape().to_vec(),
-        data,
-    )?)
+    rt.record_download(bytes.len());
+    TypedTensor::from_vec_col_major(typed.shape().to_vec(), data)
 }
 
-fn upload_bool(
-    client: &ComputeClient<WgpuRuntime>,
-    device_ordinal: usize,
-    typed: &TypedTensor<bool>,
-) -> crate::Result<TypedTensor<bool>> {
+fn upload_bool(rt: &WebGpuRuntime, typed: &TypedTensor<bool>) -> crate::Result<TypedTensor<bool>> {
     let host_data = match typed.buffer() {
         Buffer::Host(data) => data,
         Buffer::Backend(buffer) => {
@@ -151,12 +136,14 @@ fn upload_bool(
     };
 
     let bytes: Vec<u8> = host_data.iter().map(|&value| u8::from(value)).collect();
-    let handle = client.create_from_slice(&bytes);
-    Ok(TypedTensor::from_buffer_col_major(
+    let handle = rt.client().create_from_slice(&bytes);
+    let buffer = WebGpuBuffer::new_for_runtime(rt, handle, host_data.len(), "webgpu_upload")?;
+    rt.record_upload(bytes.len());
+    TypedTensor::from_buffer_col_major(
         typed.shape().to_vec(),
-        Buffer::Backend(Arc::new(WebGpuBuffer::new(handle, host_data.len()))),
-        webgpu_placement(device_ordinal),
-    )?)
+        Buffer::Backend(Arc::new(buffer)),
+        super::webgpu_placement(rt),
+    )
 }
 
 fn download_bool(
@@ -176,18 +163,13 @@ fn download_bool(
     };
 
     if typed.n_elements() == 0 {
-        return Ok(TypedTensor::from_vec_col_major(
-            typed.shape().to_vec(),
-            Vec::new(),
-        )?);
+        return TypedTensor::from_vec_col_major(typed.shape().to_vec(), Vec::new());
     }
 
     let bytes = client
         .read_one(handle)
         .map_err(|err| crate::Error::backend_source("webgpu_download", err))?;
     let data = bytes.iter().map(|&byte| byte != 0).collect();
-    Ok(TypedTensor::from_vec_col_major(
-        typed.shape().to_vec(),
-        data,
-    )?)
+    rt.record_download(bytes.len());
+    TypedTensor::from_vec_col_major(typed.shape().to_vec(), data)
 }

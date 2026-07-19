@@ -10,14 +10,18 @@ default = ["cpu-faer", "xla-pjrt"]
 cpu-faer = ["tenferro-ad/cpu-faer", "tenferro-cpu/cpu-faer", "tenferro-linalg/cpu-faer"]
 cpu-blas = ["tenferro-ad/cpu-blas", "tenferro-cpu/cpu-blas", "tenferro-linalg/cpu-blas"]
 xla-pjrt = ["tenferro-xla/pjrt"]
+apple-shared = ["dep:tenferro-fft", "dep:tenferro-gpu", "dep:tenferro-tensor"]
 
 [dependencies]
 num-complex.workspace = true
 tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false }
 tenferro-cpu = { path = "../../crates/tenferro-cpu", default-features = false }
 tenferro-einsum = { path = "../../crates/tenferro-einsum", default-features = false, features = ["autodiff"] }
+tenferro-fft = { path = "../../crates/tenferro-fft", default-features = false, features = ["webgpu"], optional = true }
+tenferro-gpu = { path = "../../crates/tenferro-gpu", default-features = false, features = ["webgpu"], optional = true }
 tenferro-linalg = { path = "../../crates/tenferro-linalg", default-features = false, features = ["autodiff"] }
 tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
+tenferro-tensor = { path = "../../crates/tenferro-tensor", optional = true }
 tenferro-xla = { path = "../../crates/tenferro-xla", default-features = false }
 
 [[bin]]
@@ -55,3 +59,13 @@ path = "src/bin/dynamic_shape_truncated_svd.rs"
 [[bin]]
 name = "complex_ad_convention"
 path = "src/bin/complex_ad_convention.rs"
+
+[[bin]]
+name = "apple_shared_fft"
+path = "src/bin/apple_shared_fft.rs"
+required-features = ["apple-shared"]
+
+[[bin]]
+name = "apple_shared_cholesky"
+path = "src/bin/apple_shared_cholesky.rs"
+required-features = ["apple-shared"]

@@ -44,8 +44,16 @@ pub use cubecl::{
 pub use cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
 #[cfg(feature = "webgpu")]
 pub use webgpu::{
-    download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, WebGpuBackend, WebGpuRuntime,
+    download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, AppleContext,
+    AppleTransferStats, WebGpuBackend, WebGpuRuntime,
 };
+
+/// Narrow owner-scoped WebGPU handle interop for extension crates.
+#[cfg(feature = "webgpu")]
+#[doc(hidden)]
+pub mod webgpu_interop {
+    pub use crate::webgpu::interop::*;
+}
 
 #[cfg(feature = "cuda")]
 #[doc(hidden)]
