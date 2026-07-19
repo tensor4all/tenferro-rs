@@ -5,6 +5,7 @@ use tenferro_ad::extension::apply_eager;
 use tenferro_ad::EagerTensor;
 use tenferro_runtime::ErrorPhase;
 
+use crate::eager_composites;
 use crate::extension::{
     validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
 };
@@ -113,6 +114,22 @@ pub trait EagerTensorLinalgExt {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> Result<EagerTensor>;
+    /// Return the determinant sign and logarithm of its absolute value.
+    fn slogdet(&self) -> Result<(EagerTensor, EagerTensor)>;
+    /// Return the determinant.
+    fn det(&self) -> Result<EagerTensor>;
+    /// Return the matrix inverse.
+    fn inv(&self) -> Result<EagerTensor>;
+    /// Return Hermitian eigenvalues without eigenvectors.
+    fn eigvalsh(&self) -> Result<EagerTensor>;
+    /// Return general eigenvalues without eigenvectors.
+    fn eigvals(&self) -> Result<EagerTensor>;
+    /// Return the Moore-Penrose pseudoinverse with the default tolerance.
+    fn pinv(&self) -> Result<EagerTensor>;
+    /// Return the Moore-Penrose pseudoinverse with an explicit relative tolerance.
+    fn pinv_with_rtol(&self, rtol: f64) -> Result<EagerTensor>;
+    /// Return a vector, matrix, or tensor norm.
+    fn norm(&self, ord: Option<f64>, dim: Option<&[usize]>, keepdim: bool) -> Result<EagerTensor>;
 }
 
 impl EagerTensorLinalgExt for EagerTensor {
@@ -184,6 +201,38 @@ impl EagerTensorLinalgExt for EagerTensor {
         unit_diagonal: bool,
     ) -> Result<EagerTensor> {
         triangular_solve(self, b, left_side, lower, transpose_a, unit_diagonal)
+    }
+
+    fn slogdet(&self) -> Result<(EagerTensor, EagerTensor)> {
+        eager_composites::slogdet(self)
+    }
+
+    fn det(&self) -> Result<EagerTensor> {
+        eager_composites::det(self)
+    }
+
+    fn inv(&self) -> Result<EagerTensor> {
+        eager_composites::inv(self)
+    }
+
+    fn eigvalsh(&self) -> Result<EagerTensor> {
+        eager_composites::eigvalsh(self)
+    }
+
+    fn eigvals(&self) -> Result<EagerTensor> {
+        eager_composites::eigvals(self)
+    }
+
+    fn pinv(&self) -> Result<EagerTensor> {
+        eager_composites::pinv(self)
+    }
+
+    fn pinv_with_rtol(&self, rtol: f64) -> Result<EagerTensor> {
+        eager_composites::pinv_with_rtol(self, rtol)
+    }
+
+    fn norm(&self, ord: Option<f64>, dim: Option<&[usize]>, keepdim: bool) -> Result<EagerTensor> {
+        eager_composites::norm(self, ord, dim, keepdim)
     }
 }
 

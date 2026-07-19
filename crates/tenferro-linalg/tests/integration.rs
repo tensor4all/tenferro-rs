@@ -4,6 +4,8 @@ mod ad_support_manifest;
 mod backend_errors;
 #[path = "integration/cpu_linalg_source_contract.rs"]
 mod cpu_linalg_source_contract;
+#[path = "integration/eager_surface_parity.rs"]
+mod eager_surface_parity;
 #[path = "integration/eager_tensor.rs"]
 mod eager_tensor;
 #[path = "integration/full_piv_lu.rs"]

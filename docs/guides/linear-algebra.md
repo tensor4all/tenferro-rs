@@ -63,13 +63,14 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 | Cholesky | `cholesky` | `cholesky` | `cholesky` |
 | SVD | `svd`, `svd_with_options` | `svd`, `svd_with_options` | `svd`, `svd_with_options` |
 | QR | `qr`, `qr_with_options` | `qr`, `qr_with_options` | `qr`, `qr_with_options` |
-| Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` |
-| General eigen | `eig` | `eig` | `eig`, `eigvals` |
+| Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` | `eigh`, `eigh_with_options`, `eigvalsh` |
+| General eigen | `eig` | `eig`, `eigvals` | `eig`, `eigvals` |
 | LU | `lu` | `lu` | `lu` |
 | Complete-pivot LU | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` |
-| Pseudoinverse | `pinv` | - | `pinv`, `pinv_with_rtol` |
-| Determinants | `det`, `slogdet` | - | `det`, `slogdet` |
-| Norms | `norm` | - | `norm` |
+| Pseudoinverse | `pinv` | `pinv`, `pinv_with_rtol` | `pinv`, `pinv_with_rtol` |
+| Determinants | `det`, `slogdet` | `det`, `slogdet` | `det`, `slogdet` |
+| Matrix inverse | - | `inv` | `inv` |
+| Norms | `norm` | `norm` | `norm` |
 
 Concrete methods are exposed by `LinalgBackend`; eager and traced tensor APIs
 are crate-root extension traits.

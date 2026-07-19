@@ -33,6 +33,8 @@ mod cpu;
 #[cfg(feature = "autodiff")]
 mod eager_backend;
 #[cfg(feature = "autodiff")]
+mod eager_composites;
+#[cfg(feature = "autodiff")]
 mod eager_ext;
 pub mod error;
 mod extension;
