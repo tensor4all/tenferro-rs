@@ -12,8 +12,10 @@ use tenferro_tensor::{
 
 impl LinalgBackend for CpuBackend {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
-        if let Some(domain) = self.shared_allocation_domain().cloned() {
-            return managed_cholesky(self, input, domain.as_ref());
+        if tensor_uses_backend_storage(input) {
+            if let Some(domain) = self.shared_allocation_domain().cloned() {
+                return managed_cholesky(self, input, domain.as_ref());
+            }
         }
         ensure_host_tensor("cholesky", input)?;
         match linalg_provider_kind(self.kind(), "cholesky")? {
@@ -1314,6 +1316,18 @@ impl LinalgBackend for CpuBackend {
         let a = canonicalize_tensor_read(self, a)?;
         let b = canonicalize_tensor_read(self, b)?;
         self.solve(&a, &b)
+    }
+}
+
+fn tensor_uses_backend_storage(input: &Tensor) -> bool {
+    match input {
+        Tensor::F32(input) => matches!(input.buffer(), Buffer::Backend(_)),
+        Tensor::F64(input) => matches!(input.buffer(), Buffer::Backend(_)),
+        Tensor::I32(input) => matches!(input.buffer(), Buffer::Backend(_)),
+        Tensor::I64(input) => matches!(input.buffer(), Buffer::Backend(_)),
+        Tensor::Bool(input) => matches!(input.buffer(), Buffer::Backend(_)),
+        Tensor::C32(input) => matches!(input.buffer(), Buffer::Backend(_)),
+        Tensor::C64(input) => matches!(input.buffer(), Buffer::Backend(_)),
     }
 }
 

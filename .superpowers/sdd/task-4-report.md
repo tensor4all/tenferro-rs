@@ -57,3 +57,17 @@ eager, and traced execution.
   eig/eigh, and triangular solve remain follow-up work.
 - The Apple tests skip when a host-visible Metal runtime cannot be initialized,
   matching the existing hardware-gated Apple test convention.
+
+## Review follow-up
+
+The two Important findings in `task-4-review.md` were addressed in a follow-up:
+
+- `CpuBackend::cholesky` now selects managed execution from the input's actual
+  `Buffer::Backend` storage. A domain-bound backend preserves the ordinary host
+  path for both direct owned tensors and `TensorRead::from_tensor`.
+- Hardware-neutral fake guarded buffers and a fake allocation domain exercise
+  F32/F64/C32/C64 factorization, direct and owned-read host parity, guarded
+  reads and full writes, matching domain and distinct allocation identity, and
+  foreign, device-local, and busy-buffer failures. These tests run under both
+  the default faer configuration and the Accelerate-backed BLAS configuration;
+  the macOS Apple integration remains the end-to-end complement.
