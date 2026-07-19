@@ -38,9 +38,10 @@ use super::backward::{
     TenferroBackwardCallbacks,
 };
 use super::{
-    eager_op_profile_enabled, eager_op_profile_per_call_us, maybe_print_eager_op_profile,
-    one_like_tensor, print_and_reset_eager_op_profile, profile_eager_op_section,
-    record_eager_op_profile, zero_like_tensor, EagerOpProfileEntry, EagerRuntime, EagerTensor,
+    eager_op_profile_enabled, eager_op_profile_per_call_us, eager_op_profile_start,
+    maybe_print_eager_op_profile, one_like_tensor, print_and_reset_eager_op_profile,
+    profile_eager_op_section, record_eager_op_profile, zero_like_tensor, EagerOpProfileEntry,
+    EagerRuntime, EagerTensor,
 };
 
 fn build_add_mul_reduce_graph(keys: &[TensorInputKey]) -> Arc<Graph<StdTensorOp>> {
@@ -447,6 +448,7 @@ fn eager_op_profile_helpers_cover_enabled_paths() {
     let _guard = EagerOpProfileOverrideGuard::set(true, Some(2));
 
     assert!(eager_op_profile_enabled());
+    assert!(eager_op_profile_start().is_some());
     assert_eq!(profile_eager_op_section("coverage.profile", || 7), 7);
     assert_eq!(
         eager_op_profile_per_call_us(&EagerOpProfileEntry::default()),
@@ -456,6 +458,14 @@ fn eager_op_profile_helpers_cover_enabled_paths() {
     record_eager_op_profile("nary_op.total", Duration::from_micros(5));
     maybe_print_eager_op_profile();
     print_and_reset_eager_op_profile();
+}
+
+#[test]
+fn eager_op_profile_start_respects_enabled_gate() {
+    let _guard = EagerOpProfileOverrideGuard::set(false, None);
+
+    assert!(!eager_op_profile_enabled());
+    assert!(eager_op_profile_start().is_none());
 }
 
 #[test]

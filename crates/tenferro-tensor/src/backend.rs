@@ -12,6 +12,9 @@ use crate::{
 };
 use num_complex::{Complex32, Complex64};
 
+#[cfg(test)]
+mod tests;
+
 fn read_boundary_error(op: &'static str) -> crate::Error {
     crate::Error::unsupported(
         op,
@@ -1093,6 +1096,20 @@ where
         + 'static,
 {
     let beta_is_zero = beta == T::zero();
+    if let Some(output) = compact_host_accumulation_slice(out, dot.len())? {
+        for (output, dot_value) in output.iter_mut().zip(dot.iter().copied()) {
+            // INVARIANT: beta == 0 follows BLAS GEMM semantics and does not read
+            // the existing output element; beta != 0 requires an initialized
+            // TensorWrite target and performs a read-modify-write update.
+            *output = if beta_is_zero {
+                alpha * dot_value
+            } else {
+                alpha * dot_value + beta * *output
+            };
+        }
+        return Ok(());
+    }
+
     for (linear, dot_value) in dot.iter().copied().enumerate() {
         let indices = flat_to_multi_for_shape(out.shape(), linear);
         let output = out.get_mut(&indices).ok_or_else(|| {
@@ -1112,6 +1129,35 @@ where
         };
     }
     Ok(())
+}
+
+fn compact_host_accumulation_slice<'a, T: 'static>(
+    out: &'a mut TypedTensorViewMut<'_, T>,
+    expected_len: usize,
+) -> crate::Result<Option<&'a mut [T]>> {
+    if out.backend_buffer().is_some()
+        || out.n_elements() != expected_len
+        || !out.is_col_major_contiguous()?
+    {
+        return Ok(None);
+    }
+
+    let start = usize::try_from(out.offset()).map_err(|_| {
+        invalid_argument("dot_general", "output", "compact output offset is negative")
+    })?;
+    let end = start
+        .checked_add(expected_len)
+        .ok_or_else(|| validation("dot_general", ValidationError::IntegerOverflow))?;
+    out.host_storage_mut()?
+        .get_mut(start..end)
+        .map(Some)
+        .ok_or_else(|| {
+            invalid_argument(
+                "dot_general",
+                "output",
+                "compact output is outside its backing storage",
+            )
+        })
 }
 
 fn flat_to_multi_for_shape(shape: &[usize], mut linear: usize) -> Vec<usize> {

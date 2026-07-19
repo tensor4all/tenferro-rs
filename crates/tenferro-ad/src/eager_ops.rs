@@ -14,9 +14,9 @@ use tenferro_tensor::{
 };
 
 use crate::eager::{
-    eager_grad_recording_enabled, exec_single_output, exec_single_output_read,
-    maybe_print_eager_op_profile, profile_eager_op_section, record_eager_op_profile,
-    record_eager_outputs, EagerTensor,
+    eager_grad_recording_enabled, eager_op_profile_start, exec_single_output,
+    exec_single_output_read, maybe_print_eager_op_profile, profile_eager_op_section,
+    record_eager_op_profile, record_eager_outputs, EagerTensor,
 };
 use crate::eager_exec::exec_dot_general_with_conj_on_tensor_reads;
 use crate::error::{Error, Result};
@@ -1111,7 +1111,7 @@ impl EagerTensor {
     }
 
     pub(crate) fn nary_op(tensors: &[&Self], op: StdTensorOp) -> Result<Self> {
-        let total_started = std::time::Instant::now();
+        let total_started = eager_op_profile_start();
         let Some(first) = tensors.first() else {
             return Err(empty_nary_input_error(&op));
         };
@@ -1149,8 +1149,10 @@ impl EagerTensor {
             let result = profile_eager_op_section("nary_op.new_untracked_result", || {
                 Self::new_untracked_result(ctx, output)
             });
-            record_eager_op_profile("nary_op.total", total_started.elapsed());
-            maybe_print_eager_op_profile();
+            if let Some(total_started) = total_started {
+                record_eager_op_profile("nary_op.total", total_started.elapsed());
+                maybe_print_eager_op_profile();
+            }
             return result;
         }
 
@@ -1192,8 +1194,10 @@ impl EagerTensor {
                 metadata_scopes,
             )
         });
-        record_eager_op_profile("nary_op.total", total_started.elapsed());
-        maybe_print_eager_op_profile();
+        if let Some(total_started) = total_started {
+            record_eager_op_profile("nary_op.total", total_started.elapsed());
+            maybe_print_eager_op_profile();
+        }
         result
     }
 }
