@@ -16,6 +16,15 @@ use crate::extension::{
 use crate::LinalgBackend;
 
 /// Scalar types supported by statically typed linear algebra methods.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_linalg::LinalgScalar;
+///
+/// fn accepts_linalg_scalar<T: LinalgScalar>() {}
+/// accepts_linalg_scalar::<f64>();
+/// ```
 pub trait LinalgScalar: TensorScalar + private::Sealed {
     /// Complex counterpart used by general eigendecomposition.
     type Complex: TensorScalar;
@@ -43,12 +52,24 @@ impl LinalgScalar for Complex64 {
 }
 
 /// Fixed typed output tuple for singular value decomposition.
+///
+/// # Examples
+///
+/// ```rust
+/// let _: Option<tenferro_linalg::TypedSvd<f64>> = None;
+/// ```
 pub type TypedSvd<T> = (
     TypedTensor<T>,
     TypedTensor<<T as TensorScalar>::Real>,
     TypedTensor<T>,
 );
 /// Fixed typed output tuple for LU decomposition.
+///
+/// # Examples
+///
+/// ```rust
+/// let _: Option<tenferro_linalg::TypedLu<f64>> = None;
+/// ```
 pub type TypedLu<T> = (
     TypedTensor<T>,
     TypedTensor<T>,
@@ -56,6 +77,12 @@ pub type TypedLu<T> = (
     TypedTensor<<T as TensorScalar>::Real>,
 );
 /// Fixed typed output tuple for complete-pivot LU decomposition.
+///
+/// # Examples
+///
+/// ```rust
+/// let _: Option<tenferro_linalg::TypedFullPivLu<f64>> = None;
+/// ```
 pub type TypedFullPivLu<T> = (
     TypedTensor<T>,
     TypedTensor<T>,
@@ -64,6 +91,12 @@ pub type TypedFullPivLu<T> = (
     TypedTensor<<T as TensorScalar>::Real>,
 );
 /// Fixed typed output tuple for general eigendecomposition.
+///
+/// # Examples
+///
+/// ```rust
+/// let _: Option<tenferro_linalg::TypedEig<f64>> = None;
+/// ```
 pub type TypedEig<T> = (
     TypedTensor<<T as LinalgScalar>::Complex>,
     TypedTensor<<T as LinalgScalar>::Complex>,
@@ -85,47 +118,86 @@ pub type TypedEig<T> = (
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 pub trait TensorLinalgExt {
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, unsupported-backend, numerical, or output-contract errors.
     fn svd<B: LinalgBackend>(
         &self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for matrix metadata or options, plus SVD backend errors.
     fn svd_with_options<B: LinalgBackend>(
         &self,
         options: SvdOptions,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, unsupported-backend, numerical, or output-contract errors.
     fn qr<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for matrix metadata or options, plus QR backend errors.
     fn qr_with_options<B: LinalgBackend>(
         &self,
         options: QrOptions,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, unsupported-backend, numerical, or output-contract errors.
     fn lu<B: LinalgBackend>(
         &self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, unsupported-backend, numerical, or output-contract errors.
     fn full_piv_lu<B: LinalgBackend>(
         &self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for incompatible inputs or a backend/singular-system error.
     fn full_piv_lu_solve<B: LinalgBackend>(
         &self,
         b: &Tensor,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for incompatible inputs or a backend/singular-system error.
     fn solve<B: LinalgBackend>(
         &self,
         b: &Tensor,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for a non-square input or backend/numerical errors.
     fn cholesky<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, unsupported-backend, convergence, or output-contract errors.
     fn eigh<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for matrix metadata or options, plus Eigh backend errors.
     fn eigh_with_options<B: LinalgBackend>(
         &self,
         options: EighOptions,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, unsupported-backend, convergence, or output-contract errors.
     fn eig<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for incompatible inputs/flags or backend/numerical errors.
     #[allow(clippy::too_many_arguments)]
     fn triangular_solve<B: LinalgBackend>(
         &self,
@@ -136,20 +208,44 @@ pub trait TensorLinalgExt {
         unit_diagonal: bool,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, unsupported-backend, numerical, or LU output-contract errors.
     fn slogdet<B: LinalgBackend>(
         &self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns the validation, backend, numerical, or contract errors from [`Self::slogdet`].
     fn det<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, unsupported-backend, or singular-solve numerical errors.
     fn inv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns the validation, backend, convergence, or contract errors from [`Self::eigh`].
     fn eigvalsh<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns the validation, backend, convergence, or contract errors from [`Self::eig`].
     fn eigvals<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, unsupported-backend, numerical, or SVD contract errors.
     fn pinv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns a validation error for invalid `rtol`, plus errors from [`Self::pinv`].
     fn pinv_with_rtol<B: LinalgBackend>(
         &self,
         rtol: f64,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for axes/order combinations or required backend operations.
     fn norm<B: LinalgBackend>(
         &self,
         ord: Option<f64>,
@@ -160,57 +256,110 @@ pub trait TensorLinalgExt {
 }
 
 /// Linear algebra methods for borrowed tensor reads.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_linalg::TensorReadLinalgExt;
+/// use tenferro_tensor::{Tensor, TensorRead};
+///
+/// let input = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0])?;
+/// let mut backend = CpuBackend::new();
+/// let (_q, r) = TensorRead::from_tensor(&input).qr_read(&mut backend)?;
+/// assert_eq!(r.shape(), &[2, 2]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub trait TensorReadLinalgExt {
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, same-placement materialization, backend, numerical, or contract errors.
     fn svd_read<B: LinalgBackend>(
         self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for metadata/options, plus read/materialization or SVD errors.
     fn svd_with_options_read<B: LinalgBackend>(
         self,
         options: SvdOptions,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, same-placement materialization, backend, numerical, or contract errors.
     fn qr_read<B: LinalgBackend>(
         self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for metadata/options, plus read/materialization or QR errors.
     fn qr_with_options_read<B: LinalgBackend>(
         self,
         options: QrOptions,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, same-placement materialization, backend, numerical, or contract errors.
     fn lu_read<B: LinalgBackend>(
         self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, same-placement materialization, backend, numerical, or contract errors.
     fn full_piv_lu_read<B: LinalgBackend>(
         self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor, Tensor, Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns incompatible-input validation, read/materialization, backend, or singular errors.
     fn full_piv_lu_solve_read<B: LinalgBackend>(
         self,
         b: TensorRead<'_>,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns incompatible-input validation, read/materialization, backend, or singular errors.
     fn solve_read<B: LinalgBackend>(
         self,
         b: TensorRead<'_>,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns matrix validation, read/materialization, backend, or positive-definiteness errors.
     fn cholesky_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, read/materialization, backend, convergence, or contract errors.
     fn eigh_read<B: LinalgBackend>(
         self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for metadata/options, plus read or Eigh backend errors.
     fn eigh_with_options_read<B: LinalgBackend>(
         self,
         options: EighOptions,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, read/materialization, backend, convergence, or contract errors.
     fn eig_read<B: LinalgBackend>(
         self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns incompatible-input/flag validation, read, backend, or singular errors.
     #[allow(clippy::too_many_arguments)]
     fn triangular_solve_read<B: LinalgBackend>(
         self,
@@ -221,20 +370,44 @@ pub trait TensorReadLinalgExt {
         unit_diagonal: bool,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, read/materialization, backend, numerical, or LU contract errors.
     fn slogdet_read<B: LinalgBackend>(
         self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(Tensor, Tensor)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, read/materialization, backend, numerical, or contract errors.
     fn det_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, read/materialization, backend, or singular-solve errors.
     fn inv_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, read/materialization, backend, convergence, or contract errors.
     fn eigvalsh_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, read/materialization, backend, convergence, or contract errors.
     fn eigvals_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, read/materialization, backend, numerical, or SVD contract errors.
     fn pinv_read<B: LinalgBackend>(self, backend: &mut B) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns a validation error for invalid `rtol`, plus errors from [`Self::pinv_read`].
     fn pinv_with_rtol_read<B: LinalgBackend>(
         self,
         rtol: f64,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for axes/order combinations or required read/backend operations.
     fn norm_read<B: LinalgBackend>(
         self,
         ord: Option<f64>,
@@ -248,51 +421,107 @@ pub trait TensorReadLinalgExt {
 ///
 /// Singular values, Hermitian eigenvalues, determinant log-magnitudes, and
 /// norms use `T::Real`; general eigenvalues and eigenvectors use `T::Complex`.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu::CpuBackend;
+/// use tenferro_linalg::TypedTensorLinalgExt;
+/// use tenferro_tensor::TypedTensor;
+///
+/// let input = TypedTensor::<f64>::from_vec_col_major(
+///     vec![2, 2],
+///     vec![2.0, 0.0, 0.0, 4.0],
+/// )?;
+/// let mut backend = CpuBackend::new();
+/// let (_u, singular_values, _vt) = input.svd(&mut backend)?;
+/// assert_eq!(singular_values.as_slice()?, &[4.0, 2.0]);
+/// # Ok::<(), tenferro_tensor::Error>(())
+/// ```
 pub trait TypedTensorLinalgExt<T: LinalgScalar> {
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, numerical, output-contract, or typed-downcast errors.
     fn svd<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedSvd<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for metadata/options, plus backend or typed-output errors.
     fn svd_with_options<B: LinalgBackend>(
         &self,
         options: SvdOptions,
         backend: &mut B,
     ) -> tenferro_tensor::Result<TypedSvd<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, numerical, output-contract, or typed-downcast errors.
     fn qr<B: LinalgBackend>(
         &self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for metadata/options, plus backend or typed-output errors.
     fn qr_with_options<B: LinalgBackend>(
         &self,
         options: QrOptions,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<T>)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, numerical, output-contract, or typed-downcast errors.
     fn lu<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedLu<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, numerical, output-contract, or typed-downcast errors.
     fn full_piv_lu<B: LinalgBackend>(
         &self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<TypedFullPivLu<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns incompatible-input validation, backend, singular, or typed-downcast errors.
     fn full_piv_lu_solve<B: LinalgBackend>(
         &self,
         b: &TypedTensor<T>,
         backend: &mut B,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns incompatible-input validation, backend, singular, or typed-downcast errors.
     fn solve<B: LinalgBackend>(
         &self,
         b: &TypedTensor<T>,
         backend: &mut B,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns matrix validation, backend, positive-definiteness, or typed-downcast errors.
     fn cholesky<B: LinalgBackend>(
         &self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, convergence, output-contract, or typed-downcast errors.
     fn eigh<B: LinalgBackend>(
         &self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(TypedTensor<<T as TensorScalar>::Real>, TypedTensor<T>)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for metadata/options, plus backend or typed-output errors.
     fn eigh_with_options<B: LinalgBackend>(
         &self,
         options: EighOptions,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(TypedTensor<<T as TensorScalar>::Real>, TypedTensor<T>)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, convergence, output-contract, or typed-downcast errors.
     fn eig<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedEig<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns incompatible-input/flag validation, backend, singular, or typed-output errors.
     #[allow(clippy::too_many_arguments)]
     fn triangular_solve<B: LinalgBackend>(
         &self,
@@ -303,26 +532,50 @@ pub trait TypedTensorLinalgExt<T: LinalgScalar> {
         unit_diagonal: bool,
         backend: &mut B,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, numerical, output-contract, or typed-downcast errors.
     fn slogdet<B: LinalgBackend>(
         &self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<<T as TensorScalar>::Real>)>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, numerical, output-contract, or typed-downcast errors.
     fn det<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, singular-solve, or typed-downcast errors.
     fn inv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, convergence, output-contract, or typed-downcast errors.
     fn eigvalsh<B: LinalgBackend>(
         &self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<TypedTensor<<T as TensorScalar>::Real>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, convergence, output-contract, or typed-downcast errors.
     fn eigvals<B: LinalgBackend>(
         &self,
         backend: &mut B,
     ) -> tenferro_tensor::Result<TypedTensor<T::Complex>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation, backend, numerical, output-contract, or typed-downcast errors.
     fn pinv<B: LinalgBackend>(&self, backend: &mut B) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns a validation error for invalid `rtol`, plus backend or typed-output errors.
     fn pinv_with_rtol<B: LinalgBackend>(
         &self,
         rtol: f64,
         backend: &mut B,
     ) -> tenferro_tensor::Result<TypedTensor<T>>;
+    /// # Errors
+    /// Returns `tenferro_tensor::Error::Unsupported` when the selected backend does not support the operation.
+    /// Returns validation errors for axes/order combinations, backend, or typed-output errors.
     fn norm<B: LinalgBackend>(
         &self,
         ord: Option<f64>,
