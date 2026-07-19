@@ -5,17 +5,19 @@ use tenferro_tensor::{Tensor, TensorBackend};
 
 use crate::{FftPlanCache, FftPlanSpec};
 
-pub(crate) enum FftCacheSource<'a> {
-    CallerOwned(&'a mut FftPlanCache),
-    RuntimeOwned(&'a mut ExtensionCacheStore),
+#[derive(Clone, Copy, Debug)]
+enum FftCacheOwner {
+    CallerOwned,
+    RuntimeOwned,
 }
 
 /// Execution-cache state supplied to an [`FftBackend`].
 ///
 /// Direct repeated calls use a caller-owned [`FftPlanCache`], while traced
-/// execution uses the owning runtime's [`ExtensionCacheStore`]. Constructors
-/// keep the representation closed so future backends can add plan/workspace
-/// entries without exposing RustFFT plan types.
+/// execution uses the owning runtime's [`ExtensionCacheStore`]. Both ownership
+/// paths expose the same bounded typed store to a backend, so CPU, Metal, CUDA,
+/// and future implementations can retain private plans or workspaces in their
+/// own cache namespace. Constructors keep the owner representation closed.
 ///
 /// # Examples
 ///
@@ -27,53 +29,49 @@ pub(crate) enum FftCacheSource<'a> {
 /// assert!(format!("{cache:?}").contains("CallerOwned"));
 /// ```
 pub struct FftExecutionCache<'a> {
-    source: FftCacheSource<'a>,
+    owner: FftCacheOwner,
+    store: &'a mut ExtensionCacheStore,
 }
 
 impl fmt::Debug for FftExecutionCache<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.source {
-            FftCacheSource::CallerOwned(cache) => f
-                .debug_struct("FftExecutionCache")
-                .field("owner", &"CallerOwned")
-                .field("stats", &cache.stats())
-                .finish_non_exhaustive(),
-            FftCacheSource::RuntimeOwned(_) => f
-                .debug_struct("FftExecutionCache")
-                .field("owner", &"RuntimeOwned")
-                .finish_non_exhaustive(),
-        }
+        f.debug_struct("FftExecutionCache")
+            .field("owner", &self.owner)
+            .field(
+                "stats",
+                &self
+                    .store
+                    .stats(tenferro_runtime::ExtensionCacheSelector::All),
+            )
+            .finish_non_exhaustive()
     }
 }
 
 impl<'a> FftExecutionCache<'a> {
-    /// Build a context backed by a caller-owned RustFFT plan cache.
+    /// Build a context backed by a caller-owned typed FFT execution cache.
     pub fn caller_owned(cache: &'a mut FftPlanCache) -> Self {
         Self {
-            source: FftCacheSource::CallerOwned(cache),
+            owner: FftCacheOwner::CallerOwned,
+            store: cache.store_mut(),
         }
     }
 
     /// Build a context backed by an extension runtime cache store.
     pub fn runtime_owned(cache: &'a mut ExtensionCacheStore) -> Self {
         Self {
-            source: FftCacheSource::RuntimeOwned(cache),
+            owner: FftCacheOwner::RuntimeOwned,
+            store: cache,
         }
     }
 
-    /// Borrow the runtime cache store when traced execution owns this context.
+    /// Borrow the bounded typed store owned by the caller or extension runtime.
     ///
-    /// Caller-owned direct execution returns `None`. Backend implementations
-    /// can use the returned store for backend-specific plans or workspaces.
-    pub fn runtime_store_mut(&mut self) -> Option<&mut ExtensionCacheStore> {
-        match &mut self.source {
-            FftCacheSource::CallerOwned(_) => None,
-            FftCacheSource::RuntimeOwned(cache) => Some(cache),
-        }
-    }
-
-    pub(crate) fn into_source(self) -> FftCacheSource<'a> {
-        self.source
+    /// Backend implementations should use a stable family/cache namespace and
+    /// include every plan-identity field in the key discriminator. The store
+    /// owns LRU bounds, typed retrieval, clear behavior, entry counts, and the
+    /// retained-byte estimates supplied at insertion.
+    pub fn store_mut(&mut self) -> &mut ExtensionCacheStore {
+        self.store
     }
 }
 

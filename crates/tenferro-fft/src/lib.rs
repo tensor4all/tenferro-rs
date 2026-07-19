@@ -99,34 +99,34 @@ pub use spec::{FftNorm, FftOperation, FftPlanSpec};
 /// ```
 pub const FFT_EXTENSION_FAMILY_ID: &str = "tenferro-fft.fft.v1";
 
-/// Reusable concrete FFT executor with explicitly owned plan state.
+/// Reusable concrete FFT executor with an explicitly owned backend-neutral cache.
 #[derive(Default)]
 pub struct FftExecutor {
     plans: FftPlanCache,
 }
 
 impl FftExecutor {
-    /// Create an executor from a caller-configured plan cache.
+    /// Create an executor from a caller-configured FFT execution cache.
     pub fn new(plans: FftPlanCache) -> Self {
         Self { plans }
     }
 
-    /// Inspect the owned plan cache.
+    /// Inspect the owned backend-neutral FFT cache.
     pub const fn plan_cache(&self) -> &FftPlanCache {
         &self.plans
     }
 
-    /// Mutably inspect or configure the owned plan cache.
+    /// Mutably inspect or configure the owned backend-neutral FFT cache.
     pub fn plan_cache_mut(&mut self) -> &mut FftPlanCache {
         &mut self.plans
     }
 
-    /// Snapshot the owned plan cache statistics.
+    /// Snapshot aggregate statistics for every backend cache namespace.
     pub fn cache_stats(&self) -> CacheStats {
         self.plans.stats()
     }
 
-    /// Remove every retained plan from this executor.
+    /// Remove every retained backend plan or workspace from this executor.
     pub fn clear_cache(&mut self) {
         self.plans.clear();
     }

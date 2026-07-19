@@ -1,3 +1,5 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -6,9 +8,10 @@ use std::sync::{
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_fft::{
-    FftBackend, FftExecutionCache, FftNorm, FftOperation, FftPlanSpec, TensorFftExt,
+    FftBackend, FftExecutionCache, FftExecutor, FftNorm, FftOperation, FftPlanSpec, TensorFftExt,
+    FFT_EXTENSION_FAMILY_ID,
 };
-use tenferro_runtime::GraphExecutor;
+use tenferro_runtime::{ExtensionCacheKey, GraphExecutor};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, Buffer, BufferHandle, CompareDir,
     DType, DeviceId, DeviceKind, DotGeneralConfig, ErrorKind, GatherConfig, GpuBackendKind,
@@ -136,6 +139,67 @@ impl TensorOnlyBackend {
 
 impl_minimal_tensor_backend!(TensorOnlyBackend);
 
+#[derive(Debug, Default)]
+struct MockNonCpuBackend {
+    plan_builds: usize,
+    plan_reuses: usize,
+}
+
+impl MockNonCpuBackend {
+    fn record_transfer(&self) {}
+}
+
+impl_minimal_tensor_backend!(MockNonCpuBackend);
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct MockNonCpuPlanKey {
+    operation: FftOperation,
+    normalized_axis: usize,
+    requested_len: Option<usize>,
+    input_dtype: DType,
+    input_shape: Vec<usize>,
+}
+
+#[derive(Debug)]
+struct MockNonCpuPlan {
+    key: MockNonCpuPlanKey,
+}
+
+impl FftBackend for MockNonCpuBackend {
+    fn execute_fft(
+        &mut self,
+        input: &Tensor,
+        spec: &FftPlanSpec,
+        mut cache: FftExecutionCache<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        let plan_key = MockNonCpuPlanKey {
+            operation: spec.operation(),
+            normalized_axis: spec.normalized_axis(),
+            requested_len: spec.requested_len(),
+            input_dtype: spec.input_dtype(),
+            input_shape: spec.input_shape().to_vec(),
+        };
+        let mut hasher = DefaultHasher::new();
+        plan_key.hash(&mut hasher);
+        let cache_key = ExtensionCacheKey::new(
+            FFT_EXTENSION_FAMILY_ID,
+            "mock-non-cpu-plans",
+            hasher.finish(),
+        );
+        let store = cache.store_mut();
+        if store
+            .get::<MockNonCpuPlan>(&cache_key)
+            .is_some_and(|plan| plan.key == plan_key)
+        {
+            self.plan_reuses += 1;
+        } else {
+            self.plan_builds += 1;
+            store.put(cache_key, MockNonCpuPlan { key: plan_key }, 96);
+        }
+        Ok(input.clone())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RecordedSpec {
     operation: FftOperation,
@@ -208,6 +272,38 @@ fn cpu_backend_is_fft_capable_and_runtime_registration_accepts_it() {
     executor
         .register_extension(tenferro_fft::register_runtime)
         .unwrap();
+}
+
+#[test]
+fn caller_owned_cache_is_backend_neutral_and_reports_reuse_clear_and_stats() {
+    let input = Tensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    )
+    .unwrap();
+    let mut backend = MockNonCpuBackend::default();
+    let mut executor = FftExecutor::default();
+
+    executor
+        .fft(&input, None, -1, FftNorm::Backward, &mut backend)
+        .unwrap();
+    executor
+        .fft(&input, None, -1, FftNorm::Backward, &mut backend)
+        .unwrap();
+
+    assert_eq!(backend.plan_builds, 1);
+    assert_eq!(backend.plan_reuses, 1);
+    assert_eq!(executor.cache_stats().entries, 1);
+    assert_eq!(executor.cache_stats().retained_bytes, 96);
+
+    executor.clear_cache();
+    assert_eq!(executor.cache_stats().entries, 0);
+    assert_eq!(executor.cache_stats().retained_bytes, 0);
+
+    executor
+        .fft(&input, None, -1, FftNorm::Backward, &mut backend)
+        .unwrap();
+    assert_eq!(backend.plan_builds, 2);
 }
 
 #[test]

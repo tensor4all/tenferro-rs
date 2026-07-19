@@ -5,7 +5,7 @@ use num_traits::{Float, FromPrimitive, Zero};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{BackendSessionHost, DeviceKind, MemoryKind, Placement, Tensor, TypedTensor};
 
-use crate::backend::{FftCacheSource, FftExecutionCache};
+use crate::backend::FftExecutionCache;
 use crate::cache::{cached_fft_plan, CachedFftPlanScalar, ExtensionFftPlanCache, FftPlanProvider};
 use crate::{
     expected_dtype_description, fft_op_name, output_shape_c2c, output_shape_c2r, output_shape_r2c,
@@ -17,20 +17,13 @@ impl FftBackend for CpuBackend {
         &mut self,
         input: &Tensor,
         spec: &FftPlanSpec,
-        cache: FftExecutionCache<'_>,
+        mut cache: FftExecutionCache<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
         validate_spec_input(input, spec)?;
         validate_host_fft_input(fft_op_name(spec.operation()), input)?;
 
-        match cache.into_source() {
-            FftCacheSource::CallerOwned(plans) => {
-                self.with_backend_session(|_exec| execute_fft_with_plans(input, spec, plans))
-            }
-            FftCacheSource::RuntimeOwned(entries) => {
-                let mut plans = ExtensionFftPlanCache::new(entries);
-                self.with_backend_session(|_exec| execute_fft_with_plans(input, spec, &mut plans))
-            }
-        }
+        let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
+        self.with_backend_session(|_exec| execute_fft_with_plans(input, spec, &mut plans))
     }
 }
 
