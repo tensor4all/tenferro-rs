@@ -1093,6 +1093,20 @@ where
         + 'static,
 {
     let beta_is_zero = beta == T::zero();
+    if let Some(output) = compact_host_accumulation_slice(out, dot.len())? {
+        for (output, dot_value) in output.iter_mut().zip(dot.iter().copied()) {
+            // INVARIANT: beta == 0 follows BLAS GEMM semantics and does not read
+            // the existing output element; beta != 0 requires an initialized
+            // TensorWrite target and performs a read-modify-write update.
+            *output = if beta_is_zero {
+                alpha * dot_value
+            } else {
+                alpha * dot_value + beta * *output
+            };
+        }
+        return Ok(());
+    }
+
     for (linear, dot_value) in dot.iter().copied().enumerate() {
         let indices = flat_to_multi_for_shape(out.shape(), linear);
         let output = out.get_mut(&indices).ok_or_else(|| {
@@ -1114,6 +1128,35 @@ where
     Ok(())
 }
 
+fn compact_host_accumulation_slice<'a, T: 'static>(
+    out: &'a mut TypedTensorViewMut<'_, T>,
+    expected_len: usize,
+) -> crate::Result<Option<&'a mut [T]>> {
+    if out.backend_buffer().is_some()
+        || out.n_elements() != expected_len
+        || !out.is_col_major_contiguous()?
+    {
+        return Ok(None);
+    }
+
+    let start = usize::try_from(out.offset()).map_err(|_| {
+        invalid_argument("dot_general", "output", "compact output offset is negative")
+    })?;
+    let end = start
+        .checked_add(expected_len)
+        .ok_or_else(|| validation("dot_general", ValidationError::IntegerOverflow))?;
+    out.host_storage_mut()?
+        .get_mut(start..end)
+        .map(Some)
+        .ok_or_else(|| {
+            invalid_argument(
+                "dot_general",
+                "output",
+                "compact output is outside its backing storage",
+            )
+        })
+}
+
 fn flat_to_multi_for_shape(shape: &[usize], mut linear: usize) -> Vec<usize> {
     let mut indices = Vec::with_capacity(shape.len());
     for &dim in shape {
@@ -1125,6 +1168,31 @@ fn flat_to_multi_for_shape(shape: &[usize], mut linear: usize) -> Vec<usize> {
         }
     }
     indices
+}
+
+#[cfg(test)]
+mod accumulation_fast_path_tests {
+    use super::*;
+
+    #[test]
+    fn compact_host_accumulation_slice_selects_only_compact_host_views() {
+        let mut compact_data = [0.0_f64; 4];
+        let mut compact =
+            TypedTensorViewMut::from_slice([2, 2], [1, 2], 0, &mut compact_data).unwrap();
+        assert_eq!(
+            compact_host_accumulation_slice(&mut compact, 4)
+                .unwrap()
+                .unwrap()
+                .len(),
+            4
+        );
+
+        let mut strided_data = [0.0_f64; 3];
+        let mut strided = TypedTensorViewMut::from_slice([2], [2], 0, &mut strided_data).unwrap();
+        assert!(compact_host_accumulation_slice(&mut strided, 2)
+            .unwrap()
+            .is_none());
+    }
 }
 
 /// Canonical elementwise fusion plan shared between segmented execution and backends.

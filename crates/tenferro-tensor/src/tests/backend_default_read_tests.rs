@@ -807,6 +807,49 @@ fn dot_general_accum_default_fallback_updates_tensor_and_view_outputs() {
 }
 
 #[test]
+fn dot_general_accum_beta_zero_does_not_read_compact_output() {
+    let dot = Tensor::from_vec_col_major([2], vec![2.0_f64, -3.0]).unwrap();
+    let mut out = Tensor::from_vec_col_major([2], vec![f64::NAN, f64::NAN]).unwrap();
+    let mut write = TensorWrite::from_tensor(&mut out);
+
+    crate::backend::accumulate_dot_result_into(
+        &dot,
+        DotGeneralAccumulation {
+            lhs_conj: false,
+            rhs_conj: false,
+            alpha: ContractionScalar::F64(2.0),
+            beta: ContractionScalar::F64(0.0),
+        },
+        &mut write,
+    )
+    .unwrap();
+
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, -6.0]);
+}
+
+#[test]
+fn dot_general_accum_keeps_strided_output_fallback() {
+    let dot = Tensor::from_vec_col_major([2], vec![2.0_f64, 3.0]).unwrap();
+    let mut storage = [10.0_f64, 99.0, 20.0];
+    let view = TypedTensorViewMut::from_slice([2], [2], 0, &mut storage).unwrap();
+    let mut write = TensorWrite::from_view(TensorViewMut::F64(view));
+
+    crate::backend::accumulate_dot_result_into(
+        &dot,
+        DotGeneralAccumulation {
+            lhs_conj: false,
+            rhs_conj: false,
+            alpha: ContractionScalar::F64(1.0),
+            beta: ContractionScalar::F64(1.0),
+        },
+        &mut write,
+    )
+    .unwrap();
+
+    assert_eq!(storage, [12.0, 99.0, 23.0]);
+}
+
+#[test]
 fn dot_general_accum_default_fallback_covers_supported_scalar_dtypes() {
     let config = vector_contract_config();
 
