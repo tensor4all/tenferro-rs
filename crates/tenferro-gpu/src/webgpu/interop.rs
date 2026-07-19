@@ -27,6 +27,13 @@ pub fn max_units_per_cube(backend: &WebGpuBackend) -> u32 {
 }
 
 /// Validate and clone an F32 tensor into CubeCL launch metadata.
+///
+/// # Errors
+///
+/// Returns [`tenferro_tensor::Error::Unsupported`] for noncompact or negative
+/// layouts, [`tenferro_tensor::Error::HostAccess`] for a foreign managed domain,
+/// and validation or runtime-state errors for incompatible placement, shape,
+/// buffer, or stride metadata.
 pub fn f32_input(
     backend: &WebGpuBackend,
     tensor: &TypedTensor<f32>,
@@ -42,6 +49,13 @@ pub fn f32_input(
 }
 
 /// Validate and clone the raw allocation plus logical metadata of a C32 tensor.
+///
+/// # Errors
+///
+/// Returns [`tenferro_tensor::Error::Unsupported`] for noncompact or negative
+/// layouts, [`tenferro_tensor::Error::HostAccess`] for a foreign managed domain,
+/// and validation or runtime-state errors for incompatible placement, shape,
+/// buffer, or stride metadata.
 pub fn c32_input_parts(
     backend: &WebGpuBackend,
     tensor: &TypedTensor<Complex32>,
@@ -50,12 +64,22 @@ pub fn c32_input_parts(
     input_parts(backend, tensor, op)
 }
 
-/// Allocate one unaliased raw output on the backend's exact client.
+/// Allocate one unaliased output range on the backend's exact client.
+///
+/// CubeCL's pool may represent the returned range with start or end offsets;
+/// completion validates the used range rather than assuming a whole page.
 pub fn allocate_raw(backend: &WebGpuBackend, bytes: usize) -> Handle {
     client(backend).empty(bytes)
 }
 
-/// Consume an initialized raw F32 allocation into a tenferro tensor.
+/// Consume an initialized, exactly sized F32 handle range into a tenferro tensor.
+///
+/// # Errors
+///
+/// Returns a validation or runtime-state error when shape-byte arithmetic
+/// overflows, the handle range is invalid, misaligned, incorrectly sized, or
+/// still has another live raw owner. Backend resource-resolution errors retain
+/// their typed source.
 pub fn finish_f32(
     backend: &WebGpuBackend,
     shape: Vec<usize>,
@@ -65,7 +89,14 @@ pub fn finish_f32(
     finish(backend, shape, handle, op)
 }
 
-/// Consume an initialized raw C32 allocation into a tenferro tensor.
+/// Consume an initialized, exactly sized C32 handle range into a tenferro tensor.
+///
+/// # Errors
+///
+/// Returns a validation or runtime-state error when shape-byte arithmetic
+/// overflows, the handle range is invalid, misaligned, incorrectly sized, or
+/// still has another live raw owner. Backend resource-resolution errors retain
+/// their typed source.
 pub fn finish_c32(
     backend: &WebGpuBackend,
     shape: Vec<usize>,
@@ -156,6 +187,63 @@ fn finish<T: Send + Sync + 'static>(
     op: &'static str,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let len = checked_shape_product(op, &shape)?;
+    let expected_bytes = len.checked_mul(core::mem::size_of::<T>()).ok_or_else(|| {
+        Error::invalid_argument(op, "shape", "WebGPU output byte length overflow")
+    })?;
+    let expected_bytes = u64::try_from(expected_bytes).map_err(|_| {
+        Error::invalid_argument(
+            op,
+            "shape",
+            "WebGPU output byte length exceeds the handle size range",
+        )
+    })?;
+    let offset_start = handle.offset_start.unwrap_or(0);
+    let offset_end = handle.offset_end.unwrap_or(0);
+    let checked_range_bytes = handle
+        .size()
+        .checked_sub(offset_start)
+        .and_then(|remaining| remaining.checked_sub(offset_end))
+        .ok_or_else(|| {
+            Error::runtime_state(
+                op,
+                format!(
+                    "WebGPU output handle range is invalid: size {}, start offset \
+                     {offset_start}, end offset {offset_end}",
+                    handle.size()
+                ),
+            )
+        })?;
+    if !offset_start.is_multiple_of(core::mem::align_of::<T>() as u64) {
+        return Err(Error::runtime_state(
+            op,
+            format!(
+                "WebGPU output handle start offset {offset_start} is not aligned for {}",
+                std::any::type_name::<T>()
+            ),
+        ));
+    }
+    let actual_bytes = handle.size_in_used();
+    if actual_bytes != checked_range_bytes {
+        return Err(Error::runtime_state(
+            op,
+            "WebGPU output handle reported inconsistent used-range size",
+        ));
+    }
+    if actual_bytes != expected_bytes {
+        return Err(Error::runtime_state(
+            op,
+            format!(
+                "WebGPU output handle has {actual_bytes} usable bytes but shape requires \
+                 {expected_bytes}"
+            ),
+        ));
+    }
+    if !handle.can_mut() {
+        return Err(Error::runtime_state(
+            op,
+            "WebGPU output completion requires unique raw-handle ownership",
+        ));
+    }
     let buffer = WebGpuBuffer::new_for_runtime(backend.runtime(), handle, len, op)?;
     typed_from_webgpu(shape, buffer, backend.runtime())
 }

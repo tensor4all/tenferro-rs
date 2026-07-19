@@ -69,3 +69,14 @@
 All listed checks passed locally; the hardware matrix executed on Apple Metal.
 Architecture guides, runnable tutorials, and the consolidated Apple worklog
 remain Task 5 so that documentation describes the completed Task 1-4 surface.
+
+## Review fix
+
+The Task 3 review found that the safe public output-completion helpers trusted
+caller-provided shape metadata. The completion boundary now checks shape-byte
+arithmetic, validates the CubeCL pool range with checked start/end subtraction,
+requires typed alignment and an exact `size_in_used()` match, and rejects any
+surviving raw handle alias through `Handle::can_mut()` before constructing a
+`TypedTensor`. Portable WebGPU tests cover undersized F32/C32 ranges and cloned
+handles; the Metal matrix also covers malformed range metadata while preserving
+the successful CubeK output lifecycle.

@@ -334,6 +334,49 @@ mod metal {
             .unwrap_err();
         assert!(matches!(error, Error::RuntimeState { .. }));
         assert_eq!(context.transfer_stats(), before);
+
+        let undersized_f32 = webgpu_interop::allocate_raw(context.metal_backend(), 4);
+        let error = webgpu_interop::finish_f32(
+            context.metal_backend(),
+            vec![2],
+            undersized_f32,
+            "test_finish_f32",
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::RuntimeState { .. }));
+
+        let undersized_c32 = webgpu_interop::allocate_raw(context.metal_backend(), 4);
+        let error = webgpu_interop::finish_c32(
+            context.metal_backend(),
+            vec![1],
+            undersized_c32,
+            "test_finish_c32",
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::RuntimeState { .. }));
+
+        let aliased = webgpu_interop::allocate_raw(context.metal_backend(), 8);
+        let surviving_alias = aliased.clone();
+        let error = webgpu_interop::finish_f32(
+            context.metal_backend(),
+            vec![2],
+            aliased,
+            "test_finish_alias",
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::RuntimeState { .. }));
+        drop(surviving_alias);
+
+        let mut invalid_range = webgpu_interop::allocate_raw(context.metal_backend(), 8);
+        invalid_range.offset_start = Some(invalid_range.size() + 1);
+        let error = webgpu_interop::finish_f32(
+            context.metal_backend(),
+            vec![1],
+            invalid_range,
+            "test_finish_invalid_range",
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::RuntimeState { .. }));
     }
 }
 
