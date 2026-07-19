@@ -98,7 +98,7 @@ use tenferro_ext_sparse::sparse_ad_rules;
 let ad = AdContext::builder()
     .with_extension_rules(sparse_ad_rules()?)
     .build()?;
-let loss = out.values().reduce_sum(&[0])?;
+let loss = out.values().reduce_sum(Some(&[0]))?;
 let grad_left_values = ad.grad(&loss, left.values())?;
 ```
 

@@ -5,6 +5,7 @@ use tenferro_ad::extension::apply_eager;
 use tenferro_ad::EagerTensor;
 use tenferro_runtime::ErrorPhase;
 
+use crate::eager_composites;
 use crate::extension::{
     validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
 };
@@ -113,6 +114,66 @@ pub trait EagerTensorLinalgExt {
         transpose_a: bool,
         unit_diagonal: bool,
     ) -> Result<EagerTensor>;
+    /// Return the determinant sign and logarithm of its absolute value.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for a non-square input, `Error::Extension`
+    /// for an unsupported dtype or numerical failure, and `Error::Internal`
+    /// if a primitive violates its output contract.
+    fn slogdet(&self) -> Result<(EagerTensor, EagerTensor)>;
+    /// Return the determinant.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation`, `Error::Extension`, `Error::RuntimeState`,
+    /// or `Error::Internal` under the conditions documented by [`Self::slogdet`].
+    fn det(&self) -> Result<EagerTensor>;
+    /// Return the matrix inverse.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for invalid matrix metadata,
+    /// `Error::Extension` for an unsupported dtype or singular solve, and
+    /// `Error::RuntimeState` when eager execution cannot access its backend.
+    fn inv(&self) -> Result<EagerTensor>;
+    /// Return Hermitian eigenvalues without eigenvectors.
+    ///
+    /// # Errors
+    ///
+    /// Returns the validation, unsupported-dtype, numerical-convergence,
+    /// runtime-state, or output-contract errors reported by [`Self::eigh`].
+    fn eigvalsh(&self) -> Result<EagerTensor>;
+    /// Return general eigenvalues without eigenvectors.
+    ///
+    /// # Errors
+    ///
+    /// Returns the validation, unsupported-dtype, numerical-convergence,
+    /// runtime-state, or output-contract errors reported by [`Self::eig`].
+    fn eigvals(&self) -> Result<EagerTensor>;
+    /// Return the Moore-Penrose pseudoinverse with the default tolerance.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for invalid matrix metadata,
+    /// `Error::Extension` for unsupported SVD execution, and
+    /// `Error::Internal` for an unexpected decomposition output contract.
+    fn pinv(&self) -> Result<EagerTensor>;
+    /// Return the Moore-Penrose pseudoinverse with an explicit relative tolerance.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` when `rtol` is negative or non-finite, plus
+    /// the `Error::Extension` and output-contract errors reported by [`Self::pinv`].
+    fn pinv_with_rtol(&self, rtol: f64) -> Result<EagerTensor>;
+    /// Return a vector, matrix, or tensor norm.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for an unsupported order/dimension
+    /// combination or invalid axes, `Error::Extension` when a required matrix
+    /// decomposition is unsupported, and eager runtime/backend failures.
+    fn norm(&self, ord: Option<f64>, dim: Option<&[usize]>, keepdim: bool) -> Result<EagerTensor>;
 }
 
 impl EagerTensorLinalgExt for EagerTensor {
@@ -184,6 +245,38 @@ impl EagerTensorLinalgExt for EagerTensor {
         unit_diagonal: bool,
     ) -> Result<EagerTensor> {
         triangular_solve(self, b, left_side, lower, transpose_a, unit_diagonal)
+    }
+
+    fn slogdet(&self) -> Result<(EagerTensor, EagerTensor)> {
+        eager_composites::slogdet(self)
+    }
+
+    fn det(&self) -> Result<EagerTensor> {
+        eager_composites::det(self)
+    }
+
+    fn inv(&self) -> Result<EagerTensor> {
+        eager_composites::inv(self)
+    }
+
+    fn eigvalsh(&self) -> Result<EagerTensor> {
+        eager_composites::eigvalsh(self)
+    }
+
+    fn eigvals(&self) -> Result<EagerTensor> {
+        eager_composites::eigvals(self)
+    }
+
+    fn pinv(&self) -> Result<EagerTensor> {
+        eager_composites::pinv(self)
+    }
+
+    fn pinv_with_rtol(&self, rtol: f64) -> Result<EagerTensor> {
+        eager_composites::pinv_with_rtol(self, rtol)
+    }
+
+    fn norm(&self, ord: Option<f64>, dim: Option<&[usize]>, keepdim: bool) -> Result<EagerTensor> {
+        eager_composites::norm(self, ord, dim, keepdim)
     }
 }
 

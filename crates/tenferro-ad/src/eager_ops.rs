@@ -261,7 +261,7 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(), ctx.clone()).unwrap();
-    /// let y = x.reduce_sum(&[0, 1]).unwrap();
+    /// let y = x.reduce_sum(None).unwrap();
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[10.0]);
     /// ```
@@ -271,11 +271,10 @@ impl EagerTensor {
     /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
     /// `DuplicateAxis` for an invalid reduction axis, or a typed
     /// unsupported/backend/runtime-state error for the selected dtype.
-    pub fn reduce_sum(&self, axes: &[usize]) -> Result<Self> {
-        validate_eager_axes("EagerTensor::reduce_sum", self.shape().len(), axes)?;
-        self.unary_op(StdTensorOp::ReduceSum {
-            axes: axes.to_vec(),
-        })
+    pub fn reduce_sum(&self, axes: Option<&[usize]>) -> Result<Self> {
+        let axes = axes.map_or_else(|| (0..self.shape().len()).collect(), <[usize]>::to_vec);
+        validate_eager_axes("EagerTensor::reduce_sum", self.shape().len(), &axes)?;
+        self.unary_op(StdTensorOp::ReduceSum { axes })
     }
 
     /// Execute a dot-general contraction eagerly.
@@ -988,7 +987,7 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(), ctx.clone()).unwrap();
-    /// let y = x.reduce_prod(&[0, 1]).unwrap();
+    /// let y = x.reduce_prod(None).unwrap();
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[24.0]);
     /// ```
@@ -997,11 +996,10 @@ impl EagerTensor {
     /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
     /// `DuplicateAxis` for an invalid reduction axis, or a typed
     /// unsupported/backend/runtime-state error for the selected dtype.
-    pub fn reduce_prod(&self, axes: &[usize]) -> Result<Self> {
-        validate_eager_axes("EagerTensor::reduce_prod", self.shape().len(), axes)?;
-        self.unary_op(StdTensorOp::ReduceProd {
-            axes: axes.to_vec(),
-        })
+    pub fn reduce_prod(&self, axes: Option<&[usize]>) -> Result<Self> {
+        let axes = axes.map_or_else(|| (0..self.shape().len()).collect(), <[usize]>::to_vec);
+        validate_eager_axes("EagerTensor::reduce_prod", self.shape().len(), &axes)?;
+        self.unary_op(StdTensorOp::ReduceProd { axes })
     }
 
     /// Reduce maximum over the requested axes.
@@ -1014,7 +1012,7 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(), ctx.clone()).unwrap();
-    /// let y = x.reduce_max(&[0, 1]).unwrap();
+    /// let y = x.reduce_max(None).unwrap();
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[4.0]);
     /// ```
@@ -1023,11 +1021,10 @@ impl EagerTensor {
     /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
     /// `DuplicateAxis` for an invalid reduction axis, or a typed
     /// unsupported/backend/runtime-state error for the selected dtype.
-    pub fn reduce_max(&self, axes: &[usize]) -> Result<Self> {
-        validate_eager_axes("EagerTensor::reduce_max", self.shape().len(), axes)?;
-        self.unary_op(StdTensorOp::ReduceMax {
-            axes: axes.to_vec(),
-        })
+    pub fn reduce_max(&self, axes: Option<&[usize]>) -> Result<Self> {
+        let axes = axes.map_or_else(|| (0..self.shape().len()).collect(), <[usize]>::to_vec);
+        validate_eager_axes("EagerTensor::reduce_max", self.shape().len(), &axes)?;
+        self.unary_op(StdTensorOp::ReduceMax { axes })
     }
 
     /// Reduce minimum over the requested axes.
@@ -1040,7 +1037,7 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::from_tensor_in(Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(), ctx.clone()).unwrap();
-    /// let y = x.reduce_min(&[0, 1]).unwrap();
+    /// let y = x.reduce_min(None).unwrap();
     ///
     /// assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[1.0]);
     /// ```
@@ -1049,11 +1046,10 @@ impl EagerTensor {
     /// Returns [`tenferro_tensor::Error::Validation`] with `AxisOutOfBounds` or
     /// `DuplicateAxis` for an invalid reduction axis, or a typed
     /// unsupported/backend/runtime-state error for the selected dtype.
-    pub fn reduce_min(&self, axes: &[usize]) -> Result<Self> {
-        validate_eager_axes("EagerTensor::reduce_min", self.shape().len(), axes)?;
-        self.unary_op(StdTensorOp::ReduceMin {
-            axes: axes.to_vec(),
-        })
+    pub fn reduce_min(&self, axes: Option<&[usize]>) -> Result<Self> {
+        let axes = axes.map_or_else(|| (0..self.shape().len()).collect(), <[usize]>::to_vec);
+        validate_eager_axes("EagerTensor::reduce_min", self.shape().len(), &axes)?;
+        self.unary_op(StdTensorOp::ReduceMin { axes })
     }
 
     pub(crate) fn unary_op(&self, op: StdTensorOp) -> Result<Self> {

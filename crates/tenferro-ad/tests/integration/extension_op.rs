@@ -1413,7 +1413,7 @@ fn scale_by_2_grad_against_reduce_sum() {
         .into_iter()
         .next()
         .unwrap();
-    let loss = scaled.reduce_sum(&[0]).unwrap();
+    let loss = scaled.reduce_sum(Some(&[0])).unwrap();
 
     let g = scale_by_2_ad_context().grad(&loss, &x).expect("grad build");
     assert!(
@@ -1442,7 +1442,7 @@ fn scale_by_2_eager_backward_uses_registered_rule() {
         .into_iter()
         .next()
         .expect("single extension output");
-    let loss = scaled.reduce_sum(&[0]).expect("loss");
+    let loss = scaled.reduce_sum(Some(&[0])).expect("loss");
 
     let _ = loss.backward().expect("eager backward");
 
@@ -1460,7 +1460,7 @@ fn ad_context_uses_owned_extension_rules_without_global_fallback() {
         .into_iter()
         .next()
         .unwrap();
-    let loss = scaled.reduce_sum(&[0]).unwrap();
+    let loss = scaled.reduce_sum(Some(&[0])).unwrap();
 
     let empty_ad = AdContext::builder().build().unwrap();
     let err = match empty_ad.grad(&loss, &x) {
@@ -1569,7 +1569,7 @@ fn traced_vjp_falls_back_to_primary_transpose_when_linearize_fails() {
         .expect("single primary_transpose_only output");
     let squared = (&y * &y).unwrap();
     let observable = (&squared + &y).unwrap();
-    let loss = observable.reduce_sum(&[0]).unwrap();
+    let loss = observable.reduce_sum(Some(&[0])).unwrap();
 
     let grad = primary_transpose_only_ad_context()
         .grad(&loss, &x)
@@ -1590,7 +1590,7 @@ fn traced_vjp_primary_transpose_fallback_reports_inactive_wrt() {
         .into_iter()
         .next()
         .expect("single primary_transpose_only output");
-    let loss = y.reduce_sum(&[0]).unwrap();
+    let loss = y.reduce_sum(Some(&[0])).unwrap();
 
     let grad = primary_transpose_only_ad_context()
         .grad_optional(&loss, &z)
@@ -1633,7 +1633,7 @@ fn eager_runtime_ad_context_uses_owned_extension_rules_without_global_fallback()
         .into_iter()
         .next()
         .expect("single extension output");
-    let loss = scaled.reduce_sum(&[0]).expect("loss");
+    let loss = scaled.reduce_sum(Some(&[0])).expect("loss");
     let err = loss
         .backward()
         .expect_err("explicit empty rule set should not use global fallback");
@@ -1656,7 +1656,7 @@ fn eager_runtime_ad_context_uses_owned_extension_rules_without_global_fallback()
         .into_iter()
         .next()
         .expect("single extension output");
-    let loss = scaled.reduce_sum(&[0]).expect("loss");
+    let loss = scaled.reduce_sum(Some(&[0])).expect("loss");
 
     let _ = loss.backward().expect("eager backward");
 
@@ -1683,7 +1683,7 @@ fn assert_probe_identity_eager_backward(probe: Tensor) {
         .into_iter()
         .next()
         .expect("single probe identity output");
-    let loss = y.reduce_sum(&[0]).expect("loss");
+    let loss = y.reduce_sum(Some(&[0])).expect("loss");
 
     let _ = loss.backward().expect("eager backward");
 
@@ -1731,7 +1731,7 @@ fn missing_extension_rule_errors_in_traced_grad() {
         .into_iter()
         .next()
         .expect("single output");
-    let loss = y.reduce_sum(&[0]).unwrap();
+    let loss = y.reduce_sum(Some(&[0])).unwrap();
 
     let err = match loss.grad(&x) {
         Ok(_) => panic!("missing extension AD rule unexpectedly succeeded"),
@@ -1761,7 +1761,7 @@ fn missing_extension_rule_errors_in_eager_backward() {
         .into_iter()
         .next()
         .expect("single output");
-    let loss = y.reduce_sum(&[0]).expect("loss");
+    let loss = y.reduce_sum(Some(&[0])).expect("loss");
 
     let err = loss
         .backward()

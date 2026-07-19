@@ -83,7 +83,7 @@ use tenferro_ext_tropical::tropical_ad_rules;
 let ad = AdContext::builder()
     .with_extension_rules(tropical_ad_rules()?)
     .build()?;
-let loss = out.reduce_sum(&[0, 1])?;
+let loss = out.reduce_sum(Some(&[0, 1]))?;
 let grad_a = ad.grad(&loss, &a)?;
 ```
 

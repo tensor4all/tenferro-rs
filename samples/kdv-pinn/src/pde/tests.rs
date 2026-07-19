@@ -216,10 +216,10 @@ fn kdv_residual_of_exact_solution_is_small() -> TestResult {
 #[test]
 fn third_derivative_of_cube() -> TestResult {
     let x = TracedTensor::input_concrete_shape(DType::F64, &[3, 1])?;
-    let y = x.mul(&x)?.mul(&x)?.reduce_sum(&[0, 1])?;
+    let y = x.mul(&x)?.mul(&x)?.reduce_sum(Some(&[0, 1]))?;
     let y_x = grad(&y, &x)?;
-    let y_xx = grad(&y_x.reduce_sum(&[0, 1])?, &x)?;
-    let y_xxx = grad(&y_xx.reduce_sum(&[0, 1])?, &x)?;
+    let y_xx = grad(&y_x.reduce_sum(Some(&[0, 1]))?, &x)?;
+    let y_xxx = grad(&y_xx.reduce_sum(Some(&[0, 1]))?, &x)?;
 
     let x_tensor = Tensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 3.0])?;
     let result = eval(&y_xxx, &[(&x, &x_tensor)]);

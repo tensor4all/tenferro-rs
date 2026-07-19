@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let y = compiler.einsum_with(&[&a, &b], "ij,jk->ik", EinsumOptimize::Path(vec![(0, 1)]))?;
-    let grad_a = y.reduce_sum(&[0, 1])?.grad(&a)?;
+    let grad_a = y.reduce_sum(Some(&[0, 1]))?.grad(&a)?;
     let grad_value = run(&grad_a)?;
 
     assert_eq!(grad_value.shape(), &[2, 3]);

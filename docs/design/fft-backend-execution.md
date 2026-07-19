@@ -59,6 +59,11 @@ The initial CubeK Metal adapter is deliberately narrower:
 and device-local WebGPU buffers return typed errors. They never trigger CPU
 fallback or an implicit transfer.
 
+`EagerTensorFftExt` registers the same FFT runtime against `EagerBackend`.
+That adapter delegates only to the selected CPU capability today. Other eager
+backend variants return `Unsupported`; the eager surface does not download,
+upload, or select a CPU backend on their behalf.
+
 ## Cache ownership
 
 Every backend receives `FftExecutionCache`, which exposes one bounded typed

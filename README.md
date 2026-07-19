@@ -113,7 +113,7 @@ fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, tenferro_runti
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let x = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0])?;
-    let y = (&x * &x)?.reduce_sum(&[0])?;
+    let y = (&x * &x)?.reduce_sum(Some(&[0]))?;
 
     let y_value = run(&y)?;
     assert_eq!(y_value.shape(), &[]);

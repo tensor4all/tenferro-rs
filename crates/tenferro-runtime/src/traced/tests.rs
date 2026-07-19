@@ -114,7 +114,7 @@ fn dot_general_keeps_existing_success_metadata() {
 fn reductions_reject_invalid_axes_instead_of_saturating_rank() {
     let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
 
-    let out_of_bounds = x.reduce_max(&[2]).unwrap_err();
+    let out_of_bounds = x.reduce_max(Some(&[2])).unwrap_err();
     assert!(
         out_of_bounds
             .to_string()
@@ -122,15 +122,28 @@ fn reductions_reject_invalid_axes_instead_of_saturating_rank() {
         "{out_of_bounds}"
     );
 
-    let duplicate = x.reduce_min(&[0, 0]).unwrap_err();
+    let duplicate = x.reduce_min(Some(&[0, 0])).unwrap_err();
     assert!(
         duplicate.to_string().contains("duplicate reduction axis 0"),
         "{duplicate}"
     );
 
-    let y = x.reduce_sum(&[1]).unwrap();
+    let y = x.reduce_sum(Some(&[1])).unwrap();
     assert_eq!(y.rank, 1);
     assert_eq!(y.try_concrete_shape().unwrap(), &[2]);
+}
+
+#[test]
+fn reductions_distinguish_all_axes_from_empty_axes() {
+    let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+
+    assert_eq!(x.reduce_sum(None).unwrap().rank, 0);
+    assert_eq!(x.reduce_prod(Some(&[])).unwrap().rank, 2);
+    assert_eq!(x.reduce_max(Some(&[0])).unwrap().rank, 1);
+    assert_eq!(x.reduce_min(None).unwrap().rank, 0);
+
+    let scalar = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    assert_eq!(scalar.reduce_sum(None).unwrap().rank, 0);
 }
 
 #[test]
@@ -369,7 +382,7 @@ fn ordered_reductions_reject_complex_dtype_without_panicking() {
     )
     .unwrap();
 
-    let err = x.reduce_max(&[0]).unwrap_err();
+    let err = x.reduce_max(Some(&[0])).unwrap_err();
 
     assert!(
         err.to_string()

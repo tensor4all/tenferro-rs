@@ -137,7 +137,7 @@ fn hvp_for_vector_exp_sum() {
     let n = x_data.len();
 
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], x_data.clone())).unwrap();
-    let y = x.exp().unwrap().reduce_sum(&[0]).unwrap();
+    let y = x.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
 
     let g = y.grad(&x).unwrap(); // shape [n]
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![n], v_data.clone())).unwrap();

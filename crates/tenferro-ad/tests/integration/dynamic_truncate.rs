@@ -217,7 +217,10 @@ fn dynamic_truncate_vjp_correct() {
     let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
 
     let truncated = x.dynamic_truncate(&size, 0).unwrap();
-    let loss = (&truncated * &truncated).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (&truncated * &truncated)
+        .unwrap()
+        .reduce_sum(Some(&[0]))
+        .unwrap();
 
     let grad = loss.grad(&x).unwrap();
     let grad_data = get_f64_data(&grad.run_with(&mut engine).unwrap());
@@ -235,7 +238,10 @@ fn dynamic_truncate_jvp_correct() {
     let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
 
     let truncated = x.dynamic_truncate(&size, 0).unwrap();
-    let loss = (&truncated * &truncated).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (&truncated * &truncated)
+        .unwrap()
+        .reduce_sum(Some(&[0]))
+        .unwrap();
 
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![1.0; 5])).unwrap();
     let jvp_result = loss.jvp(&x, &v).unwrap();
@@ -257,7 +263,10 @@ fn dynamic_truncate_hvp_correct() {
     .unwrap();
     let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
     let truncated = x.dynamic_truncate(&size, 0).unwrap();
-    let loss = (&truncated * &truncated).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (&truncated * &truncated)
+        .unwrap()
+        .reduce_sum(Some(&[0]))
+        .unwrap();
 
     let grad = loss.grad(&x).unwrap();
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![1.0; 5])).unwrap();
@@ -287,7 +296,10 @@ fn dynamic_truncate_hvp_finite_diff() {
             TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], values.to_vec())).unwrap();
         let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
         let truncated = x.dynamic_truncate(&size, 0).unwrap();
-        let loss = (&truncated * &truncated).unwrap().reduce_sum(&[0]).unwrap();
+        let loss = (&truncated * &truncated)
+            .unwrap()
+            .reduce_sum(Some(&[0]))
+            .unwrap();
         let grad = loss.grad(&x).unwrap();
         get_f64_data(&grad.run_with(&mut engine).unwrap())
     };
@@ -310,7 +322,10 @@ fn dynamic_truncate_hvp_finite_diff() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], x_data)).unwrap();
     let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(3.0)).unwrap();
     let truncated = x.dynamic_truncate(&size, 0).unwrap();
-    let loss = (&truncated * &truncated).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (&truncated * &truncated)
+        .unwrap()
+        .reduce_sum(Some(&[0]))
+        .unwrap();
     let grad = loss.grad(&x).unwrap();
     let v = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], v_data)).unwrap();
     let hv = grad.jvp(&x, &v).unwrap();
@@ -340,7 +355,7 @@ fn pad_to_match_vjp_correct() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![0.0; 5])).unwrap();
 
     let padded = x.pad_to_match(&reference, 0).unwrap();
-    let loss = (&padded * &padded).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (&padded * &padded).unwrap().reduce_sum(Some(&[0])).unwrap();
 
     let grad = loss.grad(&x).unwrap();
     let grad_data = get_f64_data(&grad.run_with(&mut engine).unwrap());
@@ -356,7 +371,7 @@ fn pad_to_match_jvp_correct() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![0.0; 5])).unwrap();
 
     let padded = x.pad_to_match(&reference, 0).unwrap();
-    let loss = (&padded * &padded).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (&padded * &padded).unwrap().reduce_sum(Some(&[0])).unwrap();
 
     let v =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 1.0, 1.0])).unwrap();
@@ -377,7 +392,7 @@ fn pad_to_match_hvp_correct() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![5], vec![0.0; 5])).unwrap();
 
     let padded = x.pad_to_match(&reference, 0).unwrap();
-    let loss = (&padded * &padded).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (&padded * &padded).unwrap().reduce_sum(Some(&[0])).unwrap();
 
     let grad = loss.grad(&x).unwrap();
     let v =

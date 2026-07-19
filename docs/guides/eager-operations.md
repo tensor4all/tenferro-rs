@@ -231,7 +231,7 @@ let col_sum = a.reduce_sum(&[0], &mut backend).unwrap();
 assert_eq!(col_sum.shape(), &[3]);
 ```
 
-The `reduce_sum(&[0])` call removes axis `0`. For this `[2, 3]` tensor, that
+The `reduce_sum(&[0], &mut backend)` call removes axis `0`. For this `[2, 3]` tensor, that
 means summing down each column and keeping one value per column.
 
 ## Einsum
@@ -287,18 +287,18 @@ let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx.clone()).unwrap();
 let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(), ctx.clone()).unwrap();
 
-let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
+let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
-let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
+let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[6.0, 8.0]);
 
 x.clear_grad().unwrap();
 assert!(x.grad().unwrap().is_none());
 
-let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
+let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
 loss.backward().unwrap();
 assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 
@@ -420,7 +420,7 @@ let x = EagerTensor::requires_grad_in(
 let y = a.matmul(&x).unwrap();
 assert_eq!(y.materialized().unwrap().as_slice::<f64>().unwrap(), &[23.0, 34.0]);
 
-let loss = y.mul(&y).unwrap().reduce_sum(&[0, 1]).unwrap();
+let loss = y.mul(&y).unwrap().reduce_sum(Some(&[0, 1])).unwrap();
 assert_eq!(loss.materialized().unwrap().as_slice::<f64>().unwrap(), &[1685.0]);
 
 loss.backward().unwrap();

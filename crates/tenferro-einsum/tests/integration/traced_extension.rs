@@ -190,7 +190,7 @@ fn traced_einsum_grad_uses_extension_ad_rule() {
             tenferro_einsum::EinsumOptimize::Path(vec![(0, 1)]),
         )
         .unwrap();
-    let grad_a = y.reduce_sum(&[0, 1]).unwrap().grad(&a).unwrap();
+    let grad_a = y.reduce_sum(Some(&[0, 1])).unwrap().grad(&a).unwrap();
     let program = compiler.compile(&grad_a).unwrap();
 
     let mut executor = GraphExecutor::new(CpuBackend::new());

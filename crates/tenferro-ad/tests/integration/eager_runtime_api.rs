@@ -12,7 +12,7 @@ fn eager_runtime_replaces_eager_context_public_name() {
         runtime.clone(),
     )
     .unwrap();
-    let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
 
     loss.backward().unwrap();
 

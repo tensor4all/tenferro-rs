@@ -27,7 +27,7 @@ This page is a translation guide for readers who already know `torch` or `jax.nu
 | Reshape | `x.reshape(shape)` | `jnp.reshape(x, shape)` | `x.reshape(&shape, &mut ctx)` via `TensorOpsExt` | `x.reshape(&shape)?` |
 | Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut ctx)` via `TensorOpsExt` | `x.transpose(&perm)` |
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast_in_dim(&shape, &dims)` |
-| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(&axes, &mut ctx)` via `TensorOpsExt` | `x.reduce_sum(&axes)` |
+| Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(&axes, &mut ctx)` via `TensorOpsExt` | `x.reduce_sum(Some(&axes))` |
 | Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `compiler.einsum(...)` via `GraphCompilerEinsumExt` plus `register_runtime` |
 | SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `tenferro_linalg::LinalgBackend::svd(&mut ctx, &x)?` | `x.svd()?` via `TracedTensorLinalgExt` |
 | QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `tenferro_linalg::LinalgBackend::qr(&mut ctx, &x)?` | `x.qr()?` via `TracedTensorLinalgExt` |

@@ -1,7 +1,8 @@
 # Linear Algebra
 
 tenferro exposes linear algebra through the `tenferro-linalg` operation crate.
-Use `LinalgBackend` for direct execution without autodiff, `EagerTensorLinalgExt`
+Use `TensorLinalgExt`, `TensorReadLinalgExt`, or `TypedTensorLinalgExt` for direct
+execution without autodiff, `EagerTensorLinalgExt`
 for immediate forward execution and eager `backward()` / functional transform
 workflows under an `EagerRuntime`, and `TracedTensorLinalgExt` when the
 operation should be part of a graph, `grad`/`vjp`/`jvp`, or repeated compile/run
@@ -46,7 +47,7 @@ Box<dyn std::error::Error>>` for a standalone binary.
 
 | Layer | Linear algebra style |
 | --- | --- |
-| Concrete `Tensor` | `tenferro_linalg::LinalgBackend` methods on a backend |
+| Concrete `Tensor` / `TensorRead` / `TypedTensor<T>` | crate-root linalg extension traits; methods take `&mut impl LinalgBackend` |
 | `EagerTensor` | `EagerTensorLinalgExt` methods behind `autodiff`; tracked variables support `backward()` and `EagerRuntime` functional transforms where AD rules support the operation |
 | `TracedTensor` | `TracedTensorLinalgExt` methods for graph execution and `grad`/`vjp`/`jvp` workflows |
 
@@ -63,21 +64,22 @@ CUDA is a backend/device choice for supported `Tensor`, `EagerTensor`, and
 | Cholesky | `cholesky` | `cholesky` | `cholesky` |
 | SVD | `svd`, `svd_with_options` | `svd`, `svd_with_options` | `svd`, `svd_with_options` |
 | QR | `qr`, `qr_with_options` | `qr`, `qr_with_options` | `qr`, `qr_with_options` |
-| Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` |
-| General eigen | `eig` | `eig` | `eig`, `eigvals` |
+| Hermitian eigen | `eigh`, `eigh_with_options` | `eigh`, `eigh_with_options`, `eigvalsh` | `eigh`, `eigh_with_options`, `eigvalsh` |
+| General eigen | `eig` | `eig`, `eigvals` | `eig`, `eigvals` |
 | LU | `lu` | `lu` | `lu` |
 | Complete-pivot LU | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` | `full_piv_lu`, `full_piv_lu_solve` |
-| Pseudoinverse | `pinv` | - | `pinv`, `pinv_with_rtol` |
-| Determinants | `det`, `slogdet` | - | `det`, `slogdet` |
-| Norms | `norm` | - | `norm` |
+| Pseudoinverse | `pinv` | `pinv`, `pinv_with_rtol` | `pinv`, `pinv_with_rtol` |
+| Determinants | `det`, `slogdet` | `det`, `slogdet` | `det`, `slogdet` |
+| Matrix inverse | `inv` | `inv` | `inv` |
+| Norms | `norm` | `norm` | `norm` |
 
-Concrete methods are exposed by `LinalgBackend`; eager and traced tensor APIs
-are crate-root extension traits.
+Concrete, read, typed, eager, and traced tensor APIs are crate-root extension
+traits. `LinalgBackend` remains the provider contract passed to concrete methods.
 
 ## Concrete Solve
 
 ```rust
-use tenferro_linalg::LinalgBackend;
+use tenferro_linalg::TensorLinalgExt;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::Tensor;
 
@@ -85,7 +87,7 @@ let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
 let b = Tensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0]);
 
-let x = LinalgBackend::solve(&mut backend, &a, &b).unwrap();
+let x = a.solve(&b, &mut backend).unwrap();
 
 assert_eq!(x.shape(), &[2, 1]);
 assert_eq!(x.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
@@ -95,7 +97,7 @@ assert_eq!(x.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::LinalgBackend;
+use tenferro_linalg::TensorLinalgExt;
 use tenferro_runtime::{Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
@@ -110,7 +112,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]);
 
-let factor = LinalgBackend::cholesky(&mut backend, &a).unwrap();
+let factor = a.cholesky(&mut backend).unwrap();
 let factor_t = factor.transpose(&[1, 0], &mut backend).unwrap();
 let reconstructed = factor.matmul(&factor_t, &mut backend).unwrap();
 
@@ -145,7 +147,7 @@ let ad = AdContext::builder()
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::{LinalgBackend, QrGauge, QrOptions};
+use tenferro_linalg::TensorLinalgExt;
 use tenferro_runtime::{Tensor, TensorOpsExt};
 
 fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
@@ -159,10 +161,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]);
-let outputs = LinalgBackend::svd(&mut backend, &a).unwrap();
-let u = &outputs[0];
-let s = &outputs[1];
-let vt = &outputs[2];
+let (u, s, vt) = a.svd(&mut backend).unwrap();
 
 assert_eq!(u.shape(), &[2, 2]);
 assert_eq!(vt.shape(), &[2, 2]);
@@ -173,7 +172,7 @@ let sigma = Tensor::from_vec_col_major(
     vec![s_values[0], 0.0, 0.0, s_values[1]],
 );
 let us = u.matmul(&sigma, &mut backend).unwrap();
-let reconstructed = us.matmul(vt, &mut backend).unwrap();
+let reconstructed = us.matmul(&vt, &mut backend).unwrap();
 
 assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 ```
@@ -243,7 +242,7 @@ assert_eq!(repeated.concrete_shape().unwrap(), vec![3]);
 ## QR decomposition
 
 ```rust
-use tenferro_linalg::LinalgBackend;
+use tenferro_linalg::{QrGauge, QrOptions, TensorLinalgExt};
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
 
@@ -265,19 +264,17 @@ let a = Tensor::from_vec_col_major(
         3.0, 6.0, 10.0, 5.0,
     ],
 );
-let outputs = LinalgBackend::qr_with_options(
-    &mut backend,
-    &a,
-    QrOptions::default().gauge(QrGauge::PositiveDiagonal),
-)
-.unwrap();
-let q = &outputs[0];
-let r = &outputs[1];
+let (q, r) = a
+    .qr_with_options(
+        QrOptions::default().gauge(QrGauge::PositiveDiagonal),
+        &mut backend,
+    )
+    .unwrap();
 
 assert_eq!(q.shape(), &[4, 3]);
 assert_eq!(r.shape(), &[3, 3]);
 
-let reconstructed = q.matmul(r, &mut backend).unwrap();
+let reconstructed = q.matmul(&r, &mut backend).unwrap();
 let qt = q.transpose(&[1, 0], &mut backend).unwrap();
 let qtq = qt.matmul(q, &mut backend).unwrap();
 let identity = Tensor::from_vec_col_major(
@@ -292,7 +289,7 @@ assert!(max_abs_diff(&qtq, &identity) < 1.0e-12);
 ## Hermitian eigenvalue decomposition
 
 ```rust
-use tenferro_linalg::LinalgBackend;
+use tenferro_linalg::TensorLinalgExt;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
 
@@ -307,9 +304,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
 
 let mut backend = CpuBackend::new();
 let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 1.0, 1.0, 2.0]);
-let outputs = LinalgBackend::eigh(&mut backend, &a).unwrap();
-let values = &outputs[0];
-let vectors = &outputs[1];
+let (values, vectors) = a.eigh(&mut backend).unwrap();
 
 assert_eq!(values.shape(), &[2]);
 assert_eq!(vectors.shape(), &[2, 2]);
@@ -372,11 +367,12 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
 `full_piv_lu` returns `(P, L, U, Q, parity)` with the reconstruction convention
 `A = P^T * L * U * Q`, equivalently `P * A * Q^T = L * U`. The `parity` output
 is a scalar real tensor containing `+1` or `-1`: `F32` for `F32`/`C32` inputs
-and `F64` for `F64`/`C64` inputs. `full_piv_lu_solve(..., false)` solves
-`A * x = b`; passing `true` solves `A^T * x = b`.
+and `F64` for `F64`/`C64` inputs. The tensor extension
+`full_piv_lu_solve` solves `A * x = b`; the lower-level backend contract also
+exposes an explicit transpose flag.
 
 ```rust
-use tenferro_linalg::LinalgBackend;
+use tenferro_linalg::TensorLinalgExt;
 use tenferro_cpu::CpuBackend;
 use tenferro_runtime::{Tensor, TensorOpsExt};
 
@@ -401,17 +397,12 @@ let a = Tensor::from_vec_col_major(
 );
 let b = Tensor::from_vec_col_major(vec![4, 1], vec![1.0_f64, 2.0, 3.0, 4.0]);
 
-let outputs = LinalgBackend::full_piv_lu(&mut backend, &a).unwrap();
-let p = &outputs[0];
-let l = &outputs[1];
-let u = &outputs[2];
-let q = &outputs[3];
-let parity = &outputs[4];
+let (p, l, u, q, parity) = a.full_piv_lu(&mut backend).unwrap();
 let pt = p.transpose(&[1, 0], &mut backend).unwrap();
-let pt_l = pt.matmul(l, &mut backend).unwrap();
-let pt_lu = pt_l.matmul(u, &mut backend).unwrap();
-let reconstructed = pt_lu.matmul(q, &mut backend).unwrap();
-let x = LinalgBackend::full_piv_lu_solve(&mut backend, &a, &b, false).unwrap();
+let pt_l = pt.matmul(&l, &mut backend).unwrap();
+let pt_lu = pt_l.matmul(&u, &mut backend).unwrap();
+let reconstructed = pt_lu.matmul(&q, &mut backend).unwrap();
+let x = a.full_piv_lu_solve(&b, &mut backend).unwrap();
 
 assert_eq!(p.shape(), &[4, 4]);
 assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);

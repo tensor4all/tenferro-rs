@@ -863,7 +863,7 @@ fn grad_x_squared() {
     let x =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
     let y = (&x * &x).unwrap();
-    let loss = y.reduce_sum(&[0]).unwrap();
+    let loss = y.reduce_sum(Some(&[0])).unwrap();
     assert_eq!(loss.rank, 0);
     let grad = loss.grad(&x).unwrap();
 
@@ -879,7 +879,7 @@ fn grad_extract_diag_sum() {
     ))
     .unwrap();
     let diag = a.extract_diag(0, 1).unwrap();
-    let loss = diag.reduce_sum(&[0]).unwrap();
+    let loss = diag.reduce_sum(Some(&[0])).unwrap();
     assert_eq!(loss.rank, 0);
     let grad = loss.grad(&a).unwrap();
 
@@ -900,7 +900,7 @@ fn grad_extract_diag_reversed_rectangular_axes_sum() {
     .unwrap();
     let diag = a.extract_diag(1, 0).unwrap();
     assert_eq!(diag.try_concrete_shape(), Some(vec![2]));
-    let loss = diag.reduce_sum(&[0]).unwrap();
+    let loss = diag.reduce_sum(Some(&[0])).unwrap();
     let grad = loss.grad(&a).unwrap();
 
     let result = eval_tensor(grad);
@@ -913,7 +913,7 @@ fn grad_embed_diag_sum() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![2.0, -1.0, 4.0]))
         .unwrap();
     let diag = x.embed_diag(0, 1).unwrap();
-    let loss = diag.reduce_sum(&[0, 1]).unwrap();
+    let loss = diag.reduce_sum(Some(&[0, 1])).unwrap();
     assert_eq!(loss.rank, 0);
     let grad = loss.grad(&x).unwrap();
 
@@ -970,7 +970,7 @@ fn grad_matmul_sum() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], a_data.clone())).unwrap();
     let b =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone())).unwrap();
-    let loss = a.matmul(&b).unwrap().reduce_sum(&[0, 1]).unwrap();
+    let loss = a.matmul(&b).unwrap().reduce_sum(Some(&[0, 1])).unwrap();
     assert_eq!(loss.rank, 0);
     let grad = loss.grad(&a).unwrap();
 
@@ -982,7 +982,7 @@ fn grad_matmul_sum() {
             TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], xs.to_vec())).unwrap();
         let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone()))
             .unwrap();
-        eval_scalar(a.matmul(&b).unwrap().reduce_sum(&[0, 1]).unwrap())
+        eval_scalar(a.matmul(&b).unwrap().reduce_sum(Some(&[0, 1])).unwrap())
     };
 
     for (index, &grad_value) in grad_data.iter().enumerate().take(a_data.len()) {
@@ -1005,7 +1005,7 @@ fn grad_matmul_sum_wrt_rhs() {
     let b =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], b_data.clone())).unwrap();
     let matmul = a.dot_general(&b, matmul_config()).unwrap();
-    let loss = matmul.reduce_sum(&[0, 1]).unwrap();
+    let loss = matmul.reduce_sum(Some(&[0, 1])).unwrap();
     assert_eq!(loss.rank, 0);
     let grad = loss.grad(&b).unwrap();
 
@@ -1018,7 +1018,7 @@ fn grad_matmul_sum_wrt_rhs() {
         let b =
             TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 2], xs.to_vec())).unwrap();
         let matmul = a.dot_general(&b, matmul_config()).unwrap();
-        let loss = matmul.reduce_sum(&[0, 1]).unwrap();
+        let loss = matmul.reduce_sum(Some(&[0, 1])).unwrap();
         eval_scalar(loss)
     };
 
@@ -1039,7 +1039,7 @@ fn grad_matmul_sum_shared_input() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], a_data.clone())).unwrap();
     let matmul = a.dot_general(&a, matmul_config()).unwrap();
-    let loss = matmul.reduce_sum(&[0, 1]).unwrap();
+    let loss = matmul.reduce_sum(Some(&[0, 1])).unwrap();
     let grad = loss.grad(&a).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -1049,7 +1049,7 @@ fn grad_matmul_sum_shared_input() {
         let a =
             TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], xs.to_vec())).unwrap();
         let matmul = a.dot_general(&a, matmul_config()).unwrap();
-        let loss = matmul.reduce_sum(&[0, 1]).unwrap();
+        let loss = matmul.reduce_sum(Some(&[0, 1])).unwrap();
         eval_scalar(loss)
     };
 
@@ -1075,7 +1075,7 @@ fn grad_batched_matmul_sum() {
     let b = TracedTensor::from_tensor_concrete_shape(f64_tensor(b_shape.clone(), b_data.clone()))
         .unwrap();
     let product = a.dot_general(&b, batched_matmul_config()).unwrap();
-    let loss = product.reduce_sum(&[0, 1, 2]).unwrap();
+    let loss = product.reduce_sum(Some(&[0, 1, 2])).unwrap();
     let grad = loss.grad(&a).unwrap();
 
     let grad_tensor = eval_tensor(grad);
@@ -1088,7 +1088,7 @@ fn grad_batched_matmul_sum() {
             TracedTensor::from_tensor_concrete_shape(f64_tensor(b_shape.clone(), b_data.clone()))
                 .unwrap();
         let product = a.dot_general(&b, batched_matmul_config()).unwrap();
-        let loss = product.reduce_sum(&[0, 1, 2]).unwrap();
+        let loss = product.reduce_sum(Some(&[0, 1, 2])).unwrap();
         eval_scalar(loss)
     };
 
@@ -1108,7 +1108,7 @@ fn grad_mul_sum_wrt_both_inputs() {
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, 2.0, 3.0])).unwrap();
     let y =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![4.0, 5.0, 6.0])).unwrap();
-    let loss = (&x * &y).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (&x * &y).unwrap().reduce_sum(Some(&[0])).unwrap();
 
     let grad_x = loss.grad(&x).unwrap();
     let grad_y = loss.grad(&y).unwrap();
@@ -1171,7 +1171,7 @@ fn jvp_elementwise_add_y_tangent() {
 fn grad_neg_sum() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3], vec![1.0, -2.0, 3.0]))
         .unwrap();
-    let loss = (-&x).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = (-&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);
@@ -1185,7 +1185,7 @@ fn grad_conj_sum_complex() {
         vec![Complex64::new(1.0, 2.0), Complex64::new(-3.0, 0.5)],
     ))
     .unwrap();
-    let loss = x.conj().unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.conj().unwrap().reduce_sum(Some(&[0])).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);
@@ -1204,7 +1204,7 @@ fn scale_real_eval_and_grad_sum() {
     let y_eval = eval_tensor(y);
     assert_close_slice(get_f64_data(&y_eval), &[2.0, 4.0, 6.0]);
 
-    let loss = x.scale_real(2.0).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x.scale_real(2.0).unwrap().reduce_sum(Some(&[0])).unwrap();
     let grad = loss.grad(&x).unwrap();
     let grad_eval = eval_tensor(grad);
     assert_close_slice(get_f64_data(&grad_eval), &[2.0, 2.0, 2.0]);
@@ -1226,7 +1226,11 @@ fn scale_complex_eval_and_grad_complex_sum() {
         &[Complex64::new(3.5, -0.5), Complex64::new(-0.75, 4.75)],
     );
 
-    let loss = x.scale_complex(factor).unwrap().reduce_sum(&[0]).unwrap();
+    let loss = x
+        .scale_complex(factor)
+        .unwrap()
+        .reduce_sum(Some(&[0]))
+        .unwrap();
     let grad = loss.grad(&x).unwrap();
     let grad_eval = eval_tensor(grad);
     assert_close_slice_c64(get_c64_data(&grad_eval), &[factor.conj(), factor.conj()]);
@@ -2081,7 +2085,7 @@ fn grad_nonscalar_errors() {
 fn grad_full_vector_reduction() {
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4], vec![1.0, 2.0, 3.0, 4.0]))
         .unwrap();
-    let loss = x.reduce_sum(&[0]).unwrap();
+    let loss = x.reduce_sum(Some(&[0])).unwrap();
     let grad = loss.grad(&x).unwrap();
 
     let result = eval_tensor(grad);

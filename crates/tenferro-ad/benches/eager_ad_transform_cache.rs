@@ -24,7 +24,7 @@ fn fixture() -> Fixture {
     .unwrap();
     let x2 = x.mul(&x).unwrap();
     let x3 = x2.mul(&x).unwrap();
-    let loss = x3.reduce_sum(&[0]).unwrap();
+    let loss = x3.reduce_sum(Some(&[0])).unwrap();
     Fixture { ctx, x, loss }
 }
 

@@ -42,7 +42,7 @@ fn checkpoint_truncate_loop_grad() {
         x.checkpoint(&mut compiler, &mut executor).unwrap();
     }
 
-    let loss = x.reduce_sum(&[0]).unwrap();
+    let loss = x.reduce_sum(Some(&[0])).unwrap();
     let grad = loss.grad(&a).unwrap();
     let grad_value = get_f64_scalar(&grad.run_with(&mut engine).unwrap());
 

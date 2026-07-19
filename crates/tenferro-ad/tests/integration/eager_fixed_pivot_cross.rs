@@ -98,7 +98,11 @@ fn take_block_backward_accumulates_to_source() {
     .unwrap();
 
     let block = x.take_block(&[2, 0, 2], &[3, 1]).unwrap();
-    let loss = block.mul(&weights).unwrap().reduce_sum(&[0, 1]).unwrap();
+    let loss = block
+        .mul(&weights)
+        .unwrap()
+        .reduce_sum(Some(&[0, 1]))
+        .unwrap();
     let _ = loss.backward().unwrap();
 
     assert_close_slice(

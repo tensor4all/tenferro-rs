@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?)?;
 
     let prediction = x.mul(&x).unwrap();
-    let loss = prediction.reduce_sum(&[0])?;
+    let loss = prediction.reduce_sum(Some(&[0]))?;
 
     assert_eq!(loss.shape(), &[]);
     assert_close(loss.materialized()?.as_slice::<f64>().unwrap(), &[14.0]);

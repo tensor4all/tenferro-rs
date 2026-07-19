@@ -122,7 +122,7 @@ fn assert_sum_gradients(
     let a = TracedTensor::from_vec_col_major(a_shape, a_data).unwrap();
     let b = TracedTensor::from_vec_col_major(b_shape, b_data).unwrap();
     let out = tropical_dot_general_fused(&a, &b).unwrap();
-    let loss = out.reduce_sum(&[0, 1]).unwrap();
+    let loss = out.reduce_sum(Some(&[0, 1])).unwrap();
     let ad = tropical_ad();
 
     let grad_a = ad.grad(&loss, &a).expect("grad wrt a");
@@ -174,7 +174,7 @@ fn finite_difference_gradient_matches_unique_winner_weighted_scalarization() {
     let weights = TracedTensor::from_vec_col_major(vec![2, 2], weights_data.clone()).unwrap();
     let out = tropical_dot_general_fused(&a, &b).unwrap();
     let weighted = (&out * &weights).unwrap();
-    let loss = weighted.reduce_sum(&[0, 1]).unwrap();
+    let loss = weighted.reduce_sum(Some(&[0, 1])).unwrap();
     let ad = tropical_ad();
 
     let grad_a = ad.grad(&loss, &a).expect("grad wrt a");

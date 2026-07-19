@@ -37,11 +37,14 @@ mod cpu;
 #[cfg(feature = "autodiff")]
 mod eager_backend;
 #[cfg(feature = "autodiff")]
+mod eager_composites;
+#[cfg(feature = "autodiff")]
 mod eager_ext;
 pub mod error;
 mod extension;
 #[cfg(feature = "cuda")]
 mod gpu;
+mod tensor_ext;
 mod traced;
 
 #[cfg(feature = "autodiff")]
@@ -58,5 +61,9 @@ pub use error::{Error, Result};
 pub use extension::{
     register_runtime, EighGauge, EighOptions, QrGauge, QrOptions, SvdGauge, SvdOptions,
     DEFAULT_DECOMPOSITION_DERIVATIVE_EPS, LINALG_EXTENSION_FAMILY_ID,
+};
+pub use tensor_ext::{
+    LinalgScalar, TensorLinalgExt, TensorReadLinalgExt, TypedEig, TypedFullPivLu, TypedLu,
+    TypedSvd, TypedTensorLinalgExt,
 };
 pub use traced::TracedTensorLinalgExt;

@@ -78,14 +78,14 @@ fn eager_maximum_and_minimum_gradients_match_finite_diff() {
         .unwrap()
         .mul(&max_weights_tensor)
         .unwrap()
-        .reduce_sum(&[0])
+        .reduce_sum(Some(&[0]))
         .unwrap();
     let min_loss = x
         .minimum(&y)
         .unwrap()
         .mul(&min_weights_tensor)
         .unwrap()
-        .reduce_sum(&[0])
+        .reduce_sum(Some(&[0]))
         .unwrap();
     let loss = max_loss.add(&min_loss).unwrap();
     let _ = loss.backward().unwrap();
@@ -163,7 +163,7 @@ fn eager_select_gradients_match_finite_diff() {
         .unwrap()
         .mul(&weights_tensor)
         .unwrap()
-        .reduce_sum(&[0])
+        .reduce_sum(Some(&[0]))
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -232,7 +232,7 @@ fn eager_clamp_gradients_match_finite_diff() {
         .unwrap()
         .mul(&weights_tensor)
         .unwrap()
-        .reduce_sum(&[0])
+        .reduce_sum(Some(&[0]))
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -288,7 +288,7 @@ fn eager_extract_diag_rectangular_gradient_matches_finite_diff() {
         .unwrap()
         .mul(&weights_tensor)
         .unwrap()
-        .reduce_sum(&[0])
+        .reduce_sum(Some(&[0]))
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -328,7 +328,7 @@ fn eager_embed_diag_shifted_axis_gradient_matches_finite_diff() {
         .unwrap()
         .mul(&weights_tensor)
         .unwrap()
-        .reduce_sum(&[0, 1, 2])
+        .reduce_sum(Some(&[0, 1, 2]))
         .unwrap();
     let _ = loss.backward().unwrap();
 
@@ -384,7 +384,7 @@ fn eager_concatenate_gradients_match_finite_diff() {
     let loss = concatenated
         .mul(&weights_tensor)
         .unwrap()
-        .reduce_sum(&[0])
+        .reduce_sum(Some(&[0]))
         .unwrap();
     let _ = loss.backward().unwrap();
 

@@ -1093,7 +1093,7 @@ impl EagerRuntime {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap(), ctx.clone()).unwrap();
-    /// let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
+    /// let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
     /// let _ = loss.backward().unwrap();
     ///
     /// ctx.clear_grads()?;
@@ -1184,7 +1184,7 @@ impl EagerRuntime {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let p = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap())?;
-    /// let loss = p.exp().unwrap().reduce_sum(&[0]).unwrap();
+    /// let loss = p.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
     /// let _ = loss.backward().unwrap();
     ///
     /// let grad = p.grad().unwrap().unwrap();
@@ -1544,9 +1544,9 @@ fn validate_seed_tensor(op: &'static str, primal: &EagerTensor, seed: &EagerTens
 ///
 /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
 /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx)?;
-/// let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
+/// let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
 /// let _cotangents = loss.backward().unwrap();
-/// let loss = x.mul(&x).unwrap().reduce_sum(&[0]).unwrap();
+/// let loss = x.mul(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
 /// let _cotangents = loss.backward().unwrap();
 ///
 /// assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 8.0, 12.0]);
@@ -1975,7 +1975,7 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(), ctx).unwrap();
-    /// let loss = x.exp().unwrap().reduce_sum(&[0]).unwrap();
+    /// let loss = x.exp().unwrap().reduce_sum(Some(&[0])).unwrap();
     /// let _cotangents = loss.backward().unwrap();
     ///
     /// let grad = x.grad()?.unwrap();
@@ -2015,7 +2015,7 @@ impl EagerTensor {
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx.clone()).unwrap();
     /// let y = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap(), ctx).unwrap();
-    /// let loss = x.mul(&y).unwrap().reduce_sum(&[0]).unwrap();
+    /// let loss = x.mul(&y).unwrap().reduce_sum(Some(&[0])).unwrap();
     /// let _ = loss.backward().unwrap();
     ///
     /// x.clear_grad()?;
@@ -2226,9 +2226,9 @@ impl EagerTensor {
     ///
     /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     /// let x = EagerTensor::requires_grad_in(Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap(), ctx).unwrap();
-    /// let loss = x.add(&x).unwrap().reduce_sum(&[0]).unwrap();
+    /// let loss = x.add(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     /// let _cotangents = loss.backward().unwrap();
-    /// let loss = x.add(&x).unwrap().reduce_sum(&[0]).unwrap();
+    /// let loss = x.add(&x).unwrap().reduce_sum(Some(&[0])).unwrap();
     /// let _cotangents = loss.backward().unwrap();
     ///
     /// assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[4.0, 4.0, 4.0]);

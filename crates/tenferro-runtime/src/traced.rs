@@ -1823,8 +1823,12 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
-    /// let y = x.reduce_sum(&[0])?;
-    /// let y2 = x.reduce_sum(&[0])?;
+    /// let total = x.reduce_sum(None)?;
+    /// let rows = x.reduce_sum(Some(&[1]))?;
+    /// let identity = x.reduce_sum(Some(&[]))?;
+    /// assert_eq!(total.rank, 0);
+    /// assert_eq!(rows.rank, 1);
+    /// assert_eq!(identity.rank, 2);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     ///
@@ -1834,13 +1838,12 @@ impl TracedTensor {
     /// outside the input rank or `DuplicateAxis` when `axes` repeats an axis,
     /// or [`Error::RuntimeStateSource`] when output metadata cannot be
     /// registered.
-    pub fn reduce_sum(&self, axes: &[usize]) -> Result<TracedTensor> {
+    pub fn reduce_sum(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
+        let axes = axes.map_or_else(|| (0..self.rank).collect(), <[usize]>::to_vec);
         let (out_rank, out_shape_hint) =
-            reduction_output_meta(self, axes, "TracedTensor::reduce_sum")?;
+            reduction_output_meta(self, &axes, "TracedTensor::reduce_sum")?;
         apply_unary(
-            StdTensorOp::ReduceSum {
-                axes: axes.to_vec(),
-            },
+            StdTensorOp::ReduceSum { axes },
             self,
             out_rank,
             out_shape_hint,
@@ -1857,7 +1860,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
-    /// let y = x.reduce_max(&[0])?;
+    /// let y = x.reduce_max(Some(&[0]))?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     ///
@@ -1868,13 +1871,12 @@ impl TracedTensor {
     /// [`Error::Unsupported`] when a non-empty maximum reduction receives a
     /// complex dtype, or [`Error::RuntimeStateSource`] when output metadata
     /// cannot be registered.
-    pub fn reduce_max(&self, axes: &[usize]) -> Result<TracedTensor> {
+    pub fn reduce_max(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
+        let axes = axes.map_or_else(|| (0..self.rank).collect(), <[usize]>::to_vec);
         let (out_rank, out_shape_hint) =
-            reduction_output_meta(self, axes, "TracedTensor::reduce_max")?;
+            reduction_output_meta(self, &axes, "TracedTensor::reduce_max")?;
         try_apply_unary(
-            StdTensorOp::ReduceMax {
-                axes: axes.to_vec(),
-            },
+            StdTensorOp::ReduceMax { axes },
             self,
             out_rank,
             out_shape_hint,
@@ -1892,7 +1894,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
-    /// let y = x.reduce_min(&[0])?;
+    /// let y = x.reduce_min(Some(&[0]))?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     ///
@@ -1903,13 +1905,12 @@ impl TracedTensor {
     /// [`Error::Unsupported`] when a non-empty minimum reduction receives a
     /// complex dtype, or [`Error::RuntimeStateSource`] when output metadata
     /// cannot be registered.
-    pub fn reduce_min(&self, axes: &[usize]) -> Result<TracedTensor> {
+    pub fn reduce_min(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
+        let axes = axes.map_or_else(|| (0..self.rank).collect(), <[usize]>::to_vec);
         let (out_rank, out_shape_hint) =
-            reduction_output_meta(self, axes, "TracedTensor::reduce_min")?;
+            reduction_output_meta(self, &axes, "TracedTensor::reduce_min")?;
         try_apply_unary(
-            StdTensorOp::ReduceMin {
-                axes: axes.to_vec(),
-            },
+            StdTensorOp::ReduceMin { axes },
             self,
             out_rank,
             out_shape_hint,
@@ -1924,7 +1925,7 @@ impl TracedTensor {
     /// ```rust
     /// # use tenferro_runtime::TracedTensor;
     /// # let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
-    /// let y = x.reduce_prod(&[0])?;
+    /// let y = x.reduce_prod(Some(&[0]))?;
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
     ///
@@ -1934,13 +1935,12 @@ impl TracedTensor {
     /// outside the input rank or `DuplicateAxis` when `axes` repeats an axis,
     /// or [`Error::RuntimeStateSource`] when output metadata cannot be
     /// registered.
-    pub fn reduce_prod(&self, axes: &[usize]) -> Result<TracedTensor> {
+    pub fn reduce_prod(&self, axes: Option<&[usize]>) -> Result<TracedTensor> {
+        let axes = axes.map_or_else(|| (0..self.rank).collect(), <[usize]>::to_vec);
         let (out_rank, out_shape_hint) =
-            reduction_output_meta(self, axes, "TracedTensor::reduce_prod")?;
+            reduction_output_meta(self, &axes, "TracedTensor::reduce_prod")?;
         apply_unary(
-            StdTensorOp::ReduceProd {
-                axes: axes.to_vec(),
-            },
+            StdTensorOp::ReduceProd { axes },
             self,
             out_rank,
             out_shape_hint,
