@@ -722,3 +722,7 @@ fn checked_add(
         )
     })
 }
+
+#[cfg(test)]
+#[path = "cpu/managed_tests.rs"]
+mod managed_tests;
