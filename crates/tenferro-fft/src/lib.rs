@@ -1,10 +1,12 @@
 //! FFT extension operations for tenferro.
 //!
-//! This crate is an out-of-tree `ExtensionOp` package. The initial
-//! implementation executes on host tensors through `rustfft`; it does not add
-//! FFT to the core `tenferro` backend trait surface. Concrete non-AD execution
-//! uses [`TensorFftExt`] and [`TensorReadFftExt`]. Traced graph construction
-//! uses [`TracedTensorFftExt`].
+//! This crate is an out-of-tree `ExtensionOp` package with an explicit
+//! [`FftBackend`] capability. [`tenferro_cpu::CpuBackend`] implements the
+//! capability through RustFFT. Metal/WebGPU and CUDA backends require separate
+//! explicit implementations; unsupported requests return an error and never
+//! fall back to CPU or transfer tensor data. Concrete non-AD execution uses
+//! [`TensorFftExt`] and [`TensorReadFftExt`]. Traced graph construction uses
+//! [`TracedTensorFftExt`].
 //!
 //! # Examples
 //!
@@ -49,18 +51,12 @@
 //! ```
 
 use std::any::Any;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::mem::MaybeUninit;
+use std::hash::Hasher;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-use lru::LruCache;
-use num_complex::Complex;
-use num_traits::{Float, FromPrimitive, Zero};
-use rustfft::{Fft, FftNum, FftPlanner};
 #[cfg(feature = "autodiff")]
 use tenferro_ad::extension::{
     ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionPrimalVjpRule,
@@ -75,16 +71,21 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOp, HostReference};
-use tenferro_runtime::{
-    Error, ErrorPhase, ExtensionCacheKey, ExtensionCacheSelector, ExtensionCacheStore, Result,
-    TracedTensor,
-};
-use tenferro_tensor::{
-    CacheStats, DType, DeviceKind, ErrorKind, MemoryKind, Placement, RuntimeCacheControl, Tensor,
-    TensorBackend, TensorRead, TypedTensor, ValidationError,
-};
+use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
+use tenferro_tensor::{CacheStats, DType, ErrorKind, Tensor, TensorRead, ValidationError};
 #[cfg(feature = "autodiff")]
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
+
+mod backend;
+mod cache;
+mod cpu;
+mod spec;
+
+pub use backend::{FftBackend, FftExecutionCache};
+pub use cache::{
+    fft_plan_cache_selector, FftPlanCache, DEFAULT_FFT_PLAN_CACHE_CAPACITY, FFT_PLAN_CACHE_NAME,
+};
+pub use spec::{FftNorm, FftOperation, FftPlanSpec};
 
 /// Extension family id used by the tenferro FFT extension.
 ///
@@ -97,134 +98,6 @@ use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 /// );
 /// ```
 pub const FFT_EXTENSION_FAMILY_ID: &str = "tenferro-fft.fft.v1";
-
-/// Runtime cache namespace used for RustFFT plans.
-pub const FFT_PLAN_CACHE_NAME: &str = "rustfft-plans";
-
-/// Default number of plans retained by a caller-owned [`FftPlanCache`].
-pub const DEFAULT_FFT_PLAN_CACHE_CAPACITY: usize = 64;
-
-/// Select the FFT plan entries in an extension runtime cache.
-pub const fn fft_plan_cache_selector() -> ExtensionCacheSelector {
-    ExtensionCacheSelector::Cache {
-        family_id: FFT_EXTENSION_FAMILY_ID,
-        cache_name: FFT_PLAN_CACHE_NAME,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-enum FftPlanDType {
-    F32,
-    F64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct FftPlanKey {
-    len: usize,
-    forward: bool,
-    dtype: FftPlanDType,
-}
-
-enum CachedFftPlan {
-    F32(Arc<dyn Fft<f32>>),
-    F64(Arc<dyn Fft<f64>>),
-}
-
-/// Bounded, caller-owned LRU cache of RustFFT plans.
-///
-/// Retained-byte statistics include the cache-owned key and `Arc` handle for
-/// each entry. RustFFT does not expose the allocations owned by an opaque plan,
-/// so those allocations are intentionally excluded from the estimate.
-pub struct FftPlanCache {
-    entries: LruCache<FftPlanKey, CachedFftPlan>,
-}
-
-impl FftPlanCache {
-    /// Create an empty plan cache with an explicit maximum entry count.
-    pub fn with_capacity(capacity: NonZeroUsize) -> Self {
-        Self {
-            entries: LruCache::new(capacity),
-        }
-    }
-
-    /// Maximum number of retained plans.
-    pub fn capacity(&self) -> NonZeroUsize {
-        self.entries.cap()
-    }
-
-    /// Resize the cache, evicting least-recently-used plans when necessary.
-    pub fn set_capacity(&mut self, capacity: NonZeroUsize) {
-        self.entries.resize(capacity);
-    }
-
-    /// Remove every retained plan.
-    pub fn clear(&mut self) {
-        self.entries.clear();
-    }
-
-    /// Snapshot the number of plans and known cache-owned bytes retained.
-    pub fn stats(&self) -> CacheStats {
-        CacheStats {
-            entries: self.entries.len(),
-            retained_bytes: self.entries.len().saturating_mul(fft_plan_retained_bytes()),
-        }
-    }
-
-    fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>> {
-        let key = FftPlanKey {
-            len,
-            forward,
-            dtype: FftPlanDType::F32,
-        };
-        if let Some(CachedFftPlan::F32(plan)) = self.entries.get(&key) {
-            return Arc::clone(plan);
-        }
-        let plan = build_fft_plan::<f32>(len, forward);
-        self.entries.put(key, CachedFftPlan::F32(Arc::clone(&plan)));
-        plan
-    }
-
-    fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>> {
-        let key = FftPlanKey {
-            len,
-            forward,
-            dtype: FftPlanDType::F64,
-        };
-        if let Some(CachedFftPlan::F64(plan)) = self.entries.get(&key) {
-            return Arc::clone(plan);
-        }
-        let plan = build_fft_plan::<f64>(len, forward);
-        self.entries.put(key, CachedFftPlan::F64(Arc::clone(&plan)));
-        plan
-    }
-
-    #[cfg(test)]
-    fn contains_f64(&self, len: usize, forward: bool) -> bool {
-        self.entries.contains(&FftPlanKey {
-            len,
-            forward,
-            dtype: FftPlanDType::F64,
-        })
-    }
-}
-
-impl Default for FftPlanCache {
-    fn default() -> Self {
-        Self::with_capacity(
-            NonZeroUsize::new(DEFAULT_FFT_PLAN_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN),
-        )
-    }
-}
-
-impl RuntimeCacheControl for FftPlanCache {
-    fn clear(&mut self) {
-        Self::clear(self);
-    }
-
-    fn stats(&self) -> CacheStats {
-        Self::stats(self)
-    }
-}
 
 /// Reusable concrete FFT executor with explicitly owned plan state.
 #[derive(Default)]
@@ -266,7 +139,7 @@ impl FftExecutor {
     /// `InvalidArgument` for invalid `axis`/`n`,
     /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
     /// for unsupported dtypes, or a typed backend source for execution.
-    pub fn fft<B: TensorBackend>(
+    pub fn fft<B: FftBackend>(
         &mut self,
         input: &Tensor,
         n: Option<usize>,
@@ -276,7 +149,7 @@ impl FftExecutor {
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
-            concrete_fft_kind("FftExecutor::fft", input.dtype())?,
+            concrete_fft_operation("FftExecutor::fft", input.dtype())?,
             "FftExecutor::fft",
             n,
             axis,
@@ -293,7 +166,7 @@ impl FftExecutor {
     /// `InvalidArgument` for invalid `axis`/`n`,
     /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
     /// for a non-complex input, or a typed backend source for execution.
-    pub fn ifft<B: TensorBackend>(
+    pub fn ifft<B: FftBackend>(
         &mut self,
         input: &Tensor,
         n: Option<usize>,
@@ -303,7 +176,7 @@ impl FftExecutor {
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
-            concrete_ifft_kind("FftExecutor::ifft", input.dtype())?,
+            concrete_ifft_operation("FftExecutor::ifft", input.dtype())?,
             "FftExecutor::ifft",
             n,
             axis,
@@ -320,7 +193,7 @@ impl FftExecutor {
     /// `InvalidArgument` for invalid `axis`/`n`,
     /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
     /// for a non-real input, or a typed backend source for execution.
-    pub fn rfft<B: TensorBackend>(
+    pub fn rfft<B: FftBackend>(
         &mut self,
         input: &Tensor,
         n: Option<usize>,
@@ -330,7 +203,7 @@ impl FftExecutor {
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
-            concrete_rfft_kind("FftExecutor::rfft", input.dtype())?,
+            concrete_rfft_operation("FftExecutor::rfft", input.dtype())?,
             "FftExecutor::rfft",
             n,
             axis,
@@ -347,7 +220,7 @@ impl FftExecutor {
     /// `InvalidArgument`, or spectrum-length details,
     /// [`tenferro_tensor::Error::Extension`] with [`ErrorKind::Unsupported`]
     /// for a non-complex input, or a typed backend source for execution.
-    pub fn irfft<B: TensorBackend>(
+    pub fn irfft<B: FftBackend>(
         &mut self,
         input: &Tensor,
         n: Option<usize>,
@@ -357,7 +230,7 @@ impl FftExecutor {
     ) -> tenferro_tensor::Result<Tensor> {
         self.execute(
             input,
-            concrete_irfft_kind("FftExecutor::irfft", input.dtype())?,
+            concrete_irfft_operation("FftExecutor::irfft", input.dtype())?,
             "FftExecutor::irfft",
             n,
             axis,
@@ -367,18 +240,30 @@ impl FftExecutor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn execute<B: TensorBackend>(
+    fn execute<B: FftBackend>(
         &mut self,
         input: &Tensor,
-        kind: FftKind,
+        operation: FftOperation,
         op_name: &'static str,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor> {
-        let op = concrete_fft_op(op_name, kind, input.shape(), n, axis, norm)?;
-        execute_concrete_fft_op_with_plans(input, &op, backend, &mut self.plans)
+        let spec = concrete_fft_spec(
+            op_name,
+            operation,
+            input.dtype(),
+            input.shape(),
+            n,
+            axis,
+            norm,
+        )?;
+        backend.execute_fft(
+            input,
+            &spec,
+            FftExecutionCache::caller_owned(&mut self.plans),
+        )
     }
 }
 
@@ -491,7 +376,7 @@ pub trait TensorFftExt {
     /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for an
     /// integer or boolean input, or a typed backend source for execution.
-    fn fft<B: TensorBackend>(
+    fn fft<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -506,7 +391,7 @@ pub trait TensorFftExt {
     /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
     /// non-complex input, or a typed backend source for execution.
-    fn ifft<B: TensorBackend>(
+    fn ifft<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -521,7 +406,7 @@ pub trait TensorFftExt {
     /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
     /// non-`F32`/`F64` input, or a typed backend source for execution.
-    fn rfft<B: TensorBackend>(
+    fn rfft<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -537,7 +422,7 @@ pub trait TensorFftExt {
     /// or spectrum-length details, `Error::Extension` with
     /// `ErrorKind::Unsupported` for a non-complex input, or a typed backend
     /// source for execution.
-    fn irfft<B: TensorBackend>(
+    fn irfft<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -547,76 +432,80 @@ pub trait TensorFftExt {
 }
 
 impl TensorFftExt for Tensor {
-    fn fft<B: TensorBackend>(
+    fn fft<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor> {
-        let op = concrete_fft_op(
+        let spec = concrete_fft_spec(
             "TensorFftExt::fft",
-            concrete_fft_kind("TensorFftExt::fft", self.dtype())?,
+            concrete_fft_operation("TensorFftExt::fft", self.dtype())?,
+            self.dtype(),
             self.shape(),
             n,
             axis,
             norm,
         )?;
-        execute_concrete_fft_op(self, &op, backend)
+        execute_concrete_fft_op(self, &spec, backend)
     }
 
-    fn ifft<B: TensorBackend>(
+    fn ifft<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor> {
-        let op = concrete_fft_op(
+        let spec = concrete_fft_spec(
             "TensorFftExt::ifft",
-            concrete_ifft_kind("TensorFftExt::ifft", self.dtype())?,
+            concrete_ifft_operation("TensorFftExt::ifft", self.dtype())?,
+            self.dtype(),
             self.shape(),
             n,
             axis,
             norm,
         )?;
-        execute_concrete_fft_op(self, &op, backend)
+        execute_concrete_fft_op(self, &spec, backend)
     }
 
-    fn rfft<B: TensorBackend>(
+    fn rfft<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor> {
-        let op = concrete_fft_op(
+        let spec = concrete_fft_spec(
             "TensorFftExt::rfft",
-            concrete_rfft_kind("TensorFftExt::rfft", self.dtype())?,
+            concrete_rfft_operation("TensorFftExt::rfft", self.dtype())?,
+            self.dtype(),
             self.shape(),
             n,
             axis,
             norm,
         )?;
-        execute_concrete_fft_op(self, &op, backend)
+        execute_concrete_fft_op(self, &spec, backend)
     }
 
-    fn irfft<B: TensorBackend>(
+    fn irfft<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
         norm: FftNorm,
         backend: &mut B,
     ) -> tenferro_tensor::Result<Tensor> {
-        let op = concrete_fft_op(
+        let spec = concrete_fft_spec(
             "TensorFftExt::irfft",
-            concrete_irfft_kind("TensorFftExt::irfft", self.dtype())?,
+            concrete_irfft_operation("TensorFftExt::irfft", self.dtype())?,
+            self.dtype(),
             self.shape(),
             n,
             axis,
             norm,
         )?;
-        execute_concrete_fft_op(self, &op, backend)
+        execute_concrete_fft_op(self, &spec, backend)
     }
 }
 
@@ -651,7 +540,7 @@ pub trait TensorReadFftExt {
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for an
     /// integer or boolean input, or a typed backend source for materialization
     /// or execution.
-    fn fft_read<B: TensorBackend>(
+    fn fft_read<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -666,7 +555,7 @@ pub trait TensorReadFftExt {
     /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
     /// non-complex input, or a typed backend source for materialization.
-    fn ifft_read<B: TensorBackend>(
+    fn ifft_read<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -681,7 +570,7 @@ pub trait TensorReadFftExt {
     /// Returns `Error::Validation` with `AxisOutOfBounds` or `InvalidArgument`
     /// for `axis`/`n`, `Error::Extension` with `ErrorKind::Unsupported` for a
     /// non-`F32`/`F64` input, or a typed backend source for materialization.
-    fn rfft_read<B: TensorBackend>(
+    fn rfft_read<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -697,7 +586,7 @@ pub trait TensorReadFftExt {
     /// or spectrum-length details, `Error::Extension` with
     /// `ErrorKind::Unsupported` for a non-complex input, or a typed backend
     /// source for materialization.
-    fn irfft_read<B: TensorBackend>(
+    fn irfft_read<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -707,7 +596,7 @@ pub trait TensorReadFftExt {
 }
 
 impl TensorReadFftExt for TensorRead<'_> {
-    fn fft_read<B: TensorBackend>(
+    fn fft_read<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -716,7 +605,7 @@ impl TensorReadFftExt for TensorRead<'_> {
     ) -> tenferro_tensor::Result<Tensor> {
         execute_concrete_fft_read_op(
             self,
-            concrete_fft_kind("TensorReadFftExt::fft_read", self.dtype())?,
+            concrete_fft_operation("TensorReadFftExt::fft_read", self.dtype())?,
             "TensorReadFftExt::fft_read",
             n,
             axis,
@@ -725,7 +614,7 @@ impl TensorReadFftExt for TensorRead<'_> {
         )
     }
 
-    fn ifft_read<B: TensorBackend>(
+    fn ifft_read<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -734,7 +623,7 @@ impl TensorReadFftExt for TensorRead<'_> {
     ) -> tenferro_tensor::Result<Tensor> {
         execute_concrete_fft_read_op(
             self,
-            concrete_ifft_kind("TensorReadFftExt::ifft_read", self.dtype())?,
+            concrete_ifft_operation("TensorReadFftExt::ifft_read", self.dtype())?,
             "TensorReadFftExt::ifft_read",
             n,
             axis,
@@ -743,7 +632,7 @@ impl TensorReadFftExt for TensorRead<'_> {
         )
     }
 
-    fn rfft_read<B: TensorBackend>(
+    fn rfft_read<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -752,7 +641,7 @@ impl TensorReadFftExt for TensorRead<'_> {
     ) -> tenferro_tensor::Result<Tensor> {
         execute_concrete_fft_read_op(
             self,
-            concrete_rfft_kind("TensorReadFftExt::rfft_read", self.dtype())?,
+            concrete_rfft_operation("TensorReadFftExt::rfft_read", self.dtype())?,
             "TensorReadFftExt::rfft_read",
             n,
             axis,
@@ -761,7 +650,7 @@ impl TensorReadFftExt for TensorRead<'_> {
         )
     }
 
-    fn irfft_read<B: TensorBackend>(
+    fn irfft_read<B: FftBackend>(
         &self,
         n: Option<usize>,
         axis: isize,
@@ -770,7 +659,7 @@ impl TensorReadFftExt for TensorRead<'_> {
     ) -> tenferro_tensor::Result<Tensor> {
         execute_concrete_fft_read_op(
             self,
-            concrete_irfft_kind("TensorReadFftExt::irfft_read", self.dtype())?,
+            concrete_irfft_operation("TensorReadFftExt::irfft_read", self.dtype())?,
             "TensorReadFftExt::irfft_read",
             n,
             axis,
@@ -778,47 +667,6 @@ impl TensorReadFftExt for TensorRead<'_> {
             backend,
         )
     }
-}
-
-/// FFT normalization convention.
-///
-/// `Backward` matches NumPy, JAX, and PyTorch defaults: the forward transform
-/// is unscaled and the inverse transform is scaled by `1 / n`.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_fft::FftNorm;
-///
-/// assert_eq!(FftNorm::default(), FftNorm::Backward);
-/// ```
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum FftNorm {
-    /// Scale inverse transforms by `1 / n`.
-    #[default]
-    Backward,
-    /// Scale forward transforms by `1 / n`.
-    Forward,
-    /// Scale both forward and inverse transforms by `1 / sqrt(n)`.
-    Ortho,
-}
-
-#[cfg(feature = "autodiff")]
-impl FftNorm {
-    fn c2c_adjoint(self) -> Self {
-        match self {
-            Self::Backward => Self::Forward,
-            Self::Forward => Self::Backward,
-            Self::Ortho => Self::Ortho,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FftKind {
-    C2C { forward: bool },
-    R2C { onesided: bool },
-    C2R,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -833,16 +681,16 @@ enum FftError {
 
 #[derive(Clone, Debug, PartialEq)]
 struct FftOp {
-    kind: FftKind,
+    operation: FftOperation,
     axis: usize,
     n: Option<usize>,
     norm: FftNorm,
 }
 
 impl FftOp {
-    fn new(kind: FftKind, axis: usize, n: Option<usize>, norm: FftNorm) -> Self {
+    fn new(operation: FftOperation, axis: usize, n: Option<usize>, norm: FftNorm) -> Self {
         Self {
-            kind,
+            operation,
             axis,
             n,
             norm,
@@ -851,14 +699,20 @@ impl FftOp {
 
     #[cfg(feature = "autodiff")]
     fn c2c_adjoint(&self) -> Option<Self> {
-        match self.kind {
-            FftKind::C2C { forward } => Some(Self {
-                kind: FftKind::C2C { forward: !forward },
+        match self.operation {
+            FftOperation::C2cForward => Some(Self {
+                operation: FftOperation::C2cInverse,
                 axis: self.axis,
                 n: self.n,
                 norm: self.norm.c2c_adjoint(),
             }),
-            FftKind::R2C { .. } | FftKind::C2R => None,
+            FftOperation::C2cInverse => Some(Self {
+                operation: FftOperation::C2cForward,
+                axis: self.axis,
+                n: self.n,
+                norm: self.norm.c2c_adjoint(),
+            }),
+            FftOperation::R2cFull | FftOperation::R2cOnesided | FftOperation::C2r => None,
         }
     }
 }
@@ -869,14 +723,14 @@ impl ExtensionOp for FftOp {
     }
 
     fn payload_hash(&self, hasher: &mut dyn Hasher) {
-        let kind = match self.kind {
-            FftKind::C2C { forward: true } => 0,
-            FftKind::C2C { forward: false } => 1,
-            FftKind::R2C { onesided: true } => 2,
-            FftKind::R2C { onesided: false } => 3,
-            FftKind::C2R => 4,
+        let operation = match self.operation {
+            FftOperation::C2cForward => 0,
+            FftOperation::C2cInverse => 1,
+            FftOperation::R2cOnesided => 2,
+            FftOperation::R2cFull => 3,
+            FftOperation::C2r => 4,
         };
-        hasher.write_u8(kind);
+        hasher.write_u8(operation);
         hasher.write_usize(self.axis);
         match self.n {
             Some(n) => {
@@ -931,8 +785,8 @@ impl ExtensionOp for FftOp {
         }
 
         let mut out_shape = input_shape.to_vec();
-        let output_dtype = match self.kind {
-            FftKind::C2C { .. } => {
+        let output_dtype = match self.operation {
+            FftOperation::C2cForward | FftOperation::C2cInverse => {
                 if !matches!(input_dtype, DType::C32 | DType::C64) {
                     return Err(tensor_unsupported_dtype(
                         "tenferro-fft",
@@ -942,9 +796,13 @@ impl ExtensionOp for FftOp {
                 }
                 input_dtype
             }
-            FftKind::R2C { onesided } => {
+            FftOperation::R2cFull | FftOperation::R2cOnesided => {
                 let len = transform_len_dim(self.n, &input_shape[self.axis]);
-                out_shape[self.axis] = if onesided { len / 2usize + 1usize } else { len };
+                out_shape[self.axis] = if self.operation.is_onesided() {
+                    len / 2usize + 1usize
+                } else {
+                    len
+                };
                 match input_dtype {
                     DType::F32 => DType::C32,
                     DType::F64 => DType::C64,
@@ -957,7 +815,7 @@ impl ExtensionOp for FftOp {
                     }
                 }
             }
-            FftKind::C2R => {
+            FftOperation::C2r => {
                 out_shape[self.axis] = output_dim_c2r(&input_shape[self.axis], self.n)?;
                 match input_dtype {
                     DType::C32 => DType::F32,
@@ -973,7 +831,7 @@ impl ExtensionOp for FftOp {
             }
         };
 
-        if matches!(self.kind, FftKind::C2C { .. }) {
+        if self.operation.is_c2c() {
             out_shape[self.axis] = transform_len_dim(self.n, &input_shape[self.axis]);
         }
 
@@ -992,15 +850,6 @@ impl HostReference for FftOp {
 }
 
 fn execute_host_fft_op(op: &FftOp, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let mut plans = FftPlanCache::with_capacity(NonZeroUsize::MIN);
-    execute_host_fft_op_with_plans(op, inputs, &mut plans)
-}
-
-fn execute_host_fft_op_with_plans<P: FftPlanProvider + ?Sized>(
-    op: &FftOp,
-    inputs: &[&Tensor],
-    plans: &mut P,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
     if inputs.len() != 1 {
         return Err(tenferro_tensor::Error::invalid_argument(
             "tenferro-fft",
@@ -1008,150 +857,169 @@ fn execute_host_fft_op_with_plans<P: FftPlanProvider + ?Sized>(
             format!("expected 1 input, got {}", inputs.len()),
         ));
     }
-    validate_host_fft_input(fft_op_name(op.kind), inputs[0])?;
-
-    let output = match (op.kind, inputs[0]) {
-        (FftKind::C2C { forward }, Tensor::C64(input)) => {
-            Tensor::C64(TypedTensor::from_vec_col_major(
-                output_shape_c2c(input.shape(), op.axis, op.n)?,
-                execute_c2c(input, op.axis, op.n, forward, op.norm, plans)?,
-            )?)
-        }
-        (FftKind::C2C { forward }, Tensor::C32(input)) => {
-            Tensor::C32(TypedTensor::from_vec_col_major(
-                output_shape_c2c(input.shape(), op.axis, op.n)?,
-                execute_c2c(input, op.axis, op.n, forward, op.norm, plans)?,
-            )?)
-        }
-        (FftKind::R2C { onesided }, Tensor::F64(input)) => {
-            Tensor::C64(TypedTensor::from_vec_col_major(
-                output_shape_r2c(input.shape(), op.axis, op.n, onesided)?,
-                execute_r2c(input, op.axis, op.n, onesided, op.norm, plans)?,
-            )?)
-        }
-        (FftKind::R2C { onesided }, Tensor::F32(input)) => {
-            Tensor::C32(TypedTensor::from_vec_col_major(
-                output_shape_r2c(input.shape(), op.axis, op.n, onesided)?,
-                execute_r2c(input, op.axis, op.n, onesided, op.norm, plans)?,
-            )?)
-        }
-        (FftKind::C2R, Tensor::C64(input)) => Tensor::F64(TypedTensor::from_vec_col_major(
-            output_shape_c2r(input.shape(), op.axis, op.n)?,
-            execute_c2r(input, op.axis, op.n, op.norm, plans)?,
-        )?),
-        (FftKind::C2R, Tensor::C32(input)) => Tensor::F32(TypedTensor::from_vec_col_major(
-            output_shape_c2r(input.shape(), op.axis, op.n)?,
-            execute_c2r(input, op.axis, op.n, op.norm, plans)?,
-        )?),
-        (kind, other) => {
-            return Err(tensor_unsupported_dtype(
-                fft_op_name(kind),
-                other.dtype(),
-                expected_dtype_description(kind),
-            ));
-        }
-    };
+    let input = inputs[0];
+    let spec = validated_fft_plan_spec(
+        fft_op_name(op.operation),
+        op.operation,
+        input.dtype(),
+        input.shape(),
+        op.n,
+        op.axis,
+        op.norm,
+    )?;
+    cpu::validate_host_fft_input(fft_op_name(op.operation), input)?;
+    let mut plans = FftPlanCache::with_capacity(NonZeroUsize::MIN);
+    let output = cpu::execute_fft_with_plans(input, &spec, &mut plans)?;
     Ok(vec![output])
 }
 
-fn execute_concrete_fft_op<B: TensorBackend>(
+fn execute_concrete_fft_op<B: FftBackend>(
     input: &Tensor,
-    op: &FftOp,
+    spec: &FftPlanSpec,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|_exec| single_fft_output(execute_host_fft_op(op, &[input])?))
-}
-
-fn execute_concrete_fft_op_with_plans<B: TensorBackend, P: FftPlanProvider + ?Sized>(
-    input: &Tensor,
-    op: &FftOp,
-    backend: &mut B,
-    plans: &mut P,
-) -> tenferro_tensor::Result<Tensor> {
-    backend.with_backend_session(|_exec| {
-        single_fft_output(execute_host_fft_op_with_plans(op, &[input], plans)?)
-    })
+    let mut plans = FftPlanCache::with_capacity(NonZeroUsize::MIN);
+    backend.execute_fft(input, spec, FftExecutionCache::caller_owned(&mut plans))
 }
 
 #[allow(clippy::too_many_arguments)]
-fn execute_concrete_fft_read_op<B: TensorBackend>(
+fn execute_concrete_fft_read_op<B: FftBackend>(
     input: &TensorRead<'_>,
-    kind: FftKind,
+    operation: FftOperation,
     op_name: &'static str,
     n: Option<usize>,
     axis: isize,
     norm: FftNorm,
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
-    let op = concrete_fft_op(op_name, kind, input.shape(), n, axis, norm)?;
-    backend.with_backend_session(|exec| {
-        let materialized = exec.to_contiguous_read(input.clone())?;
-        single_fft_output(execute_host_fft_op(&op, &[&materialized])?)
-    })
+    let spec = concrete_fft_spec(
+        op_name,
+        operation,
+        input.dtype(),
+        input.shape(),
+        n,
+        axis,
+        norm,
+    )?;
+    let materialized =
+        backend.with_backend_session(|exec| exec.to_contiguous_read(input.clone()))?;
+    let mut plans = FftPlanCache::with_capacity(NonZeroUsize::MIN);
+    backend.execute_fft(
+        &materialized,
+        &spec,
+        FftExecutionCache::caller_owned(&mut plans),
+    )
 }
 
-fn single_fft_output(mut outputs: Vec<Tensor>) -> tenferro_tensor::Result<Tensor> {
-    if outputs.len() != 1 {
-        return Err(tenferro_tensor::Error::invalid_argument(
-            "tenferro-fft",
-            "outputs",
-            format!("expected 1 FFT output, got {}", outputs.len()),
-        ));
-    }
-    Ok(outputs.remove(0))
-}
-
-fn concrete_fft_op(
+#[allow(clippy::too_many_arguments)]
+fn concrete_fft_spec(
     op: &'static str,
-    kind: FftKind,
+    operation: FftOperation,
+    input_dtype: DType,
     input_shape: &[usize],
     n: Option<usize>,
     axis: isize,
     norm: FftNorm,
-) -> tenferro_tensor::Result<FftOp> {
+) -> tenferro_tensor::Result<FftPlanSpec> {
     validate_concrete_n(op, n)?;
     let axis = normalize_concrete_axis(op, axis, input_shape.len())?;
-    validate_concrete_transform_len(op, input_shape, n, axis)?;
-    if matches!(kind, FftKind::C2R) {
-        output_shape_c2r(input_shape, axis, n)?;
-    }
-    Ok(FftOp::new(kind, axis, n, norm))
+    validated_fft_plan_spec(op, operation, input_dtype, input_shape, n, axis, norm)
 }
 
-fn concrete_fft_kind(op: &'static str, dtype: DType) -> tenferro_tensor::Result<FftKind> {
+#[allow(clippy::too_many_arguments)]
+fn validated_fft_plan_spec(
+    op: &'static str,
+    operation: FftOperation,
+    input_dtype: DType,
+    input_shape: &[usize],
+    n: Option<usize>,
+    axis: usize,
+    norm: FftNorm,
+) -> tenferro_tensor::Result<FftPlanSpec> {
+    validate_concrete_n(op, n)?;
+    validate_operation_dtype(op, operation, input_dtype)?;
+    validate_axis(op, input_shape, axis)?;
+    validate_concrete_transform_len(op, input_shape, n, axis)?;
+    if operation == FftOperation::C2r {
+        output_shape_c2r(input_shape, axis, n)?;
+    }
+    Ok(FftPlanSpec::new(
+        operation,
+        axis,
+        n,
+        norm,
+        input_dtype,
+        input_shape.to_vec(),
+    ))
+}
+
+fn concrete_fft_operation(op: &'static str, dtype: DType) -> tenferro_tensor::Result<FftOperation> {
     match dtype {
-        DType::C32 | DType::C64 => Ok(FftKind::C2C { forward: true }),
-        DType::F32 | DType::F64 => Ok(FftKind::R2C { onesided: false }),
+        DType::C32 | DType::C64 => Ok(FftOperation::C2cForward),
+        DType::F32 | DType::F64 => Ok(FftOperation::R2cFull),
         DType::I32 | DType::I64 | DType::Bool => {
             Err(tensor_unsupported_dtype(op, dtype, "F32, F64, C32, or C64"))
         }
     }
 }
 
-fn concrete_ifft_kind(op: &'static str, dtype: DType) -> tenferro_tensor::Result<FftKind> {
+fn concrete_ifft_operation(
+    op: &'static str,
+    dtype: DType,
+) -> tenferro_tensor::Result<FftOperation> {
     match dtype {
-        DType::C32 | DType::C64 => Ok(FftKind::C2C { forward: false }),
+        DType::C32 | DType::C64 => Ok(FftOperation::C2cInverse),
         DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
             Err(tensor_unsupported_dtype(op, dtype, "C32 or C64"))
         }
     }
 }
 
-fn concrete_rfft_kind(op: &'static str, dtype: DType) -> tenferro_tensor::Result<FftKind> {
+fn concrete_rfft_operation(
+    op: &'static str,
+    dtype: DType,
+) -> tenferro_tensor::Result<FftOperation> {
     match dtype {
-        DType::F32 | DType::F64 => Ok(FftKind::R2C { onesided: true }),
+        DType::F32 | DType::F64 => Ok(FftOperation::R2cOnesided),
         DType::C32 | DType::C64 | DType::I32 | DType::I64 | DType::Bool => {
             Err(tensor_unsupported_dtype(op, dtype, "F32 or F64"))
         }
     }
 }
 
-fn concrete_irfft_kind(op: &'static str, dtype: DType) -> tenferro_tensor::Result<FftKind> {
+fn concrete_irfft_operation(
+    op: &'static str,
+    dtype: DType,
+) -> tenferro_tensor::Result<FftOperation> {
     match dtype {
-        DType::C32 | DType::C64 => Ok(FftKind::C2R),
+        DType::C32 | DType::C64 => Ok(FftOperation::C2r),
         DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => {
             Err(tensor_unsupported_dtype(op, dtype, "C32 or C64"))
         }
+    }
+}
+
+fn validate_operation_dtype(
+    op: &'static str,
+    operation: FftOperation,
+    dtype: DType,
+) -> tenferro_tensor::Result<()> {
+    let supported = match operation {
+        FftOperation::C2cForward | FftOperation::C2cInverse | FftOperation::C2r => {
+            matches!(dtype, DType::C32 | DType::C64)
+        }
+        FftOperation::R2cFull | FftOperation::R2cOnesided => {
+            matches!(dtype, DType::F32 | DType::F64)
+        }
+    };
+    if supported {
+        Ok(())
+    } else {
+        Err(tensor_unsupported_dtype(
+            op,
+            dtype,
+            expected_dtype_description(operation),
+        ))
     }
 }
 
@@ -1226,36 +1094,6 @@ fn tensor_unsupported_dtype(
     )
 }
 
-fn tensor_placement(input: &Tensor) -> &Placement {
-    input.placement()
-}
-
-fn tensor_has_backend_buffer(input: &Tensor) -> bool {
-    input.is_backend_buffer()
-}
-
-fn validate_host_fft_input(op: &'static str, input: &Tensor) -> tenferro_tensor::Result<()> {
-    let placement = tensor_placement(input);
-    let is_device = matches!(placement.memory_kind, MemoryKind::Device);
-    if !is_device && !tensor_has_backend_buffer(input) {
-        return Ok(());
-    }
-
-    let location = match placement.device.as_ref().map(|device| &device.kind) {
-        Some(DeviceKind::Gpu(kind)) => format!("GPU backend {kind:?}"),
-        Some(kind) => format!("device kind {kind:?}"),
-        None if is_device => "device tensor without device metadata".to_string(),
-        None => "backend buffer".to_string(),
-    };
-    Err(tenferro_tensor::Error::unsupported(
-        op,
-        format!(
-            "tenferro-fft supports host tensors only; unsupported {location} input; \
-             download the tensor to CPU before FFT"
-        ),
-    ))
-}
-
 #[cfg(feature = "autodiff")]
 #[derive(Debug)]
 struct FftAdRule;
@@ -1276,9 +1114,9 @@ impl ExtensionLinearizeRule for FftAdRule {
         _ctx: &mut ShapeGuardContext,
     ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
         let fft_op = fft_payload(op, ADRuleKind::Jvp)?;
-        if !matches!(fft_op.kind, FftKind::C2C { .. }) {
+        if !fft_op.operation.is_c2c() {
             return Err(ADRuleError::unsupported(
-                fft_ad_family_id(fft_op.kind),
+                fft_ad_family_id(fft_op.operation),
                 ADRuleKind::Jvp,
             ));
         }
@@ -1387,9 +1225,9 @@ fn emit_c2c_adjoint<'a>(
     active_mask: Option<&[bool]>,
 ) -> ADRuleResult<Option<(LocalValueId, &'a FftOp)>> {
     let fft_op = fft_payload(op, ADRuleKind::Transpose)?;
-    if !matches!(fft_op.kind, FftKind::C2C { .. }) {
+    if !fft_op.operation.is_c2c() {
         return Err(ADRuleError::unsupported(
-            fft_ad_family_id(fft_op.kind),
+            fft_ad_family_id(fft_op.operation),
             ADRuleKind::Transpose,
         ));
     }
@@ -1532,22 +1370,40 @@ pub fn ad_rules() -> std::result::Result<ExtensionRuleSet, ExtensionRegistryErro
         .with_primal_vjp(Arc::new(FftAdRule))
 }
 
-fn execute_fft_extension<B: TensorBackend + 'static>(
+fn execute_fft_extension<B: FftBackend + 'static>(
     op: &FftOp,
     inputs: &[&Tensor],
     ctx: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let mut plans = ExtensionFftPlanCache::new(ctx.caches_mut());
-    execute_host_fft_op_with_plans(op, inputs, &mut plans)
+    if inputs.len() != 1 {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "tenferro-fft",
+            "inputs",
+            format!("expected 1 input, got {}", inputs.len()),
+        ));
+    }
+    let input = inputs[0];
+    let spec = validated_fft_plan_spec(
+        fft_op_name(op.operation),
+        op.operation,
+        input.dtype(),
+        input.shape(),
+        op.n,
+        op.axis,
+        op.norm,
+    )?;
+    let (backend, caches) = ctx.parts_mut();
+    let output = backend.execute_fft(input, &spec, FftExecutionCache::runtime_owned(caches))?;
+    Ok(vec![output])
 }
 
-fn execute_fft_extension_reads<B: TensorBackend + 'static>(
+fn execute_fft_extension_reads<B: FftBackend + 'static>(
     op: &FftOp,
     inputs: &[TensorRead<'_>],
     ctx: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
-    // rustfft consumes compact host tensors; materialization is explicit so
-    // backend-backed views produce a normal error instead of an implicit path.
+    // FFT capabilities consume compact tensors on their existing placement;
+    // materialization uses the explicitly selected backend session.
     let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
         inputs
             .iter()
@@ -1556,8 +1412,7 @@ fn execute_fft_extension_reads<B: TensorBackend + 'static>(
             .collect::<tenferro_tensor::Result<Vec<_>>>()
     })?;
     let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
-    let mut plans = ExtensionFftPlanCache::new(ctx.caches_mut());
-    execute_host_fft_op_with_plans(op, &input_refs, &mut plans)
+    execute_fft_extension(op, &input_refs, ctx)
 }
 
 define_extension_runtime! {
@@ -1567,6 +1422,7 @@ define_extension_runtime! {
     execute = execute_fft_extension,
     execute_reads = execute_fft_extension_reads,
     register_fn = register_runtime,
+    backend_bound = FftBackend,
 }
 
 /// Build a one-dimensional FFT along `axis`.
@@ -1593,9 +1449,9 @@ define_extension_runtime! {
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
 fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor> {
-    let kind = match input.dtype {
-        DType::C32 | DType::C64 => FftKind::C2C { forward: true },
-        DType::F32 | DType::F64 => FftKind::R2C { onesided: false },
+    let operation = match input.dtype {
+        DType::C32 | DType::C64 => FftOperation::C2cForward,
+        DType::F32 | DType::F64 => FftOperation::R2cFull,
         DType::I32 | DType::I64 | DType::Bool => {
             return Err(runtime_unsupported_dtype(
                 "fft",
@@ -1604,7 +1460,7 @@ fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Re
             ))
         }
     };
-    apply_unary_fft("fft", input, kind, n, axis, norm)
+    apply_unary_fft("fft", input, operation, n, axis, norm)
 }
 
 /// Build a one-dimensional inverse FFT along `axis`.
@@ -1636,14 +1492,7 @@ fn ifft(
     if !matches!(input.dtype, DType::C32 | DType::C64) {
         return Err(runtime_unsupported_dtype("ifft", input.dtype, "C32 or C64"));
     }
-    apply_unary_fft(
-        "ifft",
-        input,
-        FftKind::C2C { forward: false },
-        n,
-        axis,
-        norm,
-    )
+    apply_unary_fft("ifft", input, FftOperation::C2cInverse, n, axis, norm)
 }
 
 /// Build a one-dimensional real FFT along `axis`.
@@ -1679,14 +1528,7 @@ fn rfft(
     if !matches!(input.dtype, DType::F32 | DType::F64) {
         return Err(runtime_unsupported_dtype("rfft", input.dtype, "F32 or F64"));
     }
-    apply_unary_fft(
-        "rfft",
-        input,
-        FftKind::R2C { onesided: true },
-        n,
-        axis,
-        norm,
-    )
+    apply_unary_fft("rfft", input, FftOperation::R2cOnesided, n, axis, norm)
 }
 
 /// Build a one-dimensional inverse real FFT along `axis`.
@@ -1729,13 +1571,13 @@ fn irfft(
             "C32 or C64",
         ));
     }
-    apply_unary_fft("irfft", input, FftKind::C2R, n, axis, norm)
+    apply_unary_fft("irfft", input, FftOperation::C2r, n, axis, norm)
 }
 
 fn apply_unary_fft(
     op_name: &'static str,
     input: &TracedTensor,
-    kind: FftKind,
+    operation: FftOperation,
     n: Option<usize>,
     axis: isize,
     norm: FftNorm,
@@ -1743,12 +1585,12 @@ fn apply_unary_fft(
     validate_n(op_name, n)?;
     let axis = normalize_axis(op_name, axis, input.rank)?;
     validate_resolved_transform_len(op_name, input, n, axis)?;
-    if matches!(kind, FftKind::C2R) {
+    if operation == FftOperation::C2r {
         if let Some(shape) = input.try_concrete_shape() {
             output_shape_c2r(&shape, axis, n)?;
         }
     }
-    let op = Arc::new(FftOp::new(kind, axis, n, norm));
+    let op = Arc::new(FftOp::new(operation, axis, n, norm));
     let mut outputs = apply(op, &[input])?;
     outputs
         .pop()
@@ -1850,33 +1692,33 @@ fn transform_len_dim(n: Option<usize>, input_dim: &SymDim) -> SymDim {
     n.map(SymDim::from).unwrap_or_else(|| input_dim.clone())
 }
 
-fn expected_dtype_description(kind: FftKind) -> &'static str {
-    match kind {
-        FftKind::C2C { .. } | FftKind::C2R => "C32 or C64",
-        FftKind::R2C { .. } => "F32 or F64",
+fn expected_dtype_description(operation: FftOperation) -> &'static str {
+    match operation {
+        FftOperation::C2cForward | FftOperation::C2cInverse | FftOperation::C2r => "C32 or C64",
+        FftOperation::R2cFull | FftOperation::R2cOnesided => "F32 or F64",
     }
 }
 
-fn fft_op_name(kind: FftKind) -> &'static str {
-    match kind {
-        FftKind::C2C { forward: true } => "fft",
-        FftKind::C2C { forward: false } => "ifft",
-        FftKind::R2C { .. } => "rfft",
-        FftKind::C2R => "irfft",
-    }
-}
-
-#[cfg(feature = "autodiff")]
-fn fft_ad_family_id(kind: FftKind) -> &'static str {
-    match kind {
-        FftKind::C2C { .. } => FFT_EXTENSION_FAMILY_ID,
-        FftKind::R2C { .. } => "tenferro-fft.rfft.v1",
-        FftKind::C2R => "tenferro-fft.irfft.v1",
+fn fft_op_name(operation: FftOperation) -> &'static str {
+    match operation {
+        FftOperation::C2cForward => "fft",
+        FftOperation::C2cInverse => "ifft",
+        FftOperation::R2cFull | FftOperation::R2cOnesided => "rfft",
+        FftOperation::C2r => "irfft",
     }
 }
 
 #[cfg(feature = "autodiff")]
-fn fft_payload<'a>(op: &'a dyn ExtensionOp, rule: ADRuleKind) -> ADRuleResult<&'a FftOp> {
+fn fft_ad_family_id(operation: FftOperation) -> &'static str {
+    match operation {
+        FftOperation::C2cForward | FftOperation::C2cInverse => FFT_EXTENSION_FAMILY_ID,
+        FftOperation::R2cFull | FftOperation::R2cOnesided => "tenferro-fft.rfft.v1",
+        FftOperation::C2r => "tenferro-fft.irfft.v1",
+    }
+}
+
+#[cfg(feature = "autodiff")]
+fn fft_payload(op: &dyn ExtensionOp, rule: ADRuleKind) -> ADRuleResult<&FftOp> {
     op.as_any()
         .downcast_ref::<FftOp>()
         .ok_or_else(|| ADRuleError::unsupported(FFT_EXTENSION_FAMILY_ID, rule))
@@ -2018,464 +1860,6 @@ fn validate_axis(op: &'static str, shape: &[usize], axis: usize) -> tenferro_ten
     Ok(())
 }
 
-fn checked_shape_product(
-    op: &'static str,
-    role: &'static str,
-    shape: &[usize],
-) -> tenferro_tensor::Result<usize> {
-    shape
-        .iter()
-        .try_fold(1usize, |acc, &dim| acc.checked_mul(dim))
-        .ok_or_else(|| {
-            tenferro_tensor::Error::invalid_argument(
-                op,
-                "shape product",
-                format!("{role} shape product overflows usize"),
-            )
-        })
-}
-
-fn checked_mul(
-    op: &'static str,
-    role: &'static str,
-    lhs: usize,
-    rhs: usize,
-) -> tenferro_tensor::Result<usize> {
-    lhs.checked_mul(rhs).ok_or_else(|| {
-        tenferro_tensor::Error::invalid_argument(
-            op,
-            "arithmetic",
-            format!("{role} overflows usize"),
-        )
-    })
-}
-
-fn checked_add(
-    op: &'static str,
-    role: &'static str,
-    lhs: usize,
-    rhs: usize,
-) -> tenferro_tensor::Result<usize> {
-    lhs.checked_add(rhs).ok_or_else(|| {
-        tenferro_tensor::Error::invalid_argument(
-            op,
-            "arithmetic",
-            format!("{role} overflows usize"),
-        )
-    })
-}
-
-fn uninit_output_vec<T>(len: usize) -> Vec<MaybeUninit<T>> {
-    let mut output = Vec::with_capacity(len);
-    // SAFETY: Uninitialized bytes are valid for `MaybeUninit<T>` slots. The
-    // slots are converted to `T` only after all output positions are written.
-    unsafe { output.set_len(len) };
-    output
-}
-
-unsafe fn assume_init_output_vec<T>(mut output: Vec<MaybeUninit<T>>) -> Vec<T> {
-    let len = output.len();
-    let capacity = output.capacity();
-    let ptr = output.as_mut_ptr().cast::<T>();
-    std::mem::forget(output);
-    // SAFETY: `MaybeUninit<T>` has the same layout as `T`; the caller
-    // guarantees every slot has been initialized exactly once.
-    unsafe { Vec::from_raw_parts(ptr, len, capacity) }
-}
-
-fn build_fft_plan<T: FftNum + 'static>(len: usize, forward: bool) -> Arc<dyn Fft<T>> {
-    let mut planner = FftPlanner::<T>::new();
-    if forward {
-        planner.plan_fft_forward(len)
-    } else {
-        planner.plan_fft_inverse(len)
-    }
-}
-
-const fn fft_plan_retained_bytes() -> usize {
-    std::mem::size_of::<FftPlanKey>() + std::mem::size_of::<CachedFftPlan>()
-}
-
-trait FftPlanProvider: Send {
-    fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>>;
-    fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>>;
-}
-
-impl FftPlanProvider for FftPlanCache {
-    fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>> {
-        Self::plan_f32(self, len, forward)
-    }
-
-    fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>> {
-        Self::plan_f64(self, len, forward)
-    }
-}
-
-trait CachedFftPlanScalar: FftNum + Float + FromPrimitive + 'static {
-    fn plan<P: FftPlanProvider + ?Sized>(
-        plans: &mut P,
-        len: usize,
-        forward: bool,
-    ) -> Arc<dyn Fft<Self>>;
-}
-
-impl CachedFftPlanScalar for f32 {
-    fn plan<P: FftPlanProvider + ?Sized>(
-        plans: &mut P,
-        len: usize,
-        forward: bool,
-    ) -> Arc<dyn Fft<Self>> {
-        plans.plan_f32(len, forward)
-    }
-}
-
-impl CachedFftPlanScalar for f64 {
-    fn plan<P: FftPlanProvider + ?Sized>(
-        plans: &mut P,
-        len: usize,
-        forward: bool,
-    ) -> Arc<dyn Fft<Self>> {
-        plans.plan_f64(len, forward)
-    }
-}
-
-fn cached_fft_plan<T: CachedFftPlanScalar, P: FftPlanProvider + ?Sized>(
-    plans: &mut P,
-    len: usize,
-    forward: bool,
-) -> Arc<dyn Fft<T>> {
-    T::plan(plans, len, forward)
-}
-
-#[derive(Clone)]
-struct ExtensionF32Plan {
-    key: FftPlanKey,
-    plan: Arc<dyn Fft<f32>>,
-}
-
-#[derive(Clone)]
-struct ExtensionF64Plan {
-    key: FftPlanKey,
-    plan: Arc<dyn Fft<f64>>,
-}
-
-struct ExtensionFftPlanCache<'a> {
-    entries: &'a mut ExtensionCacheStore,
-}
-
-impl<'a> ExtensionFftPlanCache<'a> {
-    fn new(entries: &'a mut ExtensionCacheStore) -> Self {
-        Self { entries }
-    }
-}
-
-fn extension_plan_key(key: FftPlanKey) -> ExtensionCacheKey {
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    ExtensionCacheKey::new(
-        FFT_EXTENSION_FAMILY_ID,
-        FFT_PLAN_CACHE_NAME,
-        hasher.finish(),
-    )
-}
-
-impl FftPlanProvider for ExtensionFftPlanCache<'_> {
-    fn plan_f32(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f32>> {
-        let key = FftPlanKey {
-            len,
-            forward,
-            dtype: FftPlanDType::F32,
-        };
-        let cache_key = extension_plan_key(key);
-        if let Some(cached) = self.entries.get::<ExtensionF32Plan>(&cache_key) {
-            if cached.key == key {
-                return Arc::clone(&cached.plan);
-            }
-        }
-        let plan = build_fft_plan::<f32>(len, forward);
-        self.entries.put(
-            cache_key,
-            ExtensionF32Plan {
-                key,
-                plan: Arc::clone(&plan),
-            },
-            fft_plan_retained_bytes(),
-        );
-        plan
-    }
-
-    fn plan_f64(&mut self, len: usize, forward: bool) -> Arc<dyn Fft<f64>> {
-        let key = FftPlanKey {
-            len,
-            forward,
-            dtype: FftPlanDType::F64,
-        };
-        let cache_key = extension_plan_key(key);
-        if let Some(cached) = self.entries.get::<ExtensionF64Plan>(&cache_key) {
-            if cached.key == key {
-                return Arc::clone(&cached.plan);
-            }
-        }
-        let plan = build_fft_plan::<f64>(len, forward);
-        self.entries.put(
-            cache_key,
-            ExtensionF64Plan {
-                key,
-                plan: Arc::clone(&plan),
-            },
-            fft_plan_retained_bytes(),
-        );
-        plan
-    }
-}
-
-fn execute_c2c<T>(
-    input: &TypedTensor<Complex<T>>,
-    axis: usize,
-    n: Option<usize>,
-    forward: bool,
-    norm: FftNorm,
-    plans: &mut (impl FftPlanProvider + ?Sized),
-) -> tenferro_tensor::Result<Vec<Complex<T>>>
-where
-    T: CachedFftPlanScalar,
-{
-    let in_shape = input.shape();
-    let fft_len = transform_len(in_shape, axis, n)?;
-    let out_shape = output_shape_c2c(in_shape, axis, n)?;
-    let out_axis_len = out_shape[axis];
-    let input_data = input.host_data()?;
-    let output_len = checked_shape_product("fft", "output", &out_shape)?;
-    let mut output = uninit_output_vec(output_len);
-    let fft_plan = cached_fft_plan::<T, _>(plans, fft_len, forward);
-    let scale: T = scale_for(norm, forward, fft_len)?;
-    let mut lane = vec![Complex::zero(); fft_len];
-
-    for_axis_lane(in_shape, axis, out_axis_len, |lane_ctx| {
-        // INVARIANT: zero-fill is transform padding semantics when the input
-        // lane is shorter than `fft_len`; it is not redundant initialization.
-        lane.fill(Complex::zero());
-        let copy_len = lane_ctx.in_axis_len.min(fft_len);
-        for (slot, offset) in lane
-            .iter_mut()
-            .take(copy_len)
-            .zip(lane_ctx.input_offsets(copy_len))
-        {
-            *slot = input_data[offset];
-        }
-        fft_plan.process(&mut lane);
-        if scale != T::one() {
-            for value in &mut lane {
-                *value = *value * scale;
-            }
-        }
-        for (value, offset) in lane
-            .iter()
-            .take(out_axis_len)
-            .copied()
-            .zip(lane_ctx.output_offsets(out_axis_len))
-        {
-            output[offset].write(value);
-        }
-        Ok(())
-    })?;
-
-    // SAFETY: `for_axis_lane` covers every element in the compact column-major
-    // output exactly once, and each lane writes all `out_axis_len` positions.
-    Ok(unsafe { assume_init_output_vec(output) })
-}
-
-fn execute_r2c<T>(
-    input: &TypedTensor<T>,
-    axis: usize,
-    n: Option<usize>,
-    onesided: bool,
-    norm: FftNorm,
-    plans: &mut (impl FftPlanProvider + ?Sized),
-) -> tenferro_tensor::Result<Vec<Complex<T>>>
-where
-    T: CachedFftPlanScalar,
-{
-    let in_shape = input.shape();
-    let fft_len = transform_len(in_shape, axis, n)?;
-    let out_shape = output_shape_r2c(in_shape, axis, n, onesided)?;
-    let out_axis_len = out_shape[axis];
-    let input_data = input.host_data()?;
-    let output_len = checked_shape_product("rfft", "output", &out_shape)?;
-    let mut output = uninit_output_vec(output_len);
-    let fft_plan = cached_fft_plan::<T, _>(plans, fft_len, true);
-    let scale: T = scale_for(norm, true, fft_len)?;
-    let mut lane = vec![Complex::zero(); fft_len];
-
-    for_axis_lane(in_shape, axis, out_axis_len, |lane_ctx| {
-        // INVARIANT: zero-fill is rfft padding semantics when the real input
-        // lane is shorter than `fft_len`; later writes cover only `copy_len`.
-        lane.fill(Complex::zero());
-        let copy_len = lane_ctx.in_axis_len.min(fft_len);
-        for (slot, offset) in lane
-            .iter_mut()
-            .take(copy_len)
-            .zip(lane_ctx.input_offsets(copy_len))
-        {
-            *slot = Complex::new(input_data[offset], T::zero());
-        }
-        fft_plan.process(&mut lane);
-        if scale != T::one() {
-            for value in &mut lane {
-                *value = *value * scale;
-            }
-        }
-        for (value, offset) in lane
-            .iter()
-            .take(out_axis_len)
-            .copied()
-            .zip(lane_ctx.output_offsets(out_axis_len))
-        {
-            output[offset].write(value);
-        }
-        Ok(())
-    })?;
-
-    // SAFETY: `for_axis_lane` covers every element in the compact column-major
-    // output exactly once, and each lane writes all `out_axis_len` positions.
-    Ok(unsafe { assume_init_output_vec(output) })
-}
-
-fn execute_c2r<T>(
-    input: &TypedTensor<Complex<T>>,
-    axis: usize,
-    n: Option<usize>,
-    norm: FftNorm,
-    plans: &mut (impl FftPlanProvider + ?Sized),
-) -> tenferro_tensor::Result<Vec<T>>
-where
-    T: CachedFftPlanScalar,
-{
-    let in_shape = input.shape();
-    let out_shape = output_shape_c2r(in_shape, axis, n)?;
-    let out_axis_len = out_shape[axis];
-    let expected_half = validate_c2r_spectrum_len(in_shape[axis], out_axis_len)?;
-    let input_data = input.host_data()?;
-    let output_len = checked_shape_product("irfft", "output", &out_shape)?;
-    let mut output = uninit_output_vec(output_len);
-    let fft_plan = cached_fft_plan::<T, _>(plans, out_axis_len, false);
-    let scale: T = scale_for(norm, false, out_axis_len)?;
-    let mut lane = vec![Complex::zero(); out_axis_len];
-
-    for_axis_lane(in_shape, axis, out_axis_len, |lane_ctx| {
-        // INVARIANT: zero-fill clears the inverse lane before writing the
-        // one-sided spectrum and mirrored tail for this lane.
-        lane.fill(Complex::zero());
-        for (slot, offset) in lane
-            .iter_mut()
-            .take(expected_half)
-            .zip(lane_ctx.input_offsets(expected_half))
-        {
-            *slot = input_data[offset];
-        }
-        for k in expected_half..out_axis_len {
-            let mirror = out_axis_len - k;
-            if mirror < lane.len() {
-                lane[k] = lane[mirror].conj();
-            }
-        }
-        fft_plan.process(&mut lane);
-        for (value, offset) in lane
-            .iter()
-            .take(out_axis_len)
-            .zip(lane_ctx.output_offsets(out_axis_len))
-        {
-            output[offset].write(value.re * scale);
-        }
-        Ok(())
-    })?;
-
-    // SAFETY: `for_axis_lane` covers every element in the compact column-major
-    // output exactly once, and each lane writes all `out_axis_len` positions.
-    Ok(unsafe { assume_init_output_vec(output) })
-}
-
-fn scale_for<T>(norm: FftNorm, forward: bool, n: usize) -> tenferro_tensor::Result<T>
-where
-    T: Float + FromPrimitive,
-{
-    let len = T::from_usize(n).ok_or_else(|| {
-        tenferro_tensor::Error::invalid_argument(
-            "tenferro_fft::scale_for",
-            "FFT length",
-            format!("{n} cannot be represented as scalar"),
-        )
-    })?;
-    Ok(match (norm, forward) {
-        (FftNorm::Backward, true) | (FftNorm::Forward, false) => T::one(),
-        (FftNorm::Backward, false) | (FftNorm::Forward, true) => T::one() / len,
-        (FftNorm::Ortho, _) => T::one() / len.sqrt(),
-    })
-}
-
-#[derive(Clone, Copy)]
-struct LaneContext {
-    input_base: usize,
-    output_base: usize,
-    axis_stride: usize,
-    in_axis_len: usize,
-    out_axis_len: usize,
-}
-
-impl LaneContext {
-    fn input_offsets(self, count: usize) -> impl Iterator<Item = usize> {
-        debug_assert!(count <= self.in_axis_len);
-        lane_offsets(self.input_base, self.axis_stride, count)
-    }
-
-    fn output_offsets(self, count: usize) -> impl Iterator<Item = usize> {
-        debug_assert!(count <= self.out_axis_len);
-        lane_offsets(self.output_base, self.axis_stride, count)
-    }
-}
-
-fn lane_offsets(base: usize, stride: usize, count: usize) -> impl Iterator<Item = usize> {
-    // INVARIANT: `for_axis_lane` checks input/output lane coverage before it
-    // constructs any `LaneContext`, so every `base + k * stride` for
-    // `k < count` stays within the compact column-major buffer.
-    (0..count).map(move |k| base + k * stride)
-}
-
-fn for_axis_lane(
-    in_shape: &[usize],
-    axis: usize,
-    out_axis_len: usize,
-    mut f: impl FnMut(LaneContext) -> tenferro_tensor::Result<()>,
-) -> tenferro_tensor::Result<()> {
-    let in_axis_len = in_shape[axis];
-    let axis_stride = checked_shape_product("fft", "axis stride", &in_shape[..axis])?;
-    let outer = checked_shape_product("fft", "outer lane count", &in_shape[axis + 1..])?;
-    let in_block = checked_mul("fft", "input lane block", axis_stride, in_axis_len)?;
-    let out_block = checked_mul("fft", "output lane block", axis_stride, out_axis_len)?;
-    let _input_len = checked_mul("fft", "input lane coverage", outer, in_block)?;
-    let _output_len = checked_mul("fft", "output lane coverage", outer, out_block)?;
-
-    // INVARIANT: lanes are processed sequentially so one scratch lane can be
-    // reused while writing into a single `MaybeUninit` output buffer. Parallel
-    // lane execution needs disjoint output splitting plus per-worker scratch.
-    for outer_idx in 0..outer {
-        let in_outer_base = checked_mul("fft", "input outer base", outer_idx, in_block)?;
-        let out_outer_base = checked_mul("fft", "output outer base", outer_idx, out_block)?;
-        for inner in 0..axis_stride {
-            let input_base = checked_add("fft", "input lane base", in_outer_base, inner)?;
-            let output_base = checked_add("fft", "output lane base", out_outer_base, inner)?;
-            f(LaneContext {
-                input_base,
-                output_base,
-                axis_stride,
-                in_axis_len,
-                out_axis_len,
-            })?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod concrete_tests;
 
@@ -2485,7 +1869,7 @@ mod tests {
 
     #[test]
     fn fft_infer_output_meta_rejects_invalid_trait_inputs_without_panicking() {
-        let op = FftOp::new(FftKind::R2C { onesided: true }, 0, None, FftNorm::Backward);
+        let op = FftOp::new(FftOperation::R2cOnesided, 0, None, FftNorm::Backward);
         let shape = [SymDim::from(4usize)];
 
         assert!(
@@ -2502,7 +1886,7 @@ mod tests {
         )
         .is_err());
 
-        let bad_axis = FftOp::new(FftKind::C2C { forward: true }, 2, None, FftNorm::Backward);
+        let bad_axis = FftOp::new(FftOperation::C2cForward, 2, None, FftNorm::Backward);
         assert!(tenferro_ops::ext_op::invoke_extension_shape_inference(
             &bad_axis,
             &[DType::C64],
@@ -2513,7 +1897,7 @@ mod tests {
 
     #[test]
     fn checked_shape_product_rejects_overflow_before_allocation() {
-        let err = checked_shape_product("fft", "output", &[usize::MAX, 2])
+        let err = cpu::checked_shape_product("fft", "output", &[usize::MAX, 2])
             .expect_err("overflowing output shape should be rejected");
 
         assert!(err.to_string().contains("overflows usize"), "{err}");
@@ -2539,7 +1923,7 @@ mod tests {
 
     #[test]
     fn axis_lane_layout_rejects_stride_overflow() {
-        let err = for_axis_lane(&[usize::MAX, 2], 1, 2, |_| Ok(()))
+        let err = cpu::for_axis_lane(&[usize::MAX, 2], 1, 2, |_| Ok(()))
             .expect_err("lane layout should reject stride overflow");
 
         assert!(err.to_string().contains("overflows usize"), "{err}");
@@ -2549,7 +1933,7 @@ mod tests {
     #[test]
     fn fft_transpose_rule_respects_inactive_linearized_input() {
         let rule = FftAdRule;
-        let op = FftOp::new(FftKind::C2C { forward: true }, 0, None, FftNorm::Backward);
+        let op = FftOp::new(FftOperation::C2cForward, 0, None, FftNorm::Backward);
         let mut builder = computegraph::graph::GraphBuilder::<StdTensorOp>::new();
         let cotangent = builder.add_input(tenferro_ops::input_key::TensorInputKey::User { id: 0 });
         let result = rule
@@ -2571,12 +1955,7 @@ mod tests {
     #[test]
     fn fft_transpose_rule_uses_metadata_for_linear_only_matching_length() {
         let rule = FftAdRule;
-        let op = FftOp::new(
-            FftKind::C2C { forward: true },
-            0,
-            Some(4),
-            FftNorm::Backward,
-        );
+        let op = FftOp::new(FftOperation::C2cForward, 0, Some(4), FftNorm::Backward);
         let active_key = ValueKey::Input(tenferro_ops::input_key::TensorInputKey::User { id: 1 });
         let mut ctx = ShapeGuardContext::default();
         ctx.insert_metadata(

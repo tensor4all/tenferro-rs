@@ -167,6 +167,35 @@ fn fft_plan_cache_is_bounded_lru_and_reports_known_retention() {
 }
 
 #[test]
+fn fft_plan_cache_key_distinguishes_scalar_dtype_length_and_direction() {
+    let mut cache = FftPlanCache::with_capacity(NonZeroUsize::new(8).unwrap());
+
+    let f32_forward_4 = cache.plan_f32(4, true);
+    let f32_forward_8 = cache.plan_f32(8, true);
+    let f64_forward_4 = cache.plan_f64(4, true);
+    let f64_inverse_4 = cache.plan_f64(4, false);
+
+    assert_eq!(cache.stats().entries, 4);
+    assert!(std::sync::Arc::ptr_eq(
+        &f32_forward_4,
+        &cache.plan_f32(4, true)
+    ));
+    assert!(std::sync::Arc::ptr_eq(
+        &f32_forward_8,
+        &cache.plan_f32(8, true)
+    ));
+    assert!(std::sync::Arc::ptr_eq(
+        &f64_forward_4,
+        &cache.plan_f64(4, true)
+    ));
+    assert!(std::sync::Arc::ptr_eq(
+        &f64_inverse_4,
+        &cache.plan_f64(4, false)
+    ));
+    assert!(!std::sync::Arc::ptr_eq(&f64_forward_4, &f64_inverse_4));
+}
+
+#[test]
 fn caller_owned_fft_executor_reuses_plans() {
     let mut backend = CpuBackend::new();
     let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
