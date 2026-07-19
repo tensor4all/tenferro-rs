@@ -7,6 +7,9 @@
 //! C32-to-F32 IRFFT through CubeK on its existing WebGPU placement. That first
 //! GPU path supports power-of-two lengths only; unsupported operations and
 //! dtypes return an error and never fall back to CPU or transfer tensor data.
+//! On macOS, `tenferro_gpu::AppleContext` pairs that Metal backend with a
+//! domain-bound CPU RustFFT backend. Backend choice remains explicit, while
+//! matching managed tensors can be used without an intervening download.
 //! Concrete non-AD execution uses
 //! [`TensorFftExt`] and [`TensorReadFftExt`]. Traced graph construction uses
 //! [`TracedTensorFftExt`].
@@ -54,14 +57,20 @@
 //!         vec![Complex32::new(1.0, 0.0); 4],
 //!     ).unwrap();
 //!     let input = context.upload_tensor(&host).unwrap();
+//!     let after_creation = context.transfer_stats();
+//!     let mut cpu = context.cpu_backend().clone();
+//!     let cpu_output = input.fft(None, 0, FftNorm::Backward, &mut cpu).unwrap();
+//!     let mut metal = context.metal_backend().clone();
 //!     let output = input.fft(
 //!         None,
 //!         0,
 //!         FftNorm::Backward,
-//!         &mut context.metal_backend().clone(),
+//!         &mut metal,
 //!     ).unwrap();
-//!     context.metal_backend().synchronize().unwrap();
+//!     metal.synchronize().unwrap();
 //!     assert_eq!(output.shape(), &[4]);
+//!     assert_eq!(cpu_output.shape(), output.shape());
+//!     assert_eq!(context.transfer_stats(), after_creation);
 //! }
 //! # }
 //! ```

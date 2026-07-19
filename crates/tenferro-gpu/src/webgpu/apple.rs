@@ -94,7 +94,10 @@ impl SharedTensorAllocationDomain for AppleAllocationDomain {
 /// Every context owns a fresh host-visible Metal client and allocation domain.
 /// Tensors created through [`Self::upload_tensor`] can be mapped by the paired
 /// CPU backend and launched by the paired Metal backend without implicit
-/// transfers.
+/// transfers. The initial mapped CPU operations are RustFFT and rank-2
+/// Cholesky; this context does not turn other CPU operations into automatic
+/// fallbacks. Clone [`Self::cpu_backend`] or [`Self::metal_backend`] to obtain
+/// the mutable handle required by an explicitly selected operation.
 ///
 /// # Examples
 ///

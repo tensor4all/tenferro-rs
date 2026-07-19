@@ -5,8 +5,8 @@ crate imported directly alongside `tenferro-runtime` or `tenferro-tensor`.
 Concrete non-AD execution uses `TensorFftExt` and `TensorReadFftExt`; traced
 graphs use `TracedTensorFftExt`.
 
-The current implementation provides one-dimensional CPU-host transforms backed
-by `rustfft` through tenferro extension operations. The public API is ordinary
+The current implementation provides one-dimensional CPU transforms backed by
+RustFFT and an explicitly selected Apple Metal path backed by CubeK. The public API is ordinary
 Rust extension-trait methods, so most users do not need to work with the
 lower-level extension machinery directly.
 
@@ -48,6 +48,16 @@ Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
 feature. Enable `tenferro-fft`'s `autodiff` feature when registering FFT AD
 rules. `rustfft` is pulled in automatically by `tenferro-fft`, and the first
 local build can take a few minutes on a fresh machine.
+
+For the Apple shared CPU/Metal path, also enable the WebGPU feature on both
+operation and backend crates:
+
+```toml
+[dependencies]
+tenferro-fft = { path = "../crates/tenferro-fft", features = ["webgpu"] }
+tenferro-gpu = { path = "../crates/tenferro-gpu", default-features = false, features = ["webgpu"] }
+tenferro-tensor = { path = "../crates/tenferro-tensor" }
+```
 
 ## Current API
 
@@ -103,6 +113,55 @@ assert_eq!(read_full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 `TypedTensor<T>` wrappers are not part of the current API. FFT operations can
 change dtype (`rfft` real to complex, `irfft` complex to real), so typed return
 contracts need a separate design.
+
+### Apple shared CPU and Metal execution
+
+`AppleContext` makes allocation ownership shared, not backend selection
+implicit. Clone its mutable backend handles and pass the desired backend to
+each FFT call:
+
+```rust
+use tenferro_fft::{FftNorm, TensorFftExt};
+use tenferro_gpu::AppleContext;
+use tenferro_tensor::Tensor;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let context = AppleContext::new()?;
+    let host = Tensor::from_vec_col_major([8], vec![1.0_f32; 8])?;
+    let managed = context.upload_tensor(&host)?;
+    let after_creation = context.transfer_stats();
+
+    let mut cpu = context.cpu_backend().clone();
+    let cpu_spectrum = managed.rfft(None, 0, FftNorm::Backward, &mut cpu)?;
+
+    let mut metal = context.metal_backend().clone();
+    let metal_spectrum = managed.rfft(None, 0, FftNorm::Backward, &mut metal)?;
+    metal.synchronize()?;
+
+    assert_eq!(cpu_spectrum.shape(), metal_spectrum.shape());
+    assert_eq!(context.transfer_stats(), after_creation);
+    Ok(())
+}
+```
+
+RustFFT supports managed `F32`, `F64`, `C32`, and `C64` tensors. The initial
+CubeK Metal implementation supports C32 CFFT/IFFT, F32 one-sided RFFT, and C32
+IRFFT for power-of-two transform lengths of at least 2. RFFT/IRFFT may pad or
+truncate to a supported requested length; CFFT cannot change the input-axis
+length. Full-spectrum real FFT, `F64`/`C64`, non-power-of-two lengths, foreign
+domains, and ordinary device-local WebGPU buffers return typed errors. There
+is no automatic RustFFT fallback.
+
+The complete runnable tutorial additionally proves stable input allocation
+identity across CPU/Metal/CPU use, equal CPU/Metal results, unchanged
+post-creation transfer counters, C64 CPU success, and typed C64 Metal failure:
+
+```bash
+cargo test -p tenferro-tutorial-code --no-default-features \
+  --features cpu-faer,apple-shared --test tutorial_binaries
+```
+
+Source: `docs/tutorial-code/src/bin/apple_shared_fft.rs`.
 
 ### Traced Graphs
 
@@ -197,8 +256,9 @@ gradient.
 ## Status
 
 `tenferro-fft` currently lives in the top-level `tenferro-fft` crate. It
-supports 1D `fft`, `ifft`, `rfft`, and `irfft` on host tensors. CUDA/cuFFT and
-multidimensional transforms remain future work.
+supports 1D `fft`, `ifft`, `rfft`, and `irfft` through CPU RustFFT on host or
+matching Apple managed tensors, plus the narrower CubeK Metal matrix described
+above. CUDA/cuFFT and multidimensional transforms remain future work.
 
 For the general extension mechanism, see
 [Custom Tensor Operations](custom-operations.md).

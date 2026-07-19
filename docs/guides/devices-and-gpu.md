@@ -9,7 +9,8 @@ are explicitly uploaded to the selected provider and the executor/backend uses
 the same provider.
 
 CUDA support targets NVIDIA CUDA. WebGPU support is experimental and currently
-focused on explicit transfer plus limited `dot_general`/einsum coverage.
+focused on explicit transfer, limited `dot_general`/einsum coverage, and an
+Apple shared CPU/Metal path for FFT and CPU Cholesky.
 AMD/ROCm is not a supported execution path yet.
 
 The optional XLA/PJRT path is separate from these tensor backends. It lowers
@@ -22,7 +23,7 @@ plugins at runtime. See [XLA and PJRT](xla.md).
 | --- | --- | --- | --- |
 | CPU | Supported | default CPU provider features | Host execution |
 | CUDA | Supported | `cuda` | NVIDIA CUDA through CubeCL-CUDA plus CUDA libraries |
-| WebGPU | Experimental | `webgpu` | Explicit transfer and limited `dot_general`/einsum coverage |
+| WebGPU | Experimental | `webgpu` | Explicit transfer, limited `dot_general`/einsum, and Apple shared CPU/Metal FFT |
 | ROCm | Not supported for execution | `rocm` reserved | Future compile-only substrate; no runtime quickstart |
 
 ## Transfer Model
@@ -34,7 +35,8 @@ plugins at runtime. See [XLA and PJRT](xla.md).
 | CUDA tensor to CUDA backend | Runs on CUDA for supported op/dtype combinations |
 | WebGPU tensor to WebGPU backend | Runs on WebGPU for supported op/dtype combinations |
 | CUDA tensor to CPU backend | `Result`-returning CPU backend ops fail; download first |
-| WebGPU tensor to CPU backend | `Result`-returning CPU backend ops fail; download first |
+| Ordinary WebGPU tensor to CPU backend | `Result`-returning CPU backend ops fail; download first |
+| Apple managed tensor to its paired CPU backend | Guarded RustFFT and rank-2 Cholesky run without a transfer; other operations are not implied |
 | GPU tensor to host inspection | Direct host slice APIs panic; download first |
 | Unsupported CUDA op or dtype | Error, not silent CPU fallback |
 | Unsupported WebGPU op or dtype | Error, not silent CPU fallback |
@@ -195,6 +197,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 `backend.runtime().synchronize()` barrier; eager code can use
 `EagerRuntime::synchronize()`.
 
+## Apple Shared CPU/Metal Context
+
+On macOS, `AppleContext` owns a host-visible Metal allocation domain and paired
+CPU and WebGPU backend handles. Creation is explicit:
+
+```rust
+use tenferro_gpu::AppleContext;
+use tenferro_tensor::Tensor;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let context = AppleContext::new()?;
+    let host = Tensor::from_vec_col_major([4], vec![1.0_f32, 2.0, 3.0, 4.0])?;
+    let managed = context.upload_tensor(&host)?;
+    let mut cpu = context.cpu_backend().clone();
+    let mut metal = context.metal_backend().clone();
+    let _ = (&managed, &mut cpu, &mut metal);
+    Ok(())
+}
+```
+
+The cloned mutable handles make backend selection visible at each operation.
+The same managed tensor keeps its domain and physical allocation identity when
+it is mapped by CPU code and then launched by Metal code. Each operation result
+is a new allocation in that same domain. `transfer_stats()` changes only for an
+explicit upload or download, not for guarded mapping, CPU writeback, or a Metal
+launch.
+
+Current mapped CPU coverage is intentionally narrow: RustFFT supports
+`F32`/`F64`/`C32`/`C64`, and rank-2 Cholesky supports those four dtypes through
+the selected CPU linalg provider. This does not make arbitrary CPU tensor or
+linalg operations shared-memory fallbacks. CubeK Metal FFT supports F32/C32
+power-of-two CFFT, one-sided RFFT, and IRFFT; unsupported dtypes and sizes
+return typed errors without dispatching to RustFFT.
+
+The runnable tutorials exercise the complete invariants and skip cleanly when
+Metal initialization is unavailable:
+
+```bash
+cargo run -p tenferro-tutorial-code --no-default-features \
+  --features cpu-faer,apple-shared --bin apple_shared_fft
+cargo run -p tenferro-tutorial-code --no-default-features \
+  --features cpu-faer,apple-shared --bin apple_shared_cholesky
+```
+
+See `docs/tutorial-code/src/bin/apple_shared_fft.rs` and
+`docs/tutorial-code/src/bin/apple_shared_cholesky.rs` for allocation-ID,
+transfer-counter, capability-error, and numerical-residual assertions.
+
 ## CUDA Across Tensor Layers
 
 | Tensor model | How CUDA fits |
@@ -289,12 +339,13 @@ rows return explicit errors and do not fall back to CPU.
 | Allocation, upload, download | `F32`, `F64`, `I32`, `I64`, `Bool`, `C32`, `C64` | Explicit CPU/WebGPU transfer only |
 | `dot_general`, `dot_general_with_conj` | `F32`, `C32` | CubeK-backed BGEMM planner; `C32` conjugation is handled by the CubeK complex GEMM API. Supports rank-2, batched, and same-device packed operand layouts covered by tests |
 | Binary einsum lowering to `dot_general` | `F32`, `C32` | Eager `F32`/`C32` and traced `F32` paths are covered when inputs are explicitly uploaded to WebGPU |
+| 1D CFFT/IFFT, one-sided RFFT/IRFFT on Apple Metal | `C32` CFFT/IFFT; `F32` RFFT; `C32` IRFFT | CubeK-backed, explicit backend selection, power-of-two length at least 2; see the FFT guide for padding and length constraints |
 | `dot_general` with zero contracting size | No WebGPU implementation | Returns an error until CubeK behavior is validated |
 | `dot_general` for `F64`, `C64` | No WebGPU implementation | Returns an error; no CPU fallback |
 | Elementwise and analytic ops | No WebGPU implementation | Returns an error |
 | Reductions | No WebGPU implementation | Returns an error |
 | Structural/indexing ops beyond transfer-owned allocation metadata | No WebGPU implementation | Returns an error |
-| Linalg | No WebGPU implementation | Returns an error |
+| Linalg | No WebGPU implementation | Returns an error. The paired CPU backend's rank-2 Cholesky mapping is CPU execution over Apple managed storage, not a WebGPU linalg kernel |
 | ROCm | No supported execution backend | No ROCm quickstart is provided |
 
 If cuTENSOR, cuSOLVER, or cuBLAS are installed outside normal dynamic-linker
