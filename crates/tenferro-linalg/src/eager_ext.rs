@@ -164,7 +164,7 @@ pub trait EagerTensorLinalgExt {
     /// # Errors
     ///
     /// Returns `Error::Validation` when `rtol` is negative or non-finite, plus
-    /// the decomposition and output-contract errors reported by [`Self::pinv`].
+    /// the `Error::Extension` and output-contract errors reported by [`Self::pinv`].
     fn pinv_with_rtol(&self, rtol: f64) -> Result<EagerTensor>;
     /// Return a vector, matrix, or tensor norm.
     ///
