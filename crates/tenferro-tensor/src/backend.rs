@@ -12,6 +12,9 @@ use crate::{
 };
 use num_complex::{Complex32, Complex64};
 
+#[cfg(test)]
+mod tests;
+
 fn read_boundary_error(op: &'static str) -> crate::Error {
     crate::Error::unsupported(
         op,
@@ -1168,31 +1171,6 @@ fn flat_to_multi_for_shape(shape: &[usize], mut linear: usize) -> Vec<usize> {
         }
     }
     indices
-}
-
-#[cfg(test)]
-mod accumulation_fast_path_tests {
-    use super::*;
-
-    #[test]
-    fn compact_host_accumulation_slice_selects_only_compact_host_views() {
-        let mut compact_data = [0.0_f64; 4];
-        let mut compact =
-            TypedTensorViewMut::from_slice([2, 2], [1, 2], 0, &mut compact_data).unwrap();
-        assert_eq!(
-            compact_host_accumulation_slice(&mut compact, 4)
-                .unwrap()
-                .unwrap()
-                .len(),
-            4
-        );
-
-        let mut strided_data = [0.0_f64; 3];
-        let mut strided = TypedTensorViewMut::from_slice([2], [2], 0, &mut strided_data).unwrap();
-        assert!(compact_host_accumulation_slice(&mut strided, 2)
-            .unwrap()
-            .is_none());
-    }
 }
 
 /// Canonical elementwise fusion plan shared between segmented execution and backends.

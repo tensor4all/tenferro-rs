@@ -14,6 +14,8 @@ use tenferro_tensor_core::{SliceSpec as CoreSliceSpec, ValidationError};
 mod accessors;
 mod shape_packing;
 mod strided_view;
+#[cfg(test)]
+mod tests;
 
 pub use strided_view::StridedSliceSpec;
 
@@ -23,22 +25,6 @@ fn shape_vec(shape: &[usize]) -> ShapeVec {
 
 fn stride_vec(strides: &[isize]) -> StrideVec {
     strides.iter().copied().collect()
-}
-
-#[cfg(test)]
-mod inline_metadata_tests {
-    use super::*;
-
-    #[test]
-    fn inline_metadata_collection_keeps_small_shapes_and_strides_inline() {
-        let shape = shape_vec(&[2, 3]);
-        let strides = stride_vec(&[1, 2]);
-
-        assert_eq!(shape.as_slice(), &[2, 3]);
-        assert_eq!(strides.as_slice(), &[1, 2]);
-        assert!(!shape.spilled());
-        assert!(!strides.spilled());
-    }
 }
 
 /// Memory location for tensor storage.
