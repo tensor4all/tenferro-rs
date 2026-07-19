@@ -2,6 +2,8 @@ use num_complex::{Complex, Complex32, Complex64};
 use num_traits::{One, Zero};
 use std::any::Any;
 use std::fmt::Debug;
+use std::ops::Deref;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::config::SliceConfig;
@@ -132,6 +134,314 @@ pub struct BufferHandle<T> {
     _phantom: std::marker::PhantomData<T>,
 }
 
+/// Identity of a backend-owned allocation domain.
+///
+/// Domains let cooperating backends accept shared allocations without treating
+/// another context's physically similar buffer as compatible.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::AllocationDomainId;
+///
+/// assert_ne!(AllocationDomainId::fresh(), AllocationDomainId::fresh());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AllocationDomainId(u64);
+
+impl AllocationDomainId {
+    /// Create a process-unique allocation-domain identity.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::AllocationDomainId;
+    ///
+    /// let domain = AllocationDomainId::fresh();
+    /// assert_eq!(domain, domain);
+    /// ```
+    pub fn fresh() -> Self {
+        static NEXT_DOMAIN_ID: AtomicU64 = AtomicU64::new(1);
+        Self(NEXT_DOMAIN_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+/// Stable physical identity of one backend allocation.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::AllocationId;
+///
+/// assert_eq!(AllocationId::from_backend_id(7), AllocationId::from_backend_id(7));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AllocationId(u64);
+
+impl AllocationId {
+    /// Wrap an allocation identity supplied by the owning backend.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::AllocationId;
+    ///
+    /// let id = AllocationId::from_backend_id(3);
+    /// assert_eq!(id, AllocationId::from_backend_id(3));
+    /// ```
+    pub const fn from_backend_id(id: u64) -> Self {
+        Self(id)
+    }
+}
+
+/// Typed failure returned by guarded backend host access.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::HostAccessError;
+///
+/// let error = HostAccessError::Unsupported { backend: "opaque" };
+/// assert!(error.to_string().contains("opaque"));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum HostAccessError {
+    /// The backend does not expose guarded host access for this allocation.
+    #[error("backend `{backend}` does not support guarded host access")]
+    Unsupported { backend: &'static str },
+    /// The allocation belongs to another shared-allocation domain.
+    #[error("allocation belongs to domain {actual:?}, expected {expected:?}")]
+    ForeignDomain {
+        expected: AllocationDomainId,
+        actual: AllocationDomainId,
+    },
+    /// Another host mapping overlaps this allocation.
+    #[error("the allocation already has an active host mapping")]
+    OverlappingHostMapping,
+    /// GPU work currently owns or has reserved the allocation.
+    #[error("GPU access is in progress for the allocation")]
+    GpuAccessInProgress,
+    /// Host mapping is active while GPU access was requested.
+    #[error("the allocation is mapped for host access")]
+    MappedForHost,
+    /// The backend failed to complete the map operation.
+    #[error("backend host mapping failed: {message}")]
+    BackendFailure { message: String },
+    /// The source did not cover the full write-only mapping.
+    #[error("host write length mismatch: expected {expected}, got {actual}")]
+    LengthMismatch { expected: usize, actual: usize },
+}
+
+trait ReadGuardAccess<T> {
+    fn as_slice(&self) -> &[T];
+}
+
+impl<T, G> ReadGuardAccess<T> for G
+where
+    G: Deref,
+    G::Target: AsRef<[T]>,
+{
+    fn as_slice(&self) -> &[T] {
+        self.deref().as_ref()
+    }
+}
+
+/// Closure-scoped read mapping of a backend allocation.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::HostReadGuard;
+///
+/// let guard = HostReadGuard::new(vec![1_u32, 2]);
+/// assert_eq!(&*guard, &[1, 2]);
+/// ```
+pub struct HostReadGuard<'a, T> {
+    access: Box<dyn ReadGuardAccess<T> + 'a>,
+}
+
+impl<T> Debug for HostReadGuard<'_, T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HostReadGuard")
+            .field("len", &self.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, T> HostReadGuard<'a, T> {
+    /// Wrap a backend-native read guard without exposing its concrete type.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::HostReadGuard;
+    ///
+    /// let guard = HostReadGuard::new(vec![3_i32]);
+    /// assert_eq!(guard[0], 3);
+    /// ```
+    pub fn new<G>(guard: G) -> Self
+    where
+        G: Deref + 'a,
+        G::Target: AsRef<[T]>,
+        T: 'a,
+    {
+        Self {
+            access: Box::new(guard),
+        }
+    }
+}
+
+impl<T> Deref for HostReadGuard<'_, T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        self.access.as_slice()
+    }
+}
+
+/// Backend-neutral owner of one shared tensor allocation domain.
+///
+/// CPU operation crates use this object-safe boundary to allocate results in
+/// the same managed domain without depending on a GPU provider crate.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use tenferro_tensor::SharedTensorAllocationDomain;
+///
+/// let _domain: Option<Arc<dyn SharedTensorAllocationDomain>> = None;
+/// ```
+pub trait SharedTensorAllocationDomain: Debug + Send + Sync + 'static {
+    /// Return the stable identity shared by every allocation from this owner.
+    fn id(&self) -> AllocationDomainId;
+
+    /// Allocate an uninitialized compact column-major tensor in this domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation, unsupported-dtype, or backend allocation error.
+    fn allocate(&self, dtype: DType, shape: &[usize]) -> crate::Result<Tensor>;
+}
+
+type HostWriteCopy<'a, T> = dyn FnMut(&[T]) -> Result<(), HostAccessError> + 'a;
+
+/// Closure-scoped write-only mapping of a backend allocation.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_tensor::{HostAccessError, HostWriteGuard};
+///
+/// let mut written = Vec::new();
+/// {
+///     let mut guard = HostWriteGuard::new(2, |source: &[u32]| {
+///         written.extend_from_slice(source);
+///         Ok::<(), HostAccessError>(())
+///     });
+///     guard.copy_from_slice(&[4, 5]).unwrap();
+/// }
+/// assert_eq!(written, [4, 5]);
+/// ```
+pub struct HostWriteGuard<'a, T> {
+    len: usize,
+    copy: Box<HostWriteCopy<'a, T>>,
+}
+
+impl<T> Debug for HostWriteGuard<'_, T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HostWriteGuard")
+            .field("len", &self.len)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, T> HostWriteGuard<'a, T> {
+    /// Wrap a backend-native write guard without exposing its concrete type.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{HostAccessError, HostWriteGuard};
+    ///
+    /// let guard = HostWriteGuard::new(0, |_source: &[f32]| Ok::<(), HostAccessError>(()));
+    /// assert!(guard.is_empty());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Construction is infallible. A callback failure such as
+    /// [`HostAccessError::BackendFailure`] is returned later by
+    /// [`Self::copy_from_slice`].
+    pub fn new<F>(len: usize, copy: F) -> Self
+    where
+        F: FnMut(&[T]) -> Result<(), HostAccessError> + 'a,
+        T: 'a,
+    {
+        Self {
+            len,
+            copy: Box::new(copy),
+        }
+    }
+
+    /// Number of elements covered by this write-only mapping.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{HostAccessError, HostWriteGuard};
+    ///
+    /// let guard = HostWriteGuard::new(2, |_source: &[f32]| Ok::<(), HostAccessError>(()));
+    /// assert_eq!(guard.len(), 2);
+    /// ```
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns `true` when this mapping covers no elements.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{HostAccessError, HostWriteGuard};
+    ///
+    /// let guard = HostWriteGuard::new(0, |_source: &[f32]| Ok::<(), HostAccessError>(()));
+    /// assert!(guard.is_empty());
+    /// ```
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Replace the full mapped allocation contents.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{HostAccessError, HostWriteGuard};
+    ///
+    /// let mut guard = HostWriteGuard::new(1, |_source: &[f32]| Ok::<(), HostAccessError>(()));
+    /// guard.copy_from_slice(&[1.0]).unwrap();
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HostAccessError::LengthMismatch`] when `source` does not cover
+    /// the complete mapping, or the typed backend error returned by the owning
+    /// write guard.
+    pub fn copy_from_slice(&mut self, source: &[T]) -> Result<(), HostAccessError> {
+        if source.len() != self.len {
+            return Err(HostAccessError::LengthMismatch {
+                expected: self.len,
+                actual: source.len(),
+            });
+        }
+        (self.copy)(source)
+    }
+}
+
 impl<T> Debug for BufferHandle<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BufferHandle")
@@ -200,6 +510,40 @@ pub trait BackendBuffer<T>: Debug + Send + Sync + 'static {
     /// Returns `true` when the backend allocation is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Return the shared-allocation domain, when this buffer belongs to one.
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        None
+    }
+
+    /// Return the stable physical allocation identity, when available.
+    fn allocation_id(&self) -> Option<AllocationId> {
+        None
+    }
+
+    /// Map the allocation for closure-scoped host reads.
+    ///
+    /// # Errors
+    ///
+    /// The default returns [`HostAccessError::Unsupported`]. Host-visible
+    /// backends return typed overlap, pending-GPU, or backend mapping failures.
+    fn map_read(&self) -> Result<HostReadGuard<'_, T>, HostAccessError> {
+        Err(HostAccessError::Unsupported {
+            backend: self.backend_family(),
+        })
+    }
+
+    /// Map the allocation for closure-scoped host writes.
+    ///
+    /// # Errors
+    ///
+    /// The default returns [`HostAccessError::Unsupported`]. Host-visible
+    /// backends return typed overlap, pending-GPU, or backend mapping failures.
+    fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
+        Err(HostAccessError::Unsupported {
+            backend: self.backend_family(),
+        })
     }
 
     /// Type-erased access for the backend crate that owns the concrete handle.
@@ -4492,6 +4836,48 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     pub fn buffer(&self) -> &Buffer<T> {
         &self.buffer
+    }
+
+    /// Return the shared-allocation domain carried by the backend buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let tensor = TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0])?;
+    /// assert_eq!(tensor.allocation_domain(), None);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn allocation_domain(&self) -> Option<AllocationDomainId>
+    where
+        T: 'static,
+    {
+        match &self.buffer {
+            Buffer::Host(_) => None,
+            Buffer::Backend(buffer) => buffer.allocation_domain(),
+        }
+    }
+
+    /// Return the stable physical backend allocation identity.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::TypedTensor;
+    ///
+    /// let tensor = TypedTensor::<f32>::from_vec_col_major(vec![1], vec![1.0])?;
+    /// assert_eq!(tensor.allocation_id(), None);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn allocation_id(&self) -> Option<AllocationId>
+    where
+        T: 'static,
+    {
+        match &self.buffer {
+            Buffer::Host(_) => None,
+            Buffer::Backend(buffer) => buffer.allocation_id(),
+        }
     }
 
     /// Return placement metadata for this tensor.

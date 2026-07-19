@@ -97,6 +97,35 @@ fn explicit_backend_kind_constructor_records_selection() {
 }
 
 #[test]
+fn cpu_backend_can_be_bound_to_a_shared_allocation_domain() {
+    #[derive(Debug)]
+    struct TestDomain(tenferro_tensor::AllocationDomainId);
+    impl tenferro_tensor::SharedTensorAllocationDomain for TestDomain {
+        fn id(&self) -> tenferro_tensor::AllocationDomainId {
+            self.0
+        }
+
+        fn allocate(
+            &self,
+            _dtype: tenferro_tensor::DType,
+            _shape: &[usize],
+        ) -> tenferro_tensor::Result<tenferro_tensor::Tensor> {
+            Err(tenferro_tensor::Error::unsupported(
+                "test_allocate",
+                "not implemented by test domain",
+            ))
+        }
+    }
+
+    let domain = tenferro_tensor::AllocationDomainId::fresh();
+    let backend = CpuBackend::new().with_allocation_domain(Arc::new(TestDomain(domain)));
+
+    assert_eq!(backend.allocation_domain(), Some(domain));
+    assert_eq!(backend.clone().allocation_domain(), Some(domain));
+    assert_eq!(backend.shared_allocation_domain().unwrap().id(), domain);
+}
+
+#[test]
 #[cfg(all(feature = "cpu-faer", any(target_os = "linux", target_os = "android")))]
 fn placement_handle_clones_share_coordinator_engine_and_resources() {
     let backend = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();

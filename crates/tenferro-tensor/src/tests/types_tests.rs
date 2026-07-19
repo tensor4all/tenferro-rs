@@ -3,8 +3,9 @@ use std::{error::Error as _, sync::Arc};
 use num_complex::{Complex32, Complex64};
 
 use crate::types::{
-    col_major_strides, flat_to_multi, Buffer, BufferHandle, DType, DeviceId, DeviceKind,
-    GpuBackendKind, MemoryKind, Placement, Rank, StridedSliceSpec, Tensor, TensorBufferRef,
+    col_major_strides, flat_to_multi, AllocationDomainId, AllocationId, BackendBuffer, Buffer,
+    BufferHandle, DType, DeviceId, DeviceKind, GpuBackendKind, HostAccessError, HostReadGuard,
+    HostWriteGuard, MemoryKind, Placement, Rank, StridedSliceSpec, Tensor, TensorBufferRef,
     TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank, TensorRead, TensorScalar,
     TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView,
     TypedTensorViewMut, TypedTensorWrite,
@@ -14,6 +15,80 @@ use crate::{
 };
 
 mod strided_dynamic;
+
+#[derive(Debug)]
+struct HostAccessibleBuffer {
+    data: std::sync::Mutex<Vec<f32>>,
+    domain: AllocationDomainId,
+    allocation: AllocationId,
+}
+
+impl BackendBuffer<f32> for HostAccessibleBuffer {
+    fn backend_family(&self) -> &'static str {
+        "test-host-access"
+    }
+
+    fn len(&self) -> usize {
+        self.data.lock().unwrap().len()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        Some(self.domain)
+    }
+
+    fn allocation_id(&self) -> Option<AllocationId> {
+        Some(self.allocation)
+    }
+
+    fn map_read(&self) -> Result<HostReadGuard<'_, f32>, HostAccessError> {
+        Ok(HostReadGuard::new(self.data.lock().unwrap()))
+    }
+
+    fn map_write(&self) -> Result<HostWriteGuard<'_, f32>, HostAccessError> {
+        let mut guard = self.data.lock().unwrap();
+        let len = guard.len();
+        Ok(HostWriteGuard::new(len, move |source| {
+            guard.copy_from_slice(source);
+            Ok(())
+        }))
+    }
+}
+
+#[test]
+fn backend_host_access_guards_preserve_domain_identity_and_writeback() {
+    let domain = AllocationDomainId::fresh();
+    let allocation = AllocationId::from_backend_id(17);
+    let buffer = HostAccessibleBuffer {
+        data: std::sync::Mutex::new(vec![1.0, 2.0]),
+        domain,
+        allocation,
+    };
+
+    assert_eq!(buffer.allocation_domain(), Some(domain));
+    assert_eq!(buffer.allocation_id(), Some(allocation));
+    assert_eq!(&*buffer.map_read().unwrap(), &[1.0, 2.0]);
+    {
+        let mut mapped = buffer.map_write().unwrap();
+        mapped.copy_from_slice(&[1.0, 4.0]).unwrap();
+    }
+    assert_eq!(&*buffer.map_read().unwrap(), &[1.0, 4.0]);
+}
+
+#[test]
+fn opaque_backend_buffers_reject_host_mapping_with_a_typed_error() {
+    let buffer = BufferHandle::<f32>::new_with_len(1, 2);
+
+    assert_eq!(buffer.allocation_domain(), None);
+    assert_eq!(buffer.allocation_id(), None);
+    assert!(matches!(
+        buffer.map_read(),
+        Err(HostAccessError::Unsupported { backend: "opaque" })
+    ));
+}
 
 #[test]
 fn placement_default_is_the_canonical_host_placement() {
