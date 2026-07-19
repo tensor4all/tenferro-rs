@@ -440,7 +440,7 @@ fn dot_general_f32(
         output_binding,
         &mut dtypes,
     )
-    .map_err(|err| Error::backend_failure(DOT_GENERAL_OP, err.to_string()))?;
+    .map_err(|err| Error::backend_source(DOT_GENERAL_OP, err))?;
 
     Ok(output)
 }
@@ -496,7 +496,7 @@ fn dot_general_c32(
         &mut dtypes,
         ComplexMatmulOptions { lhs_conj, rhs_conj },
     )
-    .map_err(|err| Error::backend_failure(DOT_GENERAL_OP, err.to_string()))?;
+    .map_err(|err| Error::backend_source(DOT_GENERAL_OP, err))?;
 
     Ok(output)
 }
