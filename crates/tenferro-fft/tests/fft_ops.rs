@@ -173,7 +173,7 @@ fn registered_runtime_reports_gpu_input_as_unsupported() {
 
 #[test]
 fn fft_cpu_output_buffers_avoid_zero_fill_but_keep_lane_padding() {
-    let source = include_str!("../src/lib.rs");
+    let source = include_str!("../src/cpu.rs");
 
     assert!(
         !source.contains("let mut output = vec![Complex::zero(); out_shape.iter().product()]"),
@@ -193,13 +193,14 @@ fn fft_cpu_output_buffers_avoid_zero_fill_but_keep_lane_padding() {
 
 #[test]
 fn fft_cpu_execution_reuses_cached_rustfft_plans() {
-    let source = include_str!("../src/lib.rs");
+    let source = include_str!("../src/cpu.rs");
+    let cache_source = include_str!("../src/cache.rs");
     let c2c = source_section(source, "fn execute_c2c<T>(", "fn execute_r2c<T>(");
     let r2c = source_section(source, "fn execute_r2c<T>(", "fn execute_c2r<T>(");
     let c2r = source_section(source, "fn execute_c2r<T>(", "fn scale_for<T>(");
 
     assert!(
-        source.contains("trait FftPlanProvider"),
+        cache_source.contains("trait FftPlanProvider"),
         "FFT CPU execution should obtain plans from an explicit owner"
     );
     for (name, section) in [
@@ -216,7 +217,7 @@ fn fft_cpu_execution_reuses_cached_rustfft_plans() {
 
 #[test]
 fn fft_cpu_execution_uses_explicit_plan_provider() {
-    let source = include_str!("../src/lib.rs");
+    let source = include_str!("../src/cpu.rs");
     let c2c = source_section(source, "fn execute_c2c<T>(", "fn execute_r2c<T>(");
     let r2c = source_section(source, "fn execute_r2c<T>(", "fn execute_c2r<T>(");
     let c2r = source_section(source, "fn execute_c2r<T>(", "fn scale_for<T>(");
@@ -247,11 +248,17 @@ fn fft_cpu_execution_uses_explicit_plan_provider() {
 
 #[test]
 fn fft_source_has_no_process_global_plan_cache() {
-    let source = include_str!("../src/lib.rs");
+    let sources = [
+        include_str!("../src/lib.rs"),
+        include_str!("../src/cache.rs"),
+        include_str!("../src/cpu.rs"),
+    ];
 
-    assert!(!source.contains("static F32_FFT_PLAN_CACHE"));
-    assert!(!source.contains("static F64_FFT_PLAN_CACHE"));
-    assert!(!source.contains("OnceLock<Mutex"));
+    for source in sources {
+        assert!(!source.contains("static F32_FFT_PLAN_CACHE"));
+        assert!(!source.contains("static F64_FFT_PLAN_CACHE"));
+        assert!(!source.contains("OnceLock<Mutex"));
+    }
 }
 
 #[test]
@@ -274,6 +281,7 @@ fn graph_runtime_owns_fft_plan_cache() {
         .register_extension(tenferro_fft::register_runtime)
         .unwrap();
 
+    executor.run(&program).unwrap();
     executor.run(&program).unwrap();
     let stats = executor
         .extension_executor()

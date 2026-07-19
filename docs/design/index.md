@@ -18,6 +18,7 @@ migration notes live under [Plans](../plans/), not this active design index.
 | [output-modes.md](./output-modes.md) | Output-update vocabulary for `_read`, `_into`, `_add_to`, and dot `_into_accum` surfaces |
 | [algebra.md](./algebra.md) | Algebra boundary, external numeric extensions, tropical paths |
 | [einsum.md](./einsum.md) | Einsum public API, N-ary contraction tree, algebra dispatch |
+| [fft-backend-execution.md](./fft-backend-execution.md) | FFT backend capability, validated plan descriptors, no-fallback placement semantics, and backend-neutral cache ownership |
 | [contraction-pipeline.md](./contraction-pipeline.md) | Binary contraction pipeline, copy elision |
 | [dot-general-overhead.md](./dot-general-overhead.md) | Fixed-cost analysis for many small `dot_general` contractions |
 | [dynamic-symbolic-shapes.md](./dynamic-symbolic-shapes.md) | Dynamic and symbolic shape architecture. Covers `DynamicTruncate`, `transpose_scatter`, symbolic `slice_sizes`, the `Exact`/`UpperBound`/`Unknown` extent model, and extension equalities from graph-owned scopes through compiled guards. This is the key design doc for understanding how tenferro differs from XLA-style shape-specialized compilation. |
