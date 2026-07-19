@@ -128,6 +128,10 @@ pub(crate) fn eager_op_profile_enabled() -> bool {
     *ENABLED.get_or_init(|| env::var("TENFERRO_PROFILE_EAGER_OP_AGG").is_ok())
 }
 
+pub(crate) fn eager_op_profile_start() -> Option<Instant> {
+    eager_op_profile_enabled().then(Instant::now)
+}
+
 pub(crate) fn record_eager_op_profile(section: &'static str, elapsed: Duration) {
     if !eager_op_profile_enabled() {
         return;
