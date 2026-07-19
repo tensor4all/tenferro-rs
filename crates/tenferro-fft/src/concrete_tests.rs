@@ -221,3 +221,28 @@ fn caller_owned_fft_executor_reuses_plans() {
     executor.clear_cache();
     assert_eq!(executor.cache_stats().entries, 0);
 }
+
+#[test]
+fn configured_fft_executor_validates_each_public_operation_before_dispatch() {
+    let mut executor = FftExecutor::new(FftPlanCache::default());
+    let mut backend = CpuBackend::new();
+    let real = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let complex = Tensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    )
+    .unwrap();
+
+    assert!(executor
+        .fft(&real, Some(0), -1, FftNorm::Backward, &mut backend)
+        .is_err());
+    assert!(executor
+        .ifft(&real, None, -1, FftNorm::Backward, &mut backend)
+        .is_err());
+    assert!(executor
+        .rfft(&complex, None, -1, FftNorm::Backward, &mut backend)
+        .is_err());
+    assert!(executor
+        .irfft(&complex, Some(0), -1, FftNorm::Backward, &mut backend)
+        .is_err());
+}
