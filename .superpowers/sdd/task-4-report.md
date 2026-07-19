@@ -42,9 +42,9 @@ eager, and traced execution.
 ## Verification
 
 - `cargo test -p tenferro-linalg`
-- `cargo test -p tenferro-linalg --test apple_shared --features autodiff,webgpu -- --nocapture`
+- `cargo test -p tenferro-linalg --test integration --features autodiff,webgpu apple_shared -- --nocapture`
 - `cargo test -p tenferro-linalg --no-default-features --features cpu-blas,blas-accelerate cpu::tests::linalg::test_complex_cholesky -- --nocapture`
-- `cargo test -p tenferro-linalg --no-default-features --features cpu-blas,blas-accelerate,autodiff,webgpu --test apple_shared -- --nocapture`
+- `cargo test -p tenferro-linalg --no-default-features --features cpu-blas,blas-accelerate,autodiff,webgpu --test integration apple_shared -- --nocapture`
 - `cargo clippy -p tenferro-linalg --all-targets --features autodiff,webgpu -- -D warnings`
 - `cargo clippy -p tenferro-linalg --all-targets --no-default-features --features cpu-blas,blas-accelerate,autodiff,webgpu -- -D warnings`
 - `cargo fmt --all -- --check`

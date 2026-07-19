@@ -108,8 +108,3 @@ required-features = ["autodiff"]
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
-
-[[test]]
-name = "apple_shared"
-path = "tests/apple_shared.rs"
-required-features = ["autodiff", "webgpu"]
