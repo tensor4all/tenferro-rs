@@ -33,10 +33,18 @@ tenferro-fft = { path = "../crates/tenferro-fft", features = ["autodiff"] }
 ```
 
 The Apple shared path is not released yet. Until a later release task publishes
-it, clone `tensor4all/tenferro-rs` at a commit containing `AppleContext` and use
-the checkout-relative path dependencies below. The tenferro workspace already
-pins the reviewed CubeCL and CubeK Git revisions; applications do not need to
-declare CubeCL or CubeK directly.
+it, use the tested `8ffcc57b` revision and the checkout-relative path
+dependencies below:
+
+```bash
+git clone https://github.com/tensor4all/tenferro-rs.git
+cd tenferro-rs
+git checkout 8ffcc57b
+```
+
+The tenferro workspace at that revision already pins the reviewed CubeCL and
+CubeK Git revisions; applications do not need to declare CubeCL or CubeK
+directly.
 
 Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
 feature. Enable `tenferro-fft`'s `autodiff` feature when registering FFT AD
