@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::config::SliceConfig;
 pub use tenferro_tensor_core::{DynRank, Rank, TensorLayout, TensorRank};
+use tenferro_tensor_core::{ShapeVec, StrideVec};
 use tenferro_tensor_core::{SliceSpec as CoreSliceSpec, ValidationError};
 
 mod accessors;
@@ -15,6 +16,30 @@ mod shape_packing;
 mod strided_view;
 
 pub use strided_view::StridedSliceSpec;
+
+fn shape_vec(shape: &[usize]) -> ShapeVec {
+    shape.iter().copied().collect()
+}
+
+fn stride_vec(strides: &[isize]) -> StrideVec {
+    strides.iter().copied().collect()
+}
+
+#[cfg(test)]
+mod inline_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn inline_metadata_collection_keeps_small_shapes_and_strides_inline() {
+        let shape = shape_vec(&[2, 3]);
+        let strides = stride_vec(&[1, 2]);
+
+        assert_eq!(shape.as_slice(), &[2, 3]);
+        assert_eq!(strides.as_slice(), &[1, 2]);
+        assert!(!shape.spilled());
+        assert!(!strides.spilled());
+    }
+}
 
 /// Memory location for tensor storage.
 ///
@@ -819,11 +844,11 @@ impl<'a, T: 'static> TypedTensorView<'a, T, DynRank> {
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// requested shape reaches beyond `data`.
     pub fn from_col_major(shape: &[usize], data: &'a [T]) -> crate::Result<Self> {
-        let layout = TensorLayout::<DynRank>::compact(shape.to_vec().into())
+        let layout = TensorLayout::<DynRank>::compact(shape_vec(shape))
             .map_err(|err| tensor_layout_error("TypedTensorView::from_col_major", err))?;
         Self::from_buffer_ref(
-            layout.shape().to_vec(),
-            layout.strides().to_vec(),
+            shape_vec(layout.shape()),
+            stride_vec(layout.strides()),
             layout.offset(),
             TensorBufferRef::Host(data),
             default_placement(),
@@ -1448,11 +1473,11 @@ impl<'a, T: 'static> TypedTensorViewMut<'a, T, DynRank> {
     /// [`tenferro_tensor_core::ValidationError::ViewOutOfBounds`] when the
     /// compact shape reaches beyond `data`.
     pub fn from_col_major(shape: &[usize], data: &'a mut [T]) -> crate::Result<Self> {
-        let layout = TensorLayout::<DynRank>::compact(shape.to_vec().into())
+        let layout = TensorLayout::<DynRank>::compact(shape_vec(shape))
             .map_err(|err| tensor_layout_error("TypedTensorViewMut::from_col_major", err))?;
         Self::from_buffer_ref_mut(
-            layout.shape().to_vec(),
-            layout.strides().to_vec(),
+            shape_vec(layout.shape()),
+            stride_vec(layout.strides()),
             layout.offset(),
             TensorBufferRefMut::Host(data),
             default_placement(),
@@ -4328,9 +4353,9 @@ fn view_mut_from_layout_and_slice<'a, T: 'static, R: TensorRank>(
     data: &'a mut [T],
     placement: Placement,
 ) -> crate::Result<TypedTensorViewMut<'a, T, R>> {
-    let shape = R::shape_from_vec(layout.shape().to_vec().into())
+    let shape = R::shape_from_vec(shape_vec(layout.shape()))
         .map_err(|err| tensor_layout_error("TypedTensorViewMut::try_multi_slice_mut", err))?;
-    let strides = R::strides_from_vec(layout.strides().to_vec().into())
+    let strides = R::strides_from_vec(stride_vec(layout.strides()))
         .map_err(|err| tensor_layout_error("TypedTensorViewMut::try_multi_slice_mut", err))?;
     TypedTensorViewMut::from_buffer_ref_mut(
         shape,
@@ -4399,7 +4424,7 @@ fn reshape_layout_dyn<R: TensorRank>(
     buffer_len: usize,
     op: &'static str,
 ) -> crate::Result<TensorLayout<DynRank>> {
-    match layout.reshape_view_as::<DynRank>(shape.to_vec(), buffer_len) {
+    match layout.reshape_view_as::<DynRank>(shape_vec(shape), buffer_len) {
         Ok(layout) => Ok(layout),
         Err(err) => {
             if !relaxed_col_major_contiguous(layout.shape(), layout.strides(), op)? {
@@ -4413,11 +4438,11 @@ fn reshape_layout_dyn<R: TensorRank>(
                     tenferro_tensor_core::ShapeMismatch::ReshapeElementCount { from, to }.into(),
                 ));
             }
-            TensorLayout::<DynRank>::compact(shape.to_vec().into())
+            TensorLayout::<DynRank>::compact(shape_vec(shape))
                 .and_then(|compact| {
                     TensorLayout::from_parts(
-                        compact.shape().to_vec().into(),
-                        compact.strides().to_vec().into(),
+                        shape_vec(compact.shape()),
+                        stride_vec(compact.strides()),
                         layout.offset(),
                         buffer_len,
                     )
@@ -4745,8 +4770,16 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// preserved buffer cannot hold the rank-converted layout.
     pub fn try_into_rank<const N: usize>(self) -> crate::Result<TypedTensor<T, Rank<N>>> {
         let op = "TypedTensor::try_into_rank";
-        let shape = <Rank<N> as TensorRank>::shape_from_vec(self.shape().to_vec().into())
-            .map_err(|err| tensor_layout_error(op, err))?;
+        let actual = self.shape().len();
+        let shape: [usize; N] = self.shape().try_into().map_err(|_| {
+            tensor_layout_error(
+                op,
+                ValidationError::RankMismatch {
+                    expected: N,
+                    actual,
+                },
+            )
+        })?;
         let layout =
             TensorLayout::<Rank<N>>::compact(shape).map_err(|err| tensor_layout_error(op, err))?;
         Ok(TypedTensor {
