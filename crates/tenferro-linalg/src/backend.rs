@@ -49,6 +49,58 @@ pub trait LinalgBackend: TensorBackend {
         unit_diagonal: bool,
     ) -> tenferro_tensor::Result<Tensor>;
 
+    // INVARIANT: the six flags are the public triangular-solve contract and mirror the owned hook.
+    #[allow(clippy::too_many_arguments)]
+    /// Solve a triangular linear system from tensor read targets.
+    ///
+    /// Backends may canonicalize the inputs inside the same placement family,
+    /// but must not silently transfer between CPU and GPU memory.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::LinalgBackend;
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 1.0, 3.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0])?;
+    /// let mut backend = CpuBackend::new();
+    /// let x = backend.triangular_solve_read(
+    ///     TensorRead::from_tensor(&a),
+    ///     TensorRead::from_tensor(&b),
+    ///     true,
+    ///     false,
+    ///     false,
+    ///     false,
+    /// )?;
+    /// let Tensor::F64(x) = x else { unreachable!("F64 inputs return F64 output") };
+    /// assert_eq!(x.host_data()?, &[0.5, 3.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported` because the
+    /// backend does not accept tensor read targets. Implementations may return
+    /// `Error::Validation` for incompatible shapes or dtypes,
+    /// `Error::RuntimeState` for invalid placement, `Error::Extension` for a
+    /// singular system, or a typed backend-source error.
+    fn triangular_solve_read(
+        &mut self,
+        _a: TensorRead<'_>,
+        _b: TensorRead<'_>,
+        _left_side: bool,
+        _lower: bool,
+        _transpose_a: bool,
+        _unit_diagonal: bool,
+    ) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "triangular_solve",
+            "backend does not accept tensor reads at this execution boundary",
+        ))
+    }
+
     /// Compute public LU outputs `(P, L, U, parity)`.
     ///
     /// # Errors
@@ -570,6 +622,48 @@ pub trait LinalgBackend: TensorBackend {
     /// or dtype; `Error::Extension` with `ErrorKind::NumericalFailure` for a
     /// singular system; or a typed backend source for provider failure.
     fn solve(&mut self, a: &Tensor, b: &Tensor) -> tenferro_tensor::Result<Tensor>;
+
+    /// Solve a linear system from tensor read targets.
+    ///
+    /// Backends may canonicalize the inputs inside the same placement family,
+    /// but must not silently transfer between CPU and GPU memory.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_linalg::LinalgBackend;
+    /// use tenferro_tensor::{Tensor, TensorRead};
+    ///
+    /// let a = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 3.0])?;
+    /// let b = Tensor::from_vec_col_major(vec![2, 1], vec![4.0_f64, 9.0])?;
+    /// let mut backend = CpuBackend::new();
+    /// let x = backend.solve_read(
+    ///     TensorRead::from_tensor(&a),
+    ///     TensorRead::from_tensor(&b),
+    /// )?;
+    /// let Tensor::F64(x) = x else { unreachable!("F64 inputs return F64 output") };
+    /// assert_eq!(x.host_data()?, &[2.0, 3.0]);
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported` because the
+    /// backend does not accept tensor read targets. Implementations may return
+    /// `Error::Validation` for incompatible shapes or dtypes,
+    /// `Error::RuntimeState` for invalid placement, `Error::Extension` for a
+    /// singular system, or a typed backend-source error.
+    fn solve_read(
+        &mut self,
+        _a: TensorRead<'_>,
+        _b: TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        Err(tenferro_tensor::Error::unsupported(
+            "solve",
+            "backend does not accept tensor reads at this execution boundary",
+        ))
+    }
 
     #[doc(hidden)]
     fn lu_solve_prepared(

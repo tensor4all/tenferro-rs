@@ -16,7 +16,7 @@ use tenferro_tensor::backend::TensorBackend;
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
-use tenferro_tensor::types::{DType, Tensor, TensorRead, TensorView, TypedTensor};
+use tenferro_tensor::types::{DType, Tensor, TensorRead, TensorView, TypedTensor, TypedTensorView};
 
 fn get_f64(t: &Tensor, idx: &[usize]) -> f64 {
     match t {

@@ -181,6 +181,23 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
+    fn triangular_solve_read(
+        &mut self,
+        a: TensorRead<'_>,
+        b: TensorRead<'_>,
+        left_side: bool,
+        lower: bool,
+        transpose_a: bool,
+        unit_diagonal: bool,
+    ) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor_read("triangular_solve", &a)?;
+        ensure_host_tensor_read("triangular_solve", &b)?;
+        ensure_supported_linalg_dtypes("triangular_solve", a.dtype(), b.dtype())?;
+        let a = canonicalize_tensor_read(self, a)?;
+        let b = canonicalize_tensor_read(self, b)?;
+        self.triangular_solve(&a, &b, left_side, lower, transpose_a, unit_diagonal)
+    }
+
     fn lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("lu", input)?;
         match linalg_provider_kind(self.kind(), "lu")? {
@@ -1276,6 +1293,19 @@ impl LinalgBackend for CpuBackend {
             Ok(result)
         }
     }
+
+    fn solve_read(
+        &mut self,
+        a: TensorRead<'_>,
+        b: TensorRead<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        ensure_host_tensor_read("solve", &a)?;
+        ensure_host_tensor_read("solve", &b)?;
+        ensure_supported_linalg_dtypes("solve", a.dtype(), b.dtype())?;
+        let a = canonicalize_tensor_read(self, a)?;
+        let b = canonicalize_tensor_read(self, b)?;
+        self.solve(&a, &b)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1306,6 +1336,58 @@ fn ensure_host_tensor(op: &'static str, input: &Tensor) -> tenferro_tensor::Resu
     }
 }
 
+fn ensure_host_tensor_read(
+    op: &'static str,
+    input: &TensorRead<'_>,
+) -> tenferro_tensor::Result<()> {
+    match input {
+        TensorRead::Tensor(tensor) => ensure_host_tensor(op, tensor),
+        TensorRead::View(view) => ensure_host_tensor_view(op, view),
+    }
+}
+
+fn ensure_host_tensor_view(
+    op: &'static str,
+    input: &TensorView<'_>,
+) -> tenferro_tensor::Result<()> {
+    let is_backend_buffer = match input {
+        TensorView::F32(view) => view.backend_buffer().is_some(),
+        TensorView::F64(view) => view.backend_buffer().is_some(),
+        TensorView::I32(view) => view.backend_buffer().is_some(),
+        TensorView::I64(view) => view.backend_buffer().is_some(),
+        TensorView::Bool(view) => view.backend_buffer().is_some(),
+        TensorView::C32(view) => view.backend_buffer().is_some(),
+        TensorView::C64(view) => view.backend_buffer().is_some(),
+    };
+    if is_backend_buffer {
+        return Err(Error::runtime_state(
+            op,
+            "CPU linalg backend received a backend buffer; download the tensor to host before CPU execution",
+        ));
+    }
+    Ok(())
+}
+
+fn canonicalize_tensor_read<'a>(
+    backend: &mut CpuBackend,
+    input: TensorRead<'a>,
+) -> tenferro_tensor::Result<std::borrow::Cow<'a, Tensor>> {
+    let input = match input {
+        TensorRead::Tensor(tensor) => return Ok(std::borrow::Cow::Borrowed(tensor)),
+        TensorRead::View(view) => view,
+    };
+    let tensor = match input {
+        TensorView::F32(view) => backend.to_contiguous(&view).map(Tensor::F32),
+        TensorView::F64(view) => backend.to_contiguous(&view).map(Tensor::F64),
+        TensorView::I32(view) => backend.to_contiguous(&view).map(Tensor::I32),
+        TensorView::I64(view) => backend.to_contiguous(&view).map(Tensor::I64),
+        TensorView::Bool(view) => backend.to_contiguous(&view).map(Tensor::Bool),
+        TensorView::C32(view) => backend.to_contiguous(&view).map(Tensor::C32),
+        TensorView::C64(view) => backend.to_contiguous(&view).map(Tensor::C64),
+    }?;
+    Ok(std::borrow::Cow::Owned(tensor))
+}
+
 fn ensure_host_typed_tensor<T: 'static>(
     op: &'static str,
     input: &TypedTensor<T>,
@@ -1324,14 +1406,20 @@ fn ensure_supported_linalg_pair(
     lhs: &Tensor,
     rhs: &Tensor,
 ) -> tenferro_tensor::Result<()> {
-    if lhs.dtype() != rhs.dtype() {
-        return Err(Error::dtype_mismatch(op, lhs.dtype(), rhs.dtype()));
+    ensure_supported_linalg_dtypes(op, lhs.dtype(), rhs.dtype())
+}
+
+fn ensure_supported_linalg_dtypes(
+    op: &'static str,
+    lhs: DType,
+    rhs: DType,
+) -> tenferro_tensor::Result<()> {
+    if lhs != rhs {
+        return Err(Error::dtype_mismatch(op, lhs, rhs));
     }
     match lhs {
-        Tensor::F32(_) | Tensor::F64(_) | Tensor::C32(_) | Tensor::C64(_) => Ok(()),
-        Tensor::I32(_) | Tensor::I64(_) | Tensor::Bool(_) => {
-            Err(unsupported_dtype(op, lhs.dtype()))
-        }
+        DType::F32 | DType::F64 | DType::C32 | DType::C64 => Ok(()),
+        DType::I32 | DType::I64 | DType::Bool => Err(unsupported_dtype(op, lhs)),
     }
 }
 

@@ -341,6 +341,40 @@ fn default_svd_read_returns_explicit_backend_boundary_error() {
             ref message,
         } if message.contains("tensor reads")
     ));
+
+    let rhs =
+        Tensor::F64(TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![1.0, 2.0]).unwrap());
+    let err = backend
+        .solve_read(
+            TensorRead::from_tensor(&owned_input),
+            TensorRead::from_tensor(&rhs),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::Unsupported {
+            op: "solve",
+            ref message,
+        } if message.contains("tensor reads")
+    ));
+
+    let err = backend
+        .triangular_solve_read(
+            TensorRead::from_tensor(&owned_input),
+            TensorRead::from_tensor(&rhs),
+            true,
+            true,
+            false,
+            false,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::Unsupported {
+            op: "triangular_solve",
+            ref message,
+        } if message.contains("tensor reads")
+    ));
 }
 
 #[test]
@@ -601,6 +635,30 @@ fn cpu_linalg_rejects_backend_buffers_without_panicking_or_downloading() {
     assert_no_panic_backend_download_error("eigh", || backend.eigh(&a));
     assert_no_panic_backend_download_error("eig", || backend.eig(&a));
     assert_no_panic_backend_download_error("solve", || backend.solve(&a, &b));
+    assert_no_panic_backend_download_error("solve", || {
+        backend.solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+    });
+    assert_no_panic_backend_download_error("triangular_solve", || {
+        backend.triangular_solve_read(
+            TensorRead::from_tensor(&a),
+            TensorRead::from_tensor(&b),
+            true,
+            true,
+            false,
+            false,
+        )
+    });
+
+    let host_c64 = c64_tensor(
+        vec![2, 1],
+        vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)],
+    );
+    assert_no_panic_backend_download_error("solve", || {
+        backend.solve_read(
+            TensorRead::from_tensor(&a),
+            TensorRead::from_tensor(&host_c64),
+        )
+    });
 }
 
 #[test]
@@ -624,6 +682,20 @@ fn solve_rejects_invalid_dtype_pairs_before_zero_dim_fast_path() {
     let i32_b = i32_tensor(vec![0, 1], Vec::new());
 
     let err = backend.solve(&f64_a, &c64_b).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::Validation {
+            op: "solve",
+            source: ValidationError::DTypeMismatch { .. },
+        }
+    ));
+
+    let err = backend
+        .solve_read(
+            TensorRead::from_tensor(&f64_a),
+            TensorRead::from_tensor(&c64_b),
+        )
+        .unwrap_err();
     assert!(matches!(
         err,
         Error::Validation {
@@ -706,6 +778,16 @@ fn solve_rejects_singular_matrix() {
 
     let err = backend.solve(&a, &b).unwrap_err();
 
+    assert_eq!(err.kind(), ErrorKind::NumericalFailure);
+    assert!(matches!(
+        err.source()
+            .and_then(|source| source.downcast_ref::<tenferro_linalg::Error>()),
+        Some(tenferro_linalg::Error::Singular { op: "solve" })
+    ));
+
+    let err = backend
+        .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+        .unwrap_err();
     assert_eq!(err.kind(), ErrorKind::NumericalFailure);
     assert!(matches!(
         err.source()
