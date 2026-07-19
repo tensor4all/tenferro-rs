@@ -114,3 +114,22 @@ fn eager_composite_records_existing_primitives_for_backward() {
         assert!((actual - expected).abs() < 1.0e-12);
     }
 }
+
+#[test]
+fn eager_norm_covers_remaining_orders_permutations_and_errors() {
+    let matrix = eager(vec![1.0, 3.0, 2.0, 4.0], vec![2, 2]);
+    let tensor = eager(vec![1.0, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0], vec![2, 2, 2]);
+
+    for order in [Some(2.0), Some(-2.0), Some(0.0), Some(3.0)] {
+        matrix.norm(order, Some(&[0, 1]), false).unwrap();
+    }
+    tensor.norm(None, Some(&[2, 0]), true).unwrap();
+    tensor.norm(Some(f64::INFINITY), None, false).unwrap();
+    tensor.norm(Some(f64::NEG_INFINITY), None, false).unwrap();
+    tensor.norm(Some(0.0), None, false).unwrap();
+    tensor.norm(Some(3.0), None, false).unwrap();
+
+    assert!(tensor.norm(None, Some(&[0, 0]), false).is_err());
+    assert!(tensor.norm(None, Some(&[3]), false).is_err());
+    assert!(tensor.norm(Some(f64::NAN), None, false).is_err());
+}

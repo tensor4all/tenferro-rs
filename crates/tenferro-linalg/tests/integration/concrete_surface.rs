@@ -1,6 +1,8 @@
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
-use tenferro_linalg::{TensorLinalgExt, TensorReadLinalgExt, TypedTensorLinalgExt};
+use tenferro_linalg::{
+    EighOptions, QrOptions, SvdOptions, TensorLinalgExt, TensorReadLinalgExt, TypedTensorLinalgExt,
+};
 use tenferro_tensor::{Tensor, TensorRead, TensorScalar, TypedTensor};
 
 #[test]
@@ -155,4 +157,119 @@ fn concrete_norm_distinguishes_empty_axes_and_rejects_invalid_axes() {
 
     assert_eq!(identity.as_slice::<f64>().unwrap(), &[3.0, 4.0]);
     assert!(error.to_string().contains("axis 1"));
+}
+
+#[test]
+fn read_surface_covers_factorizations_and_composites() {
+    let a = Tensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 1.0, 1.0, 3.0]).unwrap();
+    let b = Tensor::from_vec_col_major(vec![2], vec![9.0_f64, 7.0]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    TensorRead::from_tensor(&a)
+        .svd_with_options_read(SvdOptions::default(), &mut backend)
+        .unwrap();
+    TensorRead::from_tensor(&a)
+        .qr_with_options_read(QrOptions::default(), &mut backend)
+        .unwrap();
+    TensorRead::from_tensor(&a).lu_read(&mut backend).unwrap();
+    TensorRead::from_tensor(&a)
+        .full_piv_lu_read(&mut backend)
+        .unwrap();
+    let x = TensorRead::from_tensor(&a)
+        .full_piv_lu_solve_read(TensorRead::from_tensor(&b), &mut backend)
+        .unwrap();
+    TensorRead::from_tensor(&a)
+        .solve_read(TensorRead::from_tensor(&b), &mut backend)
+        .unwrap();
+    TensorRead::from_tensor(&a)
+        .eigh_with_options_read(EighOptions::default(), &mut backend)
+        .unwrap();
+    TensorRead::from_tensor(&a).eig_read(&mut backend).unwrap();
+    TensorRead::from_tensor(&a)
+        .slogdet_read(&mut backend)
+        .unwrap();
+    TensorRead::from_tensor(&a).det_read(&mut backend).unwrap();
+    TensorRead::from_tensor(&a).inv_read(&mut backend).unwrap();
+    TensorRead::from_tensor(&a)
+        .eigvalsh_read(&mut backend)
+        .unwrap();
+    TensorRead::from_tensor(&a)
+        .eigvals_read(&mut backend)
+        .unwrap();
+    TensorRead::from_tensor(&a).pinv_read(&mut backend).unwrap();
+    TensorRead::from_tensor(&a)
+        .pinv_with_rtol_read(1.0e-12, &mut backend)
+        .unwrap();
+    TensorRead::from_tensor(&a)
+        .norm_read(Some(2.0), Some(&[0, 1]), false, &mut backend)
+        .unwrap();
+
+    let actual = x.as_slice::<f64>().unwrap();
+    assert!((actual[0] - 20.0 / 11.0).abs() < 1.0e-12);
+    assert!((actual[1] - 19.0 / 11.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn typed_surface_covers_all_receiver_adapters() {
+    let a = TypedTensor::<f64>::from_vec_col_major(vec![2, 2], vec![4.0, 1.0, 1.0, 3.0]).unwrap();
+    let b = TypedTensor::<f64>::from_vec_col_major(vec![2, 1], vec![9.0, 7.0]).unwrap();
+    let mut backend = CpuBackend::new();
+
+    a.svd_with_options(SvdOptions::default(), &mut backend)
+        .unwrap();
+    a.qr(&mut backend).unwrap();
+    a.qr_with_options(QrOptions::default(), &mut backend)
+        .unwrap();
+    a.lu(&mut backend).unwrap();
+    a.full_piv_lu(&mut backend).unwrap();
+    a.solve(&b, &mut backend).unwrap();
+    a.cholesky(&mut backend).unwrap();
+    a.eigh(&mut backend).unwrap();
+    a.eigh_with_options(EighOptions::default(), &mut backend)
+        .unwrap();
+    a.det(&mut backend).unwrap();
+    a.inv(&mut backend).unwrap();
+    a.eigvalsh(&mut backend).unwrap();
+    a.eigvals(&mut backend).unwrap();
+    a.pinv(&mut backend).unwrap();
+    a.pinv_with_rtol(1.0e-12, &mut backend).unwrap();
+    let norm = a
+        .norm(Some(f64::INFINITY), Some(&[0, 1]), false, &mut backend)
+        .unwrap();
+
+    assert_eq!(norm.as_slice().unwrap(), &[5.0]);
+}
+
+#[test]
+fn concrete_norm_covers_orders_axis_permutation_and_validation() {
+    let matrix = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
+    let tensor = Tensor::from_vec_col_major(
+        vec![2, 2, 2],
+        vec![1.0_f64, 0.0, 2.0, 0.0, 3.0, 0.0, 4.0, 0.0],
+    )
+    .unwrap();
+    let mut backend = CpuBackend::new();
+
+    for order in [
+        Some(0.0),
+        Some(1.0),
+        Some(-1.0),
+        Some(2.0),
+        Some(-2.0),
+        Some(f64::INFINITY),
+        Some(f64::NEG_INFINITY),
+    ] {
+        matrix
+            .norm(order, Some(&[0, 1]), false, &mut backend)
+            .unwrap();
+    }
+    tensor
+        .norm(None, Some(&[2, 0]), true, &mut backend)
+        .unwrap();
+    tensor.norm(Some(3.0), None, false, &mut backend).unwrap();
+
+    assert!(tensor
+        .norm(None, Some(&[0, 0]), false, &mut backend)
+        .is_err());
+    assert!(tensor.norm(Some(0.0), None, false, &mut backend).is_ok());
 }

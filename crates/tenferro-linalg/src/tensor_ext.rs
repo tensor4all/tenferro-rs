@@ -1537,6 +1537,7 @@ fn count_nonzero<B: LinalgBackend>(
     backend: &mut B,
 ) -> tenferro_tensor::Result<Tensor> {
     let zero = scalar_real(abs.dtype(), 0.0)?;
+    let zero = broadcast(&zero, abs.shape(), &[], backend)?;
     let mask = backend.with_backend_session(|exec| {
         exec.compare_read(
             TensorRead::from_tensor(abs),
