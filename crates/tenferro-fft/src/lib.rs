@@ -5,8 +5,9 @@
 //! capability through RustFFT. Metal/WebGPU and CUDA backends require separate
 //! explicit implementations; unsupported requests return an error and never
 //! fall back to CPU or transfer tensor data. Concrete non-AD execution uses
-//! [`TensorFftExt`] and [`TensorReadFftExt`]. Traced graph construction uses
-//! [`TracedTensorFftExt`].
+//! [`TensorFftExt`] and [`TensorReadFftExt`]. Eager execution uses
+//! `EagerTensorFftExt` when `autodiff` is enabled, and traced graph
+//! construction uses [`TracedTensorFftExt`].
 //!
 //! # Examples
 //!
@@ -79,12 +80,16 @@ use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 mod backend;
 mod cache;
 mod cpu;
+#[cfg(feature = "autodiff")]
+mod eager_ext;
 mod spec;
 
 pub use backend::{FftBackend, FftExecutionCache};
 pub use cache::{
     fft_plan_cache_selector, FftPlanCache, DEFAULT_FFT_PLAN_CACHE_CAPACITY, FFT_PLAN_CACHE_NAME,
 };
+#[cfg(feature = "autodiff")]
+pub use eager_ext::EagerTensorFftExt;
 pub use spec::{FftNorm, FftOperation, FftPlanSpec};
 
 /// Extension family id used by the tenferro FFT extension.
@@ -1449,17 +1454,7 @@ define_extension_runtime! {
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
 fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor> {
-    let operation = match input.dtype {
-        DType::C32 | DType::C64 => FftOperation::C2cForward,
-        DType::F32 | DType::F64 => FftOperation::R2cFull,
-        DType::I32 | DType::I64 | DType::Bool => {
-            return Err(runtime_unsupported_dtype(
-                "fft",
-                input.dtype,
-                "F32, F64, C32, or C64",
-            ))
-        }
-    };
+    let operation = runtime_forward_fft_operation(input.dtype)?;
     apply_unary_fft("fft", input, operation, n, axis, norm)
 }
 
@@ -1489,9 +1484,7 @@ fn ifft(
     axis: isize,
     norm: FftNorm,
 ) -> Result<TracedTensor> {
-    if !matches!(input.dtype, DType::C32 | DType::C64) {
-        return Err(runtime_unsupported_dtype("ifft", input.dtype, "C32 or C64"));
-    }
+    require_runtime_dtype("ifft", input.dtype, &[DType::C32, DType::C64], "C32 or C64")?;
     apply_unary_fft("ifft", input, FftOperation::C2cInverse, n, axis, norm)
 }
 
@@ -1525,9 +1518,7 @@ fn rfft(
     axis: isize,
     norm: FftNorm,
 ) -> Result<TracedTensor> {
-    if !matches!(input.dtype, DType::F32 | DType::F64) {
-        return Err(runtime_unsupported_dtype("rfft", input.dtype, "F32 or F64"));
-    }
+    require_runtime_dtype("rfft", input.dtype, &[DType::F32, DType::F64], "F32 or F64")?;
     apply_unary_fft("rfft", input, FftOperation::R2cOnesided, n, axis, norm)
 }
 
@@ -1564,13 +1555,12 @@ fn irfft(
     axis: isize,
     norm: FftNorm,
 ) -> Result<TracedTensor> {
-    if !matches!(input.dtype, DType::C32 | DType::C64) {
-        return Err(runtime_unsupported_dtype(
-            "irfft",
-            input.dtype,
-            "C32 or C64",
-        ));
-    }
+    require_runtime_dtype(
+        "irfft",
+        input.dtype,
+        &[DType::C32, DType::C64],
+        "C32 or C64",
+    )?;
     apply_unary_fft("irfft", input, FftOperation::C2r, n, axis, norm)
 }
 
@@ -1582,15 +1572,16 @@ fn apply_unary_fft(
     axis: isize,
     norm: FftNorm,
 ) -> Result<TracedTensor> {
-    validate_n(op_name, n)?;
-    let axis = normalize_axis(op_name, axis, input.rank)?;
-    validate_resolved_transform_len(op_name, input, n, axis)?;
-    if operation == FftOperation::C2r {
-        if let Some(shape) = input.try_concrete_shape() {
-            output_shape_c2r(&shape, axis, n)?;
-        }
-    }
-    let op = Arc::new(FftOp::new(operation, axis, n, norm));
+    let concrete_shape = input.try_concrete_shape();
+    let op = Arc::new(prepare_runtime_fft_op(
+        op_name,
+        operation,
+        input.rank,
+        concrete_shape.as_deref(),
+        n,
+        axis,
+        norm,
+    )?);
     let mut outputs = apply(op, &[input])?;
     outputs
         .pop()
@@ -1628,27 +1619,55 @@ fn validate_n(op: &'static str, n: Option<usize>) -> Result<()> {
     Ok(())
 }
 
-fn validate_resolved_transform_len(
+fn prepare_runtime_fft_op(
     op: &'static str,
-    input: &TracedTensor,
+    operation: FftOperation,
+    rank: usize,
+    concrete_shape: Option<&[usize]>,
     n: Option<usize>,
-    axis: usize,
-) -> Result<()> {
-    if n.is_some() {
-        return Ok(());
-    }
-    if input
-        .try_concrete_shape()
-        .and_then(|shape| shape.get(axis).copied())
-        == Some(0)
-    {
+    axis: isize,
+    norm: FftNorm,
+) -> Result<FftOp> {
+    validate_n(op, n)?;
+    let axis = normalize_axis(op, axis, rank)?;
+    if n.is_none() && concrete_shape.and_then(|shape| shape.get(axis).copied()) == Some(0) {
         return Err(runtime_invalid_argument(
             op,
             "n",
             "transform length must be positive",
         ));
     }
-    Ok(())
+    if operation == FftOperation::C2r {
+        if let Some(shape) = concrete_shape {
+            output_shape_c2r(shape, axis, n)?;
+        }
+    }
+    Ok(FftOp::new(operation, axis, n, norm))
+}
+
+fn runtime_forward_fft_operation(dtype: DType) -> Result<FftOperation> {
+    match dtype {
+        DType::C32 | DType::C64 => Ok(FftOperation::C2cForward),
+        DType::F32 | DType::F64 => Ok(FftOperation::R2cFull),
+        DType::I32 | DType::I64 | DType::Bool => Err(runtime_unsupported_dtype(
+            "fft",
+            dtype,
+            "F32, F64, C32, or C64",
+        )),
+    }
+}
+
+fn require_runtime_dtype(
+    op: &'static str,
+    dtype: DType,
+    supported: &[DType],
+    expected: &'static str,
+) -> Result<()> {
+    if supported.contains(&dtype) {
+        Ok(())
+    } else {
+        Err(runtime_unsupported_dtype(op, dtype, expected))
+    }
 }
 
 fn runtime_invalid_argument(

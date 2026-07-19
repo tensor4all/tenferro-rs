@@ -1,0 +1,205 @@
+use std::sync::Arc;
+
+use tenferro_ad::error::{Error, Result};
+use tenferro_ad::extension::apply_eager;
+use tenferro_ad::{EagerBackend, EagerTensor};
+use tenferro_runtime::ErrorPhase;
+use tenferro_tensor::{DType, Tensor};
+
+use crate::{
+    fft_op_name, prepare_runtime_fft_op, register_runtime, require_runtime_dtype,
+    runtime_forward_fft_operation, FftBackend, FftExecutionCache, FftNorm, FftOperation,
+    FftPlanSpec,
+};
+
+/// FFT extension methods for [`EagerTensor`].
+pub trait EagerTensorFftExt {
+    /// Execute a complex FFT, or a full-spectrum FFT for real input.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use num_complex::Complex64;
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
+    ///
+    /// let x = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+    ///     EagerRuntime::new(),
+    /// )?;
+    /// let y = x.fft(None, -1, FftNorm::Backward)?;
+    /// assert_eq!(y.materialized()?.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for an invalid axis or transform length, an
+    /// extension error for an unsupported dtype or backend, and a runtime-state
+    /// error when the eager runtime is unavailable.
+    fn fft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor>;
+
+    /// Execute an inverse complex FFT.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use num_complex::Complex64;
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
+    ///
+    /// let x = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]).unwrap(),
+    ///     EagerRuntime::new(),
+    /// )?;
+    /// let y = x.ifft(None, -1, FftNorm::Backward)?;
+    /// assert_eq!(y.shape(), &[2]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for an invalid axis or transform length, an
+    /// extension error for non-complex input or an unsupported backend, and a
+    /// runtime-state error when the eager runtime is unavailable.
+    fn ifft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor>;
+
+    /// Execute a one-sided real FFT.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
+    ///
+    /// let x = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap(),
+    ///     EagerRuntime::new(),
+    /// )?;
+    /// let y = x.rfft(None, -1, FftNorm::Backward)?;
+    /// assert_eq!(y.shape(), &[3]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for an invalid axis or transform length, an
+    /// extension error for non-real input or an unsupported backend, and a
+    /// runtime-state error when the eager runtime is unavailable.
+    fn rfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor>;
+
+    /// Execute an inverse real FFT from a one-sided complex spectrum.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use num_complex::Complex64;
+    /// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+    /// use tenferro_fft::{EagerTensorFftExt, FftNorm};
+    ///
+    /// let x = EagerTensor::from_tensor_in(
+    ///     Tensor::from_vec_col_major(vec![3], vec![Complex64::new(10.0, 0.0), Complex64::new(-2.0, 2.0), Complex64::new(-2.0, 0.0)]).unwrap(),
+    ///     EagerRuntime::new(),
+    /// )?;
+    /// let y = x.irfft(Some(4), -1, FftNorm::Backward)?;
+    /// assert_eq!(y.shape(), &[4]);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for an invalid axis, transform length, or
+    /// spectrum length, an extension error for non-complex input or an
+    /// unsupported backend, and a runtime-state error when the eager runtime is
+    /// unavailable.
+    fn irfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor>;
+}
+
+impl EagerTensorFftExt for EagerTensor {
+    fn fft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor> {
+        let operation = runtime_forward_fft_operation(self.dtype())?;
+        apply_eager_fft("fft", self, operation, n, axis, norm)
+    }
+
+    fn ifft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor> {
+        require_runtime_dtype(
+            "ifft",
+            self.dtype(),
+            &[DType::C32, DType::C64],
+            "C32 or C64",
+        )?;
+        apply_eager_fft("ifft", self, FftOperation::C2cInverse, n, axis, norm)
+    }
+
+    fn rfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor> {
+        require_runtime_dtype(
+            "rfft",
+            self.dtype(),
+            &[DType::F32, DType::F64],
+            "F32 or F64",
+        )?;
+        apply_eager_fft("rfft", self, FftOperation::R2cOnesided, n, axis, norm)
+    }
+
+    fn irfft(&self, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<EagerTensor> {
+        require_runtime_dtype(
+            "irfft",
+            self.dtype(),
+            &[DType::C32, DType::C64],
+            "C32 or C64",
+        )?;
+        apply_eager_fft("irfft", self, FftOperation::C2r, n, axis, norm)
+    }
+}
+
+fn apply_eager_fft(
+    op_name: &'static str,
+    input: &EagerTensor,
+    operation: FftOperation,
+    n: Option<usize>,
+    axis: isize,
+    norm: FftNorm,
+) -> Result<EagerTensor> {
+    let op = prepare_runtime_fft_op(
+        op_name,
+        operation,
+        input.shape().len(),
+        Some(input.shape()),
+        n,
+        axis,
+        norm,
+    )?;
+
+    input
+        .runtime()
+        .register_extension(register_runtime)
+        .map_err(|source| Error::runtime_state_source(op_name, ErrorPhase::GraphBuild, source))?;
+    let mut outputs = apply_eager(Arc::new(op), &[input])?.into_iter();
+    match (outputs.next(), outputs.next()) {
+        (Some(output), None) => Ok(output),
+        _ => Err(Error::Internal(
+            "FFT eager extension returned an unexpected number of outputs".into(),
+        )),
+    }
+}
+
+impl FftBackend for EagerBackend {
+    fn execute_fft(
+        &mut self,
+        input: &Tensor,
+        spec: &FftPlanSpec,
+        cache: FftExecutionCache<'_>,
+    ) -> tenferro_tensor::Result<Tensor> {
+        #[allow(unreachable_patterns)]
+        match self {
+            Self::Cpu(backend) => backend.execute_fft(input, spec, cache),
+            _ => Err(tenferro_tensor::Error::unsupported(
+                fft_op_name(spec.operation()),
+                format!(
+                    "the selected eager backend has no FFT capability for placement {:?}",
+                    input.placement()
+                ),
+            )),
+        }
+    }
+}

@@ -1,7 +1,11 @@
 use num_complex::{Complex32, Complex64};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
+#[cfg(feature = "autodiff")]
+use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
+#[cfg(feature = "autodiff")]
+use tenferro_fft::EagerTensorFftExt;
 use tenferro_fft::{fft_plan_cache_selector, FftNorm, TracedTensorFftExt};
 use tenferro_runtime::{
     DType, Error as RuntimeError, ErrorPhase, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
@@ -19,6 +23,11 @@ fn run(output: &TracedTensor) -> Tensor {
         .register_extension(tenferro_fft::register_runtime)
         .unwrap();
     executor.run(&program).unwrap()
+}
+
+#[cfg(feature = "autodiff")]
+fn eager(input: Tensor) -> EagerTensor {
+    EagerTensor::from_tensor_in(input, EagerRuntime::new()).unwrap()
 }
 
 fn assert_c64_close(actual: &[Complex64], expected: &[Complex64]) {
@@ -470,6 +479,156 @@ fn irfft_c32_reconstructs_real_signal() {
 
     assert_eq!(out.shape(), &[4]);
     assert_f32_close(out.as_slice::<f32>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn eager_fft_matches_traced_fft() {
+    let input = Tensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(1.0, 0.5),
+            Complex64::new(2.0, -0.25),
+            Complex64::new(3.0, 0.75),
+            Complex64::new(4.0, -1.0),
+        ],
+    )
+    .unwrap();
+    let traced = TracedTensor::from_tensor_concrete_shape(input.clone())
+        .unwrap()
+        .fft(Some(3), -1, FftNorm::Ortho)
+        .unwrap();
+    let eager = eager(input).fft(Some(3), -1, FftNorm::Ortho).unwrap();
+
+    assert_c64_close(
+        eager
+            .materialized()
+            .unwrap()
+            .as_slice::<Complex64>()
+            .unwrap(),
+        run(&traced).as_slice::<Complex64>().unwrap(),
+    );
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn eager_ifft_matches_traced_ifft() {
+    let input = Tensor::from_vec_col_major(
+        vec![4],
+        vec![
+            Complex64::new(10.0, 0.0),
+            Complex64::new(-2.0, 2.0),
+            Complex64::new(-2.0, 0.0),
+            Complex64::new(-2.0, -2.0),
+        ],
+    )
+    .unwrap();
+    let traced = TracedTensor::from_tensor_concrete_shape(input.clone())
+        .unwrap()
+        .ifft(None, 0, FftNorm::Forward)
+        .unwrap();
+    let eager = eager(input).ifft(None, 0, FftNorm::Forward).unwrap();
+
+    assert_c64_close(
+        eager
+            .materialized()
+            .unwrap()
+            .as_slice::<Complex64>()
+            .unwrap(),
+        run(&traced).as_slice::<Complex64>().unwrap(),
+    );
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn eager_rfft_matches_traced_rfft() {
+    let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let traced = TracedTensor::from_tensor_concrete_shape(input.clone())
+        .unwrap()
+        .rfft(None, -1, FftNorm::Backward)
+        .unwrap();
+    let eager = eager(input).rfft(None, -1, FftNorm::Backward).unwrap();
+
+    assert_c64_close(
+        eager
+            .materialized()
+            .unwrap()
+            .as_slice::<Complex64>()
+            .unwrap(),
+        run(&traced).as_slice::<Complex64>().unwrap(),
+    );
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn eager_irfft_matches_traced_irfft() {
+    let input = Tensor::from_vec_col_major(
+        vec![3],
+        vec![
+            Complex64::new(10.0, 0.0),
+            Complex64::new(-2.0, 2.0),
+            Complex64::new(-2.0, 0.0),
+        ],
+    )
+    .unwrap();
+    let traced = TracedTensor::from_tensor_concrete_shape(input.clone())
+        .unwrap()
+        .irfft(Some(4), -1, FftNorm::Backward)
+        .unwrap();
+    let eager = eager(input).irfft(Some(4), -1, FftNorm::Backward).unwrap();
+
+    assert_f64_close(
+        eager.materialized().unwrap().as_slice::<f64>().unwrap(),
+        run(&traced).as_slice::<f64>().unwrap(),
+    );
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn eager_fft_reuses_c2c_vjp_rule() {
+    let ad = fft_ad_context();
+    let ctx = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);
+    let x = EagerTensor::requires_grad_in(
+        Tensor::from_vec_col_major(
+            vec![4],
+            vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(2.0, 0.0),
+                Complex64::new(3.0, 0.0),
+                Complex64::new(4.0, 0.0),
+            ],
+        )
+        .unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let cotangent = EagerTensor::from_tensor_in(
+        Tensor::from_vec_col_major(
+            vec![4],
+            vec![
+                Complex64::new(1.0, 1.0),
+                Complex64::new(2.0, -1.0),
+                Complex64::new(-1.0, 0.5),
+                Complex64::new(0.25, -2.0),
+            ],
+        )
+        .unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+
+    let y = x.fft(None, -1, FftNorm::Backward).unwrap();
+    let dx = ctx.vjp(&y, &x, &cotangent).unwrap();
+
+    assert_c64_close(
+        dx.materialized().unwrap().as_slice::<Complex64>().unwrap(),
+        &[
+            Complex64::new(2.25, -1.5),
+            Complex64::new(1.0, 2.25),
+            Complex64::new(-2.25, 4.5),
+            Complex64::new(3.0, -1.25),
+        ],
+    );
 }
 
 #[test]

@@ -34,6 +34,11 @@ future Metal or CUDA implementation must be registered and selected
 explicitly. Cross-device movement remains a caller-visible operation before or
 after FFT execution.
 
+`EagerTensorFftExt` registers the same FFT runtime against `EagerBackend`.
+That adapter delegates only to the selected CPU capability today. Other eager
+backend variants return `Unsupported`; the eager surface does not download,
+upload, or select a CPU backend on their behalf.
+
 ## Cache ownership
 
 Every backend receives `FftExecutionCache`, which exposes one bounded typed

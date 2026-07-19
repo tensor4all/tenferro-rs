@@ -2,8 +2,9 @@
 
 `tenferro-fft` is the FFT extension package for tenferro. It is an extension
 crate imported directly alongside `tenferro-runtime` or `tenferro-tensor`.
-Concrete non-AD execution uses `TensorFftExt` and `TensorReadFftExt`; traced
-graphs use `TracedTensorFftExt`.
+Concrete non-AD execution uses `TensorFftExt` and `TensorReadFftExt`; eager
+execution uses `EagerTensorFftExt` behind `autodiff`; traced graphs use
+`TracedTensorFftExt`.
 
 The current implementation provides one-dimensional CPU-host transforms backed
 by `rustfft` through tenferro extension operations. The public API is ordinary
@@ -104,6 +105,30 @@ assert_eq!(read_full.as_slice::<Complex64>()?[0], Complex64::new(10.0, 0.0));
 change dtype (`rfft` real to complex, `irfft` complex to real), so typed return
 contracts need a separate design.
 
+### Eager Tensors
+
+Use `EagerTensorFftExt` for immediate execution in an `EagerRuntime`. The
+methods have the same names and arguments as `TracedTensorFftExt`, register the
+FFT execution runtime on demand, and record the existing extension operation
+when gradients are enabled.
+
+```rust
+use num_complex::Complex64;
+use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+use tenferro_fft::{EagerTensorFftExt, FftNorm};
+
+let x = EagerTensor::from_tensor_in(
+    Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0])?,
+    EagerRuntime::new(),
+)?;
+let spectrum = x.rfft(None, -1, FftNorm::Backward)?;
+let restored = spectrum.irfft(Some(4), -1, FftNorm::Backward)?;
+
+assert_eq!(spectrum.shape(), &[3]);
+assert_eq!(restored.materialized()?.as_slice::<f64>()?, &[1.0, 2.0, 3.0, 4.0]);
+# Ok::<(), tenferro_ad::Error>(())
+```
+
 ### Traced Graphs
 
 <!-- snippet-source: crates/tenferro-fft/examples/traced_fft.rs -->
@@ -187,6 +212,8 @@ extension op and normalization.
 
 Use `AdContext` for explicit extension-rule ownership, or import
 `tenferro_ad::TracedTensorAdExt` for the compact traced AD method syntax.
+For eager AD, construct the runtime with
+`EagerRuntime::with_cpu_backend_and_ad_context` using the same `AdContext`.
 
 Real-to-complex and complex-to-real AD are not enabled yet. They require the
 usual Hermitian symmetry handling so cotangents match the half-spectrum
