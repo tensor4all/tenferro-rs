@@ -26,12 +26,14 @@ autodiff = [
 ]
 cuda = ["tenferro-ad?/cuda", "tenferro-internal-ops/cuda"]
 rocm = ["tenferro-ad?/rocm", "tenferro-internal-ops/rocm"]
+webgpu = ["dep:tenferro-gpu", "tenferro-gpu/webgpu"]
 
 [dependencies]
 tenferro-runtime = { path = "../tenferro-runtime", version = "0.2.0", default-features = false }
 tenferro-ad = { path = "../tenferro-ad", version = "0.2.0", default-features = false, optional = true }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.2.0", default-features = false }
 tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features = false }
+tenferro-gpu = { path = "../tenferro-gpu", version = "0.2.0", default-features = false, optional = true }
 tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.2.0" }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.2.0", default-features = false }
 tidu = { workspace = true, optional = true }
@@ -40,3 +42,8 @@ num-complex.workspace = true
 num-traits.workspace = true
 rustfft = "6"
 thiserror.workspace = true
+
+[[test]]
+name = "apple_cpu"
+path = "tests/apple_cpu.rs"
+required-features = ["webgpu"]
