@@ -30,13 +30,7 @@ fn f32_identity(tensor: &Tensor) -> (AllocationDomainId, AllocationId) {
 
 #[cfg(target_os = "macos")]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let context = match AppleContext::new() {
-        Ok(context) => context,
-        Err(error) => {
-            eprintln!("Apple shared FFT example skipped: {error}");
-            return Ok(());
-        }
-    };
+    let context = AppleContext::new()?;
 
     // This explicit upload is the only host-to-device transfer in the sequence.
     let host = Tensor::from_vec_col_major([8], vec![1.0_f32, -2.0, 0.5, 3.0, 0.0, 1.5, -1.0, 2.0])?;
@@ -66,6 +60,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     for tensor in [cpu_first, metal_result, cpu_again] {
         assert_eq!(tensor.allocation_domain(), Some(context.domain_id()));
     }
+    let result_allocations = [
+        cpu_first.allocation_id().expect("managed CPU result"),
+        metal_result.allocation_id().expect("managed Metal result"),
+        cpu_again.allocation_id().expect("managed CPU result"),
+    ];
+    for allocation in result_allocations {
+        assert_ne!(allocation, input_identity.1);
+    }
+    assert_ne!(result_allocations[0], result_allocations[1]);
+    assert_ne!(result_allocations[0], result_allocations[2]);
+    assert_ne!(result_allocations[1], result_allocations[2]);
     let cpu_values = managed_values(cpu_first);
     let metal_values = managed_values(metal_result);
     let cpu_again_values = managed_values(cpu_again);

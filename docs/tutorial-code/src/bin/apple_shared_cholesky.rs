@@ -9,13 +9,7 @@ use tenferro_tensor::{Buffer, Tensor};
 
 #[cfg(target_os = "macos")]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let context = match AppleContext::new() {
-        Ok(context) => context,
-        Err(error) => {
-            eprintln!("Apple shared Cholesky example skipped: {error}");
-            return Ok(());
-        }
-    };
+    let context = AppleContext::new()?;
 
     // Column-major representation of the SPD matrix [[4, 2], [2, 3]].
     let host = Tensor::from_vec_col_major([2, 2], vec![4.0_f32, 2.0, 2.0, 3.0])?;

@@ -32,17 +32,11 @@ tenferro-ad = { path = "../crates/tenferro-ad" }
 tenferro-fft = { path = "../crates/tenferro-fft", features = ["autodiff"] }
 ```
 
-For published crates, use the same crate set with version requirements:
-
-```toml
-[dependencies]
-num-complex = "0.4"
-tenferro-runtime = "..."
-tenferro-tensor = "..."
-tenferro-cpu = "..."
-tenferro-ad = "..."
-tenferro-fft = { version = "...", features = ["autodiff"] }
-```
+The Apple shared path is not released yet. Until a later release task publishes
+it, clone `tensor4all/tenferro-rs` at a commit containing `AppleContext` and use
+the checkout-relative path dependencies below. The tenferro workspace already
+pins the reviewed CubeCL and CubeK Git revisions; applications do not need to
+declare CubeCL or CubeK directly.
 
 Concrete and graph-only users can omit `tenferro-ad` and the `autodiff`
 feature. Enable `tenferro-fft`'s `autodiff` feature when registering FFT AD
@@ -56,8 +50,13 @@ operation and backend crates:
 [dependencies]
 tenferro-fft = { path = "../crates/tenferro-fft", features = ["webgpu"] }
 tenferro-gpu = { path = "../crates/tenferro-gpu", default-features = false, features = ["webgpu"] }
+tenferro-cpu = { path = "../crates/tenferro-cpu", default-features = false, features = ["cpu-faer"] }
+tenferro-linalg = { path = "../crates/tenferro-linalg", default-features = false, features = ["cpu-faer"] }
 tenferro-tensor = { path = "../crates/tenferro-tensor" }
 ```
+
+`tenferro-linalg` and the CPU provider are needed by the Cholesky tutorial;
+FFT-only applications may omit `tenferro-linalg`.
 
 ## Current API
 

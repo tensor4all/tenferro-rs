@@ -32,10 +32,11 @@ transfer plus `F32` `dot_general` through a CubeK BGEMM planner. `C32` GEMM is
 implemented through a CubeK-owned complex GEMM launch API that lowers to real
 `F32` matmuls and handles conjugation flags. On Apple, `AppleContext` adds a
 host-visible shared-allocation domain for explicitly selected CPU RustFFT,
-CubeK Metal FFT, and CPU Cholesky. `F64`, `C64`,
-zero-contracting-size matmul, and non-matmul tensor ops remain explicit
-unsupported paths rather than CPU fallbacks. HIP/ROCm is still a reserved
-feature stub rather than a supported execution path.
+CubeK Metal FFT, and CPU Cholesky. WebGPU matmul and CubeK Metal FFT remain
+`F32`/`C32` paths; `F64`, `C64`, zero-contracting-size matmul, and non-matmul
+tensor ops are not silently redirected to CPU. The explicitly selected mapped
+CPU RustFFT and Cholesky paths do support `F64`/`C64`. HIP/ROCm is still a
+reserved feature stub rather than a supported execution path.
 
 See also:
 

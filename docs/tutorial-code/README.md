@@ -25,5 +25,5 @@ managed input, then checks allocation/domain and transfer-counter invariants.
 It also demonstrates C64 CPU support and the typed Metal capability error.
 `apple_shared_cholesky` selects the paired CPU backend for the initial mapped
 rank-2 linalg operation and verifies an SPD reconstruction residual. Both
-binaries skip runtime execution cleanly if a usable Metal context is absent;
-the feature path is still compiled.
+binaries are compile-gated to macOS and surface Metal initialization failures
+instead of treating them as a successful run.

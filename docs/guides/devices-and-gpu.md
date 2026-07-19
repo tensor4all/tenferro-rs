@@ -231,8 +231,9 @@ linalg operations shared-memory fallbacks. CubeK Metal FFT supports F32/C32
 power-of-two CFFT, one-sided RFFT, and IRFFT; unsupported dtypes and sizes
 return typed errors without dispatching to RustFFT.
 
-The runnable tutorials exercise the complete invariants and skip cleanly when
-Metal initialization is unavailable:
+The runnable tutorials exercise the complete invariants on macOS. Metal
+initialization failures are returned as errors so a broken or unavailable
+runtime cannot silently pass the tutorial test:
 
 ```bash
 cargo run -p tenferro-tutorial-code --no-default-features \
