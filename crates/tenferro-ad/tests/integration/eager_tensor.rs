@@ -1218,7 +1218,7 @@ fn eager_reductions_distinguish_all_axes_from_empty_axes() {
     )
     .unwrap();
     let scalar_sum = scalar.reduce_sum(None).unwrap();
-    assert_eq!(scalar_sum.shape(), &[]);
+    assert_eq!(scalar_sum.shape(), &[] as &[usize]);
     assert_close_slice(
         f64_data(scalar_sum.materialized().unwrap().as_ref()),
         &[3.0],
