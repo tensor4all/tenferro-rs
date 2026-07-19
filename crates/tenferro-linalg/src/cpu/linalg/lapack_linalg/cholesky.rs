@@ -58,8 +58,33 @@ fn cholesky_2d<T: LapackCholesky>(
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
     let n = square_matrix_dim(input, "cholesky")?;
+    tensor_from_vec_with_template(
+        vec![n, n],
+        cholesky_compact_data(input.host_data()?, n)?,
+        input,
+    )
+}
+
+pub(crate) fn cholesky_compact_data<T: LapackCholesky>(
+    input: &[T],
+    n: usize,
+) -> tenferro_tensor::Result<Vec<T>> {
     let n_i32 = dim_i32(n, "cholesky")?;
-    let mut factor = input.host_data()?.to_vec();
+    let expected_len = n.checked_mul(n).ok_or_else(|| {
+        tenferro_tensor::Error::invalid_argument(
+            "cholesky",
+            "input storage",
+            "matrix element count overflows usize",
+        )
+    })?;
+    if input.len() != expected_len {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "cholesky",
+            "input storage",
+            format!("expected {expected_len} elements, got {}", input.len()),
+        ));
+    }
+    let mut factor = input.to_vec();
     let mut info = 0;
     T::potrf(b'L', n_i32, &mut factor, n_i32, &mut info);
     if info > 0 {
@@ -69,11 +94,7 @@ fn cholesky_2d<T: LapackCholesky>(
         ));
     }
     check_lapack_info("cholesky", "dpotrf", info)?;
-    tensor_from_vec_with_template(
-        vec![n, n],
-        lower_triangle_from_lapack(&factor, n, n)?,
-        input,
-    )
+    lower_triangle_from_lapack(&factor, n, n)
 }
 
 pub(crate) fn cholesky<T: LapackCholesky>(

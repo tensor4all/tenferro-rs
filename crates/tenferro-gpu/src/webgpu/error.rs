@@ -2,7 +2,7 @@ use crate::{DType, Error, ErrorKind};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum WebGpuError {
-    #[error("{op} does not support dtype {dtype:?}")]
+    #[error("{op} does not support dtype {dtype:?} on WebGPU")]
     UnsupportedDType { op: &'static str, dtype: DType },
     #[error("{op} is unsupported on WebGPU: {detail}")]
     UnsupportedOperation {

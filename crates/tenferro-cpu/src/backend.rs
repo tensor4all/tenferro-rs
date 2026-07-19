@@ -29,8 +29,9 @@ use tenferro_tensor::backend::{
     dot_general_accum_via_temp, grouped_gemm_via_sequential, validate_dot_general_accumulation,
     validate_grouped_gemm, ElementwiseFusionPlan, GroupedGemmConfig,
 };
+use tenferro_tensor::SharedTensorAllocationDomain;
 use tenferro_tensor::{
-    BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
+    AllocationDomainId, BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
     DotGeneralAccumulation, TensorAnalytic, TensorBackend, TensorBuffer, TensorDeviceTransfer,
     TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
     TensorViewCanonicalization,
@@ -669,6 +670,7 @@ pub struct CpuBackend {
     resolved: ResolvedCpuExecution,
     engine: Arc<CpuEngine>,
     dot_general_provider: DotGeneralProvider,
+    allocation_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
 }
 
 fn resolve_discovered_topology(
@@ -691,6 +693,7 @@ impl fmt::Debug for CpuBackend {
             .field("resolved_execution", &self.resolved)
             .field("engine_placement", &self.engine.placement())
             .field("num_threads", &self.num_threads())
+            .field("allocation_domain", &self.allocation_domain())
             .field("buffer_pool_cache_stats", &self.buffer_pool_cache_stats())
             .field("buffer_pool_limit_bytes", &self.buffer_pool_limit_bytes())
             .finish_non_exhaustive()
@@ -753,6 +756,7 @@ impl CpuBackend {
                 resolved,
                 engine,
                 dot_general_provider: DotGeneralProvider::Base,
+                allocation_domain: None,
             })
         }
     }
@@ -814,6 +818,7 @@ impl CpuBackend {
             resolved,
             engine: base_engine,
             dot_general_provider: DotGeneralProvider::Base,
+            allocation_domain: None,
         }
     }
 
@@ -1067,6 +1072,7 @@ impl CpuBackend {
                 resolved,
                 engine: Arc::clone(&self.shared.base_engine),
                 dot_general_provider: self.dot_general_provider,
+                allocation_domain: self.allocation_domain.clone(),
             });
         }
         let engine_placement = match &resolved {
@@ -1095,6 +1101,7 @@ impl CpuBackend {
             resolved,
             engine,
             dot_general_provider: self.dot_general_provider,
+            allocation_domain: self.allocation_domain.clone(),
         })
     }
 
@@ -2633,6 +2640,61 @@ impl TensorIndexing for CpuBackend {
 }
 
 impl CpuBackend {
+    /// Bind this backend handle to a shared-allocation domain.
+    ///
+    /// Host-only CPU behavior is unchanged. Operation crates can use the domain
+    /// to require guarded access to matching managed allocations.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    /// use std::sync::Arc;
+    /// use tenferro_tensor::{AllocationDomainId, DType, SharedTensorAllocationDomain, Tensor};
+    ///
+    /// #[derive(Debug)]
+    /// struct Domain(AllocationDomainId);
+    /// impl SharedTensorAllocationDomain for Domain {
+    ///     fn id(&self) -> AllocationDomainId { self.0 }
+    ///     fn allocate(&self, _: DType, _: &[usize]) -> tenferro_tensor::Result<Tensor> {
+    ///         Err(tenferro_tensor::Error::unsupported("example", "not implemented"))
+    ///     }
+    /// }
+    /// let id = AllocationDomainId::fresh();
+    /// let backend = CpuBackend::new().with_allocation_domain(Arc::new(Domain(id)));
+    /// assert_eq!(backend.allocation_domain(), Some(id));
+    /// ```
+    pub fn with_allocation_domain(mut self, domain: Arc<dyn SharedTensorAllocationDomain>) -> Self {
+        self.allocation_domain = Some(domain);
+        self
+    }
+
+    /// Return the configured shared-allocation domain.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// assert_eq!(CpuBackend::new().allocation_domain(), None);
+    /// ```
+    pub fn allocation_domain(&self) -> Option<AllocationDomainId> {
+        self.allocation_domain.as_ref().map(|domain| domain.id())
+    }
+
+    /// Return the allocator for this backend's shared domain.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// assert!(CpuBackend::new().shared_allocation_domain().is_none());
+    /// ```
+    pub fn shared_allocation_domain(&self) -> Option<&Arc<dyn SharedTensorAllocationDomain>> {
+        self.allocation_domain.as_ref()
+    }
+
     fn run_backend_session_cached<R: Send>(
         &mut self,
         cache: Option<&mut gemm::GemmAnalysisCache>,

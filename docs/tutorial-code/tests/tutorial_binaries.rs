@@ -51,4 +51,12 @@ fn tutorial_binaries_run_successfully() {
         "dynamic_shape_truncated_svd",
         env!("CARGO_BIN_EXE_dynamic_shape_truncated_svd"),
     );
+    #[cfg(feature = "apple-shared")]
+    {
+        run_tutorial("apple_shared_fft", env!("CARGO_BIN_EXE_apple_shared_fft"));
+        run_tutorial(
+            "apple_shared_cholesky",
+            env!("CARGO_BIN_EXE_apple_shared_cholesky"),
+        );
+    }
 }

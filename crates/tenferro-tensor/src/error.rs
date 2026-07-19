@@ -79,6 +79,12 @@ pub enum Error {
         #[source]
         source: BoxError,
     },
+    #[error("{op}: host access failed: {source}")]
+    HostAccess {
+        op: &'static str,
+        #[source]
+        source: crate::HostAccessError,
+    },
     #[error("{op}: extension {family} failed: {source}")]
     Extension {
         op: &'static str,
@@ -455,6 +461,23 @@ impl Error {
         }
     }
 
+    /// Preserve a typed guarded-host-access failure.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{Error, HostAccessError};
+    ///
+    /// let error = Error::host_access(
+    ///     "map",
+    ///     HostAccessError::Unsupported { backend: "opaque" },
+    /// );
+    /// assert!(matches!(error, Error::HostAccess { .. }));
+    /// ```
+    pub fn host_access(op: &'static str, source: crate::HostAccessError) -> Self {
+        Self::HostAccess { op, source }
+    }
+
     /// Return the stable coarse classification for this tensor failure.
     ///
     /// # Examples
@@ -480,7 +503,9 @@ impl Error {
             | Self::Unsupported { .. } => ErrorKind::Unsupported,
             Self::BackendFailure { .. } | Self::BackendSource { .. } => ErrorKind::BackendFailure,
             Self::IoSource { .. } => ErrorKind::Io,
-            Self::RuntimeState { .. } | Self::RuntimeStateSource { .. } => ErrorKind::RuntimeState,
+            Self::RuntimeState { .. }
+            | Self::RuntimeStateSource { .. }
+            | Self::HostAccess { .. } => ErrorKind::RuntimeState,
             Self::Extension { kind, .. } => *kind,
             Self::MissingValue { .. } => ErrorKind::RuntimeState,
             Self::Internal(_) => ErrorKind::Internal,

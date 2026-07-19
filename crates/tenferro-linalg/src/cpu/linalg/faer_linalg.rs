@@ -127,8 +127,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
-        placement: &tenferro_tensor::Placement,
-    ) -> tenferro_tensor::Result<TypedTensor<Self>>;
+    ) -> tenferro_tensor::Result<Vec<Self>>;
     fn lu_core(
         ctx: &CpuContext,
         buffers: &mut BufferPool,
@@ -1010,7 +1009,11 @@ macro_rules! impl_faer_linalg_for_real {
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(input, "cholesky")?;
         let mat = Self::faer_mat_ref_compact(input.host_data()?, n, n);
-        Self::cholesky_core(ctx, buffers, mat, n, input.placement())
+        tensor_from_vec_with_template(
+            vec![n, n],
+            Self::cholesky_core(ctx, buffers, mat, n)?,
+            input.placement(),
+        )
     }
 
     fn cholesky_core(
@@ -1018,8 +1021,7 @@ macro_rules! impl_faer_linalg_for_real {
         _buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
-        placement: &tenferro_tensor::Placement,
-    ) -> tenferro_tensor::Result<TypedTensor<Self>> {
+    ) -> tenferro_tensor::Result<Vec<Self>> {
         let mut l = Mat::zeros(n, n);
         l.copy_from(mat);
         let mut mem = MemBuffer::new(
@@ -1038,11 +1040,7 @@ macro_rules! impl_faer_linalg_for_real {
             Default::default(),
         )
         .map_err(|_| decomposition_failed("cholesky"))?;
-        tensor_from_vec_with_template(
-            vec![n, n],
-            lower_triangle_vec_from_mat(l.as_ref())?,
-            placement,
-        )
+        lower_triangle_vec_from_mat(l.as_ref())
     }
 
     fn lu_2d(
@@ -1831,7 +1829,11 @@ macro_rules! impl_faer_linalg_for_complex {
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
         let n = square_matrix_dim(input, "cholesky")?;
         let mat = Self::faer_mat_ref_compact(input.host_data()?, n, n);
-        Self::cholesky_core(ctx, buffers, mat, n, input.placement())
+        tensor_from_vec_with_template(
+            vec![n, n],
+            Self::cholesky_core(ctx, buffers, mat, n)?,
+            input.placement(),
+        )
     }
 
     fn cholesky_core(
@@ -1839,8 +1841,7 @@ macro_rules! impl_faer_linalg_for_complex {
         _buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
-        placement: &tenferro_tensor::Placement,
-    ) -> tenferro_tensor::Result<TypedTensor<Self>> {
+    ) -> tenferro_tensor::Result<Vec<Self>> {
         // Cast Self (Complex32/64) to $faer_complex (faer::c32/c64) for faer calls.
         // SAFETY: layout identity guaranteed by impl_complex_faer_casts const asserts.
         let mat: MatRef<'_, $faer_complex> = unsafe {
@@ -1870,11 +1871,7 @@ macro_rules! impl_faer_linalg_for_complex {
             Default::default(),
         )
         .map_err(|_| decomposition_failed("cholesky"))?;
-        tensor_from_vec_with_template(
-            vec![n, n],
-            $matrix_from_predicate(l.as_ref(), n, n, |row, col| row >= col)?,
-            placement,
-        )
+        $matrix_from_predicate(l.as_ref(), n, n, |row, col| row >= col)
     }
 
     fn lu_2d(
@@ -2787,6 +2784,24 @@ pub(crate) fn cholesky<T: FaerLinalg>(
     })
 }
 
+pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    input: &[T],
+    n: usize,
+) -> tenferro_tensor::Result<Vec<T>> {
+    let expected_len = checked_product("cholesky", "matrix", &[n, n])?;
+    if input.len() != expected_len {
+        return Err(tenferro_tensor::Error::invalid_argument(
+            "cholesky",
+            "input storage",
+            format!("expected {expected_len} elements, got {}", input.len()),
+        ));
+    }
+    let mat = T::faer_mat_ref_compact(input, n, n);
+    T::cholesky_core(ctx, buffers, mat, n)
+}
+
 pub(crate) fn lu<T: FaerLinalg>(
     ctx: &CpuContext,
     buffers: &mut BufferPool,
@@ -3267,7 +3282,11 @@ pub(crate) fn cholesky_view<T: FaerLinalg + 'static>(
     let base = host_base_ptr(&view)?;
     // SAFETY: faer_strided_ok guarantees host placement, rank 2, non-negative strides.
     let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
-    T::cholesky_core(ctx, buffers, mat, m, &placement)
+    tensor_from_vec_with_template(
+        vec![m, m],
+        T::cholesky_core(ctx, buffers, mat, m)?,
+        &placement,
+    )
 }
 
 pub(crate) fn lu_view<T: FaerLinalg + 'static>(

@@ -3,7 +3,10 @@ use std::mem::MaybeUninit;
 use num_complex::Complex;
 use num_traits::{Float, FromPrimitive, Zero};
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{BackendSessionHost, DeviceKind, MemoryKind, Placement, Tensor, TypedTensor};
+use tenferro_tensor::{
+    AllocationDomainId, BackendSessionHost, Buffer, DType, DeviceKind, HostAccessError, MemoryKind,
+    Placement, SharedTensorAllocationDomain, Tensor, TypedTensor,
+};
 
 use crate::backend::FftExecutionCache;
 use crate::cache::{cached_fft_plan, CachedFftPlanScalar, ExtensionFftPlanCache, FftPlanProvider};
@@ -20,10 +23,15 @@ impl FftBackend for CpuBackend {
         mut cache: FftExecutionCache<'_>,
     ) -> tenferro_tensor::Result<Tensor> {
         validate_spec_input(input, spec)?;
-        validate_host_fft_input(fft_op_name(spec.operation()), input)?;
-
         let mut plans = ExtensionFftPlanCache::new(cache.store_mut());
-        self.with_backend_session(|_exec| execute_fft_with_plans(input, spec, &mut plans))
+        let allocation_domain = self.shared_allocation_domain().cloned();
+        self.with_backend_session(|_exec| match allocation_domain.as_deref() {
+            Some(domain) => execute_managed_fft_with_plans(input, spec, domain, &mut plans),
+            None => {
+                validate_host_fft_input(fft_op_name(spec.operation()), input)?;
+                execute_fft_with_plans(input, spec, &mut plans)
+            }
+        })
     }
 }
 
@@ -113,6 +121,224 @@ pub(crate) fn execute_fft_with_plans(
     Ok(output)
 }
 
+fn execute_managed_fft_with_plans(
+    input: &Tensor,
+    spec: &FftPlanSpec,
+    domain: &dyn SharedTensorAllocationDomain,
+    plans: &mut (impl FftPlanProvider + ?Sized),
+) -> tenferro_tensor::Result<Tensor> {
+    let operation = spec.operation();
+    let op = fft_op_name(operation);
+    let axis = spec.normalized_axis();
+    let n = spec.requested_len();
+    let norm = spec.norm();
+
+    match (operation, input) {
+        (FftOperation::C2cForward, Tensor::C64(input))
+        | (FftOperation::C2cInverse, Tensor::C64(input)) => {
+            let shape = output_shape_c2c(input.shape(), axis, n)?;
+            let values = with_managed_read(input, domain.id(), op, |input_data| {
+                execute_c2c_data(
+                    input.shape(),
+                    input_data,
+                    axis,
+                    n,
+                    operation.is_forward(),
+                    norm,
+                    plans,
+                )
+            })?;
+            let output = domain.allocate(DType::C64, &shape)?;
+            write_managed_output_c64(output, domain.id(), op, &values)
+        }
+        (FftOperation::C2cForward, Tensor::C32(input))
+        | (FftOperation::C2cInverse, Tensor::C32(input)) => {
+            let shape = output_shape_c2c(input.shape(), axis, n)?;
+            let values = with_managed_read(input, domain.id(), op, |input_data| {
+                execute_c2c_data(
+                    input.shape(),
+                    input_data,
+                    axis,
+                    n,
+                    operation.is_forward(),
+                    norm,
+                    plans,
+                )
+            })?;
+            let output = domain.allocate(DType::C32, &shape)?;
+            write_managed_output_c32(output, domain.id(), op, &values)
+        }
+        (FftOperation::R2cFull, Tensor::F64(input))
+        | (FftOperation::R2cOnesided, Tensor::F64(input)) => {
+            let shape = output_shape_r2c(input.shape(), axis, n, operation.is_onesided())?;
+            let values = with_managed_read(input, domain.id(), op, |input_data| {
+                execute_r2c_data(
+                    input.shape(),
+                    input_data,
+                    axis,
+                    n,
+                    operation.is_onesided(),
+                    norm,
+                    plans,
+                )
+            })?;
+            let output = domain.allocate(DType::C64, &shape)?;
+            write_managed_output_c64(output, domain.id(), op, &values)
+        }
+        (FftOperation::R2cFull, Tensor::F32(input))
+        | (FftOperation::R2cOnesided, Tensor::F32(input)) => {
+            let shape = output_shape_r2c(input.shape(), axis, n, operation.is_onesided())?;
+            let values = with_managed_read(input, domain.id(), op, |input_data| {
+                execute_r2c_data(
+                    input.shape(),
+                    input_data,
+                    axis,
+                    n,
+                    operation.is_onesided(),
+                    norm,
+                    plans,
+                )
+            })?;
+            let output = domain.allocate(DType::C32, &shape)?;
+            write_managed_output_c32(output, domain.id(), op, &values)
+        }
+        (FftOperation::C2r, Tensor::C64(input)) => {
+            let shape = output_shape_c2r(input.shape(), axis, n)?;
+            let values = with_managed_read(input, domain.id(), op, |input_data| {
+                execute_c2r_data(input.shape(), input_data, axis, n, norm, plans)
+            })?;
+            let output = domain.allocate(DType::F64, &shape)?;
+            write_managed_output_f64(output, domain.id(), op, &values)
+        }
+        (FftOperation::C2r, Tensor::C32(input)) => {
+            let shape = output_shape_c2r(input.shape(), axis, n)?;
+            let values = with_managed_read(input, domain.id(), op, |input_data| {
+                execute_c2r_data(input.shape(), input_data, axis, n, norm, plans)
+            })?;
+            let output = domain.allocate(DType::F32, &shape)?;
+            write_managed_output_f32(output, domain.id(), op, &values)
+        }
+        (operation, other) => Err(crate::tensor_unsupported_dtype(
+            op,
+            other.dtype(),
+            expected_dtype_description(operation),
+        )),
+    }
+}
+
+fn with_managed_read<T, R>(
+    input: &TypedTensor<T>,
+    expected_domain: AllocationDomainId,
+    op: &'static str,
+    execute: impl FnOnce(&[T]) -> tenferro_tensor::Result<R>,
+) -> tenferro_tensor::Result<R>
+where
+    T: Send + Sync + 'static,
+{
+    let Buffer::Backend(buffer) = input.buffer() else {
+        return Err(tenferro_tensor::Error::host_access(
+            op,
+            HostAccessError::Unsupported { backend: "host" },
+        ));
+    };
+    match buffer.allocation_domain() {
+        Some(actual) if actual == expected_domain => {}
+        Some(actual) => {
+            return Err(tenferro_tensor::Error::host_access(
+                op,
+                HostAccessError::ForeignDomain {
+                    expected: expected_domain,
+                    actual,
+                },
+            ));
+        }
+        None => {
+            return Err(tenferro_tensor::Error::host_access(
+                op,
+                HostAccessError::Unsupported {
+                    backend: buffer.backend_family(),
+                },
+            ));
+        }
+    }
+    if input.placement().memory_kind != MemoryKind::Managed {
+        return Err(tenferro_tensor::Error::host_access(
+            op,
+            HostAccessError::Unsupported {
+                backend: buffer.backend_family(),
+            },
+        ));
+    }
+    let read = buffer
+        .map_read()
+        .map_err(|source| tenferro_tensor::Error::host_access(op, source))?;
+    execute(&read)
+}
+
+fn write_managed_output<T>(
+    output: &TypedTensor<T>,
+    expected_domain: AllocationDomainId,
+    op: &'static str,
+    values: &[T],
+) -> tenferro_tensor::Result<()>
+where
+    T: Send + Sync + 'static,
+{
+    if output.allocation_domain() != Some(expected_domain) {
+        return Err(tenferro_tensor::Error::runtime_state(
+            op,
+            "shared allocation owner returned an output outside its domain",
+        ));
+    }
+    if output.placement().memory_kind != MemoryKind::Managed {
+        return Err(tenferro_tensor::Error::runtime_state(
+            op,
+            "shared allocation owner returned a non-managed output",
+        ));
+    }
+    let Buffer::Backend(buffer) = output.buffer() else {
+        return Err(tenferro_tensor::Error::runtime_state(
+            op,
+            "shared allocation owner returned a host output",
+        ));
+    };
+    let mut write = buffer
+        .map_write()
+        .map_err(|source| tenferro_tensor::Error::host_access(op, source))?;
+    write
+        .copy_from_slice(values)
+        .map_err(|source| tenferro_tensor::Error::host_access(op, source))
+}
+
+macro_rules! write_managed_output {
+    ($name:ident, $variant:ident, $scalar:ty) => {
+        fn $name(
+            output: Tensor,
+            expected_domain: AllocationDomainId,
+            op: &'static str,
+            values: &[$scalar],
+        ) -> tenferro_tensor::Result<Tensor> {
+            let Tensor::$variant(output) = output else {
+                return Err(tenferro_tensor::Error::runtime_state(
+                    op,
+                    concat!(
+                        "shared allocation owner returned a non-",
+                        stringify!($variant),
+                        " output"
+                    ),
+                ));
+            };
+            write_managed_output(&output, expected_domain, op, values)?;
+            Ok(Tensor::$variant(output))
+        }
+    };
+}
+
+write_managed_output!(write_managed_output_f32, F32, f32);
+write_managed_output!(write_managed_output_f64, F64, f64);
+write_managed_output!(write_managed_output_c32, C32, num_complex::Complex32);
+write_managed_output!(write_managed_output_c64, C64, num_complex::Complex64);
+
 pub(crate) fn validate_host_fft_input(
     op: &'static str,
     input: &Tensor,
@@ -153,11 +379,26 @@ fn execute_c2c<T>(
 where
     T: CachedFftPlanScalar,
 {
-    let in_shape = input.shape();
+    let input_data = input.host_data()?;
+    execute_c2c_data(input.shape(), input_data, axis, n, forward, norm, plans)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_c2c_data<T>(
+    in_shape: &[usize],
+    input_data: &[Complex<T>],
+    axis: usize,
+    n: Option<usize>,
+    forward: bool,
+    norm: FftNorm,
+    plans: &mut (impl FftPlanProvider + ?Sized),
+) -> tenferro_tensor::Result<Vec<Complex<T>>>
+where
+    T: CachedFftPlanScalar,
+{
     let fft_len = transform_len(in_shape, axis, n)?;
     let out_shape = output_shape_c2c(in_shape, axis, n)?;
     let out_axis_len = out_shape[axis];
-    let input_data = input.host_data()?;
     let output_len = checked_shape_product("fft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
     let fft_plan = cached_fft_plan::<T, _>(plans, fft_len, forward);
@@ -209,11 +450,26 @@ fn execute_r2c<T>(
 where
     T: CachedFftPlanScalar,
 {
-    let in_shape = input.shape();
+    let input_data = input.host_data()?;
+    execute_r2c_data(input.shape(), input_data, axis, n, onesided, norm, plans)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_r2c_data<T>(
+    in_shape: &[usize],
+    input_data: &[T],
+    axis: usize,
+    n: Option<usize>,
+    onesided: bool,
+    norm: FftNorm,
+    plans: &mut (impl FftPlanProvider + ?Sized),
+) -> tenferro_tensor::Result<Vec<Complex<T>>>
+where
+    T: CachedFftPlanScalar,
+{
     let fft_len = transform_len(in_shape, axis, n)?;
     let out_shape = output_shape_r2c(in_shape, axis, n, onesided)?;
     let out_axis_len = out_shape[axis];
-    let input_data = input.host_data()?;
     let output_len = checked_shape_product("rfft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
     let fft_plan = cached_fft_plan::<T, _>(plans, fft_len, true);
@@ -264,11 +520,24 @@ fn execute_c2r<T>(
 where
     T: CachedFftPlanScalar,
 {
-    let in_shape = input.shape();
+    let input_data = input.host_data()?;
+    execute_c2r_data(input.shape(), input_data, axis, n, norm, plans)
+}
+
+fn execute_c2r_data<T>(
+    in_shape: &[usize],
+    input_data: &[Complex<T>],
+    axis: usize,
+    n: Option<usize>,
+    norm: FftNorm,
+    plans: &mut (impl FftPlanProvider + ?Sized),
+) -> tenferro_tensor::Result<Vec<T>>
+where
+    T: CachedFftPlanScalar,
+{
     let out_shape = output_shape_c2r(in_shape, axis, n)?;
     let out_axis_len = out_shape[axis];
     let expected_half = validate_c2r_spectrum_len(in_shape[axis], out_axis_len)?;
-    let input_data = input.host_data()?;
     let output_len = checked_shape_product("irfft", "output", &out_shape)?;
     let mut output = uninit_output_vec(output_len);
     let fft_plan = cached_fft_plan::<T, _>(plans, out_axis_len, false);
@@ -453,3 +722,7 @@ fn checked_add(
         )
     })
 }
+
+#[cfg(test)]
+#[path = "cpu/managed_tests.rs"]
+mod managed_tests;

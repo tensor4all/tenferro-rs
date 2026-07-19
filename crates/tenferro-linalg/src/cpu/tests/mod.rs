@@ -285,3 +285,4 @@ fn diagonal_scatter_config() -> ScatterConfig {
 mod backend;
 mod dtype;
 mod linalg;
+mod managed_cholesky;

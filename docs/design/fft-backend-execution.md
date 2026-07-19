@@ -29,10 +29,35 @@ the operation, dtype, layout, or placement, it returns `Unsupported`. It must
 not construct another backend, upload or download the tensor, or silently run a
 host implementation.
 
-The CPU implementation therefore accepts host tensors and uses RustFFT. A
-future Metal or CUDA implementation must be registered and selected
-explicitly. Cross-device movement remains a caller-visible operation before or
-after FFT execution.
+The CPU implementation uses RustFFT. It accepts ordinary host tensors and, when
+the `CpuBackend` is paired by an Apple `AppleContext`, matching managed tensors
+through guarded host mappings. The WebGPU implementation uses CubeK on the
+configured Metal client. Callers select either backend explicitly; neither
+implementation dispatches to the other. Cross-device movement remains a
+caller-visible operation before or after FFT execution.
+
+## Apple shared execution
+
+`AppleContext` owns one host-visible Metal runtime, one allocation domain, and
+paired CPU and Metal backends. An explicitly uploaded tensor retains one
+physical allocation while the paired CPU backend maps it and the paired Metal
+backend launches it. New operation results receive new allocations in the same
+domain. Mapping, kernel launch, and managed result writeback do not change the
+context's explicit upload/download counters.
+
+The CPU RustFFT adapter supports `F32`, `F64`, `C32`, and `C64`. Its guarded
+path preserves the ordinary axis, batching, normalization, and padding rules.
+The initial CubeK Metal adapter is deliberately narrower:
+
+| Operation | Input/output | Current Metal constraints |
+| --- | --- | --- |
+| CFFT/IFFT | `C32` to `C32` | power-of-two length at least 2; requested length must equal the input-axis length |
+| one-sided RFFT | `F32` to `C32` | power-of-two requested or input length at least 2; padding/truncation supported |
+| IRFFT | `C32` to `F32` | power-of-two requested or inferred real length at least 2; padding/truncation supported |
+
+`F64`, `C64`, full-spectrum real FFT, non-power-of-two sizes, foreign domains,
+and device-local WebGPU buffers return typed errors. They never trigger CPU
+fallback or an implicit transfer.
 
 `EagerTensorFftExt` registers the same FFT runtime against `EagerBackend`.
 That adapter delegates only to the selected CPU capability today. Other eager
@@ -76,6 +101,14 @@ reported and are intentionally excluded.
 
 This namespace is an implementation detail. Non-CPU backends use distinct
 names for vendor plans and workspaces and do not depend on RustFFT types.
+
+## CubeK Metal compilation cache
+
+The CubeK adapter does not insert a synthetic plan in `FftPlanCache`: CubeK
+does not expose a reusable vendor-plan object. CubeCL's configured client owns
+the compiled-kernel cache used by repeated launches. The caller-owned FFT cache
+therefore remains empty for this backend, while its capacity and statistics
+continue to describe entries actually owned through `FftExecutionCache`.
 
 ## Extension requirements
 

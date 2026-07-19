@@ -5,6 +5,8 @@ use cubecl::Runtime;
 use cubecl_common::future;
 use cubecl_wgpu::{WgpuDevice, WgpuRuntime};
 
+use super::apple::AppleDomainState;
+
 /// Returns `true` if a WebGPU adapter is available for CubeCL.
 ///
 /// Use this in test helpers to skip WebGPU tests on machines without an
@@ -32,6 +34,7 @@ pub fn webgpu_available() -> bool {
 pub struct WebGpuRuntime {
     client: ComputeClient<WgpuRuntime>,
     device_ordinal: usize,
+    pub(super) apple_domain: Option<std::sync::Arc<AppleDomainState>>,
 }
 
 impl fmt::Debug for WebGpuRuntime {
@@ -92,7 +95,36 @@ impl WebGpuRuntime {
         Ok(Self {
             client,
             device_ordinal,
+            apple_domain: None,
         })
+    }
+
+    pub(super) fn from_apple_client(
+        client: ComputeClient<WgpuRuntime>,
+        device_ordinal: usize,
+        domain: std::sync::Arc<AppleDomainState>,
+    ) -> Self {
+        Self {
+            client,
+            device_ordinal,
+            apple_domain: Some(domain),
+        }
+    }
+
+    pub(super) fn allocation_domain(&self) -> Option<&std::sync::Arc<AppleDomainState>> {
+        self.apple_domain.as_ref()
+    }
+
+    pub(super) fn record_upload(&self, bytes: usize) {
+        if let Some(domain) = &self.apple_domain {
+            domain.record_upload(bytes);
+        }
+    }
+
+    pub(super) fn record_download(&self, bytes: usize) {
+        if let Some(domain) = &self.apple_domain {
+            domain.record_download(bytes);
+        }
     }
 
     pub(crate) fn client(&self) -> &ComputeClient<WgpuRuntime> {

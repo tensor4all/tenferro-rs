@@ -1015,3 +1015,27 @@ fn irfft_jvp_unsupported_error_names_irfft_and_jvp() {
         "{message}"
     );
 }
+
+#[test]
+fn webgpu_fft_adapter_keeps_client_ownership_and_raw_output_lifecycle_explicit() {
+    let source = include_str!("../src/webgpu.rs");
+    for launch in [
+        "cfft_interleaved_launch(",
+        "rfft_interleaved_launch_padded(",
+        "irfft_interleaved_launch_padded(",
+    ] {
+        assert!(
+            source.contains(launch),
+            "missing explicit client launch {launch}"
+        );
+    }
+    assert!(source.contains("webgpu_interop::client(backend)"));
+    assert!(source.contains("output.into_raw_parts().handle"));
+    assert!(source.contains("output.handle"));
+    assert!(source.contains("webgpu_interop::finish_c32"));
+    assert!(source.contains("webgpu_interop::finish_f32"));
+    assert!(!source.contains("download_webgpu_tensor"));
+    assert!(!source.contains("upload_webgpu_tensor"));
+    assert!(source.contains("_cache: FftExecutionCache<'_>"));
+    assert!(source.contains("Error::backend_source(op, error)"));
+}
