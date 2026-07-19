@@ -19,6 +19,7 @@ const DEFAULT_CUBE_DIM_X: u32 = 256;
 mod apple;
 mod error;
 mod gemm;
+pub(crate) mod interop;
 mod kernels;
 mod memory;
 mod runtime;

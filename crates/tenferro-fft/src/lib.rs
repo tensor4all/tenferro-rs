@@ -2,9 +2,12 @@
 //!
 //! This crate is an out-of-tree `ExtensionOp` package with an explicit
 //! [`FftBackend`] capability. [`tenferro_cpu::CpuBackend`] implements the
-//! capability through RustFFT. Metal/WebGPU and CUDA backends require separate
-//! explicit implementations; unsupported requests return an error and never
-//! fall back to CPU or transfer tensor data. Concrete non-AD execution uses
+//! capability through RustFFT. With the `webgpu` feature,
+//! `tenferro_gpu::WebGpuBackend` executes C32 CFFT, F32 one-sided RFFT, and
+//! C32-to-F32 IRFFT through CubeK on its existing WebGPU placement. That first
+//! GPU path supports power-of-two lengths only; unsupported operations and
+//! dtypes return an error and never fall back to CPU or transfer tensor data.
+//! Concrete non-AD execution uses
 //! [`TensorFftExt`] and [`TensorReadFftExt`]. Traced graph construction uses
 //! [`TracedTensorFftExt`].
 //!
@@ -35,6 +38,32 @@
 //! let out = executor.run(&program).unwrap();
 //! assert_eq!(out.shape(), &[4]);
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
+//! ```
+//!
+//! ```
+//! # #[cfg(all(feature = "webgpu", target_os = "macos"))]
+//! # {
+//! use num_complex::Complex32;
+//! use tenferro_fft::{FftNorm, TensorFftExt};
+//! use tenferro_gpu::AppleContext;
+//! use tenferro_tensor::Tensor;
+//!
+//! if let Ok(context) = AppleContext::new() {
+//!     let host = Tensor::from_vec_col_major(
+//!         vec![4],
+//!         vec![Complex32::new(1.0, 0.0); 4],
+//!     ).unwrap();
+//!     let input = context.upload_tensor(&host).unwrap();
+//!     let output = input.fft(
+//!         None,
+//!         0,
+//!         FftNorm::Backward,
+//!         &mut context.metal_backend().clone(),
+//!     ).unwrap();
+//!     context.metal_backend().synchronize().unwrap();
+//!     assert_eq!(output.shape(), &[4]);
+//! }
+//! # }
 //! ```
 //!
 //! ```
@@ -80,6 +109,8 @@ mod backend;
 mod cache;
 mod cpu;
 mod spec;
+#[cfg(feature = "webgpu")]
+mod webgpu;
 
 pub use backend::{FftBackend, FftExecutionCache};
 pub use cache::{

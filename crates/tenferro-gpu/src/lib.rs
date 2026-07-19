@@ -48,6 +48,13 @@ pub use webgpu::{
     AppleTransferStats, WebGpuBackend, WebGpuRuntime,
 };
 
+/// Narrow owner-scoped WebGPU handle interop for extension crates.
+#[cfg(feature = "webgpu")]
+#[doc(hidden)]
+pub mod webgpu_interop {
+    pub use crate::webgpu::interop::*;
+}
+
 #[cfg(feature = "cuda")]
 #[doc(hidden)]
 pub mod cuda_interop {
