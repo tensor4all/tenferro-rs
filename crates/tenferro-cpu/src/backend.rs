@@ -276,7 +276,7 @@ pub enum CpuExecutionMode {
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::backend::ExternalCpuDomainRegistryError;
+/// use tenferro_cpu::ExternalCpuDomainRegistryError;
 ///
 /// let error = ExternalCpuDomainRegistryError::EmptyRegistry;
 /// assert!(error.to_string().contains("at least one"));
@@ -534,7 +534,7 @@ impl CpuExecutionInfo {
         &self.domain_cpus
     }
 
-    /// Return the worker count of the selected native execution context.
+    /// Return the worker count of the selected domain executor.
     ///
     /// # Examples
     ///
