@@ -74,6 +74,7 @@ pub mod inject;
 mod placement;
 pub mod provider;
 mod reduction;
+mod resource_domain;
 mod structural;
 mod topology;
 
@@ -114,8 +115,10 @@ pub use dot_runtime::{
     GeneralContractionPolicy,
 };
 pub use placement::{
-    CpuEngineConstructionError, CpuPlacement, CpuPlacementError, ResolvedCpuPlacement,
+    CpuEngineConstructionError, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee,
+    ResolvedCpuPlacement,
 };
+pub use resource_domain::{CpuDomainOwnership, ExternalCpuDomain, ExternalCpuDomainError};
 pub use topology::{
     discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
     NumaNodeId,

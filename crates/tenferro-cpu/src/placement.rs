@@ -52,6 +52,29 @@ pub enum CpuPlacement {
     AllAllowed,
 }
 
+/// Strength of a caller's declared CPU placement for one resource domain.
+///
+/// This declaration does not verify executor worker affinity. Executor
+/// capabilities report affinity verification independently.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu::CpuPlacementGuarantee;
+///
+/// assert_ne!(
+///     CpuPlacementGuarantee::ExactDeclared,
+///     CpuPlacementGuarantee::AdvisoryDeclared,
+/// );
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CpuPlacementGuarantee {
+    /// The caller requires execution to remain within the declared CPU set.
+    ExactDeclared,
+    /// The declared CPU set is advisory rather than a strict placement bound.
+    AdvisoryDeclared,
+}
+
 /// Concrete managed placement after topology resolution.
 ///
 /// # Examples
