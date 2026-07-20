@@ -1,0 +1,188 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "97f4815a2e0b4843c1a649b5e3dae1754e4366a160b58828d106e739996c717f"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "7632ac6623656e4a0d9654cff39152119d74ce9dccde1bd33bf2e0b338e8fa98"
+    }
+  },
+  "attempt": 1,
+  "case": "lazy_slice_1",
+  "order": "A/B",
+  "pair": 1,
+  "protocol_version": 1,
+  "reason": "sentinel interval breaches drift band",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-lazy_slice_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:52:41.333652+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2697058, 'name': 'rustc'}, {'pid': 2697684, 'name': 'rustc'}, {'pid': 2697768, 'name': 'rustc'}, {'pid': 2697868, 'name': 'rustc'}, {'pid': 2697940, 'name': 'rustc'}, {'pid': 2698077, 'name': 'rustc'}, {'pid': 2698100, 'name': 'rustc'}, {'pid': 2698143, 'name': 'rustc'}, {'pid': 2698151, 'name': 'rustc'}, {'pid': 2698410, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2696312, 'name': 'rustc'}, {'pid': 2696317, 'name': 'rustc'}, {'pid': 2696372, 'name': 'rustc'}, {'pid': 2696391, 'name': 'rustc'}, {'pid': 2696474, 'name': 'rustc'}, {'pid': 2696503, 'name': 'rustc'}, {'pid': 2696521, 'name': 'rustc'}, {'pid': 2696553, 'name': 'rustc'}, {'pid': 2696595, 'name': 'rustc'}, {'pid': 2696604, 'name': 'rustc'}, {'pid': 2696643, 'name': 'rustc'}, {'pid': 2696665, 'name': 'rustc'}, {'pid': 2696722, 'name': 'rustc'}, {'pid': 2696755, 'name': 'rustc'}, {'pid': 2696767, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2696312, 'name': 'rustc'}, {'pid': 2696372, 'name': 'rustc'}, {'pid': 2696391, 'name': 'rustc'}, {'pid': 2696474, 'name': 'rustc'}, {'pid': 2696643, 'name': 'rustc'}, {'pid': 2696884, 'name': 'rustc'}, {'pid': 2697008, 'name': 'rustc'}, {'pid': 2697017, 'name': 'rustc'}, {'pid': 2697058, 'name': 'rustc'}, {'pid': 2697072, 'name': 'rustc'}, {'pid': 2697100, 'name': 'rustc'}, {'pid': 2697126, 'name': 'rustc'}, {'pid': 2697197, 'name': 'rustc'}, {'pid': 2697201, 'name': 'rustc'}, {'pid': 2697209, 'name': 'rustc'}, {'pid': 2697220, 'name': 'rustc'}, {'pid': 2697234, 'name': 'rustc'}, {'pid': 2697256, 'name': 'rustc'}, {'pid': 2697263, 'name': 'rustc'}, {'pid': 2697276, 'name': 'rustc'}, {'pid': 2697337, 'name': 'rustc'}, {'pid': 2697345, 'name': 'rustc'}, {'pid': 2697353, 'name': 'rustc'}, {'pid': 2697372, 'name': 'rustc'}, {'pid': 2697377, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2696312, 'name': 'rustc'}, {'pid': 2696372, 'name': 'rustc'}, {'pid': 2696474, 'name': 'rustc'}, {'pid': 2696643, 'name': 'rustc'}, {'pid': 2696884, 'name': 'rustc'}, {'pid': 2697008, 'name': 'rustc'}, {'pid': 2697017, 'name': 'rustc'}, {'pid': 2697058, 'name': 'rustc'}, {'pid': 2697100, 'name': 'rustc'}, {'pid': 2697209, 'name': 'rustc'}, {'pid': 2697276, 'name': 'rustc'}, {'pid': 2697353, 'name': 'rustc'}, {'pid': 2697400, 'name': 'rustc'}, {'pid': 2697562, 'name': 'rustc'}, {'pid': 2697603, 'name': 'rustc'}, {'pid': 2697684, 'name': 'rustc'}, {'pid': 2697768, 'name': 'rustc'}, {'pid': 2697789, 'name': 'rustc'}, {'pid': 2697793, 'name': 'rustc'}, {'pid': 2697799, 'name': 'rustc'}, {'pid': 2697830, 'name': 'rustc'}, {'pid': 2697834, 'name': 'rustc'}, {'pid': 2697840, 'name': 'rustc'}, {'pid': 2697845, 'name': 'rustc'}, {'pid': 2697855, 'name': 'rustc'}, {'pid': 2697861, 'name': 'rustc'}, {'pid': 2697868, 'name': 'rustc'}, {'pid': 2697871, 'name': 'rustc'}, {'pid': 2697882, 'name': 'rustc'}, {'pid': 2697888, 'name': 'rustc'}, {'pid': 2697892, 'name': 'rustc'}, {'pid': 2697895, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2696312, 'name': 'rustc'}, {'pid': 2697008, 'name': 'rustc'}, {'pid': 2697017, 'name': 'rustc'}, {'pid': 2697058, 'name': 'rustc'}, {'pid': 2697562, 'name': 'rustc'}, {'pid': 2697684, 'name': 'rustc'}, {'pid': 2697768, 'name': 'rustc'}, {'pid': 2697868, 'name': 'rustc'}, {'pid': 2697871, 'name': 'rustc'}, {'pid': 2697892, 'name': 'rustc'}, {'pid': 2697940, 'name': 'rustc'}, {'pid': 2698077, 'name': 'rustc'}, {'pid': 2698100, 'name': 'rustc'}, {'pid': 2698143, 'name': 'rustc'}, {'pid': 2698151, 'name': 'rustc'}, {'pid': 2698193, 'name': 'rustc'}, {'pid': 2698220, 'name': 'rustc'}, {'pid': 2698227, 'name': 'rustc'}, {'pid': 2698252, 'name': 'rustc'}, {'pid': 2698316, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2697008, 'name': 'rustc'}, {'pid': 2697058, 'name': 'rustc'}, {'pid': 2697684, 'name': 'rustc'}, {'pid': 2697768, 'name': 'rustc'}, {'pid': 2697868, 'name': 'rustc'}, {'pid': 2697871, 'name': 'rustc'}, {'pid': 2697892, 'name': 'rustc'}, {'pid': 2697940, 'name': 'rustc'}, {'pid': 2698077, 'name': 'rustc'}, {'pid': 2698100, 'name': 'rustc'}, {'pid': 2698143, 'name': 'rustc'}, {'pid': 2698151, 'name': 'rustc'}, {'pid': 2698410, 'name': 'rustc'}, {'pid': 2698442, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2697058, 'name': 'rustc'}, {'pid': 2697684, 'name': 'rustc'}, {'pid': 2697768, 'name': 'rustc'}, {'pid': 2697868, 'name': 'rustc'}, {'pid': 2697940, 'name': 'rustc'}, {'pid': 2698077, 'name': 'rustc'}, {'pid': 2698100, 'name': 'rustc'}, {'pid': 2698143, 'name': 'rustc'}, {'pid': 2698151, 'name': 'rustc'}, {'pid': 2698410, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.08258056640625,
+      "normalized_load_start": 0.08202362060546875,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T18:52:32.426216+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/slice_f64/1",
+        "--save-baseline",
+        "phase1-target-lazy_slice_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:52:50.761138+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2702970, 'name': 'rustc'}]",
+        "cargo/rustc overlap at start: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2697058, 'name': 'rustc'}, {'pid': 2697684, 'name': 'rustc'}, {'pid': 2697768, 'name': 'rustc'}, {'pid': 2697868, 'name': 'rustc'}, {'pid': 2697940, 'name': 'rustc'}, {'pid': 2698077, 'name': 'rustc'}, {'pid': 2698100, 'name': 'rustc'}, {'pid': 2698143, 'name': 'rustc'}, {'pid': 2698151, 'name': 'rustc'}, {'pid': 2698410, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2697058, 'name': 'rustc'}, {'pid': 2697684, 'name': 'rustc'}, {'pid': 2697768, 'name': 'rustc'}, {'pid': 2697868, 'name': 'rustc'}, {'pid': 2697940, 'name': 'rustc'}, {'pid': 2698077, 'name': 'rustc'}, {'pid': 2698100, 'name': 'rustc'}, {'pid': 2698143, 'name': 'rustc'}, {'pid': 2698151, 'name': 'rustc'}, {'pid': 2698410, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2697684, 'name': 'rustc'}, {'pid': 2697768, 'name': 'rustc'}, {'pid': 2697868, 'name': 'rustc'}, {'pid': 2697940, 'name': 'rustc'}, {'pid': 2698077, 'name': 'rustc'}, {'pid': 2698100, 'name': 'rustc'}, {'pid': 2698143, 'name': 'rustc'}, {'pid': 2698151, 'name': 'rustc'}, {'pid': 2698410, 'name': 'rustc'}, {'pid': 2698502, 'name': 'rustc'}, {'pid': 2698511, 'name': 'rustc'}, {'pid': 2698539, 'name': 'rustc'}, {'pid': 2698542, 'name': 'rustc'}, {'pid': 2698554, 'name': 'rustc'}, {'pid': 2698560, 'name': 'rustc'}, {'pid': 2698576, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2697684, 'name': 'rustc'}, {'pid': 2697768, 'name': 'rustc'}, {'pid': 2697868, 'name': 'rustc'}, {'pid': 2697940, 'name': 'rustc'}, {'pid': 2698077, 'name': 'rustc'}, {'pid': 2698143, 'name': 'rustc'}, {'pid': 2698151, 'name': 'rustc'}, {'pid': 2698410, 'name': 'rustc'}, {'pid': 2698502, 'name': 'rustc'}, {'pid': 2698539, 'name': 'rustc'}, {'pid': 2698542, 'name': 'rustc'}, {'pid': 2698560, 'name': 'rustc'}, {'pid': 2698576, 'name': 'rustc'}, {'pid': 2698657, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2697684, 'name': 'rustc'}, {'pid': 2697768, 'name': 'rustc'}, {'pid': 2698077, 'name': 'rustc'}, {'pid': 2698143, 'name': 'rustc'}, {'pid': 2698410, 'name': 'rustc'}, {'pid': 2698808, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2698077, 'name': 'rustc'}, {'pid': 2698410, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2698410, 'name': 'rustc'}, {'pid': 2698923, 'name': 'rustc'}, {'pid': 2698924, 'name': 'rustc'}, {'pid': 2698926, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2698410, 'name': 'rustc'}, {'pid': 2698924, 'name': 'rustc'}, {'pid': 2698975, 'name': 'rustc'}, {'pid': 2698978, 'name': 'rustc'}, {'pid': 2698982, 'name': 'rustc'}, {'pid': 2698989, 'name': 'rustc'}, {'pid': 2698993, 'name': 'rustc'}, {'pid': 2699002, 'name': 'rustc'}, {'pid': 2699007, 'name': 'rustc'}, {'pid': 2699013, 'name': 'rustc'}, {'pid': 2699019, 'name': 'rustc'}, {'pid': 2699023, 'name': 'rustc'}, {'pid': 2699028, 'name': 'rustc'}, {'pid': 2699039, 'name': 'rustc'}, {'pid': 2699043, 'name': 'rustc'}, {'pid': 2699048, 'name': 'rustc'}, {'pid': 2699055, 'name': 'rustc'}, {'pid': 2699061, 'name': 'rustc'}, {'pid': 2699067, 'name': 'rustc'}, {'pid': 2699072, 'name': 'rustc'}, {'pid': 2699077, 'name': 'rustc'}, {'pid': 2699084, 'name': 'rustc'}, {'pid': 2699095, 'name': 'rustc'}, {'pid': 2699100, 'name': 'rustc'}, {'pid': 2699104, 'name': 'rustc'}, {'pid': 2699107, 'name': 'rustc'}, {'pid': 2699113, 'name': 'rustc'}, {'pid': 2699191, 'name': 'rustc'}, {'pid': 2699199, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2698924, 'name': 'rustc'}, {'pid': 2698975, 'name': 'rustc'}, {'pid': 2699084, 'name': 'rustc'}, {'pid': 2699113, 'name': 'rustc'}, {'pid': 2699546, 'name': 'rustc'}, {'pid': 2699573, 'name': 'rustc'}, {'pid': 2699730, 'name': 'rustc'}, {'pid': 2699742, 'name': 'rustc'}, {'pid': 2699748, 'name': 'rustc'}, {'pid': 2699794, 'name': 'rustc'}, {'pid': 2699804, 'name': 'rustc'}, {'pid': 2699809, 'name': 'rustc'}, {'pid': 2699816, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2698924, 'name': 'rustc'}, {'pid': 2698975, 'name': 'rustc'}, {'pid': 2699573, 'name': 'rustc'}, {'pid': 2699730, 'name': 'rustc'}, {'pid': 2699748, 'name': 'rustc'}, {'pid': 2699794, 'name': 'rustc'}, {'pid': 2699804, 'name': 'rustc'}, {'pid': 2699809, 'name': 'rustc'}, {'pid': 2699816, 'name': 'rustc'}, {'pid': 2699978, 'name': 'rustc'}, {'pid': 2700060, 'name': 'rustc'}, {'pid': 2700108, 'name': 'rustc'}, {'pid': 2700119, 'name': 'rustc'}, {'pid': 2700121, 'name': 'rustc'}, {'pid': 2700182, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2698975, 'name': 'rustc'}, {'pid': 2699573, 'name': 'rustc'}, {'pid': 2699730, 'name': 'rustc'}, {'pid': 2699748, 'name': 'rustc'}, {'pid': 2699816, 'name': 'rustc'}, {'pid': 2700121, 'name': 'rustc'}, {'pid': 2700246, 'name': 'rustc'}, {'pid': 2700347, 'name': 'rustc'}, {'pid': 2700351, 'name': 'rustc'}, {'pid': 2700385, 'name': 'rustc'}, {'pid': 2700402, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2699573, 'name': 'rustc'}, {'pid': 2699748, 'name': 'rustc'}, {'pid': 2700121, 'name': 'rustc'}, {'pid': 2700246, 'name': 'rustc'}, {'pid': 2700347, 'name': 'rustc'}, {'pid': 2700351, 'name': 'rustc'}, {'pid': 2700409, 'name': 'rustc'}, {'pid': 2700412, 'name': 'rustc'}, {'pid': 2700427, 'name': 'rustc'}, {'pid': 2700431, 'name': 'rustc'}, {'pid': 2700508, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2699573, 'name': 'rustc'}, {'pid': 2699748, 'name': 'rustc'}, {'pid': 2700412, 'name': 'rustc'}, {'pid': 2700427, 'name': 'rustc'}, {'pid': 2700508, 'name': 'rustc'}, {'pid': 2700509, 'name': 'rustc'}, {'pid': 2700578, 'name': 'rustc'}, {'pid': 2700585, 'name': 'rustc'}, {'pid': 2700594, 'name': 'rustc'}, {'pid': 2700623, 'name': 'rustc'}, {'pid': 2700625, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2699573, 'name': 'rustc'}, {'pid': 2699748, 'name': 'rustc'}, {'pid': 2700412, 'name': 'rustc'}, {'pid': 2700578, 'name': 'rustc'}, {'pid': 2700585, 'name': 'rustc'}, {'pid': 2700623, 'name': 'rustc'}, {'pid': 2700625, 'name': 'rustc'}, {'pid': 2700676, 'name': 'rustc'}, {'pid': 2700681, 'name': 'rustc'}, {'pid': 2700686, 'name': 'rustc'}, {'pid': 2700692, 'name': 'rustc'}, {'pid': 2700697, 'name': 'rustc'}, {'pid': 2700700, 'name': 'rustc'}, {'pid': 2700718, 'name': 'rustc'}, {'pid': 2700732, 'name': 'rustc'}, {'pid': 2700743, 'name': 'rustc'}, {'pid': 2700748, 'name': 'rustc'}, {'pid': 2700758, 'name': 'rustc'}, {'pid': 2700764, 'name': 'rustc'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2700777, 'name': 'rustc'}, {'pid': 2700782, 'name': 'rustc'}, {'pid': 2700805, 'name': 'rustc'}, {'pid': 2700814, 'name': 'rustc'}, {'pid': 2700821, 'name': 'rustc'}, {'pid': 2700827, 'name': 'rustc'}, {'pid': 2700835, 'name': 'rustc'}, {'pid': 2700844, 'name': 'rustc'}, {'pid': 2700848, 'name': 'rustc'}, {'pid': 2700855, 'name': 'rustc'}, {'pid': 2700860, 'name': 'rustc'}, {'pid': 2700874, 'name': 'rustc'}, {'pid': 2700879, 'name': 'rustc'}, {'pid': 2700884, 'name': 'rustc'}, {'pid': 2700886, 'name': 'rustc'}, {'pid': 2700902, 'name': 'rustc'}, {'pid': 2700912, 'name': 'rustc'}, {'pid': 2700917, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2699573, 'name': 'rustc'}, {'pid': 2700412, 'name': 'rustc'}, {'pid': 2700585, 'name': 'rustc'}, {'pid': 2700623, 'name': 'rustc'}, {'pid': 2700625, 'name': 'rustc'}, {'pid': 2700676, 'name': 'rustc'}, {'pid': 2700681, 'name': 'rustc'}, {'pid': 2700692, 'name': 'rustc'}, {'pid': 2700697, 'name': 'rustc'}, {'pid': 2700743, 'name': 'rustc'}, {'pid': 2700748, 'name': 'rustc'}, {'pid': 2700764, 'name': 'rustc'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2700827, 'name': 'rustc'}, {'pid': 2700835, 'name': 'rustc'}, {'pid': 2700855, 'name': 'rustc'}, {'pid': 2700874, 'name': 'rustc'}, {'pid': 2700912, 'name': 'rustc'}, {'pid': 2700917, 'name': 'rustc'}, {'pid': 2700945, 'name': 'rustc'}, {'pid': 2701025, 'name': 'rustc'}, {'pid': 2701049, 'name': 'rustc'}, {'pid': 2701061, 'name': 'rustc'}, {'pid': 2701091, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2699573, 'name': 'rustc'}, {'pid': 2700412, 'name': 'rustc'}, {'pid': 2700585, 'name': 'rustc'}, {'pid': 2700623, 'name': 'rustc'}, {'pid': 2700625, 'name': 'rustc'}, {'pid': 2700743, 'name': 'rustc'}, {'pid': 2700748, 'name': 'rustc'}, {'pid': 2700764, 'name': 'rustc'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2700835, 'name': 'rustc'}, {'pid': 2700855, 'name': 'rustc'}, {'pid': 2700874, 'name': 'rustc'}, {'pid': 2700912, 'name': 'rustc'}, {'pid': 2700917, 'name': 'rustc'}, {'pid': 2700945, 'name': 'rustc'}, {'pid': 2701061, 'name': 'rustc'}, {'pid': 2701242, 'name': 'rustc'}, {'pid': 2701284, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2699573, 'name': 'rustc'}, {'pid': 2700412, 'name': 'rustc'}, {'pid': 2700585, 'name': 'rustc'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2700835, 'name': 'rustc'}, {'pid': 2700855, 'name': 'rustc'}, {'pid': 2700912, 'name': 'rustc'}, {'pid': 2700917, 'name': 'rustc'}, {'pid': 2701284, 'name': 'rustc'}, {'pid': 2701343, 'name': 'rustc'}, {'pid': 2701388, 'name': 'rustc'}, {'pid': 2701399, 'name': 'rustc'}, {'pid': 2701558, 'name': 'rustc'}, {'pid': 2701568, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2699573, 'name': 'rustc'}, {'pid': 2700585, 'name': 'rustc'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2700835, 'name': 'rustc'}, {'pid': 2700855, 'name': 'rustc'}, {'pid': 2700912, 'name': 'rustc'}, {'pid': 2700917, 'name': 'rustc'}, {'pid': 2701284, 'name': 'rustc'}, {'pid': 2701343, 'name': 'rustc'}, {'pid': 2701388, 'name': 'rustc'}, {'pid': 2701399, 'name': 'rustc'}, {'pid': 2701624, 'name': 'rustc'}, {'pid': 2701632, 'name': 'rustc'}, {'pid': 2701670, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700585, 'name': 'rustc'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2700855, 'name': 'rustc'}, {'pid': 2701284, 'name': 'rustc'}, {'pid': 2701343, 'name': 'rustc'}, {'pid': 2701388, 'name': 'rustc'}, {'pid': 2701399, 'name': 'rustc'}, {'pid': 2701717, 'name': 'rustc'}, {'pid': 2701749, 'name': 'rustc'}, {'pid': 2701769, 'name': 'rustc'}, {'pid': 2701806, 'name': 'rustc'}, {'pid': 2701809, 'name': 'rustc'}, {'pid': 2701835, 'name': 'rustc'}, {'pid': 2701842, 'name': 'rustc'}, {'pid': 2701878, 'name': 'rustc'}, {'pid': 2701887, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700585, 'name': 'rustc'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2700855, 'name': 'rustc'}, {'pid': 2701343, 'name': 'rustc'}, {'pid': 2701388, 'name': 'rustc'}, {'pid': 2701399, 'name': 'rustc'}, {'pid': 2701806, 'name': 'rustc'}, {'pid': 2701809, 'name': 'rustc'}, {'pid': 2701835, 'name': 'rustc'}, {'pid': 2701842, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2701921, 'name': 'rustc'}, {'pid': 2701954, 'name': 'rustc'}, {'pid': 2701960, 'name': 'rustc'}, {'pid': 2701962, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700585, 'name': 'rustc'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701388, 'name': 'rustc'}, {'pid': 2701399, 'name': 'rustc'}, {'pid': 2701809, 'name': 'rustc'}, {'pid': 2701835, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2701921, 'name': 'rustc'}, {'pid': 2701954, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702324, 'name': 'rustc'}, {'pid': 2702457, 'name': 'rustc'}, {'pid': 2702464, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2701921, 'name': 'rustc'}, {'pid': 2701954, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702324, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702569, 'name': 'rustc'}, {'pid': 2702580, 'name': 'rustc'}, {'pid': 2702645, 'name': 'rustc'}, {'pid': 2702647, 'name': 'rustc'}, {'pid': 2702649, 'name': 'rustc'}, {'pid': 2702650, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2701921, 'name': 'rustc'}, {'pid': 2701954, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702324, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702645, 'name': 'rustc'}, {'pid': 2702690, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2701954, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702324, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702645, 'name': 'rustc'}, {'pid': 2702690, 'name': 'rustc'}, {'pid': 2702739, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702759, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2701954, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702324, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702690, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702781, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702324, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702690, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702781, 'name': 'rustc'}, {'pid': 2702800, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702324, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702781, 'name': 'rustc'}, {'pid': 2702800, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702324, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702781, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702878, 'name': 'rustc'}, {'pid': 2702894, 'name': 'rustc'}, {'pid': 2702895, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702324, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702781, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702878, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702878, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2702970, 'name': 'rustc'}]"
+      ],
+      "normalized_load_end": 0.0980682373046875,
+      "normalized_load_start": 0.08258056640625,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T18:52:41.371089+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/slice_f64/1",
+        "--baseline",
+        "phase1-target-lazy_slice_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:52:59.816217+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2703066, 'name': 'rustc'}, {'pid': 2703862, 'name': 'rustc'}]",
+        "cargo/rustc overlap at start: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2702970, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702019, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2702970, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2702970, 'name': 'rustc'}, {'pid': 2703003, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2702970, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2703042, 'name': 'rustc'}, {'pid': 2703043, 'name': 'rustc'}, {'pid': 2703066, 'name': 'rustc'}, {'pid': 2703067, 'name': 'rustc'}, {'pid': 2703068, 'name': 'rustc'}, {'pid': 2703070, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702740, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2703042, 'name': 'rustc'}, {'pid': 2703066, 'name': 'rustc'}, {'pid': 2703068, 'name': 'rustc'}, {'pid': 2703070, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702538, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2703066, 'name': 'rustc'}, {'pid': 2703070, 'name': 'rustc'}, {'pid': 2703161, 'name': 'rustc'}, {'pid': 2703171, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702860, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2703066, 'name': 'rustc'}, {'pid': 2703215, 'name': 'rustc'}, {'pid': 2703219, 'name': 'rustc'}, {'pid': 2703220, 'name': 'rustc'}, {'pid': 2703224, 'name': 'rustc'}, {'pid': 2703228, 'name': 'rustc'}, {'pid': 2703236, 'name': 'rustc'}, {'pid': 2703242, 'name': 'rustc'}, {'pid': 2703246, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2703066, 'name': 'rustc'}, {'pid': 2703219, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2700771, 'name': 'rustc'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2703066, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2701901, 'name': 'rustc'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2703066, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2703066, 'name': 'rustc'}, {'pid': 2703862, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2702911, 'name': 'rustc'}, {'pid': 2703066, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2703066, 'name': 'rustc'}, {'pid': 2703862, 'name': 'rustc'}]"
+      ],
+      "normalized_load_end": 0.11351776123046875,
+      "normalized_load_start": 0.0980682373046875,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T18:52:50.799019+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-lazy_slice_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:53:08.561817+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2704030, 'name': 'rustc'}, {'pid': 2704322, 'name': 'rustc'}]",
+        "cargo/rustc overlap at start: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2703066, 'name': 'rustc'}, {'pid': 2703862, 'name': 'rustc'}, {'pid': 2703902, 'name': 'rustc'}, {'pid': 2703903, 'name': 'rustc'}, {'pid': 2703904, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2703066, 'name': 'rustc'}, {'pid': 2703862, 'name': 'rustc'}, {'pid': 2703902, 'name': 'rustc'}, {'pid': 2703903, 'name': 'rustc'}, {'pid': 2703904, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2703862, 'name': 'rustc'}, {'pid': 2703902, 'name': 'rustc'}, {'pid': 2703903, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2703862, 'name': 'rustc'}, {'pid': 2703903, 'name': 'rustc'}, {'pid': 2703944, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2703862, 'name': 'rustc'}, {'pid': 2703944, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2703944, 'name': 'rustc'}, {'pid': 2704003, 'name': 'rustc'}, {'pid': 2704005, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2704003, 'name': 'rustc'}, {'pid': 2704005, 'name': 'rustc'}, {'pid': 2704030, 'name': 'rustc'}, {'pid': 2704032, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2704005, 'name': 'rustc'}, {'pid': 2704030, 'name': 'rustc'}, {'pid': 2704032, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2704005, 'name': 'rustc'}, {'pid': 2704030, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2696273, 'name': 'cargo'}, {'pid': 2704030, 'name': 'rustc'}, {'pid': 2704322, 'name': 'rustc'}]"
+      ],
+      "normalized_load_end": 0.11518096923828125,
+      "normalized_load_start": 0.11351776123046875,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T18:52:59.855382+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}

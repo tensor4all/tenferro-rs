@@ -1,0 +1,120 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "485943a47d2e4b8c35f7a15ccf91c40c628542d67d0af8897996e73667e82421"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "e614a512c904f4208a7d824a7d6bf65a010245c4ed47ebd0476ae55d85773ff1"
+    }
+  },
+  "attempt": 1,
+  "case": "lazy_dot_2",
+  "order": "A/B",
+  "pair": 1,
+  "protocol_version": 1,
+  "reason": "attempt sentinel_after: monitor violation: [\"cargo/rustc overlap: [{'pid': 2682296, 'name': 'cargo'}, {'pid': 2682343, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2682296, 'name': 'cargo'}]\"]",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-lazy_dot_2-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:35:01.981743+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.0792083740234375,
+      "normalized_load_start": 0.07930755615234375,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T18:34:53.119686+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/dot_general_f64/2",
+        "--save-baseline",
+        "phase1-target-lazy_dot_2-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:35:11.154033+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.07903289794921875,
+      "normalized_load_start": 0.0792083740234375,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T18:35:02.017630+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/dot_general_f64/2",
+        "--baseline",
+        "phase1-target-lazy_dot_2-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:35:20.324067+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.078887939453125,
+      "normalized_load_start": 0.07903289794921875,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T18:35:11.185541+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-lazy_dot_2-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:35:29.267372+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap: [{'pid': 2682296, 'name': 'cargo'}, {'pid': 2682343, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2682296, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.08001708984375,
+      "normalized_load_start": 0.078887939453125,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T18:35:20.356810+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}

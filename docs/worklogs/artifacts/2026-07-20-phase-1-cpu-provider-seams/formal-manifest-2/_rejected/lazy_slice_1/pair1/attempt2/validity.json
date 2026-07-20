@@ -1,0 +1,117 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "97035213096d5d2b26e0baa90601914bbfecd0de5ab2a6f2a5cb3c7e59c70001"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "5a4a42221040a2f04be6b711191dce7c9d8a94f5c80307dc4deda1ace7c1a7c1"
+    }
+  },
+  "attempt": 2,
+  "case": "lazy_slice_1",
+  "order": "A/B",
+  "pair": 1,
+  "protocol_version": 1,
+  "reason": "sentinel interval breaches drift band",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-lazy_slice_1-p1-a2",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:55:18.488363+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.09708404541015625,
+      "normalized_load_start": 0.09348297119140625,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T18:55:09.522233+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/slice_f64/1",
+        "--save-baseline",
+        "phase1-target-lazy_slice_1-p1-a2",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:55:26.892463+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.0968170166015625,
+      "normalized_load_start": 0.09708404541015625,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T18:55:18.525951+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/slice_f64/1",
+        "--baseline",
+        "phase1-target-lazy_slice_1-p1-a2",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:55:35.790373+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.092681884765625,
+      "normalized_load_start": 0.0968170166015625,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T18:55:26.926402+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-lazy_slice_1-p1-a2",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:55:44.413515+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.09765625,
+      "normalized_load_start": 0.092681884765625,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T18:55:35.822744+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}

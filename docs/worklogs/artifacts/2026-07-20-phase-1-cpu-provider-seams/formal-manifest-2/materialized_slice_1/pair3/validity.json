@@ -1,0 +1,117 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "f5a1ac22144e9ed5168d7af73908b7e4f835ad09b5335637250531bc4d2a06ba"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "934483e020e331b5b3fc4ba0d114d08620c3ebab9c7751a5cd1caab87b34d723"
+    }
+  },
+  "attempt": 1,
+  "case": "materialized_slice_1",
+  "order": "A/B",
+  "pair": 3,
+  "protocol_version": 1,
+  "reason": "valid",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-materialized_slice_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:34:10.019223+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.0773773193359375,
+      "normalized_load_start": 0.07587432861328125,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T19:34:01.074333+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/slice_f64/1",
+        "--save-baseline",
+        "phase1-target-materialized_slice_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:34:18.705195+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.07508087158203125,
+      "normalized_load_start": 0.0773773193359375,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T19:34:10.051485+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/slice_f64/1",
+        "--baseline",
+        "phase1-target-materialized_slice_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:34:27.357154+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.07532501220703125,
+      "normalized_load_start": 0.07508087158203125,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T19:34:18.738035+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-materialized_slice_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:34:36.313854+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.07585906982421875,
+      "normalized_load_start": 0.07532501220703125,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T19:34:27.391910+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": true
+}

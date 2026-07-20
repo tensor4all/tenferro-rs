@@ -1,0 +1,121 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "e331e9102d900b0b9a2a1f800240da7397d35bb87ef00841484a23eaad73d7c9"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "09e352daf1f46d99776d671ac995cf3e10be8bcc21036fcd2142b4ffc95d1d51"
+    }
+  },
+  "attempt": 1,
+  "case": "materialized_add_64",
+  "order": "A/B",
+  "pair": 1,
+  "protocol_version": 1,
+  "reason": "attempt sentinel_after: monitor violation: [\"cargo/rustc overlap at end: [{'pid': 2730539, 'name': 'cargo'}]\", \"cargo/rustc overlap: [{'pid': 2730539, 'name': 'cargo'}, {'pid': 2730551, 'name': 'cargo'}]\", \"cargo/rustc overlap: [{'pid': 2730539, 'name': 'cargo'}]\"]",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-materialized_add_64-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:12:11.219691+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.08477783203125,
+      "normalized_load_start": 0.08734893798828125,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T19:12:02.642096+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/add_f64/64",
+        "--save-baseline",
+        "phase1-target-materialized_add_64-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:12:20.080596+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.08365631103515625,
+      "normalized_load_start": 0.08477783203125,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T19:12:11.251491+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/add_f64/64",
+        "--baseline",
+        "phase1-target-materialized_add_64-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:12:28.983741+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.08655548095703125,
+      "normalized_load_start": 0.08365631103515625,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T19:12:20.112623+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-materialized_add_64-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:12:37.904023+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2730539, 'name': 'cargo'}]",
+        "cargo/rustc overlap: [{'pid': 2730539, 'name': 'cargo'}, {'pid': 2730551, 'name': 'cargo'}]",
+        "cargo/rustc overlap: [{'pid': 2730539, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.16909027099609375,
+      "normalized_load_start": 0.08655548095703125,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T19:12:29.016588+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}

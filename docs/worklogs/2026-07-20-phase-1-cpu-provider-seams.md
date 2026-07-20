@@ -273,3 +273,66 @@ provider regression, but it does not satisfy the all-PASS phase exit. The next
 eligible experiment is a new complete 28-case, three-pair campaign with the
 same immutable inputs and protocol; no pair from formal campaign 1 may be
 selected or reused.
+
+## Formal campaign 2: INCONCLUSIVE
+
+Formal campaign 2 was a new complete run under the same immutable baseline
+and candidate binaries, common lock, CPU 0, single-thread environment, case
+matrix, and validity protocol. It used the new empty evidence root
+[`formal-manifest-2`](./artifacts/2026-07-20-phase-1-cpu-provider-seams/formal-manifest-2/)
+and reused no accepted or rejected pair from formal campaign 1.
+
+The accepted inventory is again exactly 28 cases, 84 pairs, and 336 monitored
+runs. Independent manifest re-validation found zero monitor violations, zero
+non-zero exits, zero affinity mismatches, and a maximum accepted endpoint
+normalized load of `0.13843536376953125`. Thirty-one attempts were rejected
+before manifest adoption: 23 for exact-name Cargo/rustc overlap and eight for
+an A/A sentinel drift breach. The tracked evidence occupies 3.8 MiB; the local
+root occupies 5.6 MiB including gitignored Criterion console logs. The final
+`campaign.json` SHA-256 is
+`ed99d999bf74e77d9ffef698a25583f00f3672da7a722adfd01f1bc3bc29bb0c`.
+
+The independent manifest-aware classifier rerun produced the following output
+without edits:
+
+```console
+$ python3 scripts/classify_criterion_noninferiority.py docs/worklogs/artifacts/2026-07-20-phase-1-cpu-provider-seams/formal-manifest-2
+| Case | Pair 1 | Pair 2 | Pair 3 | Class |
+|---|---:|---:|---:|---|
+| lazy_add_1 | +0.72..+4.93 (+2.89) | -2.14..+1.75 (-0.19) | -0.35..+3.67 (+1.62) | PASS |
+| lazy_add_64 | -3.36..+0.34 (-1.47) | -1.47..+2.62 (+0.51) | -4.42..-0.21 (-2.36) | PASS |
+| lazy_add_8 | -2.52..+2.30 (-0.18) | -3.77..+0.38 (-1.67) | -2.93..+1.50 (-0.75) | PASS |
+| lazy_dot_1 | -2.11..+1.85 (-0.15) | -4.00..-0.51 (-2.30) | -6.49..-3.13 (-4.83) | PASS |
+| lazy_dot_2 | -2.41..+1.45 (-0.46) | -1.49..+2.57 (+0.37) | -1.26..+2.37 (+0.57) | PASS |
+| lazy_neg_1 | -1.09..+2.90 (+0.94) | -0.20..+4.06 (+2.05) | -0.03..+3.96 (+1.89) | PASS |
+| lazy_neg_64 | -3.39..+0.25 (-1.58) | -3.65..-0.05 (-1.77) | -1.09..+2.60 (+0.74) | PASS |
+| lazy_neg_8 | -3.02..+0.64 (-1.15) | -1.15..+3.80 (+1.31) | +0.46..+5.03 (+2.55) | INCONCLUSIVE |
+| lazy_reduce_1 | -1.84..+1.89 (+0.04) | -1.71..+2.39 (+0.37) | -0.33..+4.23 (+1.79) | PASS |
+| lazy_reduce_64 | -2.43..+1.84 (-0.38) | -1.51..+2.26 (+0.36) | -1.29..+3.39 (+1.13) | PASS |
+| lazy_reduce_8 | -0.68..+3.16 (+1.33) | -1.15..+2.64 (+0.76) | -3.60..+0.68 (-1.43) | PASS |
+| lazy_slice_1 | -2.97..-1.19 (-2.07) | +0.85..+3.67 (+2.24) | -1.40..+0.68 (-0.38) | PASS |
+| lazy_slice_64 | -4.27..-2.31 (-3.29) | -2.18..-0.45 (-1.29) | +1.97..+4.41 (+3.19) | PASS |
+| lazy_slice_8 | -1.70..+0.54 (-0.60) | -1.33..+1.04 (-0.15) | -4.41..-1.89 (-3.10) | PASS |
+| materialized_add_1 | -0.35..+4.32 (+1.91) | -6.33..-2.10 (-4.20) | -0.20..+4.19 (+2.03) | PASS |
+| materialized_add_64 | -0.49..+3.72 (+1.59) | -4.08..+0.15 (-1.93) | -1.59..+2.03 (+0.17) | PASS |
+| materialized_add_8 | -0.15..+3.93 (+1.87) | -2.23..+1.64 (-0.27) | +4.24..+8.61 (+6.51) | INCONCLUSIVE |
+| materialized_dot_1 | -6.10..-2.54 (-4.31) | -1.81..+2.11 (+0.21) | -4.76..-0.56 (-2.76) | PASS |
+| materialized_dot_2 | -3.82..-0.08 (-2.00) | -4.54..-0.49 (-2.53) | -4.50..-0.92 (-2.67) | PASS |
+| materialized_neg_1 | -1.13..+3.24 (+0.95) | -1.73..+2.66 (+0.54) | -1.64..+2.59 (+0.40) | PASS |
+| materialized_neg_64 | +0.03..+4.23 (+2.05) | -1.50..+2.22 (+0.43) | -1.98..+2.49 (+0.33) | PASS |
+| materialized_neg_8 | +0.78..+5.08 (+2.99) | -2.08..+1.89 (-0.09) | -3.19..+1.07 (-1.06) | INCONCLUSIVE |
+| materialized_reduce_1 | -0.42..+3.96 (+1.77) | -2.93..+1.66 (-0.65) | -5.06..-0.46 (-2.79) | PASS |
+| materialized_reduce_64 | +3.16..+7.75 (+5.45) | -5.10..-0.54 (-2.67) | +2.34..+6.78 (+4.52) | INCONCLUSIVE |
+| materialized_reduce_8 | -0.97..+4.17 (+1.61) | -0.58..+4.32 (+1.82) | -4.08..+0.28 (-1.87) | PASS |
+| materialized_slice_1 | -0.98..+2.36 (+0.73) | -4.80..-2.04 (-3.46) | -3.16..-0.16 (-1.67) | PASS |
+| materialized_slice_64 | -3.65..-0.69 (-2.22) | -0.41..+2.68 (+1.14) | -3.14..-0.16 (-1.69) | PASS |
+| materialized_slice_8 | -0.50..+2.66 (+1.07) | -0.07..+3.05 (+1.56) | -2.45..+0.59 (-0.97) | PASS |
+
+Summary: 24 PASS / 0 FAIL / 4 INCONCLUSIVE; campaign=INCONCLUSIVE
+```
+
+The four inconclusive rows retain all three intervals above. Formal campaign 2
+again has no `FAIL`, but it does not satisfy the all-PASS phase exit. One final
+new complete campaign may be run with unchanged inputs and protocol. If that
+campaign is not `PASS`, no additional rerun is authorized: promotion remains
+blocked and the complete evidence stays on this branch for review.

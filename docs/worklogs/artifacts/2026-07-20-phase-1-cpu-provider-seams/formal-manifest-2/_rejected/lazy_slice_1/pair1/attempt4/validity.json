@@ -1,0 +1,135 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "69755ee5401bc9823cf25be4a3c3ae03be762bf7782541291006090bc0b83ea0"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "8f73a76322a2369414024675dca742ba65b9fa2e8a890eefb012f12455e8f8d7"
+    }
+  },
+  "attempt": 4,
+  "case": "lazy_slice_1",
+  "order": "A/B",
+  "pair": 1,
+  "protocol_version": 1,
+  "reason": "attempt sentinel_before: monitor violation: [\"cargo/rustc overlap at end: [{'pid': 2711152, 'name': 'cargo'}, {'pid': 2711174, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2711152, 'name': 'cargo'}, {'pid': 2711174, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2711152, 'name': 'cargo'}]\"]",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-lazy_slice_1-p1-a4",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:56:33.496633+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2711152, 'name': 'cargo'}, {'pid': 2711174, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2711152, 'name': 'cargo'}, {'pid': 2711174, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2711152, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.092498779296875,
+      "normalized_load_start": 0.09374237060546875,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T18:56:25.169543+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/slice_f64/1",
+        "--save-baseline",
+        "phase1-target-lazy_slice_1-p1-a4",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:56:42.123427+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at start: [{'pid': 2711152, 'name': 'cargo'}, {'pid': 2711174, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2711152, 'name': 'cargo'}, {'pid': 2711174, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2711152, 'name': 'cargo'}, {'pid': 2711483, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2711152, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.0926055908203125,
+      "normalized_load_start": 0.092498779296875,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T18:56:33.527917+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/slice_f64/1",
+        "--baseline",
+        "phase1-target-lazy_slice_1-p1-a4",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:56:51.023410+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2711833, 'name': 'cargo'}, {'pid': 2711837, 'name': 'cargo'}, {'pid': 2711871, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2711833, 'name': 'cargo'}, {'pid': 2711837, 'name': 'cargo'}, {'pid': 2711871, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2711833, 'name': 'cargo'}, {'pid': 2711837, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.08922576904296875,
+      "normalized_load_start": 0.0926055908203125,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T18:56:42.155030+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-lazy_slice_1-p1-a4",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:56:59.989502+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at start: [{'pid': 2711833, 'name': 'cargo'}, {'pid': 2711837, 'name': 'cargo'}, {'pid': 2711871, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2711833, 'name': 'cargo'}, {'pid': 2711837, 'name': 'cargo'}, {'pid': 2711871, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2711833, 'name': 'cargo'}, {'pid': 2711837, 'name': 'cargo'}, {'pid': 2711913, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2711837, 'name': 'cargo'}, {'pid': 2711922, 'name': 'rustc'}]"
+      ],
+      "normalized_load_end": 0.0886688232421875,
+      "normalized_load_start": 0.08922576904296875,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T18:56:51.058306+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}
