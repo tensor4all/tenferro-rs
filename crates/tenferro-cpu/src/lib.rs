@@ -101,7 +101,7 @@ pub use affinity::{
 };
 pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
-    DotGeneralProvider,
+    DotGeneralProvider, ExternalCpuDomainRegistryError,
 };
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;

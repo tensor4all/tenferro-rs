@@ -1,7 +1,8 @@
 use std::num::NonZeroUsize;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier};
+use std::sync::{mpsc, Arc};
+use std::time::Duration;
 
 use super::super::*;
 use crate::{
@@ -303,30 +304,83 @@ fn disjoint_external_domains_execute_concurrently() {
     let second = backend
         .for_placement(CpuPlacement::NumaNode(NumaNodeId::new(1)))
         .unwrap();
-    let barrier = Arc::new(Barrier::new(3));
-    let active = Arc::new(AtomicUsize::new(0));
-    let max_active = Arc::new(AtomicUsize::new(0));
 
-    let run = |backend: CpuBackend| {
-        let barrier = Arc::clone(&barrier);
-        let active = Arc::clone(&active);
-        let max_active = Arc::clone(&max_active);
+    let mut entered = observe_external_overlap(first, second, Duration::from_secs(2)).unwrap();
+    entered.sort_unstable();
+    assert_eq!(entered, [0, 1]);
+}
+
+#[test]
+fn overlap_observer_times_out_and_releases_serialized_workers() {
+    let backend = external_backend(
+        CpuDomainId::new(1),
+        [
+            external_domain_for_validation(1, node_placement(0, cpu_set([0, 1]))),
+            external_domain_for_validation(2, node_placement(1, cpu_set([1, 2]))),
+        ],
+        topology([0, 1, 2]),
+    )
+    .unwrap();
+    let first = backend
+        .for_placement(CpuPlacement::NumaNode(NumaNodeId::new(0)))
+        .unwrap();
+    let second = backend
+        .for_placement(CpuPlacement::NumaNode(NumaNodeId::new(1)))
+        .unwrap();
+
+    let error = observe_external_overlap(first, second, Duration::from_millis(50)).unwrap_err();
+
+    assert!(error.contains("did not overlap"), "{error}");
+}
+
+fn observe_external_overlap(
+    first: CpuBackend,
+    second: CpuBackend,
+    timeout: Duration,
+) -> Result<[usize; 2], String> {
+    let release_timeout = timeout.saturating_mul(4);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_first_tx, release_first_rx) = mpsc::channel();
+    let (release_second_tx, release_second_rx) = mpsc::channel();
+    let spawn_worker = |index, backend: CpuBackend, release_rx: mpsc::Receiver<()>| {
+        let entered_tx = entered_tx.clone();
         std::thread::spawn(move || {
-            backend.install(|| {
-                let now = active.fetch_add(1, Ordering::SeqCst) + 1;
-                max_active.fetch_max(now, Ordering::SeqCst);
-                barrier.wait();
-                active.fetch_sub(1, Ordering::SeqCst);
+            backend.install(move || {
+                entered_tx
+                    .send(index)
+                    .expect("overlap observer must remain alive");
+                release_rx
+                    .recv_timeout(release_timeout)
+                    .expect("overlap observer must release every entered worker");
             });
         })
     };
-    let first = run(first);
-    let second = run(second);
-    barrier.wait();
-    first.join().unwrap();
-    second.join().unwrap();
+    let first_worker = spawn_worker(0, first, release_first_rx);
+    let second_worker = spawn_worker(1, second, release_second_rx);
+    drop(entered_tx);
 
-    assert_eq!(max_active.load(Ordering::SeqCst), 2);
+    let observed = (|| {
+        let first = entered_rx
+            .recv_timeout(timeout)
+            .map_err(|error| format!("first external domain did not enter: {error}"))?;
+        let second = entered_rx
+            .recv_timeout(timeout)
+            .map_err(|error| format!("second external domain did not overlap: {error}"))?;
+        Ok([first, second])
+    })();
+
+    let first_release = release_first_tx.send(());
+    let second_release = release_second_tx.send(());
+    let first_join = first_worker.join();
+    let second_join = second_worker.join();
+
+    if first_release.is_err() || second_release.is_err() {
+        return Err("an overlap worker exited before its release signal".to_owned());
+    }
+    if first_join.is_err() || second_join.is_err() {
+        return Err("an overlap worker panicked".to_owned());
+    }
+    observed
 }
 
 #[test]
