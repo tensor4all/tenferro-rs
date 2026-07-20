@@ -333,12 +333,29 @@ fn overlap_observer_times_out_and_releases_serialized_workers() {
     assert!(error.contains("did not overlap"), "{error}");
 }
 
+#[test]
+fn overlap_observer_tolerates_slow_initial_worker_scheduling() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(100));
+        entered_tx.send(0).unwrap();
+        entered_tx.send(1).unwrap();
+    });
+
+    let observed = receive_overlap_entries(&entered_rx, Duration::from_millis(50));
+    worker.join().unwrap();
+
+    assert_eq!(observed.unwrap(), [0, 1]);
+}
+
 fn observe_external_overlap(
     first: CpuBackend,
     second: CpuBackend,
-    timeout: Duration,
+    overlap_timeout: Duration,
 ) -> Result<[usize; 2], String> {
-    let release_timeout = timeout.saturating_mul(4);
+    const RELEASE_MARGIN: Duration = Duration::from_secs(2);
+
+    let release_timeout = overlap_timeout.saturating_add(RELEASE_MARGIN);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_first_tx, release_first_rx) = mpsc::channel();
     let (release_second_tx, release_second_rx) = mpsc::channel();
@@ -359,15 +376,7 @@ fn observe_external_overlap(
     let second_worker = spawn_worker(1, second, release_second_rx);
     drop(entered_tx);
 
-    let observed = (|| {
-        let first = entered_rx
-            .recv_timeout(timeout)
-            .map_err(|error| format!("first external domain did not enter: {error}"))?;
-        let second = entered_rx
-            .recv_timeout(timeout)
-            .map_err(|error| format!("second external domain did not overlap: {error}"))?;
-        Ok([first, second])
-    })();
+    let observed = receive_overlap_entries(&entered_rx, overlap_timeout);
 
     let first_release = release_first_tx.send(());
     let second_release = release_second_tx.send(());
@@ -381,6 +390,21 @@ fn observe_external_overlap(
         return Err("an overlap worker panicked".to_owned());
     }
     observed
+}
+
+fn receive_overlap_entries(
+    entered_rx: &mpsc::Receiver<usize>,
+    overlap_timeout: Duration,
+) -> Result<[usize; 2], String> {
+    const FIRST_ENTRY_TIMEOUT: Duration = Duration::from_secs(2);
+
+    let first = entered_rx
+        .recv_timeout(FIRST_ENTRY_TIMEOUT)
+        .map_err(|error| format!("first external domain did not enter: {error}"))?;
+    let second = entered_rx
+        .recv_timeout(overlap_timeout)
+        .map_err(|error| format!("second external domain did not overlap: {error}"))?;
+    Ok([first, second])
 }
 
 #[test]
