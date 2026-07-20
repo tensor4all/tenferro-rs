@@ -1,0 +1,120 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "bdeb9ffe540f980159e0e3a617eaf7be61e3b9ff4364e02ca166877ecb7fd154"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "f0c63a36f548bd2fcb9ddf29b8bd2622406411e9f82030bc588e0261244ed437"
+    }
+  },
+  "attempt": 1,
+  "case": "materialized_neg_1",
+  "order": "A/B",
+  "pair": 3,
+  "protocol_version": 1,
+  "reason": "attempt target_second: monitor violation: [\"cargo/rustc overlap: [{'pid': 2642739, 'name': 'cargo'}, {'pid': 2642760, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2642739, 'name': 'cargo'}]\"]",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-materialized_neg_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T17:53:37.623502+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.07605743408203125,
+      "normalized_load_start": 0.07283782958984375,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T17:53:29.336829+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/neg_f64/1",
+        "--save-baseline",
+        "phase1-target-materialized_neg_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T17:53:45.923596+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.07747650146484375,
+      "normalized_load_start": 0.07605743408203125,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T17:53:37.655164+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/neg_f64/1",
+        "--baseline",
+        "phase1-target-materialized_neg_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T17:53:54.846351+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap: [{'pid': 2642739, 'name': 'cargo'}, {'pid': 2642760, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2642739, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.08518218994140625,
+      "normalized_load_start": 0.07747650146484375,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T17:53:45.959943+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-materialized_neg_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T17:54:03.738802+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.08408355712890625,
+      "normalized_load_start": 0.08518218994140625,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T17:53:54.877251+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}

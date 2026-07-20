@@ -1,0 +1,127 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "b9cbe4cb6088e5e6ad702b1e9f73a6edca6114c80f2bfd0a0c9a93168a8c29ea"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "b8d6ef8e5b87ba01996694c5e8f5d80189a16852721b2f3a437ad783d76d6bdd"
+    }
+  },
+  "attempt": 1,
+  "case": "materialized_slice_1",
+  "order": "A/B",
+  "pair": 1,
+  "protocol_version": 1,
+  "reason": "sentinel interval breaches drift band",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-materialized_slice_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:09:01.961029+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.10704803466796875,
+      "normalized_load_start": 0.10820770263671875,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T18:08:53.684142+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/slice_f64/1",
+        "--save-baseline",
+        "phase1-target-materialized_slice_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:09:10.010077+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.102691650390625,
+      "normalized_load_start": 0.10704803466796875,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T18:09:01.991995+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/slice_f64/1",
+        "--baseline",
+        "phase1-target-materialized_slice_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:09:18.362133+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2660237, 'name': 'cargo'}, {'pid': 2660266, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2660237, 'name': 'cargo'}, {'pid': 2660266, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2660237, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.10131072998046875,
+      "normalized_load_start": 0.102691650390625,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T18:09:10.047343+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-materialized_slice_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:09:27.685248+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2660237, 'name': 'cargo'}, {'pid': 2660266, 'name': 'rustc'}, {'pid': 2660373, 'name': 'rustc'}, {'pid': 2660450, 'name': 'rustc'}]",
+        "cargo/rustc overlap at start: [{'pid': 2660237, 'name': 'cargo'}, {'pid': 2660266, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2660237, 'name': 'cargo'}, {'pid': 2660266, 'name': 'rustc'}, {'pid': 2660373, 'name': 'rustc'}, {'pid': 2660450, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2660237, 'name': 'cargo'}, {'pid': 2660266, 'name': 'rustc'}, {'pid': 2660373, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2660237, 'name': 'cargo'}, {'pid': 2660266, 'name': 'rustc'}]"
+      ],
+      "normalized_load_end": 0.1134185791015625,
+      "normalized_load_start": 0.10131072998046875,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T18:09:18.396342+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}

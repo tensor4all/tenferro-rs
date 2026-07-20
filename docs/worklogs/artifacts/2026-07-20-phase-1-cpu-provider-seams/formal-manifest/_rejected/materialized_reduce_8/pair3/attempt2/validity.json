@@ -1,0 +1,121 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "d6d067e4d455cbd97cdae870277639fa3c9cbe6e7edc6be8c26849987330ca04"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "33c84cf151a79298f72cb9a68c100a4ca8a22c64d0c5491648566c2a06ac4cbc"
+    }
+  },
+  "attempt": 2,
+  "case": "materialized_reduce_8",
+  "order": "A/B",
+  "pair": 3,
+  "protocol_version": 1,
+  "reason": "attempt sentinel_before: monitor violation: [\"cargo/rustc overlap at start: [{'pid': 2658893, 'name': 'cargo'}]\", \"cargo/rustc overlap: [{'pid': 2658893, 'name': 'cargo'}]\", \"cargo/rustc overlap: [{'pid': 2658995, 'name': 'cargo'}]\"]",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-materialized_reduce_8-p3-a2",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:07:53.464808+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at start: [{'pid': 2658893, 'name': 'cargo'}]",
+        "cargo/rustc overlap: [{'pid': 2658893, 'name': 'cargo'}]",
+        "cargo/rustc overlap: [{'pid': 2658995, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.167205810546875,
+      "normalized_load_start": 0.18032073974609375,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T18:07:45.174698+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/reduce_sum_f64/8",
+        "--save-baseline",
+        "phase1-target-materialized_reduce_8-p3-a2",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:08:02.059424+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.16007232666015625,
+      "normalized_load_start": 0.167205810546875,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T18:07:53.495658+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/reduce_sum_f64/8",
+        "--baseline",
+        "phase1-target-materialized_reduce_8-p3-a2",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:08:10.916028+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.14736175537109375,
+      "normalized_load_start": 0.16007232666015625,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T18:08:02.090072+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-materialized_reduce_8-p3-a2",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T18:08:19.515250+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.13671112060546875,
+      "normalized_load_start": 0.14736175537109375,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T18:08:10.947660+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}
