@@ -4,7 +4,7 @@ use std::time::Duration;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_tensor::{DotGeneralConfig, Tensor};
+use tenferro_tensor::{DotGeneralConfig, SliceConfig, Tensor};
 
 const ELEMENT_COUNTS: &[usize] = &[1, 8, 64];
 const MATRIX_SIZES: &[usize] = &[1, 2];
@@ -73,6 +73,20 @@ fn bench_lazy(c: &mut Criterion) {
                 )
             });
         });
+        let slice = SliceConfig {
+            starts: vec![0],
+            limits: vec![len],
+            strides: vec![1],
+        };
+        group.bench_with_input(BenchmarkId::new("slice_f64", len), &len, |b, _| {
+            b.iter(|| {
+                consume_lazy(
+                    black_box(&lhs)
+                        .slice(black_box(slice.clone()))
+                        .expect("slice should succeed"),
+                )
+            });
+        });
     }
 
     for &size in MATRIX_SIZES {
@@ -119,6 +133,20 @@ fn bench_materialized(c: &mut Criterion) {
                     black_box(&lhs)
                         .reduce_sum(Some(&axes))
                         .expect("reduce_sum should succeed"),
+                )
+            });
+        });
+        let slice = SliceConfig {
+            starts: vec![0],
+            limits: vec![len],
+            strides: vec![1],
+        };
+        group.bench_with_input(BenchmarkId::new("slice_f64", len), &len, |b, _| {
+            b.iter(|| {
+                consume_materialized(
+                    black_box(&lhs)
+                        .slice(black_box(slice.clone()))
+                        .expect("slice should succeed"),
                 )
             });
         });

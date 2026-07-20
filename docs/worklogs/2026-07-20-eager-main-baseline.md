@@ -86,3 +86,37 @@ its non-inferiority statistic, allowed regression threshold, repetition policy,
 and noisy-run handling. Those choices must not be derived from candidate
 measurements. Phases 1-2 of the architecture work remain independent of this
 gate; changing the eager execution path does not.
+
+## Phase 1 fixed comparison protocol
+
+The immutable upstream baseline for the Phase 1 comparison is
+`85855e272b1495611deb601a9ee06f3546772c3c`. Before candidate code was added,
+the benchmark matrix was frozen as follows:
+
+- lazy and materialized `neg_f64`, `add_f64`, `reduce_sum_f64`, and
+  `slice_f64` for lengths 1, 8, and 64;
+- lazy and materialized `dot_general_f64` for square matrix sizes 1 and 2.
+
+The comparison consists of three complete paired runs in the order `A/B`,
+`B/A`, `A/B`, where A is the baseline and B is the candidate. Both binaries
+use the same release profile, Rust toolchain, features, inputs, and Criterion
+configuration: two-second warm-up, five-second measurement, 100 samples, and
+95% confidence intervals. One CPU is selected once from the process-allowed
+affinity mask, and every benchmark process is pinned to it. The environment
+sets `RAYON_NUM_THREADS`, `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`,
+`MKL_NUM_THREADS`, and `VECLIB_MAXIMUM_THREADS` to one.
+
+Criterion's per-pair relative-change interval is the primary statistic. A case
+passes only when the upper endpoint is at most +5% in all three valid pairs;
+it fails when the lower endpoint exceeds +5% in at least two pairs; every
+other valid pattern is inconclusive. The campaign passes only when every case
+passes, fails when any case fails, and is otherwise inconclusive. Median point
+estimates are diagnostic only. Candidate allocations and allocated bytes per
+operation must also be no greater than baseline for every case.
+
+A pair is invalid if fixed affinity is lost, a benchmark process overlaps a
+Cargo or rustc process, normalized one-minute load exceeds 0.25 of the
+process-allowed CPU count at either endpoint, or any case is missing. One
+invalid pair makes the complete campaign inconclusive. Retrying means running
+all three pairs again with unchanged settings; individual cases or favorable
+pairs are never retried or selected.

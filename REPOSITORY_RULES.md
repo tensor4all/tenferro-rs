@@ -726,6 +726,27 @@ Tests follow implementation ownership.
   thread counts. A single fixed-size speedup is not enough evidence for a
   performance-sensitive change.
 
++### Performance-Gated Experiment Protocol
+
+- Before running a candidate, record the baseline commit, candidate commit,
+  benchmark source, build profile, hardware and affinity configuration,
+  provider/thread settings, complete case list, comparison statistic,
+  acceptance threshold, repetition policy, and host-noise observables and
+  thresholds. Candidate results must not influence these choices.
+- Run the complete baseline/candidate suite as one paired experiment. Do not
+  selectively retry, omit, replace, or promote individual favorable cases.
+- If a predeclared host-noise or validity gate fails, classify the entire paired
+  experiment as `INCONCLUSIVE`. Reconsideration requires a complete paired
+  rerun under the same predeclared protocol, not a selective retry.
+- Record every measured case, confidence interval, validity observation, and
+  regression in the worklog. A negative or inconclusive primary result is
+  evidence and must not be rewritten as success because secondary cases
+  improved.
+- Promote a performance-gated change only when its predeclared primary gate and
+  all required non-regression/correctness gates pass. Do not relax thresholds,
+  redefine the primary metric, or add post-hoc exclusions after seeing the
+  candidate.
+
 ### Cache Ownership
 
 - Long-lived runtime/compiler caches must be owned by `Engine` or another
