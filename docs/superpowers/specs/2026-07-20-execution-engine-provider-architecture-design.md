@@ -1,4 +1,4 @@
-# WIP Detailed Design: Pluggable Execution Engines and Resource Domains
+# Accepted Architecture Design: Pluggable Execution Engines and Resource Domains
 
 > Planning authority and current phase status live in the
 > [execution-engine umbrella plan](./2026-07-20-execution-engine-provider-umbrella-design.md).
@@ -6,10 +6,11 @@
 
 ## Status
 
-This is a work-in-progress architecture proposal governed by the
-execution-engine umbrella plan. It records the agreed design direction for
-discussion and child issue decomposition; it is not an accepted public API or
-an implementation plan.
+The umbrella architecture is accepted for child planning and governed by the
+execution-engine umbrella plan. This document records the agreed design
+direction and invariants; it does not freeze exact public signatures or serve
+as an implementation plan. Mechanism refinement and implementation approval
+occur in bounded phase children, beginning with issue #1434.
 
 This revision incorporates all contracts added to issue #1433 after
 `f777b52e`: separate CPU thread-count and placement capabilities, ArmPL/NVPL
@@ -395,9 +396,10 @@ pub trait LayoutRuntime {
 }
 ```
 
-The names and exact signatures are not fixed by this WIP document. The
-contract is that validation and semantic preparation happen once at a public or
-planning boundary, and engines receive validated borrowed requests.
+The names and exact signatures are not fixed by this architecture-level
+document. The contract is that validation and semantic preparation happen once
+at a public or planning boundary, and engines receive validated borrowed
+requests.
 
 CPU and CUDA/WebGPU engines implement only the runtime families they support:
 
@@ -724,6 +726,17 @@ the eager fast path. N-ary einsum and decompositions lowered to multiple core
 ops intentionally pay preparation and scheduling unless a native engine
 represents them as one prepared operation.
 
+Eager remains a first-class supported API. The architecture acceptance promise
+is current-main non-inferiority, not a positive reduction of the measured
+9-11 us fixed cost for small calls. Phase 1 reuses the existing single backend
+session entry and must not add another; it is not blocked on a budget-one eager
+fast path. Current measurements show why thread count alone is not a design:
+one-thread `CpuContext::install` already executes directly at about 0.56 ns,
+while one-thread `CpuBackend::install` remains about 6.9 us. Any future eager
+fixed-overhead child must first separate validation, eager bookkeeping,
+admission, session entry, provider dispatch, and output allocation before
+selecting a mechanism.
+
 A standalone eager call acquires at most one node-level resource lease. An
 active explicit execution scope may reuse its existing compatible lease; lease
 reuse is carried by an `EagerExecutionContext`, not ambient thread-local state.
@@ -737,12 +750,12 @@ canonical starting source is the existing
 `crates/tenferro-ad/benches/eager_dispatch_baseline.rs`; it must be extended
 with an indexed case before candidate code is measured. Existing einsum and
 linalg benchmarks supplement this dispatch suite for extension-native and
-promoted multi-operation paths. The child issue fixes a non-inferiority statistic,
-threshold, repetition policy, and noisy-run handling before implementation
-results are known. Acceptance requires no new steady-state allocation or
-string lookup in the measured eager hot path, no new microsecond-scale
-orchestration step, and no statistically significant regression beyond that
-predeclared threshold.
+promoted multi-operation paths. The child issue fixes a non-inferiority
+statistic, threshold, repetition policy, and noisy-run handling before
+implementation results are known. Acceptance requires no new steady-state
+allocation or string lookup in the measured eager hot path, no new
+microsecond-scale orchestration step, and no statistically significant
+regression beyond that predeclared threshold.
 
 ### Placement-bound eager API
 
@@ -1679,6 +1692,10 @@ Required focused tests include:
   extension's concrete Rust type;
 - different concrete einsum shapes select distinct cached plans when their
   resolved contraction plans differ;
+- phase 6 eager N-ary einsum over a predeclared TCI/DMRG-representative shape
+  sequence that changes every call and misses exact-shape specializations does
+  not regress against current `main` for the complete lower-prepare-execute
+  boundary; a same-shape cache-hit case cannot satisfy this requirement;
 - a runtime epoch change invalidates old prepared plans;
 - CPU and GPU graphs use the same dependency, buffer lifetime, transfer, and
   barrier rules;
@@ -1727,6 +1744,11 @@ thread counts, NUMA placements, and device counts. Microbenchmarks must keep
 validation, request construction, dispatch, provider call, and kernel work
 separable.
 
+The architecture does not require another fixed-overhead eager prototype.
+When one is proposed independently, it follows the repository performance-gate
+protocol and does not block provider, NUMA, program, scheduler, or device
+phases.
+
 ## Consolidated Requirements from Prior Issues
 
 Closing an exploratory issue does not discard the contract it established.
@@ -1773,7 +1795,7 @@ This detailed design imposes the following migration constraints:
   issues without weakening the selected architectural invariants;
 - normative specs and rendered parallelism documentation are updated as the
   corresponding behavior lands; and
-- no child implementation is authorized by this WIP detail alone.
+- no child implementation is authorized by this detailed architecture alone.
 
 ## Documentation Requirements
 
@@ -1890,7 +1912,7 @@ this document.
 This detailed design is not authorization for one monolithic implementation
 PR. Each umbrella phase must become a reviewable child issue with exact public
 signatures, breaking-API and in-repository migration impact, benchmarks, and
-acceptance tests. Later work
-may refine names and reserved mechanisms without changing the selected
-ownership and behavioral invariants. Implementation planning starts only after
-maintainers review the umbrella and the relevant child design.
+acceptance tests. Later work may refine names and reserved mechanisms without
+changing the selected ownership and behavioral invariants. Implementation
+planning starts only after maintainers accept the relevant child design; the
+umbrella itself is no longer the open review gate.

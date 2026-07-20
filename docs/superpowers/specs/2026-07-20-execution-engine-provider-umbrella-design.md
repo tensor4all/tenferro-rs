@@ -1,4 +1,4 @@
-# WIP Umbrella Plan: Execution Engine and Provider Architecture
+# Accepted Umbrella Plan: Execution Engine and Provider Architecture
 
 ## Purpose and status
 
@@ -8,10 +8,13 @@ scope, decomposition, ordering, status, and acceptance gates for the execution
 engine and provider redesign. It intentionally does not repeat the detailed
 architecture or prototype mechanics stored in child documents.
 
-This remains a work-in-progress proposal. It does not accept a public API,
-authorize a monolithic implementation, or replace current normative runtime,
-backend, extension, or GPU specifications. Each implementation phase requires
-an accepted child issue and its own reviewed implementation plan.
+The umbrella architecture round is closed and this document is accepted for
+child planning. It does not freeze exact public signatures, authorize a
+monolithic implementation, or replace current normative runtime, backend,
+extension, or GPU specifications. Each implementation phase requires an
+accepted child issue and its own reviewed implementation plan; further design
+iteration belongs to those bounded children rather than to expansion of this
+umbrella.
 
 This revision incorporates every issue #1433 contract added after `f777b52e`,
 including the two-axis CPU capability model, additional provider
@@ -37,16 +40,16 @@ When two documents appear to conflict, their owning roles decide the result.
 For example, a worklog measurement may update evidence but cannot weaken an
 acceptance gate, and a child prototype may refine its mechanism but cannot add
 a second scheduler contrary to the umbrella. Current normative specifications
-remain authoritative over this WIP proposal until an accepted implementation
-updates them.
+remain authoritative over this accepted planning architecture until an
+accepted implementation updates them.
 
 ## Tracked documents
 
 | Artifact | Role | Status | Next gate |
 | --- | --- | --- | --- |
-| [Execution-engine architecture detail](./2026-07-20-execution-engine-provider-architecture-design.md) | Full semantic, compiler, runtime, provider, resource, and device design | WIP design recorded | Maintainer review and child decomposition |
+| [Execution-engine architecture detail](./2026-07-20-execution-engine-provider-architecture-design.md) | Full semantic, compiler, runtime, provider, resource, and device design | Accepted architecture for child planning | Refine exact mechanisms in child issues |
 | [Current-main eager baseline](../../worklogs/2026-07-20-eager-main-baseline.md) | Reproducible pre-refactor public eager evidence | Complete | Reuse unchanged for candidate comparisons |
-| [ResourceArbiter uncontended fast path](./2026-07-20-resource-arbiter-uncontended-fast-path-design.md) | Independent prototype for reducing an existing CPU entry cost | Prototype evidence inconclusive; full rerun required | Preserve branch and evidence; no prototype PR |
+| [ResourceArbiter uncontended fast path](./2026-07-20-resource-arbiter-uncontended-fast-path-design.md) | Independent prototype for reducing an existing CPU entry cost | Formally inconclusive; not promoted | Preserve branch and evidence; no prototype PR |
 
 Files under `docs/superpowers/plans/` are not planning authority for this
 umbrella. A child implementation plan may be generated there for execution,
@@ -91,7 +94,9 @@ Every child issue and implementation plan must preserve these invariants:
 6. The migration reuses the current `CpuBackend` session boundary. Eager
    execution currently pays one backend/session entry per operation, while a
    compatible graph session amortizes that entry over its program or segment.
-   New provider layers must not add another entry at either surface.
+   New provider layers must not add another entry at either surface. Eager
+   remains a first-class supported API, but this architecture promises
+   current-main non-inferiority rather than a positive fixed-overhead speedup.
 7. Internal provider/composite calls may reuse the session's context, owner,
    and permit only by direct delegation. This is not arbitrary backend
    re-entry. Current `CpuBackend` re-entry rejection remains unchanged unless
@@ -144,10 +149,11 @@ Every child issue and implementation plan must preserve these invariants:
 
 ## Workstreams and dependencies
 
-There are two independent workstreams. The architecture lane changes ownership
-and execution boundaries. The performance lane tests whether current
-`ResourceArbiter` queue bookkeeping can be made cheaper. A negative result in
-the performance lane does not block the architecture lane.
+The architecture lane changes ownership and execution boundaries. The
+independent `ResourceArbiter` performance experiment is complete and was not
+promoted. Its negative or inconclusive result does not block the architecture
+lane. Future eager fixed-overhead work is optional, begins with a fresh cost
+decomposition, and is not an acceptance dependency for phase 1.
 
 ### Architecture lane
 
@@ -159,12 +165,12 @@ own implementation.
 | Phase | Scope | Required predecessor | Status |
 | ---: | --- | --- | --- |
 | 0 | Record current-main eager dispatch and CPU-entry evidence | None | Eager baseline complete; CPU-entry diagnostics collected |
-| 1 | Borrowed validated requests, typed CPU capability slots, and layout/GEMM/general-contraction provider composites with temporary internal staging | Phase 0 evidence and accepted child issue | Not started |
+| 1 | [Borrowed validated requests, typed CPU capability slots, and layout/GEMM/general-contraction provider composites](https://github.com/tensor4all/tenferro-rs/issues/1434) with temporary internal staging | Phase 0 evidence and accepted child issue | Child issue open; design acceptance pending |
 | 2 | Placement-bound eager contexts, `CpuDomainExecutor`, explicit parallel modes, and managed/external NUMA domains | Phase 1 contracts | Not started |
 | 3 | `tenferro_runtime::program`, immutable `SemanticProgram`, fingerprints, effects, aliases, extension AD trait migration, and `TraceContext`/`GraphCompiler` separation | Phase 1 request/schema decisions and accepted semantic-IR child design | Not started |
 | 4 | Immutable runtime snapshots, remaining core capabilities, extension modules, prepared operations, specialization, and bounded caches | Phase 3 semantic artifact | Not started |
 | 5 | Common `ScheduledGraph`, core transfer/collective node boundary, event domains, buffer planning, admission, and runtime-owned `GraphExecutor`; port CPU graph execution | Phases 2 and 4 | Not started |
-| 6 | Extension capability resolution and pure core lowering, validated first with N-ary einsum and then linalg, FFT, sparse, and permutation families | Phases 4 and 5 | Not started |
+| 6 | Extension capability resolution and pure core lowering, validated first with N-ary einsum including per-call-changing shapes, then linalg, FFT, sparse, and permutation families | Phases 4 and 5 | Not started |
 | 7 | Split CUDA/WebGPU resources from algorithms and port native GPU execution to the common scheduler | Phase 5 common executor | Not started |
 | 8 | Integrate XLA through `SubgraphCompiler` and prepared operations; retire executor-shaped portable artifacts | Phases 4 and 5 | Not started |
 | 9 | Schedule independent work across multiple GPUs | Phase 7 device-resource model | Not started |
@@ -178,6 +184,7 @@ name the phase and the exact contract it advances.
 
 | Issue | Phase ownership | Retained contract |
 | --- | ---: | --- |
+| Open #1434 | 1 | Borrowed CPU requests, direct capability slots, provider composites, temporary internal staging, and eager current-main non-inferiority |
 | Closed #1432 | 1 | Validated general contraction, provider composites and extension-owned linalg bundles, temporary internal staging, engine-owned fan-out, and dispatch evidence |
 | Closed #1417 | 2 | Externally managed executor lifetime, exact declared-domain arbitration, placement-resolved registries, and honest affinity diagnostics |
 | Closed #1422 | 3 | Opaque builder tokens, typed cross-builder rejection, atomic import/finish, supported extension construction, and private representation |
@@ -205,13 +212,20 @@ For two and four threads, Rayon pool entry itself is already about 5-6 us. The
 minimal ResourceArbiter prototype can remove only backend admission/release
 overhead; it is not expected to remove multi-thread Rayon entry cost.
 
-These diagnostics guide the experiment but are not an acceptance baseline.
-The prototype must repeat the before/after benchmark at one, two, and four
-threads and record confidence intervals in a worklog. Its own continuation
-gate remains the child design's at-least-20% improvement for empty one-thread
-`CpuBackend::install`, with no statistically significant regression in the
-listed public eager cases. Failure closes or redesigns this optimization lane
-without changing architecture phases 1 or 2.
+The completed paired run was formally `INCONCLUSIVE` because its predeclared
+host-noise gate failed. Even if that noise failure is ignored, the primary
+one-thread `CpuBackend::install` improvement was about 11.8%, below the
+predeclared 20% continuation threshold. The prototype is therefore preserved
+as negative/inconclusive evidence with no PR and no promotion. No further
+session-entry prototype is required before phase 1.
+
+The accepted eager policy is non-inferiority: eager remains first-class, but
+this architecture is not required to reduce the current 9-11 us small-call
+baseline. A future eager fixed-overhead child may reconsider a budget-one
+direct path only after separating validation, eager bookkeeping, admission,
+session entry, provider dispatch, and output allocation. Budget one already
+avoids Rayon pool entry in `CpuContext::install`, so thread count alone is not
+an adequate mechanism or explanation.
 
 ### Adjacent work outside this umbrella
 
@@ -287,6 +301,14 @@ DMRG-oriented children additionally separate common-miss preparation,
 Davidson reuse, and the per-iteration application communication boundary, and
 fix budgets for each before results are collected.
 
+Phase 6 additionally benchmarks eager N-ary einsum over a predeclared sequence
+whose concrete shapes change on every call and therefore miss exact-shape
+specializations. The baseline and candidate use the same TCI/DMRG-representative
+shape sequence and output-consumption boundary. Acceptance requires
+current-main non-inferiority for the complete call, including lowering,
+preparation, and execution; a same-shape cache-hit benchmark cannot substitute
+for this gate.
+
 ### Gate E: correctness and explicit failure
 
 Contract tests cover capability resolution, unsupported behavior, placement,
@@ -315,12 +337,15 @@ measurements remain evidence artifacts and are not rewritten as plans.
 
 ## Immediate next actions
 
-1. Review and accept this umbrella as the planning control document.
+1. Review and accept
+   [phase 1 child #1434](https://github.com/tensor4all/tenferro-rs/issues/1434),
+   including exact borrowed request/provider signatures and its predeclared
+   eager non-inferiority protocol.
 2. Preserve the ResourceArbiter prototype branch and inconclusive evidence;
-   create no prototype PR. Only a later full paired rerun may reconsider
-   promotion. Architecture phases 1 and 2 continue independently.
-3. Draft the phase 1 child issue and design around provider seams and borrowed
-   requests. Fix its eager non-inferiority rule before implementation.
+   create no prototype PR. A future eager fixed-overhead experiment is optional
+   and starts from a new complete cost decomposition.
+3. After #1434 design acceptance, write its bounded implementation plan. Do
+   not begin later architecture phases by growing this umbrella.
 4. Update this document whenever a child is accepted, completed, superseded,
    or blocked; detailed mechanics stay in the child document.
 
