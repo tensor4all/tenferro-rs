@@ -504,6 +504,9 @@ git commit -m "Enforce direct CPU provider dispatch contracts"
 **Files:**
 
 - Create: `docs/worklogs/2026-07-20-phase-1-cpu-provider-seams.md`
+- Create: `scripts/run_phase1_eager_campaign.py`
+- Modify: `scripts/classify_criterion_noninferiority.py`
+- Test: `scripts/test_classify_criterion_noninferiority.py`
 
 - [ ] **Step 1: Record immutable environment**
 
@@ -519,15 +522,32 @@ pgrep -af 'cargo|rustc' || true
 
 Select the first allowed CPU once. Set all of `RAYON_NUM_THREADS`,
 `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, `MKL_NUM_THREADS`, and
-`VECLIB_MAXIMUM_THREADS` to one.
+`VECLIB_MAXIMUM_THREADS` to one. Record the common `Cargo.lock` SHA-256, both
+source revisions, both binary SHA-256 values, the process-allowed CPU count,
+and the selected CPU in the campaign manifest.
 
 - [ ] **Step 2: Build and run both immutable binaries**
 
-Build baseline and candidate benchmark binaries in separate temporary
-worktrees with one toolchain/profile/feature set. Run complete order `A/B`,
-`B/A`, `A/B`, pinned to the chosen CPU. Record affinity, normalized one-minute
-load, and active Cargo/rustc processes at both endpoints. Preserve every
-Criterion `estimates.json` and `change/estimates.json`.
+Apply a byte-identical `Cargo.lock` to the baseline and candidate worktrees and
+build both immutable benchmark binaries with `cargo --locked`, one
+toolchain/profile/feature set, and no overlapping Cargo/rustc process.
+
+Run the 28 cases one case at a time. Each case completes three adjacent pairs
+in order `A/B`, `B/A`, `A/B` before the next case starts. Bracket every target
+pair with candidate/candidate `lazy neg_f64/1` runs. The four runs of a pair
+are monitored separately for fixed affinity, exact-name Cargo/rustc overlap,
+exit status, and endpoint normalized one-minute load. A pair is valid only
+when all four runs complete, monitor violations are zero, affinity remains the
+selected CPU, endpoint normalized load is at most `0.25`, and the A/A
+sentinel's 95% interval is not wholly outside `-5%..+5%`.
+
+Copy target and sentinel Criterion evidence immediately. Store each accepted
+pair as
+`case/pairN/{change-estimates.json,sentinel-change-estimates.json,validity.json}`
+and store lock/binary hashes, order, affinity, environment, and the complete
+case/pair inventory in root `campaign.json`. Discard an invalid attempt in its
+entirety and retry that pair unchanged; no invalid estimate may enter the
+manifest. Do not selectively retry a valid favorable or unfavorable pair.
 
 - [ ] **Step 3: Classify without changing gates**
 
@@ -537,8 +557,14 @@ FAIL         at least two lower endpoints > +5%
 INCONCLUSIVE every other valid interval pattern, or any invalid pair
 ```
 
-The campaign passes only if every case passes. `FAIL` blocks promotion.
-`INCONCLUSIVE` permits only a complete unchanged three-pair rerun.
+The classifier is the only authority for both validity and interval
+classification. It must refuse a missing or inconsistent campaign manifest,
+missing pair artifact, sentinel breach, incomplete four-run record, monitor
+violation, affinity mismatch, or endpoint normalized load above `0.25`. Pair 2
+is inverted from `B/A` to candidate/baseline orientation. The campaign passes
+only if every case passes. `FAIL` blocks promotion. `INCONCLUSIVE` permits a
+new case-interleaved campaign under the unchanged protocol; it does not permit
+reusing or selectively replacing pairs from a prior campaign.
 
 - [ ] **Step 4: Write and commit the worklog**
 

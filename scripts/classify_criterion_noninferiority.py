@@ -32,6 +32,11 @@ def classify(intervals, threshold=THRESHOLD):
     return "INCONCLUSIVE"
 
 
+def sentinel_breached(lower, upper, threshold=THRESHOLD):
+    """Return whether an A/A interval lies wholly outside the drift band."""
+    return lower > threshold or upper < -threshold
+
+
 def read_change(path):
     with path.open(encoding="utf-8") as source:
         estimate = json.load(source)["mean"]
@@ -98,13 +103,25 @@ def render_markdown(cases):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("root", type=pathlib.Path)
+    parser.add_argument("root", type=pathlib.Path, nargs="?")
     parser.add_argument(
         "--no-invert-pair2",
         action="store_true",
         help="pair 2 already has the same orientation as pairs 1 and 3",
     )
+    parser.add_argument(
+        "--sentinel-change",
+        type=pathlib.Path,
+        help="validate one A/A Criterion change estimate; exit 2 on drift breach",
+    )
     args = parser.parse_args()
+    if args.sentinel_change is not None:
+        lower, upper, point = read_change(args.sentinel_change)
+        status = "INVALID" if sentinel_breached(lower, upper) else "VALID"
+        print(f"{status} {format_interval((lower, upper, point))}")
+        raise SystemExit(2 if status == "INVALID" else 0)
+    if args.root is None:
+        parser.error("root is required unless --sentinel-change is used")
     cases = load_campaign(args.root, invert_pair2=not args.no_invert_pair2)
     print(render_markdown(cases))
 

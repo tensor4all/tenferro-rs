@@ -35,6 +35,14 @@ class ClassificationBoundaryTests(unittest.TestCase):
         self.assertAlmostEqual(upper, 1.0 / 0.90 - 1.0)
         self.assertAlmostEqual(point, 1.0 / 0.92 - 1.0)
 
+    def test_sentinel_is_valid_when_interval_touches_band_boundaries(self):
+        self.assertFalse(classifier.sentinel_breached(0.05, 0.08))
+        self.assertFalse(classifier.sentinel_breached(-0.08, -0.05))
+
+    def test_sentinel_is_invalid_for_wholly_outside_interval_in_either_direction(self):
+        self.assertTrue(classifier.sentinel_breached(0.050001, 0.08))
+        self.assertTrue(classifier.sentinel_breached(-0.08, -0.050001))
+
 
 if __name__ == "__main__":
     unittest.main()
