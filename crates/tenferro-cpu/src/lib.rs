@@ -101,6 +101,10 @@ pub use backend::{
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 pub use context::{CpuContext, CpuContextError};
+pub use dot_runtime::{
+    CpuProviderBundle, CpuProviderBundleBuildError, CpuProviderBundleBuilder,
+    GeneralContractionPolicy,
+};
 pub use placement::{
     CpuEngineConstructionError, CpuPlacement, CpuPlacementError, ResolvedCpuPlacement,
 };

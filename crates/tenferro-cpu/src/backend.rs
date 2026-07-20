@@ -12,6 +12,7 @@ use crate::arbiter::{
     ResourcePermit,
 };
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
+use crate::dot_runtime::CpuProviderBundle;
 use crate::engine::{CpuEngine, EngineResources};
 use crate::placement::{
     resolve_placement, resolve_placement_with_affinity, CpuEngineConstructionError,
@@ -670,6 +671,7 @@ pub struct CpuBackend {
     resolved: ResolvedCpuExecution,
     engine: Arc<CpuEngine>,
     dot_general_provider: DotGeneralProvider,
+    provider_bundle: CpuProviderBundle,
     allocation_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
 }
 
@@ -689,6 +691,7 @@ impl fmt::Debug for CpuBackend {
         f.debug_struct("CpuBackend")
             .field("kind", &self.kind())
             .field("dot_general_provider", &self.dot_general_provider)
+            .field("provider_bundle", &self.provider_bundle)
             .field("requested_placement", &self.requested)
             .field("resolved_execution", &self.resolved)
             .field("engine_placement", &self.engine.placement())
@@ -756,6 +759,7 @@ impl CpuBackend {
                 resolved,
                 engine,
                 dot_general_provider: DotGeneralProvider::Base,
+                provider_bundle: CpuProviderBundle::standard(kind),
                 allocation_domain: None,
             })
         }
@@ -818,6 +822,7 @@ impl CpuBackend {
             resolved,
             engine: base_engine,
             dot_general_provider: DotGeneralProvider::Base,
+            provider_bundle: CpuProviderBundle::standard(kind),
             allocation_domain: None,
         }
     }
@@ -1072,6 +1077,7 @@ impl CpuBackend {
                 resolved,
                 engine: Arc::clone(&self.shared.base_engine),
                 dot_general_provider: self.dot_general_provider,
+                provider_bundle: self.provider_bundle.clone(),
                 allocation_domain: self.allocation_domain.clone(),
             });
         }
@@ -1101,6 +1107,7 @@ impl CpuBackend {
             resolved,
             engine,
             dot_general_provider: self.dot_general_provider,
+            provider_bundle: self.provider_bundle.clone(),
             allocation_domain: self.allocation_domain.clone(),
         })
     }
@@ -1238,6 +1245,29 @@ impl CpuBackend {
     /// ```
     pub fn dot_general_provider(&self) -> DotGeneralProvider {
         self.dot_general_provider
+    }
+
+    /// Return the immutable CPU provider slots selected for this handle.
+    pub fn provider_bundle(&self) -> &CpuProviderBundle {
+        &self.provider_bundle
+    }
+
+    /// Return this backend with an immutable construction-time provider bundle.
+    ///
+    /// Existing clones retain their original bundle identity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuProviderBundle};
+    /// let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled()).build()?;
+    /// let backend = CpuBackend::new().with_provider_bundle(bundle.clone());
+    /// assert!(backend.provider_bundle().shares_identity_with(&bundle));
+    /// # Ok::<(), tenferro_cpu::CpuProviderBundleBuildError>(())
+    /// ```
+    pub fn with_provider_bundle(mut self, bundle: CpuProviderBundle) -> Self {
+        self.provider_bundle = bundle;
+        self
     }
 
     /// Return this backend with a different `dot_general` provider policy.

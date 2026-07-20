@@ -2,9 +2,11 @@ use num_traits::{One, Zero};
 use smallvec::{Array, SmallVec};
 use std::fmt;
 use std::mem::size_of;
+use std::sync::{Arc, Weak};
 
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::default_placement;
+use crate::dot_runtime::CpuProviderBundleInner;
 #[cfg(feature = "cpu-blas")]
 use crate::elementwise::typed_conj_with_pool;
 #[cfg(any(feature = "cpu-blas", feature = "cpu-faer"))]
@@ -212,6 +214,7 @@ impl GemmAnalysisCacheSlot {
 pub struct GemmAnalysisCache {
     slots: Vec<GemmAnalysisCacheSlot>,
     max_slots: usize,
+    provider_bundle: Option<Weak<CpuProviderBundleInner>>,
 }
 
 impl fmt::Debug for GemmAnalysisCache {
@@ -219,6 +222,7 @@ impl fmt::Debug for GemmAnalysisCache {
         f.debug_struct("GemmAnalysisCache")
             .field("slots_len", &self.slots.len())
             .field("max_slots", &self.max_slots)
+            .field("provider_bundle_bound", &self.provider_bundle.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -228,6 +232,20 @@ impl GemmAnalysisCache {
         Self {
             slots: Vec::new(),
             max_slots,
+            provider_bundle: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn bind_provider_bundle(&mut self, bundle: &Arc<CpuProviderBundleInner>) {
+        let matches = self
+            .provider_bundle
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some_and(|current| Arc::ptr_eq(&current, bundle));
+        if !matches {
+            self.slots.clear();
+            self.provider_bundle = Some(Arc::downgrade(bundle));
         }
     }
 
@@ -313,7 +331,11 @@ impl RuntimeCacheControl for GemmAnalysisCache {
 
     fn stats(&self) -> CacheStats {
         let mut entries = 0usize;
-        let mut retained_bytes = self.slots.capacity() * size_of::<GemmAnalysisCacheSlot>();
+        let mut retained_bytes = self.slots.capacity() * size_of::<GemmAnalysisCacheSlot>()
+            + self
+                .provider_bundle
+                .as_ref()
+                .map_or(0, |_| size_of::<Weak<CpuProviderBundleInner>>());
         for slot in &self.slots {
             if let Some(plan) = &slot.direct {
                 entries += 1;
