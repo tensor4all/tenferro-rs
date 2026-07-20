@@ -27,6 +27,39 @@ use tenferro_tensor::{DotGeneralConfig, TypedTensor};
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
 #[test]
+fn provider_bundle_identity_reuses_and_invalidates_slots_without_aba() {
+    use crate::dot_runtime::CpuProviderBundle;
+    use crate::CpuBackendKind;
+
+    let first = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+        .build()
+        .unwrap();
+    let second = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+        .build()
+        .unwrap();
+    let mut cache = GemmAnalysisCache::default();
+
+    cache.bind_provider_bundle(first.inner());
+    cache.slots.push(Default::default());
+    cache.bind_provider_bundle(first.inner());
+    assert_eq!(cache.slots.len(), 1, "one bundle should retain its slots");
+
+    cache.bind_provider_bundle(second.inner());
+    assert!(cache.slots.is_empty(), "a distinct bundle must clear slots");
+
+    cache.slots.push(Default::default());
+    drop(second);
+    let third = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+        .build()
+        .unwrap();
+    cache.bind_provider_bundle(third.inner());
+    assert!(
+        cache.slots.is_empty(),
+        "a dead weak binding must clear slots before rebinding"
+    );
+}
+
+#[test]
 fn try_fuse_dims_reversed_strides() {
     assert_eq!(try_fuse_dims(&[3, 4], &[4, 1]).unwrap(), Some((12, 1)));
 }

@@ -51,6 +51,27 @@ fn default_backend_kind_prefers_blas_when_compiled() {
 }
 
 #[test]
+fn provider_bundle_is_installed_at_construction_and_shared_by_clones() {
+    let bundle = crate::dot_runtime::CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+        .build()
+        .unwrap();
+    let backend = CpuBackend::new().with_provider_bundle(bundle.clone());
+    let cloned = backend.clone();
+
+    assert!(Arc::ptr_eq(backend.provider_bundle.inner(), bundle.inner()));
+    assert!(Arc::ptr_eq(cloned.provider_bundle.inner(), bundle.inner()));
+}
+
+#[test]
+fn provider_bundle_custom_builder_rejects_missing_mandatory_slots() {
+    let error = crate::dot_runtime::CpuProviderBundle::custom_builder()
+        .build()
+        .unwrap_err();
+    assert!(error.to_string().contains("GEMM"));
+    assert!(error.to_string().contains("layout"));
+}
+
+#[test]
 fn public_buffer_pool_controls_report_poisoned_engine_resources() {
     let mut backend = CpuBackend::new();
     let original_limit = backend.buffer_pool_limit_bytes();

@@ -3,10 +3,266 @@ use tenferro_tensor::{
     TensorView, TensorViewMut, TensorWrite, ValidationError,
 };
 
-use crate::provider::{CpuContractionAxes, CpuDotGeneralRequest};
+use std::sync::Arc;
+
+use crate::backend::CpuBackendKind;
+use crate::provider::{
+    CpuContractionAxes, CpuDotGeneralRequest, CpuGemmProvider, CpuGemmRequest,
+    CpuGeneralContractionProvider, CpuGroupedGemmRequest, CpuLayoutTransformProvider,
+    CpuLayoutTransformRequest, CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported,
+};
 use crate::{Error, Result};
 
 const OP: &str = "dot_general";
+
+/// Policy applied when the configured general-contraction provider reports a
+/// typed capability miss.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::GeneralContractionPolicy;
+/// assert_ne!(
+///     GeneralContractionPolicy::Preferred,
+///     GeneralContractionPolicy::Required,
+/// );
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GeneralContractionPolicy {
+    /// Continue to the configured layout-plus-GEMM path.
+    #[default]
+    Preferred,
+    /// Convert a capability miss into a structured unsupported error.
+    Required,
+}
+
+#[derive(Debug)]
+pub(crate) struct DotGeneralRuntime {
+    pub(crate) general: Option<Arc<dyn CpuGeneralContractionProvider>>,
+    pub(crate) gemm: Arc<dyn CpuGemmProvider>,
+    pub(crate) layout: Arc<dyn CpuLayoutTransformProvider>,
+    pub(crate) general_policy: GeneralContractionPolicy,
+}
+
+#[derive(Debug)]
+pub(crate) struct CpuProviderBundleInner {
+    pub(crate) dot_general: DotGeneralRuntime,
+}
+
+/// Immutable direct provider slots installed on a CPU backend.
+///
+/// Clones share the same slot identity and may safely share compatible
+/// analysis-cache entries.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{CpuBackendKind, CpuProviderBundle};
+/// let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled()).build()?;
+/// let cloned = bundle.clone();
+/// assert!(bundle.shares_identity_with(&cloned));
+/// # Ok::<(), tenferro_cpu::CpuProviderBundleBuildError>(())
+/// ```
+#[derive(Clone, Debug)]
+pub struct CpuProviderBundle {
+    inner: Arc<CpuProviderBundleInner>,
+}
+
+impl CpuProviderBundle {
+    pub(crate) fn standard(kind: CpuBackendKind) -> Self {
+        Self {
+            inner: Arc::new(CpuProviderBundleInner {
+                dot_general: DotGeneralRuntime {
+                    general: None,
+                    gemm: Arc::new(BuiltinGemmProvider { kind }),
+                    layout: Arc::new(StridedLayoutTransformProvider),
+                    general_policy: GeneralContractionPolicy::Preferred,
+                },
+            }),
+        }
+    }
+
+    /// Start a bundle builder with the standard providers for `kind`.
+    pub fn builder(kind: CpuBackendKind) -> CpuProviderBundleBuilder {
+        CpuProviderBundleBuilder {
+            gemm: Some(Arc::new(BuiltinGemmProvider { kind })),
+            layout: Some(Arc::new(StridedLayoutTransformProvider)),
+            general: None,
+            general_policy: GeneralContractionPolicy::Preferred,
+        }
+    }
+
+    /// Start an empty custom builder.
+    pub fn custom_builder() -> CpuProviderBundleBuilder {
+        CpuProviderBundleBuilder {
+            gemm: None,
+            layout: None,
+            general: None,
+            general_policy: GeneralContractionPolicy::Preferred,
+        }
+    }
+
+    /// Return whether two handles share one immutable provider identity.
+    pub fn shares_identity_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    pub(crate) fn inner(&self) -> &Arc<CpuProviderBundleInner> {
+        &self.inner
+    }
+
+    pub(crate) fn dot_general(&self) -> &DotGeneralRuntime {
+        &self.inner.dot_general
+    }
+}
+
+/// Error returned when a custom CPU provider bundle omits mandatory slots.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuProviderBundle;
+/// assert!(CpuProviderBundle::custom_builder().build().is_err());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("missing mandatory CPU provider slots: GEMM={gemm}, layout={layout}")]
+pub struct CpuProviderBundleBuildError {
+    gemm: bool,
+    layout: bool,
+}
+
+/// Construction-time builder for immutable CPU provider slots.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::{CpuBackendKind, CpuProviderBundle};
+/// let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled()).build()?;
+/// assert!(bundle.shares_identity_with(&bundle.clone()));
+/// # Ok::<(), tenferro_cpu::CpuProviderBundleBuildError>(())
+/// ```
+#[derive(Debug)]
+pub struct CpuProviderBundleBuilder {
+    gemm: Option<Arc<dyn CpuGemmProvider>>,
+    layout: Option<Arc<dyn CpuLayoutTransformProvider>>,
+    general: Option<Arc<dyn CpuGeneralContractionProvider>>,
+    general_policy: GeneralContractionPolicy,
+}
+
+impl CpuProviderBundleBuilder {
+    /// Replace the GEMM-family provider slot.
+    pub fn gemm_provider(mut self, provider: Arc<dyn CpuGemmProvider>) -> Self {
+        self.gemm = Some(provider);
+        self
+    }
+
+    /// Replace the layout-materialization provider slot.
+    pub fn layout_transform_provider(
+        mut self,
+        provider: Arc<dyn CpuLayoutTransformProvider>,
+    ) -> Self {
+        self.layout = Some(provider);
+        self
+    }
+
+    /// Install a preferred general-contraction provider.
+    pub fn prefer_general_contraction_provider(
+        mut self,
+        provider: Arc<dyn CpuGeneralContractionProvider>,
+    ) -> Self {
+        self.general = Some(provider);
+        self.general_policy = GeneralContractionPolicy::Preferred;
+        self
+    }
+
+    /// Install a required general-contraction provider.
+    pub fn require_general_contraction_provider(
+        mut self,
+        provider: Arc<dyn CpuGeneralContractionProvider>,
+    ) -> Self {
+        self.general = Some(provider);
+        self.general_policy = GeneralContractionPolicy::Required;
+        self
+    }
+
+    /// Validate the mandatory slots and freeze the bundle identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuProviderBundleBuildError`] when GEMM or layout is absent.
+    pub fn build(self) -> std::result::Result<CpuProviderBundle, CpuProviderBundleBuildError> {
+        let missing = CpuProviderBundleBuildError {
+            gemm: self.gemm.is_none(),
+            layout: self.layout.is_none(),
+        };
+        let (Some(gemm), Some(layout)) = (self.gemm, self.layout) else {
+            return Err(missing);
+        };
+        Ok(CpuProviderBundle {
+            inner: Arc::new(CpuProviderBundleInner {
+                dot_general: DotGeneralRuntime {
+                    general: self.general,
+                    gemm,
+                    layout,
+                    general_policy: self.general_policy,
+                },
+            }),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct BuiltinGemmProvider {
+    kind: CpuBackendKind,
+}
+
+impl CpuGemmProvider for BuiltinGemmProvider {
+    fn gemm(
+        &self,
+        _context: &CpuProviderContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> Result<CpuProviderOutcome> {
+        let _ = self.kind;
+        Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::RuntimeUnavailable,
+        ))
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &CpuProviderContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> Result<CpuProviderOutcome> {
+        Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::RuntimeUnavailable,
+        ))
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &CpuProviderContext<'_>,
+        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> Result<CpuProviderOutcome> {
+        Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::RuntimeUnavailable,
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct StridedLayoutTransformProvider;
+
+impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
+    fn materialize(
+        &self,
+        _context: &CpuProviderContext<'_>,
+        _request: CpuLayoutTransformRequest<'_, '_, '_>,
+    ) -> Result<CpuProviderOutcome> {
+        Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::RuntimeUnavailable,
+        ))
+    }
+}
 
 fn validate_axis_ranges(axes: &[usize], rank: usize) -> Result<()> {
     for &axis in axes {
