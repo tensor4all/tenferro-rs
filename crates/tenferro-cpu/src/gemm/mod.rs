@@ -990,6 +990,190 @@ where
     Ok(dims)
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ProviderGemmPlan {
+    rows: usize,
+    columns: usize,
+    contracted: usize,
+    batch_count: usize,
+    lhs_layout: crate::provider::CpuBatchedMatrixLayout,
+    rhs_layout: crate::provider::CpuBatchedMatrixLayout,
+    output_layout: crate::provider::CpuBatchedMatrixLayout,
+}
+
+impl ProviderGemmPlan {
+    pub(crate) fn batch_count(self) -> usize {
+        self.batch_count
+    }
+
+    pub(crate) fn request<'request, 'input, 'output>(
+        self,
+        lhs: &'request TensorRead<'input>,
+        rhs: &'request TensorRead<'input>,
+        output: &'request mut TensorWrite<'output>,
+        accumulation: DotGeneralAccumulation,
+    ) -> CpuGemmRequest<'request, 'input, 'output> {
+        CpuGemmRequest::new(
+            lhs,
+            rhs,
+            output,
+            self.rows,
+            self.columns,
+            self.contracted,
+            self.batch_count,
+            self.lhs_layout,
+            self.rhs_layout,
+            self.output_layout,
+            accumulation,
+        )
+    }
+}
+
+fn provider_output_strides(output: &TensorWrite<'_>) -> Result<SmallVec<[isize; 8]>> {
+    Ok(match output {
+        TensorWrite::Tensor(output) => col_major_strides(output.shape())?.into_iter().collect(),
+        TensorWrite::View(output) => output.strides().iter().copied().collect(),
+    })
+}
+
+fn prepare_provider_gemm_typed<L, R, T>(
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    lhs: &L,
+    rhs: &R,
+    lhs_offset: isize,
+    rhs_offset: isize,
+    output: &TensorWrite<'_>,
+    config: &DotGeneralConfig,
+) -> Result<Option<ProviderGemmPlan>>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+{
+    let Some(dims) = analyse_gemm_cached(
+        cache,
+        cache_slot,
+        GemmAnalysisCacheKind::Direct,
+        lhs,
+        rhs,
+        config,
+    )?
+    else {
+        return Ok(None);
+    };
+    let output_strides = provider_output_strides(output)?;
+    let Some((output_row_stride, output_column_stride, output_batch_stride)) = output_gemm_strides(
+        output.shape(),
+        &output_strides,
+        lhs.shape().len(),
+        rhs.shape().len(),
+        config,
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(ProviderGemmPlan {
+        rows: dims.m,
+        columns: dims.n,
+        contracted: dims.k,
+        batch_count: dims.batch_total,
+        lhs_layout: crate::provider::CpuBatchedMatrixLayout::new(
+            lhs_offset, dims.a_rs, dims.a_cs, dims.a_bs,
+        ),
+        rhs_layout: crate::provider::CpuBatchedMatrixLayout::new(
+            rhs_offset, dims.b_rs, dims.b_cs, dims.b_bs,
+        ),
+        output_layout: crate::provider::CpuBatchedMatrixLayout::new(
+            output.offset(),
+            output_row_stride,
+            output_column_stride,
+            output_batch_stride,
+        ),
+    }))
+}
+
+pub(crate) fn prepare_provider_gemm(
+    cache: &mut GemmAnalysisCache,
+    cache_slot: Option<usize>,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    output: &TensorWrite<'_>,
+    config: &DotGeneralConfig,
+) -> Result<Option<ProviderGemmPlan>> {
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            match (lhs, rhs) {
+                (
+                    TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                    TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                ) => {
+                    return prepare_provider_gemm_typed(
+                        cache,
+                        cache_slot,
+                        lhs,
+                        rhs,
+                        lhs.offset(),
+                        rhs.offset(),
+                        output,
+                        config,
+                    );
+                }
+                (
+                    TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                    TensorRead::View(TensorView::$view(rhs)),
+                ) => {
+                    return prepare_provider_gemm_typed(
+                        cache,
+                        cache_slot,
+                        lhs,
+                        rhs,
+                        lhs.offset(),
+                        rhs.offset(),
+                        output,
+                        config,
+                    );
+                }
+                (
+                    TensorRead::View(TensorView::$view(lhs)),
+                    TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                ) => {
+                    return prepare_provider_gemm_typed(
+                        cache,
+                        cache_slot,
+                        lhs,
+                        rhs,
+                        lhs.offset(),
+                        rhs.offset(),
+                        output,
+                        config,
+                    );
+                }
+                (
+                    TensorRead::View(TensorView::$view(lhs)),
+                    TensorRead::View(TensorView::$view(rhs)),
+                ) => {
+                    return prepare_provider_gemm_typed(
+                        cache,
+                        cache_slot,
+                        lhs,
+                        rhs,
+                        lhs.offset(),
+                        rhs.offset(),
+                        output,
+                        config,
+                    );
+                }
+                _ => {}
+            }
+        };
+    }
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(None)
+}
+
 #[cfg(feature = "cpu-faer")]
 pub(crate) fn dot_general_faer_cached<T>(
     buffers: &mut BufferPool,
@@ -3316,6 +3500,23 @@ where
         CpuKernelParallelism::Inner => context.cpu_context().faer_par(),
     };
     for batch in 0..descriptor.batch_count {
+        checked_view_batch_offset(
+            descriptor.lhs_layout.offset(),
+            batch,
+            descriptor.lhs_layout.batch_stride(),
+        )?;
+        checked_view_batch_offset(
+            descriptor.rhs_layout.offset(),
+            batch,
+            descriptor.rhs_layout.batch_stride(),
+        )?;
+        checked_view_batch_offset(
+            descriptor.output_layout.offset(),
+            batch,
+            descriptor.output_layout.batch_stride(),
+        )?;
+    }
+    for batch in 0..descriptor.batch_count {
         let lhs_offset = checked_view_batch_offset(
             descriptor.lhs_layout.offset(),
             batch,
@@ -3575,6 +3776,23 @@ where
         return Err(crate::cpu_backend_buffer_error(OP));
     };
     let output_data = output.host_storage_mut()?.as_mut_ptr();
+    for batch in 0..descriptor.batch_count {
+        checked_view_batch_offset(
+            descriptor.lhs_layout.offset(),
+            batch,
+            descriptor.lhs_layout.batch_stride(),
+        )?;
+        checked_view_batch_offset(
+            descriptor.rhs_layout.offset(),
+            batch,
+            descriptor.rhs_layout.batch_stride(),
+        )?;
+        checked_view_batch_offset(
+            descriptor.output_layout.offset(),
+            batch,
+            descriptor.output_layout.batch_stride(),
+        )?;
+    }
     for batch in 0..descriptor.batch_count {
         let lhs_offset = checked_view_batch_offset(
             descriptor.lhs_layout.offset(),
