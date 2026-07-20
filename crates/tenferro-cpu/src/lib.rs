@@ -66,6 +66,7 @@ mod indexing_alloc;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
 mod placement;
+pub mod provider;
 mod reduction;
 mod structural;
 mod topology;

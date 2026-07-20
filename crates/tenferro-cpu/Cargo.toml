@@ -126,3 +126,7 @@ path = "tests/integration.rs"
 name = "install_allocation_tests"
 path = "tests/install_allocation_tests/main.rs"
 required-features = ["cpu-faer"]
+
+[[test]]
+name = "provider_boundary_allocation_tests"
+path = "tests/provider_boundary_allocation_tests/main.rs"
