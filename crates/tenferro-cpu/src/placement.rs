@@ -75,7 +75,7 @@ pub enum CpuPlacementGuarantee {
     AdvisoryDeclared,
 }
 
-/// Concrete managed placement after topology resolution.
+/// Concrete CPU placement resolved for a managed domain or declared by an external domain.
 ///
 /// # Examples
 ///
@@ -90,22 +90,22 @@ pub enum CpuPlacementGuarantee {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolvedCpuPlacement {
-    /// A selected usable OS NUMA node.
+    /// A concrete OS NUMA-node placement.
     NumaNode {
         /// The sparse OS NUMA node ID.
         id: NumaNodeId,
-        /// The node CPUs permitted by the process affinity mask.
+        /// The logical CPUs resolved or declared for the node.
         cpus: CpuSet,
     },
-    /// The complete process affinity CPU set.
+    /// A resolved or declared complete process-affinity CPU set.
     AllAllowed {
-        /// Logical CPUs permitted by the process affinity mask.
+        /// Logical CPUs resolved or declared as process-permitted.
         cpus: CpuSet,
     },
 }
 
 impl ResolvedCpuPlacement {
-    /// Return the concrete logical CPU set used for pinning and arbitration.
+    /// Return the concrete logical CPU set resolved or declared for this placement.
     ///
     /// # Examples
     ///
