@@ -10,8 +10,16 @@ use tenferro_tensor::{
 };
 
 fn rust_function_body<'a>(source: &'a str, function: &str) -> Option<&'a str> {
-    let signature = format!("fn {function}(");
-    let function_start = source.find(&signature)?;
+    let signature = format!("fn {function}");
+    let function_start = source
+        .match_indices(&signature)
+        .find(|(start, _)| {
+            matches!(
+                source.as_bytes().get(start + signature.len()),
+                Some(b'(') | Some(b'<')
+            )
+        })?
+        .0;
     let body_start = function_start + source[function_start..].find('{')?;
     let mut depth = 0usize;
     for (offset, character) in source[body_start..].char_indices() {
@@ -621,4 +629,58 @@ fn install_pool_has_no_placeholder_construction_or_gemm_descriptor_clones() {
     assert!(!backend_source.contains("rhs.clone()"));
     assert!(!exec_session_source.contains("lhs.clone()"));
     assert!(!exec_session_source.contains("rhs.clone()"));
+}
+
+#[test]
+fn cpu_provider_dispatch_has_no_runtime_registry_lookup_or_legacy_staging() {
+    let assert_direct_dispatch = |owner: &str, source: &str| {
+        for forbidden in [
+            "HashMap",
+            "TypeId",
+            "dyn Any",
+            "downcast",
+            "provider_name.to_string",
+            "with_base_dot_general_provider",
+            "match self.dot_general_provider",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{owner} contains forbidden hot-path token `{forbidden}`"
+            );
+        }
+    };
+
+    let sources = [
+        ("dot_runtime", include_str!("../../src/dot_runtime.rs")),
+        ("provider", include_str!("../../src/provider.rs")),
+        ("exec_session", include_str!("../../src/exec_session.rs")),
+        ("gemm_analysis", include_str!("../../src/gemm/mod.rs")),
+    ];
+    for (module, source) in sources {
+        assert_direct_dispatch(module, source);
+    }
+
+    // backend.rs also owns opt-in profiling state, so scanning the entire file
+    // would reject a HashMap that is not part of contraction dispatch. Scan all
+    // session-entry and contraction bodies instead.
+    let backend = include_str!("../../src/backend.rs");
+    for function in [
+        "with_linalg_pool",
+        "dot_general",
+        "dot_general_read",
+        "dot_general_read_into",
+        "dot_general_read_into_accum",
+        "dot_general_with_conj",
+        "dot_general_cached",
+        "dot_general_with_conj_cached",
+        "dot_general_read_into_accum_cached",
+        "grouped_gemm_cached",
+        "run_backend_session_cached",
+        "with_backend_session",
+        "with_backend_session_cached",
+    ] {
+        let body = rust_function_body(backend, function)
+            .unwrap_or_else(|| panic!("backend dispatch function `{function}` must exist"));
+        assert_direct_dispatch(&format!("backend::{function}"), body);
+    }
 }
