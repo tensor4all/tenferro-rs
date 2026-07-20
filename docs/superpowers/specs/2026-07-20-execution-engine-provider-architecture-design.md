@@ -664,12 +664,34 @@ let y0 = cpu0.matmul(&a0, &b0)?;
 let y1 = cpu1.matmul(&a1, &b1)?;
 ```
 
-The same surface binds `GpuPlacement::Device(gpu_id)`. Without an explicit
-context, an eager operation inherits the unique placement shared by its input
-tensors. Conflicting input placements are an error, and input-free allocation
-uses an explicit context or runtime default. CPU-domain, GPU-device, and
-CPU/GPU movement remains an explicit `transfer`; eager dispatch never inserts
-one implicitly.
+The same surface binds `GpuPlacement::Device(gpu_id)`. Device placement and
+CPU NUMA affinity follow different rules:
+
+- conflicting GPU devices, CPU versus GPU, or incompatible storage domains
+  remain errors and require an explicit transfer or import;
+- CPU NUMA domains share one address space, so tensors with different NUMA
+  affinities may participate in one operation without a copy;
+- an explicit `runtime.on(CpuPlacement::Domain(id))` selects the execution
+  domain even when some inputs were allocated elsewhere;
+- without an explicit context, the default
+  `CpuAffinityPolicy::DominantInputBytes` chooses the domain having the largest
+  sum of logical input bytes, breaking ties by stable `CpuDomainId` order;
+- inputs with unknown or no affinity do not contribute to that score, and the
+  runtime default domain is used when no input contributes;
+- `CpuAffinityPolicy::RequireSingleDomain` is an opt-in diagnostic or tuning
+  policy that rejects mixed CPU affinities.
+
+Outputs and scratch are allocated or first-touched in the selected execution
+domain. Inputs remain in place and may be read through remote NUMA access.
+Users may request an explicit CPU `rehome` copy when locality justifies its
+cost, but eager dispatch never inserts one. Input-free allocation uses an
+explicit context or runtime default.
+
+The CPU affinity resolver is shared by eager dispatch and prepared-graph input
+binding. An explicit semantic or execution-request placement constraint wins;
+otherwise the runtime applies its configured `CpuAffinityPolicy` after input
+metadata is known. The chosen domain and reason are observable in execution or
+prepared-plan diagnostics.
 
 `runtime.on(...)` binds a runtime and placement and may cache the current
 configuration epoch and resolved capability slots. Each eager call performs a
@@ -875,12 +897,24 @@ exist only as a high-level facade.
 
 `EagerTensor` pairs a physical tensor with `Arc<Runtime>`. The physical storage
 does not own its engine, avoiding runtime-storage reference cycles. Identity is
-split into `RuntimeId`, `StorageDomainId`, and `EventDomainId`. Storage records
-its domain, placement, allocation owner, and pending completion. A prepared
-graph records `RuntimeId` and epoch.
+split into:
 
-Mixing tensors from different runtime or allocation domains is an error. Same
-runtime and compatible storage may be bound directly; foreign or unregistered
+- `RuntimeId`, for runtime ownership and configuration compatibility;
+- `StorageDomainId`, for address-space, allocator, lifetime, and device
+  interoperability;
+- `AllocationDomainId`, for the allocator or pool that must reclaim storage;
+- `EventDomainId`, for completion-token interoperability; and
+- placement metadata, including an optional CPU NUMA affinity or a strict GPU
+  device placement.
+
+Storage records these identities, its allocation owner, and pending
+completion. A prepared graph records `RuntimeId` and epoch. CPU allocations on
+different NUMA nodes may share one compatible `StorageDomainId` while retaining
+different `AllocationDomainId` and affinity metadata.
+
+Mixing tensors from different runtimes or incompatible storage domains is an
+error. Different compatible CPU allocation domains are not an error: they
+affect locality and reclamation, not addressability. Foreign or unregistered
 storage is rejected. Cross-runtime movement uses explicit
 `runtime.import(tensor, ShareIfCompatible | Copy)` or transfer APIs. Zero-copy
 sharing requires compatible allocator, device, event interoperation, and
@@ -909,11 +943,12 @@ contracts into one `BufferPlan`. Output storage is one of
 slots, liveness, alias and view relations, allocation classes, scratch,
 dynamic-size bounds, and a peak-memory estimate.
 
-Provider-allocated storage is registered with its storage domain, byte size,
-completion event, destructor, layout, and dtype, and remains visible in explain
-and statistics. Exact dynamic sizes allocate from the resolved plan; bounded
-sizes reserve the bound; unbounded sizes require an explicit dynamic-allocation
-contract and cannot claim a fixed peak.
+Provider-allocated storage is registered with its storage domain, allocation
+domain and owner, byte size, completion event, destructor, layout, dtype, and
+placement or affinity metadata, and remains visible in explain and statistics.
+Exact dynamic sizes allocate from the resolved plan; bounded sizes reserve the
+bound; unbounded sizes require an explicit dynamic-allocation contract and
+cannot claim a fixed peak.
 
 Internal values may be donated automatically at proven last use. External
 inputs are borrowed by default and become candidates only through explicit
@@ -1055,8 +1090,17 @@ occurring as a side effect of provider replacement.
 
 The NUMA model includes memory locality, not just worker affinity. Buffers and
 scratch should be allocated or first-touched within the chosen domain executor
-and returned to a node-local pool. A buffer records its allocation domain so it
-cannot be reused silently by an incompatible domain.
+and returned to their owning node-local pool. A buffer's
+`AllocationDomainId` determines reclamation and pool reuse, while its NUMA
+affinity is a scheduling hint. Neither prevents another CPU domain in the same
+compatible storage domain from reading or writing the allocation through the
+shared address space.
+
+For mixed-affinity inputs, the selected execution domain may incur remote NUMA
+traffic but performs no hidden migration. The output and scratch belong to the
+selected domain; each input retains its original allocation owner. Reuse by a
+different node-local pool remains forbidden unless an explicit rehome or
+allocator-compatibility contract permits it.
 
 ## GPU Resource Model
 
@@ -1312,8 +1356,14 @@ Required focused tests include:
   planning, run admission, and schedule construction;
 - eager fast-path latency satisfies the predeclared non-inferiority threshold
   against the current implementation;
-- placement-bound eager contexts and input-placement inference behave
-  identically on CPU domains and GPU devices without implicit transfer;
+- placement-bound eager contexts apply the documented distinct CPU-affinity
+  and GPU-device rules without an implicit copy or device transfer;
+- mixed CPU NUMA affinities execute in the deterministic dominant-input domain,
+  retain every input's allocation owner, and place outputs in the selected
+  domain;
+- `CpuAffinityPolicy::RequireSingleDomain` rejects mixed CPU affinities while
+  the default policy accepts them;
+- conflicting GPU devices still require an explicit transfer;
 - BLAS capability probing rejects strict budgets that cannot be enforced;
 - extracting or replacing `CpuGemmProvider` preserves the normative grouped
   and strided-batched faer parallelization policy;
@@ -1331,7 +1381,8 @@ Required focused tests include:
 - execution failure never causes an implicit cross-engine retry;
 - eager and graph paths apply the same provider-selection policy;
 - nested CPU operations reuse the outer lease;
-- NUMA buffers remain associated with their allocation domain;
+- NUMA buffers remain associated with their allocation domain even when an
+  operation executes from another CPU domain;
 - `ExternalManaged` does not reconstruct a supplied executor;
 - GPU dependency tracking avoids unnecessary global synchronization;
 - independent multi-GPU work can enqueue concurrently;
