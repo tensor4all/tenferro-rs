@@ -1,0 +1,132 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "393f0bba84de67a28e52ccbfa1027a2b8c9e935a74aa2069cf55951ffcd17265"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "597671cea6f5058926079451d90861662d9ce27824e05ae749d4a52f7b85226d"
+    }
+  },
+  "attempt": 1,
+  "case": "materialized_dot_2",
+  "order": "A/B",
+  "pair": 1,
+  "protocol_version": 1,
+  "reason": "attempt target_second: monitor violation: [\"cargo/rustc overlap at end: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802391, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2801799, 'name': 'rustc'}, {'pid': 2801820, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2801799, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2801820, 'name': 'rustc'}, {'pid': 2802208, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2801820, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802208, 'name': 'rustc'}, {'pid': 2802391, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802208, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802391, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}]\"]",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-materialized_dot_2-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T20:33:51.201799+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.07904052734375,
+      "normalized_load_start": 0.07636260986328125,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T20:33:42.275286+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/dot_general_f64/2",
+        "--save-baseline",
+        "phase1-target-materialized_dot_2-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T20:34:00.720072+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.07764434814453125,
+      "normalized_load_start": 0.07904052734375,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T20:33:51.233663+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/materialized/dot_general_f64/2",
+        "--baseline",
+        "phase1-target-materialized_dot_2-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T20:34:10.301800+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802391, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2801799, 'name': 'rustc'}, {'pid': 2801820, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2801799, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2801820, 'name': 'rustc'}, {'pid': 2802208, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2801820, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802208, 'name': 'rustc'}, {'pid': 2802391, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802208, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802391, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.08013153076171875,
+      "normalized_load_start": 0.07764434814453125,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T20:34:00.757188+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-materialized_dot_2-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T20:34:19.370315+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802928, 'name': 'rustc'}]",
+        "cargo/rustc overlap at start: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802391, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802391, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2801750, 'name': 'cargo'}, {'pid': 2802928, 'name': 'rustc'}]"
+      ],
+      "normalized_load_end": 0.0847320556640625,
+      "normalized_load_start": 0.08013153076171875,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T20:34:10.340706+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}

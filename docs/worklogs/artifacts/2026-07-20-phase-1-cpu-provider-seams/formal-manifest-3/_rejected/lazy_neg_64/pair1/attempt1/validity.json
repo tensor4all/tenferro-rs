@@ -1,0 +1,123 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "6d931b71ed4987ab1bb48ab730542b0b6d9b29de58687f8952f08d19f56f4c3e"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "1a88cd751e637aa7612432c289e4d5f0cff31309f501ca608a83859905aa68a3"
+    }
+  },
+  "attempt": 1,
+  "case": "lazy_neg_64",
+  "order": "A/B",
+  "pair": 1,
+  "protocol_version": 1,
+  "reason": "attempt sentinel_before: monitor violation: [\"cargo/rustc overlap at end: [{'pid': 2767230, 'name': 'cargo'}]\", \"cargo/rustc overlap: [{'pid': 2767230, 'name': 'cargo'}]\"]",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-lazy_neg_64-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:58:12.163364+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2767230, 'name': 'cargo'}]",
+        "cargo/rustc overlap: [{'pid': 2767230, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.08173370361328125,
+      "normalized_load_start": 0.0823974609375,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T19:58:03.235160+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/64",
+        "--save-baseline",
+        "phase1-target-lazy_neg_64-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:58:20.896530+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at start: [{'pid': 2767230, 'name': 'cargo'}]",
+        "cargo/rustc overlap: [{'pid': 2767230, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.0880889892578125,
+      "normalized_load_start": 0.08173370361328125,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T19:58:12.202004+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/64",
+        "--baseline",
+        "phase1-target-lazy_neg_64-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:58:29.846212+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.0865478515625,
+      "normalized_load_start": 0.0880889892578125,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T19:58:20.933111+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-lazy_neg_64-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:58:38.807483+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.0863037109375,
+      "normalized_load_start": 0.0865478515625,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T19:58:29.881007+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}

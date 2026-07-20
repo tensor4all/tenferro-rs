@@ -1,0 +1,120 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "be3510c8cf9ebea44e4095b4321ac2e8b3fb2ba3e9b278197e41cbcf77d26ff5"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "55edc3152f6688d639f81263c524e30c168a457e5fc1dc45e151f4eaf52a004f"
+    }
+  },
+  "attempt": 1,
+  "case": "lazy_reduce_1",
+  "order": "A/B",
+  "pair": 1,
+  "protocol_version": 1,
+  "reason": "attempt target_second: monitor violation: [\"cargo/rustc overlap: [{'pid': 2779848, 'name': 'cargo'}]\", \"cargo/rustc overlap: [{'pid': 2780023, 'name': 'cargo'}]\"]",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-lazy_reduce_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T20:09:31.929117+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.10564422607421875,
+      "normalized_load_start": 0.11064910888671875,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T20:09:22.998910+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/reduce_sum_f64/1",
+        "--save-baseline",
+        "phase1-target-lazy_reduce_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T20:09:40.910290+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.10150909423828125,
+      "normalized_load_start": 0.10564422607421875,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T20:09:31.966903+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/reduce_sum_f64/1",
+        "--baseline",
+        "phase1-target-lazy_reduce_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T20:09:49.896185+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap: [{'pid': 2779848, 'name': 'cargo'}]",
+        "cargo/rustc overlap: [{'pid': 2780023, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.100311279296875,
+      "normalized_load_start": 0.10150909423828125,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T20:09:40.945887+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-lazy_reduce_1-p1-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T20:09:58.908775+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.09574127197265625,
+      "normalized_load_start": 0.100311279296875,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T20:09:49.932508+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}

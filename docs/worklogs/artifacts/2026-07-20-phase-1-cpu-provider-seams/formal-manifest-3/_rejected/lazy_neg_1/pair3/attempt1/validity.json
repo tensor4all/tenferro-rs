@@ -1,0 +1,124 @@
+{
+  "allowed_cpu_count": 64,
+  "artifacts": {
+    "change-estimates.json": {
+      "sha256": "c11e9e97981a2c20c5168d21ecbe1320960cdfb103d58678311b5301d23ff339"
+    },
+    "sentinel-change-estimates.json": {
+      "sha256": "d05e885fb62dc9c249d44f326ad4a1ba3264e2e21b35f034a18e27a4b112124b"
+    }
+  },
+  "attempt": 1,
+  "case": "lazy_neg_1",
+  "order": "A/B",
+  "pair": 3,
+  "protocol_version": 1,
+  "reason": "attempt target_second: monitor violation: [\"cargo/rustc overlap at end: [{'pid': 2765181, 'name': 'cargo'}]\", \"cargo/rustc overlap: [{'pid': 2765181, 'name': 'cargo'}, {'pid': 2765202, 'name': 'rustc'}]\", \"cargo/rustc overlap: [{'pid': 2765181, 'name': 'cargo'}]\"]",
+  "runs": [
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-sentinel-lazy_neg_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:56:26.275382+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.08095550537109375,
+      "normalized_load_start": 0.0813446044921875,
+      "observed_affinity": "0",
+      "role": "sentinel_before",
+      "started_at": "2026-07-20T19:56:17.339596+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "baseline",
+      "binary_sha256": "c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/baseline-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--save-baseline",
+        "phase1-target-lazy_neg_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:56:35.238659+00:00",
+      "exit_status": 0,
+      "monitor_violations": [],
+      "normalized_load_end": 0.0793609619140625,
+      "normalized_load_start": 0.08095550537109375,
+      "observed_affinity": "0",
+      "role": "target_first",
+      "started_at": "2026-07-20T19:56:26.311460+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-target-lazy_neg_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:56:44.227429+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at end: [{'pid': 2765181, 'name': 'cargo'}]",
+        "cargo/rustc overlap: [{'pid': 2765181, 'name': 'cargo'}, {'pid': 2765202, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2765181, 'name': 'cargo'}]"
+      ],
+      "normalized_load_end": 0.07917022705078125,
+      "normalized_load_start": 0.0793609619140625,
+      "observed_affinity": "0",
+      "role": "target_second",
+      "started_at": "2026-07-20T19:56:35.270428+00:00"
+    },
+    {
+      "affinity_samples": [
+        "0"
+      ],
+      "binary": "candidate",
+      "binary_sha256": "bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920",
+      "command": [
+        "/tmp/tenferro-phase1-binaries/candidate-locked",
+        "--bench",
+        "eager_dispatch_baseline/lazy/neg_f64/1",
+        "--baseline",
+        "phase1-sentinel-lazy_neg_1-p3-a1",
+        "--noplot"
+      ],
+      "completed": true,
+      "ended_at": "2026-07-20T19:56:53.206908+00:00",
+      "exit_status": 0,
+      "monitor_violations": [
+        "cargo/rustc overlap at start: [{'pid': 2765181, 'name': 'cargo'}, {'pid': 2765512, 'name': 'rustc'}]",
+        "cargo/rustc overlap: [{'pid': 2765181, 'name': 'cargo'}, {'pid': 2765512, 'name': 'rustc'}]"
+      ],
+      "normalized_load_end": 0.0790863037109375,
+      "normalized_load_start": 0.07917022705078125,
+      "observed_affinity": "0",
+      "role": "sentinel_after",
+      "started_at": "2026-07-20T19:56:44.265729+00:00"
+    }
+  ],
+  "selected_cpu": 0,
+  "valid": false
+}
