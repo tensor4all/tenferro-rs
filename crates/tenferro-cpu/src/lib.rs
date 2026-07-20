@@ -57,6 +57,10 @@ pub mod backend;
 mod buffer_pool;
 mod capability;
 pub mod context;
+// INVARIANT: Task 2 stages crate-private stack adapters here before Task 3 wires
+// them into CpuContext.
+#[allow(dead_code)]
+mod domain_executor;
 #[allow(dead_code)]
 mod dot_runtime;
 mod elementwise;
@@ -101,6 +105,10 @@ pub use backend::{
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 pub use context::{CpuContext, CpuContextError};
+pub use domain_executor::{
+    CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, ScopedCpuJob, ScopedCpuJobs,
+};
 pub use dot_runtime::{
     CpuProviderBundle, CpuProviderBundleBuildError, CpuProviderBundleBuilder,
     GeneralContractionPolicy,
