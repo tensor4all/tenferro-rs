@@ -2,8 +2,9 @@
 
 This worklog records the predeclared non-inferiority campaign for Phase 1 of
 the execution-engine provider architecture. The first complete campaign failed
-the gate and is retained here unchanged as debugging evidence. Promotion is
-blocked until a new immutable candidate passes a complete unchanged campaign.
+the gate and is retained here unchanged as debugging evidence. The final
+authorized rerun remained inconclusive, so promotion is blocked and this
+branch is preserved for review rather than published as landed behavior.
 
 ## Immutable inputs and environment
 
@@ -405,3 +406,33 @@ all-PASS non-inferiority exit remains unproven. This was the final authorized
 rerun. No further campaign or selective pair replacement is allowed under this
 decision; Phase 1 promotion remains blocked and the branch is preserved as an
 `INCONCLUSIVE` review handoff.
+
+## Final review gates
+
+The final review gates ran on checkpoint `2e658b99` after formal campaign 3
+was committed:
+
+```console
+cargo fmt --all -- --check                                      # PASS
+cargo test -p tenferro-cpu                                      # PASS: 367 unit, 47 integration/allocation, 132 doctests
+cargo test -p tenferro-runtime graph::executor                   # PASS: 25
+cargo test -p tenferro-ad --test integration eager_tensor       # PASS: 70
+python3 scripts/check-doc-snippets.py --check                    # PASS
+python3 scripts/test-doc-consistency.py                          # PASS
+python3 scripts/test-check-docs-site.py                          # PASS
+git diff --check                                                 # PASS
+bash scripts/check-pr-fast.sh --coverage-reviewed \
+  --test 'cargo test -p tenferro-cpu provider::tests'            # PASS: provider tests 11
+python3 scripts/repository-rules-review.py \
+  --base origin/main --head HEAD \
+  --output-json /tmp/phase1-repository-rules-review.json         # PASS: zero findings, no waiver
+```
+
+These gates establish a clean review handoff for the implementation and its
+evidence. They do not override the performance acceptance result: public
+landed-behavior documentation, Phase 1 promotion, and #1433 completion remain
+blocked by the final `INCONCLUSIVE` campaign. Across the three formal
+campaigns, the classifier reported `22/0/6`, `24/0/4`, and `20/0/8`
+PASS/FAIL/INCONCLUSIVE respectively; none satisfied the all-PASS exit. The
+third was the final authorized rerun, and no selective replacement or fourth
+campaign is authorized. No PR was opened, and #1433 was not marked complete.
