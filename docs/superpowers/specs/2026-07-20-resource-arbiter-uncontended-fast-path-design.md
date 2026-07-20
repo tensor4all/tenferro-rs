@@ -88,7 +88,9 @@ private helpers so the direct and queued paths cannot drift semantically.
 
 `ResourcePermit::drop` continues to take the same arbiter mutex and remove its
 request from `active`. It calls `notify_all` only when the waiter queue is
-non-empty after removal.
+non-empty after removal or `recovery_waiters` is nonzero. Request-ID-recovery
+callers sleep on the same condition variable while remaining outside the
+normal admission queue, so they also require a release notification.
 
 This is race-safe under the same mutex. A waiter arriving after an empty-queue
 check observes the already-updated active set and either admits immediately or
@@ -186,3 +188,17 @@ The prototype branch contains:
 
 No pull request is created from the prototype unless the measurements and
 correctness results justify promoting it to an implementation change.
+
+## Prototype result
+
+Candidate `480e428727276208f539afa0a941e8acbac4dbce` was compared with the named
+pre-change baseline at `f1fb366f4b762d74cabcb9dc17a6d0784498805d`. The full
+measurements and environment are recorded in the
+[prototype worklog](../../worklogs/2026-07-20-resource-arbiter-fast-path-prototype.md).
+
+The formal classification is **INCONCLUSIVE** because the predeclared host-load
+noise limit was exceeded. No selective retry is permitted, and the observed
+one-thread empty-backend improvement was only 10.152209%, below the required
+20%. The implementation is therefore preserved as prototype evidence but is
+not promoted and has no pull request. This outcome does not gate or change the
+independence of architecture phases 1 or 2.

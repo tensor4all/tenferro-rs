@@ -39,7 +39,7 @@ updates them.
 | --- | --- | --- | --- |
 | [Execution-engine architecture detail](./2026-07-20-execution-engine-provider-architecture-design.md) | Full semantic, compiler, runtime, provider, resource, and device design | WIP design recorded | Maintainer review and child decomposition |
 | [Current-main eager baseline](../../worklogs/2026-07-20-eager-main-baseline.md) | Reproducible pre-refactor public eager evidence | Complete | Reuse unchanged for candidate comparisons |
-| [ResourceArbiter uncontended fast path](./2026-07-20-resource-arbiter-uncontended-fast-path-design.md) | Independent prototype for reducing an existing CPU entry cost | Prototype design recorded; implementation not started | Correctness tests and before/after measurement |
+| [ResourceArbiter uncontended fast path](./2026-07-20-resource-arbiter-uncontended-fast-path-design.md) | Independent prototype for reducing an existing CPU entry cost | Prototype evidence inconclusive; full rerun required | Preserve branch and evidence; no prototype PR |
 
 Files under `docs/superpowers/plans/` are not planning authority for this
 umbrella. A child implementation plan may be generated there for execution,
@@ -231,9 +231,9 @@ measurements remain evidence artifacts and are not rewritten as plans.
 ## Immediate next actions
 
 1. Review and accept this umbrella as the planning control document.
-2. Implement the independent ResourceArbiter direct-admission prototype,
-   verify fairness and unwind behavior, and benchmark one, two, and four
-   threads. Do not change public APIs or session ownership.
+2. Preserve the ResourceArbiter prototype branch and inconclusive evidence;
+   create no prototype PR. Only a later full paired rerun may reconsider
+   promotion. Architecture phases 1 and 2 continue independently.
 3. Draft the phase 1 child issue and design around provider seams and borrowed
    requests. Fix its eager non-inferiority rule before implementation.
 4. Update this document whenever a child is accepted, completed, superseded,
