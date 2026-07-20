@@ -57,6 +57,8 @@ pub mod backend;
 mod buffer_pool;
 mod capability;
 pub mod context;
+#[allow(dead_code)]
+mod dot_runtime;
 mod elementwise;
 mod engine;
 mod exec_session;
