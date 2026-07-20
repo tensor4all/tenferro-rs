@@ -1,0 +1,325 @@
+use tenferro_tensor::{
+    DotGeneralAccumulation, DotGeneralConfig, ShapeMismatch, TensorRead, TensorWrite,
+    ValidationError,
+};
+
+use crate::provider::{CpuContractionAxes, CpuDotGeneralRequest};
+use crate::{Error, Result};
+
+const OP: &str = "dot_general";
+
+fn role_mask(axes: &[usize], rank: usize, role: &'static str) -> Result<Option<u64>> {
+    if rank > 64 {
+        for (position, &axis) in axes.iter().enumerate() {
+            if axis >= rank {
+                return Err(Error::axis_out_of_bounds(OP, axis, rank));
+            }
+            if axes[..position].contains(&axis) {
+                return Err(Error::duplicate_axis(OP, axis, role));
+            }
+        }
+        return Ok(None);
+    }
+
+    let mut mask = 0_u64;
+    for &axis in axes {
+        if axis >= rank {
+            return Err(Error::axis_out_of_bounds(OP, axis, rank));
+        }
+        let bit = 1_u64 << axis;
+        if mask & bit != 0 {
+            return Err(Error::duplicate_axis(OP, axis, role));
+        }
+        mask |= bit;
+    }
+    Ok(Some(mask))
+}
+
+fn validate_disjoint(
+    first: &[usize],
+    first_mask: Option<u64>,
+    first_role: &'static str,
+    second: &[usize],
+    second_mask: Option<u64>,
+    second_role: &'static str,
+) -> Result<()> {
+    let overlap = match (first_mask, second_mask) {
+        (Some(first), Some(second)) => first & second,
+        _ => 0,
+    };
+    let conflict = if overlap != 0 || first_mask.is_none() {
+        first.iter().copied().find(|axis| second.contains(axis))
+    } else {
+        None
+    };
+    if let Some(axis) = conflict {
+        return Err(Error::validation(
+            OP,
+            ValidationError::AxisRoleConflict {
+                axis,
+                first_role,
+                second_role,
+            },
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_axis_groups<'a>(
+    lhs_rank: usize,
+    rhs_rank: usize,
+    config: &'a DotGeneralConfig,
+) -> Result<CpuContractionAxes<'a>> {
+    let lhs_contracting_mask = role_mask(
+        &config.lhs_contracting_dims,
+        lhs_rank,
+        "lhs_contracting_dims",
+    )?;
+    let rhs_contracting_mask = role_mask(
+        &config.rhs_contracting_dims,
+        rhs_rank,
+        "rhs_contracting_dims",
+    )?;
+    let lhs_batch_mask = role_mask(&config.lhs_batch_dims, lhs_rank, "lhs_batch_dims")?;
+    let rhs_batch_mask = role_mask(&config.rhs_batch_dims, rhs_rank, "rhs_batch_dims")?;
+
+    validate_disjoint(
+        &config.lhs_contracting_dims,
+        lhs_contracting_mask,
+        "lhs contracting",
+        &config.lhs_batch_dims,
+        lhs_batch_mask,
+        "lhs batch",
+    )?;
+    validate_disjoint(
+        &config.rhs_contracting_dims,
+        rhs_contracting_mask,
+        "rhs contracting",
+        &config.rhs_batch_dims,
+        rhs_batch_mask,
+        "rhs batch",
+    )?;
+
+    if config.lhs_contracting_dims.len() != config.rhs_contracting_dims.len() {
+        return Err(Error::invalid_argument(
+            OP,
+            "dot_general_config",
+            format!(
+                "lhs/rhs contracting dim counts differ ({} vs {})",
+                config.lhs_contracting_dims.len(),
+                config.rhs_contracting_dims.len(),
+            ),
+        ));
+    }
+    if config.lhs_batch_dims.len() != config.rhs_batch_dims.len() {
+        return Err(Error::invalid_argument(
+            OP,
+            "dot_general_config",
+            format!(
+                "lhs/rhs batch dim counts differ ({} vs {})",
+                config.lhs_batch_dims.len(),
+                config.rhs_batch_dims.len(),
+            ),
+        ));
+    }
+
+    Ok(CpuContractionAxes::new(
+        lhs_rank,
+        rhs_rank,
+        &config.lhs_contracting_dims,
+        &config.rhs_contracting_dims,
+        &config.lhs_batch_dims,
+        &config.rhs_batch_dims,
+        lhs_contracting_mask.zip(lhs_batch_mask).map(|(a, b)| a | b),
+        rhs_contracting_mask.zip(rhs_batch_mask).map(|(a, b)| a | b),
+    ))
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ValidatedDotGeneral<'a> {
+    axes: CpuContractionAxes<'a>,
+    output_element_count: usize,
+}
+
+impl<'a> ValidatedDotGeneral<'a> {
+    pub(crate) fn axes(&self) -> &CpuContractionAxes<'a> {
+        &self.axes
+    }
+
+    pub(crate) fn output_element_count(&self) -> usize {
+        self.output_element_count
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn request<'request, 'input, 'output>(
+        &'request self,
+        lhs: &'request TensorRead<'input>,
+        rhs: &'request TensorRead<'input>,
+        output: &'request mut TensorWrite<'output>,
+        accumulation: DotGeneralAccumulation,
+    ) -> CpuDotGeneralRequest<'request, 'input, 'output>
+    where
+        'a: 'request,
+    {
+        CpuDotGeneralRequest::new(lhs, rhs, output, self.axes, accumulation)
+    }
+}
+
+fn validate_paired_extents(
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    axes: &CpuContractionAxes<'_>,
+) -> Result<()> {
+    for (lhs_axis, rhs_axis) in axes.contracting_pairs().chain(axes.batch_pairs()) {
+        if lhs.shape()[lhs_axis] != rhs.shape()[rhs_axis] {
+            return Err(Error::validation(
+                OP,
+                ShapeMismatch::ContractedDimensions {
+                    lhs_axis,
+                    lhs_size: lhs.shape()[lhs_axis],
+                    rhs_axis,
+                    rhs_size: rhs.shape()[rhs_axis],
+                }
+                .into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn expected_output_shape(
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    axes: &CpuContractionAxes<'_>,
+) -> Vec<usize> {
+    axes.lhs_free_axes()
+        .map(|axis| lhs.shape()[axis])
+        .chain(axes.rhs_free_axes().map(|axis| rhs.shape()[axis]))
+        .chain(
+            axes.batch_pairs()
+                .map(|(lhs_axis, _)| lhs.shape()[lhs_axis]),
+        )
+        .collect()
+}
+
+fn output_shape_matches(
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    output: &TensorWrite<'_>,
+    axes: &CpuContractionAxes<'_>,
+) -> Result<()> {
+    let expected_rank =
+        axes.lhs_free_axes().count() + axes.rhs_free_axes().count() + axes.batch_pairs().len();
+    let mut actual = output.shape().iter().copied();
+    let matches = output.shape().len() == expected_rank
+        && axes
+            .lhs_free_axes()
+            .map(|axis| lhs.shape()[axis])
+            .chain(axes.rhs_free_axes().map(|axis| rhs.shape()[axis]))
+            .chain(
+                axes.batch_pairs()
+                    .map(|(lhs_axis, _)| lhs.shape()[lhs_axis]),
+            )
+            .all(|expected| actual.next() == Some(expected));
+    if matches {
+        return Ok(());
+    }
+
+    Err(Error::validation(
+        OP,
+        ShapeMismatch::ExpectedActual {
+            expected: expected_output_shape(lhs, rhs, axes).into(),
+            actual: output.shape().to_vec().into(),
+        }
+        .into(),
+    ))
+}
+
+pub(crate) fn validate_dot_general<'a>(
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    output: &TensorWrite<'_>,
+    config: &'a DotGeneralConfig,
+    accumulation: DotGeneralAccumulation,
+) -> Result<ValidatedDotGeneral<'a>> {
+    if lhs.dtype() != rhs.dtype() {
+        return Err(Error::dtype_mismatch(OP, lhs.dtype(), rhs.dtype()));
+    }
+    if output.dtype() != lhs.dtype() {
+        return Err(Error::dtype_mismatch(OP, output.dtype(), lhs.dtype()));
+    }
+    if accumulation.alpha.dtype() != lhs.dtype() {
+        return Err(Error::dtype_mismatch(
+            OP,
+            lhs.dtype(),
+            accumulation.alpha.dtype(),
+        ));
+    }
+    if accumulation.beta.dtype() != lhs.dtype() {
+        return Err(Error::dtype_mismatch(
+            OP,
+            lhs.dtype(),
+            accumulation.beta.dtype(),
+        ));
+    }
+
+    crate::structural::validate_cpu_host_placement(OP, "lhs", read_placement(lhs))?;
+    crate::structural::validate_cpu_host_placement(OP, "rhs", read_placement(rhs))?;
+    crate::structural::validate_cpu_host_placement(OP, "output", write_placement(output))?;
+
+    let axes = validate_axis_groups(lhs.shape().len(), rhs.shape().len(), config)?;
+    validate_paired_extents(lhs, rhs, &axes)?;
+    output_shape_matches(lhs, rhs, output, &axes)?;
+
+    tenferro_tensor::validate::checked_shape_product(OP, "lhs_shape", lhs.shape())?;
+    tenferro_tensor::validate::checked_shape_product(OP, "rhs_shape", rhs.shape())?;
+    let output_element_count =
+        tenferro_tensor::validate::checked_shape_product(OP, "output_shape", output.shape())?;
+    for (role, offset) in [
+        ("lhs", lhs.offset()),
+        ("rhs", rhs.offset()),
+        ("output", output.offset()),
+    ] {
+        usize::try_from(offset).map_err(|_| {
+            Error::invalid_argument(OP, role, "validated tensor offset must be non-negative")
+        })?;
+    }
+
+    Ok(ValidatedDotGeneral {
+        axes,
+        output_element_count,
+    })
+}
+
+fn read_placement<'a>(tensor: &'a TensorRead<'_>) -> &'a tenferro_tensor::Placement {
+    match tensor {
+        TensorRead::Tensor(tensor) => tensor.placement(),
+        TensorRead::View(view) => match view {
+            tenferro_tensor::TensorView::F32(view) => view.placement(),
+            tenferro_tensor::TensorView::F64(view) => view.placement(),
+            tenferro_tensor::TensorView::I32(view) => view.placement(),
+            tenferro_tensor::TensorView::I64(view) => view.placement(),
+            tenferro_tensor::TensorView::Bool(view) => view.placement(),
+            tenferro_tensor::TensorView::C32(view) => view.placement(),
+            tenferro_tensor::TensorView::C64(view) => view.placement(),
+        },
+    }
+}
+
+fn write_placement<'a>(tensor: &'a TensorWrite<'_>) -> &'a tenferro_tensor::Placement {
+    match tensor {
+        TensorWrite::Tensor(tensor) => tensor.placement(),
+        TensorWrite::View(view) => match view {
+            tenferro_tensor::TensorViewMut::F32(view) => view.placement(),
+            tenferro_tensor::TensorViewMut::F64(view) => view.placement(),
+            tenferro_tensor::TensorViewMut::I32(view) => view.placement(),
+            tenferro_tensor::TensorViewMut::I64(view) => view.placement(),
+            tenferro_tensor::TensorViewMut::Bool(view) => view.placement(),
+            tenferro_tensor::TensorViewMut::C32(view) => view.placement(),
+            tenferro_tensor::TensorViewMut::C64(view) => view.placement(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests;
