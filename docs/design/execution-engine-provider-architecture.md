@@ -1,7 +1,7 @@
 # Accepted Architecture Design: Pluggable Execution Engines and Resource Domains
 
 > Planning authority and current phase status live in the
-> [execution-engine umbrella plan](./2026-07-20-execution-engine-provider-umbrella-design.md).
+> [execution-engine umbrella issue](https://github.com/tensor4all/tenferro-rs/issues/1433).
 > This child document owns the detailed proposed architecture and rationale.
 
 ## Status
@@ -1784,7 +1784,7 @@ The following requirements are carried into the named architecture phases:
 ## Migration Constraints
 
 Phase definitions, dependency order, status, and acceptance gates live only in
-the [umbrella plan](./2026-07-20-execution-engine-provider-umbrella-design.md).
+the [umbrella issue](https://github.com/tensor4all/tenferro-rs/issues/1433).
 This detailed design imposes the following migration constraints:
 
 - tenferro is pre-1.0: public breaking changes are allowed and no deprecation
@@ -1891,7 +1891,7 @@ tensors; future logical sharding is designed separately.
 
 ## Child Design and Implementation Boundary
 
-The [umbrella plan](./2026-07-20-execution-engine-provider-umbrella-design.md)
+The [umbrella issue](https://github.com/tensor4all/tenferro-rs/issues/1433)
 governs decomposition, ordering, status, and acceptance gates. This detailed
 design selects the architectural invariants that children must preserve: crate
 ownership, process-local portability, immutable public program access, typed
