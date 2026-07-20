@@ -16,7 +16,9 @@ an accepted child issue and its own reviewed implementation plan.
 This revision incorporates every issue #1433 contract added after `f777b52e`,
 including the two-axis CPU capability model, additional provider
 classifications, batched-contraction target policy, MPI compatibility, the
-DMRG-class driving workload, and requirements consolidated from closed issues.
+DMRG-class driving workload, requirements consolidated from closed issues, and
+the post-review fast-path, extension-AD, ownership, control-flow, lifecycle,
+transfer/collective, module-first, and pre-1.0 migration contracts.
 
 ## Document authority
 
@@ -114,6 +116,31 @@ Every child issue and implementation plan must preserve these invariants:
 14. A DMRG-class child must bound common-miss preparation as shapes and block
     structure change, preserve reusable Davidson state, and measure the
     user-managed communication boundary against the eager single-op contract.
+15. Eager fast-path eligibility is decided after pure eager-local lowering.
+    Exactly one executable semantic operation may remain direct; two or more
+    lowered operations require prepared-graph execution.
+16. Extension AD migrates explicitly from the current linearize, linear
+    transpose, and optional direct-primal-VJP roles to validated
+    `SemanticProgram -> SemanticProgram` transforms owned by `AdContext`.
+17. The strong ownership graph is acyclic: runtime state, caches, prepared
+    plans, events, and in-flight runs never strongly own public tensor wrappers
+    or point back to their runtime owner.
+18. Dropping execution, tensor, or runtime handles is non-blocking. In-flight
+    state retains storage, resources, external owners, and events through
+    completion; cancellation and blocking shutdown are explicit operations.
+19. Transfer and collective are scheduler-owned core node families with
+    provider implementations. A transfer explicitly bridges event domains;
+    neither family may be hidden as an arbitrary extension operation.
+20. The program component begins as `tenferro_runtime::program`. A public
+    `tenferro-program` crate is extracted only after semantic stability and a
+    direct external-consumer need are demonstrated without a dependency cycle.
+21. Tenferro is pre-1.0: phases may make clean breaking changes and update
+    in-repository callers atomically. They do not add deprecation periods or
+    public compatibility shims; temporary internal staging ends with its phase.
+22. Structured control flow remains deferred, but its child must start from a
+    region/block model with block arguments, terminators, yields, and typed
+    shape joins and prove representative branch and loop programs before API
+    work begins.
 
 ## Workstreams and dependencies
 
@@ -126,21 +153,22 @@ the performance lane does not block the architecture lane.
 
 The numbered order is the default migration order. A later phase may begin
 design review early, but implementation cannot assume an earlier contract that
-has not landed or been provided by an explicit compatibility adapter.
+has not landed or been provided by temporary internal staging in that child's
+own implementation.
 
 | Phase | Scope | Required predecessor | Status |
 | ---: | --- | --- | --- |
 | 0 | Record current-main eager dispatch and CPU-entry evidence | None | Eager baseline complete; CPU-entry diagnostics collected |
-| 1 | Borrowed validated requests, typed CPU capability slots, and layout/GEMM/general-contraction provider composites behind current adapters | Phase 0 evidence and accepted child issue | Not started |
+| 1 | Borrowed validated requests, typed CPU capability slots, and layout/GEMM/general-contraction provider composites with temporary internal staging | Phase 0 evidence and accepted child issue | Not started |
 | 2 | Placement-bound eager contexts, `CpuDomainExecutor`, explicit parallel modes, and managed/external NUMA domains | Phase 1 contracts | Not started |
-| 3 | `tenferro-program`, immutable `SemanticProgram`, fingerprints, effects, aliases, and `TraceContext`/`GraphCompiler` separation | Phase 1 request/schema decisions and accepted semantic-IR child design | Not started |
+| 3 | `tenferro_runtime::program`, immutable `SemanticProgram`, fingerprints, effects, aliases, extension AD trait migration, and `TraceContext`/`GraphCompiler` separation | Phase 1 request/schema decisions and accepted semantic-IR child design | Not started |
 | 4 | Immutable runtime snapshots, remaining core capabilities, extension modules, prepared operations, specialization, and bounded caches | Phase 3 semantic artifact | Not started |
-| 5 | Common `ScheduledGraph`, event domains, buffer planning, admission, and runtime-owned `GraphExecutor`; port CPU graph execution | Phases 2 and 4 | Not started |
+| 5 | Common `ScheduledGraph`, core transfer/collective node boundary, event domains, buffer planning, admission, and runtime-owned `GraphExecutor`; port CPU graph execution | Phases 2 and 4 | Not started |
 | 6 | Extension capability resolution and pure core lowering, validated first with N-ary einsum and then linalg, FFT, sparse, and permutation families | Phases 4 and 5 | Not started |
 | 7 | Split CUDA/WebGPU resources from algorithms and port native GPU execution to the common scheduler | Phase 5 common executor | Not started |
 | 8 | Integrate XLA through `SubgraphCompiler` and prepared operations; retire executor-shaped portable artifacts | Phases 4 and 5 | Not started |
 | 9 | Schedule independent work across multiple GPUs | Phase 7 device-resource model | Not started |
-| 10 | Design logical sharding, collectives, resharding, and structured control flow | Explicitly accepted follow-up designs | Deferred |
+| 10 | Design logical sharding, collective providers, resharding, and region/block structured control flow with representability proofs | Explicitly accepted follow-up designs | Deferred |
 
 Phase numbers describe architectural dependency, not pull-request size. Each
 phase may be split into multiple accepted child issues, but every issue must
@@ -150,7 +178,7 @@ name the phase and the exact contract it advances.
 
 | Issue | Phase ownership | Retained contract |
 | --- | ---: | --- |
-| Closed #1432 | 1 | Validated general contraction, provider composites and extension-owned linalg bundles, current adapters, engine-owned fan-out, and dispatch evidence |
+| Closed #1432 | 1 | Validated general contraction, provider composites and extension-owned linalg bundles, temporary internal staging, engine-owned fan-out, and dispatch evidence |
 | Closed #1417 | 2 | Externally managed executor lifetime, exact declared-domain arbitration, placement-resolved registries, and honest affinity diagnostics |
 | Closed #1422 | 3 | Opaque builder tokens, typed cross-builder rejection, atomic import/finish, supported extension construction, and private representation |
 | Open #1426 H8 | Phase 1/2 target-policy child | Batched `dot_general` thresholds and tiny-kernel policy remain open and benchmark-owned |
@@ -204,8 +232,9 @@ umbrella's runtime before its accepted slices can proceed.
 ### Gate A: issue and scope
 
 No implementation phase starts from this umbrella alone. Its child issue must
-be accepted and must state public/API impact, compatibility adapters, excluded
-work, and the normative documents it will update.
+be accepted and must state public/API breakage, in-repository migration and
+temporary internal staging, excluded work, and the normative documents it will
+update.
 
 ### Gate B: execution ownership
 
@@ -234,6 +263,14 @@ are fixed before candidate measurements. Candidate runs reuse the tracked
 current-main benchmark source, compiler/profile, CPU pinning, backend thread
 count, provider selection, and result-consumption semantics.
 
+The tracked source starts with
+`crates/tenferro-ad/benches/eager_dispatch_baseline.rs` and must cover small
+elementwise, reduction, contraction, and indexed eager operations before a
+candidate is measured. Existing einsum and linalg benchmarks cover extension
+and multi-operation cases. Acceptance requires no statistically significant
+regression beyond the predeclared threshold and no new steady-state allocation
+or string lookup in the measured eager hot path.
+
 The umbrella does not select one universal percentage for all phases. Each
 child owns a threshold appropriate to the surface it changes, but cannot
 replace the current-main evidence with a faster post-refactor baseline.
@@ -256,6 +293,13 @@ Contract tests cover capability resolution, unsupported behavior, placement,
 resource release on error or unwind, effect ordering, buffer lifetime, and
 numeric parity. Execution never retries silently on another engine or moves
 tensor payloads across a device boundary implicitly.
+
+Runtime tests also prove acyclic ownership with weak sentinels, non-blocking
+handle/tensor/runtime drop, retained resources through delayed completion, and
+safe event-generation reuse across success, failure, and both cancellation
+timings. Transfer tests prove source-to-destination event-domain bridging.
+The phase 3 AD child migrates FFT plus test extension rules and establishes JVP
+and VJP parity before removing the old graph-specific rule traits.
 
 CPU tests cover process-allowed cpuset discovery, strict versus advisory
 placement, provider count/placement classification, and externally managed

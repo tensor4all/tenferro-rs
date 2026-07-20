@@ -142,22 +142,29 @@ The dependency direction is deliberate:
 - extension crates add semantic and provider traits without requiring the core
   runtime to enumerate their operation families.
 
-### Crate ownership
+### Component and crate ownership
 
-A new public `tenferro-program` crate owns `SemanticProgram`,
+The first implementation keeps the logical program component in
+`tenferro_runtime::program`. That component owns `SemanticProgram`,
 `CoreSemanticOp`, `ExtensionOp`, semantic metadata, shape guards, effects,
-alias declarations, and process-local structural fingerprints.
-`tenferro-runtime` owns `TraceContext`, `GraphCompiler`, runtime and engine
-traits, `PreparedGraph`, `ScheduledGraph`, `GraphExecutor`, `ResourceArbiter`,
-and prepared-plan caches. XLA depends on `tenferro-program` and integrates with
-`tenferro-runtime` as an engine. Operation crates depend on
-`tenferro-program` for semantic payloads and optionally on `tenferro-runtime`
-for execution adapters.
+alias declarations, validation, and process-local structural fingerprints.
+`tenferro-runtime` also owns `TraceContext`, `GraphCompiler`, runtime and
+engine traits, `PreparedGraph`, `ScheduledGraph`, `GraphExecutor`,
+`ResourceArbiter`, and prepared-plan caches. This module-first boundary avoids
+freezing a new public crate while the semantic representation and extension
+interfaces are still changing.
+
+The logical program component has no dependency on runtime resources,
+providers, scheduling, or AD even while it is physically a runtime module.
+Phase 3 must keep that dependency boundary mechanically auditable. Extraction
+to a public `tenferro-program` crate occurs only after the representation is
+stable and a direct external consumer such as XLA or an operation crate needs
+the semantic types without the runtime surface. The extraction child must show
+an acyclic dependency graph and must not change the artifact semantics.
 
 `GraphCompiler` remains in `tenferro-runtime` initially because its compiler
 service, trace integration, and cache are closely tied to runtime-facing
-workflows. This ownership may be split later without changing the program
-artifact.
+workflows. It may be split later without changing the program artifact.
 
 ## Compiler and Artifact Boundaries
 
@@ -194,15 +201,28 @@ It does not contain:
 
 This makes `SemanticProgram` the backend-neutral replacement for the portable
 role currently attributed to `GraphProgram`. Existing `GraphProgram` and
-`ExecProgram` remain temporary adapters while migration is in progress.
+`ExecProgram` may be used as temporary internal staging types, but they are not
+compatibility surfaces and are removed when their owning migration phase
+completes.
 
 `SemanticProgram` has private fields and read-only views and iterators. A
 validation-preserving builder is available to low-level frontends, but callers
 cannot mutate an already frozen program. `CoreSemanticOp` is a public,
 `#[non_exhaustive]` enum. The initial program contains one acyclic
-`SemanticRegion`. The container reserves future nested regions for structured
-control flow, but the first implementation has no `if`, `while`, block
+`SemanticRegion`; the first implementation has no `if`, `while`, block
 arguments, yields, shape joins, or loop AD.
+
+The reserved structured-control-flow model is at least an MLIR-style
+region/block model: a `SemanticRegion` contains ordered blocks, a block has
+typed block arguments, operations, and exactly one terminator, successor edges
+pass explicit operands, and region operations declare yielded values. Branch
+and loop validation must define dtype and symbolic-shape joins, including the
+guards required when incoming shapes are not statically equal. Nested regions
+cannot capture runtime resources or bypass effect and alias analysis. Before
+adding public control flow, the phase 10 child must prove that representative
+`if` and `while` programs, their shape joins, and their AD requirements are
+representable in this model; reserving `SemanticRegion` alone is not evidence
+of that capability.
 
 Builder-issued graph and value handles are opaque tokens scoped to one builder;
 raw integer identities are never public. Using a token with another builder is
@@ -237,8 +257,8 @@ never imported implicitly as a default. Cross-`TraceContext` tensor use also
 requires an explicit import; tracing does not merge graphs implicitly.
 
 Extension tracing APIs target `TraceContext`. Existing APIs such as
-`GraphCompilerEinsumExt` become compatibility adapters rather than permanent
-compiler extension points.
+`GraphCompilerEinsumExt` are replaced atomically when the new compiler
+extension point lands; they are not permanent compiler extension points.
 
 ### Verified semantic transforms and AD
 
@@ -260,11 +280,29 @@ limited to pure semantic operations such as output pruning.
 
 Automatic differentiation is a separate
 `SemanticProgram -> SemanticProgram` transform in `tenferro-ad`, before
-runtime preparation. `tenferro-program` has no AD dependency. Extension-owned
-rules are installed explicitly in an `AdContext`; there is no global rule
-inventory. AD tries the extension rule before runtime lowering. Differentiating
-through a lowering is an explicit fallback policy, effectful operations require
-a rule, and in-place semantics require functionalization.
+runtime preparation. The logical program component has no AD dependency.
+Extension-owned rules are installed explicitly in an `AdContext`; there is no
+global rule inventory. AD tries the extension rule before runtime lowering.
+Differentiating through a lowering is an explicit fallback policy, effectful
+operations require a rule, and in-place semantics require functionalization.
+
+The phase 3 AD child must define semantic-rule traits and migrate all three
+current extension roles explicitly:
+
+| Current role | Semantic-program role |
+| --- | --- |
+| `ExtensionLinearizeRule` | Emit a validated primal-plus-linear semantic fragment from one extension op and active tangent inputs. |
+| `ExtensionLinearTransposeRule` | Transpose an already linearized semantic fragment and emit cotangents for its active inputs. |
+| `ExtensionPrimalVjpRule` | Optional direct-VJP transform retained only as a measured optimization; the canonical reverse path remains linearize then transpose. |
+
+The new callbacks consume immutable semantic op/value views and emit through a
+validation-preserving semantic AD builder. They do not expose
+`ValueKey<StdTensorOp>`, `PrimitiveRuleBuilder`, `ShapeGuardContext`, or the
+current executor graph. The child must specify active-input and absent-tangent
+encoding, multi-output ordering, residual capture, effect rejection,
+provenance, typed failures, and cache identity. It must migrate the FFT and
+test extension rules and compare JVP/VJP results against the current rules
+before the old traits are removed in the same migration phase.
 
 The current recorded eager VJP maps to this pipeline as
 `record -> TracedGraph -> SemanticProgram -> AD transform -> Runtime::prepare_for`.
@@ -465,6 +503,7 @@ pub enum ScheduledNode {
         resources: ResourceRequirements,
     },
     Transfer(PreparedTransfer),
+    Collective(PreparedCollective),
     Barrier(PreparedBarrier),
 }
 ```
@@ -481,6 +520,18 @@ context identity. Inputs and outputs remain borrowed, and execution performs
 no context or plan allocation. An unsafe custom vtable fast path is deferred
 unless benchmarks prove the safe check material; increasing fusion is the
 preferred way to amortize dispatch.
+
+`Transfer` and `Collective` are scheduler-owned node families, not arbitrary
+extension operations. A transfer has explicit source and destination storage
+domains and bridges their event domains by producing a destination-domain
+completion dependency; the scheduler understands its buffer lifetime,
+ordering, failure, and resource requirements. A collective similarly has
+explicit participants, ordering, event-domain behavior, and communication
+resources. Provider registries may supply their implementations, but cannot
+hide them inside an opaque extension op. The initial refactor implements
+transfers and may leave collectives unavailable; reserving the core collective
+node prevents a later sharding design from bypassing common scheduling and
+lifetime rules.
 
 The common `GraphExecutor` is owned by `Runtime`; it is not generic over one
 `TensorBackend`. This permits a single graph to contain CPU work, GPU work,
@@ -528,9 +579,9 @@ let outputs = runtime.run(&semantic, inputs)?;
 `ExecutionHandle`. `ExecutionHandle::wait` reports completion errors, and
 `run` is exactly `submit` plus `wait`. Pending outputs may feed more work in the
 same runtime without host synchronization. Dropping a handle does not cancel
-already submitted work. Eager GPU operations likewise return tensors carrying
-pending completion; host reads, explicit synchronization, or export observe
-completion and deferred errors.
+or wait for already submitted work. Eager GPU operations likewise return
+tensors carrying pending completion; host reads, explicit synchronization, or
+export observe completion and deferred errors.
 
 `Runtime::run` validates input metadata and shape guards, derives the
 `InputSignature`, looks up or creates a prepared specialization, acquires
@@ -637,7 +688,8 @@ An eager operation shares semantic validation and resolved provider behavior
 with graph execution, but it must not pay graph orchestration costs merely to
 execute one already-resident operation. The direct fast path applies when:
 
-- there is exactly one semantic operation;
+- eager-local pure legalization yields exactly one executable semantic
+  operation, whether native or one core operation produced by lowering;
 - all inputs belong to the same runtime and compatible storage domain;
 - placement resolves to one CPU domain or one GPU device;
 - no transfer, collective, cross-domain barrier, or multi-operation core
@@ -659,6 +711,19 @@ operation-local composite such as layout-plus-GEMM may remain on the fast path
 when its temporary storage, dependencies, and effects are fully described by
 that one operation contract; it need not be expanded into a general schedule.
 
+Fast-path eligibility is evaluated after eager-local pure lowering, not merely
+from the source extension op count. An extension with a native engine remains
+one operation. A `lower_to_core` result may also remain eligible only when it
+emits exactly one core operation and its validation, placement, effects,
+aliases, output and scratch needs are operation-local. Lowering to two or more
+operations always promotes to prepared-graph execution, even when the lowered
+sequence is short. Consequently, an extension author who requires predictable
+eager latency must provide either a native engine or a guaranteed single-core-
+operation lowering; providing generic `lower_to_core` alone does not guarantee
+the eager fast path. N-ary einsum and decompositions lowered to multiple core
+ops intentionally pay preparation and scheduling unless a native engine
+represents them as one prepared operation.
+
 A standalone eager call acquires at most one node-level resource lease. An
 active explicit execution scope may reuse its existing compatible lease; lease
 reuse is carried by an `EagerExecutionContext`, not ambient thread-local state.
@@ -667,11 +732,17 @@ one-node prepared-graph path without changing semantics or hiding a transfer.
 
 Before a child implementation changes eager dispatch, it records release-mode
 baselines for representative no-op or metadata-light operations and small
-elementwise, reduction, and contraction calls on current `main`. The child
-issue fixes a non-inferiority threshold before implementation results are
-known. Acceptance requires no new steady-state allocation or string lookup, no
-new microsecond-scale orchestration step, and no statistically significant
-regression beyond that predeclared threshold.
+elementwise, reduction, contraction, and indexed calls on current `main`. The
+canonical starting source is the existing
+`crates/tenferro-ad/benches/eager_dispatch_baseline.rs`; it must be extended
+with an indexed case before candidate code is measured. Existing einsum and
+linalg benchmarks supplement this dispatch suite for extension-native and
+promoted multi-operation paths. The child issue fixes a non-inferiority statistic,
+threshold, repetition policy, and noisy-run handling before implementation
+results are known. Acceptance requires no new steady-state allocation or
+string lookup in the measured eager hot path, no new microsecond-scale
+orchestration step, and no statistically significant regression beyond that
+predeclared threshold.
 
 ### Placement-bound eager API
 
@@ -766,13 +837,14 @@ payload identity, arity and metadata, effects and aliases, optional
 inspect providers or input values, or access device and global state. A host
 reference implementation is an explicitly registered
 `HostReferenceExtensionEngine`, not a method on the semantic payload. The
-current `host_reference` bridge may remain only as a deprecated compatibility
-adapter.
+current `host_reference` bridge is removed when that engine lands; it does not
+remain as a parallel compatibility surface.
 
 Duplicate registration is an error only for the same `(family_id, EngineId)`.
 Replacing an entry is explicit. The current per-execution `register_runtime`
-pattern migrates to a deprecated transactional configuration bridge; it does
-not auto-register on every call.
+pattern may be routed through a temporary internal transactional staging path
+within its migration phase, but the old public entry point is then removed. It
+does not auto-register on every call.
 
 ### Generic extension lowering and specialization
 
@@ -818,11 +890,15 @@ The current `lower_to_standard_ops` result uses `Ok(None)` for both temporary
 metadata insufficiency and permanent lack of a lowering. Migration replaces
 that ambiguity with `NeedsSpecialization` versus `Unsupported`.
 
-Lowering is invoked by runtime preparation, because the decision depends on
-available engines and may depend on a concrete input signature. The pure
+Graph lowering is invoked by runtime preparation, because the decision depends
+on available engines and may depend on a concrete input signature. The pure
 `GraphCompiler` preserves the extension payload in `SemanticProgram`. Runtime
 preparation first checks native capability, then attempts core lowering, then
-uses an explicitly configured fallback engine if one exists.
+uses an explicitly configured fallback engine if one exists. The eager
+dispatcher may invoke the same pure lowering callback before constructing a
+program only to decide the single-operation path described above; it may
+execute the result directly only when exactly one core operation is emitted and
+every other eager fast-path condition holds.
 
 A successful lowering preserves the extension's declared metadata, effects,
 alias behavior, output arity, and node provenance. The newly emitted core
@@ -933,6 +1009,30 @@ Storage records these identities, its allocation owner, and pending
 completion. A prepared graph records `RuntimeId` and epoch. CPU allocations on
 different NUMA nodes may share one compatible `StorageDomainId` while retaining
 different `AllocationDomainId` and affinity metadata.
+
+The strong-ownership graph is acyclic by contract:
+
+```text
+EagerTensor -> Arc<RuntimeHandle> -> Arc<RuntimeState>
+     |                                  |
+     v                                  v
+TensorStorage -> PendingCompletion   snapshots/caches/executor services
+                     |
+                     v
+              Arc<InFlightRun> -> storage + leases + events + prepared ops
+```
+
+There is no strong edge from `RuntimeState`, a cache entry, a prepared plan, an
+event, or an `InFlightRun` back to `EagerTensor`, `Tensor`, or another public
+tensor wrapper. Runtime registries that index public values use opaque IDs and
+`Weak` backreferences only. `InFlightRun` owns exactly the storage, prepared
+operations, configuration snapshot, leases, event tokens, and completion
+state required to finish submitted work; it does not own `RuntimeHandle` or
+`RuntimeState`. Pending output storage may own its `InFlightRun` completion,
+but completion records never own the output wrapper. Cache insertion must be
+rejected in review if its value can introduce a strong path back to the cache
+owner. The runtime ownership child includes a cycle test using weak sentinels
+for completed, cancelled, failed, and dropped-handle runs.
 
 Mixing tensors from different runtimes or incompatible storage domains is an
 error. Different compatible CPU allocation domains are not an error: they
@@ -1263,6 +1363,26 @@ device work is cancellable. Submitted work is drained, leases remain held until
 completion, effects are not rolled back, and dropping an execution handle does
 not imply cancellation.
 
+`ExecutionHandle::drop` is non-blocking detach: it removes only that observer
+and neither waits nor requests cancellation. `ExecutionHandle::cancel` is an
+explicit best-effort request, and `wait` or `await` is the error-observing
+completion boundary. Dropping an eager tensor or ordinary `Runtime` handle is
+also non-blocking. `Runtime::shutdown` is the explicit API for callers that
+want to stop admission and wait for all submitted work; default runtime drop
+signals shutdown and hands remaining run records to the runtime driver or
+external executor owner for draining.
+
+An `InFlightRun` retains every input/output allocation, prepared operation,
+resource lease, event token, external executor owner, and engine/device handle
+that submitted work may access. These are released only after the completion
+event, including failure or cancellation drain. Event-slot generations cannot
+be recycled until that release. Thus detaching a handle cannot cause use after
+free, while public handle and tensor destructors never synchronize a device.
+The event/cancellation child must test dropped handles and runtimes with delayed
+success, delayed failure, cancellation before enqueue, and cancellation after
+device enqueue; completion errors from a detached run remain observable in
+runtime diagnostics even though no handle receives them.
+
 ## Admission Control and Resource Leases
 
 The illustrative arbiter design has two levels. A `RunAdmissionRequest`
@@ -1347,9 +1467,11 @@ export/import suitable for calls such as `MPI_Allreduce`. Export is zero-copy
 when compatible contiguous mutable host storage is already available;
 otherwise the API reports and performs at most one stated staging copy.
 Import similarly adopts or makes one explicit copy according to its ownership
-contract. A future device/DLPack interop path and a future
-`CollectiveProvider` fit the already reserved transfer/collective boundary;
-neither is required by the initial CPU refactor.
+contract. A future device/DLPack interop path uses the core transfer boundary,
+and a future `CollectiveProvider` implements the reserved core collective node;
+neither is required by the initial CPU refactor. MPI remains application-owned
+until a collective child explicitly defines a provider, but a collective is
+never encoded as an arbitrary extension operation.
 
 `ExecutionPolicy::Reproducible` must produce identical provider selection,
 partitioning, contraction paths, and planning decisions on ranks with the same
@@ -1420,12 +1542,14 @@ Errors are separated by lifecycle stage:
 4. **Completion:** deferred device, kernel, transfer, collective, or
    asynchronous provider failure.
 
-Ownership follows crate boundaries: `tenferro-program` owns build, validation,
-extension-schema, and transform errors; `tenferro-runtime` owns configuration,
-prepare, enqueue, completion, and execution errors; operation crates own their
-planning and preparation errors. `ExecutionError` is the sum of `Prepare`,
-`Enqueue`, and `Completion`; compilation remains separate. A convenience
-trace-and-run API may expose an outer `TraceRunError`.
+Ownership follows component boundaries: `tenferro_runtime::program` initially
+owns build, validation, extension-schema, and transform errors;
+`tenferro-runtime` owns configuration, prepare, enqueue, completion, and
+execution errors; operation crates own their planning and preparation errors.
+If the program component is later extracted, those errors move with it.
+`ExecutionError` is the sum of `Prepare`, `Enqueue`, and `Completion`;
+compilation remains separate. A convenience trace-and-run API may expose an
+outer `TraceRunError`.
 
 Public errors preserve typed source chains and a runtime classification without
 making unstable provider internals part of the public enum. Only a typed
@@ -1483,7 +1607,7 @@ designed later.
 Testing is organized around reusable contracts rather than duplicating one
 large integration suite for every backend:
 
-- `tenferro-program` property tests cover builders, validation, fingerprint
+- program-component property tests cover builders, validation, fingerprint
   collisions, effects and aliases, transforms, and extension lowering;
 - runtime tests use mock engines, event domains, and resource arbiters to make
   single-flight preparation, epochs, atomic leases, fail-fast draining,
@@ -1512,8 +1636,13 @@ Required focused tests include:
 - request construction and resolved dispatch allocate nothing in steady state;
 - eligible eager single-operation calls avoid graph artifacts, global buffer
   planning, run admission, and schedule construction;
+- native extensions and pure one-core-op lowerings remain eager-fast-path
+  eligible, while two-or-more-op lowerings always promote to prepared graphs;
 - eager fast-path latency satisfies the predeclared non-inferiority threshold
-  against the current implementation;
+  against the current implementation for elementwise, reduction, contraction,
+  and indexed calls, with no new eager-path allocation or string lookup;
+- semantic extension AD preserves JVP and VJP results while removing all
+  graph-specific rule-builder types from the new traits;
 - placement-bound eager contexts apply the documented distinct CPU-affinity
   and GPU-device rules without an implicit copy or device transfer;
 - mixed CPU NUMA affinities execute in the deterministic dominant-input domain,
@@ -1522,6 +1651,9 @@ Required focused tests include:
 - `CpuAffinityPolicy::RequireSingleDomain` rejects mixed CPU affinities while
   the default policy accepts them;
 - conflicting GPU devices still require an explicit transfer;
+- transfers bridge source and destination event domains as first-class
+  scheduled nodes, and collectives cannot be registered as arbitrary extension
+  operations;
 - count and placement capability are tested independently: budget-one external
   BLAS runs inline on a pinned domain thread, while strict exact-`CpuSet`
   placement plus external BLAS budget greater than one is rejected unless the
@@ -1585,6 +1717,8 @@ Required focused tests include:
 - non-monotonic specialization requests fail as provider contract violations;
 - atomic node lease requests never hold a partial resource set while queued;
 - run-level failure stops new enqueue and drains already submitted operations;
+- runtime/cache/run ownership has no strong cycle, public drops are
+  non-blocking, and delayed completion retains resources and external owners;
 - `Reproducible` rejects unsupported algorithms during prepare rather than
   silently using `Fast`.
 
@@ -1602,10 +1736,11 @@ The following requirements are carried into the named architecture phases:
   validated binary `dot_general` request, including TBLIS label groups;
   `DotGeneralRuntime` remains the engine-owned composite; linalg exposes
   extension-owned family bundles rather than an upstream facade; and phase 1
-  first installs adapters around current implementations. The engine alone
-  owns batch fan-out and `ParallelMode`. Provider-specific fallback after an
-  error is forbidden. The direct-dispatch and borrowed-request prototype
-  evidence at `1b6223ce` remains part of the phase's performance baseline.
+  may use temporary internal staging around current implementations. The
+  engine alone owns batch fan-out and `ParallelMode`. Provider-specific
+  fallback after an error is forbidden. The direct-dispatch and
+  borrowed-request prototype evidence at `1b6223ce` remains part of the
+  phase's performance baseline.
 - **Closed #1417, phase 2:** `ExternalManaged` retains the external pool owner
   for all dependent work, never repins workers or claims live OS-affinity
   verification, and treats an inaccurate declared `CpuSet` as a caller
@@ -1630,8 +1765,10 @@ Phase definitions, dependency order, status, and acceptance gates live only in
 the [umbrella plan](./2026-07-20-execution-engine-provider-umbrella-design.md).
 This detailed design imposes the following migration constraints:
 
-- migration is incremental and keeps the current backend path working behind
-  explicit compatibility adapters;
+- tenferro is pre-1.0: public breaking changes are allowed and no deprecation
+  period or compatibility shim is required. Migration is incremental only to
+  keep each merged phase buildable, testable, and reviewable; temporary
+  internal staging types are removed by the end of their owning phase;
 - every phase is independently reviewable and may be split into smaller child
   issues without weakening the selected architectural invariants;
 - normative specs and rendered parallelism documentation are updated as the
@@ -1659,6 +1796,15 @@ policy in operation hooks.
 
 ## Alternatives Considered
 
+### Create `tenferro-program` before the semantic model stabilizes
+
+An early crate makes the intended dependency boundary visible, but also freezes
+a public package while operation payloads, AD transforms, effects, aliases, and
+builder contracts are still being migrated. Rejected for the first
+implementation. The logical boundary starts as `tenferro_runtime::program` and
+is extracted only when stability and a direct external-consumer dependency
+justify it.
+
 ### Treat the current `ExecProgram` as the portable graph artifact
 
 This minimizes type migration but preserves executor categories, slots,
@@ -1682,8 +1828,9 @@ internally, retained by a `PreparedOperation` in the common schedule.
 
 This preserves a simple call site but couples unrelated operation families,
 resources, and extensions. It also requires upstream crates to know new linalg
-families. Rejected as the target architecture; retained temporarily behind
-adapters during migration.
+families. Rejected as the target architecture. A child may use it as an
+internal staging boundary while replacing all in-repository callers, but it is
+not preserved as a compatibility API.
 
 ### Add per-operation hooks to `CpuBackend`
 
@@ -1742,7 +1889,8 @@ this document.
 
 This detailed design is not authorization for one monolithic implementation
 PR. Each umbrella phase must become a reviewable child issue with exact public
-signatures, compatibility impact, benchmarks, and acceptance tests. Later work
+signatures, breaking-API and in-repository migration impact, benchmarks, and
+acceptance tests. Later work
 may refine names and reserved mechanisms without changing the selected
 ownership and behavioral invariants. Implementation planning starts only after
 maintainers review the umbrella and the relevant child design.
