@@ -88,6 +88,10 @@ name = "dot_general_overhead"
 harness = false
 
 [[bench]]
+name = "provider_boundary_overhead"
+harness = false
+
+[[bench]]
 name = "pairwise_contraction"
 harness = false
 
