@@ -36,6 +36,42 @@ impl CpuDomainExecutor for InlineExecutor {
     }
 }
 
+#[derive(Debug)]
+struct NoRunExecutor;
+
+impl CpuDomainExecutor for NoRunExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        InlineExecutor::new().capabilities()
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        InlineExecutor::new().submit(jobs)
+    }
+
+    fn install(&self, _job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct AdmissionRejectingExecutor;
+
+impl CpuDomainExecutor for AdmissionRejectingExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        InlineExecutor::new().capabilities()
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        InlineExecutor::new().submit(jobs)
+    }
+
+    fn install(&self, _job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        Err(CpuDomainExecutorError::Admission {
+            message: "test executor rejected admission".to_string(),
+        })
+    }
+}
+
 #[test]
 fn executor_is_object_safe_and_accepts_borrowed_jobs() {
     let executor = InlineExecutor::new();
@@ -154,4 +190,71 @@ fn arbitrary_operation_error_survives_executor_dispatch_unchanged() {
     .unwrap();
 
     assert_eq!(operation_result, Err(SentinelOperationError));
+}
+
+#[test]
+fn install_scoped_rejects_executor_success_without_running_the_job() {
+    let error = install_scoped(&NoRunExecutor, || 42usize).unwrap_err();
+
+    assert!(matches!(
+        error,
+        CpuDomainExecutorError::Scheduling { message }
+            if message == "executor returned success without running the scoped CPU job"
+    ));
+}
+
+#[test]
+fn scoped_job_second_run_is_scheduling_error_and_operation_runs_once() {
+    let calls = AtomicUsize::new(0);
+    let mut job = scoped_job(|| {
+        calls.fetch_add(1, Ordering::Relaxed);
+    });
+
+    job.run().unwrap();
+    let error = job.run().unwrap_err();
+
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert!(matches!(
+        error,
+        CpuDomainExecutorError::Scheduling { message }
+            if message == "executor attempted to run a scoped CPU job more than once"
+    ));
+}
+
+#[test]
+fn indexed_jobs_rejects_index_equal_to_len_without_running_the_closure() {
+    let calls = AtomicUsize::new(0);
+    let jobs = indexed_jobs(2, |_| {
+        calls.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    });
+
+    let error = jobs.run(2).unwrap_err();
+
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    assert!(matches!(
+        error,
+        CpuDomainExecutorError::Scheduling { message }
+            if message
+                == "executor requested scoped CPU job index 2, but the submission has 2 jobs"
+    ));
+}
+
+#[test]
+fn install_scoped_preserves_admission_error_without_running_operation() {
+    let calls = AtomicUsize::new(0);
+
+    let error = install_scoped(&AdmissionRejectingExecutor, || {
+        calls.fetch_add(1, Ordering::Relaxed);
+        42usize
+    })
+    .unwrap_err();
+
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        error,
+        CpuDomainExecutorError::Admission {
+            message: "test executor rejected admission".to_string(),
+        }
+    );
 }
