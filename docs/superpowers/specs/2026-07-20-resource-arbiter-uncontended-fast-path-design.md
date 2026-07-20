@@ -1,11 +1,17 @@
 # ResourceArbiter Uncontended Fast-Path Prototype
 
+> This is an independent performance child of the
+> [execution-engine umbrella plan](./2026-07-20-execution-engine-provider-umbrella-design.md).
+> Its result does not gate architecture phases 1 or 2.
+
 ## Status and scope
 
 This specification defines a measurement-driven prototype for the first eager
 CPU fast-path step. It does not add an eager session API, an async runtime, a
 thread pool, or another scheduler. The application and tenferro continue to use
 the existing `CpuBackend`, `CpuContext`, and `ResourceArbiter` ownership model.
+It reduces a cost already paid by current eager entry; no provider or runtime
+layer may add a second `CpuContext::install` or resource acquisition.
 
 The current pinned one-thread baseline on an AMD EPYC 7713P is approximately:
 
@@ -15,6 +21,18 @@ The current pinned one-thread baseline on an AMD EPYC 7713P is approximately:
 
 The prototype therefore targets `ResourceArbiter` admission and release rather
 than `SmallVec` conversion or a new public execution API.
+
+A preliminary empty-entry decomposition on the same host measured:
+
+| Entry path | 1 thread | 2 threads | 4 threads |
+| --- | ---: | ---: | ---: |
+| `CpuContext::install` | 0.56 ns | 5.15 us | 5.60 us |
+| `CpuBackend::install` | 6.92 us | 6.45 us | 7.02 us |
+
+The one-thread context has no Rayon pool and calls the closure directly. At two
+and four threads, the existing Rayon pool entry accounts for about 5-6 us. The
+prototype tests the remaining backend admission/release cost; it does not try
+to remove Rayon pool-entry cost.
 
 ## Current cost hypothesis
 
@@ -86,6 +104,9 @@ notification for a state change that occurred before it joined the queue.
 - It does not change public APIs or error types.
 - It does not change NUMA overlap, provider-exclusive, reentrant-owner,
   fairness, poison-recovery, or request-ID-exhaustion semantics.
+- It does not change `BACKEND_REENTRY_PANIC`: lower-level owner accounting
+  remains an arbiter invariant, while arbitrary nested `CpuBackend` entry
+  remains rejected before acquisition.
 - It does not mix application job scheduling with tenferro resource
   arbitration.
 
@@ -103,7 +124,8 @@ Existing arbiter tests must continue to cover:
 - provider-exclusive requests excluding CPU-set requests;
 - older conflicting waiters not being bypassed;
 - compatible requests progressing when fairness permits;
-- reentrant-owner semantics;
+- lower-level reentrant-owner semantics and unchanged rejection of arbitrary
+  nested backend entry;
 - poisoned mutex recovery;
 - request-ID exhaustion recovery;
 - permit drop after normal execution and unwinding.
@@ -115,7 +137,8 @@ must not expose those counters or add profiling work when disabled.
 ## Performance experiment
 
 The comparison reuses the same host and pins the benchmark process to CPU 0.
-The primary command is:
+The benchmark already constructs one-, two-, and four-thread contexts in a
+single run. The primary command is:
 
 ```console
 RAYON_NUM_THREADS=1 taskset -c 0 \
@@ -133,18 +156,21 @@ Criterion configuration, compiler profile, input sizes, backend thread count,
 and CPU pinning must match the recorded baseline. The report must include the
 median and 95% confidence interval for at least:
 
-- empty one-thread `CpuBackend::install`;
+- empty `CpuContext::install` and `CpuBackend::install` at one, two, and four
+  threads;
 - eager `neg_f64/1`;
 - eager `add_f64/1`;
 - eager `reduce_sum_f64/1`;
 - eager `dot_general_f64/1`.
 
-The prototype is considered promising when empty backend entry improves by at
-least 20% without a statistically significant regression in any listed eager
-case. Reaching 2 us or less for empty backend entry is a strong result. A
-smaller improvement falsifies queue bookkeeping as the dominant explanation
-and triggers a separate atomic-admission design rather than further unrelated
-micro-optimizations.
+The prototype is considered promising when empty one-thread backend entry
+improves by at least 20% without a statistically significant regression in any
+listed eager case. Reaching 2 us or less for one-thread empty backend entry is
+a strong result. Two- and four-thread results must not regress, but the
+prototype is not expected to eliminate their existing Rayon pool-entry cost. A
+smaller one-thread improvement falsifies queue bookkeeping as the dominant
+explanation and triggers a separate atomic-admission design rather than further
+unrelated micro-optimizations.
 
 This threshold evaluates whether to continue the prototype; it is not the
 final eager non-inferiority threshold for the execution-engine architecture.

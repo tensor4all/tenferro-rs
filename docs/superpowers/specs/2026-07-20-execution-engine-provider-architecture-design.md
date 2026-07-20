@@ -1,10 +1,15 @@
-# WIP Design: Pluggable Execution Engines and Resource Domains
+# WIP Detailed Design: Pluggable Execution Engines and Resource Domains
+
+> Planning authority and current phase status live in the
+> [execution-engine umbrella plan](./2026-07-20-execution-engine-provider-umbrella-design.md).
+> This child document owns the detailed proposed architecture and rationale.
 
 ## Status
 
-This is a work-in-progress architecture proposal. It records the agreed design
-direction for discussion and issue decomposition; it is not an accepted public
-API or an implementation plan.
+This is a work-in-progress architecture proposal governed by the
+execution-engine umbrella plan. It records the agreed design direction for
+discussion and child issue decomposition; it is not an accepted public API or
+an implementation plan.
 
 The proposal returns tenferro to a prism-like dependency direction: operation
 semantics are expressed in a backend-neutral IR and pure schemas, execution
@@ -981,8 +986,10 @@ pub struct CpuExecutionContext<'a> {
 
 Providers consume this context. They do not choose a NUMA node, query ambient
 Rayon state, or acquire a second resource permit. The outer execution acquires
-one lease; nested operations reuse it. This prevents nested oversubscription
-and makes the thread budget a single engine-owned policy.
+one lease. Internal provider and composite calls receive the existing context
+and reuse that lease by direct delegation. They do not re-enter `CpuBackend`.
+This prevents nested oversubscription and makes the thread budget a single
+engine-owned policy.
 
 CPU execution uses an object-safe `CpuDomainExecutor` with two distinct
 operations: `submit` for outer scheduling and synchronous `install` for an
@@ -996,6 +1003,22 @@ Every operation receives `ParallelMode::Outer`, `Inner`, or `Sequential`.
 Providers may not use ambient Rayon or independently submit nested work. A
 composite contraction or batched linalg implementation chooses outer versus
 inner parallelism once, and all delegated providers honor that choice.
+
+### Re-entry during migration
+
+Current `main` rejects arbitrary `CpuBackend` re-entry on the active thread or
+managed Rayon scope through `BACKEND_REENTRY_PANIC`. The architecture does not
+silently reverse that public safety contract. Phases 1 and 2 preserve the
+rejection while moving internal composition below the session boundary, where
+providers receive `CpuExecutionContext` and call each other directly without a
+second backend entry.
+
+Thus, "reuse the outer lease" means trusted runtime composition within one
+already-entered session. It does not mean that an application closure may call
+`CpuBackend::install` recursively. Supporting arbitrary nested backend calls,
+or replacing the panic with a typed scoped API, requires a separate accepted
+child design with oversubscription, provider-exclusivity, unwind, and
+compatibility tests.
 
 ### Managed mode
 
@@ -1380,7 +1403,9 @@ Required focused tests include:
 - input and shape-guard failure occurs before resource acquisition;
 - execution failure never causes an implicit cross-engine retry;
 - eager and graph paths apply the same provider-selection policy;
-- nested CPU operations reuse the outer lease;
+- internal CPU provider/composite operations reuse the outer lease without
+  re-entering `CpuBackend`, while arbitrary nested backend entry retains the
+  documented rejection;
 - NUMA buffers remain associated with their allocation domain even when an
   operation executes from another CPU domain;
 - `ExternalManaged` does not reconstruct a supplied executor;
@@ -1400,45 +1425,19 @@ thread counts, NUMA placements, and device counts. Microbenchmarks must keep
 validation, request construction, dispatch, provider call, and kernel work
 separable.
 
-## Migration Strategy
+## Migration Constraints
 
-This is an umbrella architecture. Migration is incremental, keeps the current
-backend path working behind adapters, and is decomposed into independently
-accepted child issues:
+Phase definitions, dependency order, status, and acceptance gates live only in
+the [umbrella plan](./2026-07-20-execution-engine-provider-umbrella-design.md).
+This detailed design imposes the following migration constraints:
 
-1. Extract validated borrowed requests, typed CPU capability slots, and the
-   layout/GEMM/general-contraction provider composites behind adapters on the
-   current eager and backend path. Preserve current performance and faer batch
-   policy while delivering provider replacement early.
-2. Introduce placement-bound eager contexts, `CpuDomainExecutor`, explicit
-   parallel modes, and managed/external NUMA resource domains behind the same
-   compatibility layer. Establish the eager fast-path benchmark gate.
-3. Introduce `tenferro-program`, private immutable `SemanticProgram`, builders,
-   fingerprints, effects, aliases, and adapters from current graph artifacts.
-   Split mutable `TraceContext` from pure `GraphCompiler`.
-4. Introduce immutable runtime snapshots, the remaining typed core
-   capabilities, explicit extension modules, `PreparedOperation`, finite
-   specialization requirements, and single-flight bounded plan caches.
-5. Introduce common `ScheduledGraph`, runtime-owned event domains, buffer
-   planning, resource admission, and `GraphExecutor`. Port CPU graph execution
-   while retaining a compatibility adapter for `GraphExecutor<B>`.
-6. Migrate extension capability resolution and pure core lowering. Use N-ary
-   einsum to validate shape specialization, planning policy, resolved slots,
-   AD registration, and host-reference fallback; then migrate FFT, linalg,
-   sparse, and permutation families.
-7. Split CUDA/WebGPU resources from provider algorithms, port GPU execution to
-   the common scheduler, and use runtime-owned event slots and explicit
-   transfers.
-8. Integrate XLA through `SubgraphCompiler` and `PreparedOperation`, then retire
-   `GraphProgramLoweringView` and the executor-shaped portable artifact.
-9. Add multi-GPU task scheduling for independent work.
-10. Add structured control flow, logical sharding, collectives, and resharding
-    only through later accepted designs.
-
-Each phase must be independently reviewable. Normative specs and online
-parallelism documentation are updated as the corresponding behavior lands.
-No child implementation issue is authorized merely by this WIP umbrella
-design; maintainers must accept its scope before implementation begins.
+- migration is incremental and keeps the current backend path working behind
+  explicit compatibility adapters;
+- every phase is independently reviewable and may be split into smaller child
+  issues without weakening the selected architectural invariants;
+- normative specs and rendered parallelism documentation are updated as the
+  corresponding behavior lands; and
+- no child implementation is authorized by this WIP detail alone.
 
 ## Documentation Requirements
 
@@ -1520,13 +1519,15 @@ tensors; future logical sharding is designed separately.
 
 ## Child Design and Implementation Boundary
 
-The umbrella design selects the architectural invariants needed for child
-decomposition: crate ownership, process-local portability, immutable public
-program access, typed core capabilities, pure extensions, runtime identity and
-epochs, safe prepared-operation dispatch, external CPU executors,
-runtime-owned events, explicit buffer contracts, all-or-none multi-resource
-acquisition, finite specialization projections, structural collision checks,
-no rollback of effects, draining of submitted work, and the determinism policy.
+The [umbrella plan](./2026-07-20-execution-engine-provider-umbrella-design.md)
+governs decomposition, ordering, status, and acceptance gates. This detailed
+design selects the architectural invariants that children must preserve: crate
+ownership, process-local portability, immutable public program access, typed
+core capabilities, pure extensions, runtime identity and epochs, safe
+prepared-operation dispatch, external CPU executors, runtime-owned events,
+explicit buffer contracts, all-or-none multi-resource acquisition, finite
+specialization projections, structural collision checks, no rollback of
+effects, draining of submitted work, and the determinism policy.
 
 Mechanism details are reserved for workload-informed child designs. These
 include event-slot identifier and generation representation, slot recycling,
@@ -1536,10 +1537,9 @@ and the public cancellation state machine. Child designs must preserve the
 selected invariants but may replace the illustrative representations used in
 this document.
 
-This is still an umbrella design rather than authorization for one monolithic
-implementation PR. Each numbered migration phase must become a reviewable
-child issue with exact public signatures, compatibility impact, benchmarks,
-and acceptance tests. Later work may refine names and reserved mechanisms
-without changing the selected ownership and behavioral invariants.
-Implementation planning starts only
-after maintainers review this written WIP design.
+This detailed design is not authorization for one monolithic implementation
+PR. Each umbrella phase must become a reviewable child issue with exact public
+signatures, compatibility impact, benchmarks, and acceptance tests. Later work
+may refine names and reserved mechanisms without changing the selected
+ownership and behavioral invariants. Implementation planning starts only after
+maintainers review the umbrella and the relevant child design.

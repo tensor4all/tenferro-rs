@@ -1,5 +1,8 @@
 # Current-main eager dispatch baseline (2026-07-20)
 
+> This is the baseline evidence artifact tracked by the
+> [execution-engine umbrella plan](../superpowers/specs/2026-07-20-execution-engine-provider-umbrella-design.md).
+
 This worklog records the pre-refactor eager API baseline requested by issue
 #1433. It is a measurement of the current implementation, not evidence about
 the proposed runtime architecture and not a post-hoc non-inferiority threshold.
