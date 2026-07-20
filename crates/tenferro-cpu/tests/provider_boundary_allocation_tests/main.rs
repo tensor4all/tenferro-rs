@@ -1,19 +1,24 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use tenferro_cpu::provider::{
     __dispatch_gemm_for_allocation_probe, CpuGemmProvider, CpuGemmRequest, CpuGroupedGemmRequest,
     CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported,
 };
-use tenferro_cpu::CpuContext;
-use tenferro_tensor::{DType, DotGeneralAccumulation, Tensor, TensorRead, TensorWrite};
+use tenferro_cpu::{CpuBackend, CpuContext};
+use tenferro_tensor::{
+    DType, DotGeneralAccumulation, DotGeneralConfig, SliceConfig, Tensor, TensorBuffer, TensorDot,
+    TensorElementwise, TensorIndexing, TensorRead, TensorReduction, TensorWrite,
+};
 
 struct CountingAllocator;
 
 static COUNTING: AtomicBool = AtomicBool::new(false);
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 static BYTES: AtomicUsize = AtomicUsize::new(0);
+static PROBE_LOCK: Mutex<()> = Mutex::new(());
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -42,6 +47,33 @@ unsafe impl GlobalAlloc for CountingAllocator {
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AllocationCount {
+    allocations: usize,
+    bytes: usize,
+}
+
+fn count_repeated(mut op: impl FnMut(), iterations: usize) -> AllocationCount {
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+    BYTES.store(0, Ordering::Relaxed);
+    COUNTING.store(true, Ordering::SeqCst);
+    for _ in 0..iterations {
+        op();
+    }
+    COUNTING.store(false, Ordering::SeqCst);
+    AllocationCount {
+        allocations: ALLOCATIONS.load(Ordering::Relaxed),
+        bytes: BYTES.load(Ordering::Relaxed),
+    }
+}
+
+fn assert_not_above_baseline(case: &str, actual: AllocationCount, baseline: AllocationCount) {
+    assert!(
+        actual.allocations <= baseline.allocations && actual.bytes <= baseline.bytes,
+        "{case} allocation regression: actual={actual:?}, fixed-main baseline={baseline:?}"
+    );
+}
 
 #[derive(Debug)]
 struct UnsupportedGemm;
@@ -80,6 +112,7 @@ impl CpuGemmProvider for UnsupportedGemm {
 
 #[test]
 fn warmed_borrowed_request_dispatch_does_not_allocate() {
+    let _probe = PROBE_LOCK.lock().unwrap();
     let provider = UnsupportedGemm;
     let context = CpuContext::with_threads(1).unwrap();
     let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
@@ -124,4 +157,107 @@ fn warmed_borrowed_request_dispatch_does_not_allocate() {
 
     assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
     assert_eq!(BYTES.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
+    // This direct CpuBackend probe isolates the steady-state allocation boundary
+    // changed by the provider routing. Full AD eager non-inferiority is measured
+    // separately by the fixed three-pair Criterion campaign.
+    //
+    // Baselines were measured with this identical setup at immutable commit
+    // 85855e272b1495611deb601a9ee06f3546772c3c using the default cpu-faer
+    // feature set. Setup and 32 warm-up iterations are outside counted loops.
+    let _probe = PROBE_LOCK.lock().unwrap();
+    const ITERATIONS: usize = 100;
+    let mut backend = CpuBackend::with_threads(1).unwrap();
+    let matrix = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 6.0, 7.0, 8.0]).unwrap();
+    let slice = SliceConfig {
+        starts: vec![0, 0],
+        limits: vec![2, 2],
+        strides: vec![1, 1],
+    };
+    let dot = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    for _ in 0..32 {
+        let output = backend.add(&matrix, &rhs).unwrap();
+        backend.reclaim_buffer(output);
+        let output = backend.reduce_sum(&matrix, &[0]).unwrap();
+        backend.reclaim_buffer(output);
+        let output = backend.slice(&matrix, &slice).unwrap();
+        backend.reclaim_buffer(output);
+        let output = backend.dot_general(&matrix, &rhs, &dot).unwrap();
+        backend.reclaim_buffer(output);
+    }
+
+    let elementwise = count_repeated(
+        || {
+            let output = backend.add(&matrix, &rhs).unwrap();
+            backend.reclaim_buffer(output);
+        },
+        ITERATIONS,
+    );
+    let reduction = count_repeated(
+        || {
+            let output = backend.reduce_sum(&matrix, &[0]).unwrap();
+            backend.reclaim_buffer(output);
+        },
+        ITERATIONS,
+    );
+    let slice_count = count_repeated(
+        || {
+            let output = backend.slice(&matrix, &slice).unwrap();
+            backend.reclaim_buffer(output);
+        },
+        ITERATIONS,
+    );
+    let dot_count = count_repeated(
+        || {
+            let output = backend.dot_general(&matrix, &rhs, &dot).unwrap();
+            backend.reclaim_buffer(output);
+        },
+        ITERATIONS,
+    );
+
+    eprintln!(
+        "candidate allocation probe: elementwise={elementwise:?} reduction={reduction:?} slice={slice_count:?} dot={dot_count:?}"
+    );
+    assert_not_above_baseline(
+        "elementwise",
+        elementwise,
+        AllocationCount {
+            allocations: 1_201,
+            bytes: 55_920,
+        },
+    );
+    assert_not_above_baseline(
+        "reduction",
+        reduction,
+        AllocationCount {
+            allocations: 5_005,
+            bytes: 112_592,
+        },
+    );
+    assert_not_above_baseline(
+        "slice",
+        slice_count,
+        AllocationCount {
+            allocations: 601,
+            bytes: 38_320,
+        },
+    );
+    assert_not_above_baseline(
+        "dot_general",
+        dot_count,
+        AllocationCount {
+            allocations: 3_802,
+            bytes: 112_440,
+        },
+    );
 }
