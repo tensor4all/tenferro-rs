@@ -13,6 +13,11 @@ authorize a monolithic implementation, or replace current normative runtime,
 backend, extension, or GPU specifications. Each implementation phase requires
 an accepted child issue and its own reviewed implementation plan.
 
+This revision incorporates every issue #1433 contract added after `f777b52e`,
+including the two-axis CPU capability model, additional provider
+classifications, batched-contraction target policy, MPI compatibility, the
+DMRG-class driving workload, and requirements consolidated from closed issues.
+
 ## Document authority
 
 The documents have distinct roles:
@@ -99,6 +104,16 @@ Every child issue and implementation plan must preserve these invariants:
    and entry/byte statistics.
 11. No phase makes a performance claim without release-mode measurements that
     pin relevant thread, placement, and provider configuration.
+12. CPU thread-count and CPU-placement capabilities are independent. Strict
+    exact-domain placement rejects external BLAS with a budget greater than
+    one unless the domain is the process's complete allowed CPU set; advisory
+    placement remains explicit and observable.
+13. `Managed` CPU topology is restricted to the process-allowed cpuset, and
+    each MPI rank may own an independent runtime without process-global mutable
+    tenferro state. Communication stays at an explicit application boundary.
+14. A DMRG-class child must bound common-miss preparation as shapes and block
+    structure change, preserve reusable Davidson state, and measure the
+    user-managed communication boundary against the eager single-op contract.
 
 ## Workstreams and dependencies
 
@@ -130,6 +145,19 @@ has not landed or been provided by an explicit compatibility adapter.
 Phase numbers describe architectural dependency, not pull-request size. Each
 phase may be split into multiple accepted child issues, but every issue must
 name the phase and the exact contract it advances.
+
+### Consolidated issue-to-phase mapping
+
+| Issue | Phase ownership | Retained contract |
+| --- | ---: | --- |
+| Closed #1432 | 1 | Validated general contraction, provider composites and extension-owned linalg bundles, current adapters, engine-owned fan-out, and dispatch evidence |
+| Closed #1417 | 2 | Externally managed executor lifetime, exact declared-domain arbitration, placement-resolved registries, and honest affinity diagnostics |
+| Closed #1422 | 3 | Opaque builder tokens, typed cross-builder rejection, atomic import/finish, supported extension construction, and private representation |
+| Open #1426 H8 | Phase 1/2 target-policy child | Batched `dot_general` thresholds and tiny-kernel policy remain open and benchmark-owned |
+
+Closing the first three issues did not discard their requirements; the detailed
+architecture is their durable design home. Tactical fixes remain independent
+when they do not alter these contracts or the phase dependencies above.
 
 ### Independent ResourceArbiter performance lane
 
@@ -192,7 +220,11 @@ Every child touching CPU dispatch must demonstrate that:
   unless a separate accepted design changes it;
 - faer and native kernels remain within the selected `CpuContext`; and
 - BLAS/LAPACK global or provider-local thread controls are represented
-  honestly rather than modeled as a supplied Rayon executor.
+  honestly rather than modeled as a supplied Rayon executor;
+- thread-count and CPU-placement capability are probed and reported separately;
+  and
+- strict placement returns a typed configuration or prepare error when an
+  external BLAS budget greater than one cannot honor the exact domain.
 
 ### Gate C: eager non-inferiority
 
@@ -214,6 +246,9 @@ practical. They must cover representative ranks, shapes, batch counts, thread
 counts, layouts, NUMA placements, and devices for the behavior they change.
 No steady-state path adds per-call heap allocation, whole-program hashing,
 string lookup, or graph-level scheduling to an eligible eager operation.
+DMRG-oriented children additionally separate common-miss preparation,
+Davidson reuse, and the per-iteration application communication boundary, and
+fix budgets for each before results are collected.
 
 ### Gate E: correctness and explicit failure
 
@@ -221,6 +256,12 @@ Contract tests cover capability resolution, unsupported behavior, placement,
 resource release on error or unwind, effect ordering, buffer lifetime, and
 numeric parity. Execution never retries silently on another engine or moves
 tensor payloads across a device boundary implicitly.
+
+CPU tests cover process-allowed cpuset discovery, strict versus advisory
+placement, provider count/placement classification, and externally managed
+domain diagnostics. MPI-compatibility tests use independent rank-like runtimes,
+explicit contiguous mutable host export/import, and reproducible cross-rank
+planning without introducing a core MPI runtime.
 
 ### Gate F: documentation and evidence
 

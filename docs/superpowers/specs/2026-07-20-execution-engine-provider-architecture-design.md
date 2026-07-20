@@ -11,6 +11,12 @@ execution-engine umbrella plan. It records the agreed design direction for
 discussion and child issue decomposition; it is not an accepted public API or
 an implementation plan.
 
+This revision incorporates all contracts added to issue #1433 after
+`f777b52e`: separate CPU thread-count and placement capabilities, ArmPL/NVPL
+classification, the PyTorch-aligned batched-contraction target policy,
+MPI-compatible process boundaries, the DMRG-class driving workload, and the
+consolidated requirements retained from closed issues #1432, #1417, and #1422.
+
 The proposal returns tenferro to a prism-like dependency direction: operation
 semantics are expressed in a backend-neutral IR and pure schemas, execution
 capabilities are expressed as small operation-family traits, and tenferro's
@@ -197,6 +203,15 @@ cannot mutate an already frozen program. `CoreSemanticOp` is a public,
 `SemanticRegion`. The container reserves future nested regions for structured
 control flow, but the first implementation has no `if`, `while`, block
 arguments, yields, shape joins, or loop AD.
+
+Builder-issued graph and value handles are opaque tokens scoped to one builder;
+raw integer identities are never public. Using a token with another builder is
+a typed error. Import is atomic across the source graph, value map, bindings,
+roots, checkpoint, and metadata or constraint scopes. Finishing is likewise
+atomic for both metadata and tensors and returns an error without requiring a
+caller panic. Extensions emit through the same supported builder interface,
+with a source-contract check that prevents them from depending on private
+representation fields.
 
 Terminology is fixed as follows:
 
@@ -411,12 +426,14 @@ family exists.
 
 `CpuGemmProvider` exposes GEMM, strided-batched GEMM, and grouped GEMM
 primitives; it does not implement semantic `dot_general` or own batch
-scheduling. `DotGeneralRuntime` is an engine-owned composite that may use a
-`CpuGeneralContractionProvider` such as TBLIS for a direct binary contraction,
-or a `CpuLayoutTransformProvider` plus `CpuGemmProvider` for decomposition.
-N-ary einsum first resolves a contraction path into binary `dot_general`
-operations. A user may replace the complete composite, the
-general-contraction provider, or only GEMM/layout providers.
+scheduling. `CpuGeneralContractionProvider` consumes a full validated binary
+`dot_general` request, including TBLIS-style label groups, without forcing the
+engine to flatten it into GEMM. `DotGeneralRuntime` is an engine-owned composite
+that may use such a provider for a direct binary contraction, or a
+`CpuLayoutTransformProvider` plus `CpuGemmProvider` for decomposition. N-ary
+einsum first resolves a contraction path into binary `dot_general` operations.
+A user may replace the complete composite, the general-contraction provider,
+or only GEMM/layout providers.
 
 The composite chooses the batch parallelization level before invoking the
 provider. Under `ParallelMode::Outer`, it splits a grouped request into jobs,
@@ -1039,6 +1056,17 @@ CPU sets, and thread budgets through the same `CpuDomainExecutor` contract.
 Tenferro validates static configuration such as empty CPU sets, duplicate
 domain identities, and overlapping declared CPU sets.
 
+The runtime retains the supplied executor or pool owner for at least the
+lifetime of every domain, lease, and submitted job that refers to it. It never
+repins external workers and does not attempt to verify their live OS affinity;
+the declared `CpuSet` is a caller contract, and an inaccurate declaration is a
+placement or performance contract violation rather than a memory-safety
+mechanism. Arbitration still uses the declared exact CPU sets. A runtime may
+register multiple external domains and resolves them by placement instead of
+collapsing them into one ambient pool. Diagnostics distinguish declared
+placement, unverifiable external affinity, executor capabilities, and the
+owner responsible for shutdown.
+
 The external owner is responsible for:
 
 - fairness and lifecycle of jobs after submission to the external executor;
@@ -1050,6 +1078,45 @@ The external owner is responsible for:
 
 Tenferro must not reconstruct or silently replace an external executor.
 
+### Two capability axes: thread count and placement
+
+CPU resource capability has two independent axes:
+
+1. **Thread-count control** asks whether a provider can enforce the execution
+   budget as an upper bound for this call without interfering with another
+   domain.
+2. **CPU-placement control** asks whether every worker used by that call is
+   confined to the selected domain's concrete `CpuSet`.
+
+Construction or preparation probes both axes once and records the result in
+the prepared provider capability. They are not inferred from a library name
+and are not reprobed on every call. A thread budget remains an upper bound: a
+provider may use fewer threads, and a serial provider satisfies every positive
+budget.
+
+Placement for a budget greater than one is enforceable only when the kernel
+runs on engine-supplied workers, as with faer and tenferro-native kernels.
+External BLAS worker pools are not modeled as a `CpuDomainExecutor`:
+
+- OpenBLAS pthread builds use a process-global, lazily created worker pool. The
+  local thread setter changes the participating count, not worker binding;
+  distributions may use `NO_AFFINITY` or their own affinity policy, and there
+  is no per-call or per-domain binding API. Its parallel BLAS server executes
+  only one multithreaded job at a time, so simultaneous multithreaded calls
+  from different domains serialize on its internal lock.
+- MKL's `KMP_AFFINITY` placement is process-global rather than a per-call
+  domain binding.
+- Accelerate schedules through Grand Central Dispatch, and macOS exposes no
+  API for binding those workers to a selected set of cores.
+
+A budget of one is sound for both axes because the provider call executes
+inline on the already pinned calling thread. Under strict `Managed` or
+`ExternalManaged` placement, an exact domain `CpuSet` combined with an
+external BLAS budget greater than one is therefore a typed configuration or
+prepare error. It is permitted only when the selected domain equals the
+process's complete allowed CPU set, or when placement was explicitly declared
+advisory rather than exact.
+
 ### BLAS and faer behavior
 
 Faer and tenferro-native parallel kernels can use the selected executor when
@@ -1057,11 +1124,6 @@ their APIs permit it. General BLAS/LAPACK providers often expose only a global
 or provider-specific thread count, not a per-call executor. Such a provider
 receives the execution thread budget and provider exclusivity policy, but it
 does not receive a Rayon pool as if BLAS could execute on that pool.
-
-A thread budget is an upper bound, not an exact-width requirement. A provider
-may use fewer threads, and a sequential provider satisfies every positive
-budget. A violation occurs only when a provider may exceed the cap and has no
-mechanism to prevent it.
 
 Thread-control capability is resolved when constructing the provider or during
 preparation, never by probing on every call. A system OpenBLAS provider may use
@@ -1072,15 +1134,18 @@ an OpenMP build does not receive that claim because local isolation is not
 reliable. Strict enforcement without the required capability returns a typed
 configuration or prepare error and never degrades to a global setter.
 
-Known control granularity is:
+Known count and placement capability is:
 
-| Provider | Mechanism | Granularity |
-| --- | --- | --- |
-| faer / native kernels | per-call executor or parallelism argument | any `N` |
-| MKL | `mkl_set_num_threads_local` | any `N`, thread-local |
-| OpenBLAS, recent pthread build | `openblas_set_num_threads_local` | any `N`, thread-local |
-| Accelerate, macOS 15+ | `BLASSetThreading` | binary single/auto, thread-local |
-| Accelerate, macOS 14 and older | `VECLIB_MAXIMUM_THREADS` | global, effectively startup-fixed |
+| Provider | Count mechanism | Count granularity | Placement with budget > 1 |
+| --- | --- | --- | --- |
+| faer / native kernels | per-call executor or parallelism argument | any `N` | exact engine-supplied domain workers |
+| MKL | `mkl_set_num_threads_local` | any `N`, thread-local | process-global `KMP_AFFINITY`; not exact per domain |
+| OpenBLAS, recent pthread build | `openblas_set_num_threads_local` | any `N`, thread-local | process-global worker pool; not exact per domain |
+| Accelerate, macOS 15+ | `BLASSetThreading` | binary single/auto, thread-local | GCD workers; not exact per domain |
+| Accelerate, macOS 14 and older | `VECLIB_MAXIMUM_THREADS` | global, effectively startup-fixed | GCD workers; not exact per domain |
+| ArmPL `_mp` | OpenMP controls | probe at construction; no exact thread-local claim | external OpenMP workers; not exact per domain |
+| ArmPL serial | no worker pool | always one thread | pinned calling thread |
+| NVPL on Grace | vendor/runtime-dependent controls | probe and classify at construction | external workers; not exact per domain |
 
 For binary control, a budget of one selects single-threaded mode. An
 intermediate budget such as eight is an explicit runtime policy choice between
@@ -1108,6 +1173,30 @@ stays under one outer lease and its upper-bound thread budget. The
 engine-owned composite, not `CpuGemmProvider`, owns this choice. Changing it
 requires benchmark evidence and a normative specification update rather than
 occurring as a side effect of provider replacement.
+
+### Target policy for strided-batched `dot_general`
+
+The normative faer extraction policy above remains the migration-preservation
+rule. Issue #1426 H8 owns a later PyTorch-aligned target policy and its actual
+thresholds:
+
+1. Prefer a provider-native strided-batched primitive when it satisfies the
+   selected count, placement, and single-fan-out contracts.
+2. For small matrices, parallelize the outer batch with a grain size roughly
+   `GRAIN_SIZE / (m * n * k)` only when each inner kernel can be forced
+   sequential independently on the executing worker. Eligible examples are
+   faer, MKL local control, recent pthread OpenBLAS local control, macOS 15
+   Accelerate, and intrinsically serial kernels.
+3. Providers without per-worker sequential enforcement cannot use outer
+   fan-out. Large matrices use a sequential outer loop with parallel inner
+   kernels.
+
+PyTorch's `m * n * k < 400` cutoff and `GRAIN_SIZE = 32768` are starting
+points, not accepted tenferro constants. The #1426 H8 child benchmarks
+tensor-network shapes before selecting thresholds. Whether to retain a tiny
+naive kernel is also a child decision. At every size there is exactly one
+fan-out level; provider replacement cannot create nested outer and inner
+parallelism.
 
 ### Memory locality
 
@@ -1238,6 +1327,52 @@ Automatic sharding, multi-host scheduling, distributed decomposition kernels,
 and collective-library implementation are deferred. Future resharding and
 collectives must remain observable; the engine must not hide communication
 inside an unrelated tensor operation.
+
+## MPI and Multi-Process Compatibility
+
+The initial architecture provides no core MPI implementation and no
+multi-host runtime. An MPI application creates one `Runtime` per rank and owns
+communication, rank placement, communicator lifetime, and progress. Tenferro
+must not require process-global mutable runtime, provider, topology, or
+registration state, so independently configured rank processes remain valid.
+
+In `Managed` mode, discovered topology is restricted to the process's actual
+allowed CPUs, using `sched_getaffinity` and cgroup cpuset constraints where
+available. The runtime must not construct domains from machine CPUs that the
+rank cannot schedule on. User-specified domains are validated against that
+allowed set before worker creation.
+
+The host interop boundary includes an explicit contiguous mutable host
+export/import suitable for calls such as `MPI_Allreduce`. Export is zero-copy
+when compatible contiguous mutable host storage is already available;
+otherwise the API reports and performs at most one stated staging copy.
+Import similarly adopts or makes one explicit copy according to its ownership
+contract. A future device/DLPack interop path and a future
+`CollectiveProvider` fit the already reserved transfer/collective boundary;
+neither is required by the initial CPU refactor.
+
+`ExecutionPolicy::Reproducible` must produce identical provider selection,
+partitioning, contraction paths, and planning decisions on ranks with the same
+runtime snapshot, input signatures, and hardware class. This planning
+guarantee does not claim bitwise cross-rank equality for providers that do not
+declare it.
+
+## Driving Workload: DMRG-Class Sweeps
+
+DMRG-class workloads are a design driver rather than an application-specific
+core API. Block-sparse semantics enter through an extension family and
+block-sparse providers. During a sweep, matrix shapes and block structure
+change often enough that common cache misses must keep preparation cheap; a
+child must bound planning cost and cache footprint or define an explicit
+polymorphic plan rather than assuming shape-stable reuse.
+
+Prepared Davidson operations must support deliberate reuse of subspace,
+workspace, and provider plans while preserving effects and invalidation rules.
+At each user-managed MPI iteration boundary, tenferro adds no extra
+synchronization, allocation, or admission beyond the applicable eager
+single-operation contract. The application remains responsible for the MPI
+collective and for making the resulting host mutation visible before the next
+tenferro call.
 
 ## Capability and Fallback Contract
 
@@ -1387,9 +1522,24 @@ Required focused tests include:
 - `CpuAffinityPolicy::RequireSingleDomain` rejects mixed CPU affinities while
   the default policy accepts them;
 - conflicting GPU devices still require an explicit transfer;
-- BLAS capability probing rejects strict budgets that cannot be enforced;
+- count and placement capability are tested independently: budget-one external
+  BLAS runs inline on a pinned domain thread, while strict exact-`CpuSet`
+  placement plus external BLAS budget greater than one is rejected unless the
+  domain is the complete process-allowed set; explicitly advisory placement is
+  accepted and remains visible in diagnostics;
+- OpenBLAS, MKL, Accelerate, ArmPL `_mp`, ArmPL serial, and NVPL construction
+  probes classify thread-count and placement capability without making an
+  unsupported thread-local or per-domain claim;
 - extracting or replacing `CpuGemmProvider` preserves the normative grouped
   and strided-batched faer parallelization policy;
+- #1426 target-policy tests select outer batching only for providers that can
+  force a per-worker sequential inner kernel, prefer an eligible native batched
+  primitive, select parallel inner kernels for large matrices, and detect any
+  nested fan-out;
+- `CpuGeneralContractionProvider` receives validated `dot_general` label groups,
+  `DotGeneralRuntime` composition stays engine-owned, linalg family bundles stay
+  extension-owned, and an execution error cannot trigger provider-specific
+  fallback;
 - extension execution performs no string lookup after prepare;
 - extension native execution, core lowering, and explicit fallback obey the
   documented priority;
@@ -1409,6 +1559,24 @@ Required focused tests include:
 - NUMA buffers remain associated with their allocation domain even when an
   operation executes from another CPU domain;
 - `ExternalManaged` does not reconstruct a supplied executor;
+- `ExternalManaged` retains the supplied executor lifetime, arbitrates exact
+  declared CPU sets across multiple placement-resolved domains, never repins or
+  claims live OS-affinity verification, and diagnoses caller-owned affinity;
+- managed topology discovery never includes CPUs outside the
+  `sched_getaffinity`/cgroup allowed set;
+- contiguous mutable host export/import is zero-copy when eligible and otherwise
+  reports no more than the specified single copy, including an in-place
+  `MPI_Allreduce` integration test;
+- separate rank-like runtimes require no process-global mutable state, and
+  `Reproducible` produces identical planning decisions for identical snapshots;
+- DMRG-like changing shapes and block structures meet a predeclared common-miss
+  prepare budget, Davidson state reuse invalidates correctly, and the
+  user-managed MPI boundary adds no synchronization, allocation, or admission
+  beyond the eager single-operation contract;
+- builder tokens reject cross-builder use, graph import and finish are atomic
+  across values, roots, bindings, checkpoints, and metadata scopes, and
+  extension construction passes the public source-contract check without raw
+  representation access;
 - GPU dependency tracking avoids unnecessary global synchronization;
 - independent multi-GPU work can enqueue concurrently;
 - foreign runtime tensors do not transfer implicitly;
@@ -1424,6 +1592,37 @@ Performance work must measure representative shapes, ranks, batch counts,
 thread counts, NUMA placements, and device counts. Microbenchmarks must keep
 validation, request construction, dispatch, provider call, and kernel work
 separable.
+
+## Consolidated Requirements from Prior Issues
+
+Closing an exploratory issue does not discard the contract it established.
+The following requirements are carried into the named architecture phases:
+
+- **Closed #1432, phase 1:** `CpuGeneralContractionProvider` accepts a complete
+  validated binary `dot_general` request, including TBLIS label groups;
+  `DotGeneralRuntime` remains the engine-owned composite; linalg exposes
+  extension-owned family bundles rather than an upstream facade; and phase 1
+  first installs adapters around current implementations. The engine alone
+  owns batch fan-out and `ParallelMode`. Provider-specific fallback after an
+  error is forbidden. The direct-dispatch and borrowed-request prototype
+  evidence at `1b6223ce` remains part of the phase's performance baseline.
+- **Closed #1417, phase 2:** `ExternalManaged` retains the external pool owner
+  for all dependent work, never repins workers or claims live OS-affinity
+  verification, and treats an inaccurate declared `CpuSet` as a caller
+  placement contract violation rather than a memory-safety concern. Exact
+  declared sets participate in domain arbitration; multiple external domains
+  are registered and resolved by placement; diagnostics state the limits of
+  external affinity, fairness, oversubscription, and shutdown guarantees.
+- **Closed #1422, phase 3:** builder-issued graph and value tokens are opaque,
+  never expose raw IDs, and reject cross-builder use with a typed error. Import
+  is atomic across the complete graph/value mapping, bindings, roots,
+  checkpoint, and metadata scopes. Finish is atomic for metadata and tensors
+  and returns errors without requiring caller panic recovery. Extensions use
+  only the supported builder with a source-contract check; raw representation
+  fields stay private.
+- **Open #1426 H8:** the strided-batched `dot_general` child owns target-policy
+  thresholds and tiny-kernel decisions. Tactical fixes that do not change
+  these contracts remain independent of the architecture migration.
 
 ## Migration Constraints
 
@@ -1508,6 +1707,10 @@ tensors; future logical sharding is designed separately.
 
 ## References
 
+- [Execution-engine and provider umbrella issue #1433](https://github.com/tensor4all/tenferro-rs/issues/1433)
+- [External-managed NUMA requirements, issue #1417](https://github.com/tensor4all/tenferro-rs/issues/1417)
+- [Semantic builder integrity requirements, issue #1422](https://github.com/tensor4all/tenferro-rs/issues/1422)
+- [Batched parallelism policy child, issue #1426](https://github.com/tensor4all/tenferro-rs/issues/1426)
 - [Provider-overhead prototype and measurements, issue #1432](https://github.com/tensor4all/tenferro-rs/issues/1432#issuecomment-5017993877)
 - [Prototype branch at commit `1b6223ce`](https://github.com/tensor4all/tenferro-rs/commit/1b6223cee988af8e98a4a79d05d977024482573f)
 - [JAX array migration](https://docs.jax.dev/en/latest/jax_array_migration.html)
