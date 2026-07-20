@@ -20,6 +20,22 @@ use crate::shape_constraint::{ConstraintSource, ShapeGuard};
 use crate::{Error, GraphCompiler, TracedTensor};
 
 #[derive(Debug)]
+struct GraphGeneralProviderSpy {
+    calls: Arc<AtomicUsize>,
+}
+
+impl tenferro_cpu::provider::CpuGeneralContractionProvider for GraphGeneralProviderSpy {
+    fn dot_general(
+        &self,
+        _context: &tenferro_cpu::provider::CpuProviderContext<'_>,
+        _request: tenferro_cpu::provider::CpuDotGeneralRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<tenferro_cpu::provider::CpuProviderOutcome> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(tenferro_cpu::provider::CpuProviderOutcome::Executed)
+    }
+}
+
+#[derive(Debug)]
 struct CountingBackend {
     uploads: Arc<AtomicUsize>,
     uploads_in_session: Arc<AtomicUsize>,
@@ -205,6 +221,53 @@ fn runtime_materialization_uses_backend() {
     let compact = executor.materialize_value(&view).unwrap();
     assert_eq!(compact.as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     assert_eq!(materializations.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn compiled_graph_dot_uses_the_installed_cpu_provider_slot_once() {
+    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+    let product = lhs.dot_general(&rhs, config).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(
+            &product,
+            &[(&lhs, DType::F64, &[1, 1]), (&rhs, DType::F64, &[1, 1])],
+        )
+        .unwrap();
+    let lhs_data = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
+    let rhs_data = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let bundle =
+        tenferro_cpu::CpuProviderBundle::builder(tenferro_cpu::CpuBackendKind::default_compiled())
+            .prefer_general_contraction_provider(Arc::new(GraphGeneralProviderSpy {
+                calls: Arc::clone(&calls),
+            }))
+            .build()
+            .unwrap();
+    let backend = tenferro_cpu::CpuBackend::with_threads(1)
+        .unwrap()
+        .with_provider_bundle(bundle);
+    let mut executor = GraphExecutor::new(backend);
+
+    let outputs = executor
+        .run_many_with_input_reads(
+            &program,
+            &[
+                (&lhs, TensorRead::from_tensor(&lhs_data)),
+                (&rhs, TensorRead::from_tensor(&rhs_data)),
+            ],
+        )
+        .unwrap();
+
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
 }
 
 #[test]

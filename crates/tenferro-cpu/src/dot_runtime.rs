@@ -1,16 +1,18 @@
 use tenferro_tensor::{
-    Buffer, DotGeneralAccumulation, DotGeneralConfig, ShapeMismatch, Tensor, TensorRead,
-    TensorView, TensorViewMut, TensorWrite, ValidationError,
+    Buffer, DType, DotGeneralAccumulation, DotGeneralConfig, ShapeMismatch, Tensor, TensorRead,
+    TensorView, TensorViewMut, TensorWrite, TypedTensor, ValidationError,
 };
 
 use rayon::prelude::*;
 use std::sync::Arc;
 
 use crate::backend::CpuBackendKind;
+use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::provider::{
     builtin_gemm_provider, builtin_layout_provider, CpuContractionAxes, CpuDotGeneralRequest,
     CpuGemmProvider, CpuGeneralContractionProvider, CpuGroupedGemmRequest, CpuKernelParallelism,
-    CpuLayoutTransformProvider, CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported,
+    CpuLayoutTransformIntent, CpuLayoutTransformProvider, CpuLayoutTransformRequest,
+    CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported,
 };
 use crate::{gemm::GemmAnalysisCache, CpuContext, Error, Result};
 
@@ -119,6 +121,7 @@ impl CpuProviderBundle {
     pub(crate) fn execute_dot_general_into(
         &self,
         context: &CpuContext,
+        buffers: &mut BufferPool,
         cache: &mut GemmAnalysisCache,
         cache_slot: Option<usize>,
         lhs: TensorRead<'_>,
@@ -130,6 +133,7 @@ impl CpuProviderBundle {
         self.inner.dot_general.execute_into(
             &self.inner,
             context,
+            buffers,
             cache,
             cache_slot,
             lhs,
@@ -167,6 +171,7 @@ impl DotGeneralRuntime {
         &self,
         bundle_identity: &Arc<CpuProviderBundleInner>,
         context: &CpuContext,
+        buffers: &mut BufferPool,
         cache: &mut GemmAnalysisCache,
         cache_slot: Option<usize>,
         lhs: TensorRead<'_>,
@@ -194,27 +199,99 @@ impl DotGeneralRuntime {
             }
         }
 
-        let Some(plan) =
+        if let Some(plan) =
             crate::gemm::prepare_provider_gemm(cache, cache_slot, &lhs, &rhs, &output, config)?
-        else {
-            return Err(Error::unsupported(
-                OP,
-                "configured CPU layout-plus-GEMM path cannot represent this contraction",
-            ));
-        };
-        let batch_count = plan.batch_count();
-        let request = plan.request(&lhs, &rhs, &mut output, accumulation);
-        let outcome = if batch_count == 1 {
-            self.gemm.gemm(&provider_context, request)?
-        } else {
-            self.gemm.strided_batched_gemm(&provider_context, request)?
-        };
-        match outcome {
-            CpuProviderOutcome::Executed => Ok(()),
-            CpuProviderOutcome::Unsupported(reason) => {
-                Err(unsupported_provider_error("GEMM", reason))
-            }
+        {
+            return execute_gemm_plan(
+                self.gemm.as_ref(),
+                &provider_context,
+                plan,
+                &lhs,
+                &rhs,
+                accumulation,
+                &mut output,
+            );
         }
+
+        self.execute_canonical_gemm(
+            &provider_context,
+            buffers,
+            cache,
+            cache_slot,
+            &lhs,
+            &rhs,
+            config,
+            accumulation,
+            &mut output,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_canonical_gemm(
+        &self,
+        provider_context: &CpuProviderContext<'_>,
+        buffers: &mut BufferPool,
+        cache: &mut GemmAnalysisCache,
+        cache_slot: Option<usize>,
+        lhs: &TensorRead<'_>,
+        rhs: &TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        output: &mut TensorWrite<'_>,
+    ) -> Result<()> {
+        let (lhs_perm, rhs_perm, canonical_config) =
+            crate::gemm::canonical_gemm_layout(config, lhs.shape().len(), rhs.shape().len());
+        let lhs_canonical = materialize_canonical_operand(
+            self.layout.as_ref(),
+            provider_context,
+            buffers,
+            lhs,
+            &lhs_perm,
+        )?;
+        let rhs_canonical = match materialize_canonical_operand(
+            self.layout.as_ref(),
+            provider_context,
+            buffers,
+            rhs,
+            &rhs_perm,
+        ) {
+            Ok(tensor) => tensor,
+            Err(error) => {
+                reclaim_temporary(buffers, lhs_canonical);
+                return Err(error);
+            }
+        };
+
+        let result = {
+            let lhs = TensorRead::from_tensor(&lhs_canonical);
+            let rhs = TensorRead::from_tensor(&rhs_canonical);
+            match crate::gemm::prepare_provider_gemm_canonical(
+                cache,
+                cache_slot,
+                &lhs,
+                &rhs,
+                output,
+                &canonical_config,
+            ) {
+                Ok(Some(plan)) => execute_gemm_plan(
+                    self.gemm.as_ref(),
+                    provider_context,
+                    plan,
+                    &lhs,
+                    &rhs,
+                    accumulation,
+                    output,
+                ),
+                Ok(None) => Err(Error::unsupported(
+                    OP,
+                    "configured CPU layout-plus-GEMM path cannot represent the canonical contraction",
+                )),
+                Err(error) => Err(error),
+            }
+        };
+        reclaim_temporary(buffers, lhs_canonical);
+        reclaim_temporary(buffers, rhs_canonical);
+        result
     }
 
     fn execute_grouped(
@@ -346,6 +423,119 @@ impl DotGeneralRuntime {
             CpuProviderOutcome::Unsupported(reason) => {
                 Err(unsupported_provider_error("grouped-GEMM", reason))
             }
+        }
+    }
+}
+
+fn execute_gemm_plan(
+    provider: &dyn CpuGemmProvider,
+    context: &CpuProviderContext<'_>,
+    plan: crate::gemm::ProviderGemmPlan,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    accumulation: DotGeneralAccumulation,
+    output: &mut TensorWrite<'_>,
+) -> Result<()> {
+    let batch_count = plan.batch_count();
+    let request = plan.request(lhs, rhs, output, accumulation);
+    let outcome = if batch_count == 1 {
+        provider.gemm(context, request)?
+    } else {
+        provider.strided_batched_gemm(context, request)?
+    };
+    match outcome {
+        CpuProviderOutcome::Executed => Ok(()),
+        CpuProviderOutcome::Unsupported(reason) => Err(unsupported_provider_error("GEMM", reason)),
+    }
+}
+
+fn transposed_read_view<'input>(
+    input: &TensorRead<'input>,
+    permutation: &[usize],
+) -> Result<TensorView<'input>> {
+    Ok(match input.clone().tensor_view() {
+        TensorView::F32(view) => TensorView::F32(view.transpose_view(permutation)?),
+        TensorView::F64(view) => TensorView::F64(view.transpose_view(permutation)?),
+        TensorView::I32(view) => TensorView::I32(view.transpose_view(permutation)?),
+        TensorView::I64(view) => TensorView::I64(view.transpose_view(permutation)?),
+        TensorView::Bool(view) => TensorView::Bool(view.transpose_view(permutation)?),
+        TensorView::C32(view) => TensorView::C32(view.transpose_view(permutation)?),
+        TensorView::C64(view) => TensorView::C64(view.transpose_view(permutation)?),
+    })
+}
+
+fn pooled_zero_tensor<T>(buffers: &mut BufferPool, shape: Vec<usize>) -> Result<TypedTensor<T>>
+where
+    T: PoolScalar + Clone + 'static,
+{
+    let element_count =
+        tenferro_tensor::validate::checked_shape_product(OP, "canonical operand", &shape)?;
+    TypedTensor::from_buffer_col_major(
+        shape,
+        Buffer::Host(T::pool_acquire_zeroed(buffers, element_count)),
+        crate::default_placement(),
+    )
+}
+
+fn allocate_canonical_operand(
+    buffers: &mut BufferPool,
+    dtype: DType,
+    shape: Vec<usize>,
+) -> Result<Tensor> {
+    match dtype {
+        DType::F32 => pooled_zero_tensor(buffers, shape).map(Tensor::F32),
+        DType::F64 => pooled_zero_tensor(buffers, shape).map(Tensor::F64),
+        DType::C32 => pooled_zero_tensor(buffers, shape).map(Tensor::C32),
+        DType::C64 => pooled_zero_tensor(buffers, shape).map(Tensor::C64),
+        dtype => Err(Error::unsupported_dtype(
+            OP,
+            dtype,
+            "CPU contraction providers support floating and complex dtypes",
+        )),
+    }
+}
+
+fn reclaim_temporary(buffers: &mut BufferPool, tensor: Tensor) {
+    match tensor {
+        Tensor::F32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::F64(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::I32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::I64(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::Bool(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::C32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::C64(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+    }
+}
+
+fn materialize_canonical_operand(
+    provider: &dyn CpuLayoutTransformProvider,
+    context: &CpuProviderContext<'_>,
+    buffers: &mut BufferPool,
+    input: &TensorRead<'_>,
+    permutation: &[usize],
+) -> Result<Tensor> {
+    let input_view = transposed_read_view(input, permutation)?;
+    let mut output =
+        allocate_canonical_operand(buffers, input_view.dtype(), input_view.shape().to_vec())?;
+    let input = TensorRead::from_view(input_view);
+    let outcome = {
+        let mut output_write = TensorWrite::from_tensor(&mut output);
+        let request = CpuLayoutTransformRequest::new(
+            &input,
+            &mut output_write,
+            CpuLayoutTransformIntent::CanonicalColumnMajor,
+        );
+        provider.materialize(context, request)
+    };
+    match outcome {
+        Ok(CpuProviderOutcome::Executed) => Ok(output),
+        Ok(CpuProviderOutcome::Unsupported(reason)) => {
+            reclaim_temporary(buffers, output);
+            Err(unsupported_provider_error("layout-transform", reason))
+        }
+        Err(error) => {
+            reclaim_temporary(buffers, output);
+            Err(error)
         }
     }
 }

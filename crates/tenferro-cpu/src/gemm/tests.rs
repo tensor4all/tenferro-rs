@@ -9,20 +9,14 @@ use super::blas_gemm::provider_should_use_gemm_batch;
 use super::blas_gemm::BlasGemm;
 #[cfg(any(feature = "blas-openblas", feature = "blas-mkl"))]
 use super::blas_gemm::BlasGemmBatch;
-#[cfg(feature = "cpu-blas")]
-use super::dot_general_blas_cached;
 #[cfg(feature = "cpu-faer")]
 use super::faer_gemm::FaerGemm;
-#[cfg(feature = "cpu-faer")]
-use super::{dot_general_faer_read_cached, strided_dot};
-#[cfg(any(feature = "cpu-blas", feature = "cpu-faer"))]
-use crate::buffer_pool::BufferPool;
 #[cfg(feature = "cpu-faer")]
 use crate::CpuContext;
 #[cfg(feature = "cpu-blas")]
 use num_complex::Complex64;
 use tenferro_tensor::RuntimeCacheControl;
-use tenferro_tensor::{DotGeneralConfig, TypedTensor};
+use tenferro_tensor::{DotGeneralConfig, TensorDot, TypedTensor};
 #[cfg(feature = "cpu-faer")]
 use tenferro_tensor::{Tensor, TensorRead, TensorView};
 
@@ -351,7 +345,7 @@ fn gemm_analysis_cache_exposes_debug_capacity_and_clear_contract() {
 
 #[cfg(feature = "cpu-faer")]
 #[test]
-fn faer_read_transposed_view_uses_strided_dot_without_materializing_input() {
+fn faer_read_transposed_view_uses_provider_runtime() {
     let lhs_source =
         TypedTensor::<f64>::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
             .unwrap();
@@ -368,24 +362,15 @@ fn faer_read_transposed_view_uses_strided_dot_without_materializing_input() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let mut buffers = BufferPool::new();
-    let mut cache = GemmAnalysisCache::default();
-    let ctx = CpuContext::with_threads(1).unwrap();
-
-    let dispatch_count_before = strided_dot::test_dispatch_count();
-    let out = dot_general_faer_read_cached(
-        &mut buffers,
-        &mut cache,
-        Some(0),
-        &ctx,
-        &TensorRead::from_view(TensorView::F64(lhs_view)),
-        &TensorRead::from_tensor(&rhs),
-        &config,
-    )
-    .unwrap()
-    .expect("same-dtype f64 inputs should be handled directly");
-
-    assert!(strided_dot::test_dispatch_count() > dispatch_count_before);
+    let mut backend =
+        crate::CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Faer).unwrap();
+    let out = backend
+        .dot_general_read(
+            TensorRead::from_view(TensorView::F64(lhs_view)),
+            TensorRead::from_tensor(&rhs),
+            &config,
+        )
+        .unwrap();
     assert_eq!(out.shape(), &[2, 2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[50.0, 122.0, 68.0, 167.0]);
 }
@@ -403,13 +388,14 @@ fn blas_dot_general_contract_trailing_rhs_dim() {
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
     };
-    let mut buffers = BufferPool::new();
-    let mut cache = GemmAnalysisCache::default();
-    let out = dot_general_blas_cached(&mut buffers, &mut cache, None, &lhs, &rhs, &config)
+    let mut backend =
+        crate::CpuBackend::with_threads_and_kind(1, crate::CpuBackendKind::Blas).unwrap();
+    let out = backend
+        .dot_general(&Tensor::F64(lhs), &Tensor::F64(rhs), &config)
         .expect("dot_general should succeed");
 
     assert_eq!(out.shape(), &[2, 2]);
-    assert_eq!(out.host_data().unwrap(), &[89.0, 116.0, 98.0, 128.0]);
+    assert_eq!(out.as_slice::<f64>().unwrap(), &[89.0, 116.0, 98.0, 128.0]);
 }
 
 #[cfg(feature = "cpu-blas")]

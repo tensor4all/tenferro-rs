@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 
 #[cfg(feature = "cpu-tblis-linked")]
@@ -69,6 +70,54 @@ fn provider_bundle_custom_builder_rejects_missing_mandatory_slots() {
         .unwrap_err();
     assert!(error.to_string().contains("GEMM"));
     assert!(error.to_string().contains("layout"));
+}
+
+#[derive(Debug)]
+struct CountingGeneralProvider {
+    calls: Arc<AtomicUsize>,
+}
+
+impl crate::provider::CpuGeneralContractionProvider for CountingGeneralProvider {
+    fn dot_general(
+        &self,
+        _context: &crate::provider::CpuProviderContext<'_>,
+        _request: crate::provider::CpuDotGeneralRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
+        self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+        Ok(crate::provider::CpuProviderOutcome::Executed)
+    }
+}
+
+#[test]
+fn direct_and_cached_sessions_share_the_installed_provider_slot() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+        .prefer_general_contraction_provider(Arc::new(CountingGeneralProvider {
+            calls: Arc::clone(&calls),
+        }))
+        .build()
+        .unwrap();
+    let mut backend = CpuBackend::with_threads(1)
+        .unwrap()
+        .with_provider_bundle(bundle);
+    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    backend.dot_general(&lhs, &rhs, &config).unwrap();
+    assert_eq!(calls.load(AtomicOrdering::Relaxed), 1);
+
+    backend.with_backend_session(|session| {
+        session
+            .dot_general_cached(None, &lhs, &rhs, &config)
+            .unwrap();
+    });
+    assert_eq!(calls.load(AtomicOrdering::Relaxed), 2);
 }
 
 #[test]
@@ -513,25 +562,21 @@ fn explicit_blas_backend_kind_constructor_records_selection() {
 }
 
 #[test]
-fn explicit_dot_general_provider_records_selection() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+fn explicit_dot_general_provider_maps_to_a_new_bundle() {
+    let backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
+    let base_bundle = backend.provider_bundle().clone();
+    let backend = backend.with_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
 
     assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
-    assert_eq!(backend.dot_general_provider(), DotGeneralProvider::Base);
-
-    backend.set_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
-    assert_eq!(
-        backend.dot_general_provider(),
-        DotGeneralProvider::TblisIfAvailable
-    );
-    assert_eq!(backend.kind(), CpuBackendKind::default_compiled());
+    assert!(!backend.provider_bundle().shares_identity_with(&base_bundle));
 }
 
 #[test]
 #[cfg(feature = "cpu-tblis-linked")]
 fn tblis_dot_general_matches_column_major_matmul() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
-    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled())
+        .unwrap()
+        .with_dot_general_provider(DotGeneralProvider::TblisRequired);
     let lhs =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let rhs =
@@ -552,8 +597,9 @@ fn tblis_dot_general_matches_column_major_matmul() {
 #[test]
 #[cfg(feature = "cpu-tblis-linked")]
 fn tblis_dot_general_read_into_accum_applies_alpha_beta() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
-    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled())
+        .unwrap()
+        .with_dot_general_provider(DotGeneralProvider::TblisRequired);
     let lhs =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let rhs =
@@ -591,8 +637,9 @@ fn tblis_dot_general_read_into_accum_applies_alpha_beta() {
 #[test]
 #[cfg(feature = "cpu-tblis-linked")]
 fn tblis_dot_general_supports_c64() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
-    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled())
+        .unwrap()
+        .with_dot_general_provider(DotGeneralProvider::TblisRequired);
     let lhs = Tensor::from_vec_col_major(
         vec![2, 2],
         vec![
@@ -638,8 +685,9 @@ fn tblis_dot_general_supports_c64() {
 #[test]
 #[cfg(feature = "cpu-tblis-linked")]
 fn tblis_dot_general_c32_conj_accum() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
-    backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled())
+        .unwrap()
+        .with_dot_general_provider(DotGeneralProvider::TblisRequired);
     let lhs = Tensor::from_vec_col_major(
         vec![2, 2],
         vec![
@@ -700,8 +748,9 @@ fn tblis_dot_general_c32_conj_accum() {
 #[test]
 #[cfg(feature = "cpu-tblis-provider")]
 fn tblis_dot_general_falls_back_for_scalar_output_inner_product() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
-    backend.set_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled())
+        .unwrap()
+        .with_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
     let lhs = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
     let config = DotGeneralConfig {
@@ -720,8 +769,9 @@ fn tblis_dot_general_falls_back_for_scalar_output_inner_product() {
 #[test]
 #[cfg(feature = "cpu-tblis-provider")]
 fn tblis_dot_general_falls_back_for_zero_size_matmul() {
-    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled()).unwrap();
-    backend.set_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
+    let mut backend = CpuBackend::with_kind(CpuBackendKind::default_compiled())
+        .unwrap()
+        .with_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
     let lhs = Tensor::from_vec_col_major(vec![2, 0], Vec::<f64>::new()).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![0, 3], Vec::<f64>::new()).unwrap();
     let config = DotGeneralConfig {
@@ -825,14 +875,8 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
         ),
     ] {
         let err = result.unwrap_err();
-        assert!(matches!(
-            err,
-            crate::Error::Validation {
-                op: "dot_general",
-                ..
-            }
-        ));
-        assert!(err.to_string().contains("blas"));
+        assert_eq!(err.kind(), tenferro_tensor::ErrorKind::Unsupported);
+        assert!(err.to_string().contains("GEMM"));
     }
 }
 

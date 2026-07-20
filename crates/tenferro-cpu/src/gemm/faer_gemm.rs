@@ -3,7 +3,7 @@ use num_complex::{Complex32, Complex64};
 use crate::CpuContext;
 
 pub(crate) trait FaerGemm: Sized {
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, dead_code)]
     unsafe fn strided_gemm(
         ctx: &CpuContext,
         alpha: Self,
@@ -29,7 +29,7 @@ pub(crate) trait FaerGemm: Sized {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, dead_code)]
     unsafe fn strided_gemm_with_conj(
         ctx: &CpuContext,
         alpha: Self,

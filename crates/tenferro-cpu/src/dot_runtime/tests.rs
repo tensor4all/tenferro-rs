@@ -1,11 +1,12 @@
 use super::{
     validate_axis_groups, validate_dot_general, validate_layout_metadata, CpuProviderBundle,
 };
+use crate::buffer_pool::BufferPool;
 use crate::gemm::GemmAnalysisCache;
 use crate::provider::{
     CpuGemmProvider, CpuGemmRequest, CpuGeneralContractionProvider, CpuGroupedGemmRequest,
-    CpuKernelParallelism, CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported,
-    StridedLayoutTransformProvider,
+    CpuKernelParallelism, CpuLayoutTransformProvider, CpuLayoutTransformRequest,
+    CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported, StridedLayoutTransformProvider,
 };
 use crate::CpuContext;
 use std::sync::{Arc, Mutex};
@@ -258,6 +259,22 @@ impl CpuGemmProvider for GemmSpy {
     }
 }
 
+#[derive(Debug)]
+struct LayoutSpy {
+    calls: Arc<Mutex<usize>>,
+}
+
+impl CpuLayoutTransformProvider for LayoutSpy {
+    fn materialize(
+        &self,
+        context: &CpuProviderContext<'_>,
+        request: CpuLayoutTransformRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        *self.calls.lock().unwrap() += 1;
+        StridedLayoutTransformProvider.materialize(context, request)
+    }
+}
+
 fn route_operands() -> (Tensor, Tensor, Tensor, DotGeneralConfig) {
     (
         Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap(),
@@ -296,6 +313,7 @@ fn route_general_executed_short_circuits_gemm() {
     bundle
         .execute_dot_general_into(
             &CpuContext::with_threads(1).unwrap(),
+            &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
             TensorRead::from_tensor(&lhs),
@@ -323,6 +341,7 @@ fn route_general_unsupported_falls_back_only_when_preferred() {
     bundle
         .execute_dot_general_into(
             &CpuContext::with_threads(1).unwrap(),
+            &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
             TensorRead::from_tensor(&lhs),
@@ -347,6 +366,7 @@ fn route_general_error_is_terminal() {
     let error = bundle
         .execute_dot_general_into(
             &CpuContext::with_threads(1).unwrap(),
+            &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
             TensorRead::from_tensor(&lhs),
@@ -374,6 +394,7 @@ fn route_required_general_unsupported_is_typed_and_terminal() {
     let error = bundle
         .execute_dot_general_into(
             &CpuContext::with_threads(1).unwrap(),
+            &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
             TensorRead::from_tensor(&lhs),
@@ -397,6 +418,7 @@ fn route_gemm_unsupported_is_terminal() {
     let error = bundle
         .execute_dot_general_into(
             &CpuContext::with_threads(1).unwrap(),
+            &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
             TensorRead::from_tensor(&lhs),
@@ -410,6 +432,39 @@ fn route_gemm_unsupported_is_terminal() {
 }
 
 #[test]
+fn route_canonical_fallback_uses_layout_slot_before_gemm() {
+    let layout_calls = Arc::new(Mutex::new(0));
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = CpuProviderBundle::custom_builder()
+        .gemm_provider(gemm.clone())
+        .layout_transform_provider(Arc::new(LayoutSpy {
+            calls: Arc::clone(&layout_calls),
+        }))
+        .build()
+        .unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![2, 2, 2, 2], vec![1.0_f64; 16]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2, 2, 2], vec![1.0_f64; 16]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2, 2, 2, 2], vec![0.0_f64; 16]).unwrap();
+
+    bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(1).unwrap(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[1, 3], &[2, 1], &[], &[]),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    assert_eq!(*layout_calls.lock().unwrap(), 2);
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 1);
+}
+
+#[test]
 fn route_strided_batch_allows_inner_parallelism() {
     let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
     let bundle = route_bundle(gemm.clone(), None);
@@ -419,6 +474,7 @@ fn route_strided_batch_allows_inner_parallelism() {
     bundle
         .execute_dot_general_into(
             &CpuContext::with_threads(2).unwrap(),
+            &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
             TensorRead::from_tensor(&lhs),
