@@ -358,7 +358,10 @@ pub struct DotGeneralAccumulation {
 /// output buffers. Each job computes a column-major `rows x cols` output block
 /// from a column-major `rows x contracted` lhs block and a column-major
 /// `contracted x cols` rhs block.
-#[doc(hidden)]
+///
+/// Provider implementations receive these descriptors through the public
+/// grouped-GEMM request accessor. The engine validates ranges and pairwise
+/// output disjointness before provider entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GroupedGemmJob {
     out_offset: usize,
@@ -370,6 +373,7 @@ pub struct GroupedGemmJob {
 }
 
 impl GroupedGemmJob {
+    /// Construct a column-major grouped-GEMM job over shared flat buffers.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         out_offset: usize,
@@ -389,26 +393,32 @@ impl GroupedGemmJob {
         }
     }
 
+    /// Return the output element offset.
     pub fn out_offset(&self) -> usize {
         self.out_offset
     }
 
+    /// Return the left-input element offset.
     pub fn lhs_offset(&self) -> usize {
         self.lhs_offset
     }
 
+    /// Return the right-input element offset.
     pub fn rhs_offset(&self) -> usize {
         self.rhs_offset
     }
 
+    /// Return the output row count.
     pub fn rows(&self) -> usize {
         self.rows
     }
 
+    /// Return the contracted dimension.
     pub fn contracted(&self) -> usize {
         self.contracted
     }
 
+    /// Return the output column count.
     pub fn cols(&self) -> usize {
         self.cols
     }

@@ -8,6 +8,7 @@ use tblis_ffi::tblis::{
 };
 
 use super::{checked_product, validate_dot_general, TypedTensorRead, OP};
+use crate::provider::CpuContractionAxes;
 use crate::{Error, Result};
 use tenferro_tensor::{DotGeneralConfig, TypedTensorViewMut};
 
@@ -252,6 +253,114 @@ where
     rhs_labels.push(0);
     out_labels.push(0);
 
+    Ok(Some(TblisPlan {
+        lhs_len: dims_to_tblis(lhs_shape)?,
+        rhs_len: dims_to_tblis(rhs_shape)?,
+        out_len: dims_to_tblis(out_shape)?,
+        lhs_stride: strides_to_tblis(lhs_strides.as_slice())?,
+        rhs_stride: strides_to_tblis(rhs_strides.as_slice())?,
+        out_stride: strides_to_tblis(out_strides)?,
+        lhs_labels,
+        rhs_labels,
+        out_labels,
+    }))
+}
+
+pub(crate) fn plan_from_axes<L, R, T>(
+    lhs: &L,
+    rhs: &R,
+    axes: &CpuContractionAxes<'_>,
+    out_shape: &[usize],
+    out_strides: &[isize],
+) -> Result<Option<TblisPlan>>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+{
+    let lhs_shape = lhs.shape();
+    let rhs_shape = rhs.shape();
+    let lhs_rank = lhs_shape.len();
+    let rhs_rank = rhs_shape.len();
+
+    let mut expected_out_shape = SmallVec::<[usize; 8]>::new();
+    expected_out_shape.extend(axes.lhs_free_axes().map(|axis| lhs_shape[axis]));
+    expected_out_shape.extend(axes.rhs_free_axes().map(|axis| rhs_shape[axis]));
+    expected_out_shape.extend(axes.batch_pairs().map(|(lhs_axis, _)| lhs_shape[lhs_axis]));
+    if expected_out_shape.as_slice() != out_shape {
+        return Ok(None);
+    }
+    if lhs_rank == 0 || rhs_rank == 0 || out_shape.is_empty() {
+        return Ok(None);
+    }
+    if lhs_shape
+        .iter()
+        .chain(rhs_shape)
+        .chain(out_shape)
+        .any(|&dim| dim == 0)
+    {
+        return Ok(None);
+    }
+    if lhs.offset() < 0 || rhs.offset() < 0 {
+        return Ok(None);
+    }
+
+    let lhs_strides = lhs.strides()?;
+    let rhs_strides = rhs.strides()?;
+    if lhs_strides
+        .iter()
+        .chain(rhs_strides.iter())
+        .chain(out_strides.iter())
+        .any(|&stride| stride <= 0)
+    {
+        return Ok(None);
+    }
+    if lhs_rank > c_int::MAX as usize
+        || rhs_rank > c_int::MAX as usize
+        || out_shape.len() > c_int::MAX as usize
+    {
+        return Ok(None);
+    }
+
+    let mut labels = TblisLabelAllocator::new();
+    let mut lhs_labels = SmallVec::<[label_type; 8]>::from_elem(0, lhs_rank);
+    let mut rhs_labels = SmallVec::<[label_type; 8]>::from_elem(0, rhs_rank);
+    let mut out_labels = SmallVec::<[label_type; 8]>::new();
+    for axis in axes.lhs_free_axes() {
+        let Some(label) = labels.next() else {
+            return Ok(None);
+        };
+        lhs_labels[axis] = label;
+        out_labels.push(label);
+    }
+    for axis in axes.rhs_free_axes() {
+        let Some(label) = labels.next() else {
+            return Ok(None);
+        };
+        rhs_labels[axis] = label;
+        out_labels.push(label);
+    }
+    for (lhs_axis, rhs_axis) in axes.batch_pairs() {
+        let Some(label) = labels.next() else {
+            return Ok(None);
+        };
+        lhs_labels[lhs_axis] = label;
+        rhs_labels[rhs_axis] = label;
+        out_labels.push(label);
+    }
+    for (lhs_axis, rhs_axis) in axes.contracting_pairs() {
+        let Some(label) = labels.next() else {
+            return Ok(None);
+        };
+        lhs_labels[lhs_axis] = label;
+        rhs_labels[rhs_axis] = label;
+    }
+    if lhs_labels.contains(&0) || rhs_labels.contains(&0) {
+        return Ok(None);
+    }
+
+    lhs_labels.push(0);
+    rhs_labels.push(0);
+    out_labels.push(0);
     Ok(Some(TblisPlan {
         lhs_len: dims_to_tblis(lhs_shape)?,
         rhs_len: dims_to_tblis(rhs_shape)?,

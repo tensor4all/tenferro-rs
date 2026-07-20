@@ -5,10 +5,14 @@
 //! tensor metadata and reachable ranges have already been validated.
 
 use core::fmt;
+use std::sync::Arc;
 
 use tenferro_tensor::backend::GroupedGemmJob;
-use tenferro_tensor::{DType, DotGeneralAccumulation, TensorRead, TensorWrite};
+use tenferro_tensor::{
+    DType, DotGeneralAccumulation, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite,
+};
 
+use crate::backend::CpuBackendKind;
 use crate::CpuContext;
 
 /// Operand named by a provider capability reason.
@@ -239,6 +243,20 @@ pub struct CpuGemmRequest<'request, 'input, 'output> {
     accumulation: DotGeneralAccumulation,
 }
 
+pub(crate) struct CpuGemmRequestParts<'request, 'input, 'output> {
+    pub(crate) lhs: &'request TensorRead<'input>,
+    pub(crate) rhs: &'request TensorRead<'input>,
+    pub(crate) output: &'request mut TensorWrite<'output>,
+    pub(crate) rows: usize,
+    pub(crate) columns: usize,
+    pub(crate) contracted: usize,
+    pub(crate) batch_count: usize,
+    pub(crate) lhs_layout: CpuBatchedMatrixLayout,
+    pub(crate) rhs_layout: CpuBatchedMatrixLayout,
+    pub(crate) output_layout: CpuBatchedMatrixLayout,
+    pub(crate) accumulation: DotGeneralAccumulation,
+}
+
 impl<'request, 'input, 'output> CpuGemmRequest<'request, 'input, 'output> {
     #[allow(clippy::too_many_arguments, dead_code)]
     pub(crate) fn new(
@@ -323,6 +341,22 @@ impl<'request, 'input, 'output> CpuGemmRequest<'request, 'input, 'output> {
     pub fn accumulation(&self) -> DotGeneralAccumulation {
         self.accumulation
     }
+
+    pub(crate) fn into_parts(self) -> CpuGemmRequestParts<'request, 'input, 'output> {
+        CpuGemmRequestParts {
+            lhs: self.lhs,
+            rhs: self.rhs,
+            output: self.output,
+            rows: self.rows,
+            columns: self.columns,
+            contracted: self.contracted,
+            batch_count: self.batch_count,
+            lhs_layout: self.lhs_layout,
+            rhs_layout: self.rhs_layout,
+            output_layout: self.output_layout,
+            accumulation: self.accumulation,
+        }
+    }
 }
 
 /// Validated borrowed grouped-GEMM request.
@@ -385,6 +419,24 @@ impl<'request, 'input, 'output> CpuGroupedGemmRequest<'request, 'input, 'output>
     /// Return shared conjugation and alpha/beta semantics.
     pub fn accumulation(&self) -> DotGeneralAccumulation {
         self.accumulation
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        &'request TensorRead<'input>,
+        &'request TensorRead<'input>,
+        &'request mut TensorWrite<'output>,
+        &'request [GroupedGemmJob],
+        DotGeneralAccumulation,
+    ) {
+        (
+            self.lhs,
+            self.rhs,
+            self.output,
+            self.jobs,
+            self.accumulation,
+        )
     }
 }
 
@@ -449,6 +501,16 @@ impl<'request, 'input, 'output> CpuLayoutTransformRequest<'request, 'input, 'out
     /// Return the requested materialization intent.
     pub fn intent(&self) -> CpuLayoutTransformIntent {
         self.intent
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        &'request TensorRead<'input>,
+        &'request mut TensorWrite<'output>,
+        CpuLayoutTransformIntent,
+    ) {
+        (self.input, self.output, self.intent)
     }
 }
 
@@ -600,6 +662,25 @@ impl<'request, 'input, 'output> CpuDotGeneralRequest<'request, 'input, 'output> 
     pub fn accumulation(&self) -> DotGeneralAccumulation {
         self.accumulation
     }
+
+    #[cfg(feature = "cpu-tblis-provider")]
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        &'request TensorRead<'input>,
+        &'request TensorRead<'input>,
+        &'request mut TensorWrite<'output>,
+        CpuContractionAxes<'request>,
+        DotGeneralAccumulation,
+    ) {
+        (
+            self.lhs,
+            self.rhs,
+            self.output,
+            self.axes,
+            self.accumulation,
+        )
+    }
 }
 
 /// Provider for validated GEMM-family requests.
@@ -667,6 +748,257 @@ pub trait CpuGeneralContractionProvider: fmt::Debug + Send + Sync + 'static {
         context: &CpuProviderContext<'_>,
         request: CpuDotGeneralRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome>;
+}
+
+/// Built-in TBLIS general-contraction provider.
+///
+/// Without a TBLIS feature this provider reports
+/// [`CpuProviderUnsupported::RuntimeUnavailable`] without modifying output.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::provider::{
+///     CpuGeneralContractionProvider, TblisGeneralContractionProvider,
+/// };
+/// let provider: &dyn CpuGeneralContractionProvider = &TblisGeneralContractionProvider;
+/// let _ = provider;
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TblisGeneralContractionProvider;
+
+impl CpuGeneralContractionProvider for TblisGeneralContractionProvider {
+    fn dot_general(
+        &self,
+        context: &CpuProviderContext<'_>,
+        request: CpuDotGeneralRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        #[cfg(feature = "cpu-tblis-provider")]
+        {
+            crate::gemm::execute_tblis_general_request(context, request)
+        }
+        #[cfg(not(feature = "cpu-tblis-provider"))]
+        {
+            let _ = (context, request);
+            Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::RuntimeUnavailable,
+            ))
+        }
+    }
+}
+
+/// Built-in faer GEMM provider.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::provider::{CpuGemmProvider, FaerGemmProvider};
+/// let provider: &dyn CpuGemmProvider = &FaerGemmProvider;
+/// let _ = provider;
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FaerGemmProvider;
+
+impl CpuGemmProvider for FaerGemmProvider {
+    fn gemm(
+        &self,
+        context: &CpuProviderContext<'_>,
+        request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        #[cfg(feature = "cpu-faer")]
+        {
+            crate::gemm::execute_faer_gemm_request(context, request)
+        }
+        #[cfg(not(feature = "cpu-faer"))]
+        {
+            let _ = (context, request);
+            Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::RuntimeUnavailable,
+            ))
+        }
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        context: &CpuProviderContext<'_>,
+        request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.gemm(context, request)
+    }
+
+    fn grouped_gemm(
+        &self,
+        context: &CpuProviderContext<'_>,
+        request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        #[cfg(feature = "cpu-faer")]
+        {
+            crate::gemm::execute_faer_grouped_request(context, request)
+        }
+        #[cfg(not(feature = "cpu-faer"))]
+        {
+            let _ = (context, request);
+            Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::RuntimeUnavailable,
+            ))
+        }
+    }
+}
+
+/// Built-in BLAS GEMM provider.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::provider::{BlasGemmProvider, CpuGemmProvider};
+/// let provider: &dyn CpuGemmProvider = &BlasGemmProvider;
+/// let _ = provider;
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BlasGemmProvider;
+
+impl CpuGemmProvider for BlasGemmProvider {
+    fn gemm(
+        &self,
+        context: &CpuProviderContext<'_>,
+        request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        #[cfg(feature = "cpu-blas")]
+        {
+            crate::gemm::execute_blas_gemm_request(context, request)
+        }
+        #[cfg(not(feature = "cpu-blas"))]
+        {
+            let _ = (context, request);
+            Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::RuntimeUnavailable,
+            ))
+        }
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        context: &CpuProviderContext<'_>,
+        request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.gemm(context, request)
+    }
+
+    fn grouped_gemm(
+        &self,
+        context: &CpuProviderContext<'_>,
+        request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        #[cfg(feature = "cpu-blas")]
+        {
+            crate::gemm::execute_blas_grouped_request(context, request)
+        }
+        #[cfg(not(feature = "cpu-blas"))]
+        {
+            let _ = (context, request);
+            Ok(CpuProviderOutcome::Unsupported(
+                CpuProviderUnsupported::RuntimeUnavailable,
+            ))
+        }
+    }
+}
+
+/// Built-in strided layout materialization provider.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::provider::{CpuLayoutTransformProvider, StridedLayoutTransformProvider};
+/// let provider: &dyn CpuLayoutTransformProvider = &StridedLayoutTransformProvider;
+/// let _ = provider;
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StridedLayoutTransformProvider;
+
+impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
+    fn materialize(
+        &self,
+        _context: &CpuProviderContext<'_>,
+        request: CpuLayoutTransformRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        let (input, output, _intent) = request.into_parts();
+        macro_rules! dispatch {
+            ($owned:ident, $view:ident) => {
+                match (input, &mut *output) {
+                    (
+                        TensorRead::Tensor(Tensor::$owned(input)),
+                        TensorWrite::Tensor(Tensor::$owned(output)),
+                    ) => {
+                        let input = input.as_view();
+                        let mut output = output.as_view_mut();
+                        crate::structural::typed_copy_view_into(
+                            &input,
+                            &mut output,
+                            "cpu layout materialization",
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(input)),
+                        TensorWrite::Tensor(Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        crate::structural::typed_copy_view_into(
+                            input,
+                            &mut output,
+                            "cpu layout materialization",
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    (
+                        TensorRead::Tensor(Tensor::$owned(input)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => {
+                        let input = input.as_view();
+                        crate::structural::typed_copy_view_into(
+                            &input,
+                            output,
+                            "cpu layout materialization",
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(input)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => {
+                        crate::structural::typed_copy_view_into(
+                            input,
+                            output,
+                            "cpu layout materialization",
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    _ => {}
+                }
+            };
+        }
+        dispatch!(F32, F32);
+        dispatch!(F64, F64);
+        dispatch!(I32, I32);
+        dispatch!(I64, I64);
+        dispatch!(Bool, Bool);
+        dispatch!(C32, C32);
+        dispatch!(C64, C64);
+        Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::DType(input.dtype()),
+        ))
+    }
+}
+
+pub(crate) fn builtin_gemm_provider(kind: CpuBackendKind) -> Arc<dyn CpuGemmProvider> {
+    match kind {
+        CpuBackendKind::Faer => Arc::new(FaerGemmProvider),
+        CpuBackendKind::Blas => Arc::new(BlasGemmProvider),
+    }
+}
+
+pub(crate) fn builtin_layout_provider() -> Arc<dyn CpuLayoutTransformProvider> {
+    Arc::new(StridedLayoutTransformProvider)
 }
 
 /// Dispatch one prevalidated 1-by-1 GEMM for the provider allocation probe.
