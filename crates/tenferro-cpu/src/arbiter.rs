@@ -174,19 +174,64 @@ struct ActiveRequest {
     owner: ResourceOwner,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct AdmissionMetrics {
+    direct: usize,
+    queued: usize,
+    acquire_notifications: usize,
+    release_notifications: usize,
+}
+
 #[derive(Debug, Default)]
 struct ArbiterState {
     next_request_id: u64,
     waiters: VecDeque<Waiter>,
+    // Exhausted-ID callers wait outside the admission queue but still need
+    // release notifications until active requests and normal waiters drain.
+    recovery_waiters: usize,
     // INVARIANT: active admission only needs conflict scans and id removal. A
     // retained Vec avoids the per-permit node allocation of a tree map.
     active: Vec<ActiveRequest>,
+    #[cfg(test)]
+    metrics: AdmissionMetrics,
+}
+
+impl ArbiterState {
+    fn allocate_request_id(&mut self) -> Result<u64, ResourceArbiterError> {
+        let next_request_id = self
+            .next_request_id
+            .checked_add(1)
+            .ok_or(ResourceArbiterError::RequestIdExhausted)?;
+        let id = self.next_request_id;
+        self.next_request_id = next_request_id;
+        Ok(id)
+    }
+
+    fn active_compatibility(
+        &self,
+        request: &ResourceRequest,
+        owner: ResourceOwner,
+    ) -> (bool, bool) {
+        let reentrant = self.active.iter().any(|active| active.owner == owner);
+        let compatible = self
+            .active
+            .iter()
+            .all(|active| active.owner == owner || !active.request.conflicts_with(request));
+        (reentrant, compatible)
+    }
+
+    fn activate(&mut self, id: u64, request: ResourceRequest, owner: ResourceOwner) {
+        self.active.push(ActiveRequest { id, request, owner });
+    }
 }
 
 #[derive(Debug, Default)]
 struct ArbiterInner {
     state: Mutex<ArbiterState>,
     changed: Condvar,
+    #[cfg(test)]
+    recovery_waiter_changed: Condvar,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -259,6 +304,9 @@ impl ResourceArbiter {
                         .state
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    state.recovery_waiters += 1;
+                    #[cfg(test)]
+                    self.inner.recovery_waiter_changed.notify_all();
                     while !state.active.is_empty() || !state.waiters.is_empty() {
                         state = self
                             .inner
@@ -266,6 +314,7 @@ impl ResourceArbiter {
                             .wait(state)
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
                     }
+                    state.recovery_waiters -= 1;
                     state.next_request_id = 0;
                 }
             }
@@ -282,12 +331,28 @@ impl ResourceArbiter {
             .state
             .lock()
             .map_err(|_| ResourceArbiterError::StatePoisoned)?;
-        let id = state.next_request_id;
-        state.next_request_id = state
-            .next_request_id
-            .checked_add(1)
-            .ok_or(ResourceArbiterError::RequestIdExhausted)?;
+        let (reentrant, active_compatible) = state.active_compatibility(&request, owner);
+        if state.waiters.is_empty() && active_compatible {
+            let id = state.allocate_request_id()?;
+            state.activate(id, request, owner);
+            #[cfg(test)]
+            {
+                state.metrics.direct += 1;
+            }
+            return Ok(ResourcePermit {
+                inner: Arc::clone(&self.inner),
+                id,
+                reentrant,
+            });
+        }
+
+        let id = state.allocate_request_id()?;
         state.waiters.push_back(Waiter { id, request, owner });
+        #[cfg(test)]
+        {
+            state.metrics.queued += 1;
+            state.metrics.acquire_notifications += 1;
+        }
         self.inner.changed.notify_all();
 
         loop {
@@ -295,11 +360,7 @@ impl ResourceArbiter {
                 return Err(ResourceArbiterError::StatePoisoned);
             };
             let request = &state.waiters[position].request;
-            let reentrant = state.active.iter().any(|active| active.owner == owner);
-            let active_compatible = state
-                .active
-                .iter()
-                .all(|active| active.owner == owner || !active.request.conflicts_with(request));
+            let (reentrant, active_compatible) = state.active_compatibility(request, owner);
             let older_compatible = reentrant
                 || state
                     .waiters
@@ -310,11 +371,7 @@ impl ResourceArbiter {
                 let Some(waiter) = state.waiters.remove(position) else {
                     return Err(ResourceArbiterError::StatePoisoned);
                 };
-                state.active.push(ActiveRequest {
-                    id,
-                    request: waiter.request,
-                    owner: waiter.owner,
-                });
+                state.activate(id, waiter.request, waiter.owner);
                 return Ok(ResourcePermit {
                     inner: Arc::clone(&self.inner),
                     id,
@@ -327,6 +384,10 @@ impl ResourceArbiter {
                 Err(poisoned) => {
                     let mut state = poisoned.into_inner();
                     state.waiters.retain(|waiter| waiter.id != id);
+                    #[cfg(test)]
+                    {
+                        state.metrics.acquire_notifications += 1;
+                    }
                     self.inner.changed.notify_all();
                     return Err(ResourceArbiterError::StatePoisoned);
                 }
@@ -345,30 +406,28 @@ impl ResourceArbiter {
             .lock()
             .map_err(|_| ResourceArbiterError::StatePoisoned)?;
         let owner = request_owner();
-        let reentrant = state.active.iter().any(|active| active.owner == owner);
-        let conflicts_with_active = state
-            .active
-            .iter()
-            .any(|active| active.owner != owner && active.request.conflicts_with(&request));
+        let (reentrant, active_compatible) = state.active_compatibility(&request, owner);
         let bypasses_waiter = !reentrant
             && state
                 .waiters
                 .iter()
                 .any(|waiter| waiter.request.conflicts_with(&request));
-        if conflicts_with_active || bypasses_waiter {
+        if !active_compatible || bypasses_waiter {
             return Ok(None);
         }
-        let id = state.next_request_id;
-        state.next_request_id = state
-            .next_request_id
-            .checked_add(1)
-            .ok_or(ResourceArbiterError::RequestIdExhausted)?;
-        state.active.push(ActiveRequest { id, request, owner });
+        let id = state.allocate_request_id()?;
+        state.activate(id, request, owner);
+        state.metrics.direct += 1;
         Ok(Some(ResourcePermit {
             inner: Arc::clone(&self.inner),
             id,
             reentrant,
         }))
+    }
+
+    #[cfg(test)]
+    fn admission_metrics_for_test(&self) -> AdmissionMetrics {
+        self.inner.state.lock().unwrap().metrics
     }
 
     #[cfg(test)]
@@ -390,6 +449,35 @@ impl ResourceArbiter {
             };
             state = next;
             if wait.timed_out() && state.waiters.len() < expected {
+                return false;
+            }
+        }
+        true
+    }
+
+    #[cfg(test)]
+    fn wait_for_recovery_waiter_count_for_test(
+        &self,
+        expected: usize,
+        timeout: std::time::Duration,
+    ) -> bool {
+        let Ok(mut state) = self.inner.state.lock() else {
+            return false;
+        };
+        let deadline = std::time::Instant::now() + timeout;
+        while state.recovery_waiters < expected {
+            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
+                return false;
+            };
+            let Ok((next, wait)) = self
+                .inner
+                .recovery_waiter_changed
+                .wait_timeout(state, remaining)
+            else {
+                return false;
+            };
+            state = next;
+            if wait.timed_out() && state.recovery_waiters < expected {
                 return false;
             }
         }
@@ -436,7 +524,13 @@ impl Drop for ResourcePermit {
         if let Some(position) = state.active.iter().position(|active| active.id == self.id) {
             state.active.swap_remove(position);
         }
-        self.inner.changed.notify_all();
+        if !state.waiters.is_empty() || state.recovery_waiters > 0 {
+            #[cfg(test)]
+            {
+                state.metrics.release_notifications += 1;
+            }
+            self.inner.changed.notify_all();
+        }
     }
 }
 
