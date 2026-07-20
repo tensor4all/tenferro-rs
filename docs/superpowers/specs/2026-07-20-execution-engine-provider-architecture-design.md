@@ -82,8 +82,10 @@ explicit operation-family and provider traits, and explicit runtime resources.
 
 ## Architectural Overview
 
-The graph path has two compilation stages separated by a portable semantic
-artifact:
+The graph path has two compilation stages separated by a backend- and
+runtime-neutral semantic artifact. Initial portability is deliberately
+process-local; serialization and wire compatibility are not part of this
+design.
 
 ```text
 TracedGraph
@@ -96,11 +98,10 @@ SemanticProgram                  backend and runtime neutral
     |
     v
 Runtime::prepare_for
-    +-------------------------+
-    |                         |
-    v                         v
-PreparedGraph             XlaExecutable
-    |                     whole-region target
+    |
+    v
+PreparedGraph                   runtime-bound scheduled artifact
+    |
     v
 runtime-owned GraphExecutor
 ```
@@ -115,6 +116,10 @@ The current `GraphProgram`, `ExecProgram`, `GraphExecutor<B>`, and
 boundaries. In particular, an executor-shaped instruction stream is not the
 portable compiler artifact.
 
+XLA follows this same path. A whole-program XLA compilation is represented as
+one prepared subgraph operation in a one-node `ScheduledGraph`; the internal
+PJRT executable is not a second public execution pipeline.
+
 The dependency direction is deliberate:
 
 - tenferro core defines or depends on semantic operation contracts;
@@ -124,6 +129,23 @@ The dependency direction is deliberate:
   resources;
 - extension crates add semantic and provider traits without requiring the core
   runtime to enumerate their operation families.
+
+### Crate ownership
+
+A new public `tenferro-program` crate owns `SemanticProgram`,
+`CoreSemanticOp`, `ExtensionOp`, semantic metadata, shape guards, effects,
+alias declarations, and process-local structural fingerprints.
+`tenferro-runtime` owns `TraceContext`, `GraphCompiler`, runtime and engine
+traits, `PreparedGraph`, `ScheduledGraph`, `GraphExecutor`, `ResourceArbiter`,
+and prepared-plan caches. XLA depends on `tenferro-program` and integrates with
+`tenferro-runtime` as an engine. Operation crates depend on
+`tenferro-program` for semantic payloads and optionally on `tenferro-runtime`
+for execution adapters.
+
+`GraphCompiler` remains in `tenferro-runtime` initially because its compiler
+service, trace integration, and cache are closely tied to runtime-facing
+workflows. This ownership may be split later without changing the program
+artifact.
 
 ## Compiler and Artifact Boundaries
 
@@ -161,6 +183,67 @@ It does not contain:
 This makes `SemanticProgram` the backend-neutral replacement for the portable
 role currently attributed to `GraphProgram`. Existing `GraphProgram` and
 `ExecProgram` remain temporary adapters while migration is in progress.
+
+`SemanticProgram` has private fields and read-only views and iterators. A
+validation-preserving builder is available to low-level frontends, but callers
+cannot mutate an already frozen program. `CoreSemanticOp` is a public,
+`#[non_exhaustive]` enum. The initial program contains one acyclic
+`SemanticRegion`. The container reserves future nested regions for structured
+control flow, but the first implementation has no `if`, `while`, block
+arguments, yields, shape joins, or loop AD.
+
+Terminology is fixed as follows:
+
+- `SemanticRegion` is the future control-flow nesting unit;
+- `SemanticSubgraph` is a fusion or multi-node compilation candidate;
+- `SubgraphCompiler` prepares a multi-node candidate for one engine;
+- `ScheduledGraph` is the executable dependency DAG.
+
+### Trace and compiler responsibilities
+
+`TraceContext` owns mutable graph construction, traced value identities,
+captures and defaults, trace-time parsing caches, and metadata or constraint
+scopes. It produces an immutable `TracedGraph`. A pure `GraphCompiler`
+consumes that graph and emits `CompiledGraph { program, bindings }`, where
+`program` is an `Arc<SemanticProgram>` and `bindings` is process-local
+`ProgramBindings`.
+
+The program contains input schemas and only small backend-neutral
+`ConstantLiteral` values. Actual captured or default tensors, and all large
+constants, remain in `ProgramBindings`. Constantizing a large tensor is an
+explicit operation governed by a size policy. A tensor from another runtime is
+never imported implicitly as a default. Cross-`TraceContext` tensor use also
+requires an explicit import; tracing does not merge graphs implicitly.
+
+Extension tracing APIs target `TraceContext`. Existing APIs such as
+`GraphCompilerEinsumExt` become compatibility adapters rather than permanent
+compiler extension points.
+
+### Verified semantic transforms and AD
+
+The fixed compiler pipeline is deterministic and target-independent:
+
+1. trace normalization;
+2. metadata, constraints, and shape guards;
+3. effects and aliases;
+4. canonicalization plus DCE/CSE and view composition;
+5. extension output pruning;
+6. validation, freeze, and fingerprinting.
+
+Custom compiler work uses an explicit `SemanticTransform`: a read-only input
+and a validated builder output. Transforms cannot mutate a program, inspect
+runtime providers or input values, or use a process-global pass registry.
+Ordered custom transforms participate in a compiler cache key and preserve
+node provenance. Extension callbacks admitted inside the fixed pipeline are
+limited to pure semantic operations such as output pruning.
+
+Automatic differentiation is a separate
+`SemanticProgram -> SemanticProgram` transform in `tenferro-ad`, before
+runtime preparation. `tenferro-program` has no AD dependency. Extension-owned
+rules are installed explicitly in an `AdContext`; there is no global rule
+inventory. AD tries the extension rule before runtime lowering. Differentiating
+through a lowering is an explicit fallback policy, effectful operations require
+a rule, and in-place semantics require functionalization.
 
 ### Runtime plan compilation
 
@@ -206,6 +289,21 @@ expressed through small operation-family traits such as
 `DotGeneralRuntime`, `ReductionRuntime`, and extension-owned linalg traits.
 An engine implements only the operation-family traits it supports.
 
+### Effects and aliases
+
+An effect is observable state beyond returned tensor values, such as stateful
+random-number generation, a host callback, access to an external mutable
+buffer, or use of a collective communicator. Pure operations declare an empty
+effect set. Effects use typed resource identities with read and write access,
+so operations touching independent resources may still execute concurrently.
+An extension may not silently default to pure; it must declare its effects.
+
+Aliasing is a separate semantic contract with `Fresh`, `ViewOf`, `MustAlias`,
+and `ExternalAlias` forms. Physical reuse of a dead buffer is permitted even
+for semantically `Fresh` outputs when the buffer planner proves it safe.
+Extension lowering must preserve output arity, metadata, effects, aliases, and
+provenance, and validation rejects any mismatch.
+
 ## Two Trait Layers
 
 ### Runtime operation-family traits
@@ -249,16 +347,21 @@ thread-pool or CUDA-stream contexts.
 
 ### Backend-specific provider traits
 
-Provider traits are narrower algorithm families inside an eager backend. The
-initial likely families are:
+The core engine capability bundle has typed optional slots for:
 
-- `GemmProvider`;
-- `LayoutTransformProvider`;
-- `ReductionProvider`;
-- `IndexingProvider`;
-- `ElementwiseProvider` where replacement is useful;
-- extension-owned decomposition or solver provider traits;
-- `TransferProvider` and `CollectiveProvider` for multi-device execution.
+- `ElementwiseRuntime` for one semantic elementwise operation;
+- `ReductionRuntime` for reductions and arg reductions;
+- `IndexingRuntime` for gather, scatter, dynamic slice/update, concatenate,
+  padding, and indexing copies;
+- `DotGeneralRuntime` for semantic generalized contraction;
+- `LayoutRuntime` for actual materialization, packing, and copies;
+- `SubgraphCompiler` for optional multi-node compilation or fusion.
+
+Metadata-only reshape, transpose, broadcast, and view slicing do not call a
+provider. Allocation and scheduling are runtime resources, not capabilities.
+Transfers use a separate registry keyed by source and destination storage
+class, and collectives use a separate registry. Neither may hide a host
+transfer.
 
 Providers may be implemented by faer, general BLAS/LAPACK, TBLIS, CubeCL,
 cuTENSOR, or user code. A provider does not select a resource domain, create a
@@ -267,23 +370,22 @@ fallback.
 
 ## Provider Bundles and Dispatch
 
-Standard provider families are stored as direct trait-object fields:
+Standard core families are stored as direct typed trait-object fields:
 
 ```rust
 pub struct CpuProviderBundle {
-    gemm: Option<Arc<dyn CpuGemmProvider>>,
-    layout: Option<Arc<dyn CpuLayoutTransformProvider>>,
-    reduction: Option<Arc<dyn CpuReductionProvider>>,
-    indexing: Option<Arc<dyn CpuIndexingProvider>>,
-    extensions: ExtensionProviderRegistry,
+    elementwise: Option<Arc<dyn ElementwiseRuntime>>,
+    reduction: Option<Arc<dyn ReductionRuntime>>,
+    indexing: Option<Arc<dyn IndexingRuntime>>,
+    dot_general: Option<Arc<dyn DotGeneralRuntime>>,
+    layout: Option<Arc<dyn LayoutRuntime>>,
+    subgraph: Option<Arc<dyn SubgraphCompiler>>,
 }
 ```
 
-This is preferred over a `HashMap` for built-in hot-path dispatch. A family may
-be delegated to another provider explicitly. For example, a custom GEMM
-provider may override `dot_general` while an engine uses the default provider
-for layout transforms and reductions. Delegation is composition, not an
-implicit fallback performed after an unsupported error.
+This is preferred over a `HashMap` or `TypeId`/`Any` query for built-in hot-path
+dispatch. A family may delegate explicitly to another implementation.
+Delegation is composition, not an implicit fallback after an arbitrary error.
 
 Provider bundle granularity is per operation family rather than one trait per
 operation or one trait for every operation in the system. This keeps runtime
@@ -294,6 +396,24 @@ uses a resolved trait-object field or slot. Missing optional families are
 reported during preparation; the execution loop never branches on whether a
 family exists.
 
+### CPU contraction and linalg composition
+
+`CpuGemmProvider` implements GEMM, strided-batched GEMM, and grouped GEMM; it
+does not implement semantic `dot_general`. `DotGeneralRuntime` is a composite
+that may use a `CpuGeneralContractionProvider` such as TBLIS for a direct
+binary contraction, or a `CpuLayoutTransformProvider` plus `CpuGemmProvider`
+for decomposition. N-ary einsum first resolves a contraction path into binary
+`dot_general` operations. A user may replace the complete composite, the
+general-contraction provider, or only GEMM/layout providers.
+
+Linalg remains extension-owned and uses a family-level capability bundle with
+optional SVD, QR, eigen, Cholesky, LU, and solve slots. This avoids both one
+monolithic linalg trait and one public trait per operation. A values-only
+request may not silently invoke a full decomposition; such behavior requires
+an explicit decomposition adapter. Batch scheduling belongs to the engine,
+while a prepared provider operation describes one matrix algorithm and its
+workspace. All providers obey the engine-selected `ParallelMode`.
+
 ## Prepared Graphs and Common Execution
 
 `PreparedGraph` contains a common `ScheduledGraph` plus runtime-binding
@@ -302,10 +422,8 @@ multi-device execution. Its nodes are conceptually:
 
 ```rust
 pub enum ScheduledNode {
-    Host(PreparedHostOperation),
-    Engine {
-        engine: EngineId,
-        operation: PreparedOperation,
+    Operation {
+        operation: Arc<dyn PreparedOperation>,
         resources: ResourceRequirements,
     },
     Transfer(PreparedTransfer),
@@ -314,9 +432,17 @@ pub enum ScheduledNode {
 ```
 
 The schedule also records value slots, the dependency DAG, buffer lifetimes,
-output bindings, and event dependencies. A `PreparedOperation` has already
-resolved its provider or extension adapter. There is no family-id lookup or
-capability discovery in the execution loop.
+output bindings, and event dependencies. Each `PreparedOperation` is
+self-contained: it retains the resolved engine/provider and algorithm plan.
+There is one dynamic operation dispatch and no family-id, provider-registry, or
+capability lookup in the execution loop.
+
+Provider code receives an `ErasedExecutionContext` and performs one safe
+`TypeId` check/downcast to its typed context. Preparation validates the same
+context identity. Inputs and outputs remain borrowed, and execution performs
+no context or plan allocation. An unsafe custom vtable fast path is deferred
+unless benchmarks prove the safe check material; increasing fusion is the
+preferred way to amortize dispatch.
 
 The common `GraphExecutor` is owned by `Runtime`; it is not generic over one
 `TensorBackend`. This permits a single graph to contain CPU work, GPU work,
@@ -324,6 +450,21 @@ explicit transfers, barriers, and work on more than one device. An opaque
 `dyn ExecutableGraph` was considered but rejected because it would hide the
 common scheduling and lifetime model. A generic `GraphExecutor<E>` was also
 rejected because it makes heterogeneous and multi-GPU execution awkward.
+
+### Subgraph compilation and fusion
+
+`SubgraphCompiler` is an optional engine capability for multi-node
+compilation. `GraphCompiler` records target-independent legality facts and
+candidate relationships but does not commit to a target fusion. Runtime
+preparation performs legalization, asks engines for proposals, applies a
+deterministic partition, prepares selected subgraphs, and falls back to
+single-operation preparation for uncovered nodes.
+
+Selection follows explicit constraints, engine preference, larger legal
+subgraphs, and stable semantic node order. CPU elementwise fusion, GPU fusion,
+and whole-program XLA compilation use this same mechanism. Every selected
+subgraph must preserve effects, aliases, external inputs, outputs, and
+provenance.
 
 ### Public execution path
 
@@ -339,11 +480,19 @@ let prepared = runtime.prepare_for(
 let outputs = runtime.execute_prepared(&prepared, inputs)?;
 ```
 
-The ordinary convenience path is:
+The ordinary synchronous convenience path is:
 
 ```rust
 let outputs = runtime.run(&semantic, inputs)?;
 ```
+
+`Runtime::submit` is the asynchronous primitive and returns an
+`ExecutionHandle`. `ExecutionHandle::wait` reports completion errors, and
+`run` is exactly `submit` plus `wait`. Pending outputs may feed more work in the
+same runtime without host synchronization. Dropping a handle does not cancel
+already submitted work. Eager GPU operations likewise return tensors carrying
+pending completion; host reads, explicit synchronization, or export observe
+completion and deferred errors.
 
 `Runtime::run` validates input metadata and shape guards, derives the
 `InputSignature`, looks up or creates a prepared specialization, acquires
@@ -369,9 +518,19 @@ work or resource acquisition, the runtime validates input metadata, evaluates
 shape guards, and selects a prepared specialization.
 
 When a provider or lowering can remain polymorphic, it may prepare one
-polymorphic plan. Otherwise, preparation is keyed by `InputSignature`. This is
-required for operations such as N-ary einsum, where contraction-path selection
-depends on concrete operand dimensions.
+polymorphic plan. Otherwise, the cache key uses a runtime-owned finite typed
+projection, `SpecializationRequirements`. It may include concrete dimensions,
+dtype, placement, layout class, exact strides, and alignment. It does not
+include tensor values, pointers, current free memory, or scheduler load.
+Topology, configuration, and hard workspace policies belong to the runtime
+epoch or prepare options.
+
+A provider may respond with `NeedsSpecialization` and strictly broader
+requirements. Repeating or narrowing the same request is a
+`ProviderContractError`. Since the vocabulary is finite and widening is
+monotonic, preparation terminates. This is required for operations such as
+N-ary einsum, where contraction-path selection depends on concrete operand
+dimensions.
 
 Planning is not performed inside the steady-state executor. On the first call
 for a signature, `Runtime::run` crosses a planning boundary before acquiring
@@ -386,16 +545,30 @@ semantic graph + compiler options
     -> SemanticProgram
 
 semantic fingerprint + RuntimeId/config epoch + placement
-    + InputSignature + prepare options/provider version
-    -> PreparedGraph or XlaExecutable
+    + specialization projection + prepare options
+    -> PreparedGraph
 ```
 
 Every long-lived cache follows the repository cache contract: bounded default,
 entry and retained-byte statistics, configuration, clear APIs, and aggregate
-runtime introspection. Cache keys use compact structural fingerprints plus
-exact collision checks rather than formatted programs. The semantic cache is
+runtime introspection. A fixed process-local structural fingerprint is computed
+once when a program freezes. Cache lookup uses it first and exact structural
+equality only within a collision bucket; the bucket retains an
+`Arc<SemanticProgram>`. Extension identity contributes `family_id` plus
+`payload_hash`, followed by `payload_eq` on collision. The algorithm has no
+wire-stability guarantee. The prepared-plan root key is the fingerprint,
+`RuntimeId`, configuration epoch, and `PrepareOptionsKey`; its specialization
+projection is part of the selected entry. The semantic cache is
 owned by an explicit compiler service or `GraphCompiler`; specialization and
 prepared-plan caches are owned by `Runtime`.
+
+Prepared-plan creation uses key-level single-flight states: `Preparing`,
+`Ready`, and `Failed`. A global cache lock is never held while planning. The
+same key waits; different keys prepare concurrently. Deterministic failures may
+be negative-cached within one epoch, while transient failures are not cached.
+Self-recursive preparation returns `PreparationCycle`. An in-progress entry is
+not evicted, and ready entries remain safe through `Arc` ownership. Metrics
+include hits, misses, waits, negative hits, preparation, and eviction.
 
 ## Request and Dispatch Cost Contract
 
@@ -432,7 +605,11 @@ An extension crate owns four pieces:
 
 The core runtime stores an erased `ExtensionRuntimeAdapter`, but extension
 authors and engines work with typed traits. Registration uses the stable
-`family_id` contract from `docs/spec/extension-op.md` during build or prepare.
+`family_id` contract from `docs/spec/extension-op.md` during runtime
+configuration. An explicit `ExtensionModule` may install multiple CPU, CUDA,
+XLA, or reference engine adapters into `RuntimeConfigBuilder`. Semantic payload
+use does not require runtime registration. Runtime extension modules and AD
+rules are installed separately, and no process-global inventory is consulted.
 The result is a resolved `ExtensionSlot`; execution does not repeat a string
 hash lookup.
 
@@ -452,6 +629,20 @@ and explicitly delegate the rest.
 Extension payload identity remains semantic. Provider handles, caches, streams,
 thread pools, and mutable runtime state do not participate in `ExtensionOp`
 hashing or equality.
+
+`ExtensionOp` itself is a pure deterministic semantic object: family identity,
+payload identity, arity and metadata, effects and aliases, optional
+`lower_to_core`, and output pruning. It cannot allocate runtime storage,
+inspect providers or input values, or access device and global state. A host
+reference implementation is an explicitly registered
+`HostReferenceExtensionEngine`, not a method on the semantic payload. The
+current `host_reference` bridge may remain only as a deprecated compatibility
+adapter.
+
+Duplicate registration is an error only for the same `(family_id, EngineId)`.
+Replacing an entry is explicit. The current per-execution `register_runtime`
+pattern migrates to a deprecated transactional configuration bridge; it does
+not auto-register on every call.
 
 ### Generic extension lowering and specialization
 
@@ -488,10 +679,10 @@ pub trait ExtensionEngine {
 }
 ```
 
-`SpecializationRequirements` may request concrete shapes, dtype, layout,
-placement, runtime topology, or resource limits. It must not request arbitrary
-input tensor values. Data-dependent algorithms remain dynamic execution
-operations rather than compile-time inspection of user data.
+`SpecializationRequirements` uses the finite runtime-owned projection described
+above. It must not request arbitrary input tensor values or private provider
+cache keys. Data-dependent algorithms remain dynamic execution operations
+rather than compile-time inspection of user data.
 
 The current `lower_to_standard_ops` result uses `Ok(None)` for both temporary
 metadata insufficiency and permanent lack of a lowering. Migration replaces
@@ -596,19 +787,52 @@ This is illustrative, not a frozen public struct. There is no process-global or
 thread-local singleton in the core contract. A convenience default runtime may
 exist only as a high-level facade.
 
-`EagerTensor` may hold `Arc<Runtime>`. The physical tensor/storage object does
-not own its engine, avoiding runtime-storage reference cycles. Physical tensor
-state includes storage, placement, and any pending completion event.
+`EagerTensor` pairs a physical tensor with `Arc<Runtime>`. The physical storage
+does not own its engine, avoiding runtime-storage reference cycles. Identity is
+split into `RuntimeId`, `StorageDomainId`, and `EventDomainId`. Storage records
+its domain, placement, allocation owner, and pending completion. A prepared
+graph records `RuntimeId` and epoch.
 
-Mixing tensors from different runtime or allocation domains is an error. The
-runtime does not silently transfer or import them. Cross-runtime movement uses
-an explicit `import` or `transfer` API with visible cost and error behavior.
+Mixing tensors from different runtime or allocation domains is an error. Same
+runtime and compatible storage may be bound directly; foreign or unregistered
+storage is rejected. Cross-runtime movement uses explicit
+`runtime.import(tensor, ShareIfCompatible | Copy)` or transfer APIs. Zero-copy
+sharing requires compatible allocator, device, event interoperation, and
+lifetime contracts. There is no implicit copy fallback.
 
-Runtime configuration has an epoch. Changes to providers, extensions,
-topology, resource domains, or planning defaults advance the epoch and
-invalidate prepared-plan reuse. Runtime-owned caches and resource pools expose
-individual and aggregate bounds, clear operations, entry counts, and retained
-byte estimates.
+Runtime configuration is an immutable `RuntimeConfigSnapshot` containing its
+epoch, engines, extensions, transfers, collectives, provider-selection policy,
+and topology. Reconfiguration builds and validates a complete replacement,
+increments the epoch once, and publishes it atomically; failure leaves the old
+snapshot active. Preparation pins one snapshot. In-flight work retains old
+prepared-operation `Arc`s and may finish, while explicit execution of an old
+prepared graph returns stale and the convenience path re-prepares.
+
+Registering the same family and registration identity is a no-op; a conflicting
+duplicate is an error and replacement must be explicit. A builder is the
+normal construction API, while transactional reconfiguration supports plugins,
+tuning, and migration. The steady executor takes no registry lock.
+Runtime-owned caches and resource pools expose individual and aggregate bounds,
+clear operations, entry counts, and retained-byte estimates.
+
+## Buffer Planning
+
+Each prepared provider returns a `BufferContract`; `Runtime` integrates all
+contracts into one `BufferPlan`. Output storage is one of
+`RuntimeAllocated`, `ProviderAllocated`, or `ViewOf`. The plan owns logical
+slots, liveness, alias and view relations, allocation classes, scratch,
+dynamic-size bounds, and a peak-memory estimate.
+
+Provider-allocated storage is registered with its storage domain, byte size,
+completion event, destructor, layout, and dtype, and remains visible in explain
+and statistics. Exact dynamic sizes allocate from the resolved plan; bounded
+sizes reserve the bound; unbounded sizes require an explicit dynamic-allocation
+contract and cannot claim a fixed peak.
+
+Internal values may be donated automatically at proven last use. External
+inputs are borrowed by default and become candidates only through explicit
+`BindingMode::Donatable`. Donation is refused for shared, viewed, foreign, or
+still-pending storage.
 
 ## CPU Resource Model
 
@@ -639,6 +863,19 @@ Rayon state, or acquire a second resource permit. The outer execution acquires
 one lease; nested operations reuse it. This prevents nested oversubscription
 and makes the thread budget a single engine-owned policy.
 
+CPU execution uses an object-safe `CpuDomainExecutor` with two distinct
+operations: `submit` for outer scheduling and synchronous `install` for an
+inner parallel region. `ScopedCpuJob` permits a borrowed synchronous job, and
+the standard distribution includes a Rayon adapter. The executor advertises
+worker count, submit/install support, reentrancy, and external affinity and
+shutdown guarantees. CPU set, NUMA identity, and thread budget belong to
+`CpuResourceDomain`, not to the executor object.
+
+Every operation receives `ParallelMode::Outer`, `Inner`, or `Sequential`.
+Providers may not use ambient Rayon or independently submit nested work. A
+composite contraction or batched linalg implementation chooses outer versus
+inner parallelism once, and all delegated providers honor that choice.
+
 ### Managed mode
 
 In `Managed` mode, tenferro:
@@ -654,12 +891,13 @@ In `Managed` mode, tenferro:
 ### ExternalManaged mode
 
 In `ExternalManaged` mode, the user supplies node domains, executors or pools,
-CPU sets, and thread budgets. Tenferro validates static configuration such as
-empty CPU sets, duplicate domain identities, and overlapping declared CPU sets.
+CPU sets, and thread budgets through the same `CpuDomainExecutor` contract.
+Tenferro validates static configuration such as empty CPU sets, duplicate
+domain identities, and overlapping declared CPU sets.
 
 The external owner is responsible for:
 
-- admission and fairness among submitted work;
+- fairness and lifecycle of jobs after submission to the external executor;
 - maintaining worker affinity;
 - coordinating pools used by other libraries;
 - avoiding oversubscription;
@@ -704,18 +942,19 @@ would migrate into the per-device runtime. A GPU provider receives a resolved
 `GpuExecutionContext` containing the selected device, stream or queue, scratch
 access, and dependency events. It does not create or globally select a stream.
 
-## Asynchronous Execution
+## Asynchronous Execution and Events
 
-The public eager API remains synchronous-looking, while GPU execution is
-internally asynchronous:
+The runtime preplans event slots identified by `EventDomainId`, `EventSlotId`,
+and generation. An engine-owned event domain stores the actual CUDA, WebGPU,
+PJRT, or CPU completion token in per-run workspace. Nodes do not allocate an
+`Arc<dyn CompletionEvent>` for every launch, and the core runtime does not use
+a closed backend-event enum.
 
-- a GPU provider enqueues work and returns an `ExecutionEvent`;
-- the engine attaches dependencies to subsequent work;
-- a CPU event is immediately ready;
-- an XLA/PJRT event can wrap the corresponding future;
-- providers do not call a global synchronize after each operation.
-
-Synchronization occurs only at an observable boundary:
+The engine attaches dependencies to subsequent work and providers never call a
+global synchronize after each operation. Cross-event-domain dependencies
+require an explicit `Transfer` or `Barrier`; the executor does not synthesize a
+hidden global synchronization. Synchronization occurs only at an observable
+boundary:
 
 - host read or download;
 - explicit synchronize;
@@ -726,6 +965,36 @@ Synchronization occurs only at an observable boundary:
 In externally managed GPU execution, the user owns stream lifetime and
 interoperation constraints, while tenferro still tracks ordering for work it
 submits.
+
+Cancellation is best-effort. It removes waiting resource requests and prevents
+unsubmitted nodes from being enqueued, but cannot assume already enqueued
+device work is cancellable. Submitted work is drained, leases remain held until
+completion, effects are not rolled back, and dropping an execution handle does
+not imply cancellation.
+
+## Admission Control and Resource Leases
+
+`ResourceArbiter` has two levels. A `RunAdmissionRequest` reserves persistent,
+maximum-live, and provider-bound memory derived from `BufferPlan`. Once
+admitted, each ready node submits one atomic `NodeLeaseRequest` containing all
+required CPU domains or thread budgets, device streams, scratch memory, and
+exclusivity constraints. The arbiter either grants the complete set or queues
+the request while it holds nothing; it acquires resources internally in a
+canonical order.
+
+Leases live through asynchronous completion and, for buffers, through their
+planned last use. An `AnyCompatible` resource may be selected when granting the
+lease, but it may vary only within the compatibility class accepted during
+preparation; the provider and algorithm do not change. The default queue is
+FIFO with aging, with optional priority or deadline hints but no real-time
+guarantee. Nested provider operations reuse the current lease. Recursively
+calling `Runtime::run` from a provider is prohibited.
+
+The executor uses run-level fail-fast semantics. The first failure becomes the
+primary error, no new node is enqueued, waiting and unsubmitted nodes are
+cancelled, and already submitted work is drained safely. Additional drain
+failures are retained as suppressed errors. Partial outputs are not returned as
+a successful run.
 
 ## Multi-GPU Design Boundary
 
@@ -772,13 +1041,22 @@ operation resolves to a provider, extension slot, or lowering implementation.
 Missing capabilities return a typed prepare error. `PreparedGraph` cannot
 contain an unresolved operation.
 
-The default resolution order is:
+The deterministic resolution order is:
 
-1. a native engine implementation;
-2. semantic lowering to core operations;
-3. an explicitly configured fallback engine;
-4. `PrepareError::UnsupportedOperation` or
+1. an operation-local explicit override;
+2. placement constraints;
+3. runtime family preference;
+4. a native engine capability;
+5. semantic lowering to core operations;
+6. an explicitly configured fallback engine;
+7. `PrepareError::UnsupportedOperation` or
    `PrepareError::UnsupportedExtension`.
+
+Provider and algorithm are fixed at preparation. The initial design has no
+adaptive current-load selection or implicit cost model. An equivalent resource
+lease may be selected late only within its prepared compatibility class. The
+selected implementation and reason are recorded by `prepared.explain()`. A
+future cost model must be an explicit versioned policy.
 
 Fallback is permitted only through explicit runtime configuration, a decorator,
 or a composite provider. A provider must not catch an arbitrary error and
@@ -802,11 +1080,19 @@ Errors are separated by lifecycle stage:
 4. **Completion:** deferred device, kernel, transfer, collective, or
    asynchronous provider failure.
 
-Public errors preserve these distinctions without exposing unstable provider
-internals as public API and preserve typed source chains. Input metadata and
-shape guards are validated before specialization work, provider work, or
-resource acquisition. Resource leases are acquired only after preparation has
-produced a feasible schedule.
+Ownership follows crate boundaries: `tenferro-program` owns build, validation,
+extension-schema, and transform errors; `tenferro-runtime` owns configuration,
+prepare, enqueue, completion, and execution errors; operation crates own their
+planning and preparation errors. `ExecutionError` is the sum of `Prepare`,
+`Enqueue`, and `Completion`; compilation remains separate. A convenience
+trace-and-run API may expose an outer `TraceRunError`.
+
+Public errors preserve typed source chains and a runtime classification without
+making unstable provider internals part of the public enum. Only a typed
+`Unsupported` result continues capability selection. Input metadata and shape
+guards are validated before specialization work, provider work, or resource
+acquisition. Resource leases are acquired only after preparation has produced
+a feasible schedule.
 
 Runtime construction errors such as overlapping NUMA domains, malformed
 external executors, or incompatible provider configuration remain a separate
@@ -835,16 +1121,45 @@ is not accidentally reported as kernel cost.
 Explanations and diagnostics are not cache keys. They may format human-readable
 strings on demand, while steady-state lookup uses compact structural keys.
 
+## Determinism Policy
+
+`ExecutionPolicy::determinism` has two initial levels:
+
+- `Fast`, the default, guarantees deterministic semantic compilation,
+  provider selection, partitioning, and cache identity, but not a fixed
+  concurrent execution order or bitwise-identical parallel reductions;
+- `Reproducible` admits only provider algorithms declaring reproducible
+  behavior and fixes reduction trees, contraction paths, and subgraph
+  partitioning. Unsupported operations fail during preparation with
+  `DeterminismUnsupported` rather than falling back to `Fast`.
+
+The reproducibility scope is the same runtime snapshot, inputs, and hardware
+class. Cross-backend bitwise equality and reproducibility across arbitrary
+library versions are not initial guarantees. A stricter `Bitwise` level may be
+designed later.
+
 ## Testing and Performance Evidence
 
-The implementation must provide a shared semantic conformance suite across at
-least:
+Testing is organized around reusable contracts rather than duplicating one
+large integration suite for every backend:
 
-- CPU with faer providers;
-- CPU with general BLAS/LAPACK providers where available;
-- CUDA/CubeCL and custom CUDA providers;
-- WebGPU providers;
-- XLA lowering plus a reference execution path.
+- `tenferro-program` property tests cover builders, validation, fingerprint
+  collisions, effects and aliases, transforms, and extension lowering;
+- runtime tests use mock engines, event domains, and resource arbiters to make
+  single-flight preparation, epochs, atomic leases, fail-fast draining,
+  cancellation, and buffer lifetimes deterministic;
+- a provider contract suite checks capability declarations, monotonic
+  specialization, buffer contracts, aliases, event completion,
+  `ParallelMode`, and determinism claims;
+- a small backend-parity suite executes common programs on faer, general
+  BLAS/LAPACK, TBLIS where available, CUDA/CubeCL, WebGPU, and XLA, comparing
+  numeric tolerances, effect order, and typed failure behavior;
+- fault injection covers prepare, allocation, enqueue, device completion, and
+  transfer failures, including primary and suppressed errors and resource
+  release.
+
+Bitwise equality is tested only where the selected `Reproducible` provider
+contract promises it.
 
 Required focused tests include:
 
@@ -875,6 +1190,12 @@ Required focused tests include:
 - independent multi-GPU work can enqueue concurrently;
 - foreign runtime tensors do not transfer implicitly;
 - unsupported provider paths return explicit errors rather than fallback.
+- same-key preparation is single-flight while different keys make progress;
+- non-monotonic specialization requests fail as provider contract violations;
+- atomic node lease requests never hold a partial resource set while queued;
+- run-level failure stops new enqueue and drains already submitted operations;
+- `Reproducible` rejects unsupported algorithms during prepare rather than
+  silently using `Fast`.
 
 Performance work must measure representative shapes, ranks, batch counts,
 thread counts, NUMA placements, and device counts. Microbenchmarks must keep
@@ -887,28 +1208,32 @@ This is an umbrella architecture. Migration is incremental, keeps the current
 backend path working behind adapters, and is decomposed into independently
 accepted child issues:
 
-1. Introduce `SemanticProgram` and make `GraphCompiler` produce it. Preserve
-   current `GraphProgram` and `ExecProgram` behavior through an adapter without
-   changing execution.
-2. Introduce runtime plan compilation, `Engine`, small operation-family traits,
-   `PreparedOperation`, specialization requirements, and bounded plan caches.
-3. Introduce common `ScheduledGraph` and runtime-owned `GraphExecutor`. Port
-   CPU execution first while retaining a compatibility adapter for
-   `GraphExecutor<B>`.
-4. Lift NUMA topology, arbiter, executor, buffer, and cache ownership into CPU
-   resource domains. Add `Managed` and `ExternalManaged` validation.
-5. Migrate extension capability resolution and core lowering. Use N-ary einsum
-   to validate shape specialization, operation-local planning policy, and
-   resolved-slot execution; then migrate FFT, linalg, sparse, and permutation
-   families.
-6. Split CUDA/WebGPU device runtime resources from provider algorithms, port
-   GPU execution to the common scheduler, and introduce dependency-aware
-   `ExecutionEvent` resource reuse.
-7. Make XLA consume `SemanticProgram` directly, then retire
+1. Introduce `tenferro-program`, private immutable `SemanticProgram`, builders,
+   fingerprints, effects, aliases, and compatibility adapters from the current
+   graph artifacts. Split mutable `TraceContext` from pure `GraphCompiler`.
+2. Introduce immutable runtime snapshots, typed core capabilities, explicit
+   extension modules, `PreparedOperation`, finite specialization requirements,
+   and single-flight bounded plan caches.
+3. Introduce common `ScheduledGraph`, event domains, buffer planning, and the
+   runtime-owned `GraphExecutor`. Port CPU execution first while retaining a
+   compatibility adapter for `GraphExecutor<B>`.
+4. Lift NUMA topology, `CpuDomainExecutor`, two-level resource admission,
+   buffers, and caches into CPU resource domains. Add `Managed` and
+   `ExternalManaged` validation plus explicit parallel modes.
+5. Introduce the core provider composites for layout, GEMM, TBLIS-style general
+   contraction, reduction, indexing, and optional subgraph compilation.
+6. Migrate extension capability resolution and pure core lowering. Use N-ary
+   einsum to validate shape specialization, planning policy, resolved slots,
+   AD registration, and host-reference fallback; then migrate FFT, linalg,
+   sparse, and permutation families.
+7. Split CUDA/WebGPU resources from provider algorithms, port GPU execution to
+   the common scheduler, and use runtime-owned event slots and explicit
+   transfers.
+8. Integrate XLA through `SubgraphCompiler` and `PreparedOperation`, then retire
    `GraphProgramLoweringView` and the executor-shaped portable artifact.
-8. Add multi-GPU task scheduling for independent work.
-9. Add logical sharding, collectives, and resharding only if accepted by a
-   later design issue.
+9. Add multi-GPU task scheduling for independent work.
+10. Add structured control flow, logical sharding, collectives, and resharding
+    only through later accepted designs.
 
 Each phase must be independently reviewable. Normative specs and online
 parallelism documentation are updated as the corresponding behavior lands.
@@ -951,9 +1276,9 @@ in favor of a runtime-owned executor over a common `ScheduledGraph`.
 ### Return only an opaque `dyn ExecutableGraph`
 
 This gives every target complete freedom but hides common dependency, transfer,
-buffer-lifetime, resource, and observability contracts. Rejected for CPU/GPU
-execution. XLA may still produce an opaque whole-region executable after
-consuming the same `SemanticProgram`.
+buffer-lifetime, resource, and observability contracts. Rejected as a public
+execution boundary. XLA may still produce an opaque whole-region executable
+internally, retained by a `PreparedOperation` in the common schedule.
 
 ### Keep one broad `TensorBackend`
 
@@ -991,25 +1316,18 @@ tensors; future logical sharding is designed separately.
 - [PyTorch `DTensor`](https://docs.pytorch.org/docs/stable/distributed.tensor.html)
 - [PyTorch tensor parallel APIs](https://docs.pytorch.org/docs/stable/distributed.tensor.parallel.html)
 
-## Decisions Required Before Child Implementation Planning
+## Child Design and Implementation Boundary
 
-The artifact boundaries, generic extension model, specialization ownership,
-fallback behavior, common CPU/GPU schedule, and staged migration direction are
-agreed in this WIP design. An accepted umbrella issue must still assign the
-following API-level details to child design issues before implementation:
+The architectural boundaries needed for child decomposition are now selected:
+crate ownership, process-local portability, immutable public program access,
+typed core capabilities, pure extensions, runtime identity and epochs, safe
+prepared-operation dispatch, external CPU executors, runtime-owned event slots,
+finite specialization projections, structural collision checks, buffer plans,
+resource admission, fail-fast behavior, and determinism policy.
 
-1. exact crate ownership, public visibility, and names of `SemanticProgram`,
-   engine traits, and prepared types;
-2. exact built-in provider-family boundaries and delegation APIs;
-3. serialized versus process-local portability requirements for extension
-   payloads and semantic programs;
-4. runtime identity and configuration-epoch representation;
-5. executor abstraction required by `ExternalManaged`;
-6. `ExecutionEvent` object-safety, cancellation, and error propagation;
-7. exact structural key and equality strategy for semantic and specialization
-   caches;
-8. which migration phases become separately accepted child issues.
-
-Until those details and child scopes are accepted, this branch is design
-evidence only and must not be treated as authorization for a feature
-implementation PR.
+This is still an umbrella design rather than authorization for one monolithic
+implementation PR. Each numbered migration phase must become a reviewable
+child issue with exact public signatures, compatibility impact, benchmarks,
+and acceptance tests. Later work may refine names without changing the
+ownership and behavior selected here. Implementation planning starts only
+after maintainers review this written WIP design.
