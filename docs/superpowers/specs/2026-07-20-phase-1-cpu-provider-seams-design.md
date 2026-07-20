@@ -304,12 +304,23 @@ included symmetrically.
 The host protocol is:
 
 - release profile, identical Rust toolchain and feature set;
+- byte-identical `Cargo.lock` inputs with the lock SHA-256 recorded before
+  either build, both binaries built with `cargo --locked`, and both binary
+  SHA-256 values recorded before measurement;
 - one fixed CPU selected from the process-allowed affinity mask;
 - `RAYON_NUM_THREADS=1`, `OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`,
   `MKL_NUM_THREADS=1`, and `VECLIB_MAXIMUM_THREADS=1`;
 - Criterion 2 s warm-up, 5 s measurement, 100 samples, 95% confidence;
-- three complete baseline/candidate pairs, alternating order `A/B`, `B/A`,
-  `A/B`;
+- case-interleaved execution: one case completes three adjacent
+  baseline/candidate pairs in order `A/B`, `B/A`, `A/B` before the next case
+  starts; the `B/A` interval is inverted to candidate/baseline orientation;
+- every target pair is bracketed by two candidate/candidate runs of the
+  `lazy neg_f64/1` control under the same settings. These before/after runs
+  form an A/A drift sentinel. A target pair is invalid if the sentinel's 95%
+  relative-change interval lies wholly above +5% or wholly below -5%;
+- every run is monitored separately and its named-baseline, `new`, and
+  `change` estimates are copied to pair-specific evidence immediately, before
+  any later Criterion run can overwrite `new` or `change`;
 - Criterion's per-pair 95% relative-change interval is the primary statistic;
 - a case is `PASS` only when all three interval upper endpoints are at most
   +5%; it is `FAIL` when at least two interval lower endpoints exceed +5%; all
@@ -322,12 +333,14 @@ The host protocol is:
 - source/behavior contract tests require direct typed slot dispatch and forbid
   hot-path `HashMap`, string lookup, `TypeId`, `Any`, and downcast.
 
-A pair is invalid when the process loses its fixed affinity, any benchmark
-process overlaps a Cargo/rustc process, the normalized one-minute load average
-exceeds 0.25 of the process-allowed CPU count at either endpoint, or a case is
-missing. Any invalid pair makes the whole experiment `INCONCLUSIVE`. A retry is
-the complete three-pair experiment with unchanged settings; individual cases
-or favorable pairs are never retried or selected.
+A pair is invalid when the process loses its fixed affinity, any benchmark or
+sentinel process overlaps a Cargo/rustc process, the normalized one-minute load
+average exceeds 0.25 of the process-allowed CPU count at either endpoint, its
+A/A drift sentinel breaches the bound above, or one of its four runs is
+missing. An invalid pair and its sentinel are discarded together and rerun
+with unchanged settings; no estimate from the invalid attempt is eligible for
+classification. A case is `INCONCLUSIVE` if three valid pairs cannot be
+obtained. Favorable valid pairs are never selectively retried.
 
 ## Phase Exit
 

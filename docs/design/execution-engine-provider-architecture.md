@@ -757,6 +757,14 @@ allocation or string lookup in the measured eager hot path, no new
 microsecond-scale orchestration step, and no statistically significant
 regression beyond that predeclared threshold.
 
+The Phase 1 campaign also established two measurement requirements for later
+children. Baseline and candidate builds use a byte-identical dependency lock
+with `--locked`, and latency cases are interleaved one case at a time rather
+than comparing two full-suite runs separated by minutes. Each measured pair is
+bracketed by a same-binary metadata-light A/A sentinel; a sentinel drift wholly
+outside the predeclared ±5% band invalidates that pair. Binary, lock, raw
+estimate, ordering, load, and process-monitor evidence is retained per pair.
+
 ### Placement-bound eager API
 
 The explicit low-level API remains `Runtime::submit(ExecutionRequest)`, while

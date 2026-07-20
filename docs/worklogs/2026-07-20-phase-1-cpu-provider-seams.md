@@ -102,7 +102,101 @@ cargo test -p tenferro-cpu --test provider_boundary_allocation_tests
 
 ## Root-cause investigation
 
-Pending. The failed candidate remains frozen above while common eager/session
-entry overhead is profiled against exact main. Any fix requires a focused
-reproduction, one explicit root-cause hypothesis, a failing regression test,
-and a complete unchanged campaign rerun.
+The failed candidate remains frozen above; none of its raw artifacts were
+removed or replaced.
+
+The exact eager path is `EagerTensor::nary_op` ->
+`exec_single_output_read` -> `EagerRuntime::exec_outputs_read` ->
+`exec_standard_op_on_tensor_reads` -> `EagerBackend::with_backend_session` ->
+`CpuBackend::run_backend_session_cached`. The only session-entry source delta
+for non-contraction operations was replacing a copied `DotGeneralProvider`
+enum with a cloned `CpuProviderBundle` `Arc`. A focused empty-session
+microbenchmark rejected that as a material explanation: the candidate interval
+was `7.0771..7.2245 us` and fixed main was `7.0388..7.2666 us`. The intervals
+fully overlap and cannot explain a repeated regression beyond five percent.
+No clone-removal or performance code change was made.
+
+### Same-binary A/A control
+
+The five initially failing cases plus the initially passing `lazy neg_f64/1`
+control were run candidate-against-itself, one case at a time, for three pairs.
+The original 2 s / 5 s / 100-sample settings, CPU 0 pinning, thread environment,
+and exact-name Cargo/rustc monitor were retained. Invalid attempts were
+discarded. Raw A, B, and change estimates for each accepted pair are under
+[`aa-focused`](./artifacts/2026-07-20-phase-1-cpu-provider-seams/aa-focused/).
+
+The single classifier script produced:
+
+| Case | Pair 1 | Pair 2 | Pair 3 | Class |
+|---|---:|---:|---:|---|
+| control_lazy_neg_1 | -5.41..-0.59 (-3.00) | +1.09..+6.62 (+3.88) | +0.98..+5.58 (+3.27) | INCONCLUSIVE |
+| lazy_add_64 | -4.44..-0.17 (-2.41) | -2.58..+1.97 (-0.22) | -1.02..+3.54 (+1.17) | PASS |
+| lazy_dot_2 | -0.53..+3.41 (+1.48) | -4.29..-0.42 (-2.45) | -5.61..-1.73 (-3.61) | PASS |
+| lazy_reduce_8 | +0.40..+4.86 (+2.66) | -2.08..+2.04 (+0.02) | -1.74..+1.99 (+0.27) | PASS |
+| lazy_slice_64 | -0.34..+2.72 (+1.20) | -2.57..-0.01 (-1.27) | +1.27..+4.59 (+2.89) | PASS |
+| materialized_neg_8 | -3.15..+1.37 (-0.91) | +2.10..+7.24 (+4.57) | -2.06..+1.97 (+0.01) | INCONCLUSIVE |
+
+Summary: `4 PASS / 0 FAIL / 2 INCONCLUSIVE`; campaign=`INCONCLUSIVE`.
+The A/A control did not itself produce a false `FAIL`, but it demonstrated
+pair-to-pair shifts large enough to make full-suite temporal separation a
+plausible noise amplifier.
+
+### Case-interleaved reproduction and dependency-lock confound
+
+The same six cases were next run fixed-main versus candidate in case-local
+`A/B`, `B/A`, `A/B` order. This removed the minutes-long separation between
+corresponding cases. It produced `3 PASS / 0 FAIL / 3 INCONCLUSIVE`, so none of
+the five initial `FAIL` classifications reproduced under the predeclared
+two-of-three rule. Those raw estimates remain under
+[`focused-main-candidate`](./artifacts/2026-07-20-phase-1-cpu-provider-seams/focused-main-candidate/).
+
+Inspection then found a stronger protocol confound: the fixed-main and
+candidate binaries had been built from different dependency resolutions. The
+original fixed-main build used newer `clap`, `enumset`, `serde_json`, and
+`syn 3` versions even though the Rust toolchain, profile, and declared features
+matched. `85855e27` did not provide a tracked lock that prevented this drift.
+
+The candidate lock was therefore applied byte-for-byte to the fixed-main
+worktree. Both benches were rebuilt with `cargo --locked`:
+
+- common `Cargo.lock` SHA-256:
+  `09d8dd85de17dbb27425e5c4866ecf0963fe8d1b3c6b517b4bace12c44741cd6`;
+- locked fixed-main binary SHA-256:
+  `c8f3cd59bab3b29185ed4bdbc4ed57a22d0741144e717fb8b7eaeea7aff68636`;
+- locked candidate binary SHA-256:
+  `bf559cefce3694046d59bf5ad35de842b925dd99050fb102c05628e2c668d920`.
+
+The locked case-interleaved rerun is preserved under
+[`focused-locked-main-candidate`](./artifacts/2026-07-20-phase-1-cpu-provider-seams/focused-locked-main-candidate/).
+The classifier output was:
+
+| Case | Pair 1 | Pair 2 | Pair 3 | Class |
+|---|---:|---:|---:|---|
+| control_lazy_neg_1 | -2.36..+1.96 (-0.24) | -3.00..+1.20 (-0.92) | +0.13..+4.18 (+2.16) | PASS |
+| lazy_add_64 | +0.31..+4.59 (+2.50) | -0.68..+3.93 (+1.67) | +0.42..+5.28 (+2.68) | INCONCLUSIVE |
+| lazy_dot_2 | -4.83..-0.99 (-2.92) | -3.23..+1.04 (-1.22) | -3.97..+0.24 (-1.92) | PASS |
+| lazy_reduce_8 | -1.03..+3.95 (+1.30) | -3.00..+1.79 (-0.58) | -4.58..+0.28 (-2.11) | PASS |
+| lazy_slice_64 | -2.77..-0.37 (-1.59) | +4.97..+7.62 (+6.29) | -8.53..-5.49 (-7.02) | INCONCLUSIVE |
+| materialized_neg_8 | +3.24..+7.73 (+5.44) | -0.30..+4.09 (+1.93) | +1.05..+5.34 (+3.22) | INCONCLUSIVE |
+
+Summary: `3 PASS / 0 FAIL / 3 INCONCLUSIVE`; campaign=`INCONCLUSIVE`.
+Thus the initial `FAIL` is not evidence for a provider-dispatch code regression:
+it is confounded by unlocked dependency resolution and full-suite time drift,
+and it does not reproduce after controlling both. The locked result still does
+not satisfy the phase exit because three cases remain inconclusive.
+
+### Amended formal campaign
+
+Before the final 28-case rerun, the protocol was amended in the Phase 1 design:
+
+- byte-identical lock input, `--locked` builds, and lock/binary SHA recording;
+- case-local `A/B`, `B/A`, `A/B` execution and immediate per-pair raw copying;
+- each target pair bracketed by candidate/candidate `lazy neg_f64/1` runs;
+- an A/A interval wholly outside `-5%..+5%` invalidates the enclosed pair;
+- invalid attempts contribute no estimates and are retried unchanged.
+
+Classification is performed only by
+[`scripts/classify_criterion_noninferiority.py`](../../scripts/classify_criterion_noninferiority.py).
+Its boundary tests fix `PASS` to all three upper endpoints at most +5%, `FAIL`
+to at least two lower endpoints strictly above +5%, and every other result to
+`INCONCLUSIVE`.
