@@ -391,6 +391,7 @@ pub(crate) fn default_placement() -> Placement {
     Placement {
         memory_kind: MemoryKind::UnpinnedHost,
         device: None,
+        cpu_affinity: None,
     }
 }
 

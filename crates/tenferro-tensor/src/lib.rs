@@ -79,11 +79,11 @@ pub use config::{
 pub use error::{BoxError, Error, Result};
 pub use types::{
     col_major_strides, AllocationDomainId, AllocationId, BackendBuffer, Buffer, BufferHandle,
-    DType, DeviceId, DeviceKind, DynRank, GpuBackendKind, HostAccessError, HostReadGuard,
-    HostWriteGuard, MemoryKind, Placement, Rank, SharedTensorAllocationDomain, StridedSliceSpec,
-    Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank,
-    TensorRead, TensorScalar, TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor,
-    TypedTensorView, TypedTensorViewMut, TypedTensorViewMutPair, TypedTensorWrite,
+    CpuDomainId, DType, DeviceId, DeviceKind, DynRank, GpuBackendKind, HostAccessError,
+    HostReadGuard, HostWriteGuard, MemoryKind, Placement, Rank, SharedTensorAllocationDomain,
+    StridedSliceSpec, Tensor, TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView,
+    TensorRank, TensorRead, TensorScalar, TensorValue, TensorView, TensorViewMut, TensorWrite,
+    TypedTensor, TypedTensorView, TypedTensorViewMut, TypedTensorViewMutPair, TypedTensorWrite,
 };
 
 pub(crate) fn core_dtype(dtype: DType) -> tenferro_tensor_core::DType {

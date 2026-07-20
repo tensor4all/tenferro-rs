@@ -139,6 +139,7 @@ impl FakeDomain {
             Placement {
                 memory_kind,
                 device: None,
+                cpu_affinity: None,
             },
         )
         .unwrap()

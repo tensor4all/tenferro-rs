@@ -422,6 +422,7 @@ pub(crate) fn typed_from_cubecl<T: Send + Sync + 'static>(
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
+            cpu_affinity: None,
         },
     )
 }

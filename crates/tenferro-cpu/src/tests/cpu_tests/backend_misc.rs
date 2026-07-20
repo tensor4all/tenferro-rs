@@ -8,6 +8,7 @@ fn opaque_backend_placement() -> Placement {
     Placement {
         memory_kind: MemoryKind::Device,
         device: None,
+        cpu_affinity: None,
     }
 }
 
@@ -748,6 +749,7 @@ fn cpu_structural_read_direct_helpers_preserve_view_placement() {
     input.set_placement(tenferro_tensor::Placement {
         memory_kind: tenferro_tensor::MemoryKind::PinnedHost,
         device: None,
+        cpu_affinity: None,
     });
 
     let transpose = crate::structural::transpose_read_with_pool(
@@ -1127,6 +1129,7 @@ fn cpu_view_materialization_preserves_static_rank_and_placement() {
     placed.set_placement(tenferro_tensor::Placement {
         memory_kind: tenferro_tensor::MemoryKind::PinnedHost,
         device: None,
+        cpu_affinity: None,
     });
     let placed = crate::structural::typed_materialize_view_with_pool(
         &mut buffers,
@@ -1154,6 +1157,7 @@ fn cpu_view_materialization_rejects_backend_buffer_with_caller_operation_name() 
                 kind: tenferro_tensor::DeviceKind::Gpu(tenferro_tensor::GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
+            cpu_affinity: None,
         },
     )
     .unwrap();

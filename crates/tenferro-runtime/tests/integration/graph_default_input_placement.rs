@@ -193,6 +193,7 @@ fn backend_resident_scalar_default_input_is_not_reuploaded() {
             Placement {
                 memory_kind: MemoryKind::Other("test-backend".to_string()),
                 device: None,
+                cpu_affinity: None,
             },
         )
         .unwrap(),
