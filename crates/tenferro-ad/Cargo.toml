@@ -61,6 +61,10 @@ criterion.workspace = true
 name = "eager_ad_transform_cache"
 harness = false
 
+[[bench]]
+name = "eager_dispatch_baseline"
+harness = false
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
