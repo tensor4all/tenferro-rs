@@ -47,8 +47,8 @@ explicit operation-family and provider traits, and explicit runtime resources.
 
 ## Goals
 
-1. Let CPU eager, CUDA/WebGPU eager, and XLA lowering consume the same semantic
-   operation contract.
+1. Let CPU eager, CUDA/WebGPU eager, tenferro's native graph execution, XLA,
+   and third-party runtimes consume the same semantic operation contract.
 2. Allow runtime replacement of CPU and GPU implementation providers without a
    process-global registry.
 3. Keep operation-family crates such as linalg independent of an upstream
@@ -107,9 +107,10 @@ runtime-owned GraphExecutor
 ```
 
 Eager execution does not run a whole graph compiler for each operation. It
-constructs the same semantic descriptors, uses the same validation contracts,
-and enters the same runtime capability, provider, resource, and prepared-plan
-path through a single-operation fast path.
+constructs the same borrowed semantic request and uses the same validation,
+capability, provider, placement, and resource contracts through a
+single-operation fast path. Sharing contracts does not require eager execution
+to construct graph-only artifacts or pay graph-level orchestration costs.
 
 The current `GraphProgram`, `ExecProgram`, `GraphExecutor<B>`, and
 `GraphProgramLoweringView` are migration inputs, not the final abstraction
@@ -244,6 +245,11 @@ rules are installed explicitly in an `AdContext`; there is no global rule
 inventory. AD tries the extension rule before runtime lowering. Differentiating
 through a lowering is an explicit fallback policy, effectful operations require
 a rule, and in-place semantics require functionalization.
+
+The current recorded eager VJP maps to this pipeline as
+`record -> TracedGraph -> SemanticProgram -> AD transform -> Runtime::prepare_for`.
+The eager recorder remains a frontend; derivative execution does not preserve
+a separate legacy graph-runtime path.
 
 ### Runtime plan compilation
 
@@ -398,13 +404,23 @@ family exists.
 
 ### CPU contraction and linalg composition
 
-`CpuGemmProvider` implements GEMM, strided-batched GEMM, and grouped GEMM; it
-does not implement semantic `dot_general`. `DotGeneralRuntime` is a composite
-that may use a `CpuGeneralContractionProvider` such as TBLIS for a direct
-binary contraction, or a `CpuLayoutTransformProvider` plus `CpuGemmProvider`
-for decomposition. N-ary einsum first resolves a contraction path into binary
-`dot_general` operations. A user may replace the complete composite, the
+`CpuGemmProvider` exposes GEMM, strided-batched GEMM, and grouped GEMM
+primitives; it does not implement semantic `dot_general` or own batch
+scheduling. `DotGeneralRuntime` is an engine-owned composite that may use a
+`CpuGeneralContractionProvider` such as TBLIS for a direct binary contraction,
+or a `CpuLayoutTransformProvider` plus `CpuGemmProvider` for decomposition.
+N-ary einsum first resolves a contraction path into binary `dot_general`
+operations. A user may replace the complete composite, the
 general-contraction provider, or only GEMM/layout providers.
+
+The composite chooses the batch parallelization level before invoking the
+provider. Under `ParallelMode::Outer`, it splits a grouped request into jobs,
+fans them out through the domain executor, and calls the provider with a
+sequential single-job request. Under `ParallelMode::Inner`, the outer loop is
+sequential and each provider call may use `CpuDomainExecutor::install` for
+inner kernel parallelism. A grouped provider entry point is therefore a
+provider-native grouped primitive, not permission to create its own outer task
+fan-out. Replacing the provider cannot change the selected parallel level.
 
 Linalg remains extension-owned and uses a family-level capability bundle with
 optional SVD, QR, eigen, Cholesky, LU, and solve slots. This avoids both one
@@ -592,6 +608,76 @@ per-call `SmallVec` request was worse. These results are evidence for direct
 trait-object fields and resolved slots, not a permanent performance guarantee.
 Future implementation must benchmark representative ranks and request shapes,
 including `Vec` versus `SmallVec`, validation cost, and cache-key hashing.
+
+### Eager single-operation cost contract
+
+An eager operation shares semantic validation and resolved provider behavior
+with graph execution, but it must not pay graph orchestration costs merely to
+execute one already-resident operation. The direct fast path applies when:
+
+- there is exactly one semantic operation;
+- all inputs belong to the same runtime and compatible storage domain;
+- placement resolves to one CPU domain or one GPU device;
+- no transfer, collective, cross-domain barrier, or multi-operation core
+  lowering is required;
+- effects and output storage can be represented by the operation-local
+  contract; and
+- the selected provider can prepare or execute without global liveness
+  analysis.
+
+Under those conditions the path uses a validated borrowed request and a
+pre-resolved typed capability slot. It does not construct or freeze a
+`SemanticProgram`, derive a program fingerprint, consult the graph
+specialization cache, build a `ScheduledGraph`, integrate a global
+`BufferPlan`, allocate a run event-slot table, or issue a
+`RunAdmissionRequest`. Output and scratch allocation use the provider's local
+`BufferContract`. A provider-specific bounded plan cache remains allowed when
+the algorithm genuinely requires shape-dependent preparation. An
+operation-local composite such as layout-plus-GEMM may remain on the fast path
+when its temporary storage, dependencies, and effects are fully described by
+that one operation contract; it need not be expanded into a general schedule.
+
+A standalone eager call acquires at most one node-level resource lease. An
+active explicit execution scope may reuse its existing compatible lease; lease
+reuse is carried by an `EagerExecutionContext`, not ambient thread-local state.
+If any fast-path condition fails, execution promotes explicitly to the normal
+one-node prepared-graph path without changing semantics or hiding a transfer.
+
+Before a child implementation changes eager dispatch, it records release-mode
+baselines for representative no-op or metadata-light operations and small
+elementwise, reduction, and contraction calls on current `main`. The child
+issue fixes a non-inferiority threshold before implementation results are
+known. Acceptance requires no new steady-state allocation or string lookup, no
+new microsecond-scale orchestration step, and no statistically significant
+regression beyond that predeclared threshold.
+
+### Placement-bound eager API
+
+The explicit low-level API remains `Runtime::submit(ExecutionRequest)`, while
+ordinary eager calls use a lightweight placement-bound context:
+
+```rust
+let cpu0 = runtime.on(CpuPlacement::Domain(socket0));
+let cpu1 = runtime.on(CpuPlacement::Domain(socket1));
+
+let y0 = cpu0.matmul(&a0, &b0)?;
+let y1 = cpu1.matmul(&a1, &b1)?;
+```
+
+The same surface binds `GpuPlacement::Device(gpu_id)`. Without an explicit
+context, an eager operation inherits the unique placement shared by its input
+tensors. Conflicting input placements are an error, and input-free allocation
+uses an explicit context or runtime default. CPU-domain, GPU-device, and
+CPU/GPU movement remains an explicit `transfer`; eager dispatch never inserts
+one implicitly.
+
+`runtime.on(...)` binds a runtime and placement and may cache the current
+configuration epoch and resolved capability slots. Each eager call performs a
+cheap epoch check and refreshes those slots after reconfiguration; a long-lived
+context does not silently pin obsolete policy. It also does not hold scarce CPU
+threads or a stream indefinitely. Lease reuse occurs only inside an explicit
+resource scope or already admitted executor job, preventing a long-lived eager
+context from starving other work.
 
 ## Extensions
 
@@ -914,9 +1000,56 @@ or provider-specific thread count, not a per-call executor. Such a provider
 receives the execution thread budget and provider exclusivity policy, but it
 does not receive a Rayon pool as if BLAS could execute on that pool.
 
-If a BLAS library cannot provide the requested isolation, the engine returns a
-typed unsupported or configuration error for explicit placement modes. It does
-not claim NUMA placement that it cannot enforce.
+A thread budget is an upper bound, not an exact-width requirement. A provider
+may use fewer threads, and a sequential provider satisfies every positive
+budget. A violation occurs only when a provider may exceed the cap and has no
+mechanism to prevent it.
+
+Thread-control capability is resolved when constructing the provider or during
+preparation, never by probing on every call. A system OpenBLAS provider may use
+`dlsym` to detect `openblas_set_num_threads_local` and
+`openblas_get_parallel()`. It claims exact thread-local control only when the
+local setter exists and `openblas_get_parallel()` reports the pthread variant;
+an OpenMP build does not receive that claim because local isolation is not
+reliable. Strict enforcement without the required capability returns a typed
+configuration or prepare error and never degrades to a global setter.
+
+Known control granularity is:
+
+| Provider | Mechanism | Granularity |
+| --- | --- | --- |
+| faer / native kernels | per-call executor or parallelism argument | any `N` |
+| MKL | `mkl_set_num_threads_local` | any `N`, thread-local |
+| OpenBLAS, recent pthread build | `openblas_set_num_threads_local` | any `N`, thread-local |
+| Accelerate, macOS 15+ | `BLASSetThreading` | binary single/auto, thread-local |
+| Accelerate, macOS 14 and older | `VECLIB_MAXIMUM_THREADS` | global, effectively startup-fixed |
+
+For binary control, a budget of one selects single-threaded mode. An
+intermediate budget such as eight is an explicit runtime policy choice between
+clamping to one, which respects the upper bound, and returning unsupported.
+Auto mode is invalid if it may exceed the cap. If a BLAS library cannot provide
+the requested isolation, the engine does not claim NUMA placement that it
+cannot enforce.
+
+### Normative faer batched-GEMM policy
+
+Extracting the GEMM provider must preserve current `main` behavior:
+
+- for grouped or batched jobs with more than one job and a context with more
+  than one thread, the engine composite uses outer `jobs().par_iter()` on the
+  selected domain executor and forces every per-job faer kernel to
+  `faer_seq()`;
+- with one job or a single-threaded context, the job loop is sequential and
+  the faer kernel may use inner parallelism through `faer_par()`;
+- for strided-batched `dot_general`, the outer batch loop remains sequential
+  and the inner faer kernel parallelizes.
+
+The invariant is one Rayon fan-out level: either jobs parallelize and kernels
+are sequential, or the loop is sequential and kernels parallelize. All work
+stays under one outer lease and its upper-bound thread budget. The
+engine-owned composite, not `CpuGemmProvider`, owns this choice. Changing it
+requires benchmark evidence and a normative specification update rather than
+occurring as a side effect of provider replacement.
 
 ### Memory locality
 
@@ -944,11 +1077,13 @@ access, and dependency events. It does not create or globally select a stream.
 
 ## Asynchronous Execution and Events
 
-The runtime preplans event slots identified by `EventDomainId`, `EventSlotId`,
-and generation. An engine-owned event domain stores the actual CUDA, WebGPU,
-PJRT, or CPU completion token in per-run workspace. Nodes do not allocate an
-`Arc<dyn CompletionEvent>` for every launch, and the core runtime does not use
-a closed backend-event enum.
+The runtime owns event storage rather than allocating an
+`Arc<dyn CompletionEvent>` for every node or defining a closed backend-event
+enum. One illustrative implementation preplans slots identified by
+`EventDomainId`, `EventSlotId`, and a generation, with the actual CUDA, WebGPU,
+PJRT, or CPU completion token stored in engine-owned per-run workspace. Exact
+slot identity, recycling, and generation management are reserved for the event
+child design.
 
 The engine attaches dependencies to subsequent work and providers never call a
 global synchronize after each operation. Cross-event-domain dependencies
@@ -974,21 +1109,24 @@ not imply cancellation.
 
 ## Admission Control and Resource Leases
 
-`ResourceArbiter` has two levels. A `RunAdmissionRequest` reserves persistent,
-maximum-live, and provider-bound memory derived from `BufferPlan`. Once
-admitted, each ready node submits one atomic `NodeLeaseRequest` containing all
-required CPU domains or thread budgets, device streams, scratch memory, and
-exclusivity constraints. The arbiter either grants the complete set or queues
-the request while it holds nothing; it acquires resources internally in a
-canonical order.
+The illustrative arbiter design has two levels. A `RunAdmissionRequest`
+reserves persistent, maximum-live, and provider-bound memory derived from
+`BufferPlan`. Once admitted, each ready node submits one atomic
+`NodeLeaseRequest` containing all required CPU domains or thread budgets,
+device streams, scratch memory, and exclusivity constraints. The selected
+invariant is that the arbiter grants a node's complete resource set or queues
+it while it holds nothing, acquiring multi-domain resources in a deadlock-free
+order. A child design may combine or split the two admission levels if it
+preserves this invariant and enforces the prepared memory feasibility bound.
 
 Leases live through asynchronous completion and, for buffers, through their
 planned last use. An `AnyCompatible` resource may be selected when granting the
 lease, but it may vary only within the compatibility class accepted during
-preparation; the provider and algorithm do not change. The default queue is
-FIFO with aging, with optional priority or deadline hints but no real-time
-guarantee. Nested provider operations reuse the current lease. Recursively
-calling `Runtime::run` from a provider is prohibited.
+preparation; the provider and algorithm do not change. The umbrella contract
+requires starvation avoidance but does not select FIFO, aging, priorities, or
+deadline semantics; queue policy belongs to the resource-arbiter child design.
+Nested provider operations reuse the current lease. Recursively calling
+`Runtime::run` from a provider is prohibited.
 
 The executor uses run-level fail-fast semantics. The first failure becomes the
 primary error, no new node is enqueued, waiting and unsubmitted nodes are
@@ -1170,6 +1308,15 @@ Required focused tests include:
 - no `PreparedGraph` contains an unresolved operation;
 - provider replacement preserves semantic results;
 - request construction and resolved dispatch allocate nothing in steady state;
+- eligible eager single-operation calls avoid graph artifacts, global buffer
+  planning, run admission, and schedule construction;
+- eager fast-path latency satisfies the predeclared non-inferiority threshold
+  against the current implementation;
+- placement-bound eager contexts and input-placement inference behave
+  identically on CPU domains and GPU devices without implicit transfer;
+- BLAS capability probing rejects strict budgets that cannot be enforced;
+- extracting or replacing `CpuGemmProvider` preserves the normative grouped
+  and strided-batched faer parallelization policy;
 - extension execution performs no string lookup after prepare;
 - extension native execution, core lowering, and explicit fallback obey the
   documented priority;
@@ -1189,7 +1336,7 @@ Required focused tests include:
 - GPU dependency tracking avoids unnecessary global synchronization;
 - independent multi-GPU work can enqueue concurrently;
 - foreign runtime tensors do not transfer implicitly;
-- unsupported provider paths return explicit errors rather than fallback.
+- unsupported provider paths return explicit errors rather than fallback;
 - same-key preparation is single-flight while different keys make progress;
 - non-monotonic specialization requests fail as provider contract violations;
 - atomic node lease requests never hold a partial resource set while queued;
@@ -1208,20 +1355,22 @@ This is an umbrella architecture. Migration is incremental, keeps the current
 backend path working behind adapters, and is decomposed into independently
 accepted child issues:
 
-1. Introduce `tenferro-program`, private immutable `SemanticProgram`, builders,
-   fingerprints, effects, aliases, and compatibility adapters from the current
-   graph artifacts. Split mutable `TraceContext` from pure `GraphCompiler`.
-2. Introduce immutable runtime snapshots, typed core capabilities, explicit
-   extension modules, `PreparedOperation`, finite specialization requirements,
-   and single-flight bounded plan caches.
-3. Introduce common `ScheduledGraph`, event domains, buffer planning, and the
-   runtime-owned `GraphExecutor`. Port CPU execution first while retaining a
-   compatibility adapter for `GraphExecutor<B>`.
-4. Lift NUMA topology, `CpuDomainExecutor`, two-level resource admission,
-   buffers, and caches into CPU resource domains. Add `Managed` and
-   `ExternalManaged` validation plus explicit parallel modes.
-5. Introduce the core provider composites for layout, GEMM, TBLIS-style general
-   contraction, reduction, indexing, and optional subgraph compilation.
+1. Extract validated borrowed requests, typed CPU capability slots, and the
+   layout/GEMM/general-contraction provider composites behind adapters on the
+   current eager and backend path. Preserve current performance and faer batch
+   policy while delivering provider replacement early.
+2. Introduce placement-bound eager contexts, `CpuDomainExecutor`, explicit
+   parallel modes, and managed/external NUMA resource domains behind the same
+   compatibility layer. Establish the eager fast-path benchmark gate.
+3. Introduce `tenferro-program`, private immutable `SemanticProgram`, builders,
+   fingerprints, effects, aliases, and adapters from current graph artifacts.
+   Split mutable `TraceContext` from pure `GraphCompiler`.
+4. Introduce immutable runtime snapshots, the remaining typed core
+   capabilities, explicit extension modules, `PreparedOperation`, finite
+   specialization requirements, and single-flight bounded plan caches.
+5. Introduce common `ScheduledGraph`, runtime-owned event domains, buffer
+   planning, resource admission, and `GraphExecutor`. Port CPU graph execution
+   while retaining a compatibility adapter for `GraphExecutor<B>`.
 6. Migrate extension capability resolution and pure core lowering. Use N-ary
    einsum to validate shape specialization, planning policy, resolved slots,
    AD registration, and host-reference fallback; then migrate FFT, linalg,
@@ -1315,19 +1464,31 @@ tensors; future logical sharding is designed separately.
 - [JAX explicit sharding](https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html)
 - [PyTorch `DTensor`](https://docs.pytorch.org/docs/stable/distributed.tensor.html)
 - [PyTorch tensor parallel APIs](https://docs.pytorch.org/docs/stable/distributed.tensor.parallel.html)
+- [StableHLO specification](https://openxla.org/stablehlo/spec)
+- [PJRT uniform device API](https://openxla.org/xla/pjrt)
 
 ## Child Design and Implementation Boundary
 
-The architectural boundaries needed for child decomposition are now selected:
-crate ownership, process-local portability, immutable public program access,
-typed core capabilities, pure extensions, runtime identity and epochs, safe
-prepared-operation dispatch, external CPU executors, runtime-owned event slots,
-finite specialization projections, structural collision checks, buffer plans,
-resource admission, fail-fast behavior, and determinism policy.
+The umbrella design selects the architectural invariants needed for child
+decomposition: crate ownership, process-local portability, immutable public
+program access, typed core capabilities, pure extensions, runtime identity and
+epochs, safe prepared-operation dispatch, external CPU executors,
+runtime-owned events, explicit buffer contracts, all-or-none multi-resource
+acquisition, finite specialization projections, structural collision checks,
+no rollback of effects, draining of submitted work, and the determinism policy.
+
+Mechanism details are reserved for workload-informed child designs. These
+include event-slot identifier and generation representation, slot recycling,
+buffer-donation heuristics, exact dynamic-buffer reservation, the precise
+two-level admission accounting algorithm, queue ordering or priority policy,
+and the public cancellation state machine. Child designs must preserve the
+selected invariants but may replace the illustrative representations used in
+this document.
 
 This is still an umbrella design rather than authorization for one monolithic
 implementation PR. Each numbered migration phase must become a reviewable
 child issue with exact public signatures, compatibility impact, benchmarks,
-and acceptance tests. Later work may refine names without changing the
-ownership and behavior selected here. Implementation planning starts only
+and acceptance tests. Later work may refine names and reserved mechanisms
+without changing the selected ownership and behavioral invariants.
+Implementation planning starts only
 after maintainers review this written WIP design.
