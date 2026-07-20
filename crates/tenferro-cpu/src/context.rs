@@ -1,12 +1,18 @@
 use std::env;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use rayon::prelude::*;
 use thiserror::Error as ThisError;
 
 use crate::affinity::{CpuAffinityError, SystemThreadAffinity, ThreadAffinity};
 use crate::arbiter::{
     register_worker_execution_scope, with_execution_owner, worker_execution_scope_matches,
     ExecutionScopeState, ResourceOwner,
+};
+use crate::domain_executor::{
+    CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, ScopedCpuJob, ScopedCpuJobs,
 };
 use crate::{CpuId, CpuSet, Error, ErrorKind, Result, ValidationKind};
 
@@ -402,6 +408,53 @@ impl CpuContext {
     #[doc(hidden)]
     pub fn faer_seq(&self) -> faer::Par {
         faer::Par::Seq
+    }
+}
+
+impl CpuDomainExecutor for CpuContext {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        // INVARIANT: every CpuContext constructor rejects zero workers, and
+        // `num_threads` is private so it cannot be invalidated after creation.
+        let worker_count = match NonZeroUsize::new(self.num_threads) {
+            Some(worker_count) => worker_count,
+            None => unreachable!("CpuContext must contain at least one worker"),
+        };
+        CpuDomainExecutorCapabilities {
+            worker_count,
+            outer_parallelism: self.num_threads > 1,
+            inner_parallelism: if self.pool.is_some() {
+                CpuInnerParallelism::Rayon
+            } else {
+                CpuInnerParallelism::None
+            },
+            // This permits internal entry through the same executor. Public
+            // CpuBackend re-entry remains guarded by BACKEND_REENTRY_PANIC.
+            reentrancy: CpuExecutorReentrancy::SameExecutor,
+            affinity: if self.pinned_cpus.is_some() {
+                CpuExecutorAffinity::TenferroPinnedVerified
+            } else {
+                CpuExecutorAffinity::None
+            },
+            shutdown: CpuExecutorShutdown::TenferroOwned,
+        }
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> std::result::Result<(), CpuDomainExecutorError> {
+        if self.pool.is_none() {
+            return (0..jobs.len()).try_for_each(|index| jobs.run(index));
+        }
+        self.install_if_needed(|| {
+            (0..jobs.len())
+                .into_par_iter()
+                .try_for_each(|index| jobs.run(index))
+        })
+    }
+
+    fn install(
+        &self,
+        job: &mut dyn ScopedCpuJob,
+    ) -> std::result::Result<(), CpuDomainExecutorError> {
+        self.install_if_needed(|| job.run())
     }
 }
 
