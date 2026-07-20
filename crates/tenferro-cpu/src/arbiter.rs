@@ -66,6 +66,15 @@ pub(crate) fn register_worker_execution_scope(scope: Arc<ExecutionScopeState>) {
     });
 }
 
+pub(crate) fn worker_execution_scope_matches(scope: &Arc<ExecutionScopeState>) -> bool {
+    WORKER_EXECUTION_SCOPE.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, scope))
+    })
+}
+
 #[cfg(test)]
 pub(crate) fn worker_execution_scope_registered() -> bool {
     WORKER_EXECUTION_SCOPE.with(|scope| scope.borrow().is_some())

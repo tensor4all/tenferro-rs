@@ -428,18 +428,8 @@ impl SessionCachedDot for CpuExecSession<'_> {
         config: &GroupedGemmConfig<'_>,
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        if self.kind == CpuBackendKind::Blas
-            && self.ctx.num_threads() > 1
-            && config.jobs().len() > 1
-        {
-            self.ctx.install(|| {
-                self.providers
-                    .execute_grouped_gemm(self.ctx, lhs, rhs, config, out)
-            })
-        } else {
-            self.providers
-                .execute_grouped_gemm(self.ctx, lhs, rhs, config, out)
-        }
+        self.providers
+            .execute_grouped_gemm(self.ctx, lhs, rhs, config, out)
     }
 }
 

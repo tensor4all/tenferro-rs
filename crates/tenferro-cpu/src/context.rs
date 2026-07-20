@@ -5,7 +5,8 @@ use thiserror::Error as ThisError;
 
 use crate::affinity::{CpuAffinityError, SystemThreadAffinity, ThreadAffinity};
 use crate::arbiter::{
-    register_worker_execution_scope, with_execution_owner, ExecutionScopeState, ResourceOwner,
+    register_worker_execution_scope, with_execution_owner, worker_execution_scope_matches,
+    ExecutionScopeState, ResourceOwner,
 };
 use crate::{CpuId, CpuSet, Error, ErrorKind, Result, ValidationKind};
 
@@ -355,6 +356,19 @@ impl CpuContext {
             Some(pool) => pool.install(op),
             None => op(),
         }
+    }
+
+    pub(crate) fn install_if_needed<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
+        if self.pool.is_some() && worker_execution_scope_matches(&self.execution_scope) {
+            op()
+        } else {
+            self.install(op)
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn owns_current_worker_for_test(&self) -> bool {
+        worker_execution_scope_matches(&self.execution_scope)
     }
 
     pub(crate) fn install_with_execution_owner<R: Send>(

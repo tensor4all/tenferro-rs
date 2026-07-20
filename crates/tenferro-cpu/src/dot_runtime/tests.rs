@@ -8,7 +8,7 @@ use crate::provider::{
     CpuKernelParallelism, CpuLayoutTransformProvider, CpuLayoutTransformRequest,
     CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported, StridedLayoutTransformProvider,
 };
-use crate::CpuContext;
+use crate::{CpuBackendKind, CpuContext};
 use std::sync::{Arc, Mutex};
 use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 use tenferro_tensor::{
@@ -204,6 +204,8 @@ struct GemmSpy {
     strided_calls: Arc<Mutex<usize>>,
     grouped_calls: Arc<Mutex<usize>>,
     parallelism: Arc<Mutex<Vec<CpuKernelParallelism>>>,
+    grouped_job_counts: Arc<Mutex<Vec<usize>>>,
+    in_selected_pool: Arc<Mutex<Vec<bool>>>,
 }
 
 impl GemmSpy {
@@ -214,6 +216,8 @@ impl GemmSpy {
             strided_calls: Arc::new(Mutex::new(0)),
             grouped_calls: Arc::new(Mutex::new(0)),
             parallelism: Arc::new(Mutex::new(Vec::new())),
+            grouped_job_counts: Arc::new(Mutex::new(Vec::new())),
+            in_selected_pool: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -248,13 +252,21 @@ impl CpuGemmProvider for GemmSpy {
     fn grouped_gemm(
         &self,
         context: &CpuProviderContext<'_>,
-        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+        request: CpuGroupedGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         *self.grouped_calls.lock().unwrap() += 1;
         self.parallelism
             .lock()
             .unwrap()
             .push(context.kernel_parallelism());
+        self.grouped_job_counts
+            .lock()
+            .unwrap()
+            .push(request.jobs().len());
+        self.in_selected_pool
+            .lock()
+            .unwrap()
+            .push(context.cpu_context().owns_current_worker_for_test());
         Ok(self.outcome)
     }
 }
@@ -290,6 +302,7 @@ fn route_bundle(
 ) -> CpuProviderBundle {
     let builder = CpuProviderBundle::custom_builder()
         .gemm_provider(gemm)
+        .engine_outer_grouped_gemm()
         .layout_transform_provider(Arc::new(StridedLayoutTransformProvider));
     match general {
         Some((provider, true)) => builder.require_general_contraction_provider(provider),
@@ -492,7 +505,7 @@ fn route_strided_batch_allows_inner_parallelism() {
 }
 
 #[test]
-fn route_grouped_multiple_jobs_forces_sequential_provider_kernels() {
+fn route_engine_outer_grouped_runs_single_jobs_sequentially_in_selected_pool() {
     let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
     let bundle = route_bundle(gemm.clone(), None);
     let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
@@ -515,6 +528,7 @@ fn route_grouped_multiple_jobs_forces_sequential_provider_kernels() {
         )
         .unwrap();
     assert_eq!(*gemm.grouped_calls.lock().unwrap(), 2);
+    assert_eq!(gemm.grouped_job_counts.lock().unwrap().as_slice(), &[1, 1]);
     assert_eq!(
         gemm.parallelism.lock().unwrap().as_slice(),
         &[
@@ -522,4 +536,46 @@ fn route_grouped_multiple_jobs_forces_sequential_provider_kernels() {
             CpuKernelParallelism::Sequential,
         ]
     );
+    assert!(gemm
+        .in_selected_pool
+        .lock()
+        .unwrap()
+        .iter()
+        .all(|inside| *inside));
+}
+
+#[test]
+fn route_provider_owned_grouped_delegates_whole_group_with_inner_parallelism() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = CpuProviderBundle::builder(CpuBackendKind::Blas)
+        .gemm_provider(gemm.clone())
+        .build()
+        .unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
+        GroupedGemmJob::new(1, 1, 1, 1, 1, 1),
+    ];
+    bundle
+        .execute_grouped_gemm(
+            &CpuContext::with_threads(2).unwrap(),
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &GroupedGemmConfig::new(
+                &jobs,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            ),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 1);
+    assert_eq!(gemm.grouped_job_counts.lock().unwrap().as_slice(), &[2]);
+    assert_eq!(
+        gemm.parallelism.lock().unwrap().as_slice(),
+        &[CpuKernelParallelism::Inner]
+    );
+    assert_eq!(gemm.in_selected_pool.lock().unwrap().as_slice(), &[false]);
 }

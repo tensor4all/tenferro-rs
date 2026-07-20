@@ -45,6 +45,20 @@ pub(crate) struct DotGeneralRuntime {
     pub(crate) gemm: Arc<dyn CpuGemmProvider>,
     pub(crate) layout: Arc<dyn CpuLayoutTransformProvider>,
     pub(crate) general_policy: GeneralContractionPolicy,
+    grouped_scheduling: GroupedGemmScheduling,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GroupedGemmScheduling {
+    ProviderOwned,
+    EngineOuter,
+}
+
+fn standard_grouped_scheduling(kind: CpuBackendKind) -> GroupedGemmScheduling {
+    match kind {
+        CpuBackendKind::Faer => GroupedGemmScheduling::EngineOuter,
+        CpuBackendKind::Blas => GroupedGemmScheduling::ProviderOwned,
+    }
 }
 
 #[derive(Debug)]
@@ -80,6 +94,7 @@ impl CpuProviderBundle {
                     gemm: builtin_gemm_provider(kind),
                     layout: builtin_layout_provider(),
                     general_policy: GeneralContractionPolicy::Preferred,
+                    grouped_scheduling: standard_grouped_scheduling(kind),
                 },
             }),
         }
@@ -92,6 +107,7 @@ impl CpuProviderBundle {
             layout: Some(builtin_layout_provider()),
             general: None,
             general_policy: GeneralContractionPolicy::Preferred,
+            grouped_scheduling: standard_grouped_scheduling(kind),
         }
     }
 
@@ -102,6 +118,7 @@ impl CpuProviderBundle {
             layout: None,
             general: None,
             general_policy: GeneralContractionPolicy::Preferred,
+            grouped_scheduling: GroupedGemmScheduling::ProviderOwned,
         }
     }
 
@@ -309,8 +326,11 @@ impl DotGeneralRuntime {
             config,
             "grouped_gemm",
         )?;
-        if context.num_threads() > 1 && config.jobs().len() > 1 {
-            return match &mut output {
+        if self.grouped_scheduling == GroupedGemmScheduling::EngineOuter
+            && context.num_threads() > 1
+            && config.jobs().len() > 1
+        {
+            return context.install_if_needed(|| match &mut output {
                 TensorWrite::Tensor(Tensor::F32(output)) => execute_grouped_outer_typed(
                     self.gemm.as_ref(),
                     context,
@@ -407,7 +427,7 @@ impl DotGeneralRuntime {
                     "grouped-GEMM",
                     CpuProviderUnsupported::DType(output.dtype()),
                 )),
-            };
+            });
         }
         let kernel_parallelism = CpuKernelParallelism::Inner;
         let provider_context = CpuProviderContext::new(context, kernel_parallelism);
@@ -660,12 +680,25 @@ pub struct CpuProviderBundleBuilder {
     layout: Option<Arc<dyn CpuLayoutTransformProvider>>,
     general: Option<Arc<dyn CpuGeneralContractionProvider>>,
     general_policy: GeneralContractionPolicy,
+    grouped_scheduling: GroupedGemmScheduling,
 }
 
 impl CpuProviderBundleBuilder {
     /// Replace the GEMM-family provider slot.
     pub fn gemm_provider(mut self, provider: Arc<dyn CpuGemmProvider>) -> Self {
         self.gemm = Some(provider);
+        self.grouped_scheduling = GroupedGemmScheduling::ProviderOwned;
+        self
+    }
+
+    /// Permit the engine to fan out grouped GEMM into concurrent single-job calls.
+    ///
+    /// The installed GEMM provider must be safe for concurrent calls and must
+    /// honor [`CpuKernelParallelism::Sequential`] without creating inner
+    /// workers. Custom providers remain provider-owned unless this capability
+    /// is selected explicitly.
+    pub fn engine_outer_grouped_gemm(mut self) -> Self {
+        self.grouped_scheduling = GroupedGemmScheduling::EngineOuter;
         self
     }
 
@@ -718,6 +751,7 @@ impl CpuProviderBundleBuilder {
                     gemm,
                     layout,
                     general_policy: self.general_policy,
+                    grouped_scheduling: self.grouped_scheduling,
                 },
             }),
         })
