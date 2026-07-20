@@ -60,6 +60,7 @@ compile_error!(
 compile_error!("provider-inject cannot be combined with explicit BLAS provider features");
 
 pub mod affinity;
+mod affinity_policy;
 mod analytic;
 mod arbiter;
 pub mod backend;
@@ -108,6 +109,10 @@ extern crate tblis_src as _;
 
 pub use affinity::{
     available_parallelism, process_cpu_affinity, process_cpu_affinity_count, CpuAffinityError,
+};
+pub use affinity_policy::{
+    resolve_cpu_affinity, resolve_cpu_affinity_with_override, CpuAffinityInput, CpuAffinityPolicy,
+    CpuAffinityResolutionError, CpuAffinitySelection, CpuAffinitySelectionReason,
 };
 pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
