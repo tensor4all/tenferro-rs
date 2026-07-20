@@ -9,13 +9,21 @@ use crate::default_placement;
 use crate::dot_runtime::CpuProviderBundleInner;
 #[cfg(feature = "cpu-blas")]
 use crate::elementwise::typed_conj_with_pool;
+#[cfg(feature = "cpu-faer")]
+use crate::provider::CpuKernelParallelism;
+#[cfg(any(feature = "cpu-blas", feature = "cpu-tblis-provider"))]
+use crate::provider::CpuOperand;
+#[cfg(feature = "cpu-tblis-provider")]
+use crate::provider::{CpuContractionAxes, CpuDotGeneralRequest};
+use crate::provider::{
+    CpuGemmRequest, CpuGroupedGemmRequest, CpuProviderContext, CpuProviderOutcome,
+    CpuProviderUnsupported,
+};
 #[cfg(any(feature = "cpu-blas", feature = "cpu-faer"))]
 use crate::structural::typed_transpose_with_pool;
 #[cfg(feature = "cpu-blas")]
 use crate::ConjElem;
 use crate::{Error, Result};
-#[cfg(feature = "cpu-faer")]
-use rayon::prelude::*;
 use tenferro_tensor::backend::GroupedGemmConfig;
 use tenferro_tensor::{
     col_major_strides, Buffer, TensorRead, TensorView, TensorViewMut, TensorWrite, TypedTensor,
@@ -1460,6 +1468,18 @@ pub(crate) fn grouped_gemm_faer_cached(
     config: &GroupedGemmConfig<'_>,
     out: &mut TensorWrite<'_>,
 ) -> crate::Result<bool> {
+    grouped_gemm_faer_with_parallelism(ctx, CpuKernelParallelism::Inner, lhs, rhs, config, out)
+}
+
+#[cfg(feature = "cpu-faer")]
+fn grouped_gemm_faer_with_parallelism(
+    ctx: &crate::CpuContext,
+    kernel_parallelism: CpuKernelParallelism,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    config: &GroupedGemmConfig<'_>,
+    out: &mut TensorWrite<'_>,
+) -> crate::Result<bool> {
     macro_rules! dispatch {
         ($owned:ident, $view:ident) => {
             if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
@@ -1472,7 +1492,16 @@ pub(crate) fn grouped_gemm_faer_cached(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, &mut c);
+                        return grouped_gemm_faer_typed(
+                            ctx,
+                            kernel_parallelism,
+                            a,
+                            b,
+                            config,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
                     }
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
@@ -1480,7 +1509,16 @@ pub(crate) fn grouped_gemm_faer_cached(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, &mut c);
+                        return grouped_gemm_faer_typed(
+                            ctx,
+                            kernel_parallelism,
+                            a,
+                            b,
+                            config,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
@@ -1488,7 +1526,16 @@ pub(crate) fn grouped_gemm_faer_cached(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, &mut c);
+                        return grouped_gemm_faer_typed(
+                            ctx,
+                            kernel_parallelism,
+                            a,
+                            b,
+                            config,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
@@ -1496,28 +1543,81 @@ pub(crate) fn grouped_gemm_faer_cached(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, &mut c);
+                        return grouped_gemm_faer_typed(
+                            ctx,
+                            kernel_parallelism,
+                            a,
+                            b,
+                            config,
+                            alpha,
+                            beta,
+                            &mut c,
+                        );
                     }
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
                         TensorRead::Tensor(crate::Tensor::$owned(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, c),
+                    ) => {
+                        return grouped_gemm_faer_typed(
+                            ctx,
+                            kernel_parallelism,
+                            a,
+                            b,
+                            config,
+                            alpha,
+                            beta,
+                            c,
+                        )
+                    }
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
                         TensorRead::View(TensorView::$view(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, c),
+                    ) => {
+                        return grouped_gemm_faer_typed(
+                            ctx,
+                            kernel_parallelism,
+                            a,
+                            b,
+                            config,
+                            alpha,
+                            beta,
+                            c,
+                        )
+                    }
                     (
                         TensorRead::View(TensorView::$view(a)),
                         TensorRead::Tensor(crate::Tensor::$owned(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, c),
+                    ) => {
+                        return grouped_gemm_faer_typed(
+                            ctx,
+                            kernel_parallelism,
+                            a,
+                            b,
+                            config,
+                            alpha,
+                            beta,
+                            c,
+                        )
+                    }
                     (
                         TensorRead::View(TensorView::$view(a)),
                         TensorRead::View(TensorView::$view(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => return grouped_gemm_faer_typed(ctx, a, b, config, alpha, beta, c),
+                    ) => {
+                        return grouped_gemm_faer_typed(
+                            ctx,
+                            kernel_parallelism,
+                            a,
+                            b,
+                            config,
+                            alpha,
+                            beta,
+                            c,
+                        )
+                    }
                     _ => {}
                 }
             }
@@ -1534,6 +1634,7 @@ pub(crate) fn grouped_gemm_faer_cached(
 #[cfg(feature = "cpu-faer")]
 fn grouped_gemm_faer_typed<L, R, T>(
     ctx: &crate::CpuContext,
+    kernel_parallelism: CpuKernelParallelism,
     lhs: &L,
     rhs: &R,
     config: &GroupedGemmConfig<'_>,
@@ -1583,12 +1684,15 @@ where
         let rows = dim_to_isize(job.rows(), "grouped_gemm rows")?;
         let contracted = dim_to_isize(job.contracted(), "grouped_gemm contracted")?;
         // SAFETY: validate_grouped_gemm checked input/output ranges and output
-        // disjointness before this provider path; child faer calls run
-        // sequentially to avoid nested Rayon fan-out.
+        // disjointness before this provider path. The engine selects whether
+        // one job may use inner kernel parallelism.
         unsafe {
             T::strided_gemm_with_conj_par(
                 ctx,
-                ctx.faer_seq(),
+                match kernel_parallelism {
+                    CpuKernelParallelism::Sequential => ctx.faer_seq(),
+                    CpuKernelParallelism::Inner => ctx.faer_par(),
+                },
                 alpha,
                 a_ptr,
                 job.rows(),
@@ -1610,12 +1714,8 @@ where
         Ok(())
     };
 
-    if ctx.num_threads() > 1 && config.jobs().len() > 1 {
-        config.jobs().par_iter().try_for_each(run_job)?;
-    } else {
-        for job in config.jobs() {
-            run_job(job)?;
-        }
+    for job in config.jobs() {
+        run_job(job)?;
     }
     Ok(true)
 }
@@ -2692,6 +2792,129 @@ where
 }
 
 #[cfg(feature = "cpu-tblis-provider")]
+fn execute_tblis_request_typed<L, R, T>(
+    lhs: &L,
+    rhs: &R,
+    axes: CpuContractionAxes<'_>,
+    output: &mut TypedTensorViewMut<'_, T>,
+    execution: tblis_gemm::TblisExecution<T>,
+) -> Result<CpuProviderOutcome>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: TblisGemm + Copy + Clone + Zero + One + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
+    if !tblis_gemm::runtime_available()? {
+        return Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::RuntimeUnavailable,
+        ));
+    }
+    let Some(plan) = tblis_gemm::plan_from_axes(lhs, rhs, &axes, output.shape(), output.strides())?
+    else {
+        return Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::Layout(CpuOperand::Output),
+        ));
+    };
+    let Some(lhs_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Err(crate::cpu_backend_buffer_error(OP));
+    };
+    let Some(rhs_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Err(crate::cpu_backend_buffer_error(OP));
+    };
+    // SAFETY: the common validator proved non-negative, reachable offsets.
+    let lhs_ptr = unsafe { lhs_data.offset(lhs.offset()) };
+    // SAFETY: the common validator proved non-negative, reachable offsets.
+    let rhs_ptr = unsafe { rhs_data.offset(rhs.offset()) };
+    tblis_gemm::execute(plan, lhs_ptr, rhs_ptr, output, execution)?;
+    Ok(CpuProviderOutcome::Executed)
+}
+
+#[cfg(feature = "cpu-tblis-provider")]
+pub(crate) fn execute_tblis_general_request(
+    _context: &CpuProviderContext<'_>,
+    request: CpuDotGeneralRequest<'_, '_, '_>,
+) -> Result<CpuProviderOutcome> {
+    let (lhs, rhs, output, axes, accumulation) = request.into_parts();
+    let dtype = lhs.dtype();
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
+                (accumulation.alpha, accumulation.beta)
+            {
+                let execution = tblis_gemm::TblisExecution::new(
+                    alpha,
+                    beta,
+                    accumulation.lhs_conj,
+                    accumulation.rhs_conj,
+                );
+                match (lhs, rhs, &mut *output) {
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        return execute_tblis_request_typed(lhs, rhs, axes, &mut output, execution);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        return execute_tblis_request_typed(lhs, rhs, axes, &mut output, execution);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        return execute_tblis_request_typed(lhs, rhs, axes, &mut output, execution);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        return execute_tblis_request_typed(lhs, rhs, axes, &mut output, execution);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => return execute_tblis_request_typed(lhs, rhs, axes, output, execution),
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => return execute_tblis_request_typed(lhs, rhs, axes, output, execution),
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => return execute_tblis_request_typed(lhs, rhs, axes, output, execution),
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => return execute_tblis_request_typed(lhs, rhs, axes, output, execution),
+                    _ => {}
+                }
+            }
+        };
+    }
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(CpuProviderOutcome::Unsupported(
+        CpuProviderUnsupported::DType(dtype),
+    ))
+}
+
+#[cfg(feature = "cpu-tblis-provider")]
 pub(crate) fn dot_general_tblis_cached<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
@@ -3028,6 +3251,545 @@ fn blas_leading_stride_supported(stride: isize, minimum: usize) -> bool {
         return false;
     };
     stride_usize >= minimum && i32::try_from(stride).is_ok()
+}
+
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
+#[derive(Clone, Copy)]
+struct ProviderGemmDescriptor {
+    rows: usize,
+    columns: usize,
+    contracted: usize,
+    batch_count: usize,
+    lhs_layout: crate::provider::CpuBatchedMatrixLayout,
+    rhs_layout: crate::provider::CpuBatchedMatrixLayout,
+    output_layout: crate::provider::CpuBatchedMatrixLayout,
+    accumulation: DotGeneralAccumulation,
+}
+
+#[cfg(any(feature = "cpu-faer", feature = "cpu-blas"))]
+impl ProviderGemmDescriptor {
+    fn from_parts(parts: &crate::provider::CpuGemmRequestParts<'_, '_, '_>) -> Self {
+        Self {
+            rows: parts.rows,
+            columns: parts.columns,
+            contracted: parts.contracted,
+            batch_count: parts.batch_count,
+            lhs_layout: parts.lhs_layout,
+            rhs_layout: parts.rhs_layout,
+            output_layout: parts.output_layout,
+            accumulation: parts.accumulation,
+        }
+    }
+}
+
+#[cfg(feature = "cpu-faer")]
+fn execute_faer_request_typed<L, R, T>(
+    context: &CpuProviderContext<'_>,
+    descriptor: ProviderGemmDescriptor,
+    lhs: &L,
+    rhs: &R,
+    output: &mut TypedTensorViewMut<'_, T>,
+    alpha: T,
+    beta: T,
+) -> Result<()>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: FaerGemm + Copy + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
+    if descriptor.rows == 0
+        || descriptor.columns == 0
+        || descriptor.contracted == 0
+        || descriptor.batch_count == 0
+    {
+        return scale_empty_contract_output(output, beta);
+    }
+    let Some(lhs_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Err(crate::cpu_backend_buffer_error(OP));
+    };
+    let Some(rhs_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Err(crate::cpu_backend_buffer_error(OP));
+    };
+    let output_data = output.host_storage_mut()?.as_mut_ptr();
+    let par = match context.kernel_parallelism() {
+        CpuKernelParallelism::Sequential => context.cpu_context().faer_seq(),
+        CpuKernelParallelism::Inner => context.cpu_context().faer_par(),
+    };
+    for batch in 0..descriptor.batch_count {
+        let lhs_offset = checked_view_batch_offset(
+            descriptor.lhs_layout.offset(),
+            batch,
+            descriptor.lhs_layout.batch_stride(),
+        )?;
+        let rhs_offset = checked_view_batch_offset(
+            descriptor.rhs_layout.offset(),
+            batch,
+            descriptor.rhs_layout.batch_stride(),
+        )?;
+        let output_offset = checked_view_batch_offset(
+            descriptor.output_layout.offset(),
+            batch,
+            descriptor.output_layout.batch_stride(),
+        )?;
+        // SAFETY: the engine validates every request layout and reachable range
+        // before provider entry. Batch offsets are rechecked above and output
+        // batches are uniquely writable.
+        unsafe {
+            T::strided_gemm_with_conj_par(
+                context.cpu_context(),
+                par,
+                alpha,
+                lhs_data.offset(lhs_offset),
+                descriptor.rows,
+                descriptor.contracted,
+                descriptor.lhs_layout.row_stride(),
+                descriptor.lhs_layout.column_stride(),
+                descriptor.accumulation.lhs_conj,
+                rhs_data.offset(rhs_offset),
+                descriptor.columns,
+                descriptor.rhs_layout.row_stride(),
+                descriptor.rhs_layout.column_stride(),
+                descriptor.accumulation.rhs_conj,
+                beta,
+                output_data.offset(output_offset),
+                descriptor.output_layout.row_stride(),
+                descriptor.output_layout.column_stride(),
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cpu-faer")]
+pub(crate) fn execute_faer_gemm_request(
+    context: &CpuProviderContext<'_>,
+    request: CpuGemmRequest<'_, '_, '_>,
+) -> Result<CpuProviderOutcome> {
+    let parts = request.into_parts();
+    let descriptor = ProviderGemmDescriptor::from_parts(&parts);
+    let lhs = parts.lhs;
+    let rhs = parts.rhs;
+    let dtype = lhs.dtype();
+    let output = parts.output;
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
+                (descriptor.accumulation.alpha, descriptor.accumulation.beta)
+            {
+                match (lhs, rhs, &mut *output) {
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        execute_faer_request_typed(
+                            context,
+                            descriptor,
+                            lhs,
+                            rhs,
+                            &mut output,
+                            alpha,
+                            beta,
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        execute_faer_request_typed(
+                            context,
+                            descriptor,
+                            lhs,
+                            rhs,
+                            &mut output,
+                            alpha,
+                            beta,
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        execute_faer_request_typed(
+                            context,
+                            descriptor,
+                            lhs,
+                            rhs,
+                            &mut output,
+                            alpha,
+                            beta,
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        execute_faer_request_typed(
+                            context,
+                            descriptor,
+                            lhs,
+                            rhs,
+                            &mut output,
+                            alpha,
+                            beta,
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => {
+                        execute_faer_request_typed(
+                            context, descriptor, lhs, rhs, output, alpha, beta,
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => {
+                        execute_faer_request_typed(
+                            context, descriptor, lhs, rhs, output, alpha, beta,
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => {
+                        execute_faer_request_typed(
+                            context, descriptor, lhs, rhs, output, alpha, beta,
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => {
+                        execute_faer_request_typed(
+                            context, descriptor, lhs, rhs, output, alpha, beta,
+                        )?;
+                        return Ok(CpuProviderOutcome::Executed);
+                    }
+                    _ => {}
+                }
+            }
+        };
+    }
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(CpuProviderOutcome::Unsupported(
+        CpuProviderUnsupported::DType(dtype),
+    ))
+}
+
+#[cfg(feature = "cpu-blas")]
+fn blas_descriptor_unsupported(
+    descriptor: ProviderGemmDescriptor,
+) -> Option<CpuProviderUnsupported> {
+    if i32::try_from(descriptor.rows).is_err()
+        || i32::try_from(descriptor.columns).is_err()
+        || i32::try_from(descriptor.contracted).is_err()
+    {
+        return Some(CpuProviderUnsupported::Rank { lhs: 2, rhs: 2 });
+    }
+    if !blas_lhs_layout_supported(
+        descriptor.rows,
+        descriptor.contracted,
+        descriptor.lhs_layout.row_stride(),
+        descriptor.lhs_layout.column_stride(),
+    ) {
+        return Some(CpuProviderUnsupported::Layout(CpuOperand::Lhs));
+    }
+    if !blas_rhs_layout_supported(
+        descriptor.contracted,
+        descriptor.columns,
+        descriptor.rhs_layout.row_stride(),
+        descriptor.rhs_layout.column_stride(),
+    ) {
+        return Some(CpuProviderUnsupported::Layout(CpuOperand::Rhs));
+    }
+    if !blas_output_layout_supported(
+        descriptor.rows,
+        descriptor.output_layout.row_stride(),
+        descriptor.output_layout.column_stride(),
+    ) {
+        return Some(CpuProviderUnsupported::Layout(CpuOperand::Output));
+    }
+    None
+}
+
+#[cfg(feature = "cpu-blas")]
+fn execute_blas_request_typed<L, R, T>(
+    descriptor: ProviderGemmDescriptor,
+    lhs: &L,
+    rhs: &R,
+    output: &mut TypedTensorViewMut<'_, T>,
+    alpha: T,
+    beta: T,
+) -> Result<CpuProviderOutcome>
+where
+    L: TypedTensorRead<T>,
+    R: TypedTensorRead<T>,
+    T: BlasGemm + Copy + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
+{
+    if let Some(reason) = blas_descriptor_unsupported(descriptor) {
+        return Ok(CpuProviderOutcome::Unsupported(reason));
+    }
+    if (descriptor.accumulation.lhs_conj && descriptor.lhs_layout.row_stride() == 1)
+        || (descriptor.accumulation.rhs_conj && descriptor.rhs_layout.row_stride() == 1)
+    {
+        return Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::Conjugation,
+        ));
+    }
+    if descriptor.rows == 0
+        || descriptor.columns == 0
+        || descriptor.contracted == 0
+        || descriptor.batch_count == 0
+    {
+        scale_empty_contract_output(output, beta)?;
+        return Ok(CpuProviderOutcome::Executed);
+    }
+
+    let Some(lhs_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Err(crate::cpu_backend_buffer_error(OP));
+    };
+    let Some(rhs_data) = rhs.host_data_opt()?.map(<[T]>::as_ptr) else {
+        return Err(crate::cpu_backend_buffer_error(OP));
+    };
+    let output_data = output.host_storage_mut()?.as_mut_ptr();
+    for batch in 0..descriptor.batch_count {
+        let lhs_offset = checked_view_batch_offset(
+            descriptor.lhs_layout.offset(),
+            batch,
+            descriptor.lhs_layout.batch_stride(),
+        )?;
+        let rhs_offset = checked_view_batch_offset(
+            descriptor.rhs_layout.offset(),
+            batch,
+            descriptor.rhs_layout.batch_stride(),
+        )?;
+        let output_offset = checked_view_batch_offset(
+            descriptor.output_layout.offset(),
+            batch,
+            descriptor.output_layout.batch_stride(),
+        )?;
+        // SAFETY: the engine validates every reachable range and uniquely
+        // writable output batch before constructing the provider request.
+        let executed = unsafe {
+            T::strided_gemm_with_conj(
+                alpha,
+                lhs_data.offset(lhs_offset),
+                descriptor.rows,
+                descriptor.contracted,
+                descriptor.lhs_layout.row_stride(),
+                descriptor.lhs_layout.column_stride(),
+                descriptor.accumulation.lhs_conj,
+                rhs_data.offset(rhs_offset),
+                descriptor.columns,
+                descriptor.rhs_layout.row_stride(),
+                descriptor.rhs_layout.column_stride(),
+                descriptor.accumulation.rhs_conj,
+                beta,
+                output_data.offset(output_offset),
+                descriptor.output_layout.row_stride(),
+                descriptor.output_layout.column_stride(),
+            )?
+        };
+        debug_assert!(
+            executed,
+            "BLAS capability was checked before output mutation"
+        );
+    }
+    Ok(CpuProviderOutcome::Executed)
+}
+
+#[cfg(feature = "cpu-blas")]
+pub(crate) fn execute_blas_gemm_request(
+    _context: &CpuProviderContext<'_>,
+    request: CpuGemmRequest<'_, '_, '_>,
+) -> Result<CpuProviderOutcome> {
+    let parts = request.into_parts();
+    let descriptor = ProviderGemmDescriptor::from_parts(&parts);
+    let lhs = parts.lhs;
+    let rhs = parts.rhs;
+    let dtype = lhs.dtype();
+    let output = parts.output;
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            if let (ContractionScalar::$owned(alpha), ContractionScalar::$owned(beta)) =
+                (descriptor.accumulation.alpha, descriptor.accumulation.beta)
+            {
+                match (lhs, rhs, &mut *output) {
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        return execute_blas_request_typed(
+                            descriptor,
+                            lhs,
+                            rhs,
+                            &mut output,
+                            alpha,
+                            beta,
+                        );
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        return execute_blas_request_typed(
+                            descriptor,
+                            lhs,
+                            rhs,
+                            &mut output,
+                            alpha,
+                            beta,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        return execute_blas_request_typed(
+                            descriptor,
+                            lhs,
+                            rhs,
+                            &mut output,
+                            alpha,
+                            beta,
+                        );
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::Tensor(crate::Tensor::$owned(output)),
+                    ) => {
+                        let mut output = output.as_view_mut();
+                        return execute_blas_request_typed(
+                            descriptor,
+                            lhs,
+                            rhs,
+                            &mut output,
+                            alpha,
+                            beta,
+                        );
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => {
+                        return execute_blas_request_typed(
+                            descriptor, lhs, rhs, output, alpha, beta,
+                        )
+                    }
+                    (
+                        TensorRead::Tensor(crate::Tensor::$owned(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => {
+                        return execute_blas_request_typed(
+                            descriptor, lhs, rhs, output, alpha, beta,
+                        )
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::Tensor(crate::Tensor::$owned(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => {
+                        return execute_blas_request_typed(
+                            descriptor, lhs, rhs, output, alpha, beta,
+                        )
+                    }
+                    (
+                        TensorRead::View(TensorView::$view(lhs)),
+                        TensorRead::View(TensorView::$view(rhs)),
+                        TensorWrite::View(TensorViewMut::$view(output)),
+                    ) => {
+                        return execute_blas_request_typed(
+                            descriptor, lhs, rhs, output, alpha, beta,
+                        )
+                    }
+                    _ => {}
+                }
+            }
+        };
+    }
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(CpuProviderOutcome::Unsupported(
+        CpuProviderUnsupported::DType(dtype),
+    ))
+}
+
+#[cfg(feature = "cpu-blas")]
+pub(crate) fn execute_blas_grouped_request(
+    _context: &CpuProviderContext<'_>,
+    request: CpuGroupedGemmRequest<'_, '_, '_>,
+) -> Result<CpuProviderOutcome> {
+    let (lhs, rhs, output, jobs, accumulation) = request.into_parts();
+    if accumulation.lhs_conj || accumulation.rhs_conj {
+        return Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::Conjugation,
+        ));
+    }
+    let config = GroupedGemmConfig::new(jobs, accumulation);
+    if grouped_gemm_blas_cached(lhs, rhs, &config, output)? {
+        Ok(CpuProviderOutcome::Executed)
+    } else {
+        Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::DType(lhs.dtype()),
+        ))
+    }
+}
+
+#[cfg(feature = "cpu-faer")]
+pub(crate) fn execute_faer_grouped_request(
+    context: &CpuProviderContext<'_>,
+    request: CpuGroupedGemmRequest<'_, '_, '_>,
+) -> Result<CpuProviderOutcome> {
+    let (lhs, rhs, output, jobs, accumulation) = request.into_parts();
+    let config = GroupedGemmConfig::new(jobs, accumulation);
+    if grouped_gemm_faer_with_parallelism(
+        context.cpu_context(),
+        context.kernel_parallelism(),
+        lhs,
+        rhs,
+        &config,
+        output,
+    )? {
+        Ok(CpuProviderOutcome::Executed)
+    } else {
+        Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::DType(lhs.dtype()),
+        ))
+    }
 }
 
 #[cfg(test)]

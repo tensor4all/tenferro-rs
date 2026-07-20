@@ -7,9 +7,8 @@ use std::sync::Arc;
 
 use crate::backend::CpuBackendKind;
 use crate::provider::{
-    CpuContractionAxes, CpuDotGeneralRequest, CpuGemmProvider, CpuGemmRequest,
-    CpuGeneralContractionProvider, CpuGroupedGemmRequest, CpuLayoutTransformProvider,
-    CpuLayoutTransformRequest, CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported,
+    builtin_gemm_provider, builtin_layout_provider, CpuContractionAxes, CpuDotGeneralRequest,
+    CpuGemmProvider, CpuGeneralContractionProvider, CpuLayoutTransformProvider,
 };
 use crate::{Error, Result};
 
@@ -74,8 +73,8 @@ impl CpuProviderBundle {
             inner: Arc::new(CpuProviderBundleInner {
                 dot_general: DotGeneralRuntime {
                     general: None,
-                    gemm: Arc::new(BuiltinGemmProvider { kind }),
-                    layout: Arc::new(StridedLayoutTransformProvider),
+                    gemm: builtin_gemm_provider(kind),
+                    layout: builtin_layout_provider(),
                     general_policy: GeneralContractionPolicy::Preferred,
                 },
             }),
@@ -85,8 +84,8 @@ impl CpuProviderBundle {
     /// Start a bundle builder with the standard providers for `kind`.
     pub fn builder(kind: CpuBackendKind) -> CpuProviderBundleBuilder {
         CpuProviderBundleBuilder {
-            gemm: Some(Arc::new(BuiltinGemmProvider { kind })),
-            layout: Some(Arc::new(StridedLayoutTransformProvider)),
+            gemm: Some(builtin_gemm_provider(kind)),
+            layout: Some(builtin_layout_provider()),
             general: None,
             general_policy: GeneralContractionPolicy::Preferred,
         }
@@ -208,59 +207,6 @@ impl CpuProviderBundleBuilder {
                 },
             }),
         })
-    }
-}
-
-#[derive(Debug)]
-struct BuiltinGemmProvider {
-    kind: CpuBackendKind,
-}
-
-impl CpuGemmProvider for BuiltinGemmProvider {
-    fn gemm(
-        &self,
-        _context: &CpuProviderContext<'_>,
-        _request: CpuGemmRequest<'_, '_, '_>,
-    ) -> Result<CpuProviderOutcome> {
-        let _ = self.kind;
-        Ok(CpuProviderOutcome::Unsupported(
-            CpuProviderUnsupported::RuntimeUnavailable,
-        ))
-    }
-
-    fn strided_batched_gemm(
-        &self,
-        _context: &CpuProviderContext<'_>,
-        _request: CpuGemmRequest<'_, '_, '_>,
-    ) -> Result<CpuProviderOutcome> {
-        Ok(CpuProviderOutcome::Unsupported(
-            CpuProviderUnsupported::RuntimeUnavailable,
-        ))
-    }
-
-    fn grouped_gemm(
-        &self,
-        _context: &CpuProviderContext<'_>,
-        _request: CpuGroupedGemmRequest<'_, '_, '_>,
-    ) -> Result<CpuProviderOutcome> {
-        Ok(CpuProviderOutcome::Unsupported(
-            CpuProviderUnsupported::RuntimeUnavailable,
-        ))
-    }
-}
-
-#[derive(Debug)]
-struct StridedLayoutTransformProvider;
-
-impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
-    fn materialize(
-        &self,
-        _context: &CpuProviderContext<'_>,
-        _request: CpuLayoutTransformRequest<'_, '_, '_>,
-    ) -> Result<CpuProviderOutcome> {
-        Ok(CpuProviderOutcome::Unsupported(
-            CpuProviderUnsupported::RuntimeUnavailable,
-        ))
     }
 }
 
