@@ -69,9 +69,12 @@ only after active requests and queued waiters drain; separate recovery-waiter
 accounting covers an active permit and multiple simultaneous recovery callers.
 Existing re-entry rejection remains covered and unchanged.
 
-The final fast PR gate and the repository-rules review at the committed
-documentation head are **PENDING** until Task 6. They are not counted as passed
-in this worklog revision.
+The Task 6 fast PR gate passed on the committed documentation head, including
+`check-doc-snippets.py` (`doc-snippets-ok`) and `cargo test -p tenferro-cpu
+--lib` (342 passed, 0 failed). The committed-head repository-rules review also
+returned `pass` with no findings or unresolved items. These correctness and
+policy gates do not change the formal prototype result: it remains
+**INCONCLUSIVE**, and no PR is opened from this evidence branch.
 
 ## CPU-entry results
 
