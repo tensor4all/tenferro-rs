@@ -2,10 +2,15 @@
 
 ## Status
 
-Accepted for implementation under the maintainer directive to execute the
-accepted issue #1433 architecture through phase 9. This child design is bounded
-to phase 2. It refines exact Rust mechanisms without changing the umbrella's
-semantic-program, scheduler, extension, GPU, or XLA scope.
+Accepted for implementation as child issue
+[#1436](https://github.com/tensor4all/tenferro-rs/issues/1436) under the
+maintainer directive to execute the accepted issue #1433 architecture through
+phase 9. This child design is bounded to phase 2. It refines exact Rust
+mechanisms without changing the umbrella's semantic-program, scheduler,
+extension, GPU, or XLA scope.
+
+The ordered TDD tasks are recorded in
+[`docs/superpowers/plans/2026-07-21-phase-2-cpu-domain-executor.md`](https://github.com/tensor4all/tenferro-rs/blob/codex/execution-engine-through-phase9/docs/superpowers/plans/2026-07-21-phase-2-cpu-domain-executor.md).
 
 The implementation branch is `codex/execution-engine-through-phase9`, based on
 the preserved phase-1 evidence head `8a0baf42`. Phase 1 remains an
@@ -294,13 +299,15 @@ socket0.with_eager_session(|session| run_job(session, input0))?;
 
 `CpuPlacementBoundEager` retains the original runtime and a resolved, cheap
 `CpuBackend` handle. It does not own a lease or hold a backend mutex while idle.
-`with_eager_session` locks the original eager runtime once, verifies that it is
-CPU-backed, enters exactly one selected backend session, and passes a borrowed
-`&mut dyn BackendSession` adapter to the closure. The bridge operates on
-concrete `Tensor` values through the existing backend-session traits; it does
-not ask ordinary `EagerTensor` methods to recursively lock the runtime. Nested
-operation-family calls through the borrowed session delegate below that session
-boundary and do not call `CpuBackend::install` again.
+`on_cpu` locks the original eager runtime once, verifies that it is CPU-backed,
+clones a resolved placement handle, and releases the lock. The placement
+context is used mutably, so it needs no second backend mutex.
+`with_eager_session` enters exactly one selected backend session and passes a
+borrowed `&mut dyn BackendSession` adapter to the closure. The bridge operates
+on concrete `Tensor` values through the existing public backend-session traits;
+it does not ask ordinary `EagerTensor` methods to recursively lock the runtime.
+Nested operation-family calls through the borrowed session delegate below that
+session boundary and do not call `CpuBackend::install` again.
 
 This scoped surface is the phase-2 bridge. Phase 4 attaches the same placement
 binding to the general immutable `RuntimeSnapshot` and adds AD-aware
@@ -422,9 +429,10 @@ The phase updates:
   risks.
 
 The phase may make clean pre-1.0 breaking changes. It does not leave aliases for
-`CpuKernelParallelism` or `CpuProviderContext`, and it does not expose backend
-sessions or mutable resource pools as new public APIs. Temporary internal
-staging is removed before the phase is called complete.
+`CpuKernelParallelism` or `CpuProviderContext`, and it does not expose mutable
+resource pools, permits, or `CpuEngine` internals. Its placement bridge reuses
+the existing public `BackendSession` contract. Temporary internal staging is
+removed before the phase is called complete.
 
 ## Excluded Work
 
