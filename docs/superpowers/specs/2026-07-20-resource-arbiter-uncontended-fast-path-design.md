@@ -198,7 +198,8 @@ measurements and environment are recorded in the
 
 The formal classification is **INCONCLUSIVE** because the predeclared host-load
 noise limit was exceeded. No selective retry is permitted, and the observed
-one-thread empty-backend improvement was only 10.152209%, below the required
-20%. The implementation is therefore preserved as prototype evidence but is
-not promoted and has no pull request. This outcome does not gate or change the
-independence of architecture phases 1 or 2.
+one-thread empty-backend median changed from 7398.064362 ns to 6646.997416 ns
+(7.398064 us to 6.646997 us), an improvement of only 10.152209% and below the
+required 20%. The implementation is therefore preserved as prototype evidence
+but is not promoted and has no pull request. This outcome does not gate or
+change the independence of architecture phases 1 or 2.

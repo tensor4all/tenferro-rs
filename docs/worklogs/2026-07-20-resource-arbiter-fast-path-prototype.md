@@ -8,6 +8,7 @@ rule was violated: the candidate snapshot changed the 5-minute load average by
 (the 1-minute value changed by -9.43%). The plan forbids a selective retry in
 the same execution, so these measurements are retained as evidence but do not
 promote the implementation and do not justify a pull request.
+This result does not gate architecture phases 1 or 2.
 
 Separately from that classification, the observed primary result missed its
 continuation threshold. One-thread `backend_install_empty` improved by
