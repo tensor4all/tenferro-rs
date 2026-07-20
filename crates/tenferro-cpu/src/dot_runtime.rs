@@ -3,14 +3,16 @@ use tenferro_tensor::{
     TensorView, TensorViewMut, TensorWrite, ValidationError,
 };
 
+use rayon::prelude::*;
 use std::sync::Arc;
 
 use crate::backend::CpuBackendKind;
 use crate::provider::{
     builtin_gemm_provider, builtin_layout_provider, CpuContractionAxes, CpuDotGeneralRequest,
-    CpuGemmProvider, CpuGeneralContractionProvider, CpuLayoutTransformProvider,
+    CpuGemmProvider, CpuGeneralContractionProvider, CpuGroupedGemmRequest, CpuKernelParallelism,
+    CpuLayoutTransformProvider, CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported,
 };
-use crate::{Error, Result};
+use crate::{gemm::GemmAnalysisCache, CpuContext, Error, Result};
 
 const OP: &str = "dot_general";
 
@@ -113,6 +115,328 @@ impl CpuProviderBundle {
     pub(crate) fn dot_general(&self) -> &DotGeneralRuntime {
         &self.inner.dot_general
     }
+
+    pub(crate) fn execute_dot_general_into(
+        &self,
+        context: &CpuContext,
+        cache: &mut GemmAnalysisCache,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        output: TensorWrite<'_>,
+    ) -> Result<()> {
+        self.inner.dot_general.execute_into(
+            &self.inner,
+            context,
+            cache,
+            cache_slot,
+            lhs,
+            rhs,
+            config,
+            accumulation,
+            output,
+        )
+    }
+
+    pub(crate) fn execute_grouped_gemm(
+        &self,
+        context: &CpuContext,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &tenferro_tensor::backend::GroupedGemmConfig<'_>,
+        output: TensorWrite<'_>,
+    ) -> Result<()> {
+        self.inner
+            .dot_general
+            .execute_grouped(context, lhs, rhs, config, output)
+    }
+}
+
+fn unsupported_provider_error(capability: &'static str, reason: CpuProviderUnsupported) -> Error {
+    Error::unsupported(
+        OP,
+        format!("configured CPU {capability} provider reported unsupported: {reason:?}"),
+    )
+}
+
+impl DotGeneralRuntime {
+    #[allow(clippy::too_many_arguments)]
+    fn execute_into(
+        &self,
+        bundle_identity: &Arc<CpuProviderBundleInner>,
+        context: &CpuContext,
+        cache: &mut GemmAnalysisCache,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        mut output: TensorWrite<'_>,
+    ) -> Result<()> {
+        cache.bind_provider_bundle(bundle_identity);
+        let validated = validate_dot_general(&lhs, &rhs, &output, config, accumulation)?;
+        let provider_context = CpuProviderContext::new(context, CpuKernelParallelism::Inner);
+
+        if let Some(general) = &self.general {
+            let request = validated.request(&lhs, &rhs, &mut output, accumulation);
+            match general.dot_general(&provider_context, request)? {
+                CpuProviderOutcome::Executed => return Ok(()),
+                CpuProviderOutcome::Unsupported(reason) => {
+                    if self.general_policy == GeneralContractionPolicy::Required {
+                        return Err(unsupported_provider_error(
+                            "required general-contraction",
+                            reason,
+                        ));
+                    }
+                }
+            }
+        }
+
+        let Some(plan) =
+            crate::gemm::prepare_provider_gemm(cache, cache_slot, &lhs, &rhs, &output, config)?
+        else {
+            return Err(Error::unsupported(
+                OP,
+                "configured CPU layout-plus-GEMM path cannot represent this contraction",
+            ));
+        };
+        let batch_count = plan.batch_count();
+        let request = plan.request(&lhs, &rhs, &mut output, accumulation);
+        let outcome = if batch_count == 1 {
+            self.gemm.gemm(&provider_context, request)?
+        } else {
+            self.gemm.strided_batched_gemm(&provider_context, request)?
+        };
+        match outcome {
+            CpuProviderOutcome::Executed => Ok(()),
+            CpuProviderOutcome::Unsupported(reason) => {
+                Err(unsupported_provider_error("GEMM", reason))
+            }
+        }
+    }
+
+    fn execute_grouped(
+        &self,
+        context: &CpuContext,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &tenferro_tensor::backend::GroupedGemmConfig<'_>,
+        mut output: TensorWrite<'_>,
+    ) -> Result<()> {
+        tenferro_tensor::backend::validate_grouped_gemm(
+            &lhs,
+            &rhs,
+            &output,
+            config,
+            "grouped_gemm",
+        )?;
+        if context.num_threads() > 1 && config.jobs().len() > 1 {
+            return match &mut output {
+                TensorWrite::Tensor(Tensor::F32(output)) => execute_grouped_outer_typed(
+                    self.gemm.as_ref(),
+                    context,
+                    &lhs,
+                    &rhs,
+                    config,
+                    output.host_data_mut()?,
+                    0,
+                    |view| TensorViewMut::F32(view),
+                ),
+                TensorWrite::Tensor(Tensor::F64(output)) => execute_grouped_outer_typed(
+                    self.gemm.as_ref(),
+                    context,
+                    &lhs,
+                    &rhs,
+                    config,
+                    output.host_data_mut()?,
+                    0,
+                    |view| TensorViewMut::F64(view),
+                ),
+                TensorWrite::Tensor(Tensor::C32(output)) => execute_grouped_outer_typed(
+                    self.gemm.as_ref(),
+                    context,
+                    &lhs,
+                    &rhs,
+                    config,
+                    output.host_data_mut()?,
+                    0,
+                    |view| TensorViewMut::C32(view),
+                ),
+                TensorWrite::Tensor(Tensor::C64(output)) => execute_grouped_outer_typed(
+                    self.gemm.as_ref(),
+                    context,
+                    &lhs,
+                    &rhs,
+                    config,
+                    output.host_data_mut()?,
+                    0,
+                    |view| TensorViewMut::C64(view),
+                ),
+                TensorWrite::View(TensorViewMut::F32(output)) => {
+                    let base = output.offset();
+                    execute_grouped_outer_typed(
+                        self.gemm.as_ref(),
+                        context,
+                        &lhs,
+                        &rhs,
+                        config,
+                        output.host_storage_mut()?,
+                        base,
+                        |view| TensorViewMut::F32(view),
+                    )
+                }
+                TensorWrite::View(TensorViewMut::F64(output)) => {
+                    let base = output.offset();
+                    execute_grouped_outer_typed(
+                        self.gemm.as_ref(),
+                        context,
+                        &lhs,
+                        &rhs,
+                        config,
+                        output.host_storage_mut()?,
+                        base,
+                        |view| TensorViewMut::F64(view),
+                    )
+                }
+                TensorWrite::View(TensorViewMut::C32(output)) => {
+                    let base = output.offset();
+                    execute_grouped_outer_typed(
+                        self.gemm.as_ref(),
+                        context,
+                        &lhs,
+                        &rhs,
+                        config,
+                        output.host_storage_mut()?,
+                        base,
+                        |view| TensorViewMut::C32(view),
+                    )
+                }
+                TensorWrite::View(TensorViewMut::C64(output)) => {
+                    let base = output.offset();
+                    execute_grouped_outer_typed(
+                        self.gemm.as_ref(),
+                        context,
+                        &lhs,
+                        &rhs,
+                        config,
+                        output.host_storage_mut()?,
+                        base,
+                        |view| TensorViewMut::C64(view),
+                    )
+                }
+                _ => Err(unsupported_provider_error(
+                    "grouped-GEMM",
+                    CpuProviderUnsupported::DType(output.dtype()),
+                )),
+            };
+        }
+        let kernel_parallelism = CpuKernelParallelism::Inner;
+        let provider_context = CpuProviderContext::new(context, kernel_parallelism);
+        let request = CpuGroupedGemmRequest::new(
+            &lhs,
+            &rhs,
+            &mut output,
+            config.jobs(),
+            config.accumulation(),
+        );
+        match self.gemm.grouped_gemm(&provider_context, request)? {
+            CpuProviderOutcome::Executed => Ok(()),
+            CpuProviderOutcome::Unsupported(reason) => {
+                Err(unsupported_provider_error("grouped-GEMM", reason))
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_grouped_outer_typed<T>(
+    provider: &dyn CpuGemmProvider,
+    context: &CpuContext,
+    lhs: &TensorRead<'_>,
+    rhs: &TensorRead<'_>,
+    config: &tenferro_tensor::backend::GroupedGemmConfig<'_>,
+    output_storage: &mut [T],
+    output_base: isize,
+    wrap_output: for<'a> fn(tenferro_tensor::TypedTensorViewMut<'a, T>) -> TensorViewMut<'a>,
+) -> Result<()>
+where
+    T: Send + Sync + 'static,
+{
+    let output_base = usize::try_from(output_base).map_err(|_| {
+        Error::invalid_argument(
+            "grouped_gemm",
+            "output",
+            "grouped-GEMM output base offset is negative",
+        )
+    })?;
+    for job in config.jobs() {
+        let len = job.rows().checked_mul(job.cols()).ok_or_else(|| {
+            Error::invalid_argument(
+                "grouped_gemm",
+                "jobs",
+                "grouped-GEMM output span overflows usize",
+            )
+        })?;
+        let start = output_base.checked_add(job.out_offset()).ok_or_else(|| {
+            Error::invalid_argument(
+                "grouped_gemm",
+                "jobs",
+                "grouped-GEMM output offset overflows usize",
+            )
+        })?;
+        let end = start.checked_add(len).ok_or_else(|| {
+            Error::invalid_argument(
+                "grouped_gemm",
+                "jobs",
+                "grouped-GEMM output end overflows usize",
+            )
+        })?;
+        if end > output_storage.len() {
+            return Err(Error::invalid_argument(
+                "grouped_gemm",
+                "jobs",
+                "grouped-GEMM output range exceeds host storage",
+            ));
+        }
+    }
+
+    let output_address = output_storage.as_mut_ptr() as usize;
+    let provider_context = CpuProviderContext::new(context, CpuKernelParallelism::Sequential);
+    config.jobs().par_iter().try_for_each(|job| {
+        let len = job.rows() * job.cols();
+        let start = output_base + job.out_offset();
+        // SAFETY: the common grouped validator proves pairwise-disjoint output
+        // ranges; the preflight above proves each range is inside this one host
+        // allocation. Each Rayon task receives exactly its own range.
+        let output_slice =
+            unsafe { std::slice::from_raw_parts_mut((output_address as *mut T).add(start), len) };
+        let output_view =
+            tenferro_tensor::TypedTensorViewMut::from_slice([len], [1], 0, output_slice)?;
+        let mut output = TensorWrite::from_view(wrap_output(output_view));
+        let job = tenferro_tensor::backend::GroupedGemmJob::new(
+            0,
+            job.lhs_offset(),
+            job.rhs_offset(),
+            job.rows(),
+            job.contracted(),
+            job.cols(),
+        );
+        let request = CpuGroupedGemmRequest::new(
+            lhs,
+            rhs,
+            &mut output,
+            std::slice::from_ref(&job),
+            config.accumulation(),
+        );
+        match provider.grouped_gemm(&provider_context, request)? {
+            CpuProviderOutcome::Executed => Ok(()),
+            CpuProviderOutcome::Unsupported(reason) => {
+                Err(unsupported_provider_error("grouped-GEMM", reason))
+            }
+        }
+    })
 }
 
 /// Error returned when a custom CPU provider bundle omits mandatory slots.

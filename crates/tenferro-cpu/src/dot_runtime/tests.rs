@@ -1,4 +1,15 @@
-use super::{validate_axis_groups, validate_dot_general, validate_layout_metadata};
+use super::{
+    validate_axis_groups, validate_dot_general, validate_layout_metadata, CpuProviderBundle,
+};
+use crate::gemm::GemmAnalysisCache;
+use crate::provider::{
+    CpuGemmProvider, CpuGemmRequest, CpuGeneralContractionProvider, CpuGroupedGemmRequest,
+    CpuKernelParallelism, CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported,
+    StridedLayoutTransformProvider,
+};
+use crate::CpuContext;
+use std::sync::{Arc, Mutex};
+use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 use tenferro_tensor::{
     ContractionScalar, DType, DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorRead,
     TensorViewMut, TensorWrite, TypedTensorViewMut,
@@ -154,4 +165,305 @@ fn dot_general_validation_accepts_checked_negative_stride_output() {
 
     let validated = validate_dot_general(&lhs, &rhs, &output, &config, accumulation).unwrap();
     assert_eq!(validated.output_element_count(), 40);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum GeneralBehavior {
+    Outcome(CpuProviderOutcome),
+    Error,
+}
+
+#[derive(Debug)]
+struct GeneralSpy {
+    behavior: GeneralBehavior,
+    calls: Arc<Mutex<usize>>,
+}
+
+impl CpuGeneralContractionProvider for GeneralSpy {
+    fn dot_general(
+        &self,
+        _context: &CpuProviderContext<'_>,
+        _request: crate::provider::CpuDotGeneralRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        *self.calls.lock().unwrap() += 1;
+        match self.behavior {
+            GeneralBehavior::Outcome(outcome) => Ok(outcome),
+            GeneralBehavior::Error => Err(tenferro_tensor::Error::runtime_state(
+                "dot_general",
+                "general spy failure",
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct GemmSpy {
+    outcome: CpuProviderOutcome,
+    gemm_calls: Arc<Mutex<usize>>,
+    strided_calls: Arc<Mutex<usize>>,
+    grouped_calls: Arc<Mutex<usize>>,
+    parallelism: Arc<Mutex<Vec<CpuKernelParallelism>>>,
+}
+
+impl GemmSpy {
+    fn new(outcome: CpuProviderOutcome) -> Self {
+        Self {
+            outcome,
+            gemm_calls: Arc::new(Mutex::new(0)),
+            strided_calls: Arc::new(Mutex::new(0)),
+            grouped_calls: Arc::new(Mutex::new(0)),
+            parallelism: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl CpuGemmProvider for GemmSpy {
+    fn gemm(
+        &self,
+        context: &CpuProviderContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        *self.gemm_calls.lock().unwrap() += 1;
+        self.parallelism
+            .lock()
+            .unwrap()
+            .push(context.kernel_parallelism());
+        Ok(self.outcome)
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        context: &CpuProviderContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        *self.strided_calls.lock().unwrap() += 1;
+        self.parallelism
+            .lock()
+            .unwrap()
+            .push(context.kernel_parallelism());
+        Ok(self.outcome)
+    }
+
+    fn grouped_gemm(
+        &self,
+        context: &CpuProviderContext<'_>,
+        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        *self.grouped_calls.lock().unwrap() += 1;
+        self.parallelism
+            .lock()
+            .unwrap()
+            .push(context.kernel_parallelism());
+        Ok(self.outcome)
+    }
+}
+
+fn route_operands() -> (Tensor, Tensor, Tensor, DotGeneralConfig) {
+    (
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap(),
+        Tensor::from_vec_col_major(vec![2, 2], vec![0.0_f64; 4]).unwrap(),
+        config(&[1], &[0], &[], &[]),
+    )
+}
+
+fn route_bundle(
+    gemm: Arc<dyn CpuGemmProvider>,
+    general: Option<(Arc<dyn CpuGeneralContractionProvider>, bool)>,
+) -> CpuProviderBundle {
+    let builder = CpuProviderBundle::custom_builder()
+        .gemm_provider(gemm)
+        .layout_transform_provider(Arc::new(StridedLayoutTransformProvider));
+    match general {
+        Some((provider, true)) => builder.require_general_contraction_provider(provider),
+        Some((provider, false)) => builder.prefer_general_contraction_provider(provider),
+        None => builder,
+    }
+    .build()
+    .unwrap()
+}
+
+#[test]
+fn route_general_executed_short_circuits_gemm() {
+    let general_calls = Arc::new(Mutex::new(0));
+    let general = Arc::new(GeneralSpy {
+        behavior: GeneralBehavior::Outcome(CpuProviderOutcome::Executed),
+        calls: Arc::clone(&general_calls),
+    });
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), Some((general, false)));
+    let (lhs, rhs, mut output, config) = route_operands();
+    bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(1).unwrap(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+    assert_eq!(*general_calls.lock().unwrap(), 1);
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 0);
+}
+
+#[test]
+fn route_general_unsupported_falls_back_only_when_preferred() {
+    let general = Arc::new(GeneralSpy {
+        behavior: GeneralBehavior::Outcome(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::Layout(crate::provider::CpuOperand::Lhs),
+        )),
+        calls: Arc::new(Mutex::new(0)),
+    });
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), Some((general, false)));
+    let (lhs, rhs, mut output, config) = route_operands();
+    bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(1).unwrap(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 1);
+}
+
+#[test]
+fn route_general_error_is_terminal() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let general = Arc::new(GeneralSpy {
+        behavior: GeneralBehavior::Error,
+        calls: Arc::new(Mutex::new(0)),
+    });
+    let bundle = route_bundle(gemm.clone(), Some((general, false)));
+    let (lhs, rhs, mut output, config) = route_operands();
+    let error = bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(1).unwrap(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("general spy failure"));
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 0);
+}
+
+#[test]
+fn route_required_general_unsupported_is_typed_and_terminal() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let general = Arc::new(GeneralSpy {
+        behavior: GeneralBehavior::Outcome(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::RuntimeUnavailable,
+        )),
+        calls: Arc::new(Mutex::new(0)),
+    });
+    let bundle = route_bundle(gemm.clone(), Some((general, true)));
+    let (lhs, rhs, mut output, config) = route_operands();
+    let error = bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(1).unwrap(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 0);
+}
+
+#[test]
+fn route_gemm_unsupported_is_terminal() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Unsupported(
+        CpuProviderUnsupported::DType(DType::F64),
+    )));
+    let bundle = route_bundle(gemm, None);
+    let (lhs, rhs, mut output, config) = route_operands();
+    let error = bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(1).unwrap(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
+}
+
+#[test]
+fn route_strided_batch_allows_inner_parallelism() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![2, 2, 2], vec![1.0_f64; 8]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2, 2], vec![1.0_f64; 8]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2, 2, 2], vec![0.0_f64; 8]).unwrap();
+    bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(2).unwrap(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[1], &[0], &[2], &[2]),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+    assert_eq!(*gemm.strided_calls.lock().unwrap(), 1);
+    assert_eq!(
+        gemm.parallelism.lock().unwrap().as_slice(),
+        &[CpuKernelParallelism::Inner]
+    );
+}
+
+#[test]
+fn route_grouped_multiple_jobs_forces_sequential_provider_kernels() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
+        GroupedGemmJob::new(1, 1, 1, 1, 1, 1),
+    ];
+    bundle
+        .execute_grouped_gemm(
+            &CpuContext::with_threads(2).unwrap(),
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &GroupedGemmConfig::new(
+                &jobs,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            ),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 2);
+    assert_eq!(
+        gemm.parallelism.lock().unwrap().as_slice(),
+        &[
+            CpuKernelParallelism::Sequential,
+            CpuKernelParallelism::Sequential,
+        ]
+    );
 }
