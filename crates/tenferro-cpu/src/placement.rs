@@ -210,6 +210,12 @@ pub enum CpuPlacementError {
         /// The selected public backend kind.
         backend: CpuBackendKind,
     },
+    /// An externally managed coordinator has no domain for the explicit placement.
+    #[error("externally managed CPU coordinator has no registered domain for {requested:?}")]
+    UnregisteredExternalPlacement {
+        /// The explicit registry-only placement request.
+        requested: CpuPlacement,
+    },
     /// A pinned engine could not be built for an otherwise valid placement.
     #[error("cannot resolve {requested:?} for {backend:?}: engine construction failed: {source}")]
     EngineConstruction {
@@ -237,6 +243,7 @@ pub enum CpuPlacementError {
 pub(crate) enum ResolvedCpuExecution {
     Compatibility,
     Managed(ResolvedCpuPlacement),
+    ExternalManaged(ResolvedCpuPlacement),
     ProviderDefaultExclusive,
 }
 

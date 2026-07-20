@@ -6,6 +6,8 @@ use num_complex::{Complex32, Complex64};
 
 use super::*;
 
+mod external_managed;
+
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = payload.downcast_ref::<String>() {
         return message.clone();
@@ -149,7 +151,10 @@ fn public_buffer_pool_controls_report_poisoned_engine_registry() {
     let backend = CpuBackend::new();
     let shared = Arc::clone(&backend.shared);
     let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        let _engines = shared.node_engines.lock().unwrap();
+        let CpuEngineRegistry::ManagedLazy(registry) = &shared.engines else {
+            panic!("default backend should use the managed engine registry");
+        };
+        let _engines = registry.node_engines.lock().unwrap();
         panic!("poison CPU engine registry for regression test");
     }));
     assert!(poison.is_err());
