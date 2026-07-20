@@ -27,6 +27,7 @@ fn with_cuda_ordinal<T: Clone + 'static>(
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal,
             }),
+            cpu_affinity: None,
         },
     )
     .unwrap()
@@ -490,6 +491,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
                     kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                     ordinal: 0,
                 }),
+                cpu_affinity: None,
             },
         )
         .unwrap(),
@@ -564,6 +566,7 @@ fn cuda_indexing_zero_domains_validate_wrong_device_and_malformed_buffers() {
                     kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                     ordinal: 0,
                 }),
+                cpu_affinity: None,
             },
         )
         .unwrap(),

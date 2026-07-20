@@ -25,6 +25,7 @@ fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
                     kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                     ordinal: 0,
                 }),
+                cpu_affinity: None,
             },
         )
         .unwrap(),

@@ -40,6 +40,7 @@ fn backend_f64_tensor(shape: Vec<usize>) -> Tensor {
                     kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                     ordinal: 0,
                 }),
+                cpu_affinity: None,
             },
         )
         .unwrap(),

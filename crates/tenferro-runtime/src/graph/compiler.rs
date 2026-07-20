@@ -817,6 +817,7 @@ mod tests {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
+            cpu_affinity: None,
         };
         let lhs = Arc::new(Tensor::F64(
             TypedTensor::from_buffer_col_major(

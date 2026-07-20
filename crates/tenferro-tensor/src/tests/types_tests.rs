@@ -4,11 +4,11 @@ use num_complex::{Complex32, Complex64};
 
 use crate::types::{
     col_major_strides, flat_to_multi, AllocationDomainId, AllocationId, BackendBuffer, Buffer,
-    BufferHandle, DType, DeviceId, DeviceKind, GpuBackendKind, HostAccessError, HostReadGuard,
-    HostWriteGuard, MemoryKind, Placement, Rank, StridedSliceSpec, Tensor, TensorBufferRef,
-    TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank, TensorRead, TensorScalar,
-    TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor, TypedTensorView,
-    TypedTensorViewMut, TypedTensorWrite,
+    BufferHandle, CpuDomainId, DType, DeviceId, DeviceKind, GpuBackendKind, HostAccessError,
+    HostReadGuard, HostWriteGuard, MemoryKind, Placement, Rank, StridedSliceSpec, Tensor,
+    TensorBufferRef, TensorBufferRefMut, TensorLayout, TensorOwnedView, TensorRank, TensorRead,
+    TensorScalar, TensorValue, TensorView, TensorViewMut, TensorWrite, TypedTensor,
+    TypedTensorView, TypedTensorViewMut, TypedTensorWrite,
 };
 use crate::{
     Error, ErrorKind, ShapeMismatch, ShapeVec, SliceConfig, ValidationError, ValidationKind,
@@ -97,8 +97,28 @@ fn placement_default_is_the_canonical_host_placement() {
         Placement {
             memory_kind: MemoryKind::UnpinnedHost,
             device: None,
+            cpu_affinity: None,
         }
     );
+}
+
+#[test]
+fn cpu_domain_id_is_stable_caller_metadata() {
+    let id = CpuDomainId::new(17);
+    assert_eq!(id.as_u64(), 17);
+    assert_eq!(id, CpuDomainId::new(17));
+}
+
+#[test]
+fn cpu_affinity_is_not_a_device_boundary() {
+    let placement = Placement {
+        memory_kind: MemoryKind::UnpinnedHost,
+        device: None,
+        cpu_affinity: Some(CpuDomainId::new(3)),
+    };
+    assert_eq!(placement.cpu_affinity, Some(CpuDomainId::new(3)));
+    assert!(placement.device.is_none());
+    assert!(Placement::default().cpu_affinity.is_none());
 }
 
 #[test]
@@ -467,6 +487,7 @@ fn gpu_placement_is_metadata_only() {
             kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
             ordinal: 0,
         }),
+        cpu_affinity: None,
     };
 
     assert_eq!(placement.memory_kind, MemoryKind::Device);
@@ -523,6 +544,7 @@ fn typed_tensor_try_into_rank_preserves_backend_buffer_and_placement() {
             kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
             ordinal: 2,
         }),
+        cpu_affinity: None,
     };
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![2, 3],
@@ -569,6 +591,7 @@ fn typed_tensor_view_backend_as_slice_returns_runtime_state() {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
+            cpu_affinity: None,
         },
     )
     .unwrap();
@@ -639,6 +662,7 @@ fn typed_tensor_backend_buffer_layout_length_mismatch_returns_error() {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
+            cpu_affinity: None,
         },
     )
     .unwrap_err();
@@ -707,6 +731,7 @@ fn backend_buffer_handle_metadata_and_host_export_errors_are_explicit() {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
+            cpu_affinity: None,
         },
     )
     .unwrap();
@@ -1021,6 +1046,7 @@ fn backend_buffers_return_errors_when_host_access_is_requested() {
             kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
             ordinal: 0,
         }),
+        cpu_affinity: None,
     };
     let tensor = TypedTensor::<f64>::from_buffer_col_major(
         vec![1],
@@ -1055,6 +1081,7 @@ fn backend_mutable_views_keep_metadata_paths_without_host_access() {
             kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
             ordinal: 1,
         }),
+        cpu_affinity: None,
     };
     let mut tensor = TypedTensor::<i32>::from_buffer_col_major(
         vec![2, 2],
@@ -1129,6 +1156,7 @@ fn backend_multi_slice_mut_returns_none_instead_of_touching_host_memory() {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 1,
             }),
+            cpu_affinity: None,
         },
     )
     .unwrap();
@@ -1162,6 +1190,7 @@ fn typed_tensor_metadata_accessors_accept_non_clone_elements() {
     let placement = Placement {
         memory_kind: MemoryKind::Other("backend".to_string()),
         device: None,
+        cpu_affinity: None,
     };
     let tensor = TypedTensor::<NonCloneElement>::from_buffer_col_major(
         vec![2, 3],
@@ -2015,6 +2044,7 @@ fn backend_tensor_f64(id: u64, len: usize) -> TypedTensor<f64> {
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
+            cpu_affinity: None,
         },
     )
     .unwrap()

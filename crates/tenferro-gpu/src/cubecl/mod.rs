@@ -805,6 +805,7 @@ impl CudaBackend {
                     kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                     ordinal: self.runtime().device_ordinal(),
                 }),
+                cpu_affinity: None,
             },
         )?)
     }

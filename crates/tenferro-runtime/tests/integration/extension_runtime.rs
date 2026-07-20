@@ -415,6 +415,7 @@ fn extension_executor_read_fallback_reports_backend_view_materialization_error_w
             Placement {
                 memory_kind: MemoryKind::Device,
                 device: None,
+                cpu_affinity: None,
             },
         )
         .unwrap(),

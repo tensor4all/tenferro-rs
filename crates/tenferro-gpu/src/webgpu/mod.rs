@@ -521,6 +521,7 @@ fn webgpu_placement(rt: &WebGpuRuntime) -> Placement {
             kind: DeviceKind::Gpu(GpuBackendKind::WebGpu),
             ordinal: rt.device_ordinal(),
         }),
+        cpu_affinity: None,
     }
 }
 

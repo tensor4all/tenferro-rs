@@ -27,6 +27,7 @@ fn with_cuda_ordinal<T: Clone + 'static>(
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal,
             }),
+            cpu_affinity: None,
         },
     )
     .unwrap()

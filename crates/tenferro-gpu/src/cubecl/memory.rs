@@ -128,6 +128,7 @@ fn upload_typed<T: CubeElement + Clone + Send + Sync + 'static>(
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
+            cpu_affinity: None,
         },
     )
 }
@@ -188,6 +189,7 @@ fn upload_bool(
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: device_ordinal,
             }),
+            cpu_affinity: None,
         },
     )
 }

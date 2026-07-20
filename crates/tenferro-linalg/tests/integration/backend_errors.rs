@@ -51,6 +51,7 @@ fn opaque_backend_placement() -> Placement {
     Placement {
         memory_kind: MemoryKind::Device,
         device: None,
+        cpu_affinity: None,
     }
 }
 
