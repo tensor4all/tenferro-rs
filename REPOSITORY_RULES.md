@@ -726,7 +726,7 @@ Tests follow implementation ownership.
   thread counts. A single fixed-size speedup is not enough evidence for a
   performance-sensitive change.
 
-+### Performance-Gated Experiment Protocol
+### Performance-Gated Experiment Protocol
 
 - Before running a candidate, record the baseline commit, candidate commit,
   benchmark source, build profile, hardware and affinity configuration,
