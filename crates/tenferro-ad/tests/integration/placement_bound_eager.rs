@@ -13,8 +13,10 @@ use tenferro_cpu::provider::{
 use tenferro_cpu::{
     discover_cpu_topology, CpuBackend, CpuDomainExecutor, CpuDomainExecutorCapabilities,
     CpuDomainExecutorError, CpuExecutorAffinity, CpuExecutorReentrancy, CpuExecutorShutdown,
-    CpuInnerParallelism, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee, CpuProviderBundle,
-    ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    CpuInnerParallelism, CpuPlacement, CpuPlacementControl, CpuPlacementError,
+    CpuPlacementGuarantee, CpuProviderBundle, CpuProviderExecutionCapabilities,
+    CpuThreadCountControl, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement, ScopedCpuJob,
+    ScopedCpuJobs,
 };
 use tenferro_runtime::{
     Error as RuntimeError, ErrorPhase, GraphCompiler, GraphExecutor, TracedTensor,
@@ -91,6 +93,17 @@ impl MarkerGemmProvider {
 }
 
 impl CpuGemmProvider for MarkerGemmProvider {
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities {
+        CpuProviderExecutionCapabilities {
+            thread_count: CpuThreadCountControl::Sequential,
+            placement: CpuPlacementControl::CallingThread,
+            worker_local_sequential: true,
+            accepts_sequential: true,
+            accepts_outer: true,
+            accepts_inner: true,
+        }
+    }
+
     fn gemm(
         &self,
         _context: &tenferro_cpu::CpuExecutionContext<'_>,
