@@ -422,25 +422,24 @@ files or integration tests.
 
 ## Performance Gate
 
-Before candidate measurement, phase 2 fixes the following protocol:
+The protocol-v2 Phase 2E child design
+[`2026-07-21-phase-2e-atomic-noninferiority-campaign-design.md`](2026-07-21-phase-2e-atomic-noninferiority-campaign-design.md)
+supersedes the original evidence procedure in this section without changing
+the CPU domain/executor semantics above. It requires both an exact
+current-main end-to-end gate and a common-lock normalized attribution guard,
+each as one atomic 28-case `A/B`, `B/A`, `A/B` campaign with the existing +5%
+threshold and sentinel rules. Both timing and allocation comparisons must
+pass; source-dispatch, single-entry, placement, correctness, recovery, and
+affinity conformance are additional gates, while characterization latency is
+diagnostic only.
 
-- reuse the tracked current-`main` eager benchmark, lockfile, compiler/profile,
-  CPU pin, provider, thread count, output consumption, and phase-1 interleaved
-  pair runner;
-- run the complete small elementwise, reduction, indexed, and contraction
-  matrix, not only placement-bound calls;
-- require all three valid 95% interval upper bounds to be at most +5% for each
-  default-path case, with the existing A/A sentinel and invalid-pair rules;
-- require no new allocation, allocated bytes, backend/session entry, string
-  lookup, or downcast on the default eager path;
-- separately measure placement-bound session entry, managed/external executor
-  `submit` and `install`, and grouped outer/inner scheduling at 1, 2, and 4
-  threads; and
-- record NUMA hardware evidence only when the machine actually exposes
-  multiple usable nodes. Fixture correctness is mandatory everywhere.
-
-An `INCONCLUSIVE` campaign is preserved as evidence and is not called a pass.
-It does not authorize changing the baseline to the phase-1 or phase-2 branch.
+Every measured invocation is registered before launch, retained under one
+fresh candidate-scoped evidence root, and may be rerun only as a complete
+campaign after a validity failure. A statistical `FAIL` or `INCONCLUSIVE` is
+preserved as terminal evidence and is not called a pass. The build/probe
+manifests bind exact source, root-owned locks, toolchain, provider/features,
+sealed environment, binaries, and normative artifacts. Phase 2 does not exit
+until the protocol-v2 root validator and independent performance review pass.
 
 ## Documentation and Migration
 

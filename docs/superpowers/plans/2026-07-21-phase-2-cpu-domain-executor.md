@@ -505,16 +505,18 @@ git commit -m "refactor(cpu): pass one execution context to providers"
 
 ### Task 7: Classify provider count and placement capabilities
 
-> **Status (2026-07-21): Task 7a implemented; Task 7b remains required.** The
+> **Status (2026-07-21): Phase 2 scope implemented.** The
 > conservative trait, classification table, typed bundle/domain validation,
 > capability-aware dispatch, and pre-mutation rejection are implemented.
 > Built-in BLAS/TBLIS remain `GlobalOrUncontrolled` because no adapter yet
 > applies and restores MKL or macOS 15 Accelerate local control per call.
 > OpenBLAS is different: its `_local` entry point performs process-global
 > set-and-restore, so wiring it can never establish strict per-call control.
-> Task 7b must add scoped guards only for genuinely local mechanisms and may
-> classify OpenBLAS global control solely for exclusive compatibility and
-> diagnostics. The legacy BLAS
+> Production BLAS build-mode discovery and scoped vendor controllers are
+> explicitly deferred until after Phase 9 as an unresolved design item; they
+> are not a Phase 2 or Phase 2E exit dependency. Any later controller may add
+> guards only for genuinely local mechanisms and may classify OpenBLAS global
+> control solely for exclusive compatibility and diagnostics. The legacy BLAS
 > `Auto`/`ProviderDefaultExclusive` compatibility path remains process-wide
 > exclusive and must not be described as strict count or placement control.
 > Review hardening snapshots each slot descriptor exactly once at bundle
@@ -523,7 +525,8 @@ git commit -m "refactor(cpu): pass one execution context to providers"
 > `from_external_managed_domains_with_provider_bundle` route preserves a way
 > to initialize a compiled-BLAS backend with caller-controlled providers even
 > though the uncontrolled standard BLAS bundle is rejected. This bundle covers
-> `dot_general`; linalg capability injection remains Task 7b work.
+> `dot_general`; linalg capability injection belongs to the later
+> operation-family runtime design and is not hidden inside this task.
 
 **Files:**
 
@@ -639,6 +642,14 @@ fn inner_mode_installs_once_without_outer_submission() {
     assert_eq!(fixture.executor.submit_calls(), 0);
     assert_eq!(fixture.executor.install_calls(), 1);
 }
+
+#[test]
+fn sequential_mode_installs_once_without_outer_submission() {
+    let fixture = grouped_fixture(ParallelMode::Sequential, 1, 3);
+    fixture.execute().unwrap();
+    assert_eq!(fixture.executor.submit_calls(), 0);
+    assert_eq!(fixture.executor.install_calls(), 1);
+}
 ```
 
 - [ ] **Step 2: Verify RED**
@@ -651,10 +662,12 @@ the old context.
 - [ ] **Step 3: Implement executor-owned fan-out**
 
 Replace direct ambient Rayon selection in `execute_grouped` with
-`CpuExecutionContext::submit`. The indexed job object performs the existing
+`CpuOperationEntry::submit_outer`. The indexed job object performs the existing
 prevalidated disjoint output writes. Each provider call receives
-`context.sequential_child()`. `Inner` enters one checked executor install and
-runs the outer loop sequentially. `Sequential` performs neither executor call.
+an entered sequential child context. `Inner` and `Sequential` each cross one
+checked executor `install` through `CpuOperationEntry::enter` and run the outer
+loop sequentially; they differ only in the provider/native child policy.
+`Outer` performs one `submit` and no `install`.
 
 Because `CpuDomainExecutor` is a public safe boundary, engine-owned fan-out
 must audit every job as `UNCLAIMED`, `RUNNING`, or `COMPLETE`, reject duplicate
@@ -861,6 +874,9 @@ git commit -m "feat(ad): add placement-bound CPU eager sessions"
 - Create: `docs/worklogs/2026-07-21-phase-2-cpu-domain-executors.md`
 - Modify: `docs/superpowers/specs/2026-07-21-phase-2-cpu-domain-executor-design.md`
 
+The Phase 2E child plan owns its complete scripts, Rust evidence, worklog,
+index, and artifact file map. Do not duplicate that evolving map here.
+
 - [ ] **Step 1: Add failing documentation/source contract checks**
 
 Extend docs checks so the rendered parallelism guide must name Managed,
@@ -903,33 +919,76 @@ cargo test -p tenferro-runtime
 cargo test -p tenferro-ad --test integration eager_tensor::
 cargo doc --workspace --no-deps
 python3 scripts/check-docs-site.py
+bash scripts/check-pr-fast.sh \
+  --coverage-reviewed \
+  --test 'cargo test -p tenferro-cpu' \
+  --test 'cargo test -p tenferro-runtime' \
+  --test 'cargo test -p tenferro-ad'
 python3 scripts/repository-rules-review.py --base origin/main --head HEAD --output-json /tmp/phase2-rules-review.json
 ```
 
 Expected: every command succeeds and the review JSON reports zero unwaived
 findings.
 
-- [ ] **Step 5: Run the predeclared performance campaign**
+- [ ] **Step 5: Commit the parent-owned documentation and benchmark boundary**
 
-Use the phase-1 interleaved campaign runner with its unchanged current-main
-baseline, byte-identical lock, three valid pairs, ±5% sentinel, and +5% case
-threshold. Record the complete manifest, raw estimates, allocation probe, and
-classification under the phase-2 worklog artifact directory. Do not selectively
-rerun valid pairs or replace `INCONCLUSIVE` with a pass.
-
-- [ ] **Step 6: Commit**
+The Phase 2E child requires a clean candidate. Commit every parent-owned
+change from Steps 1-4 before entering the child plan:
 
 ```bash
-git add crates/tenferro-cpu/benches docs
-git commit -m "docs: record phase 2 CPU domain executor evidence"
+git add crates/tenferro-cpu/benches/numa_execution.rs \
+  docs/design/execution-engine-provider-architecture.md \
+  docs/design/cpu-backend-execution.md \
+  docs/guides/cpu-execution.md \
+  docs/guides/parallelism-and-caching.md \
+  docs/worklogs/2026-07-21-phase-2-cpu-domain-executors.md \
+  docs/superpowers/specs/2026-07-21-phase-2-cpu-domain-executor-design.md
+git diff --cached --check
+git commit -m "docs: document phase 2 CPU domain execution"
+test -z "$(git status --porcelain=v1)"
+bash scripts/check-pr-fast.sh \
+  --coverage-reviewed \
+  --test 'cargo test -p tenferro-cpu' \
+  --test 'cargo test -p tenferro-runtime' \
+  --test 'cargo test -p tenferro-ad'
+python3 scripts/repository-rules-review.py \
+  --base origin/main \
+  --head HEAD \
+  --output-json /tmp/phase2-parent-final-rules-review.json
 ```
 
-- [ ] **Step 7: Push and update issues**
+If those exact paths were already committed and the tree is clean, omit the
+empty commit. Do not leave parent documentation for a later broad `git add`.
 
-Push `codex/execution-engine-through-phase9`. Comment on #1436 with commit,
-tests, performance classification, and worklog links. Update #1433's phase table
-only when every exit criterion is proven; otherwise report the exact pending
-gate without calling the phase complete.
+- [ ] **Step 6: Run the predeclared performance campaign**
+
+Execute every TDD and evidence task in the bounded child plan
+`docs/superpowers/plans/2026-07-21-phase-2e-atomic-noninferiority-campaign.md`,
+which implements the protocol-v2 Phase 2E design in
+`docs/superpowers/specs/2026-07-21-phase-2e-atomic-noninferiority-campaign-design.md`.
+The initially empty candidate-scoped evidence root must retain the exact
+current-main and common-lock normalized build/probe manifests, both atomic
+allocation comparisons, dispatch and parallelism gates, every timing attempt,
+and the aggregate classification. Both complete 28-case timing campaigns and
+both allocation comparisons must pass. Do not selectively rerun a case or
+pair, reuse an observation across comparisons, discard negative evidence, or
+replace `INCONCLUSIVE` with a pass.
+
+- [ ] **Step 7: Confirm the child handoff is clean**
+
+```bash
+test -z "$(git status --porcelain=v1)"
+git push origin codex/execution-engine-through-phase9
+```
+
+- [ ] **Step 8: Update issues**
+
+The child plan owns all tooling, evidence, negative-result, review, and final
+commit/push operations; no parent empty or directory-wide commit follows it.
+Confirm its #1436 comment names the commit, tests, performance classification,
+worklog, evidence root, and reviews. Update #1433's phase table only when every
+exit criterion is proven; otherwise report the exact pending gate without
+calling the phase complete.
 
 ## Review follow-up addendum: scoped linalg operation entry
 
