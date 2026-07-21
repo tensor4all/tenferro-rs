@@ -699,3 +699,23 @@ validate_nonsingular_u_test!(validate_f32, F32, f32);
 validate_nonsingular_u_test!(validate_f64, F64, f64);
 validate_nonsingular_u_test!(validate_c32, C32, Complex32);
 validate_nonsingular_u_test!(validate_c64, C64, Complex64);
+
+#[test]
+fn c32_tiny_nonzero_complex_diagonal_is_nonsingular() {
+    // What: a representable complex pivot remains nonzero even when its squared norm underflows.
+    let tiny = 2.0_f32.powi(-80);
+    let tensor =
+        TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex32::new(tiny, 0.0)]).unwrap();
+
+    assert!(check_singular_diagonal(&tensor).is_ok());
+}
+
+#[test]
+fn c64_tiny_nonzero_complex_diagonal_is_nonsingular() {
+    // What: double-precision complex validation does not infer zero from an underflowed norm.
+    let tiny = 2.0_f64.powi(-600);
+    let tensor =
+        TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(0.0, tiny)]).unwrap();
+
+    assert!(check_singular_diagonal(&tensor).is_ok());
+}

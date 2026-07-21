@@ -48,6 +48,98 @@ fn solve_read_accepts_owned_and_strided_inputs_for_compiled_providers() {
 }
 
 #[test]
+fn solve_accepts_tiny_nonzero_real_and_complex_pivots_for_compiled_providers() {
+    // What: ordinary and prepared solve treat scaling as units, not as an implicit rank cutoff.
+    for kind in compiled_linalg_provider_kinds() {
+        let mut backend = CpuBackend::with_kind(kind).unwrap();
+
+        let scale = 2.0_f32.powi(-80);
+        let a = Tensor::from_vec_col_major([2, 2], vec![scale, 0.0, 0.0, 2.0 * scale]).unwrap();
+        let b = Tensor::from_vec_col_major([2, 1], vec![3.0 * scale, 10.0 * scale]).unwrap();
+        let direct = backend.solve(&a, &b).unwrap();
+        assert!((get_f32(&direct, &[0, 0]) - 3.0).abs() < 1.0e-5);
+        assert!((get_f32(&direct, &[1, 0]) - 5.0).abs() < 1.0e-5);
+        let read = backend
+            .solve_read(TensorRead::from_tensor(&a), TensorRead::from_tensor(&b))
+            .unwrap();
+        assert!((get_f32(&read, &[0, 0]) - 3.0).abs() < 1.0e-5);
+        let factors = backend.lu_factor(&a).unwrap();
+        let prepared = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
+            .unwrap();
+        assert!((get_f32(&prepared, &[1, 0]) - 5.0).abs() < 1.0e-5);
+
+        let scale = 2.0_f64.powi(-600);
+        let a = Tensor::from_vec_col_major([2, 2], vec![scale, 0.0, 0.0, 2.0 * scale]).unwrap();
+        let b = Tensor::from_vec_col_major([2, 1], vec![3.0 * scale, 10.0 * scale]).unwrap();
+        let direct = backend.solve(&a, &b).unwrap();
+        assert_f64_close(get_f64(&direct, &[0, 0]), 3.0);
+        assert_f64_close(get_f64(&direct, &[1, 0]), 5.0);
+        let factors = backend.lu_factor(&a).unwrap();
+        let prepared = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
+            .unwrap();
+        assert_f64_close(get_f64(&prepared, &[1, 0]), 5.0);
+
+        let scale = 2.0_f32.powi(-80);
+        let zero = Complex32::new(0.0, 0.0);
+        let a = Tensor::from_vec_col_major(
+            [2, 2],
+            vec![
+                Complex32::new(scale, 0.0),
+                zero,
+                zero,
+                Complex32::new(2.0 * scale, 0.0),
+            ],
+        )
+        .unwrap();
+        let b = Tensor::from_vec_col_major(
+            [2, 1],
+            vec![
+                Complex32::new(3.0 * scale, 0.0),
+                Complex32::new(10.0 * scale, 0.0),
+            ],
+        )
+        .unwrap();
+        let direct = backend.solve(&a, &b).unwrap();
+        assert!((get_c32(&direct, &[0, 0]) - Complex32::new(3.0, 0.0)).norm() < 1.0e-5);
+        let factors = backend.lu_factor(&a).unwrap();
+        let prepared = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
+            .unwrap();
+        assert!((get_c32(&prepared, &[1, 0]) - Complex32::new(5.0, 0.0)).norm() < 1.0e-5);
+
+        let scale = 2.0_f64.powi(-600);
+        let zero = Complex64::new(0.0, 0.0);
+        let a = Tensor::from_vec_col_major(
+            [2, 2],
+            vec![
+                Complex64::new(0.0, scale),
+                zero,
+                zero,
+                Complex64::new(0.0, 2.0 * scale),
+            ],
+        )
+        .unwrap();
+        let b = Tensor::from_vec_col_major(
+            [2, 1],
+            vec![
+                Complex64::new(0.0, 3.0 * scale),
+                Complex64::new(0.0, 10.0 * scale),
+            ],
+        )
+        .unwrap();
+        let direct = backend.solve(&a, &b).unwrap();
+        assert_c64_close(get_c64(&direct, &[0, 0]), Complex64::new(3.0, 0.0));
+        let factors = backend.lu_factor(&a).unwrap();
+        let prepared = backend
+            .lu_solve_prepared(&a, &factors[0], &factors[1], &b, false, false)
+            .unwrap();
+        assert_c64_close(get_c64(&prepared, &[1, 0]), Complex64::new(5.0, 0.0));
+    }
+}
+
+#[test]
 fn triangular_solve_read_accepts_owned_and_strided_inputs_for_compiled_providers() {
     let a = Tensor::from_vec_col_major([2, 2], vec![2.0_f64, 0.0, 1.0, 3.0]).unwrap();
     let b = Tensor::from_vec_col_major([2, 1], vec![5.0_f64, 6.0]).unwrap();

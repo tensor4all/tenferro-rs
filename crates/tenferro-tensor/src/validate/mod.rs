@@ -320,7 +320,11 @@ macro_rules! impl_diag_singularity_complex {
         $(
             impl DiagSingularity for $t {
                 fn is_singular_or_nonfinite(&self) -> bool {
-                    !self.re.is_finite() || !self.im.is_finite() || self.norm_sqr() == 0.0
+                    // Why not `norm_sqr() == 0`: squaring a representable tiny
+                    // component can underflow and relabel a nonzero pivot as zero.
+                    !self.re.is_finite()
+                        || !self.im.is_finite()
+                        || (self.re == 0.0 && self.im == 0.0)
                 }
             }
         )*
