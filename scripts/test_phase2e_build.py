@@ -3062,5 +3062,66 @@ class BuildOrchestratorTests(unittest.TestCase):
             self.assertEqual(source_control.created, [])
 
 
+class AllocationProbeBuildPlanTests(unittest.TestCase):
+    def test_three_probe_identities_bind_role_worktrees_locks_and_manifests(self) -> None:
+        self.assertEqual(
+            build.PROBE_BUILD_MANIFEST_PATHS,
+            {
+                "direct-current-main-baseline": pathlib.Path(
+                    "builds/probes/direct-current-main-baseline.json"
+                ),
+                "common-lock-normalized-baseline": pathlib.Path(
+                    "builds/probes/common-lock-normalized-baseline.json"
+                ),
+                "candidate": pathlib.Path("builds/probes/candidate.json"),
+            },
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config = BuildOrchestratorTests().config(root)
+            manifests = {
+                role: {"role": role, "head": character * 40}
+                for role, character in (
+                    ("direct-current-main-baseline", "d"),
+                    ("common-lock-normalized-baseline", "e"),
+                    ("candidate", "c"),
+                )
+            }
+            specs = build.allocation_probe_build_specs(config, manifests)
+            self.assertEqual([spec.role for spec in specs], list(build.BUILD_MANIFEST_PATHS))
+            self.assertEqual(
+                [spec.lock_name for spec in specs],
+                ["direct-probe", "common-probe", "common-probe"],
+            )
+            for spec in specs:
+                self.assertEqual(spec.repository, config.scratch_root / spec.role)
+                self.assertEqual(
+                    spec.manifest_path,
+                    config.evidence_root / build.PROBE_BUILD_MANIFEST_PATHS[spec.role],
+                )
+                self.assertEqual(spec.profile, "bench")
+
+    def test_probe_build_command_is_locked_bench_profile_and_lists_cases(self) -> None:
+        manifest = pathlib.Path("/probe/Cargo.toml")
+        binary = pathlib.Path("/target/release/phase2e-allocation-probe")
+        plan = build.allocation_probe_build_only_command_plan(
+            manifest, binary, "/tools/cargo"
+        )
+        self.assertEqual([step.name for step in plan], ["build", "list-cases"])
+        self.assertEqual(
+            plan[0].argv,
+            (
+                "/tools/cargo",
+                "build",
+                "--locked",
+                "--profile",
+                "bench",
+                "--manifest-path",
+                str(manifest),
+            ),
+        )
+        self.assertEqual(plan[1].argv, (str(binary), "--list-cases"))
+
+
 if __name__ == "__main__":
     unittest.main()
