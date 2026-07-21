@@ -505,6 +505,26 @@ git commit -m "refactor(cpu): pass one execution context to providers"
 
 ### Task 7: Classify provider count and placement capabilities
 
+> **Status (2026-07-21): Task 7a implemented; Task 7b remains required.** The
+> conservative trait, classification table, typed bundle/domain validation,
+> capability-aware dispatch, and pre-mutation rejection are implemented.
+> Built-in BLAS/TBLIS remain `GlobalOrUncontrolled` because no adapter yet
+> applies and restores MKL or macOS 15 Accelerate local control per call.
+> OpenBLAS is different: its `_local` entry point performs process-global
+> set-and-restore, so wiring it can never establish strict per-call control.
+> Task 7b must add scoped guards only for genuinely local mechanisms and may
+> classify OpenBLAS global control solely for exclusive compatibility and
+> diagnostics. The legacy BLAS
+> `Auto`/`ProviderDefaultExclusive` compatibility path remains process-wide
+> exclusive and must not be described as strict count or placement control.
+> Review hardening snapshots each slot descriptor exactly once at bundle
+> construction, validates every lazy managed NUMA domain, and validates an
+> initial ExternalManaged bundle before returning the backend. The public
+> `from_external_managed_domains_with_provider_bundle` route preserves a way
+> to initialize a compiled-BLAS backend with caller-controlled providers even
+> though the uncontrolled standard BLAS bundle is rejected. This bundle covers
+> `dot_general`; linalg capability injection remains Task 7b work.
+
 **Files:**
 
 - Create: `crates/tenferro-cpu/src/provider_capability.rs`
@@ -520,11 +540,11 @@ Use an injected symbol/probe fixture, not host-library assumptions:
 
 ```rust
 #[test]
-fn openblas_pthread_local_setter_controls_count_not_placement() {
-    let caps = classify_openblas(&FakeOpenBlasProbe::pthread_with_local_setter());
-    assert_eq!(caps.thread_count, CpuThreadCountControl::PerCallUpperBound);
+fn openblas_global_set_restore_never_claims_per_call_count() {
+    let caps = classify_openblas(&FakeOpenBlasProbe::pthread_with_global_guard());
+    assert_eq!(caps.thread_count, CpuThreadCountControl::GlobalOrUncontrolled);
     assert_eq!(caps.placement, CpuPlacementControl::ExternalWorkers);
-    assert!(caps.worker_local_sequential);
+    assert!(!caps.worker_local_sequential);
 }
 
 #[test]
@@ -553,13 +573,19 @@ Expected: compile failure because provider capabilities do not exist.
 Implement `CpuProviderExecutionCapabilities`, `CpuThreadCountControl`, and
 `CpuPlacementControl`; add required `execution_capabilities()` methods to
 provider traits. Explicit compile features may supply known mechanisms, but
-runtime symbol observations are performed once and stored. Unknown injected
-providers stay conservative unless constructed with an explicit descriptor.
+each provider slot is queried exactly once while its immutable bundle is built
+and that descriptor is stored. Validation and hot-path dispatch never re-query
+the provider. Unknown injected providers stay conservative unless constructed
+with an explicit descriptor.
 
 Validate strict/advisory domain compatibility before output mutation. Budget
 one external calls are allowed inline; strict subdomain budget greater than one
 with external workers is rejected unless the domain equals the process-allowed
 set.
+
+`BinaryClampToOne` means the adapter selects single-threaded mode for every
+finite resource-domain budget; it never selects auto. An adapter that cannot
+make this guarantee remains `GlobalOrUncontrolled`.
 
 - [ ] **Step 4: Verify GREEN across feature contracts**
 

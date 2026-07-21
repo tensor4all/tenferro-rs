@@ -12,6 +12,374 @@ use crate::{
     ScopedCpuJobs,
 };
 
+#[derive(Debug)]
+struct CapabilityOnlyGemmProvider {
+    capabilities: crate::CpuProviderExecutionCapabilities,
+}
+
+#[derive(Debug)]
+struct StrictUnusedFallbackProvider;
+
+impl crate::provider::CpuGemmProvider for CapabilityOnlyGemmProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        self.capabilities
+    }
+
+    fn gemm(
+        &self,
+        _context: &crate::CpuExecutionContext<'_>,
+        _request: crate::provider::CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
+        unreachable!("domain-install tests never execute the capability-only provider")
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &crate::CpuExecutionContext<'_>,
+        _request: crate::provider::CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
+        unreachable!("domain-install tests never execute the capability-only provider")
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &crate::CpuExecutionContext<'_>,
+        _request: crate::provider::CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
+        unreachable!("domain-install tests never execute the capability-only provider")
+    }
+}
+
+impl crate::provider::CpuGemmProvider for StrictUnusedFallbackProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
+    fn gemm(
+        &self,
+        _context: &crate::CpuExecutionContext<'_>,
+        _request: crate::provider::CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
+        unreachable!("the preferred general provider must short-circuit GEMM fallback")
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &crate::CpuExecutionContext<'_>,
+        _request: crate::provider::CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
+        unreachable!("the preferred general provider must short-circuit GEMM fallback")
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &crate::CpuExecutionContext<'_>,
+        _request: crate::provider::CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
+        unreachable!("the preferred general provider must short-circuit GEMM fallback")
+    }
+}
+
+impl crate::provider::CpuLayoutTransformProvider for StrictUnusedFallbackProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
+    fn materialize(
+        &self,
+        _context: &crate::CpuExecutionContext<'_>,
+        _request: crate::provider::CpuLayoutTransformRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
+        unreachable!("the preferred general provider must short-circuit layout fallback")
+    }
+}
+
+fn bundle_with_gemm_capabilities(
+    capabilities: crate::CpuProviderExecutionCapabilities,
+) -> CpuProviderBundle {
+    CpuProviderBundle::custom_builder()
+        .gemm_provider(Arc::new(CapabilityOnlyGemmProvider { capabilities }))
+        .layout_transform_provider(Arc::new(crate::provider::StridedLayoutTransformProvider))
+        .build()
+        .unwrap()
+}
+
+fn controlled_external_capabilities() -> crate::CpuProviderExecutionCapabilities {
+    crate::CpuProviderExecutionCapabilities {
+        thread_count: crate::CpuThreadCountControl::PerCallUpperBound,
+        placement: crate::CpuPlacementControl::ExternalWorkers,
+        worker_local_sequential: true,
+        accepts_sequential: true,
+        accepts_outer: true,
+        accepts_inner: true,
+    }
+}
+
+#[test]
+fn bundle_install_rejects_external_workers_for_a_strict_multithread_subdomain() {
+    let backend = external_backend(
+        CpuDomainId::new(7),
+        [external_domain(
+            7,
+            node_placement(0, cpu_set([0, 1])),
+            2,
+            2,
+            CpuPlacementGuarantee::ExactDeclared,
+            Arc::new(AtomicUsize::new(0)),
+        )],
+        topology([0, 1, 2, 3]),
+    )
+    .unwrap();
+
+    let error = backend
+        .with_provider_bundle(bundle_with_gemm_capabilities(
+            controlled_external_capabilities(),
+        ))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CpuProviderBundleInstallError::IncompatibleDomain {
+            domain_id,
+            source: crate::CpuProviderDomainError::PlacementNotEnforceable { .. },
+            ..
+        } if domain_id == CpuDomainId::new(7)
+    ));
+}
+
+#[test]
+fn bundle_install_allows_external_workers_for_advisory_or_process_wide_domains() {
+    let advisory = external_backend(
+        CpuDomainId::new(8),
+        [external_domain(
+            8,
+            node_placement(0, cpu_set([0, 1])),
+            2,
+            2,
+            CpuPlacementGuarantee::AdvisoryDeclared,
+            Arc::new(AtomicUsize::new(0)),
+        )],
+        topology([0, 1, 2, 3]),
+    )
+    .unwrap();
+    advisory
+        .with_provider_bundle(bundle_with_gemm_capabilities(
+            controlled_external_capabilities(),
+        ))
+        .unwrap();
+
+    let process_wide = external_backend(
+        CpuDomainId::new(9),
+        [external_domain(
+            9,
+            all_allowed_placement(cpu_set([0, 1, 2, 3])),
+            2,
+            2,
+            CpuPlacementGuarantee::ExactDeclared,
+            Arc::new(AtomicUsize::new(0)),
+        )],
+        topology([0, 1, 2, 3]),
+    )
+    .unwrap();
+    process_wide
+        .with_provider_bundle(bundle_with_gemm_capabilities(
+            controlled_external_capabilities(),
+        ))
+        .unwrap();
+}
+
+#[test]
+fn bundle_install_allows_controlled_external_budget_one_inline() {
+    let backend = external_backend(
+        CpuDomainId::new(10),
+        [external_domain(
+            10,
+            node_placement(0, cpu_set([0])),
+            1,
+            1,
+            CpuPlacementGuarantee::ExactDeclared,
+            Arc::new(AtomicUsize::new(0)),
+        )],
+        topology([0, 1]),
+    )
+    .unwrap();
+    backend
+        .with_provider_bundle(bundle_with_gemm_capabilities(
+            controlled_external_capabilities(),
+        ))
+        .unwrap();
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn bundle_install_checks_lazily_constructible_exact_numa_domains() {
+    let allowed = cpu_set([0, 1, 2, 3]);
+    let topology =
+        CpuTopology::from_discovered(allowed.clone(), [(NumaNodeId::new(0), cpu_set([0, 1]))])
+            .unwrap();
+    let backend = CpuBackend::compatibility_with_topology(
+        Arc::new(CpuContext::with_threads(4).unwrap()),
+        crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
+        CpuBackendKind::Faer,
+        topology,
+        ResolvedCpuExecution::Managed(ResolvedCpuPlacement::AllAllowed { cpus: allowed }),
+    );
+
+    let error = backend
+        .with_provider_bundle(bundle_with_gemm_capabilities(
+            controlled_external_capabilities(),
+        ))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CpuProviderBundleInstallError::IncompatibleDomain {
+            domain_id,
+            source: crate::CpuProviderDomainError::PlacementNotEnforceable { .. },
+            ..
+        } if domain_id == CpuDomainId::new(1)
+    ));
+}
+
+#[test]
+fn bundle_install_rejects_uncontrolled_count_with_typed_source() {
+    let backend = external_backend(
+        CpuDomainId::new(11),
+        [external_domain(
+            11,
+            all_allowed_placement(cpu_set([0, 1])),
+            2,
+            2,
+            CpuPlacementGuarantee::ExactDeclared,
+            Arc::new(AtomicUsize::new(0)),
+        )],
+        topology([0, 1]),
+    )
+    .unwrap();
+    let error = backend
+        .with_provider_bundle(bundle_with_gemm_capabilities(
+            crate::CpuProviderExecutionCapabilities::default(),
+        ))
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        CpuProviderBundleInstallError::IncompatibleDomain {
+            domain_id,
+            source: crate::CpuProviderDomainError::ThreadCountNotEnforceable { .. },
+            ..
+        } if domain_id == CpuDomainId::new(11)
+    ));
+}
+
+#[test]
+fn external_constructor_rejects_an_initial_incompatible_bundle_atomically() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let domain = ExternalCpuDomain::new(
+        CpuDomainId::new(12),
+        node_placement(0, cpu_set([0, 1])),
+        Arc::new(CountingExecutor {
+            workers: NonZeroUsize::new(2).unwrap(),
+            installs: Arc::new(AtomicUsize::new(0)),
+            drops: Some(Arc::clone(&drops)),
+        }),
+        NonZeroUsize::new(2).unwrap(),
+        CpuPlacementGuarantee::ExactDeclared,
+    )
+    .unwrap();
+
+    let error =
+        CpuBackend::from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
+            CpuDomainId::new(12),
+            [domain],
+            topology([0, 1, 2, 3]),
+            ResourceArbiter::new(),
+            bundle_with_gemm_capabilities(controlled_external_capabilities()),
+        )
+        .unwrap_err();
+
+    let CpuBackendError::Tensor(tensor_error) = &error else {
+        panic!("provider validation should use the established tensor error wrapper");
+    };
+    let install_source = std::error::Error::source(tensor_error)
+        .and_then(|source| source.downcast_ref::<CpuProviderBundleInstallError>())
+        .expect("tensor error should retain the typed bundle-install source");
+    assert!(std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<CpuProviderBundleInstallError>())
+        .is_some());
+    assert!(matches!(
+        install_source,
+        CpuProviderBundleInstallError::IncompatibleDomain {
+            domain_id,
+            provider: crate::CpuProviderSlot::Gemm,
+            source: crate::CpuProviderDomainError::PlacementNotEnforceable { .. },
+        } if *domain_id == CpuDomainId::new(12)
+    ));
+    assert!(std::error::Error::source(install_source)
+        .and_then(|source| source.downcast_ref::<crate::CpuProviderDomainError>())
+        .is_some());
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn external_constructor_accepts_the_initial_standard_faer_bundle() {
+    let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer)
+        .build()
+        .unwrap();
+    let backend =
+        CpuBackend::from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
+            CpuDomainId::new(13),
+            [external_domain(
+                13,
+                node_placement(0, cpu_set([0, 1])),
+                2,
+                2,
+                CpuPlacementGuarantee::ExactDeclared,
+                Arc::new(AtomicUsize::new(0)),
+            )],
+            topology([0, 1, 2, 3]),
+            ResourceArbiter::new(),
+            bundle.clone(),
+        )
+        .unwrap();
+
+    assert!(backend.provider_bundle().shares_identity_with(&bundle));
+}
+
+#[cfg(feature = "cpu-blas")]
+#[test]
+fn external_constructor_rejects_the_initial_uncontrolled_standard_blas_bundle() {
+    let error =
+        CpuBackend::from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
+            CpuDomainId::new(14),
+            [external_domain(
+                14,
+                all_allowed_placement(cpu_set([0, 1])),
+                1,
+                1,
+                CpuPlacementGuarantee::ExactDeclared,
+                Arc::new(AtomicUsize::new(0)),
+            )],
+            topology([0, 1]),
+            ResourceArbiter::new(),
+            CpuProviderBundle::standard(CpuBackendKind::Blas, false),
+        )
+        .unwrap_err();
+
+    let CpuBackendError::Tensor(tensor_error) = &error else {
+        panic!("standard BLAS incompatibility should retain the tensor wrapper");
+    };
+    let install_source = std::error::Error::source(tensor_error)
+        .and_then(|source| source.downcast_ref::<CpuProviderBundleInstallError>())
+        .expect("standard BLAS incompatibility should retain the install source");
+    assert!(matches!(
+        install_source,
+        CpuProviderBundleInstallError::IncompatibleDomain {
+            domain_id,
+            provider: crate::CpuProviderSlot::Gemm,
+            source: crate::CpuProviderDomainError::ThreadCountNotEnforceable { .. },
+        } if *domain_id == CpuDomainId::new(14)
+    ));
+}
+
 #[test]
 fn external_registry_routes_without_reconstructing_executors() {
     let allowed = discover_cpu_topology().unwrap().allowed_cpus().clone();
@@ -34,8 +402,15 @@ fn external_registry_routes_without_reconstructing_executors() {
         Arc::clone(&all_runs),
     );
 
-    let backend =
-        CpuBackend::from_external_managed_domains(CpuDomainId::new(10), [node, all]).unwrap();
+    let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer)
+        .build()
+        .unwrap();
+    let backend = CpuBackend::from_external_managed_domains_with_provider_bundle(
+        CpuDomainId::new(10),
+        [node, all],
+        bundle,
+    )
+    .unwrap();
     assert_eq!(
         backend.execution_info().execution_mode(),
         CpuExecutionMode::ExternalManaged
@@ -615,7 +990,9 @@ fn external_provider_dot_uses_the_supplied_no_inner_executor() {
         topology([0]),
     )
     .unwrap();
-    let bundle = CpuProviderBundle::builder(backend.kind())
+    let bundle = CpuProviderBundle::custom_builder()
+        .gemm_provider(Arc::new(StrictUnusedFallbackProvider))
+        .layout_transform_provider(Arc::new(StrictUnusedFallbackProvider))
         .prefer_general_contraction_provider(Arc::new(super::CountingGeneralProvider {
             calls: Arc::clone(&calls),
         }))
@@ -655,7 +1032,7 @@ fn sequential_direct_session_native_dot_and_linalg_each_enter_exactly_once() {
     .unwrap();
     let backend = external_backend(CpuDomainId::new(1), [domain], topology([0])).unwrap();
     let provider_calls = Arc::new(AtomicUsize::new(0));
-    let bundle = CpuProviderBundle::builder(backend.kind())
+    let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer)
         .prefer_general_contraction_provider(Arc::new(super::CountingGeneralProvider {
             calls: Arc::clone(&provider_calls),
         }))
@@ -811,11 +1188,12 @@ fn external_backend(
     domains: impl IntoIterator<Item = ExternalCpuDomain>,
     topology: CpuTopology,
 ) -> Result<CpuBackend, CpuBackendError> {
-    CpuBackend::from_external_managed_domains_with_topology_and_arbiter(
+    CpuBackend::from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
         default_domain,
         domains,
         topology,
         ResourceArbiter::new(),
+        CpuProviderBundle::standard(CpuBackendKind::Faer, false),
     )
 }
 

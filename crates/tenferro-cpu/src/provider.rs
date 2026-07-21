@@ -17,6 +17,13 @@ use crate::arbiter::{with_execution_owner, ResourcePermit};
 use crate::backend::CpuBackendKind;
 use crate::buffer_pool::BufferPool;
 use crate::domain_executor::{indexed_jobs, install_scoped};
+#[cfg(feature = "cpu-blas")]
+use crate::provider_capability::builtin_blas_execution_capabilities;
+#[cfg(feature = "cpu-tblis-provider")]
+use crate::provider_capability::builtin_tblis_execution_capabilities;
+use crate::provider_capability::{
+    engine_worker_capabilities, serial_capabilities, CpuProviderExecutionCapabilities,
+};
 use crate::resource_domain::CpuResourceDomain;
 use crate::{
     CpuDomainExecutorError, CpuDomainId, CpuInnerParallelism, CpuPlacementGuarantee, CpuSet,
@@ -481,14 +488,53 @@ impl<'a> CpuOperationEntry<'a> {
         }
     }
 
-    pub(crate) fn preferred_provider_mode(self, kind: CpuBackendKind) -> ParallelMode {
-        if self.domain.thread_budget().get() <= 1 {
+    pub(crate) fn preferred_provider_mode(
+        self,
+        accepts: impl Fn(ParallelMode) -> bool,
+    ) -> Result<ParallelMode, crate::CpuProviderDomainError> {
+        if self.domain.thread_budget().get() == 1 {
+            return if accepts(ParallelMode::Sequential) {
+                Ok(ParallelMode::Sequential)
+            } else {
+                Err(crate::CpuProviderDomainError::ParallelModeNotSupported {
+                    mode: ParallelMode::Sequential,
+                })
+            };
+        }
+        if accepts(ParallelMode::Inner) {
+            return Ok(ParallelMode::Inner);
+        }
+        if accepts(ParallelMode::Sequential) {
+            return Ok(ParallelMode::Sequential);
+        }
+        Err(crate::CpuProviderDomainError::ParallelModeNotSupported {
+            mode: ParallelMode::Inner,
+        })
+    }
+
+    pub(crate) fn preferred_linalg_mode(self, kind: CpuBackendKind) -> ParallelMode {
+        if self.domain.thread_budget().get() == 1 {
             return ParallelMode::Sequential;
         }
         match kind {
             CpuBackendKind::Faer => self.preferred_engine_mode(),
+            // The linalg operation-family provider has not yet moved onto the
+            // provider capability traits. Preserve its existing ownership
+            // policy until that trait boundary is introduced.
             CpuBackendKind::Blas => ParallelMode::Inner,
         }
+    }
+
+    pub(crate) fn provider_default_compatibility_mode(self) -> ParallelMode {
+        if self.domain.thread_budget().get() == 1 {
+            ParallelMode::Sequential
+        } else {
+            ParallelMode::Inner
+        }
+    }
+
+    pub(crate) fn thread_budget(self) -> NonZeroUsize {
+        self.domain.thread_budget()
     }
 
     pub(crate) fn supports_outer(self) -> bool {
@@ -1051,6 +1097,15 @@ impl<'request, 'input, 'output> CpuDotGeneralRequest<'request, 'input, 'output> 
 /// # fn accepts_provider(_: &dyn CpuGemmProvider) {}
 /// ```
 pub trait CpuGemmProvider: fmt::Debug + Send + Sync + 'static {
+    /// Return immutable count, placement, and fan-out capabilities.
+    ///
+    /// This declaration must describe controls actually applied and restored
+    /// by the provider adapter around each call. Merely discovering a runtime
+    /// symbol is insufficient. A provider bundle samples this method exactly
+    /// once during construction and keeps that snapshot for its lifetime; the
+    /// returned contract must therefore remain valid for the provider object.
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities;
+
     /// Execute one validated GEMM.
     ///
     /// # Errors
@@ -1106,6 +1161,12 @@ pub trait CpuGemmProvider: fmt::Debug + Send + Sync + 'static {
 /// # fn accepts_provider(_: &dyn CpuLayoutTransformProvider) {}
 /// ```
 pub trait CpuLayoutTransformProvider: fmt::Debug + Send + Sync + 'static {
+    /// Return immutable count, placement, and fan-out capabilities.
+    ///
+    /// A provider bundle samples this method exactly once during construction
+    /// and uses the stored descriptor for all validation and dispatch.
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities;
+
     /// Materialize one validated input into a preallocated output.
     ///
     /// # Errors
@@ -1131,6 +1192,12 @@ pub trait CpuLayoutTransformProvider: fmt::Debug + Send + Sync + 'static {
 /// # fn accepts_provider(_: &dyn CpuGeneralContractionProvider) {}
 /// ```
 pub trait CpuGeneralContractionProvider: fmt::Debug + Send + Sync + 'static {
+    /// Return immutable count, placement, and fan-out capabilities.
+    ///
+    /// A provider bundle samples this method exactly once during construction
+    /// and uses the stored descriptor for all validation and dispatch.
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities;
+
     /// Execute one complete semantic contraction.
     ///
     /// # Errors
@@ -1166,6 +1233,20 @@ pub trait CpuGeneralContractionProvider: fmt::Debug + Send + Sync + 'static {
 pub struct TblisGeneralContractionProvider;
 
 impl CpuGeneralContractionProvider for TblisGeneralContractionProvider {
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities {
+        #[cfg(feature = "cpu-tblis-provider")]
+        {
+            // The current TBLIS adapter does not install a scoped thread-count
+            // control, so it cannot claim a domain-local upper bound.
+            builtin_tblis_execution_capabilities()
+        }
+        #[cfg(not(feature = "cpu-tblis-provider"))]
+        {
+            // This build returns RuntimeUnavailable without invoking a kernel.
+            serial_capabilities()
+        }
+    }
+
     fn dot_general(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -1198,6 +1279,10 @@ impl CpuGeneralContractionProvider for TblisGeneralContractionProvider {
 pub struct FaerGemmProvider;
 
 impl CpuGemmProvider for FaerGemmProvider {
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities {
+        engine_worker_capabilities()
+    }
+
     fn gemm(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -1256,6 +1341,18 @@ impl CpuGemmProvider for FaerGemmProvider {
 pub struct BlasGemmProvider;
 
 impl CpuGemmProvider for BlasGemmProvider {
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities {
+        #[cfg(feature = "cpu-blas")]
+        {
+            builtin_blas_execution_capabilities()
+        }
+        #[cfg(not(feature = "cpu-blas"))]
+        {
+            // This build returns RuntimeUnavailable without invoking BLAS.
+            serial_capabilities()
+        }
+    }
+
     fn gemm(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -1314,6 +1411,10 @@ impl CpuGemmProvider for BlasGemmProvider {
 pub struct StridedLayoutTransformProvider;
 
 impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities {
+        engine_worker_capabilities()
+    }
+
     fn materialize(
         &self,
         context: &CpuExecutionContext<'_>,

@@ -11,8 +11,9 @@ use tenferro_cpu::provider::{
 use tenferro_cpu::{
     discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
     CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
-    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementGuarantee,
-    CpuProviderBundle, ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementControl,
+    CpuPlacementGuarantee, CpuProviderBundle, CpuProviderExecutionCapabilities,
+    CpuThreadCountControl, ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_tensor::{
     BackendSessionHost, CpuDomainId, DType, DotGeneralAccumulation, DotGeneralConfig, SliceConfig,
@@ -115,6 +116,17 @@ impl CpuDomainExecutor for InlineExecutor {
 }
 
 impl CpuGeneralContractionProvider for ValueWritingGeneralProvider {
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities {
+        CpuProviderExecutionCapabilities {
+            thread_count: CpuThreadCountControl::Sequential,
+            placement: CpuPlacementControl::CallingThread,
+            worker_local_sequential: true,
+            accepts_sequential: true,
+            accepts_outer: true,
+            accepts_inner: true,
+        }
+    }
+
     fn dot_general(
         &self,
         _context: &CpuExecutionContext<'_>,
