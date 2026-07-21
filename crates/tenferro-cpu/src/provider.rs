@@ -412,6 +412,10 @@ impl<'a> CpuOperationEntry<'a> {
         Self { domain, permit }
     }
 
+    pub(crate) fn domain_id(self) -> CpuDomainId {
+        self.domain.id()
+    }
+
     pub(crate) fn enter<R: Send>(
         self,
         parallel_mode: ParallelMode,

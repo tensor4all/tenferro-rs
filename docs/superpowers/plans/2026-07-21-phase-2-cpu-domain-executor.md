@@ -713,7 +713,7 @@ fn dominant_input_bytes_is_deterministic_and_keeps_inputs_in_place() {
     let inputs = [
         affinity_input(2, CpuDomainId::new(9)),
         affinity_input(8, CpuDomainId::new(4)),
-        affinity_input(6, CpuDomainId::new(9)),
+        affinity_input(7, CpuDomainId::new(9)),
     ];
     let selected = resolve_cpu_affinity(
         CpuAffinityPolicy::DominantInputBytes,

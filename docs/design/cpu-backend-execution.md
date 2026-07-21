@@ -36,6 +36,15 @@ The session stores `CpuOperationEntry`, not a provider context; each operation
 performs exactly one executor entry. Direct and session execution therefore
 have identical placement and call-count contracts.
 
+Every successfully returned fresh CPU allocation records the selected resource
+domain as `Placement::cpu_affinity`. The tag is routing/locality metadata, not
+allocation ownership or evidence of NUMA page placement, worker pinning, or
+memory residency. Device, memory-kind, and backend allocation-domain metadata
+remain independent. Storage-sharing views and metadata-only reshapes preserve
+the source metadata; caller-owned `_into` outputs preserve the caller's
+metadata. Validation and provider/domain compatibility checks precede fresh
+allocation or caller-output mutation, and failures never cause tagging.
+
 After that single executor entry, the already-entered
 `CpuExecutionContext` scopes tenferro-native strided work. `Inner` plus a
 selected executor that advertises Rayon uses that executor's Rayon region,

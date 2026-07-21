@@ -162,8 +162,15 @@ impl CpuDomainId {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Placement {
+    /// Storage memory class, independent of execution routing metadata.
     pub memory_kind: MemoryKind,
+    /// Device that owns or addresses the storage, when applicable.
     pub device: Option<DeviceId>,
+    /// Preferred or producing CPU execution domain for routing and locality.
+    ///
+    /// This tag is not proof of allocation ownership, page residency, NUMA
+    /// pinning, or worker-affinity enforcement. Backend allocation-domain
+    /// metadata remains attached to the buffer independently.
     pub cpu_affinity: Option<CpuDomainId>,
 }
 
@@ -4980,6 +4987,25 @@ impl<T, R: TensorRank> TypedTensor<T, R> {
     /// ```
     pub fn set_placement(&mut self, placement: Placement) {
         self.placement = placement;
+    }
+
+    /// Replace only CPU routing/locality metadata without changing storage.
+    ///
+    /// Device, memory kind, backend allocation domain, and allocation identity
+    /// remain unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_tensor::{CpuDomainId, TypedTensor};
+    ///
+    /// let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![1], vec![1.0])?;
+    /// tensor.set_cpu_affinity(Some(CpuDomainId::new(4)));
+    /// assert_eq!(tensor.placement().cpu_affinity, Some(CpuDomainId::new(4)));
+    /// # Ok::<(), tenferro_tensor::Error>(())
+    /// ```
+    pub fn set_cpu_affinity(&mut self, cpu_affinity: Option<CpuDomainId>) {
+        self.placement.cpu_affinity = cpu_affinity;
     }
 
     /// Borrow this tensor as a typed view preserving rank and layout metadata.

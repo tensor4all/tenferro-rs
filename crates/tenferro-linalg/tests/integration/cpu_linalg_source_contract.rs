@@ -400,7 +400,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
     for (read, entered) in methods {
         let section = rust_function_section(&source, read);
         assert_eq!(
-            section.matches("self.with_linalg_pool(").count(),
+            section.matches("self.with_linalg_pool_fresh(").count(),
             1,
             "{read} must enter CPU resources exactly once"
         );
@@ -443,7 +443,7 @@ fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
 
     let cholesky = rust_function_section(&source, "cholesky_read");
     let entry = cholesky
-        .find("self.with_linalg_pool(")
+        .find("self.with_linalg_pool_fresh(")
         .expect("cholesky_read must have one operation entry");
     let managed_dispatch = cholesky
         .find("tensor_uses_backend_storage")

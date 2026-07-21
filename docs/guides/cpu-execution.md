@@ -113,6 +113,14 @@ from the selected node. Applications that require memory locality must arrange
 allocation/first-touch or OS memory policy separately and measure the result on
 their deployment topology.
 
+Fresh CPU results record the selected execution domain in
+`Placement::cpu_affinity`. This is routing and locality metadata: it identifies
+the domain that produced the result and can guide later scheduling. It is not
+proof that the storage was allocated by that domain, that its pages are pinned
+or resident there, or that an allocation-domain owner changed. Metadata-only
+views and reshapes retain their storage metadata, while caller-owned `_into`
+destinations are never retagged.
+
 The reduced worker budget is spread deterministically over the logical CPU IDs
 in a domain. This is not a promise to prefer physical cores over SMT siblings;
 tenferro does not currently infer core/sibling topology for that selection.

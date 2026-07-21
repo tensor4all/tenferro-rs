@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use smallvec::SmallVec;
-use tenferro_tensor::CpuDomainId;
+use tenferro_tensor::{CpuDomainId, DType, Tensor};
 
 const INLINE_DOMAIN_CAPACITY: usize = 8;
 
@@ -46,6 +46,128 @@ pub struct CpuAffinityInput {
     pub domain: Option<CpuDomainId>,
     /// Logical input size used by [`CpuAffinityPolicy::DominantInputBytes`].
     pub logical_bytes: usize,
+}
+
+impl CpuAffinityInput {
+    /// Construct resolver input metadata from a tensor.
+    ///
+    /// The logical byte count is the checked shape product times the tensor's
+    /// scalar byte width. CPU affinity is copied from placement metadata; the
+    /// tensor and its storage are otherwise untouched.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuAffinityInput;
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let input = CpuAffinityInput::from_tensor(&tensor)?;
+    /// assert_eq!(input.logical_bytes, 2 * std::mem::size_of::<f64>());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuAffinityInputError`] when the logical element or byte
+    /// count cannot be represented by `usize`.
+    pub fn from_tensor(tensor: &Tensor) -> Result<Self, CpuAffinityInputError> {
+        Self::from_parts(
+            tensor.placement().cpu_affinity,
+            tensor.shape(),
+            tensor.dtype(),
+        )
+    }
+
+    /// Construct resolver input metadata from placement, shape, and dtype.
+    ///
+    /// Scalar shapes have one element. Any zero extent yields zero logical
+    /// bytes without multiplying the other extents.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_cpu::CpuAffinityInput;
+    /// use tenferro_tensor::DType;
+    ///
+    /// let scalar = CpuAffinityInput::from_parts(None, &[], DType::F32)?;
+    /// let empty = CpuAffinityInput::from_parts(None, &[usize::MAX, 0], DType::F64)?;
+    /// assert_eq!(scalar.logical_bytes, 4);
+    /// assert_eq!(empty.logical_bytes, 0);
+    /// # Ok::<(), tenferro_cpu::CpuAffinityInputError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuAffinityInputError::ShapeProductOverflow`] when non-zero
+    /// extents overflow, or
+    /// [`CpuAffinityInputError::LogicalByteCountOverflow`] when multiplying by
+    /// the dtype width overflows.
+    pub fn from_parts(
+        domain: Option<CpuDomainId>,
+        shape: &[usize],
+        dtype: DType,
+    ) -> Result<Self, CpuAffinityInputError> {
+        let element_count = if shape.contains(&0) {
+            0
+        } else {
+            shape.iter().try_fold(1_usize, |count, &extent| {
+                count
+                    .checked_mul(extent)
+                    .ok_or(CpuAffinityInputError::ShapeProductOverflow)
+            })?
+        };
+        let byte_width = dtype_byte_width(dtype);
+        let logical_bytes = element_count.checked_mul(byte_width).ok_or(
+            CpuAffinityInputError::LogicalByteCountOverflow {
+                element_count,
+                byte_width,
+            },
+        )?;
+        Ok(Self {
+            domain,
+            logical_bytes,
+        })
+    }
+}
+
+const fn dtype_byte_width(dtype: DType) -> usize {
+    match dtype {
+        DType::F32 | DType::I32 => std::mem::size_of::<u32>(),
+        DType::F64 | DType::I64 => std::mem::size_of::<u64>(),
+        DType::Bool => std::mem::size_of::<bool>(),
+        DType::C32 => std::mem::size_of::<num_complex::Complex32>(),
+        DType::C64 => std::mem::size_of::<num_complex::Complex64>(),
+    }
+}
+
+/// Failure to derive logical input bytes for CPU affinity resolution.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu::{CpuAffinityInput, CpuAffinityInputError};
+/// use tenferro_tensor::DType;
+///
+/// let error = CpuAffinityInput::from_parts(None, &[usize::MAX, 2], DType::F32)
+///     .unwrap_err();
+/// assert_eq!(error, CpuAffinityInputError::ShapeProductOverflow);
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum CpuAffinityInputError {
+    /// Multiplying non-zero shape extents overflowed `usize`.
+    #[error("logical tensor element count overflowed usize")]
+    ShapeProductOverflow,
+    /// Multiplying element count by dtype width overflowed `usize`.
+    #[error(
+        "logical tensor byte count overflowed: element_count={element_count}, byte_width={byte_width}"
+    )]
+    LogicalByteCountOverflow {
+        /// Checked logical element count.
+        element_count: usize,
+        /// Scalar dtype width in bytes.
+        byte_width: usize,
+    },
 }
 
 /// Why the CPU affinity resolver selected a domain.

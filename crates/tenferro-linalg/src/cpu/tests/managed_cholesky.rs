@@ -257,6 +257,7 @@ fn domain_bound_backend_preserves_host_owned_and_read_cholesky() {
 fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
     let domain = FakeDomain::new();
     let mut backend = backend(&domain);
+    let selected = backend.execution_info().domain_id();
 
     macro_rules! check_real {
         ($scalar:ty, $variant:ident) => {{
@@ -276,6 +277,9 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
             };
             assert_eq!(output.allocation_domain(), Some(domain.id));
             assert_ne!(output.allocation_id(), input_id);
+            assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
+            assert_eq!(output.placement().device, None);
+            assert_eq!(output.placement().cpu_affinity, Some(selected));
             let Buffer::Backend(buffer) = output.buffer() else {
                 panic!("expected backend output")
             };
@@ -298,6 +302,9 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
             };
             assert_eq!(output.allocation_domain(), Some(domain.id));
             assert_ne!(output.allocation_id(), input_id);
+            assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
+            assert_eq!(output.placement().device, None);
+            assert_eq!(output.placement().cpu_affinity, Some(selected));
             let Buffer::Backend(buffer) = output.buffer() else {
                 panic!("expected backend output")
             };

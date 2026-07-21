@@ -361,6 +361,14 @@ impl CpuProviderBundle {
         Ok(())
     }
 
+    pub(crate) fn preflight_dot_general(&self, entry: &CpuOperationEntry<'_>) -> Result<()> {
+        self.inner
+            .dot_general
+            .dot_general_mode(entry)
+            .map(|_| ())
+            .map_err(|error| Error::backend_source(OP, error))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute_dot_general_into(
         &self,

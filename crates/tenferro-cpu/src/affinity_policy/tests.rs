@@ -1,14 +1,76 @@
 use super::{
-    resolve_cpu_affinity, resolve_cpu_affinity_with_override, CpuAffinityInput, CpuAffinityPolicy,
-    CpuAffinityResolutionError, CpuAffinitySelectionReason,
+    resolve_cpu_affinity, resolve_cpu_affinity_with_override, CpuAffinityInput,
+    CpuAffinityInputError, CpuAffinityPolicy, CpuAffinityResolutionError,
+    CpuAffinitySelectionReason,
 };
-use tenferro_tensor::CpuDomainId;
+use tenferro_tensor::{CpuDomainId, DType, MemoryKind, Placement, Tensor, TypedTensor};
 
 fn input(domain: Option<u64>, logical_bytes: usize) -> CpuAffinityInput {
     CpuAffinityInput {
         domain: domain.map(CpuDomainId::new),
         logical_bytes,
     }
+}
+
+#[test]
+fn tensor_input_uses_checked_shape_product_and_dtype_width() {
+    let mut tensor = TypedTensor::<f64>::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    tensor.set_placement(Placement {
+        memory_kind: MemoryKind::UnpinnedHost,
+        device: None,
+        cpu_affinity: Some(CpuDomainId::new(7)),
+    });
+
+    let input = CpuAffinityInput::from_tensor(&Tensor::F64(tensor)).unwrap();
+
+    assert_eq!(input.domain, Some(CpuDomainId::new(7)));
+    assert_eq!(input.logical_bytes, 6 * std::mem::size_of::<f64>());
+}
+
+#[test]
+fn scalar_and_zero_extent_logical_byte_counts_are_exact() {
+    let scalar = CpuAffinityInput::from_parts(None, &[], DType::C64).unwrap();
+    let zero =
+        CpuAffinityInput::from_parts(Some(CpuDomainId::new(8)), &[usize::MAX, 2, 0], DType::F64)
+            .unwrap();
+
+    assert_eq!(
+        scalar.logical_bytes,
+        std::mem::size_of::<num_complex::Complex64>()
+    );
+    assert_eq!(zero.logical_bytes, 0);
+    assert_eq!(zero.domain, Some(CpuDomainId::new(8)));
+}
+
+#[test]
+fn shape_product_overflow_is_a_typed_input_error() {
+    let error = CpuAffinityInput::from_parts(None, &[usize::MAX, 2], DType::F32).unwrap_err();
+
+    assert_eq!(error, CpuAffinityInputError::ShapeProductOverflow);
+}
+
+#[test]
+fn byte_width_multiplication_overflow_is_a_typed_input_error() {
+    let error = CpuAffinityInput::from_parts(None, &[usize::MAX], DType::C64).unwrap_err();
+
+    assert_eq!(
+        error,
+        CpuAffinityInputError::LogicalByteCountOverflow {
+            element_count: usize::MAX,
+            byte_width: std::mem::size_of::<num_complex::Complex64>(),
+        }
+    );
+}
+
+#[test]
+fn input_overflow_remains_typed_through_the_error_trait() {
+    let error = CpuAffinityInput::from_parts(None, &[usize::MAX], DType::C64).unwrap_err();
+    let error: Box<dyn std::error::Error> = Box::new(error);
+
+    assert!(matches!(
+        error.downcast_ref::<CpuAffinityInputError>(),
+        Some(CpuAffinityInputError::LogicalByteCountOverflow { .. })
+    ));
 }
 
 #[test]

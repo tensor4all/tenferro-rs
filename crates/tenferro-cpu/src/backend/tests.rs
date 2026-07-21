@@ -7,6 +7,7 @@ use num_complex::{Complex32, Complex64};
 use super::*;
 
 mod external_managed;
+mod output_affinity;
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = payload.downcast_ref::<String>() {
@@ -58,6 +59,26 @@ fn provider_context_source_cannot_reenter_or_bypass_the_executor_boundary() {
     assert!(!dot_runtime.contains("context.ownership()"));
     assert!(exec_session.contains("pub(crate) entry: CpuOperationEntry"));
     assert!(!exec_session.contains("pub(crate) context: CpuExecutionContext"));
+}
+
+#[test]
+fn fresh_tagging_is_field_only_and_has_no_dynamic_lookup_or_metadata_clone() {
+    let backend = include_str!("../backend.rs");
+    let tagging = backend
+        .split_once("fn tag_fresh_output")
+        .expect("CPU backend should define one fresh-output tagger")
+        .1
+        .split_once("struct CpuSessionProfileEntry")
+        .expect("session profiling should follow fresh-output tagging")
+        .0;
+
+    assert!(tagging.contains("set_cpu_affinity(Some(domain))"));
+    for forbidden in ["placement().clone", "format!", "HashMap", ".hash("] {
+        assert!(
+            !tagging.contains(forbidden),
+            "fresh CPU tagging must not contain `{forbidden}`"
+        );
+    }
 }
 
 #[test]

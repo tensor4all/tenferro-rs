@@ -284,4 +284,5 @@ mod backend;
 mod dtype;
 mod linalg;
 mod managed_cholesky;
+mod output_affinity;
 mod single_entry;

@@ -111,8 +111,9 @@ pub use affinity::{
     available_parallelism, process_cpu_affinity, process_cpu_affinity_count, CpuAffinityError,
 };
 pub use affinity_policy::{
-    resolve_cpu_affinity, resolve_cpu_affinity_with_override, CpuAffinityInput, CpuAffinityPolicy,
-    CpuAffinityResolutionError, CpuAffinitySelection, CpuAffinitySelectionReason,
+    resolve_cpu_affinity, resolve_cpu_affinity_with_override, CpuAffinityInput,
+    CpuAffinityInputError, CpuAffinityPolicy, CpuAffinityResolutionError, CpuAffinitySelection,
+    CpuAffinitySelectionReason,
 };
 pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,

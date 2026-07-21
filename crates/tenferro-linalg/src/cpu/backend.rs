@@ -11,11 +11,62 @@ use tenferro_tensor::{
     TensorStructural, TensorView, TypedTensor,
 };
 
+trait FreshLinalgOutput {
+    fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId);
+}
+
+impl FreshLinalgOutput for Tensor {
+    fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId) {
+        macro_rules! tag {
+            ($tensor:expr) => {{
+                $tensor.set_cpu_affinity(Some(domain));
+            }};
+        }
+        match self {
+            Tensor::F32(tensor) => tag!(tensor),
+            Tensor::F64(tensor) => tag!(tensor),
+            Tensor::I32(tensor) => tag!(tensor),
+            Tensor::I64(tensor) => tag!(tensor),
+            Tensor::Bool(tensor) => tag!(tensor),
+            Tensor::C32(tensor) => tag!(tensor),
+            Tensor::C64(tensor) => tag!(tensor),
+        }
+    }
+}
+
+impl FreshLinalgOutput for Vec<Tensor> {
+    fn tag_fresh(&mut self, domain: tenferro_tensor::CpuDomainId) {
+        for output in self {
+            output.tag_fresh(domain);
+        }
+    }
+}
+
+trait CpuBackendLinalgAffinityExt {
+    fn with_linalg_pool_fresh<R: FreshLinalgOutput + Send>(
+        &mut self,
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
+    ) -> tenferro_tensor::Result<R>;
+}
+
+impl CpuBackendLinalgAffinityExt for CpuBackend {
+    fn with_linalg_pool_fresh<R: FreshLinalgOutput + Send>(
+        &mut self,
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> tenferro_tensor::Result<R> + Send,
+    ) -> tenferro_tensor::Result<R> {
+        self.with_linalg_pool(move |context, buffers| {
+            let mut output = op(context, buffers)?;
+            output.tag_fresh(context.domain_id());
+            Ok(output)
+        })
+    }
+}
+
 impl LinalgBackend for CpuBackend {
     fn cholesky(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         let domain = self.shared_allocation_domain().cloned();
         let kind = self.kind();
-        self.with_linalg_pool(move |context, buffers| {
+        self.with_linalg_pool_fresh(move |context, buffers| {
             let provider = linalg_provider_kind(kind, "cholesky")?;
             if tensor_uses_backend_storage(input) {
                 if let Some(domain) = domain.as_deref() {
@@ -45,7 +96,7 @@ impl LinalgBackend for CpuBackend {
             transpose_a,
             unit_diagonal,
         };
-        self.with_linalg_pool(|context, buffers| {
+        self.with_linalg_pool_fresh(|context, buffers| {
             triangular_solve_entered(provider, context, buffers, a, b, options)
         })
     }
@@ -69,7 +120,7 @@ impl LinalgBackend for CpuBackend {
             transpose_a,
             unit_diagonal,
         };
-        self.with_linalg_pool(move |context, buffers| {
+        self.with_linalg_pool_fresh(move |context, buffers| {
             context.with_materialized_tensor_read(buffers, "triangular_solve", a, |a, buffers| {
                 context.with_materialized_tensor_read(
                     buffers,
@@ -86,7 +137,9 @@ impl LinalgBackend for CpuBackend {
     fn lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("lu", input)?;
         let provider = linalg_provider_kind(self.kind(), "lu")?;
-        self.with_linalg_pool(|context, buffers| lu_entered(provider, context, buffers, input))
+        self.with_linalg_pool_fresh(|context, buffers| {
+            lu_entered(provider, context, buffers, input)
+        })
     }
 
     fn lu_factor(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -95,7 +148,7 @@ impl LinalgBackend for CpuBackend {
             CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
-                    self.with_linalg_pool(|ctx, buffers| match input {
+                    self.with_linalg_pool_fresh(|ctx, buffers| match input {
                         Tensor::F32(t) => {
                             linalg::faer::lu_factor(ctx, buffers, t).map(|(lu, pivots, parity)| {
                                 vec![Tensor::F32(lu), Tensor::I32(pivots), Tensor::F32(parity)]
@@ -127,7 +180,7 @@ impl LinalgBackend for CpuBackend {
             CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
-                    self.with_linalg_pool(|_, buffers| match input {
+                    self.with_linalg_pool_fresh(|_, buffers| match input {
                         Tensor::F32(t) => {
                             linalg::blas::lu_factor(buffers, t).map(|(lu, pivots, parity)| {
                                 vec![Tensor::F32(lu), Tensor::I32(pivots), Tensor::F32(parity)]
@@ -162,7 +215,7 @@ impl LinalgBackend for CpuBackend {
     fn full_piv_lu(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("full_piv_lu", input)?;
         let provider = linalg_provider_kind(self.kind(), "full_piv_lu")?;
-        self.with_linalg_pool(|context, buffers| {
+        self.with_linalg_pool_fresh(|context, buffers| {
             full_piv_lu_entered(provider, context, buffers, input)
         })
     }
@@ -176,8 +229,9 @@ impl LinalgBackend for CpuBackend {
         ensure_host_tensor("full_piv_lu_solve", a)?;
         ensure_host_tensor("full_piv_lu_solve", b)?;
         ensure_supported_linalg_pair("full_piv_lu_solve", a, b)?;
+        let provider = linalg_provider_kind(self.kind(), "full_piv_lu_solve")?;
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return zeros_like_tensor(b);
+            return self.with_linalg_pool_fresh(|_, _| zeros_like_tensor(b));
         }
 
         let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
@@ -189,11 +243,11 @@ impl LinalgBackend for CpuBackend {
             (b.clone(), None)
         };
 
-        let result = match linalg_provider_kind(self.kind(), "full_piv_lu_solve")? {
+        let result = match provider {
             CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
-                    self.with_linalg_pool(|ctx, buffers| match (a, &rhs) {
+                    self.with_linalg_pool_fresh(|ctx, buffers| match (a, &rhs) {
                         (Tensor::F32(a), Tensor::F32(b)) => {
                             linalg::faer::full_piv_lu_solve(ctx, buffers, a, b, transpose_a)
                                 .map(Tensor::F32)
@@ -221,7 +275,7 @@ impl LinalgBackend for CpuBackend {
             CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
-                    self.with_linalg_pool(|_, buffers| match (a, &rhs) {
+                    self.with_linalg_pool_fresh(|_, buffers| match (a, &rhs) {
                         (Tensor::F32(a), Tensor::F32(b)) => {
                             linalg::blas::full_piv_lu_solve(buffers, a, b, transpose_a)
                                 .map(Tensor::F32)
@@ -258,7 +312,9 @@ impl LinalgBackend for CpuBackend {
     fn svd(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("svd", input)?;
         let provider = linalg_provider_kind(self.kind(), "svd")?;
-        self.with_linalg_pool(|context, buffers| svd_entered(provider, context, buffers, input))
+        self.with_linalg_pool_fresh(|context, buffers| {
+            svd_entered(provider, context, buffers, input)
+        })
     }
 
     fn svd_full(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -303,7 +359,7 @@ impl LinalgBackend for CpuBackend {
             CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
-                    self.with_linalg_pool(|ctx, buffers| match input {
+                    self.with_linalg_pool_fresh(|ctx, buffers| match input {
                         Tensor::F32(t) => {
                             linalg::faer::svd_values(ctx, buffers, t).map(Tensor::F32)
                         }
@@ -327,7 +383,7 @@ impl LinalgBackend for CpuBackend {
             CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
-                    self.with_linalg_pool(|_, buffers| match input {
+                    self.with_linalg_pool_fresh(|_, buffers| match input {
                         Tensor::F32(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F32),
                         Tensor::F64(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F64),
                         Tensor::C32(t) => linalg::blas::svd_values(buffers, t).map(Tensor::F32),
@@ -347,7 +403,7 @@ impl LinalgBackend for CpuBackend {
         ensure_host_tensor_read("svd", &input)?;
         ensure_supported_linalg_dtype("svd", input.dtype())?;
         let provider = linalg_provider_kind(self.kind(), "svd")?;
-        self.with_linalg_pool(move |context, buffers| {
+        self.with_linalg_pool_fresh(move |context, buffers| {
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
                 return svd_faer_view_entered(context, buffers, input.tensor_view());
@@ -361,14 +417,16 @@ impl LinalgBackend for CpuBackend {
     fn qr(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("qr", input)?;
         let provider = linalg_provider_kind(self.kind(), "qr")?;
-        self.with_linalg_pool(|context, buffers| qr_entered(provider, context, buffers, input))
+        self.with_linalg_pool_fresh(|context, buffers| {
+            qr_entered(provider, context, buffers, input)
+        })
     }
 
     fn qr_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("qr", &input)?;
         ensure_supported_linalg_dtype("qr", input.dtype())?;
         let provider = linalg_provider_kind(self.kind(), "qr")?;
-        self.with_linalg_pool(move |context, buffers| {
+        self.with_linalg_pool_fresh(move |context, buffers| {
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
                 return qr_faer_view_entered(context, buffers, input.tensor_view());
@@ -382,14 +440,16 @@ impl LinalgBackend for CpuBackend {
     fn eigh(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor("eigh", input)?;
         let provider = linalg_provider_kind(self.kind(), "eigh")?;
-        self.with_linalg_pool(|context, buffers| eigh_entered(provider, context, buffers, input))
+        self.with_linalg_pool_fresh(|context, buffers| {
+            eigh_entered(provider, context, buffers, input)
+        })
     }
 
     fn eigh_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Vec<Tensor>> {
         ensure_host_tensor_read("eigh", &input)?;
         ensure_supported_linalg_dtype("eigh", input.dtype())?;
         let provider = linalg_provider_kind(self.kind(), "eigh")?;
-        self.with_linalg_pool(move |context, buffers| {
+        self.with_linalg_pool_fresh(move |context, buffers| {
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
                 return eigh_faer_view_entered(context, buffers, input.tensor_view());
@@ -403,7 +463,7 @@ impl LinalgBackend for CpuBackend {
     fn cholesky_read(&mut self, input: TensorRead<'_>) -> tenferro_tensor::Result<Tensor> {
         let domain = self.shared_allocation_domain().cloned();
         let kind = self.kind();
-        self.with_linalg_pool(move |context, buffers| {
+        self.with_linalg_pool_fresh(move |context, buffers| {
             let provider = linalg_provider_kind(kind, "cholesky")?;
             if let (Some(domain), Some(tensor)) = (domain.as_deref(), input.as_tensor()) {
                 if tensor_uses_backend_storage(tensor) {
@@ -426,7 +486,7 @@ impl LinalgBackend for CpuBackend {
         ensure_host_tensor_read("lu", &input)?;
         ensure_supported_linalg_dtype("lu", input.dtype())?;
         let provider = linalg_provider_kind(self.kind(), "lu")?;
-        self.with_linalg_pool(move |context, buffers| {
+        self.with_linalg_pool_fresh(move |context, buffers| {
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
                 return lu_faer_view_entered(context, buffers, input.tensor_view());
@@ -441,7 +501,7 @@ impl LinalgBackend for CpuBackend {
         ensure_host_tensor_read("full_piv_lu", &input)?;
         ensure_supported_linalg_dtype("full_piv_lu", input.dtype())?;
         let provider = linalg_provider_kind(self.kind(), "full_piv_lu")?;
-        self.with_linalg_pool(move |context, buffers| {
+        self.with_linalg_pool_fresh(move |context, buffers| {
             #[cfg(feature = "cpu-faer")]
             if provider == CpuLinalgProvider::Faer && faer_strided_read_ok(&input) {
                 return full_piv_lu_faer_view_entered(context, buffers, input.tensor_view());
@@ -459,7 +519,7 @@ impl LinalgBackend for CpuBackend {
         ensure_host_tensor_read("eig", &input)?;
         ensure_supported_linalg_dtype("eig", input.dtype())?;
         let provider = linalg_provider_kind(self.kind(), "eig")?;
-        self.with_linalg_pool(move |context, buffers| {
+        self.with_linalg_pool_fresh(move |context, buffers| {
             context.with_materialized_tensor_read(buffers, "eig", input, |input, buffers| {
                 eig_entered(provider, context, buffers, input)
             })
@@ -472,7 +532,7 @@ impl LinalgBackend for CpuBackend {
             CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
-                    self.with_linalg_pool(|ctx, buffers| match input {
+                    self.with_linalg_pool_fresh(|ctx, buffers| match input {
                         Tensor::F32(t) => {
                             linalg::faer::eigh_values(ctx, buffers, t).map(Tensor::F32)
                         }
@@ -496,7 +556,7 @@ impl LinalgBackend for CpuBackend {
             CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
-                    self.with_linalg_pool(|_, buffers| match input {
+                    self.with_linalg_pool_fresh(|_, buffers| match input {
                         Tensor::F32(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F32),
                         Tensor::F64(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F64),
                         Tensor::C32(t) => linalg::blas::eigh_values(buffers, t).map(Tensor::F32),
@@ -516,7 +576,9 @@ impl LinalgBackend for CpuBackend {
         ensure_host_tensor("eig", input)?;
         ensure_supported_linalg_dtype("eig", input.dtype())?;
         let provider = linalg_provider_kind(self.kind(), "eig")?;
-        self.with_linalg_pool(|context, buffers| eig_entered(provider, context, buffers, input))
+        self.with_linalg_pool_fresh(|context, buffers| {
+            eig_entered(provider, context, buffers, input)
+        })
     }
 
     fn eig_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
@@ -531,7 +593,7 @@ impl LinalgBackend for CpuBackend {
             CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
-                    self.with_linalg_pool(|ctx, buffers| {
+                    self.with_linalg_pool_fresh(|ctx, buffers| {
                         linalg::faer::eig_values(ctx, buffers, input)
                     })
                 }
@@ -543,7 +605,9 @@ impl LinalgBackend for CpuBackend {
             CpuLinalgProvider::Blas => {
                 #[cfg(feature = "cpu-blas")]
                 {
-                    self.with_linalg_pool(|_, buffers| linalg::blas::eig_values(buffers, input))
+                    self.with_linalg_pool_fresh(|_, buffers| {
+                        linalg::blas::eig_values(buffers, input)
+                    })
                 }
                 #[cfg(not(feature = "cpu-blas"))]
                 {
@@ -574,7 +638,7 @@ impl LinalgBackend for CpuBackend {
             return Err(Error::dtype_mismatch(OP, DType::I32, pivots.dtype()));
         }
         if has_zero_dim(a.shape()) || has_zero_dim(b.shape()) {
-            return zeros_like_tensor(b);
+            return self.with_linalg_pool_fresh(|_, _| zeros_like_tensor(b));
         }
 
         let (rhs, restore_shape) = if let Some(matrix_rhs_shape) = batched_vector_rhs_shape(a, b) {
@@ -593,7 +657,7 @@ impl LinalgBackend for CpuBackend {
         } else {
             packed_lu.clone()
         };
-        let result = if transpose_a {
+        let mut result = if transpose_a {
             let z = self.triangular_solve(&lu_op, &rhs, true, false, true, false)?;
             let y = self.triangular_solve(&lu_op, &z, true, true, true, true)?;
             apply_lu_pivots_cpu(&y, pivots, true)?
@@ -602,6 +666,7 @@ impl LinalgBackend for CpuBackend {
             let y = self.triangular_solve(&lu_op, &pb, true, true, false, true)?;
             self.triangular_solve(&lu_op, &y, true, false, false, false)?
         };
+        result.tag_fresh(self.execution_info().domain_id());
 
         if let Some(shape) = restore_shape {
             self.reshape(&result, &shape)
@@ -615,7 +680,9 @@ impl LinalgBackend for CpuBackend {
         ensure_host_tensor("solve", b)?;
         ensure_supported_linalg_pair("solve", a, b)?;
         let provider = linalg_provider_kind(self.kind(), "solve")?;
-        self.with_linalg_pool(|context, buffers| solve_entered(provider, context, buffers, a, b))
+        self.with_linalg_pool_fresh(|context, buffers| {
+            solve_entered(provider, context, buffers, a, b)
+        })
     }
 
     fn solve_read(
@@ -627,7 +694,7 @@ impl LinalgBackend for CpuBackend {
         ensure_host_tensor_read("solve", &b)?;
         ensure_supported_linalg_dtypes("solve", a.dtype(), b.dtype())?;
         let provider = linalg_provider_kind(self.kind(), "solve")?;
-        self.with_linalg_pool(move |context, buffers| {
+        self.with_linalg_pool_fresh(move |context, buffers| {
             context.with_materialized_tensor_read(buffers, "solve", a, |a, buffers| {
                 context.with_materialized_tensor_read(buffers, "solve", b, |b, buffers| {
                     solve_entered(provider, context, buffers, a, b)
