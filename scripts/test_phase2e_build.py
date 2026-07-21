@@ -3122,6 +3122,117 @@ class AllocationProbeBuildPlanTests(unittest.TestCase):
         )
         self.assertEqual(plan[1].argv, (str(binary), "--list-cases"))
 
+    def test_probe_builder_runs_two_lock_generations_and_three_independent_builds(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository = root / "repository"
+            repository.mkdir()
+            write_probe_fixture(repository)
+            evidence = root / "evidence"
+            evidence.mkdir()
+            scratch = root / "scratch"
+            for role in build.BUILD_MANIFEST_PATHS:
+                for crate in ("tenferro-ad", "tenferro-cpu", "tenferro-tensor"):
+                    (scratch / role / "crates" / crate).mkdir(parents=True)
+            home = root / "home"
+            cargo_home = root / "cargo-home"
+            home.mkdir()
+            cargo_home.mkdir()
+            controlled_path = controlled_tool_path(root)
+            tools = build.resolve_toolchain(controlled_path)
+            config = build.BuildConfig(
+                repository=repository,
+                evidence_root=evidence,
+                scratch_root=scratch,
+                candidate_commit="c" * 40,
+                path=controlled_path,
+                home=home,
+                cargo_home=cargo_home,
+            )
+            toolchain = {
+                name: {
+                    "path": str(getattr(tools, name).path),
+                    "sha256": getattr(tools, name).sha256,
+                    **({} if name == "git" else {"version": f"{name} 1.90.0"}),
+                }
+                for name in ("git", "cargo", "rustc")
+            }
+            manifests = {
+                role: {
+                    "role": role,
+                    "head": ("c" if role == "candidate" else "d") * 40,
+                    "toolchain": toolchain,
+                }
+                for role in build.BUILD_MANIFEST_PATHS
+            }
+
+            class ProbeBuildRunner:
+                def __init__(self):
+                    self.calls = []
+
+                def __call__(self, argv, *, cwd, environment, deadline_seconds, **_kwargs):
+                    argv = tuple(argv)
+                    cwd = pathlib.Path(cwd)
+                    self.calls.append(argv)
+                    if len(argv) > 1 and argv[1] == "generate-lockfile":
+                        (cwd / "Cargo.lock").write_bytes(
+                            f"lock:{cwd.name}\n".encode()
+                        )
+                    elif len(argv) > 1 and argv[1] == "build":
+                        binary = (
+                            pathlib.Path(environment["CARGO_TARGET_DIR"])
+                            / "release"
+                            / build.ALLOCATION_PROBE_BINARY
+                        )
+                        binary.parent.mkdir(parents=True)
+                        binary.write_bytes(f"binary:{cwd.parent.name}\n".encode())
+                        binary.chmod(0o755)
+                    stdout = (
+                        json.dumps(list(protocol.CANONICAL_CASES), separators=(",", ":"))
+                        + "\n"
+                        if argv[0].endswith(build.ALLOCATION_PROBE_BINARY)
+                        else ""
+                    )
+                    return build.CommandResult(
+                        argv=argv,
+                        cwd=str(cwd),
+                        environment=dict(sorted(environment.items())),
+                        deadline_seconds=deadline_seconds,
+                        returncode=0,
+                        stdout=stdout,
+                        stderr="",
+                        validity_state="COMPLETE",
+                        failure_reason=None,
+                        terminated=False,
+                        killed=False,
+                    )
+
+            command_runner = ProbeBuildRunner()
+            observed = build._build_allocation_probe_set_with_dependencies(
+                config,
+                manifests,
+                tools=tools,
+                command_runner=command_runner,
+            )
+            self.assertEqual(tuple(observed), tuple(build.BUILD_MANIFEST_PATHS))
+            self.assertEqual(len(command_runner.calls), 8)
+            self.assertEqual(
+                sum(argv[1:2] == ("generate-lockfile",) for argv in command_runner.calls),
+                2,
+            )
+            self.assertEqual(
+                sum(argv[1:2] == ("--list-cases",) for argv in command_runner.calls),
+                3,
+            )
+            self.assertEqual(
+                observed["candidate"]["lock_sha256"],
+                observed["common-lock-normalized-baseline"]["lock_sha256"],
+            )
+            self.assertNotEqual(
+                observed["candidate"]["lock_sha256"],
+                observed["direct-current-main-baseline"]["lock_sha256"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
