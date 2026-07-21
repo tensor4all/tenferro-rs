@@ -300,14 +300,36 @@ socket0.with_eager_session(|session| run_job(session, input0))?;
 `CpuPlacementBoundEager` retains the original runtime and a resolved, cheap
 `CpuBackend` handle. It does not own a lease or hold a backend mutex while idle.
 `on_cpu` locks the original eager runtime once, verifies that it is CPU-backed,
-clones a resolved placement handle, and releases the lock. The placement
-context is used mutably, so it needs no second backend mutex.
+and clones the CPU coordinator and its immutable provider bundle as one
+snapshot. The guard is released before `CpuBackend::for_placement` performs
+placement resolution. Later backend or provider replacement on the original
+runtime does not alter an already-created placement binding. The placement
+context is used mutably, so it needs no second backend mutex. It has a
+hand-written summary `Debug` implementation and is intentionally not `Clone` in
+phase 2.
 `with_eager_session` enters exactly one selected backend session and passes a
 borrowed `&mut dyn BackendSession` adapter to the closure. The bridge operates
 on concrete `Tensor` values through the existing public backend-session traits;
 it does not ask ordinary `EagerTensor` methods to recursively lock the runtime.
 Nested operation-family calls through the borrowed session delegate below that
 session boundary and do not call `CpuBackend::install` again.
+
+The phase-2 adapter exposes only the core operations already implemented by
+`BackendSession`. It does not enter the eager runtime's extension registry and
+does not add linalg, FFT, einsum, or other operation-family methods. Those
+families remain phase-4/phase-6 work. “One session entry” means one
+`CpuBackend::with_backend_session` call for each `with_eager_session` scope;
+each core operation invoked on the borrowed session still crosses its own
+`CpuOperationEntry` exactly once.
+
+The existing CPU backend re-entry guard is panic-based rather than a typed
+admission API: calling an ordinary same-runtime `EagerTensor` operation from
+inside the borrowed session reaches `BACKEND_REENTRY_PANIC` immediately. The
+placement bridge therefore documents this `# Panics` boundary and tests unwind
+recovery. It does not hold the eager backend mutex during the callback, so this
+case cannot deadlock on that mutex. A typed recursive-entry result would require
+a later change to the underlying `BackendSessionHost`/CPU entry contract and is
+not emulated here by catching panics.
 
 This scoped surface is the phase-2 bridge. Phase 4 attaches the same placement
 binding to the general immutable `RuntimeSnapshot` and adds AD-aware

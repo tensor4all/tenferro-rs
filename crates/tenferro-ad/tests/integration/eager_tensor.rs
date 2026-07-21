@@ -2,12 +2,14 @@ use std::sync::{Arc, OnceLock};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{CpuBackend, CpuPlacement};
 use tenferro_runtime::{
     DType, DotGeneralConfig, Error as RuntimeError, ErrorPhase, GatherConfig, PadConfig,
     SliceConfig, Tensor, TensorRead, TensorView,
 };
-use tenferro_tensor::{Error as TensorError, ErrorKind, ValidationError, ValidationKind};
+use tenferro_tensor::{
+    Error as TensorError, ErrorKind, TensorElementwise, ValidationError, ValidationKind,
+};
 
 #[path = "eager_tensor/context_and_promotion.rs"]
 mod context_and_promotion;
@@ -45,6 +47,25 @@ fn c64_data(tensor: &Tensor) -> &[Complex64] {
 }
 
 fn assert_send_sync<T: Send + Sync>() {}
+
+#[test]
+fn placement_bound_session_reuses_runtime_identity_and_requested_placement() {
+    let runtime = EagerRuntime::with_cpu_backend(CpuBackend::with_threads(1).unwrap());
+    let mut cpu = runtime.on_cpu(CpuPlacement::Auto).unwrap();
+
+    assert_eq!(cpu.runtime_id(), runtime.id());
+    assert_eq!(cpu.placement(), CpuPlacement::Auto);
+
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let output = cpu
+        .with_eager_session(|session| {
+            TensorElementwise::add(session, &lhs, &rhs).map_err(RuntimeError::from)
+        })
+        .unwrap();
+
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[3.0]);
+}
 
 fn finite_diff_scalar(f: impl Fn(&[f64]) -> f64, x: &[f64], index: usize) -> f64 {
     let mut plus = x.to_vec();

@@ -13,7 +13,7 @@ use computegraph::graph::Graph;
 use computegraph::ValueKey;
 #[cfg(test)]
 use computegraph::ValueRef;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{CpuBackend, CpuBackendError, CpuPlacement};
 #[cfg(feature = "cuda")]
 use tenferro_gpu::CudaBackend;
 #[cfg(feature = "webgpu")]
@@ -24,7 +24,7 @@ use tenferro_ops::ExtensionRuleSet;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::ones_tensor;
 use tenferro_runtime::ErrorPhase;
-use tenferro_tensor::BackendSessionHost;
+use tenferro_tensor::{BackendSession, BackendSessionHost};
 use tenferro_tensor::{
     CacheStats, DType, IntoShapeVec, Tensor, TensorBackend, TensorElementwise, TensorRead,
     TensorScalar, TensorValue, TypedTensor,
@@ -234,6 +234,125 @@ pub(crate) struct EagerGraphExecution {
     pub(crate) retained_values: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
 }
 
+/// Placement-selected CPU view of one [`EagerRuntime`].
+///
+/// The view snapshots the runtime's CPU coordinator and provider bundle when
+/// [`EagerRuntime::on_cpu`] is called. It holds no resource permit while idle
+/// and enters one backend session only while [`Self::with_eager_session`] runs.
+/// The session exposes core [`BackendSession`] operations on concrete
+/// [`Tensor`] values. Phase 2 deliberately does not expose the eager runtime's
+/// linalg, FFT, einsum, or extension-runtime registries through this bridge.
+///
+/// The value is intentionally not `Clone`: mutable use makes concurrent
+/// session ownership explicit without adding another backend mutex.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::EagerRuntime;
+/// use tenferro_cpu::CpuPlacement;
+///
+/// let runtime = EagerRuntime::new();
+/// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+/// assert_eq!(cpu.runtime_id(), runtime.id());
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+pub struct CpuPlacementBoundEager {
+    runtime: Arc<EagerRuntime>,
+    backend: CpuBackend,
+}
+
+impl fmt::Debug for CpuPlacementBoundEager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CpuPlacementBoundEager")
+            .field("runtime_id", &self.runtime.id())
+            .field("placement", &self.backend.placement())
+            .finish_non_exhaustive()
+    }
+}
+
+impl CpuPlacementBoundEager {
+    /// Return the identity of the original eager runtime.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuPlacement;
+    ///
+    /// let runtime = EagerRuntime::new();
+    /// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+    /// assert_eq!(cpu.runtime_id(), runtime.id());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn runtime_id(&self) -> ContextId {
+        self.runtime.id()
+    }
+
+    /// Return the placement requested when this view was created.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuPlacement;
+    ///
+    /// let runtime = EagerRuntime::new();
+    /// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+    /// assert_eq!(cpu.placement(), CpuPlacement::Auto);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn placement(&self) -> CpuPlacement {
+        self.backend.placement()
+    }
+
+    /// Enter one CPU backend session and run core operations through it.
+    ///
+    /// One call creates one backend session. Each core operation invoked on
+    /// `session` still enters its own operation boundary exactly once. The
+    /// closure may borrow stack data and need not be `'static`.
+    ///
+    /// This phase-2 bridge accepts only core [`BackendSession`] operations. It
+    /// does not lock or dispatch the eager runtime's linalg, FFT, einsum, or
+    /// extension registries.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Error};
+    /// use tenferro_cpu::CpuPlacement;
+    /// use tenferro_tensor::{Tensor, TensorElementwise};
+    ///
+    /// let runtime = EagerRuntime::new();
+    /// let mut cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+    /// let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// let output = cpu.with_eager_session(|session| {
+    ///     TensorElementwise::add(session, &lhs, &rhs).map_err(Error::from)
+    /// })?;
+    /// assert_eq!(output.as_slice::<f64>().unwrap(), &[3.0]);
+    /// # Ok::<(), Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the callback's [`Error`] unchanged. Core backend operations may
+    /// report validation, unsupported capability, backend, or runtime-state
+    /// failures through that error.
+    ///
+    /// # Panics
+    ///
+    /// The existing CPU backend re-entry guard panics if the callback enters a
+    /// public `CpuBackend` or calls an ordinary `EagerTensor` operation on this
+    /// same runtime. Use only the borrowed `session` for work inside the scope.
+    pub fn with_eager_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> Result<R> + Send,
+    ) -> Result<R> {
+        self.backend.with_backend_session(f)
+    }
+}
+
 /// Shared eager execution context for tensors on a backend.
 ///
 /// Reusing one context lets eager tensors share backend state, extension
@@ -432,6 +551,56 @@ impl EagerRuntime {
     /// ```
     pub fn with_cpu_backend(backend: CpuBackend) -> Arc<Self> {
         Arc::new(Self::from_backend(EagerBackend::cpu(backend)))
+    }
+
+    /// Snapshot a placement-selected CPU handle from this eager runtime.
+    ///
+    /// The eager backend lock is held only long enough to verify the backend
+    /// kind and clone its CPU coordinator/provider snapshot. Placement
+    /// resolution happens after that guard is dropped. The returned value does
+    /// not hold a resource permit or a second runtime/backend mutex while idle.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuPlacement;
+    ///
+    /// let runtime = EagerRuntime::new();
+    /// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+    /// assert_eq!(cpu.runtime_id(), runtime.id());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] if the eager backend lock is poisoned,
+    /// [`Error::Unsupported`] if the runtime is not CPU-backed, or a typed
+    /// tensor runtime error retaining [`tenferro_cpu::CpuPlacementError`] when
+    /// the requested placement cannot be resolved.
+    pub fn on_cpu(self: &Arc<Self>, placement: CpuPlacement) -> Result<CpuPlacementBoundEager> {
+        let backend = {
+            let backend = self.lock_backend()?;
+            backend.cpu_snapshot().ok_or_else(|| {
+                Error::unsupported(
+                    "EagerRuntime::on_cpu",
+                    ErrorPhase::Execution,
+                    "the eager runtime is not CPU-backed",
+                )
+            })?
+        };
+        let backend = backend.for_placement(placement).map_err(|source| {
+            let error: tenferro_tensor::Error = CpuBackendError::Placement {
+                op: "EagerRuntime::on_cpu",
+                source,
+            }
+            .into();
+            Error::from(error)
+        })?;
+        Ok(CpuPlacementBoundEager {
+            runtime: Arc::clone(self),
+            backend,
+        })
     }
 
     /// Create a shared CPU eager context with explicit AD extension rules.
