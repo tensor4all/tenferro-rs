@@ -769,13 +769,30 @@ class GitSourceControl:
         return outcome.stdout
 
 
+def _record_suppressed_failure(
+    primary: BaseException, operation: str, secondary: BaseException
+) -> None:
+    """Attach best-effort diagnostics without replacing an active exception."""
+    try:
+        primary.add_note(
+            f"suppressed {operation} failure: {type(secondary).__name__}: {secondary}"
+        )
+    except BaseException:
+        pass
+
+
 def _read_regular_bytes(path: pathlib.Path) -> bytes:
     path = pathlib.Path(path)
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+    descriptor: int | None = None
     try:
         descriptor = os.open(path, flags)
-    except OSError as error:
-        raise protocol.ProtocolError(f"cannot open lock source {path}: {error}") from error
+    except BaseException as error:
+        if isinstance(error, Exception):
+            raise protocol.ProtocolError(
+                f"cannot open lock source {path}: {error}"
+            ) from error
+        raise
     primary: BaseException | None = None
     chunks: list[bytes] = []
     try:
@@ -787,20 +804,28 @@ def _read_regular_bytes(path: pathlib.Path) -> bytes:
             if not chunk:
                 break
             chunks.append(chunk)
-    except OSError as error:
-        primary = error
-        raise protocol.ProtocolError(f"cannot read lock source {path}: {error}") from error
     except BaseException as error:
-        primary = error
-        raise
+        if isinstance(error, protocol.ProtocolError) or not isinstance(error, Exception):
+            primary = error
+            raise
+        wrapped = protocol.ProtocolError(f"cannot read lock source {path}: {error}")
+        primary = wrapped
+        raise wrapped from error
     finally:
-        try:
-            os.close(descriptor)
-        except OSError as error:
-            if primary is None:
-                raise protocol.ProtocolError(
-                    f"cannot close lock source {path}: {error}"
-                ) from error
+        if descriptor is not None:
+            owned_descriptor = descriptor
+            descriptor = None
+            try:
+                os.close(owned_descriptor)
+            except BaseException as error:
+                if primary is not None:
+                    _record_suppressed_failure(primary, "lock source close", error)
+                elif isinstance(error, Exception):
+                    raise protocol.ProtocolError(
+                        f"cannot close lock source {path}: {error}"
+                    ) from error
+                else:
+                    raise
     return b"".join(chunks)
 
 
@@ -2399,10 +2424,15 @@ def _validate_allocation_probe_manifest(payload: bytes, repository: pathlib.Path
 
 def _write_new_regular(path: pathlib.Path, payload: bytes) -> None:
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
+    descriptor: int | None = None
     try:
         descriptor = os.open(path, flags, 0o644)
-    except OSError as error:
-        raise protocol.ProtocolError(f"cannot create generated probe file {path}: {error}") from error
+    except BaseException as error:
+        if isinstance(error, Exception):
+            raise protocol.ProtocolError(
+                f"cannot create generated probe file {path}: {error}"
+            ) from error
+        raise
     primary: BaseException | None = None
     try:
         offset = 0
@@ -2413,16 +2443,27 @@ def _write_new_regular(path: pathlib.Path, payload: bytes) -> None:
             offset += written
         os.fsync(descriptor)
     except BaseException as error:
-        primary = error
-        raise
+        if isinstance(error, protocol.ProtocolError) or not isinstance(error, Exception):
+            primary = error
+            raise
+        wrapped = protocol.ProtocolError(f"cannot write generated probe file {path}: {error}")
+        primary = wrapped
+        raise wrapped from error
     finally:
-        try:
-            os.close(descriptor)
-        except OSError as error:
-            if primary is None:
-                raise protocol.ProtocolError(
-                    f"cannot close generated probe file {path}: {error}"
-                ) from error
+        if descriptor is not None:
+            owned_descriptor = descriptor
+            descriptor = None
+            try:
+                os.close(owned_descriptor)
+            except BaseException as error:
+                if primary is not None:
+                    _record_suppressed_failure(primary, "generated probe file close", error)
+                elif isinstance(error, Exception):
+                    raise protocol.ProtocolError(
+                        f"cannot close generated probe file {path}: {error}"
+                    ) from error
+                else:
+                    raise
 
 
 def _validate_generated_probe_inventory(root: pathlib.Path, *, lock_required: bool) -> None:
@@ -2532,10 +2573,14 @@ def _cleanup_probe_root(root: pathlib.Path, primary: BaseException | None) -> No
     try:
         shutil.rmtree(root)
     except BaseException as error:
-        if primary is None:
+        if primary is not None:
+            _record_suppressed_failure(primary, "allocation probe root cleanup", error)
+        elif isinstance(error, Exception):
             raise protocol.ProtocolError(
                 f"cannot clean allocation probe temporary root {root}: {error}"
             ) from error
+        else:
+            raise
 
 
 def _verify_allocation_probe_with_dependencies(

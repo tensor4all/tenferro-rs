@@ -903,7 +903,7 @@ class AllocationProbeVerifierTests(unittest.TestCase):
     def test_cleanup_failure_never_replaces_active_exception(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
-            repository, cargo, cache, _, make_root = self.fixture(root)
+            repository, cargo, cache, owned, make_root = self.fixture(root)
             interruption = KeyboardInterrupt("primary")
             runner = FakeProbeRunner(fail_at="fmt", interrupt=interruption)
             with mock.patch.object(build.shutil, "rmtree", side_effect=OSError("cleanup")):
@@ -916,6 +916,388 @@ class AllocationProbeVerifierTests(unittest.TestCase):
                         cache_source=cache,
                     )
             self.assertIs(caught.exception, interruption)
+            self.assertTrue(owned.is_dir())
+
+    def test_cleanup_without_primary_preserves_control_exceptions_raw(self) -> None:
+        root = pathlib.Path("/tmp/owned-probe-root")
+        for make_interruption in (lambda: KeyboardInterrupt("cleanup"), lambda: SystemExit(23)):
+            interruption = make_interruption()
+            with self.subTest(kind=type(interruption).__name__):
+                def raising_cleanup(_root, error=interruption):
+                    raise error
+
+                with mock.patch.object(build.shutil, "rmtree", side_effect=raising_cleanup):
+                    try:
+                        build._cleanup_probe_root(root, None)
+                    except BaseException as caught:
+                        self.assertIs(caught, interruption)
+                        traceback_names = []
+                        traceback = caught.__traceback__
+                        while traceback is not None:
+                            traceback_names.append(traceback.tb_frame.f_code.co_name)
+                            traceback = traceback.tb_next
+                    else:
+                        self.fail("cleanup control exception was suppressed")
+                self.assertIn("raising_cleanup", traceback_names)
+
+    def test_cleanup_without_primary_wraps_ordinary_exception_only(self) -> None:
+        root = pathlib.Path("/tmp/owned-probe-root")
+        for make_secondary in (lambda: OSError("cleanup"), lambda: RuntimeError("cleanup")):
+            secondary = make_secondary()
+            with self.subTest(kind=type(secondary).__name__):
+                with mock.patch.object(build.shutil, "rmtree", side_effect=secondary):
+                    with self.assertRaises(protocol.ProtocolError) as caught:
+                        build._cleanup_probe_root(root, None)
+                self.assertIs(caught.exception.__cause__, secondary)
+
+    def test_cleanup_secondary_never_replaces_active_primary(self) -> None:
+        root = pathlib.Path("/tmp/owned-probe-root")
+        for make_primary in (
+            lambda: OSError("primary"),
+            lambda: RuntimeError("primary"),
+            lambda: KeyboardInterrupt("primary"),
+            lambda: SystemExit(17),
+        ):
+            for make_secondary in (
+                lambda: OSError("cleanup"),
+                lambda: RuntimeError("cleanup"),
+                lambda: KeyboardInterrupt("cleanup"),
+                lambda: SystemExit(29),
+            ):
+                primary = make_primary()
+                secondary = make_secondary()
+                with self.subTest(
+                    primary=type(primary).__name__, secondary=type(secondary).__name__
+                ):
+                    def raise_primary(error=primary):
+                        raise error
+
+                    with self.assertRaises(type(primary)) as caught:
+                        try:
+                            raise_primary()
+                        except BaseException as active:
+                            with mock.patch.object(
+                                build.shutil, "rmtree", side_effect=secondary
+                            ):
+                                build._cleanup_probe_root(root, active)
+                            raise
+                    self.assertIs(caught.exception, primary)
+                    self.assertTrue(
+                        any("cleanup" in note for note in getattr(primary, "__notes__", ()))
+                    )
+
+    def test_write_new_regular_preserves_open_write_and_fsync_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            real_open = os.open
+            real_write = os.write
+            real_fsync = os.fsync
+            for stage in ("open", "write", "fsync"):
+                for make_primary in (
+                    lambda: OSError(f"{stage}-primary"),
+                    lambda: RuntimeError(f"{stage}-primary"),
+                    lambda: KeyboardInterrupt(f"{stage}-primary"),
+                    lambda: SystemExit(31),
+                ):
+                    primary = make_primary()
+                    with self.subTest(stage=stage, primary=type(primary).__name__):
+                        path = root / f"{stage}-{type(primary).__name__}"
+                        opened: list[int] = []
+
+                        def recording_open(*args, **kwargs):
+                            descriptor = real_open(*args, **kwargs)
+                            opened.append(descriptor)
+                            return descriptor
+
+                        patches = {
+                            "open": mock.patch.object(
+                                build.os,
+                                "open",
+                                side_effect=primary if stage == "open" else recording_open,
+                            ),
+                            "write": mock.patch.object(
+                                build.os,
+                                "write",
+                                side_effect=primary if stage == "write" else real_write,
+                            ),
+                            "fsync": mock.patch.object(
+                                build.os,
+                                "fsync",
+                                side_effect=primary if stage == "fsync" else real_fsync,
+                            ),
+                        }
+                        with patches["open"], patches["write"], patches["fsync"]:
+                            expected = (
+                                protocol.ProtocolError
+                                if isinstance(primary, Exception)
+                                else type(primary)
+                            )
+                            with self.assertRaises(expected) as caught:
+                                build._write_new_regular(path, b"payload")
+                        if isinstance(primary, Exception):
+                            self.assertIs(caught.exception.__cause__, primary)
+                        else:
+                            self.assertIs(caught.exception, primary)
+                        for descriptor in opened:
+                            with self.assertRaises(OSError):
+                                os.fstat(descriptor)
+                            del descriptor
+                        if stage == "open":
+                            self.assertFalse(path.exists())
+                        elif path.exists():
+                            path.unlink()
+
+    def test_write_new_regular_close_exception_matrix_and_fd_reuse(self) -> None:
+        real_open = os.open
+        real_close = os.close
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            for make_secondary in (
+                lambda: OSError("close"),
+                lambda: RuntimeError("close"),
+                lambda: KeyboardInterrupt("close"),
+                lambda: SystemExit(37),
+            ):
+                secondary = make_secondary()
+                with self.subTest(secondary=type(secondary).__name__):
+                    path = root / f"close-{type(secondary).__name__}"
+                    reused: list[int] = []
+
+                    def close_reuse_then_raise(descriptor, error=secondary):
+                        real_close(descriptor)
+                        reused.append(
+                            real_open(
+                                root / "reuse", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
+                            )
+                        )
+                        self.assertEqual(reused[-1], descriptor)
+                        raise error
+
+                    with mock.patch.object(build.os, "close", side_effect=close_reuse_then_raise):
+                        if isinstance(secondary, Exception):
+                            with self.assertRaises(protocol.ProtocolError) as context:
+                                build._write_new_regular(path, b"payload")
+                            caught = context.exception
+                        else:
+                            try:
+                                build._write_new_regular(path, b"payload")
+                            except BaseException as caught:
+                                observed = caught
+                                traceback_names = []
+                                traceback = caught.__traceback__
+                                while traceback is not None:
+                                    traceback_names.append(traceback.tb_frame.f_code.co_name)
+                                    traceback = traceback.tb_next
+                            else:
+                                self.fail("close control exception was suppressed")
+                            self.assertIn("close_reuse_then_raise", traceback_names)
+                    if isinstance(secondary, Exception):
+                        self.assertIs(caught.__cause__, secondary)
+                    else:
+                        self.assertIs(observed, secondary)
+                    os.write(reused[-1], b"still-live")
+                    real_close(reused[-1])
+                    (root / "reuse").unlink()
+
+    def test_write_primary_survives_every_close_secondary_without_double_close(self) -> None:
+        real_open = os.open
+        real_close = os.close
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            for make_primary in (
+                lambda: OSError("write"),
+                lambda: RuntimeError("write"),
+                lambda: KeyboardInterrupt("write"),
+                lambda: SystemExit(41),
+            ):
+                for make_secondary in (
+                    lambda: OSError("close"),
+                    lambda: RuntimeError("close"),
+                    lambda: KeyboardInterrupt("close"),
+                    lambda: SystemExit(41),
+                ):
+                    primary = make_primary()
+                    secondary = make_secondary()
+                    with self.subTest(
+                        primary=type(primary).__name__, secondary=type(secondary).__name__
+                    ):
+                        path = root / f"primary-{type(primary).__name__}-{type(secondary).__name__}"
+                        reused: list[int] = []
+
+                        def close_reuse_then_raise(descriptor, error=secondary):
+                            real_close(descriptor)
+                            reused.append(
+                                real_open(
+                                    root / "reuse",
+                                    os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                                    0o600,
+                                )
+                            )
+                            self.assertEqual(reused[-1], descriptor)
+                            raise error
+
+                        with mock.patch.object(build.os, "write", side_effect=primary), mock.patch.object(
+                            build.os, "close", side_effect=close_reuse_then_raise
+                        ):
+                            expected = (
+                                protocol.ProtocolError
+                                if isinstance(primary, Exception)
+                                else type(primary)
+                            )
+                            with self.assertRaises(expected) as caught:
+                                build._write_new_regular(path, b"payload")
+                        if isinstance(primary, Exception):
+                            self.assertIs(caught.exception.__cause__, primary)
+                            active = caught.exception
+                        else:
+                            self.assertIs(caught.exception, primary)
+                            active = primary
+                        self.assertTrue(
+                            any("close" in note for note in getattr(active, "__notes__", ()))
+                        )
+                        os.write(reused[-1], b"still-live")
+                        real_close(reused[-1])
+                        (root / "reuse").unlink()
+                        path.unlink()
+
+    def test_read_regular_preserves_open_and_read_failures(self) -> None:
+        real_open = os.open
+        real_read = os.read
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            source = root / "source"
+            source.write_bytes(b"payload")
+            for stage in ("open", "read"):
+                for make_primary in (
+                    lambda: OSError(f"{stage}-primary"),
+                    lambda: RuntimeError(f"{stage}-primary"),
+                    lambda: KeyboardInterrupt(f"{stage}-primary"),
+                    lambda: SystemExit(43),
+                ):
+                    primary = make_primary()
+                    with self.subTest(stage=stage, primary=type(primary).__name__):
+                        with mock.patch.object(
+                            build.os,
+                            "open",
+                            side_effect=primary if stage == "open" else real_open,
+                        ), mock.patch.object(
+                            build.os,
+                            "read",
+                            side_effect=primary if stage == "read" else real_read,
+                        ):
+                            expected = (
+                                protocol.ProtocolError
+                                if isinstance(primary, Exception)
+                                else type(primary)
+                            )
+                            with self.assertRaises(expected) as caught:
+                                build._read_regular_bytes(source)
+                        if isinstance(primary, Exception):
+                            self.assertIs(caught.exception.__cause__, primary)
+                        else:
+                            self.assertIs(caught.exception, primary)
+
+    def test_read_regular_close_exception_matrix_and_fd_reuse(self) -> None:
+        real_open = os.open
+        real_close = os.close
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            source = root / "source"
+            source.write_bytes(b"payload")
+            for make_secondary in (
+                lambda: OSError("close"),
+                lambda: RuntimeError("close"),
+                lambda: KeyboardInterrupt("close"),
+                lambda: SystemExit(47),
+            ):
+                secondary = make_secondary()
+                with self.subTest(secondary=type(secondary).__name__):
+                    reused: list[int] = []
+
+                    def close_reuse_then_raise(descriptor, error=secondary):
+                        real_close(descriptor)
+                        reused.append(real_open(source, os.O_RDONLY | os.O_CLOEXEC))
+                        self.assertEqual(reused[-1], descriptor)
+                        raise error
+
+                    with mock.patch.object(build.os, "close", side_effect=close_reuse_then_raise):
+                        if isinstance(secondary, Exception):
+                            with self.assertRaises(protocol.ProtocolError) as context:
+                                build._read_regular_bytes(source)
+                            caught = context.exception
+                        else:
+                            try:
+                                build._read_regular_bytes(source)
+                            except BaseException as caught:
+                                observed = caught
+                                traceback_names = []
+                                traceback = caught.__traceback__
+                                while traceback is not None:
+                                    traceback_names.append(traceback.tb_frame.f_code.co_name)
+                                    traceback = traceback.tb_next
+                            else:
+                                self.fail("close control exception was suppressed")
+                            self.assertIn("close_reuse_then_raise", traceback_names)
+                    if isinstance(secondary, Exception):
+                        self.assertIs(caught.__cause__, secondary)
+                    else:
+                        self.assertIs(observed, secondary)
+                    self.assertEqual(os.read(reused[-1], 1), b"p")
+                    real_close(reused[-1])
+
+    def test_read_primary_survives_every_close_secondary_without_double_close(self) -> None:
+        real_open = os.open
+        real_close = os.close
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            source = root / "source"
+            source.write_bytes(b"payload")
+            for make_primary in (
+                lambda: OSError("read"),
+                lambda: RuntimeError("read"),
+                lambda: KeyboardInterrupt("read"),
+                lambda: SystemExit(53),
+            ):
+                for make_secondary in (
+                    lambda: OSError("close"),
+                    lambda: RuntimeError("close"),
+                    lambda: KeyboardInterrupt("close"),
+                    lambda: SystemExit(59),
+                ):
+                    primary = make_primary()
+                    secondary = make_secondary()
+                    with self.subTest(
+                        primary=type(primary).__name__, secondary=type(secondary).__name__
+                    ):
+                        reused: list[int] = []
+
+                        def close_reuse_then_raise(descriptor, error=secondary):
+                            real_close(descriptor)
+                            reused.append(real_open(source, os.O_RDONLY | os.O_CLOEXEC))
+                            self.assertEqual(reused[-1], descriptor)
+                            raise error
+
+                        with mock.patch.object(build.os, "read", side_effect=primary), mock.patch.object(
+                            build.os, "close", side_effect=close_reuse_then_raise
+                        ):
+                            expected = (
+                                protocol.ProtocolError
+                                if isinstance(primary, Exception)
+                                else type(primary)
+                            )
+                            with self.assertRaises(expected) as caught:
+                                build._read_regular_bytes(source)
+                        if isinstance(primary, Exception):
+                            self.assertIs(caught.exception.__cause__, primary)
+                            active = caught.exception
+                        else:
+                            self.assertIs(caught.exception, primary)
+                            active = primary
+                        self.assertTrue(
+                            any("close" in note for note in getattr(active, "__notes__", ()))
+                        )
+                        self.assertEqual(os.read(reused[-1], 1), b"p")
+                        real_close(reused[-1])
 
     def test_source_mutation_and_foreign_inventory_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
