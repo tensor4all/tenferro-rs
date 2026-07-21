@@ -210,10 +210,10 @@ jobs:
               repo,
               username: labelActor,
             });
-            if (!allowed.has(data.permission)) {
+            if (!allowed.has(data.role_name)) {
               core.setFailed(
-                `Actor ${labelActor} has ${data.permission} permission; ` +
-                `the ${labelName} label requires maintain or admin permission.`
+                `Actor ${labelActor} has ${data.role_name} repository role; ` +
+                `the ${labelName} label requires the maintain or admin role.`
               );
             }
       - name: Checkout trusted base revision
@@ -377,10 +377,10 @@ jobs:
               repo,
               username: labelActor,
             });
-            if (!allowed.has(data.permission)) {
+            if (!allowed.has(data.role_name)) {
               core.setFailed(
-                `Actor ${labelActor} has ${data.permission} permission; ` +
-                `the ${labelName} label requires maintain or admin permission.`
+                `Actor ${labelActor} has ${data.role_name} repository role; ` +
+                `the ${labelName} label requires the maintain or admin role.`
               );
             }
       - name: Checkout trusted base revision
