@@ -2334,7 +2334,7 @@ def _render_allocation_probe_manifest(
             "allocation probe template must use exactly one repository-root token kind"
         )
     without_placeholder = text.replace(ALLOCATION_PROBE_ROOT_PLACEHOLDER, "")
-    if re.search(r"__TENFERRO_[A-Z0-9_]+__", without_placeholder):
+    if re.search(r"__[A-Z][A-Z0-9_]+__", without_placeholder):
         raise protocol.ProtocolError("allocation probe template contains a foreign token")
     rendered = text.replace(
         ALLOCATION_PROBE_ROOT_PLACEHOLDER,
@@ -2349,8 +2349,23 @@ def _validate_allocation_probe_manifest(payload: bytes, repository: pathlib.Path
         decoded = tomllib.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise protocol.ProtocolError("generated allocation probe manifest is invalid") from error
-    if decoded.get("package", {}).get("name") != ALLOCATION_PROBE_BINARY:
-        raise protocol.ProtocolError("allocation probe package name mismatch")
+    if set(decoded) != {"package", "dependencies"}:
+        raise protocol.ProtocolError("allocation probe top-level manifest schema mismatch")
+    package = decoded["package"]
+    expected_package = {
+        "name": ALLOCATION_PROBE_BINARY,
+        "version": "0.0.0",
+        "edition": "2021",
+        "publish": False,
+    }
+    if type(package) is not dict or set(package) != set(expected_package):
+        raise protocol.ProtocolError("allocation probe package schema mismatch")
+    for field, expected in expected_package.items():
+        observed = package[field]
+        if type(observed) is not type(expected) or observed != expected:
+            raise protocol.ProtocolError(
+                f"allocation probe package field mismatch: {field}"
+            )
     dependencies = decoded.get("dependencies")
     expected_names = {"tenferro-ad", "tenferro-cpu", "tenferro-tensor"}
     if type(dependencies) is not dict or set(dependencies) != expected_names:

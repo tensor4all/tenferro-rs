@@ -1037,6 +1037,93 @@ class AllocationProbeVerifierTests(unittest.TestCase):
             self.assertEqual(runner.calls, [])
             self.assertFalse(owned.exists())
 
+    def test_manifest_rejects_every_noncanonical_toml_surface(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository, _, _, _, _ = self.fixture(root)
+            template = (
+                repository
+                / build.ALLOCATION_PROBE_SOURCE_ROOT
+                / build.ALLOCATION_PROBE_TEMPLATE
+            ).read_bytes()
+            valid = build._render_allocation_probe_manifest(template, repository).decode()
+            mutations = {
+                "top-level key": "foreign = true\n" + valid,
+                "top-level table": valid + "\n[foreign]\nvalue = true\n",
+                "package unknown": valid.replace(
+                    "[package]\n", '[package]\nbuild = "build.rs"\n', 1
+                ),
+                "package name": valid.replace(
+                    'name = "phase2e-allocation-probe"', 'name = "foreign"', 1
+                ),
+                "package version": valid.replace('version = "0.0.0"', 'version = "1.0.0"', 1),
+                "package edition": valid.replace('edition = "2021"', 'edition = "2024"', 1),
+                "package publish": valid.replace("publish = false", "publish = true", 1),
+                "absolute bin": valid
+                + '\n[[bin]]\nname = "probe"\npath = "/tmp/main.rs"\n',
+                "tracked bin": valid
+                + '\n[[bin]]\nname = "probe"\npath = "src/main.rs"\n',
+                "foreign bin": valid
+                + '\n[[bin]]\nname = "probe"\npath = "foreign.rs"\n',
+                "build dependencies": valid + "\n[build-dependencies]\ncc = \"1\"\n",
+                "dev dependencies": valid + "\n[dev-dependencies]\nserde = \"1\"\n",
+                "patch": valid + "\n[patch.crates-io]\nserde = { path = \"/tmp/serde\" }\n",
+                "replace": valid
+                + '\n[replace]\n"serde:1.0.0" = { path = "/tmp/serde" }\n',
+                "profile": valid + "\n[profile.bench]\nlto = true\n",
+                "workspace members": valid + '\n[workspace]\nmembers = ["foreign"]\n',
+                "workspace dependencies": valid
+                + '\n[workspace.dependencies]\nserde = "1"\n',
+                "features": valid + '\n[features]\ndefault = ["foreign"]\n',
+                "target dependencies": valid
+                + '\n[target.\'cfg(unix)\'.dependencies]\nserde = "1"\n',
+            }
+            for label, mutation in mutations.items():
+                with self.subTest(label=label), self.assertRaises(protocol.ProtocolError):
+                    build._validate_allocation_probe_manifest(
+                        mutation.encode(), repository
+                    )
+
+    def test_template_accepts_only_the_single_frozen_placeholder_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository, _, _, _, _ = self.fixture(root)
+            template = (
+                repository
+                / build.ALLOCATION_PROBE_SOURCE_ROOT
+                / build.ALLOCATION_PROBE_TEMPLATE
+            ).read_bytes()
+            mutations = (
+                template.replace(
+                    build.ALLOCATION_PROBE_ROOT_PLACEHOLDER.encode(),
+                    b"/foreign/root",
+                    1,
+                ),
+                template + build.ALLOCATION_PROBE_ROOT_PLACEHOLDER.encode(),
+                template + b"\n# __FOREIGN_PLACEHOLDER__\n",
+            )
+            for mutation in mutations:
+                with self.assertRaises(protocol.ProtocolError):
+                    build._render_allocation_probe_manifest(mutation, repository)
+
+    def test_invalid_manifest_is_rejected_before_launch_and_owned_root_is_cleaned(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository, cargo, cache, owned, make_root = self.fixture(root)
+            template = repository / build.ALLOCATION_PROBE_SOURCE_ROOT / "Cargo.toml.in"
+            template.write_text("foreign = true\n" + template.read_text())
+            runner = FakeProbeRunner()
+            with self.assertRaisesRegex(protocol.ProtocolError, "top-level"):
+                build._verify_allocation_probe_with_dependencies(
+                    repository,
+                    cargo=cargo,
+                    command_runner=runner,
+                    temporary_root_factory=make_root,
+                    cache_source=cache,
+                )
+            self.assertEqual(runner.calls, [])
+            self.assertFalse(owned.exists())
+
     def test_lock_mutation_after_creation_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
