@@ -1232,6 +1232,74 @@ while not os.path.exists(sys.argv[1]):
         finally:
             os.close(root_fd)
 
+    def test_component_close_failure_never_recloses_reused_descriptor_numbers(self):
+        real_close = os.close
+
+        def exercise(operation, patched_os):
+            before = len(os.listdir("/proc/self/fd"))
+            primary = KeyboardInterrupt("parent descriptor close interrupted")
+            replacements = []
+            close_calls = 0
+
+            def close_then_reuse(descriptor):
+                nonlocal close_calls
+                close_calls += 1
+                real_close(descriptor)
+                if close_calls <= 2:
+                    replacement = os.open("/dev/null", os.O_RDONLY)
+                    self.assertEqual(replacement, descriptor)
+                    replacements.append(replacement)
+                    if close_calls == 1:
+                        raise primary
+                    raise OSError("secondary child descriptor close failure")
+
+            try:
+                with mock.patch.object(
+                    patched_os, "close", side_effect=close_then_reuse
+                ):
+                    with self.assertRaises(KeyboardInterrupt) as raised:
+                        operation()
+                self.assertIs(raised.exception, primary)
+                self.assertEqual(len(replacements), 2)
+                for descriptor in replacements:
+                    os.fstat(descriptor)
+                self.assertEqual(
+                    len(os.listdir("/proc/self/fd")), before + len(replacements)
+                )
+            finally:
+                for descriptor in replacements:
+                    try:
+                        real_close(descriptor)
+                    except OSError:
+                        pass
+
+        fresh = self.base / "reuse-fresh" / "artifact"
+        fresh.parent.mkdir()
+        exercise(
+            lambda: runner.PinnedDirectory.create_fresh(fresh),
+            runner.os,
+        )
+
+        pinned_path = self.base / "reuse-pinned"
+        (pinned_path / "nested").mkdir(parents=True)
+        pinned = runner.PinnedDirectory(pinned_path)
+        try:
+            exercise(lambda: pinned.open_directory("nested"), runner.os)
+        finally:
+            pinned.close()
+
+        retained_fd = os.open(pinned_path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            retained_path = pathlib.Path(f"/proc/self/fd/{retained_fd}/nested")
+            exercise(
+                lambda: runner.classification._open_retained_directory_path(
+                    retained_path
+                ),
+                runner.classification.os,
+            )
+        finally:
+            os.close(retained_fd)
+
     def test_create_fresh_final_parent_close_failure_closes_root_once(self):
         for interruption in (
             KeyboardInterrupt("parent close interrupted"),
@@ -1728,22 +1796,77 @@ while not os.path.exists(sys.argv[1]):
                 runner._probe_committed_marker(root, marker),
                 runner.MARKER_EXACT,
             )
-            with mock.patch.object(
-                root, "read_regular", side_effect=OSError("probe read failed")
+        finally:
+            root.close()
+
+    def test_marker_probe_open_only_treats_leaf_not_found_as_absent(self):
+        root_path = self.base / "marker-probe-open-root"
+        root_path.mkdir()
+        root = runner.PinnedDirectory(root_path)
+        marker = {"version": 1}
+        try:
+            for error, expected in (
+                (FileNotFoundError("leaf absent"), runner.MARKER_ABSENT),
+                (OSError("leaf open failed"), runner.MARKER_UNKNOWN_IO),
+                (KeyboardInterrupt("leaf open interrupted"), runner.MARKER_UNKNOWN_IO),
             ):
-                self.assertEqual(
-                    runner._probe_committed_marker(root, marker),
-                    runner.MARKER_UNKNOWN_IO,
-                )
+                with self.subTest(error=type(error).__name__), mock.patch.object(
+                    runner.os, "open", side_effect=error
+                ):
+                    self.assertEqual(
+                        runner._probe_committed_marker(root, marker), expected
+                    )
+        finally:
+            root.close()
+
+    def test_marker_probe_post_open_failures_are_unknown_and_leak_free(self):
+        root_path = self.base / "marker-probe-post-open-root"
+        root_path.mkdir()
+        root = runner.PinnedDirectory(root_path)
+        marker = {"version": 1, "value": "expected"}
+        root.atomic_json(runner.FINALIZATION_MARKER, marker)
+        real_close = os.close
+        try:
+            for operation in ("read", "fstat", "close"):
+                for error_type in (FileNotFoundError, OSError, KeyboardInterrupt):
+                    with self.subTest(operation=operation, error=error_type.__name__):
+                        error = error_type(f"probe {operation} failed")
+                        before = len(os.listdir("/proc/self/fd"))
+
+                        def fail(*_args, **_keywords):
+                            raise error
+
+                        def close_then_fail(descriptor):
+                            real_close(descriptor)
+                            raise error
+
+                        side_effect = close_then_fail if operation == "close" else fail
+                        with mock.patch.object(
+                            runner.os, operation, side_effect=side_effect
+                        ):
+                            self.assertEqual(
+                                runner._probe_committed_marker(root, marker),
+                                runner.MARKER_UNKNOWN_IO,
+                            )
+                        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
         finally:
             root.close()
 
     def test_marker_probe_close_error_preserves_recoverable_transaction(self):
-        for primary in (
-            KeyboardInterrupt("marker publication interrupted"),
-            SystemExit("marker publication exited"),
+        for primary, probe_failure in (
+            (
+                KeyboardInterrupt("marker publication interrupted"),
+                FileNotFoundError("marker close reported absent"),
+            ),
+            (
+                SystemExit("marker publication exited"),
+                KeyboardInterrupt("marker close interrupted"),
+            ),
         ):
-            with self.subTest(primary=type(primary).__name__):
+            with self.subTest(
+                primary=type(primary).__name__,
+                probe_failure=type(probe_failure).__name__,
+            ):
                 args = self.arguments()
                 first = FakeProcessFactory()
                 original_write = protocol.atomic_write_json_at
@@ -1751,9 +1874,10 @@ while not os.path.exists(sys.argv[1]):
                 marker_identity = None
                 probe_started = False
                 close_injected = False
+                publication_traceback = None
 
                 def interrupt_after_marker(directory_fd, name, payload):
-                    nonlocal marker_identity, probe_started
+                    nonlocal marker_identity, probe_started, publication_traceback
                     result = original_write(directory_fd, name, payload)
                     if name == runner.FINALIZATION_MARKER:
                         metadata = os.stat(
@@ -1761,7 +1885,11 @@ while not os.path.exists(sys.argv[1]):
                         )
                         marker_identity = (metadata.st_dev, metadata.st_ino)
                         probe_started = True
-                        raise primary
+                        try:
+                            raise primary
+                        except BaseException as error:
+                            publication_traceback = error.__traceback__
+                            raise
                     return result
 
                 def close_marker_then_fail(descriptor):
@@ -1775,7 +1903,7 @@ while not os.path.exists(sys.argv[1]):
                         and not close_injected
                     ):
                         close_injected = True
-                        raise OSError("marker probe close failed after exact read")
+                        raise probe_failure
 
                 with mock.patch.object(
                     runner.protocol,
@@ -1784,9 +1912,18 @@ while not os.path.exists(sys.argv[1]):
                 ), mock.patch.object(
                     runner.os, "close", side_effect=close_marker_then_fail
                 ):
-                    with self.assertRaises(type(primary)) as raised:
+                    caught = None
+                    caught_traceback = None
+                    try:
                         self.execute(args, first)
-                self.assertIs(raised.exception, primary)
+                    except type(primary) as error:
+                        caught = error
+                        caught_traceback = error.__traceback__
+                self.assertIs(caught, primary)
+                traceback = caught_traceback
+                while traceback is not None and traceback is not publication_traceback:
+                    traceback = traceback.tb_next
+                self.assertIs(traceback, publication_traceback)
                 self.assertTrue(close_injected)
                 self.assertTrue(
                     (args.artifact_root / runner.FINALIZATION_STAGE).is_file()

@@ -380,6 +380,20 @@ def _retained_proc_components(
     return descriptor, tuple(parts[5:])
 
 
+def _advance_directory_descriptor(
+    parent: int, child: int
+) -> tuple[int | None, BaseException | None]:
+    try:
+        os.close(parent)
+    except BaseException as error:
+        try:
+            os.close(child)
+        except BaseException:
+            pass
+        return None, error
+    return child, None
+
+
 def _open_retained_directory_path(path: pathlib.Path, *, create: bool = False) -> int:
     retained = _retained_proc_components(path)
     if retained is None:
@@ -387,9 +401,10 @@ def _open_retained_directory_path(path: pathlib.Path, *, create: bool = False) -
             path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
         )
     root_descriptor, components = retained
-    descriptor = os.dup(root_descriptor)
+    descriptor: int | None = os.dup(root_descriptor)
     try:
         for component in components:
+            assert descriptor is not None
             if create:
                 try:
                     os.mkdir(component, mode=0o700, dir_fd=descriptor)
@@ -401,21 +416,22 @@ def _open_retained_directory_path(path: pathlib.Path, *, create: bool = False) -
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                 dir_fd=descriptor,
             )
-            try:
-                os.close(descriptor)
-            except BaseException as error:
-                try:
-                    os.close(child)
-                except BaseException:
-                    pass
-                raise error
-            descriptor = child
+            parent = descriptor
+            descriptor = None
+            descriptor, failure = _advance_directory_descriptor(parent, child)
+            if failure is not None:
+                raise failure
+            assert descriptor is not None
+        assert descriptor is not None
         return descriptor
     except BaseException:
-        try:
-            os.close(descriptor)
-        except BaseException:
-            pass
+        if descriptor is not None:
+            descriptor_to_close = descriptor
+            descriptor = None
+            try:
+                os.close(descriptor_to_close)
+            except BaseException:
+                pass
         raise
 
 

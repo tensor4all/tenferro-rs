@@ -490,8 +490,11 @@ rename, probe the canonical marker through the held root descriptor as
 `EXACT`, `ABSENT`, `MISMATCH`, or `UNKNOWN_IO`.  `EXACT` resumes finalization;
 `MISMATCH` is preserved and rejected; `UNKNOWN_IO` conservatively preserves
 the transaction and original exception; only `ABSENT` permits pre-commit
-stage cleanup.  Missing-file cleanup still fsyncs the root directory so that
-recovery has one durability rule.
+stage cleanup.  Only a `FileNotFoundError` from the dirfd-relative leaf open is
+`ABSENT`; after that open succeeds, every read, stability-check, or close
+exception is `UNKNOWN_IO`, including another `FileNotFoundError`.
+Missing-file cleanup still fsyncs the root directory so that recovery has one
+durability rule.
 
 Create and pin fresh roots through their parent directory descriptors before
 checking emptiness.  Keep classifier reads, inventory, and output publication
@@ -509,6 +512,9 @@ process-group members.  Cleanup must preserve `KeyboardInterrupt` and
 Open every absolute parent component from `/` with retained directory
 descriptors and `O_DIRECTORY | O_NOFOLLOW`; do not resolve-check a parent and
 then reopen it by pathname before creating the fresh child root.
+Consume each traversed descriptor in caller state before attempting its close.
+If close reports an exception, never retry that descriptor number: it may
+already have been closed and reassigned to an unrelated file descriptor.
 
 - [ ] **Step 4: Run runner and classifier tests GREEN**
 

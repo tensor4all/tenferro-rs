@@ -217,7 +217,9 @@ def _sha256_open_file(descriptor: int) -> str:
     return digest.hexdigest()
 
 
-def _advance_directory_descriptor(parent: int, child: int) -> int:
+def _advance_directory_descriptor(
+    parent: int, child: int
+) -> tuple[int | None, BaseException | None]:
     """Transfer directory ownership without leaking on an interrupted close."""
     try:
         os.close(parent)
@@ -226,8 +228,8 @@ def _advance_directory_descriptor(parent: int, child: int) -> int:
             os.close(child)
         except BaseException:
             pass
-        raise error
-    return child
+        return None, error
+    return child, None
 
 
 def _open_absolute_directory(
@@ -237,27 +239,37 @@ def _open_absolute_directory(
 ) -> int:
     """Open an absolute directory one no-follow component at a time."""
     logical = pathlib.Path(os.path.abspath(logical_path))
-    descriptor = os.open(
+    descriptor: int | None = os.open(
         "/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     )
     try:
         opened_path = pathlib.Path("/")
         for component in logical.parts[1:]:
+            assert descriptor is not None
             child = os.open(
                 component,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                 dir_fd=descriptor,
             )
-            descriptor = _advance_directory_descriptor(descriptor, child)
+            parent = descriptor
+            descriptor = None
+            descriptor, failure = _advance_directory_descriptor(parent, child)
+            if failure is not None:
+                raise failure
+            assert descriptor is not None
             opened_path /= component
             if component_observer is not None:
                 component_observer(opened_path, descriptor)
+        assert descriptor is not None
         return descriptor
     except BaseException:
-        try:
-            os.close(descriptor)
-        except BaseException:
-            pass
+        if descriptor is not None:
+            descriptor_to_close = descriptor
+            descriptor = None
+            try:
+                os.close(descriptor_to_close)
+            except BaseException:
+                pass
         raise
 
 
@@ -387,9 +399,10 @@ class PinnedDirectory:
         return path.parts
 
     def open_directory(self, relative: str, *, create: bool = False) -> int:
-        descriptor = os.dup(self.descriptor)
+        descriptor: int | None = os.dup(self.descriptor)
         try:
             for component in self._parts(relative):
+                assert descriptor is not None
                 if create:
                     try:
                         os.mkdir(component, mode=0o700, dir_fd=descriptor)
@@ -401,13 +414,22 @@ class PinnedDirectory:
                     os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                     dir_fd=descriptor,
                 )
-                descriptor = _advance_directory_descriptor(descriptor, child)
+                parent = descriptor
+                descriptor = None
+                descriptor, failure = _advance_directory_descriptor(parent, child)
+                if failure is not None:
+                    raise failure
+                assert descriptor is not None
+            assert descriptor is not None
             return descriptor
         except BaseException:
-            try:
-                os.close(descriptor)
-            except BaseException:
-                pass
+            if descriptor is not None:
+                descriptor_to_close = descriptor
+                descriptor = None
+                try:
+                    os.close(descriptor_to_close)
+                except BaseException:
+                    pass
             raise
 
     def _open_parent(self, relative: str, *, create: bool = False) -> tuple[int, str]:
@@ -1397,18 +1419,59 @@ def _probe_committed_marker(
     root: PinnedDirectory, marker: Mapping[str, Any]
 ) -> str:
     """Classify marker state without turning uncertain I/O into absence."""
+    descriptor: int | None
     try:
-        content = root.read_regular(FINALIZATION_MARKER)
+        descriptor = os.open(
+            FINALIZATION_MARKER,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=root.descriptor,
+        )
     except FileNotFoundError:
         return MARKER_ABSENT
     except BaseException:
         return MARKER_UNKNOWN_IO
+
+    failure: BaseException | None = None
+    content = b""
+    stable_regular_snapshot = False
     try:
-        if content == protocol._canonical_json_bytes(marker):
-            return MARKER_EXACT
+        before = os.fstat(descriptor)
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        identity = lambda item: (
+            item.st_dev,
+            item.st_ino,
+            item.st_size,
+            item.st_mtime_ns,
+        )
+        stable_regular_snapshot = stat.S_ISREG(before.st_mode) and identity(
+            before
+        ) == identity(after)
+        content = b"".join(chunks)
+    except BaseException as error:
+        failure = error
+    assert descriptor is not None
+    descriptor_to_close = descriptor
+    descriptor = None
+    try:
+        os.close(descriptor_to_close)
+    except BaseException as error:
+        if failure is None:
+            failure = error
+    if failure is not None:
+        return MARKER_UNKNOWN_IO
+    if not stable_regular_snapshot:
         return MARKER_MISMATCH
+    try:
+        expected = protocol._canonical_json_bytes(marker)
     except BaseException:
         return MARKER_UNKNOWN_IO
+    return MARKER_EXACT if content == expected else MARKER_MISMATCH
 
 
 def _ledger_attempt(ledger: Mapping[str, Any], args) -> Mapping[str, Any]:
