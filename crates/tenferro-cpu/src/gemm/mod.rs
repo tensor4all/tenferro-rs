@@ -7,14 +7,12 @@ use std::mem::size_of;
 use std::sync::{Arc, Weak};
 
 use crate::dot_runtime::CpuProviderBundleInner;
-#[cfg(feature = "cpu-faer")]
-use crate::provider::CpuKernelParallelism;
 #[cfg(any(feature = "cpu-blas", feature = "cpu-tblis-provider"))]
 use crate::provider::CpuOperand;
 #[cfg(feature = "cpu-tblis-provider")]
 use crate::provider::{CpuContractionAxes, CpuDotGeneralRequest};
 use crate::provider::{
-    CpuGemmRequest, CpuGroupedGemmRequest, CpuProviderContext, CpuProviderOutcome,
+    CpuExecutionContext, CpuGemmRequest, CpuGroupedGemmRequest, CpuProviderOutcome,
     CpuProviderUnsupported,
 };
 use crate::{Error, Result};
@@ -998,6 +996,7 @@ fn provider_output_strides(output: &TensorWrite<'_>) -> Result<SmallVec<[isize; 
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_provider_gemm_typed<L, R, T>(
     cache: &mut GemmAnalysisCache,
     cache_slot: Option<usize>,
@@ -1027,16 +1026,28 @@ where
     else {
         return Ok(None);
     };
+    let lhs_row_stride = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
+    let lhs_column_stride = normalize_singleton_stride(dims.a_cs, dims.k, dims.m);
+    let rhs_row_stride = normalize_singleton_stride(dims.b_rs, dims.k, dims.n);
+    let rhs_column_stride = normalize_singleton_stride(dims.b_cs, dims.n, dims.k);
+    let output_row_stride = normalize_singleton_stride(output_row_stride, dims.m, 1);
+    let output_column_stride = normalize_singleton_stride(output_column_stride, dims.n, dims.m);
     Ok(Some(ProviderGemmPlan {
         rows: dims.m,
         columns: dims.n,
         contracted: dims.k,
         batch_count: dims.batch_total,
         lhs_layout: crate::provider::CpuBatchedMatrixLayout::new(
-            lhs_offset, dims.a_rs, dims.a_cs, dims.a_bs,
+            lhs_offset,
+            lhs_row_stride,
+            lhs_column_stride,
+            dims.a_bs,
         ),
         rhs_layout: crate::provider::CpuBatchedMatrixLayout::new(
-            rhs_offset, dims.b_rs, dims.b_cs, dims.b_bs,
+            rhs_offset,
+            rhs_row_stride,
+            rhs_column_stride,
+            dims.b_bs,
         ),
         output_layout: crate::provider::CpuBatchedMatrixLayout::new(
             output.offset(),
@@ -1045,6 +1056,15 @@ where
             output_batch_stride,
         ),
     }))
+}
+
+fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> isize {
+    if extent == 1 {
+        let fallback = fallback.max(1) as isize;
+        stride.max(fallback)
+    } else {
+        stride
+    }
 }
 
 fn prepare_provider_gemm_kind(
@@ -1174,8 +1194,7 @@ pub(crate) fn prepare_provider_gemm_canonical(
 
 #[cfg(feature = "cpu-faer")]
 fn grouped_gemm_faer_with_parallelism(
-    ctx: &crate::CpuContext,
-    kernel_parallelism: CpuKernelParallelism,
+    context: &CpuExecutionContext<'_>,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
     config: &GroupedGemmConfig<'_>,
@@ -1193,16 +1212,7 @@ fn grouped_gemm_faer_with_parallelism(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_faer_typed(
-                            ctx,
-                            kernel_parallelism,
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            &mut c,
-                        );
+                        return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, &mut c);
                     }
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
@@ -1210,16 +1220,7 @@ fn grouped_gemm_faer_with_parallelism(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_faer_typed(
-                            ctx,
-                            kernel_parallelism,
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            &mut c,
-                        );
+                        return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, &mut c);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
@@ -1227,16 +1228,7 @@ fn grouped_gemm_faer_with_parallelism(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_faer_typed(
-                            ctx,
-                            kernel_parallelism,
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            &mut c,
-                        );
+                        return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, &mut c);
                     }
                     (
                         TensorRead::View(TensorView::$view(a)),
@@ -1244,81 +1236,28 @@ fn grouped_gemm_faer_with_parallelism(
                         TensorWrite::Tensor(crate::Tensor::$owned(c)),
                     ) => {
                         let mut c = c.as_view_mut();
-                        return grouped_gemm_faer_typed(
-                            ctx,
-                            kernel_parallelism,
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            &mut c,
-                        );
+                        return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, &mut c);
                     }
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
                         TensorRead::Tensor(crate::Tensor::$owned(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => {
-                        return grouped_gemm_faer_typed(
-                            ctx,
-                            kernel_parallelism,
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            c,
-                        )
-                    }
+                    ) => return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, c),
                     (
                         TensorRead::Tensor(crate::Tensor::$owned(a)),
                         TensorRead::View(TensorView::$view(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => {
-                        return grouped_gemm_faer_typed(
-                            ctx,
-                            kernel_parallelism,
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            c,
-                        )
-                    }
+                    ) => return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, c),
                     (
                         TensorRead::View(TensorView::$view(a)),
                         TensorRead::Tensor(crate::Tensor::$owned(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => {
-                        return grouped_gemm_faer_typed(
-                            ctx,
-                            kernel_parallelism,
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            c,
-                        )
-                    }
+                    ) => return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, c),
                     (
                         TensorRead::View(TensorView::$view(a)),
                         TensorRead::View(TensorView::$view(b)),
                         TensorWrite::View(TensorViewMut::$view(c)),
-                    ) => {
-                        return grouped_gemm_faer_typed(
-                            ctx,
-                            kernel_parallelism,
-                            a,
-                            b,
-                            config,
-                            alpha,
-                            beta,
-                            c,
-                        )
-                    }
+                    ) => return grouped_gemm_faer_typed(context, a, b, config, alpha, beta, c),
                     _ => {}
                 }
             }
@@ -1334,8 +1273,7 @@ fn grouped_gemm_faer_with_parallelism(
 
 #[cfg(feature = "cpu-faer")]
 fn grouped_gemm_faer_typed<L, R, T>(
-    ctx: &crate::CpuContext,
-    kernel_parallelism: CpuKernelParallelism,
+    context: &CpuExecutionContext<'_>,
     lhs: &L,
     rhs: &R,
     config: &GroupedGemmConfig<'_>,
@@ -1389,11 +1327,8 @@ where
         // one job may use inner kernel parallelism.
         unsafe {
             T::strided_gemm_with_conj_par(
-                ctx,
-                match kernel_parallelism {
-                    CpuKernelParallelism::Sequential => ctx.faer_seq(),
-                    CpuKernelParallelism::Inner => ctx.faer_par(),
-                },
+                context,
+                context.faer_parallelism(),
                 alpha,
                 a_ptr,
                 job.rows(),
@@ -1612,7 +1547,7 @@ where
 
 #[cfg(feature = "cpu-tblis-provider")]
 pub(crate) fn execute_tblis_general_request(
-    _context: &CpuProviderContext<'_>,
+    _context: &CpuExecutionContext<'_>,
     request: CpuDotGeneralRequest<'_, '_, '_>,
 ) -> Result<CpuProviderOutcome> {
     let (lhs, rhs, output, axes, accumulation) = request.into_parts();
@@ -1695,16 +1630,6 @@ pub(crate) fn execute_tblis_general_request(
     ))
 }
 
-#[cfg(any(feature = "cpu-blas", feature = "cpu-faer"))]
-fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> isize {
-    if extent == 1 {
-        let fallback = fallback.max(1) as isize;
-        stride.max(fallback)
-    } else {
-        stride
-    }
-}
-
 #[cfg(feature = "cpu-blas")]
 fn blas_lhs_layout_supported(m: usize, k: usize, row_stride: isize, col_stride: isize) -> bool {
     if row_stride == 1 {
@@ -1774,7 +1699,7 @@ impl ProviderGemmDescriptor {
 
 #[cfg(feature = "cpu-faer")]
 fn execute_faer_request_typed<L, R, T>(
-    context: &CpuProviderContext<'_>,
+    context: &CpuExecutionContext<'_>,
     descriptor: ProviderGemmDescriptor,
     lhs: &L,
     rhs: &R,
@@ -1801,10 +1726,7 @@ where
         return Err(crate::cpu_backend_buffer_error(OP));
     };
     let output_data = output.host_storage_mut()?.as_mut_ptr();
-    let par = match context.kernel_parallelism() {
-        CpuKernelParallelism::Sequential => context.cpu_context().faer_seq(),
-        CpuKernelParallelism::Inner => context.cpu_context().faer_par(),
-    };
+    let par = context.faer_parallelism();
     for batch in 0..descriptor.batch_count {
         checked_view_batch_offset(
             descriptor.lhs_layout.offset(),
@@ -1843,7 +1765,7 @@ where
         // batches are uniquely writable.
         unsafe {
             T::strided_gemm_with_conj_par(
-                context.cpu_context(),
+                context,
                 par,
                 alpha,
                 lhs_data.offset(lhs_offset),
@@ -1869,7 +1791,7 @@ where
 
 #[cfg(feature = "cpu-faer")]
 pub(crate) fn execute_faer_gemm_request(
-    context: &CpuProviderContext<'_>,
+    context: &CpuExecutionContext<'_>,
     request: CpuGemmRequest<'_, '_, '_>,
 ) -> Result<CpuProviderOutcome> {
     let parts = request.into_parts();
@@ -2056,6 +1978,14 @@ where
     R: TypedTensorRead<T>,
     T: BlasGemm + Copy + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
 {
+    if descriptor.rows == 0
+        || descriptor.columns == 0
+        || descriptor.contracted == 0
+        || descriptor.batch_count == 0
+    {
+        scale_empty_contract_output(output, beta)?;
+        return Ok(CpuProviderOutcome::Executed);
+    }
     if let Some(reason) = blas_descriptor_unsupported(descriptor) {
         return Ok(CpuProviderOutcome::Unsupported(reason));
     }
@@ -2066,15 +1996,6 @@ where
             CpuProviderUnsupported::Conjugation,
         ));
     }
-    if descriptor.rows == 0
-        || descriptor.columns == 0
-        || descriptor.contracted == 0
-        || descriptor.batch_count == 0
-    {
-        scale_empty_contract_output(output, beta)?;
-        return Ok(CpuProviderOutcome::Executed);
-    }
-
     let Some(lhs_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Err(crate::cpu_backend_buffer_error(OP));
     };
@@ -2147,7 +2068,7 @@ where
 
 #[cfg(feature = "cpu-blas")]
 pub(crate) fn execute_blas_gemm_request(
-    _context: &CpuProviderContext<'_>,
+    _context: &CpuExecutionContext<'_>,
     request: CpuGemmRequest<'_, '_, '_>,
 ) -> Result<CpuProviderOutcome> {
     let parts = request.into_parts();
@@ -2274,7 +2195,7 @@ pub(crate) fn execute_blas_gemm_request(
 
 #[cfg(feature = "cpu-blas")]
 pub(crate) fn execute_blas_grouped_request(
-    _context: &CpuProviderContext<'_>,
+    _context: &CpuExecutionContext<'_>,
     request: CpuGroupedGemmRequest<'_, '_, '_>,
 ) -> Result<CpuProviderOutcome> {
     let (lhs, rhs, output, jobs, accumulation) = request.into_parts();
@@ -2295,19 +2216,12 @@ pub(crate) fn execute_blas_grouped_request(
 
 #[cfg(feature = "cpu-faer")]
 pub(crate) fn execute_faer_grouped_request(
-    context: &CpuProviderContext<'_>,
+    context: &CpuExecutionContext<'_>,
     request: CpuGroupedGemmRequest<'_, '_, '_>,
 ) -> Result<CpuProviderOutcome> {
     let (lhs, rhs, output, jobs, accumulation) = request.into_parts();
     let config = GroupedGemmConfig::new(jobs, accumulation);
-    if grouped_gemm_faer_with_parallelism(
-        context.cpu_context(),
-        context.kernel_parallelism(),
-        lhs,
-        rhs,
-        &config,
-        output,
-    )? {
+    if grouped_gemm_faer_with_parallelism(context, lhs, rhs, &config, output)? {
         Ok(CpuProviderOutcome::Executed)
     } else {
         Ok(CpuProviderOutcome::Unsupported(

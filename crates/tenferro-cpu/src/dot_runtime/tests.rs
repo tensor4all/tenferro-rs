@@ -1,20 +1,306 @@
 use super::{
     validate_axis_groups, validate_dot_general, validate_layout_metadata, CpuProviderBundle,
+    GroupedJobState, PackedJobStates, GROUPED_INLINE_JOB_CAPACITY, GROUPED_JOBS_PER_STATE_WORD,
 };
-use crate::buffer_pool::BufferPool;
+use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::gemm::GemmAnalysisCache;
+use crate::provider::tests::{execution_context_fixture, external_execution_context_fixture};
 use crate::provider::{
-    CpuGemmProvider, CpuGemmRequest, CpuGeneralContractionProvider, CpuGroupedGemmRequest,
-    CpuKernelParallelism, CpuLayoutTransformProvider, CpuLayoutTransformRequest,
-    CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported, StridedLayoutTransformProvider,
+    CpuExecutionContext, CpuGemmProvider, CpuGemmRequest, CpuGeneralContractionProvider,
+    CpuGroupedGemmRequest, CpuLayoutTransformProvider, CpuLayoutTransformRequest, CpuOperand,
+    CpuProviderOutcome, CpuProviderUnsupported, ParallelMode, StridedLayoutTransformProvider,
 };
-use crate::{CpuBackendKind, CpuContext};
-use std::sync::{Arc, Mutex};
+use crate::{
+    CpuBackendKind, CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError,
+    CpuExecutorAffinity, CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism,
+    ScopedCpuJob, ScopedCpuJobs,
+};
+use num_complex::Complex64;
+use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Barrier, Mutex};
 use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 use tenferro_tensor::{
-    ContractionScalar, DType, DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorRead,
-    TensorViewMut, TensorWrite, TypedTensorViewMut,
+    ContractionScalar, DType, DotGeneralAccumulation, DotGeneralConfig, ErrorKind, Tensor,
+    TensorRead, TensorViewMut, TensorWrite, TypedTensorViewMut, ValidationKind,
 };
+
+#[derive(Debug)]
+struct CountingExecutor {
+    submits: Arc<AtomicUsize>,
+    installs: Arc<AtomicUsize>,
+}
+
+fn outer_executor_capabilities() -> CpuDomainExecutorCapabilities {
+    CpuDomainExecutorCapabilities {
+        worker_count: NonZeroUsize::new(4).unwrap(),
+        outer_parallelism: true,
+        inner_parallelism: CpuInnerParallelism::Rayon,
+        reentrancy: CpuExecutorReentrancy::Rejected,
+        affinity: CpuExecutorAffinity::CallerDeclaredUnverified,
+        shutdown: CpuExecutorShutdown::CallerOwned,
+    }
+}
+
+impl CpuDomainExecutor for CountingExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        outer_executor_capabilities()
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        self.submits.fetch_add(1, Ordering::Relaxed);
+        for index in 0..jobs.len() {
+            jobs.run(index)?;
+        }
+        Ok(())
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        self.installs.fetch_add(1, Ordering::Relaxed);
+        job.run()
+    }
+}
+
+#[derive(Debug)]
+struct RejectingInstallExecutor {
+    submits: Arc<AtomicUsize>,
+    installs: Arc<AtomicUsize>,
+}
+
+impl CpuDomainExecutor for RejectingInstallExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        outer_executor_capabilities()
+    }
+
+    fn submit(&self, _jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        self.submits.fetch_add(1, Ordering::Relaxed);
+        Err(CpuDomainExecutorError::Scheduling {
+            message: "unexpected submit while testing install failure".to_owned(),
+        })
+    }
+
+    fn install(&self, _job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        self.installs.fetch_add(1, Ordering::Relaxed);
+        Err(CpuDomainExecutorError::Cancellation {
+            message: "intentional install rejection".to_owned(),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ConcurrentDuplicateExecutor;
+
+impl CpuDomainExecutor for ConcurrentDuplicateExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        outer_executor_capabilities()
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| jobs.run(0));
+            let duplicate = scope.spawn(|| jobs.run(0));
+            // Deliberately ignore both job results: a safe custom executor can
+            // violate the documented contract while still returning success.
+            let _ = first.join().unwrap();
+            let _ = duplicate.join().unwrap();
+        });
+        Ok(())
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        job.run()
+    }
+}
+
+#[derive(Debug)]
+struct MissingJobExecutor;
+
+impl CpuDomainExecutor for MissingJobExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        outer_executor_capabilities()
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        jobs.run(0)
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        job.run()
+    }
+}
+
+#[derive(Debug)]
+struct FailingSubmitExecutor;
+
+impl CpuDomainExecutor for FailingSubmitExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        outer_executor_capabilities()
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        jobs.run(0)?;
+        Err(CpuDomainExecutorError::Cancellation {
+            message: "authoritative submit failure".to_string(),
+        })
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        job.run()
+    }
+}
+
+#[derive(Debug)]
+struct IgnoredInvalidIndexExecutor {
+    requested_index: usize,
+}
+
+#[derive(Debug)]
+struct InvalidThenFailingSubmitExecutor;
+
+impl CpuDomainExecutor for InvalidThenFailingSubmitExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        outer_executor_capabilities()
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        for index in 0..jobs.len() {
+            jobs.run(index)?;
+        }
+        let _ = jobs.run(jobs.len());
+        Err(CpuDomainExecutorError::Cancellation {
+            message: "submit failure after ignored invalid index".to_string(),
+        })
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        job.run()
+    }
+}
+
+#[derive(Debug)]
+struct SequentialDuplicateAllValidExecutor;
+
+impl CpuDomainExecutor for SequentialDuplicateAllValidExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        outer_executor_capabilities()
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        for index in 0..jobs.len() {
+            jobs.run(index)?;
+        }
+        let _ = jobs.run(0);
+        Ok(())
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        job.run()
+    }
+}
+
+#[derive(Debug)]
+struct CatchProviderPanicExecutor;
+
+impl CpuDomainExecutor for CatchProviderPanicExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        outer_executor_capabilities()
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        for index in 0..jobs.len() {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| jobs.run(index)));
+        }
+        Ok(())
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        job.run()
+    }
+}
+
+#[derive(Debug)]
+struct BarrierDuplicateExecutor {
+    provider_entered: Arc<Barrier>,
+    release_provider: Arc<Barrier>,
+    duplicate_failed: Arc<AtomicBool>,
+}
+
+impl CpuDomainExecutor for BarrierDuplicateExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        outer_executor_capabilities()
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| jobs.run(0));
+            self.provider_entered.wait();
+            self.duplicate_failed
+                .store(jobs.run(0).is_err(), Ordering::Release);
+            self.release_provider.wait();
+            first
+                .join()
+                .map_err(|_| CpuDomainExecutorError::Cancellation {
+                    message: "barrier-backed grouped job panicked".to_string(),
+                })??;
+            for index in 1..jobs.len() {
+                jobs.run(index)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        job.run()
+    }
+}
+
+impl CpuDomainExecutor for IgnoredInvalidIndexExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        outer_executor_capabilities()
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        for index in 0..jobs.len() {
+            jobs.run(index)?;
+        }
+        // A safe custom executor may discard the typed error from `run` and
+        // still claim that the overall submission succeeded.
+        let _ = jobs.run(self.requested_index);
+        Ok(())
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        job.run()
+    }
+}
+
+fn assert_grouped_scheduling_error(error: &tenferro_tensor::Error, expected: &str) {
+    let tenferro_tensor::Error::BackendSource { source, .. } = error else {
+        panic!("grouped executor failure must retain a typed source: {error}");
+    };
+    assert!(matches!(
+        source.downcast_ref::<CpuDomainExecutorError>(),
+        Some(CpuDomainExecutorError::Scheduling { message }) if message.contains(expected)
+    ));
+}
+
+fn counting_execution_fixture(
+    thread_budget: usize,
+) -> (
+    Arc<AtomicUsize>,
+    Arc<AtomicUsize>,
+    crate::provider::tests::CpuExecutionContextFixture,
+) {
+    let submits = Arc::new(AtomicUsize::new(0));
+    let installs = Arc::new(AtomicUsize::new(0));
+    let executor: Arc<dyn CpuDomainExecutor> = Arc::new(CountingExecutor {
+        submits: Arc::clone(&submits),
+        installs: Arc::clone(&installs),
+    });
+    let fixture =
+        external_execution_context_fixture(executor, NonZeroUsize::new(thread_budget).unwrap());
+    (submits, installs, fixture)
+}
 
 fn config(
     lhs_contracting_dims: &[usize],
@@ -183,7 +469,7 @@ struct GeneralSpy {
 impl CpuGeneralContractionProvider for GeneralSpy {
     fn dot_general(
         &self,
-        _context: &CpuProviderContext<'_>,
+        _context: &CpuExecutionContext<'_>,
         _request: crate::provider::CpuDotGeneralRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         *self.calls.lock().unwrap() += 1;
@@ -199,19 +485,25 @@ impl CpuGeneralContractionProvider for GeneralSpy {
 
 #[derive(Debug)]
 struct GemmSpy {
-    outcome: CpuProviderOutcome,
+    behavior: GemmBehavior,
     gemm_calls: Arc<Mutex<usize>>,
     strided_calls: Arc<Mutex<usize>>,
     grouped_calls: Arc<Mutex<usize>>,
-    parallelism: Arc<Mutex<Vec<CpuKernelParallelism>>>,
+    parallelism: Arc<Mutex<Vec<ParallelMode>>>,
     grouped_job_counts: Arc<Mutex<Vec<usize>>>,
     in_selected_pool: Arc<Mutex<Vec<bool>>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum GemmBehavior {
+    Outcome(CpuProviderOutcome),
+    Error,
 }
 
 impl GemmSpy {
     fn new(outcome: CpuProviderOutcome) -> Self {
         Self {
-            outcome,
+            behavior: GemmBehavior::Outcome(outcome),
             gemm_calls: Arc::new(Mutex::new(0)),
             strided_calls: Arc::new(Mutex::new(0)),
             grouped_calls: Arc::new(Mutex::new(0)),
@@ -220,45 +512,61 @@ impl GemmSpy {
             in_selected_pool: Arc::new(Mutex::new(Vec::new())),
         }
     }
+
+    fn error() -> Self {
+        let mut spy = Self::new(CpuProviderOutcome::Executed);
+        spy.behavior = GemmBehavior::Error;
+        spy
+    }
+
+    fn result(&self) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        match self.behavior {
+            GemmBehavior::Outcome(outcome) => Ok(outcome),
+            GemmBehavior::Error => Err(tenferro_tensor::Error::runtime_state(
+                "dot_general",
+                "GEMM provider spy failure",
+            )),
+        }
+    }
 }
 
 impl CpuGemmProvider for GemmSpy {
     fn gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         _request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         *self.gemm_calls.lock().unwrap() += 1;
         self.parallelism
             .lock()
             .unwrap()
-            .push(context.kernel_parallelism());
-        Ok(self.outcome)
+            .push(context.parallel_mode());
+        self.result()
     }
 
     fn strided_batched_gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         _request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         *self.strided_calls.lock().unwrap() += 1;
         self.parallelism
             .lock()
             .unwrap()
-            .push(context.kernel_parallelism());
-        Ok(self.outcome)
+            .push(context.parallel_mode());
+        self.result()
     }
 
     fn grouped_gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuGroupedGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         *self.grouped_calls.lock().unwrap() += 1;
         self.parallelism
             .lock()
             .unwrap()
-            .push(context.kernel_parallelism());
+            .push(context.parallel_mode());
         self.grouped_job_counts
             .lock()
             .unwrap()
@@ -266,8 +574,296 @@ impl CpuGemmProvider for GemmSpy {
         self.in_selected_pool
             .lock()
             .unwrap()
-            .push(context.cpu_context().owns_current_worker_for_test());
-        Ok(self.outcome)
+            .push(rayon::current_thread_index().is_some());
+        self.result()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CanonicalFallbackBehavior {
+    Real,
+    ConjugatedComplex,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CanonicalFallbackTerminal {
+    Unsupported(CpuProviderUnsupported),
+    Error,
+}
+
+#[derive(Debug)]
+struct CanonicalFallbackSpy {
+    first_outcome: CpuProviderUnsupported,
+    second_terminal: Option<CanonicalFallbackTerminal>,
+    behavior: CanonicalFallbackBehavior,
+    calls: Arc<Mutex<usize>>,
+}
+
+impl CanonicalFallbackSpy {
+    fn new(first_outcome: CpuProviderUnsupported, behavior: CanonicalFallbackBehavior) -> Self {
+        Self {
+            first_outcome,
+            second_terminal: None,
+            behavior,
+            calls: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    fn rejecting_retry(
+        first_outcome: CpuProviderUnsupported,
+        second_outcome: CpuProviderUnsupported,
+    ) -> Self {
+        Self {
+            first_outcome,
+            second_terminal: Some(CanonicalFallbackTerminal::Unsupported(second_outcome)),
+            behavior: CanonicalFallbackBehavior::Real,
+            calls: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    fn erroring_retry(first_outcome: CpuProviderUnsupported) -> Self {
+        Self {
+            first_outcome,
+            second_terminal: Some(CanonicalFallbackTerminal::Error),
+            behavior: CanonicalFallbackBehavior::Real,
+            calls: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    fn execute(
+        &self,
+        request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        let call = {
+            let mut calls = self.calls.lock().unwrap();
+            *calls += 1;
+            *calls
+        };
+        if call == 1 {
+            return Ok(CpuProviderOutcome::Unsupported(self.first_outcome));
+        }
+        assert_eq!(call, 2, "canonical fallback must retry exactly once");
+        if let Some(terminal) = self.second_terminal {
+            return match terminal {
+                CanonicalFallbackTerminal::Unsupported(reason) => {
+                    Ok(CpuProviderOutcome::Unsupported(reason))
+                }
+                CanonicalFallbackTerminal::Error => Err(tenferro_tensor::Error::runtime_state(
+                    "dot_general",
+                    "canonical retry spy failure",
+                )),
+            };
+        }
+
+        let parts = request.into_parts();
+        assert_eq!(parts.lhs_layout.row_stride(), 1);
+        assert_eq!(parts.rhs_layout.row_stride(), 1);
+        assert_eq!(parts.output_layout.row_stride(), 1);
+        match self.behavior {
+            CanonicalFallbackBehavior::Real => {
+                assert!(!parts.accumulation.lhs_conj);
+                assert!(!parts.accumulation.rhs_conj);
+                match &mut *parts.output {
+                    TensorWrite::Tensor(Tensor::F64(output)) => {
+                        assert_eq!(output.host_data()?, &[41.0; 4]);
+                        output
+                            .host_data_mut()?
+                            .copy_from_slice(&[19.0, 43.0, 22.0, 50.0]);
+                    }
+                    other => panic!("unexpected fallback output: {other:?}"),
+                }
+            }
+            CanonicalFallbackBehavior::ConjugatedComplex => {
+                assert!(!parts.accumulation.lhs_conj);
+                assert!(!parts.accumulation.rhs_conj);
+                assert_eq!(
+                    parts.accumulation.alpha,
+                    ContractionScalar::C64(Complex64::new(2.0, 0.0)),
+                );
+                assert_eq!(
+                    parts.accumulation.beta,
+                    ContractionScalar::C64(Complex64::new(3.0, 0.0)),
+                );
+                match parts.lhs {
+                    TensorRead::Tensor(Tensor::C64(lhs)) => {
+                        assert_eq!(lhs.host_data()?, &[Complex64::new(1.0, -2.0)]);
+                    }
+                    other => panic!("conjugated lhs was not materialized: {other:?}"),
+                }
+                match parts.rhs {
+                    TensorRead::Tensor(Tensor::C64(rhs)) => {
+                        assert_eq!(rhs.host_data()?, &[Complex64::new(3.0, 4.0)]);
+                    }
+                    other => panic!("rhs was not materialized: {other:?}"),
+                }
+                match &mut *parts.output {
+                    TensorWrite::Tensor(Tensor::C64(output)) => {
+                        assert_eq!(output.host_data()?, &[Complex64::new(5.0, 1.0)]);
+                        output.host_data_mut()?[0] = Complex64::new(37.0, -1.0);
+                    }
+                    other => panic!("unexpected fallback output: {other:?}"),
+                }
+            }
+        }
+        Ok(CpuProviderOutcome::Executed)
+    }
+}
+
+impl CpuGemmProvider for CanonicalFallbackSpy {
+    fn gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.execute(request)
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.execute(request)
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        panic!("canonical fallback tests do not issue grouped GEMM")
+    }
+}
+
+#[derive(Debug)]
+struct PanicOnceGemmProvider {
+    calls: Arc<AtomicUsize>,
+}
+
+impl CpuGemmProvider for PanicOnceGemmProvider {
+    fn gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        Err(tenferro_tensor::Error::runtime_state(
+            "panic_once_test",
+            "unexpected scalar GEMM request",
+        ))
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        Err(tenferro_tensor::Error::runtime_state(
+            "panic_once_test",
+            "unexpected strided GEMM request",
+        ))
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+            panic!("intentional grouped provider panic");
+        }
+        Ok(CpuProviderOutcome::Executed)
+    }
+}
+
+#[derive(Debug)]
+struct ProviderErrorSpy {
+    calls: Arc<AtomicUsize>,
+}
+
+impl CpuGemmProvider for ProviderErrorSpy {
+    fn gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        Err(tenferro_tensor::Error::runtime_state(
+            "grouped_provider_sentinel",
+            "unexpected scalar GEMM request",
+        ))
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        Err(tenferro_tensor::Error::runtime_state(
+            "grouped_provider_sentinel",
+            "unexpected strided GEMM request",
+        ))
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Err(tenferro_tensor::Error::RuntimeState {
+            op: "grouped_provider_sentinel",
+            message: "exact provider failure".to_string(),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct BarrierMutationGemmProvider {
+    calls: Arc<AtomicUsize>,
+    provider_entered: Arc<Barrier>,
+    release_provider: Arc<Barrier>,
+}
+
+impl CpuGemmProvider for BarrierMutationGemmProvider {
+    fn gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        Err(tenferro_tensor::Error::runtime_state(
+            "barrier_mutation_test",
+            "unexpected scalar GEMM request",
+        ))
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        Err(tenferro_tensor::Error::runtime_state(
+            "barrier_mutation_test",
+            "unexpected strided GEMM request",
+        ))
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        mut request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        let call = self.calls.fetch_add(1, Ordering::Relaxed);
+        if call == 0 {
+            self.provider_entered.wait();
+            self.release_provider.wait();
+        }
+        let TensorWrite::View(TensorViewMut::F64(output)) = request.output() else {
+            return Err(tenferro_tensor::Error::runtime_state(
+                "barrier_mutation_test",
+                "expected an f64 output view",
+            ));
+        };
+        output.host_storage_mut()?[0] += 1.0;
+        Ok(CpuProviderOutcome::Executed)
     }
 }
 
@@ -279,7 +875,7 @@ struct LayoutSpy {
 impl CpuLayoutTransformProvider for LayoutSpy {
     fn materialize(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuLayoutTransformRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         *self.calls.lock().unwrap() += 1;
@@ -313,6 +909,93 @@ fn route_bundle(
     .unwrap()
 }
 
+fn execute_unit_grouped(
+    job_count: usize,
+    executor: Arc<dyn CpuDomainExecutor>,
+    provider: Arc<dyn CpuGemmProvider>,
+) -> tenferro_tensor::Result<()> {
+    let bundle = route_bundle(provider, None);
+    let lhs = Tensor::from_vec_col_major(vec![job_count], vec![2.0_f64; job_count]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![job_count], vec![4.0_f64; job_count]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![job_count], vec![0.0_f64; job_count]).unwrap();
+    let jobs = (0..job_count)
+        .map(|index| GroupedGemmJob::new(index, index, index, 1, 1, 1))
+        .collect::<Vec<_>>();
+    let fixture = external_execution_context_fixture(executor, NonZeroUsize::new(4).unwrap());
+
+    bundle.execute_grouped_gemm(
+        &fixture.entry(),
+        TensorRead::from_tensor(&lhs),
+        TensorRead::from_tensor(&rhs),
+        &GroupedGemmConfig::new(
+            &jobs,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+        ),
+        TensorWrite::from_tensor(&mut output),
+    )
+}
+
+#[test]
+fn packed_grouped_job_states_keep_two_usize_bit_widths_inline_then_spill() {
+    assert_eq!(
+        GROUPED_INLINE_JOB_CAPACITY,
+        2 * usize::BITS as usize,
+        "four inline words at two bits per job define the allocation-free bound"
+    );
+    let cases: [(usize, bool); 5] = [
+        (8, false),
+        (9, false),
+        (GROUPED_INLINE_JOB_CAPACITY, false),
+        (GROUPED_INLINE_JOB_CAPACITY + 1, true),
+        (GROUPED_INLINE_JOB_CAPACITY * 8, true),
+    ];
+
+    for (job_count, expected_spill) in cases {
+        let states = PackedJobStates::new(job_count);
+        assert_eq!(states.len(), job_count);
+        assert_eq!(
+            states.word_count(),
+            job_count.div_ceil(GROUPED_JOBS_PER_STATE_WORD)
+        );
+        assert_eq!(
+            states.spilled(),
+            expected_spill,
+            "unexpected SmallVec storage for {job_count} grouped jobs"
+        );
+        assert!((0..job_count).all(|index| states.state(index) == GroupedJobState::Unclaimed));
+    }
+}
+
+#[test]
+fn packed_grouped_job_states_do_not_clobber_adjacent_or_boundary_jobs() {
+    let states = PackedJobStates::new(GROUPED_JOBS_PER_STATE_WORD + 1);
+
+    std::thread::scope(|scope| {
+        let left = scope.spawn(|| states.try_claim(0));
+        let right = scope.spawn(|| states.try_claim(1));
+        assert_eq!(left.join().unwrap(), Ok(()));
+        assert_eq!(right.join().unwrap(), Ok(()));
+    });
+    assert_eq!(states.state(0), GroupedJobState::Running);
+    assert_eq!(states.state(1), GroupedJobState::Running);
+    assert!(states.complete(0));
+    assert_eq!(states.state(0), GroupedJobState::Complete);
+    assert_eq!(states.state(1), GroupedJobState::Running);
+    assert!(states.complete(1));
+
+    let left_boundary = GROUPED_JOBS_PER_STATE_WORD - 1;
+    let right_boundary = GROUPED_JOBS_PER_STATE_WORD;
+    assert_eq!(states.try_claim(left_boundary), Ok(()));
+    assert_eq!(states.try_claim(right_boundary), Ok(()));
+    assert!(states.complete(left_boundary));
+    assert_eq!(states.state(right_boundary), GroupedJobState::Running);
+    assert!(states.complete(right_boundary));
+    assert_eq!(
+        states.try_claim(right_boundary),
+        Err(GroupedJobState::Complete)
+    );
+}
+
 #[test]
 fn route_general_executed_short_circuits_gemm() {
     let general_calls = Arc::new(Mutex::new(0));
@@ -323,9 +1006,10 @@ fn route_general_executed_short_circuits_gemm() {
     let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
     let bundle = route_bundle(gemm.clone(), Some((general, false)));
     let (lhs, rhs, mut output, config) = route_operands();
+    let fixture = execution_context_fixture(1);
     bundle
         .execute_dot_general_into(
-            &CpuContext::with_threads(1).unwrap(),
+            &fixture.entry(),
             &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
@@ -351,9 +1035,10 @@ fn route_general_unsupported_falls_back_only_when_preferred() {
     let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
     let bundle = route_bundle(gemm.clone(), Some((general, false)));
     let (lhs, rhs, mut output, config) = route_operands();
+    let fixture = execution_context_fixture(1);
     bundle
         .execute_dot_general_into(
-            &CpuContext::with_threads(1).unwrap(),
+            &fixture.entry(),
             &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
@@ -376,9 +1061,10 @@ fn route_general_error_is_terminal() {
     });
     let bundle = route_bundle(gemm.clone(), Some((general, false)));
     let (lhs, rhs, mut output, config) = route_operands();
+    let fixture = execution_context_fixture(1);
     let error = bundle
         .execute_dot_general_into(
-            &CpuContext::with_threads(1).unwrap(),
+            &fixture.entry(),
             &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
@@ -404,9 +1090,10 @@ fn route_required_general_unsupported_is_typed_and_terminal() {
     });
     let bundle = route_bundle(gemm.clone(), Some((general, true)));
     let (lhs, rhs, mut output, config) = route_operands();
+    let fixture = execution_context_fixture(1);
     let error = bundle
         .execute_dot_general_into(
-            &CpuContext::with_threads(1).unwrap(),
+            &fixture.entry(),
             &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
@@ -426,11 +1113,12 @@ fn route_gemm_unsupported_is_terminal() {
     let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Unsupported(
         CpuProviderUnsupported::DType(DType::F64),
     )));
-    let bundle = route_bundle(gemm, None);
+    let bundle = route_bundle(gemm.clone(), None);
     let (lhs, rhs, mut output, config) = route_operands();
+    let fixture = execution_context_fixture(1);
     let error = bundle
         .execute_dot_general_into(
-            &CpuContext::with_threads(1).unwrap(),
+            &fixture.entry(),
             &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
@@ -442,6 +1130,271 @@ fn route_gemm_unsupported_is_terminal() {
         )
         .unwrap_err();
     assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 1);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[0.0; 4]);
+}
+
+#[test]
+fn route_gemm_output_layout_unsupported_is_terminal_without_mutation() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Unsupported(
+        CpuProviderUnsupported::Layout(CpuOperand::Output),
+    )));
+    let bundle = route_bundle(gemm.clone(), None);
+    let (lhs, rhs, mut output, config) = route_operands();
+    let fixture = execution_context_fixture(1);
+
+    let error = bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 1);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[0.0; 4]);
+}
+
+#[test]
+fn route_gemm_provider_error_is_terminal_without_mutation() {
+    let gemm = Arc::new(GemmSpy::error());
+    let bundle = route_bundle(gemm.clone(), None);
+    let (lhs, rhs, mut output, config) = route_operands();
+    let fixture = execution_context_fixture(1);
+
+    let error = bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::RuntimeState);
+    assert!(error.to_string().contains("GEMM provider spy failure"));
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 1);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[0.0; 4]);
+}
+
+#[test]
+fn route_gemm_canonical_retry_unsupported_is_terminal_without_mutation() {
+    for second_outcome in [
+        CpuProviderUnsupported::Layout(CpuOperand::Lhs),
+        CpuProviderUnsupported::Conjugation,
+        CpuProviderUnsupported::DType(DType::F64),
+    ] {
+        let gemm = Arc::new(CanonicalFallbackSpy::rejecting_retry(
+            CpuProviderUnsupported::Layout(CpuOperand::Rhs),
+            second_outcome,
+        ));
+        let bundle = route_bundle(gemm.clone(), None);
+        let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+        let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+        let mut output = Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap();
+        let mut buffers = BufferPool::new();
+        <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+        <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+        let seed_stats = buffers.stats();
+        let fixture = execution_context_fixture(1);
+
+        let error = bundle
+            .execute_dot_general_into(
+                &fixture.entry(),
+                &mut buffers,
+                &mut GemmAnalysisCache::default(),
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config(&[1], &[0], &[], &[]),
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+                TensorWrite::from_tensor(&mut output),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
+        assert_eq!(*gemm.calls.lock().unwrap(), 2);
+        assert_eq!(output.as_slice::<f64>().unwrap(), &[41.0; 4]);
+        assert_eq!(buffers.stats(), seed_stats);
+    }
+}
+
+#[test]
+fn route_gemm_canonical_retry_error_reclaims_both_materializations() {
+    let gemm = Arc::new(CanonicalFallbackSpy::erroring_retry(
+        CpuProviderUnsupported::Layout(CpuOperand::Rhs),
+    ));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap();
+    let mut buffers = BufferPool::new();
+    <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+    <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+    let seed_stats = buffers.stats();
+    let fixture = execution_context_fixture(1);
+
+    let error = bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut buffers,
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[1], &[0], &[], &[]),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::RuntimeState);
+    assert!(error.to_string().contains("canonical retry spy failure"));
+    assert_eq!(*gemm.calls.lock().unwrap(), 2);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[41.0; 4]);
+    assert_eq!(buffers.stats(), seed_stats);
+}
+
+fn assert_layout_unsupported_materializes_and_retries(operand: CpuOperand) {
+    let gemm = Arc::new(CanonicalFallbackSpy::new(
+        CpuProviderUnsupported::Layout(operand),
+        CanonicalFallbackBehavior::Real,
+    ));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap();
+    let mut buffers = BufferPool::new();
+    <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+    <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+    let seed_stats = buffers.stats();
+    let fixture = execution_context_fixture(1);
+
+    bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut buffers,
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[1], &[0], &[], &[]),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    assert_eq!(*gemm.calls.lock().unwrap(), 2);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);
+    assert_eq!(buffers.stats(), seed_stats);
+}
+
+#[test]
+fn route_gemm_lhs_layout_unsupported_materializes_and_retries() {
+    assert_layout_unsupported_materializes_and_retries(CpuOperand::Lhs);
+}
+
+#[test]
+fn route_gemm_rhs_layout_unsupported_materializes_and_retries() {
+    assert_layout_unsupported_materializes_and_retries(CpuOperand::Rhs);
+}
+
+#[test]
+fn route_gemm_conjugation_unsupported_materializes_conjugate_and_retries() {
+    let gemm = Arc::new(CanonicalFallbackSpy::new(
+        CpuProviderUnsupported::Conjugation,
+        CanonicalFallbackBehavior::ConjugatedComplex,
+    ));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 2.0)]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(3.0, 4.0)]).unwrap();
+    let mut output =
+        Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(5.0, 1.0)]).unwrap();
+    let mut accumulation = DotGeneralAccumulation::scaled(
+        ContractionScalar::C64(Complex64::new(2.0, 0.0)),
+        ContractionScalar::C64(Complex64::new(3.0, 0.0)),
+    )
+    .unwrap();
+    accumulation.lhs_conj = true;
+    let fixture = execution_context_fixture(1);
+
+    bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[1], &[0], &[], &[]),
+            accumulation,
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    assert_eq!(*gemm.calls.lock().unwrap(), 2);
+    assert_eq!(
+        output.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(37.0, -1.0)],
+    );
+}
+
+#[test]
+fn route_install_failure_precedes_provider_and_output_mutation() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
+    let (lhs, rhs, _, config) = route_operands();
+    let mut output = Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap();
+    let before = output.as_slice::<f64>().unwrap().to_vec();
+    let submits = Arc::new(AtomicUsize::new(0));
+    let installs = Arc::new(AtomicUsize::new(0));
+    let fixture = external_execution_context_fixture(
+        Arc::new(RejectingInstallExecutor {
+            submits: Arc::clone(&submits),
+            installs: Arc::clone(&installs),
+        }),
+        NonZeroUsize::new(4).unwrap(),
+    );
+
+    let error = bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    let tenferro_tensor::Error::BackendSource { source, .. } = error else {
+        panic!("executor failure must retain its typed source: {error}");
+    };
+    assert!(matches!(
+        source.downcast_ref::<CpuDomainExecutorError>(),
+        Some(CpuDomainExecutorError::Cancellation { message })
+            if message == "intentional install rejection"
+    ));
+    assert_eq!(installs.load(Ordering::Relaxed), 1);
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 0);
+    assert_eq!(*gemm.strided_calls.lock().unwrap(), 0);
+    assert_eq!(output.as_slice::<f64>().unwrap(), before.as_slice());
 }
 
 #[test]
@@ -458,10 +1411,11 @@ fn route_canonical_fallback_uses_layout_slot_before_gemm() {
     let lhs = Tensor::from_vec_col_major(vec![2, 2, 2, 2], vec![1.0_f64; 16]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2, 2, 2, 2], vec![1.0_f64; 16]).unwrap();
     let mut output = Tensor::from_vec_col_major(vec![2, 2, 2, 2], vec![0.0_f64; 16]).unwrap();
+    let fixture = execution_context_fixture(1);
 
     bundle
         .execute_dot_general_into(
-            &CpuContext::with_threads(1).unwrap(),
+            &fixture.entry(),
             &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
@@ -484,9 +1438,10 @@ fn route_strided_batch_allows_inner_parallelism() {
     let lhs = Tensor::from_vec_col_major(vec![2, 2, 2], vec![1.0_f64; 8]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2, 2, 2], vec![1.0_f64; 8]).unwrap();
     let mut output = Tensor::from_vec_col_major(vec![2, 2, 2], vec![0.0_f64; 8]).unwrap();
+    let fixture = execution_context_fixture(2);
     bundle
         .execute_dot_general_into(
-            &CpuContext::with_threads(2).unwrap(),
+            &fixture.entry(),
             &mut BufferPool::new(),
             &mut GemmAnalysisCache::default(),
             None,
@@ -500,24 +1455,23 @@ fn route_strided_batch_allows_inner_parallelism() {
     assert_eq!(*gemm.strided_calls.lock().unwrap(), 1);
     assert_eq!(
         gemm.parallelism.lock().unwrap().as_slice(),
-        &[CpuKernelParallelism::Inner]
+        &[ParallelMode::Inner]
     );
 }
 
 #[test]
-fn route_engine_outer_grouped_runs_single_jobs_sequentially_in_selected_pool() {
+fn route_engine_outer_grouped_submits_once_with_sequential_children() {
     let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
     let bundle = route_bundle(gemm.clone(), None);
-    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap();
-    let rhs = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]).unwrap();
-    let mut output = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
-    let jobs = [
-        GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
-        GroupedGemmJob::new(1, 1, 1, 1, 1, 1),
-    ];
+    let lhs = Tensor::from_vec_col_major(vec![8], vec![2.0_f64; 8]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![8], vec![4.0_f64; 8]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![8], vec![0.0_f64; 8]).unwrap();
+    let jobs =
+        std::array::from_fn::<_, 8, _>(|index| GroupedGemmJob::new(index, index, index, 1, 1, 1));
+    let (submits, installs, fixture) = counting_execution_fixture(4);
     bundle
         .execute_grouped_gemm(
-            &CpuContext::with_threads(2).unwrap(),
+            &fixture.entry(),
             TensorRead::from_tensor(&lhs),
             TensorRead::from_tensor(&rhs),
             &GroupedGemmConfig::new(
@@ -527,27 +1481,328 @@ fn route_engine_outer_grouped_runs_single_jobs_sequentially_in_selected_pool() {
             TensorWrite::from_tensor(&mut output),
         )
         .unwrap();
-    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 2);
-    assert_eq!(gemm.grouped_job_counts.lock().unwrap().as_slice(), &[1, 1]);
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 8);
+    assert_eq!(gemm.grouped_job_counts.lock().unwrap().as_slice(), &[1; 8]);
     assert_eq!(
         gemm.parallelism.lock().unwrap().as_slice(),
-        &[
-            CpuKernelParallelism::Sequential,
-            CpuKernelParallelism::Sequential,
-        ]
+        &[ParallelMode::Sequential; 8]
     );
-    assert!(gemm
-        .in_selected_pool
-        .lock()
-        .unwrap()
-        .iter()
-        .all(|inside| *inside));
+    assert_eq!(submits.load(Ordering::Relaxed), 1);
+    assert_eq!(installs.load(Ordering::Relaxed), 0);
 }
 
 #[test]
-fn route_provider_owned_grouped_delegates_whole_group_with_inner_parallelism() {
+fn route_engine_outer_rejects_ignored_index_equal_to_len_after_valid_jobs() {
     let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
-    let bundle = CpuProviderBundle::builder(CpuBackendKind::Blas)
+    let error = execute_unit_grouped(
+        2,
+        Arc::new(IgnoredInvalidIndexExecutor { requested_index: 2 }),
+        gemm.clone(),
+    )
+    .unwrap_err();
+
+    assert_grouped_scheduling_error(&error, "index 2");
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 2);
+}
+
+#[test]
+fn route_engine_outer_rejects_ignored_usize_max_index_after_valid_jobs() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let error = execute_unit_grouped(
+        2,
+        Arc::new(IgnoredInvalidIndexExecutor {
+            requested_index: usize::MAX,
+        }),
+        gemm.clone(),
+    )
+    .unwrap_err();
+
+    assert_grouped_scheduling_error(&error, &format!("index {}", usize::MAX));
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 2);
+}
+
+#[test]
+fn route_engine_outer_submit_error_overrides_ignored_invalid_index_audit() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let error = execute_unit_grouped(2, Arc::new(InvalidThenFailingSubmitExecutor), gemm.clone())
+        .unwrap_err();
+
+    let tenferro_tensor::Error::BackendSource { source, .. } = error else {
+        panic!("submit failure must retain a typed source");
+    };
+    assert!(matches!(
+        source.downcast_ref::<CpuDomainExecutorError>(),
+        Some(CpuDomainExecutorError::Cancellation { message })
+            if message == "submit failure after ignored invalid index"
+    ));
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 2);
+}
+
+#[test]
+fn route_engine_outer_rejects_sequential_duplicate_after_all_valid_jobs() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let error = execute_unit_grouped(
+        2,
+        Arc::new(SequentialDuplicateAllValidExecutor),
+        gemm.clone(),
+    )
+    .unwrap_err();
+
+    assert_grouped_scheduling_error(&error, "duplicate index 0");
+    assert_eq!(
+        *gemm.grouped_calls.lock().unwrap(),
+        2,
+        "the duplicate invocation must not reach provider mutation"
+    );
+}
+
+#[test]
+fn route_engine_outer_reports_running_job_when_executor_catches_provider_panic() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn CpuGemmProvider> = Arc::new(PanicOnceGemmProvider {
+        calls: Arc::clone(&calls),
+    });
+    let error =
+        execute_unit_grouped(2, Arc::new(CatchProviderPanicExecutor), provider).unwrap_err();
+
+    assert_grouped_scheduling_error(&error, "did not complete grouped-GEMM index 0");
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn route_engine_outer_preserves_exact_provider_error_after_successful_submit() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn CpuGemmProvider> = Arc::new(ProviderErrorSpy {
+        calls: Arc::clone(&calls),
+    });
+    let executor: Arc<dyn CpuDomainExecutor> = Arc::new(CountingExecutor {
+        submits: Arc::new(AtomicUsize::new(0)),
+        installs: Arc::new(AtomicUsize::new(0)),
+    });
+    let error = execute_unit_grouped(2, executor, provider).unwrap_err();
+
+    assert!(matches!(
+        error,
+        tenferro_tensor::Error::RuntimeState { op, message }
+            if op == "grouped_provider_sentinel" && message == "exact provider failure"
+    ));
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn route_engine_outer_submit_error_overrides_prior_provider_error() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn CpuGemmProvider> = Arc::new(ProviderErrorSpy {
+        calls: Arc::clone(&calls),
+    });
+    let error = execute_unit_grouped(2, Arc::new(FailingSubmitExecutor), provider).unwrap_err();
+
+    let tenferro_tensor::Error::BackendSource { source, .. } = error else {
+        panic!("submit failure must retain a typed source");
+    };
+    assert!(matches!(
+        source.downcast_ref::<CpuDomainExecutorError>(),
+        Some(CpuDomainExecutorError::Cancellation { message })
+            if message == "authoritative submit failure"
+    ));
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn route_engine_outer_rejects_duplicate_while_first_provider_call_is_running() {
+    let provider_entered = Arc::new(Barrier::new(2));
+    let release_provider = Arc::new(Barrier::new(2));
+    let duplicate_failed = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let provider: Arc<dyn CpuGemmProvider> = Arc::new(BarrierMutationGemmProvider {
+        calls: Arc::clone(&calls),
+        provider_entered: Arc::clone(&provider_entered),
+        release_provider: Arc::clone(&release_provider),
+    });
+    let executor: Arc<dyn CpuDomainExecutor> = Arc::new(BarrierDuplicateExecutor {
+        provider_entered,
+        release_provider,
+        duplicate_failed: Arc::clone(&duplicate_failed),
+    });
+    let bundle = route_bundle(provider, None);
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64; 2]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![4.0_f64; 2]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
+        GroupedGemmJob::new(1, 1, 1, 1, 1, 1),
+    ];
+    let fixture = external_execution_context_fixture(executor, NonZeroUsize::new(4).unwrap());
+
+    let error = bundle
+        .execute_grouped_gemm(
+            &fixture.entry(),
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &GroupedGemmConfig::new(
+                &jobs,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            ),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    assert_grouped_scheduling_error(&error, "duplicate index 0");
+    assert!(duplicate_failed.load(Ordering::Acquire));
+    assert_eq!(calls.load(Ordering::Relaxed), 2);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[1.0, 1.0]);
+}
+
+#[test]
+fn route_engine_outer_rejects_concurrent_duplicate_job_before_provider_mutation() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64; 2]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![4.0_f64; 2]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
+        GroupedGemmJob::new(1, 1, 1, 1, 1, 1),
+    ];
+    let fixture = external_execution_context_fixture(
+        Arc::new(ConcurrentDuplicateExecutor),
+        NonZeroUsize::new(4).unwrap(),
+    );
+
+    let error = bundle
+        .execute_grouped_gemm(
+            &fixture.entry(),
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &GroupedGemmConfig::new(
+                &jobs,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            ),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    assert_grouped_scheduling_error(&error, "duplicate index 0");
+    assert_eq!(
+        *gemm.grouped_calls.lock().unwrap(),
+        1,
+        "a duplicate safe-executor invocation must not reach provider mutation"
+    );
+}
+
+#[test]
+fn route_engine_outer_rejects_successful_submit_that_omits_a_job() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64; 2]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![4.0_f64; 2]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
+        GroupedGemmJob::new(1, 1, 1, 1, 1, 1),
+    ];
+    let fixture = external_execution_context_fixture(
+        Arc::new(MissingJobExecutor),
+        NonZeroUsize::new(4).unwrap(),
+    );
+
+    let error = bundle
+        .execute_grouped_gemm(
+            &fixture.entry(),
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &GroupedGemmConfig::new(
+                &jobs,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            ),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    assert_grouped_scheduling_error(&error, "missing index 1");
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 1);
+}
+
+#[test]
+fn route_engine_outer_preserves_submit_error_before_missing_job_audit() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![2.0_f64; 2]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![4.0_f64; 2]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2], vec![0.0_f64; 2]).unwrap();
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
+        GroupedGemmJob::new(1, 1, 1, 1, 1, 1),
+    ];
+    let fixture = external_execution_context_fixture(
+        Arc::new(FailingSubmitExecutor),
+        NonZeroUsize::new(4).unwrap(),
+    );
+
+    let error = bundle
+        .execute_grouped_gemm(
+            &fixture.entry(),
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &GroupedGemmConfig::new(
+                &jobs,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            ),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    let tenferro_tensor::Error::BackendSource { source, .. } = error else {
+        panic!("submit failure must retain a typed source");
+    };
+    assert!(matches!(
+        source.downcast_ref::<CpuDomainExecutorError>(),
+        Some(CpuDomainExecutorError::Cancellation { message })
+            if message == "authoritative submit failure"
+    ));
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 1);
+}
+
+#[test]
+fn route_engine_outer_rejects_output_boundary_before_submission() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![3], vec![2.0_f64; 3]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![4.0_f64; 3]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2], vec![-7.0_f64; 2]).unwrap();
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
+        GroupedGemmJob::new(2, 2, 2, 1, 1, 1),
+    ];
+    let (submits, installs, fixture) = counting_execution_fixture(4);
+
+    let error = bundle
+        .execute_grouped_gemm(
+            &fixture.entry(),
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &GroupedGemmConfig::new(
+                &jobs,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            ),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    assert_eq!(
+        error.kind(),
+        ErrorKind::Validation(ValidationKind::InvalidArgument)
+    );
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+    assert_eq!(installs.load(Ordering::Relaxed), 0);
+    assert_eq!(*gemm.grouped_calls.lock().unwrap(), 0);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[-7.0, -7.0]);
+}
+
+#[test]
+fn route_provider_owned_grouped_installs_once_with_inner_parallelism() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed));
+    let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer)
         .gemm_provider(gemm.clone())
         .build()
         .unwrap();
@@ -558,9 +1813,10 @@ fn route_provider_owned_grouped_delegates_whole_group_with_inner_parallelism() {
         GroupedGemmJob::new(0, 0, 0, 1, 1, 1),
         GroupedGemmJob::new(1, 1, 1, 1, 1, 1),
     ];
+    let (submits, installs, fixture) = counting_execution_fixture(2);
     bundle
         .execute_grouped_gemm(
-            &CpuContext::with_threads(2).unwrap(),
+            &fixture.entry(),
             TensorRead::from_tensor(&lhs),
             TensorRead::from_tensor(&rhs),
             &GroupedGemmConfig::new(
@@ -575,7 +1831,49 @@ fn route_provider_owned_grouped_delegates_whole_group_with_inner_parallelism() {
     assert_eq!(gemm.grouped_job_counts.lock().unwrap().as_slice(), &[2]);
     assert_eq!(
         gemm.parallelism.lock().unwrap().as_slice(),
-        &[CpuKernelParallelism::Inner]
+        &[ParallelMode::Inner]
     );
-    assert_eq!(gemm.in_selected_pool.lock().unwrap().as_slice(), &[false]);
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+    assert_eq!(installs.load(Ordering::Relaxed), 1);
+}
+
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn engine_outer_real_faer_writes_only_nonzero_base_output_view_jobs() {
+    let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer)
+        .build()
+        .unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![8], vec![1.0_f64, 3.0, 2.0, 4.0, 2.0, 0.0, 0.0, 3.0])
+        .unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![8], vec![5.0_f64, 7.0, 6.0, 8.0, 4.0, 0.0, 0.0, 5.0])
+        .unwrap();
+    let mut guarded = vec![-99.0_f64; 10];
+    let output = TypedTensorViewMut::from_slice([8], [1], 1, &mut guarded).unwrap();
+    let jobs = [
+        GroupedGemmJob::new(0, 0, 0, 2, 2, 2),
+        GroupedGemmJob::new(4, 4, 4, 2, 2, 2),
+    ];
+    let (submits, installs, fixture) = counting_execution_fixture(4);
+
+    bundle
+        .execute_grouped_gemm(
+            &fixture.entry(),
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &GroupedGemmConfig::new(
+                &jobs,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            ),
+            TensorWrite::from_view(TensorViewMut::F64(output)),
+        )
+        .unwrap();
+
+    assert_eq!(guarded[0], -99.0);
+    assert_eq!(guarded[9], -99.0);
+    assert_eq!(
+        &guarded[1..9],
+        &[19.0, 43.0, 22.0, 50.0, 8.0, 0.0, 0.0, 15.0]
+    );
+    assert_eq!(submits.load(Ordering::Relaxed), 1);
+    assert_eq!(installs.load(Ordering::Relaxed), 0);
 }

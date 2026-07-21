@@ -50,11 +50,11 @@ proc-macro2 = "1"
 quote = "1"
 syn = "2"
 tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "57a2e7ebe7738ca2f8b5c96f4c6ce4e467b20495", version = "0.1.0" }
-strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "10fc972d3c0f8cdfd4ecb45d21d815aebfd7d1f2", version = "0.3.0" }
-strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "10fc972d3c0f8cdfd4ecb45d21d815aebfd7d1f2", version = "0.3.0" }
-strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "10fc972d3c0f8cdfd4ecb45d21d815aebfd7d1f2", version = "0.3.0", features = ["parallel"] }
-strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "10fc972d3c0f8cdfd4ecb45d21d815aebfd7d1f2", version = "0.3.0", features = ["parallel"] }
-strided-einsum2 = { git = "https://github.com/tensor4all/strided-rs.git", rev = "10fc972d3c0f8cdfd4ecb45d21d815aebfd7d1f2", version = "0.3.0", default-features = false }
+strided-view = { git = "https://github.com/tensor4all/strided-rs.git", rev = "6b0b4a46b7dd9a9ea1677a0d596c0b4adab1acbc", version = "0.3.0" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs.git", rev = "6b0b4a46b7dd9a9ea1677a0d596c0b4adab1acbc", version = "0.3.0" }
+strided-perm = { git = "https://github.com/tensor4all/strided-rs.git", rev = "6b0b4a46b7dd9a9ea1677a0d596c0b4adab1acbc", version = "0.3.0", features = ["parallel"] }
+strided-kernel = { git = "https://github.com/tensor4all/strided-rs.git", rev = "6b0b4a46b7dd9a9ea1677a0d596c0b4adab1acbc", version = "0.3.0", features = ["parallel"] }
+strided-einsum2 = { git = "https://github.com/tensor4all/strided-rs.git", rev = "6b0b4a46b7dd9a9ea1677a0d596c0b4adab1acbc", version = "0.3.0", default-features = false }
 libloading = "0.8"
 faer = { version = "0.24", default-features = false, features = ["std", "rayon"] }
 cblas-sys = "0.1"

@@ -7,8 +7,8 @@ use thiserror::Error as ThisError;
 
 use crate::affinity::{CpuAffinityError, SystemThreadAffinity, ThreadAffinity};
 use crate::arbiter::{
-    register_worker_execution_scope, with_execution_owner, worker_execution_scope_matches,
-    ExecutionScopeState, ResourceOwner,
+    current_execution_owner, register_worker_execution_scope, worker_execution_scope_matches,
+    ExecutionScopeState,
 };
 use crate::domain_executor::{
     CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
@@ -376,39 +376,6 @@ impl CpuContext {
     pub(crate) fn owns_current_worker_for_test(&self) -> bool {
         worker_execution_scope_matches(&self.execution_scope)
     }
-
-    pub(crate) fn install_with_execution_owner<R: Send>(
-        &self,
-        owner: ResourceOwner,
-        op: impl FnOnce() -> R + Send,
-    ) -> R {
-        // Workers share this state from construction; broadcasting owner TLS
-        // here would only reintroduce per-entry scheduler work and allocation.
-        let _scope = self.execution_scope.enter(owner);
-        self.install(|| with_execution_owner(owner, op))
-    }
-
-    /// Return the faer parallelism policy for work run inside this context.
-    ///
-    /// The explicit degree keeps policy construction independent of the
-    /// ambient Rayon pool, including plans prepared before [`Self::install`].
-    #[cfg(feature = "cpu-faer")]
-    #[doc(hidden)]
-    pub fn faer_par(&self) -> faer::Par {
-        if self.num_threads == 1 {
-            faer::Par::Seq
-        } else {
-            // `rayon(0)` captures the ambient pool immediately, which may not
-            // be this context when a provider plan is prepared outside install.
-            faer::Par::rayon(self.num_threads)
-        }
-    }
-
-    #[cfg(feature = "cpu-faer")]
-    #[doc(hidden)]
-    pub fn faer_seq(&self) -> faer::Par {
-        faer::Par::Seq
-    }
 }
 
 impl CpuDomainExecutor for CpuContext {
@@ -440,6 +407,7 @@ impl CpuDomainExecutor for CpuContext {
     }
 
     fn submit(&self, jobs: &dyn ScopedCpuJobs) -> std::result::Result<(), CpuDomainExecutorError> {
+        let _scope = current_execution_owner().map(|owner| self.execution_scope.enter(owner));
         if self.pool.is_none() {
             return (0..jobs.len()).try_for_each(|index| jobs.run(index));
         }
@@ -454,6 +422,7 @@ impl CpuDomainExecutor for CpuContext {
         &self,
         job: &mut dyn ScopedCpuJob,
     ) -> std::result::Result<(), CpuDomainExecutorError> {
+        let _scope = current_execution_owner().map(|owner| self.execution_scope.enter(owner));
         self.install_if_needed(|| job.run())
     }
 }

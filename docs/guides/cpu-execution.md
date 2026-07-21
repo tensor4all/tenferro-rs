@@ -125,10 +125,12 @@ faer GEMM work execute inside the selected fixed Rayon engine. With the default
 is that node's process-visible CPU set.
 
 For a BLAS backend, a graph keeps one exclusive coordinator permit. Native
-tenferro segments enter the pinned all-allowed Rayon engine, while BLAS/LAPACK
-provider calls execute outside that Rayon pool. Thus an elementwise operation
-adjacent to BLAS does not run on an unconstrained global Rayon pool, and the
-provider is not nested inside tenferro's Rayon workers.
+tenferro segments and BLAS/LAPACK provider calls both cross the selected domain
+executor exactly once. The BLAS call runs inside that admitted operation
+region, but the provider runtime owns its worker fan-out; it does not use the
+executor's Rayon team as BLAS workers. Thus an elementwise operation adjacent
+to BLAS does not run on an unconstrained global Rayon pool, and no provider path
+bypasses domain admission.
 
 Supported Host instructions, native instructions, and session-capable GEMM FFI
 instructions share one backend session. Extension runtimes that cannot execute

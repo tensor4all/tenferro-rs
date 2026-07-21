@@ -3,18 +3,19 @@ use tenferro_tensor::{
     TensorView, TensorViewMut, TensorWrite, TypedTensor, ValidationError,
 };
 
-use rayon::prelude::*;
+use smallvec::SmallVec;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::backend::CpuBackendKind;
 use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::provider::{
     builtin_gemm_provider, builtin_layout_provider, CpuContractionAxes, CpuDotGeneralRequest,
-    CpuGemmProvider, CpuGeneralContractionProvider, CpuGroupedGemmRequest, CpuKernelParallelism,
+    CpuExecutionContext, CpuGemmProvider, CpuGeneralContractionProvider, CpuGroupedGemmRequest,
     CpuLayoutTransformIntent, CpuLayoutTransformProvider, CpuLayoutTransformRequest,
-    CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported,
+    CpuOperationEntry, CpuProviderOutcome, CpuProviderUnsupported,
 };
-use crate::{gemm::GemmAnalysisCache, CpuContext, Error, Result};
+use crate::{gemm::GemmAnalysisCache, CpuDomainExecutorError, Error, Result};
 
 const OP: &str = "dot_general";
 
@@ -41,6 +42,7 @@ pub enum GeneralContractionPolicy {
 
 #[derive(Debug)]
 pub(crate) struct DotGeneralRuntime {
+    kind: CpuBackendKind,
     pub(crate) general: Option<Arc<dyn CpuGeneralContractionProvider>>,
     pub(crate) gemm: Arc<dyn CpuGemmProvider>,
     pub(crate) layout: Arc<dyn CpuLayoutTransformProvider>,
@@ -52,6 +54,122 @@ pub(crate) struct DotGeneralRuntime {
 enum GroupedGemmScheduling {
     ProviderOwned,
     EngineOuter,
+}
+
+const GROUPED_JOB_STATE_BITS: usize = 2;
+const GROUPED_JOBS_PER_STATE_WORD: usize = usize::BITS as usize / GROUPED_JOB_STATE_BITS;
+const GROUPED_INLINE_STATE_WORDS: usize = 4;
+const GROUPED_INLINE_JOB_CAPACITY: usize = GROUPED_INLINE_STATE_WORDS * GROUPED_JOBS_PER_STATE_WORD;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(usize)]
+enum GroupedJobState {
+    Unclaimed = 0,
+    Running = 1,
+    Complete = 2,
+    Reserved = 3,
+}
+
+impl GroupedJobState {
+    fn from_bits(bits: usize) -> Self {
+        match bits {
+            0 => Self::Unclaimed,
+            1 => Self::Running,
+            2 => Self::Complete,
+            _ => Self::Reserved,
+        }
+    }
+}
+
+// INVARIANT: the public safe executor boundary can independently duplicate or
+// omit any grouped job, so sound post-submit auditing requires O(job_count)
+// state with at least UNCLAIMED/RUNNING/COMPLETE. Packing two bits per job into
+// four inline AtomicUsize words covers 2 * usize::BITS jobs without allocation;
+// only larger groups spill. Whole-word CAS updates preserve neighboring states.
+struct PackedJobStates {
+    words: SmallVec<[AtomicUsize; GROUPED_INLINE_STATE_WORDS]>,
+    len: usize,
+}
+
+impl PackedJobStates {
+    fn new(len: usize) -> Self {
+        let word_count = len.div_ceil(GROUPED_JOBS_PER_STATE_WORD);
+        let mut words = SmallVec::new();
+        words.resize_with(word_count, || AtomicUsize::new(0));
+        Self { words, len }
+    }
+
+    fn position(index: usize) -> (usize, usize) {
+        let word = index / GROUPED_JOBS_PER_STATE_WORD;
+        let shift = (index % GROUPED_JOBS_PER_STATE_WORD) * GROUPED_JOB_STATE_BITS;
+        (word, shift)
+    }
+
+    fn state(&self, index: usize) -> GroupedJobState {
+        let (word, shift) = Self::position(index);
+        let bits = (self.words[word].load(Ordering::Acquire) >> shift) & 0b11;
+        GroupedJobState::from_bits(bits)
+    }
+
+    fn try_claim(&self, index: usize) -> std::result::Result<(), GroupedJobState> {
+        let (word, shift) = Self::position(index);
+        let word = &self.words[word];
+        let mask = 0b11usize << shift;
+        let running = (GroupedJobState::Running as usize) << shift;
+        let mut observed = word.load(Ordering::Acquire);
+        loop {
+            let state = GroupedJobState::from_bits((observed & mask) >> shift);
+            if state != GroupedJobState::Unclaimed {
+                return Err(state);
+            }
+            let updated = (observed & !mask) | running;
+            match word.compare_exchange_weak(observed, updated, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => return Ok(()),
+                Err(current) => observed = current,
+            }
+        }
+    }
+
+    fn complete(&self, index: usize) -> bool {
+        let (word, shift) = Self::position(index);
+        let word = &self.words[word];
+        let mask = 0b11usize << shift;
+        let complete = (GroupedJobState::Complete as usize) << shift;
+        let mut observed = word.load(Ordering::Acquire);
+        loop {
+            if GroupedJobState::from_bits((observed & mask) >> shift) != GroupedJobState::Running {
+                return false;
+            }
+            let updated = (observed & !mask) | complete;
+            match word.compare_exchange_weak(observed, updated, Ordering::AcqRel, Ordering::Acquire)
+            {
+                Ok(_) => return true,
+                Err(current) => observed = current,
+            }
+        }
+    }
+
+    fn first_incomplete(&self) -> Option<(usize, GroupedJobState)> {
+        (0..self.len)
+            .map(|index| (index, self.state(index)))
+            .find(|(_, state)| *state != GroupedJobState::Complete)
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    #[cfg(test)]
+    fn word_count(&self) -> usize {
+        self.words.len()
+    }
+
+    #[cfg(test)]
+    fn spilled(&self) -> bool {
+        self.words.spilled()
+    }
 }
 
 fn standard_grouped_scheduling(kind: CpuBackendKind) -> GroupedGemmScheduling {
@@ -90,6 +208,7 @@ impl CpuProviderBundle {
         Self {
             inner: Arc::new(CpuProviderBundleInner {
                 dot_general: DotGeneralRuntime {
+                    kind,
                     general: None,
                     gemm: builtin_gemm_provider(kind),
                     layout: builtin_layout_provider(),
@@ -103,6 +222,7 @@ impl CpuProviderBundle {
     /// Start a bundle builder with the standard providers for `kind`.
     pub fn builder(kind: CpuBackendKind) -> CpuProviderBundleBuilder {
         CpuProviderBundleBuilder {
+            kind,
             gemm: Some(builtin_gemm_provider(kind)),
             layout: Some(builtin_layout_provider()),
             general: None,
@@ -114,6 +234,7 @@ impl CpuProviderBundle {
     /// Start an empty custom builder.
     pub fn custom_builder() -> CpuProviderBundleBuilder {
         CpuProviderBundleBuilder {
+            kind: CpuBackendKind::default_compiled(),
             gemm: None,
             layout: None,
             general: None,
@@ -135,9 +256,10 @@ impl CpuProviderBundle {
         &self.inner.dot_general
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn execute_dot_general_into(
         &self,
-        context: &CpuContext,
+        entry: &CpuOperationEntry<'_>,
         buffers: &mut BufferPool,
         cache: &mut GemmAnalysisCache,
         cache_slot: Option<usize>,
@@ -149,7 +271,7 @@ impl CpuProviderBundle {
     ) -> Result<()> {
         self.inner.dot_general.execute_into(
             &self.inner,
-            context,
+            entry,
             buffers,
             cache,
             cache_slot,
@@ -163,7 +285,7 @@ impl CpuProviderBundle {
 
     pub(crate) fn execute_grouped_gemm(
         &self,
-        context: &CpuContext,
+        entry: &CpuOperationEntry<'_>,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
         config: &tenferro_tensor::backend::GroupedGemmConfig<'_>,
@@ -171,7 +293,7 @@ impl CpuProviderBundle {
     ) -> Result<()> {
         self.inner
             .dot_general
-            .execute_grouped(context, lhs, rhs, config, output)
+            .execute_grouped(entry, lhs, rhs, config, output)
     }
 }
 
@@ -187,7 +309,45 @@ impl DotGeneralRuntime {
     fn execute_into(
         &self,
         bundle_identity: &Arc<CpuProviderBundleInner>,
-        context: &CpuContext,
+        entry: &CpuOperationEntry<'_>,
+        buffers: &mut BufferPool,
+        cache: &mut GemmAnalysisCache,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        output: TensorWrite<'_>,
+    ) -> Result<()> {
+        cache.bind_provider_bundle(bundle_identity);
+        let validated = validate_dot_general(&lhs, &rhs, &output, config, accumulation)?;
+        let mode = entry.preferred_provider_mode(self.kind);
+        entry
+            .enter(mode, |provider_context| {
+                self.execute_into_validated(
+                    provider_context,
+                    validated,
+                    buffers,
+                    cache,
+                    cache_slot,
+                    lhs,
+                    rhs,
+                    config,
+                    accumulation,
+                    output,
+                )
+            })
+            .map_err(|error| Error::backend_source(OP, error))?
+    }
+
+    // INVARIANT: these arguments are distinct borrowed components of one
+    // validated dispatch; grouping them would duplicate validation-owned
+    // metadata or add a request allocation to the hot path.
+    #[allow(clippy::too_many_arguments)]
+    fn execute_into_validated(
+        &self,
+        provider_context: &CpuExecutionContext<'_>,
+        validated: ValidatedDotGeneral<'_>,
         buffers: &mut BufferPool,
         cache: &mut GemmAnalysisCache,
         cache_slot: Option<usize>,
@@ -197,13 +357,9 @@ impl DotGeneralRuntime {
         accumulation: DotGeneralAccumulation,
         mut output: TensorWrite<'_>,
     ) -> Result<()> {
-        cache.bind_provider_bundle(bundle_identity);
-        let validated = validate_dot_general(&lhs, &rhs, &output, config, accumulation)?;
-        let provider_context = CpuProviderContext::new(context, CpuKernelParallelism::Inner);
-
         if let Some(general) = &self.general {
             let request = validated.request(&lhs, &rhs, &mut output, accumulation);
-            match general.dot_general(&provider_context, request)? {
+            match general.dot_general(provider_context, request)? {
                 CpuProviderOutcome::Executed => return Ok(()),
                 CpuProviderOutcome::Unsupported(reason) => {
                     if self.general_policy == GeneralContractionPolicy::Required {
@@ -219,19 +375,27 @@ impl DotGeneralRuntime {
         if let Some(plan) =
             crate::gemm::prepare_provider_gemm(cache, cache_slot, &lhs, &rhs, &output, config)?
         {
-            return execute_gemm_plan(
+            match execute_gemm_plan(
                 self.gemm.as_ref(),
-                &provider_context,
+                provider_context,
                 plan,
                 &lhs,
                 &rhs,
                 accumulation,
                 &mut output,
-            );
+            )? {
+                CpuProviderOutcome::Executed => return Ok(()),
+                CpuProviderOutcome::Unsupported(reason)
+                    if !canonical_gemm_fallback_supported(reason) =>
+                {
+                    return Err(unsupported_provider_error("GEMM", reason));
+                }
+                CpuProviderOutcome::Unsupported(_) => {}
+            }
         }
 
         self.execute_canonical_gemm(
-            &provider_context,
+            provider_context,
             buffers,
             cache,
             cache_slot,
@@ -246,7 +410,7 @@ impl DotGeneralRuntime {
     #[allow(clippy::too_many_arguments)]
     fn execute_canonical_gemm(
         &self,
-        provider_context: &CpuProviderContext<'_>,
+        provider_context: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         cache: &mut GemmAnalysisCache,
         cache_slot: Option<usize>,
@@ -264,6 +428,7 @@ impl DotGeneralRuntime {
             buffers,
             lhs,
             &lhs_perm,
+            accumulation.lhs_conj,
         )?;
         let rhs_canonical = match materialize_canonical_operand(
             self.layout.as_ref(),
@@ -271,6 +436,7 @@ impl DotGeneralRuntime {
             buffers,
             rhs,
             &rhs_perm,
+            accumulation.rhs_conj,
         ) {
             Ok(tensor) => tensor,
             Err(error) => {
@@ -282,6 +448,11 @@ impl DotGeneralRuntime {
         let result = {
             let lhs = TensorRead::from_tensor(&lhs_canonical);
             let rhs = TensorRead::from_tensor(&rhs_canonical);
+            let canonical_accumulation = DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                ..accumulation
+            };
             match crate::gemm::prepare_provider_gemm_canonical(
                 cache,
                 cache_slot,
@@ -290,15 +461,21 @@ impl DotGeneralRuntime {
                 output,
                 &canonical_config,
             ) {
-                Ok(Some(plan)) => execute_gemm_plan(
+                Ok(Some(plan)) => match execute_gemm_plan(
                     self.gemm.as_ref(),
                     provider_context,
                     plan,
                     &lhs,
                     &rhs,
-                    accumulation,
+                    canonical_accumulation,
                     output,
-                ),
+                ) {
+                    Ok(CpuProviderOutcome::Executed) => Ok(()),
+                    Ok(CpuProviderOutcome::Unsupported(reason)) => {
+                        Err(unsupported_provider_error("GEMM", reason))
+                    }
+                    Err(error) => Err(error),
+                },
                 Ok(None) => Err(Error::unsupported(
                     OP,
                     "configured CPU layout-plus-GEMM path cannot represent the canonical contraction",
@@ -311,9 +488,10 @@ impl DotGeneralRuntime {
         result
     }
 
+    #[allow(clippy::redundant_closure)]
     fn execute_grouped(
         &self,
-        context: &CpuContext,
+        entry: &CpuOperationEntry<'_>,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
         config: &tenferro_tensor::backend::GroupedGemmConfig<'_>,
@@ -327,13 +505,13 @@ impl DotGeneralRuntime {
             "grouped_gemm",
         )?;
         if self.grouped_scheduling == GroupedGemmScheduling::EngineOuter
-            && context.num_threads() > 1
+            && entry.supports_outer()
             && config.jobs().len() > 1
         {
-            return context.install_if_needed(|| match &mut output {
+            return match &mut output {
                 TensorWrite::Tensor(Tensor::F32(output)) => execute_grouped_outer_typed(
                     self.gemm.as_ref(),
-                    context,
+                    entry,
                     &lhs,
                     &rhs,
                     config,
@@ -343,7 +521,7 @@ impl DotGeneralRuntime {
                 ),
                 TensorWrite::Tensor(Tensor::F64(output)) => execute_grouped_outer_typed(
                     self.gemm.as_ref(),
-                    context,
+                    entry,
                     &lhs,
                     &rhs,
                     config,
@@ -353,7 +531,7 @@ impl DotGeneralRuntime {
                 ),
                 TensorWrite::Tensor(Tensor::C32(output)) => execute_grouped_outer_typed(
                     self.gemm.as_ref(),
-                    context,
+                    entry,
                     &lhs,
                     &rhs,
                     config,
@@ -363,7 +541,7 @@ impl DotGeneralRuntime {
                 ),
                 TensorWrite::Tensor(Tensor::C64(output)) => execute_grouped_outer_typed(
                     self.gemm.as_ref(),
-                    context,
+                    entry,
                     &lhs,
                     &rhs,
                     config,
@@ -375,7 +553,7 @@ impl DotGeneralRuntime {
                     let base = output.offset();
                     execute_grouped_outer_typed(
                         self.gemm.as_ref(),
-                        context,
+                        entry,
                         &lhs,
                         &rhs,
                         config,
@@ -388,7 +566,7 @@ impl DotGeneralRuntime {
                     let base = output.offset();
                     execute_grouped_outer_typed(
                         self.gemm.as_ref(),
-                        context,
+                        entry,
                         &lhs,
                         &rhs,
                         config,
@@ -401,7 +579,7 @@ impl DotGeneralRuntime {
                     let base = output.offset();
                     execute_grouped_outer_typed(
                         self.gemm.as_ref(),
-                        context,
+                        entry,
                         &lhs,
                         &rhs,
                         config,
@@ -414,7 +592,7 @@ impl DotGeneralRuntime {
                     let base = output.offset();
                     execute_grouped_outer_typed(
                         self.gemm.as_ref(),
-                        context,
+                        entry,
                         &lhs,
                         &rhs,
                         config,
@@ -427,35 +605,38 @@ impl DotGeneralRuntime {
                     "grouped-GEMM",
                     CpuProviderUnsupported::DType(output.dtype()),
                 )),
-            });
+            };
         }
-        let kernel_parallelism = CpuKernelParallelism::Inner;
-        let provider_context = CpuProviderContext::new(context, kernel_parallelism);
-        let request = CpuGroupedGemmRequest::new(
-            &lhs,
-            &rhs,
-            &mut output,
-            config.jobs(),
-            config.accumulation(),
-        );
-        match self.gemm.grouped_gemm(&provider_context, request)? {
-            CpuProviderOutcome::Executed => Ok(()),
-            CpuProviderOutcome::Unsupported(reason) => {
-                Err(unsupported_provider_error("grouped-GEMM", reason))
-            }
-        }
+        let mode = entry.preferred_provider_mode(self.kind);
+        entry
+            .enter(mode, |provider_context| {
+                let request = CpuGroupedGemmRequest::new(
+                    &lhs,
+                    &rhs,
+                    &mut output,
+                    config.jobs(),
+                    config.accumulation(),
+                );
+                match self.gemm.grouped_gemm(provider_context, request)? {
+                    CpuProviderOutcome::Executed => Ok(()),
+                    CpuProviderOutcome::Unsupported(reason) => {
+                        Err(unsupported_provider_error("grouped-GEMM", reason))
+                    }
+                }
+            })
+            .map_err(|error| Error::backend_source("grouped_gemm", error))?
     }
 }
 
 fn execute_gemm_plan(
     provider: &dyn CpuGemmProvider,
-    context: &CpuProviderContext<'_>,
+    context: &CpuExecutionContext<'_>,
     plan: crate::gemm::ProviderGemmPlan,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
     accumulation: DotGeneralAccumulation,
     output: &mut TensorWrite<'_>,
-) -> Result<()> {
+) -> Result<CpuProviderOutcome> {
     let batch_count = plan.batch_count();
     let request = plan.request(lhs, rhs, output, accumulation);
     let outcome = if batch_count == 1 {
@@ -463,10 +644,16 @@ fn execute_gemm_plan(
     } else {
         provider.strided_batched_gemm(context, request)?
     };
-    match outcome {
-        CpuProviderOutcome::Executed => Ok(()),
-        CpuProviderOutcome::Unsupported(reason) => Err(unsupported_provider_error("GEMM", reason)),
-    }
+    Ok(outcome)
+}
+
+fn canonical_gemm_fallback_supported(reason: CpuProviderUnsupported) -> bool {
+    matches!(
+        reason,
+        CpuProviderUnsupported::Layout(crate::provider::CpuOperand::Lhs)
+            | CpuProviderUnsupported::Layout(crate::provider::CpuOperand::Rhs)
+            | CpuProviderUnsupported::Conjugation
+    )
 }
 
 fn transposed_read_view<'input>(
@@ -529,10 +716,11 @@ fn reclaim_temporary(buffers: &mut BufferPool, tensor: Tensor) {
 
 fn materialize_canonical_operand(
     provider: &dyn CpuLayoutTransformProvider,
-    context: &CpuProviderContext<'_>,
+    context: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TensorRead<'_>,
     permutation: &[usize],
+    conjugate: bool,
 ) -> Result<Tensor> {
     let input_view = transposed_read_view(input, permutation)?;
     let mut output =
@@ -544,6 +732,7 @@ fn materialize_canonical_operand(
             &input,
             &mut output_write,
             CpuLayoutTransformIntent::CanonicalColumnMajor,
+            conjugate,
         );
         provider.materialize(context, request)
     };
@@ -560,10 +749,48 @@ fn materialize_canonical_operand(
     }
 }
 
+fn checked_grouped_output_range(
+    output_base: usize,
+    output_len: usize,
+    job: &tenferro_tensor::backend::GroupedGemmJob,
+) -> Result<std::ops::Range<usize>> {
+    let len = job.rows().checked_mul(job.cols()).ok_or_else(|| {
+        Error::invalid_argument(
+            "grouped_gemm",
+            "jobs",
+            "grouped-GEMM output span overflows usize",
+        )
+    })?;
+    let start = output_base.checked_add(job.out_offset()).ok_or_else(|| {
+        Error::invalid_argument(
+            "grouped_gemm",
+            "jobs",
+            "grouped-GEMM output offset overflows usize",
+        )
+    })?;
+    let end = start.checked_add(len).ok_or_else(|| {
+        Error::invalid_argument(
+            "grouped_gemm",
+            "jobs",
+            "grouped-GEMM output end overflows usize",
+        )
+    })?;
+    if end > output_len {
+        return Err(Error::invalid_argument(
+            "grouped_gemm",
+            "jobs",
+            "grouped-GEMM output range exceeds host storage",
+        ));
+    }
+    Ok(start..end)
+}
+
+// INVARIANT: provider, context, tensor views, grouped metadata, and output
+// storage are independent borrowed parts of one already-validated request.
 #[allow(clippy::too_many_arguments)]
 fn execute_grouped_outer_typed<T>(
     provider: &dyn CpuGemmProvider,
-    context: &CpuContext,
+    entry: &CpuOperationEntry<'_>,
     lhs: &TensorRead<'_>,
     rhs: &TensorRead<'_>,
     config: &tenferro_tensor::backend::GroupedGemmConfig<'_>,
@@ -574,6 +801,8 @@ fn execute_grouped_outer_typed<T>(
 where
     T: Send + Sync + 'static,
 {
+    const NO_DUPLICATE: usize = usize::MAX;
+
     let output_base = usize::try_from(output_base).map_err(|_| {
         Error::invalid_argument(
             "grouped_gemm",
@@ -581,72 +810,119 @@ where
             "grouped-GEMM output base offset is negative",
         )
     })?;
+    let output_storage_len = output_storage.len();
     for job in config.jobs() {
-        let len = job.rows().checked_mul(job.cols()).ok_or_else(|| {
-            Error::invalid_argument(
-                "grouped_gemm",
-                "jobs",
-                "grouped-GEMM output span overflows usize",
-            )
-        })?;
-        let start = output_base.checked_add(job.out_offset()).ok_or_else(|| {
-            Error::invalid_argument(
-                "grouped_gemm",
-                "jobs",
-                "grouped-GEMM output offset overflows usize",
-            )
-        })?;
-        let end = start.checked_add(len).ok_or_else(|| {
-            Error::invalid_argument(
-                "grouped_gemm",
-                "jobs",
-                "grouped-GEMM output end overflows usize",
-            )
-        })?;
-        if end > output_storage.len() {
-            return Err(Error::invalid_argument(
-                "grouped_gemm",
-                "jobs",
-                "grouped-GEMM output range exceeds host storage",
-            ));
-        }
+        checked_grouped_output_range(output_base, output_storage_len, job)?;
     }
 
     let output_address = output_storage.as_mut_ptr() as usize;
-    let provider_context = CpuProviderContext::new(context, CpuKernelParallelism::Sequential);
-    config.jobs().par_iter().try_for_each(|job| {
-        let len = job.rows() * job.cols();
-        let start = output_base + job.out_offset();
-        // SAFETY: the common grouped validator proves pairwise-disjoint output
-        // ranges; the preflight above proves each range is inside this one host
-        // allocation. Each Rayon task receives exactly its own range.
-        let output_slice =
-            unsafe { std::slice::from_raw_parts_mut((output_address as *mut T).add(start), len) };
-        let output_view =
-            tenferro_tensor::TypedTensorViewMut::from_slice([len], [1], 0, output_slice)?;
-        let mut output = TensorWrite::from_view(wrap_output(output_view));
-        let job = tenferro_tensor::backend::GroupedGemmJob::new(
-            0,
-            job.lhs_offset(),
-            job.rhs_offset(),
-            job.rows(),
-            job.contracted(),
-            job.cols(),
-        );
-        let request = CpuGroupedGemmRequest::new(
-            lhs,
-            rhs,
-            &mut output,
-            std::slice::from_ref(&job),
-            config.accumulation(),
-        );
-        match provider.grouped_gemm(&provider_context, request)? {
-            CpuProviderOutcome::Executed => Ok(()),
-            CpuProviderOutcome::Unsupported(reason) => {
-                Err(unsupported_provider_error("grouped-GEMM", reason))
+    let operation_error = std::sync::Mutex::new(None);
+    let job_states = PackedJobStates::new(config.jobs().len());
+    let duplicate_index = AtomicUsize::new(NO_DUPLICATE);
+    entry
+        .submit_outer(config.jobs().len(), |index, provider_context| {
+        if job_states.try_claim(index).is_err() {
+            let _ = duplicate_index.compare_exchange(
+                NO_DUPLICATE,
+                index,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            return Err(CpuDomainExecutorError::Scheduling {
+                message: format!(
+                    "executor invoked grouped-GEMM duplicate index {index}; every index must run exactly once"
+                ),
+            });
+        }
+
+        let already_failed = operation_error
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some();
+        if !already_failed {
+            let job = &config.jobs()[index];
+            let result = (|| -> Result<()> {
+                let range = checked_grouped_output_range(output_base, output_storage_len, job)?;
+                let len = range.len();
+                let start = range.start;
+                // INVARIANT: the immutable job, output base, and allocation
+                // length are identical to preflight. The shared checked helper
+                // therefore reconstructs the same in-bounds range inside this
+                // worker; the common grouped validator also proved distinct
+                // job ranges disjoint. Before reaching this point, the
+                // packed atomic claim changed this job from UNCLAIMED to
+                // RUNNING without clobbering neighboring states, so even a
+                // contract-violating safe executor cannot send a second
+                // invocation of this index to the provider.
+                // SAFETY: `start..start + len` is in this allocation. Distinct
+                // jobs have disjoint validated ranges, and the atomic claim
+                // permits exactly one invocation of each job to construct its
+                // mutable slice.
+                let output_slice = unsafe {
+                    std::slice::from_raw_parts_mut((output_address as *mut T).add(start), len)
+                };
+                let output_view =
+                    tenferro_tensor::TypedTensorViewMut::from_slice([len], [1], 0, output_slice)?;
+                let mut output = TensorWrite::from_view(wrap_output(output_view));
+                let job = tenferro_tensor::backend::GroupedGemmJob::new(
+                    0,
+                    job.lhs_offset(),
+                    job.rhs_offset(),
+                    job.rows(),
+                    job.contracted(),
+                    job.cols(),
+                );
+                let request = CpuGroupedGemmRequest::new(
+                    lhs,
+                    rhs,
+                    &mut output,
+                    std::slice::from_ref(&job),
+                    config.accumulation(),
+                );
+                match provider.grouped_gemm(provider_context, request)? {
+                    CpuProviderOutcome::Executed => Ok(()),
+                    CpuProviderOutcome::Unsupported(reason) => {
+                        Err(unsupported_provider_error("grouped-GEMM", reason))
+                    }
+                }
+            })();
+            if let Err(error) = result {
+                *operation_error
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error);
             }
         }
+        let _ = job_states.complete(index);
+        Ok(())
     })
+        .map_err(|error| Error::backend_source("grouped_gemm", error))?;
+    let duplicate = duplicate_index.load(Ordering::Acquire);
+    if duplicate != NO_DUPLICATE {
+        return Err(Error::backend_source(
+            "grouped_gemm",
+            CpuDomainExecutorError::Scheduling {
+                message: format!(
+                    "executor invoked grouped-GEMM duplicate index {duplicate}; every index must run exactly once"
+                ),
+            },
+        ));
+    }
+    if let Some((index, state)) = job_states.first_incomplete() {
+        let detail = if state == GroupedJobState::Unclaimed {
+            format!("executor omitted grouped-GEMM missing index {index}")
+        } else {
+            format!("executor did not complete grouped-GEMM index {index}")
+        };
+        return Err(Error::backend_source(
+            "grouped_gemm",
+            CpuDomainExecutorError::Scheduling { message: detail },
+        ));
+    }
+    match operation_error.into_inner() {
+        Ok(Some(error)) => Err(error),
+        Err(poisoned) => poisoned.into_inner().map_or(Ok(()), Err),
+        Ok(None) => Ok(()),
+    }
 }
 
 /// Error returned when a custom CPU provider bundle omits mandatory slots.
@@ -664,6 +940,33 @@ pub struct CpuProviderBundleBuildError {
     layout: bool,
 }
 
+/// Failure to install a CPU provider bundle for the backend's domains.
+///
+/// Phase 2 reserves this typed surface for construction-time domain/provider
+/// validation. Provider capability classification populates concrete
+/// incompatibilities without adding a second installation API.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuProviderBundleInstallError;
+/// # fn diagnostic(error: &CpuProviderBundleInstallError) -> String {
+/// error.to_string()
+/// # }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum CpuProviderBundleInstallError {
+    /// A provider capability cannot satisfy one selected resource domain.
+    #[error("CPU provider bundle is incompatible with domain {domain_id:?}: {message}")]
+    IncompatibleDomain {
+        /// Domain rejected by construction-time validation.
+        domain_id: tenferro_tensor::CpuDomainId,
+        /// Allocation-independent construction diagnostic.
+        message: &'static str,
+    },
+}
+
 /// Construction-time builder for immutable CPU provider slots.
 ///
 /// # Examples
@@ -676,6 +979,7 @@ pub struct CpuProviderBundleBuildError {
 /// ```
 #[derive(Debug)]
 pub struct CpuProviderBundleBuilder {
+    kind: CpuBackendKind,
     gemm: Option<Arc<dyn CpuGemmProvider>>,
     layout: Option<Arc<dyn CpuLayoutTransformProvider>>,
     general: Option<Arc<dyn CpuGeneralContractionProvider>>,
@@ -694,7 +998,7 @@ impl CpuProviderBundleBuilder {
     /// Permit the engine to fan out grouped GEMM into concurrent single-job calls.
     ///
     /// The installed GEMM provider must be safe for concurrent calls and must
-    /// honor [`CpuKernelParallelism::Sequential`] without creating inner
+    /// honor [`crate::provider::ParallelMode::Sequential`] without creating inner
     /// workers. Custom providers remain provider-owned unless this capability
     /// is selected explicitly.
     pub fn engine_outer_grouped_gemm(mut self) -> Self {
@@ -747,6 +1051,7 @@ impl CpuProviderBundleBuilder {
         Ok(CpuProviderBundle {
             inner: Arc::new(CpuProviderBundleInner {
                 dot_general: DotGeneralRuntime {
+                    kind: self.kind,
                     general: self.general,
                     gemm,
                     layout,

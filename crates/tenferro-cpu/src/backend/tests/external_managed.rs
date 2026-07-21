@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -506,7 +506,7 @@ fn external_executor_error_keeps_its_diagnostic_and_releases_the_permit() {
         .err()
         .map(super::panic_message)
         .expect("executor admission failure should panic at the infallible API");
-    assert!(message.contains("external executor failed"), "{message}");
+    assert!(message.contains("executor failed"), "{message}");
     assert!(message.contains("fixture rejection"), "{message}");
 
     let overlapping = backend
@@ -542,7 +542,7 @@ fn external_domain_rejects_nested_backend_entry() {
 }
 
 #[test]
-fn external_provider_staging_is_explicitly_deferred_to_task_six() {
+fn external_linalg_execution_uses_the_supplied_no_inner_executor() {
     let installs = Arc::new(AtomicUsize::new(0));
     let mut backend = external_backend(
         CpuDomainId::new(1),
@@ -558,13 +558,182 @@ fn external_provider_staging_is_explicitly_deferred_to_task_six() {
     )
     .unwrap();
 
-    let message = catch_unwind(AssertUnwindSafe(|| backend.with_linalg_pool(|_| ())))
-        .err()
-        .map(super::panic_message)
-        .expect("phase-1 provider staging must reject external domains");
+    backend
+        .with_linalg_pool(|context, _| {
+            assert_eq!(context.parallel_mode(), crate::ParallelMode::Sequential);
+            Ok(())
+        })
+        .unwrap();
 
-    assert!(message.contains("phase-2 execution-context migration"));
-    assert_eq!(installs.load(Ordering::Relaxed), 0);
+    assert_eq!(installs.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn external_elementwise_and_session_operations_use_the_supplied_no_inner_executor() {
+    let installs = Arc::new(AtomicUsize::new(0));
+    let mut backend = external_backend(
+        CpuDomainId::new(1),
+        [external_domain(
+            1,
+            node_placement(0, cpu_set([0])),
+            1,
+            1,
+            CpuPlacementGuarantee::ExactDeclared,
+            Arc::clone(&installs),
+        )],
+        topology([0]),
+    )
+    .unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+
+    let output = backend.add(&lhs, &rhs).unwrap();
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    assert_eq!(installs.load(Ordering::Relaxed), 1);
+
+    backend.with_backend_session(|session| {
+        let output = session.add(&lhs, &rhs).unwrap();
+        assert_eq!(output.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    });
+    assert_eq!(installs.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+fn external_provider_dot_uses_the_supplied_no_inner_executor() {
+    let installs = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend = external_backend(
+        CpuDomainId::new(1),
+        [external_domain(
+            1,
+            node_placement(0, cpu_set([0])),
+            1,
+            1,
+            CpuPlacementGuarantee::ExactDeclared,
+            Arc::clone(&installs),
+        )],
+        topology([0]),
+    )
+    .unwrap();
+    let bundle = CpuProviderBundle::builder(backend.kind())
+        .prefer_general_contraction_provider(Arc::new(super::CountingGeneralProvider {
+            calls: Arc::clone(&calls),
+        }))
+        .build()
+        .unwrap();
+    let mut backend = backend.with_provider_bundle(bundle).unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
+
+    backend.dot_general(&lhs, &rhs, &config).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+    assert_eq!(installs.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn sequential_direct_session_native_dot_and_linalg_each_enter_exactly_once() {
+    let installs = Arc::new(AtomicUsize::new(0));
+    let submits = Arc::new(AtomicUsize::new(0));
+    let executor = Arc::new(RejectReentryCountingExecutor {
+        active: AtomicBool::new(false),
+        installs: Arc::clone(&installs),
+        submits: Arc::clone(&submits),
+    });
+    let domain = ExternalCpuDomain::new(
+        CpuDomainId::new(1),
+        node_placement(0, cpu_set([0])),
+        executor,
+        NonZeroUsize::new(1).unwrap(),
+        CpuPlacementGuarantee::ExactDeclared,
+    )
+    .unwrap();
+    let backend = external_backend(CpuDomainId::new(1), [domain], topology([0])).unwrap();
+    let provider_calls = Arc::new(AtomicUsize::new(0));
+    let bundle = CpuProviderBundle::builder(backend.kind())
+        .prefer_general_contraction_provider(Arc::new(super::CountingGeneralProvider {
+            calls: Arc::clone(&provider_calls),
+        }))
+        .build()
+        .unwrap();
+    let mut backend = backend.with_provider_bundle(bundle).unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
+
+    let direct_calls = AtomicUsize::new(0);
+    backend.install(|| {
+        direct_calls.fetch_add(1, Ordering::Relaxed);
+    });
+    assert_eq!(direct_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(installs.load(Ordering::Relaxed), 1);
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+
+    backend.add(&lhs, &rhs).unwrap();
+    assert_eq!(installs.load(Ordering::Relaxed), 2);
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+
+    backend.with_backend_session(|session| {
+        session.add(&lhs, &rhs).unwrap();
+    });
+    assert_eq!(installs.load(Ordering::Relaxed), 3);
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+
+    let linalg_calls = AtomicUsize::new(0);
+    backend
+        .with_linalg_pool(|context, _| {
+            assert_eq!(context.parallel_mode(), crate::ParallelMode::Sequential);
+            linalg_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(linalg_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(installs.load(Ordering::Relaxed), 4);
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+
+    backend
+        .dot_general(
+            &lhs,
+            &rhs,
+            &DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
+        )
+        .unwrap();
+    assert_eq!(provider_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(installs.load(Ordering::Relaxed), 5);
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn external_executor_error_is_preserved_as_a_typed_tensor_source() {
+    let domain = ExternalCpuDomain::new(
+        CpuDomainId::new(1),
+        node_placement(0, cpu_set([0])),
+        Arc::new(RejectingExecutor),
+        NonZeroUsize::new(1).unwrap(),
+        CpuPlacementGuarantee::ExactDeclared,
+    )
+    .unwrap();
+    let mut backend = external_backend(CpuDomainId::new(1), [domain], topology([0])).unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+
+    let error = backend.add(&lhs, &rhs).unwrap_err();
+    let crate::Error::BackendSource { source, .. } = error else {
+        panic!("executor failure must retain a typed source");
+    };
+    assert!(matches!(
+        source.downcast_ref::<CpuDomainExecutorError>(),
+        Some(CpuDomainExecutorError::Admission { message }) if message == "fixture rejection"
+    ));
 }
 
 #[test]
@@ -733,6 +902,60 @@ struct CountingExecutor {
     workers: NonZeroUsize,
     installs: Arc<AtomicUsize>,
     drops: Option<Arc<AtomicUsize>>,
+}
+
+#[derive(Debug)]
+struct RejectReentryCountingExecutor {
+    active: AtomicBool,
+    installs: Arc<AtomicUsize>,
+    submits: Arc<AtomicUsize>,
+}
+
+struct ReentryGuard<'a>(&'a AtomicBool);
+
+impl Drop for ReentryGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+impl RejectReentryCountingExecutor {
+    fn enter(&self) -> Result<ReentryGuard<'_>, CpuDomainExecutorError> {
+        self.active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ReentryGuard(&self.active))
+            .map_err(|_| CpuDomainExecutorError::Admission {
+                message: "test executor rejected nested entry".to_owned(),
+            })
+    }
+}
+
+impl CpuDomainExecutor for RejectReentryCountingExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        CpuDomainExecutorCapabilities {
+            worker_count: NonZeroUsize::new(1).unwrap(),
+            outer_parallelism: false,
+            inner_parallelism: CpuInnerParallelism::None,
+            reentrancy: CpuExecutorReentrancy::Rejected,
+            affinity: CpuExecutorAffinity::CallerDeclaredUnverified,
+            shutdown: CpuExecutorShutdown::CallerOwned,
+        }
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        let _guard = self.enter()?;
+        self.submits.fetch_add(1, Ordering::Relaxed);
+        for index in 0..jobs.len() {
+            jobs.run(index)?;
+        }
+        Ok(())
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        let _guard = self.enter()?;
+        self.installs.fetch_add(1, Ordering::Relaxed);
+        job.run()
+    }
 }
 
 impl Drop for CountingExecutor {

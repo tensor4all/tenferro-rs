@@ -5,6 +5,7 @@
 //! tensor metadata and reachable ranges have already been validated.
 
 use core::fmt;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use tenferro_tensor::backend::GroupedGemmJob;
@@ -12,8 +13,14 @@ use tenferro_tensor::{
     DType, DotGeneralAccumulation, Tensor, TensorRead, TensorView, TensorViewMut, TensorWrite,
 };
 
+use crate::arbiter::{with_execution_owner, ResourcePermit};
 use crate::backend::CpuBackendKind;
-use crate::CpuContext;
+use crate::buffer_pool::BufferPool;
+use crate::domain_executor::{indexed_jobs, install_scoped};
+use crate::resource_domain::CpuResourceDomain;
+use crate::{
+    CpuDomainExecutorError, CpuDomainId, CpuInnerParallelism, CpuPlacementGuarantee, CpuSet,
+};
 
 /// Operand named by a provider capability reason.
 ///
@@ -93,68 +100,400 @@ pub enum CpuProviderOutcome {
     Unsupported(CpuProviderUnsupported),
 }
 
-/// Kernel-level parallelism permitted for one provider invocation.
+/// Parallel scheduling mode selected for one CPU operation.
 ///
 /// # Examples
 ///
 /// ```
-/// use tenferro_cpu::provider::CpuKernelParallelism;
-/// assert_ne!(
-///     CpuKernelParallelism::Sequential,
-///     CpuKernelParallelism::Inner,
-/// );
+/// use tenferro_cpu::provider::ParallelMode;
+/// assert_ne!(ParallelMode::Sequential, ParallelMode::Outer);
+/// assert_ne!(ParallelMode::Outer, ParallelMode::Inner);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CpuKernelParallelism {
-    /// The provider must execute this request sequentially.
+pub enum ParallelMode {
+    /// Neither the engine nor the provider may fan out this operation.
     Sequential,
-    /// The provider may use the engine's configured inner parallelism.
+    /// The engine owns outer fan-out and delegates Sequential child contexts.
+    /// Providers do not receive an Outer context.
+    Outer,
+    /// One provider kernel may use the selected executor's inner region.
     Inner,
 }
 
-/// Read-only execution policy visible to CPU providers.
+/// Borrowed execution policy for an already-entered CPU operation.
 ///
-/// The context deliberately exposes no pool, session, permit, or installation
-/// API.
+/// The context exposes immutable domain facts while keeping the resource lease,
+/// executor object, and the checked executor-entry boundary private. Providers
+/// cannot install or submit work through this value.
 ///
 /// # Examples
 ///
 /// Providers inspect this value inside a trait method:
 ///
 /// ```
-/// use tenferro_cpu::provider::CpuProviderContext;
-/// # fn inspect(context: &CpuProviderContext<'_>) {
-/// assert!(context.thread_budget() >= 1);
+/// use tenferro_cpu::provider::CpuExecutionContext;
+/// # fn inspect(context: &CpuExecutionContext<'_>) {
+/// assert!(context.thread_budget().get() >= 1);
 /// # }
 /// ```
-#[derive(Clone, Copy, Debug)]
-pub struct CpuProviderContext<'a> {
-    context: &'a CpuContext,
-    kernel_parallelism: CpuKernelParallelism,
+#[derive(Clone, Copy)]
+pub struct CpuExecutionContext<'a> {
+    domain: &'a CpuResourceDomain,
+    parallel_mode: ParallelMode,
 }
 
-impl<'a> CpuProviderContext<'a> {
-    #[allow(dead_code)]
-    pub(crate) fn new(context: &'a CpuContext, kernel_parallelism: CpuKernelParallelism) -> Self {
+impl fmt::Debug for CpuExecutionContext<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CpuExecutionContext")
+            .field("domain_id", &self.domain_id())
+            .field("cpus", &self.cpus())
+            .field("thread_budget", &self.thread_budget())
+            .field("placement_guarantee", &self.placement_guarantee())
+            .field("parallel_mode", &self.parallel_mode())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> CpuExecutionContext<'a> {
+    fn entered(domain: &'a CpuResourceDomain, parallel_mode: ParallelMode) -> Self {
         Self {
-            context,
-            kernel_parallelism,
+            domain,
+            parallel_mode,
         }
     }
 
-    /// Return the validated engine thread budget.
-    pub fn thread_budget(&self) -> usize {
-        self.context.num_threads()
+    /// Return the stable identity of the selected CPU resource domain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuExecutionContext;
+    /// # fn inspect(context: &CpuExecutionContext<'_>) {
+    /// let _domain_id = context.domain_id();
+    /// # }
+    /// ```
+    pub fn domain_id(&self) -> CpuDomainId {
+        self.domain.id()
     }
 
-    /// Return whether this invocation may use inner kernel parallelism.
-    pub fn kernel_parallelism(&self) -> CpuKernelParallelism {
-        self.kernel_parallelism
+    /// Return the selected domain's declared logical CPU set.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuExecutionContext;
+    /// # fn inspect(context: &CpuExecutionContext<'_>) {
+    /// assert!(!context.cpus().is_empty());
+    /// # }
+    /// ```
+    pub fn cpus(&self) -> &CpuSet {
+        self.domain.cpus()
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn cpu_context(&self) -> &CpuContext {
-        self.context
+    /// Return the non-zero maximum participating-thread budget.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuExecutionContext;
+    /// # fn inspect(context: &CpuExecutionContext<'_>) {
+    /// assert!(context.thread_budget().get() >= 1);
+    /// # }
+    /// ```
+    pub fn thread_budget(&self) -> NonZeroUsize {
+        self.domain.thread_budget()
+    }
+
+    /// Return the strength of the selected domain's placement guarantee.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuExecutionContext;
+    /// # fn inspect(context: &CpuExecutionContext<'_>) {
+    /// let _guarantee = context.placement_guarantee();
+    /// # }
+    /// ```
+    pub fn placement_guarantee(&self) -> CpuPlacementGuarantee {
+        self.domain.placement_guarantee()
+    }
+
+    /// Return the engine-selected scheduling mode for this entered provider call.
+    ///
+    /// Provider calls observe Sequential or Inner. Outer scheduling creates a
+    /// separate Sequential context inside every submitted child.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::{CpuExecutionContext, ParallelMode};
+    /// # fn inspect(context: &CpuExecutionContext<'_>) {
+    /// assert!(matches!(
+    ///     context.parallel_mode(),
+    ///     ParallelMode::Sequential | ParallelMode::Inner
+    /// ));
+    /// # }
+    /// ```
+    pub fn parallel_mode(&self) -> ParallelMode {
+        self.parallel_mode
+    }
+
+    /// Materialize a borrowed tensor view for one scoped operation and reclaim
+    /// its temporary host buffer before returning.
+    ///
+    /// Owned tensor inputs are borrowed directly. View inputs are materialized
+    /// from `buffers`, passed to `operation`, and returned to the same pool on
+    /// both success and ordinary error. The receiver is an unforgeable proof
+    /// that the caller is already inside the selected CPU execution domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::RuntimeState`] when the view is not
+    /// accessible from CPU host memory, propagates typed view-materialization
+    /// errors, and otherwise returns the error produced by `operation`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::{StridedSliceSpec, TensorRead, TensorView, TypedTensor};
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let input = TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// backend.with_linalg_pool(|context, buffers| {
+    ///     let view = input
+    ///         .as_view()
+    ///         .try_slice(&[StridedSliceSpec::reverse()])?;
+    ///     context.with_materialized_tensor_read(
+    ///         buffers,
+    ///         "example",
+    ///         TensorRead::from_view(TensorView::F64(view)),
+    ///         |materialized, _| {
+    ///             assert_eq!(materialized.as_slice::<f64>().unwrap(), &[2.0, 1.0]);
+    ///             Ok(())
+    ///         },
+    ///     )
+    /// })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[doc(hidden)]
+    pub fn with_materialized_tensor_read<R>(
+        &self,
+        buffers: &mut BufferPool,
+        op: &'static str,
+        input: TensorRead<'_>,
+        operation: impl FnOnce(&Tensor, &mut BufferPool) -> tenferro_tensor::Result<R>,
+    ) -> tenferro_tensor::Result<R> {
+        match input {
+            TensorRead::Tensor(tensor) => operation(tensor, buffers),
+            TensorRead::View(view) => {
+                let materialized = self.with_native_parallelism(|| {
+                    crate::materialize_tensor_read(buffers, op, TensorRead::View(view))
+                })?;
+                let result = operation(&materialized, buffers);
+                reclaim_tensor(buffers, materialized);
+                result
+            }
+        }
+    }
+
+    /// Reshape a compact tensor while retaining the current execution proof.
+    ///
+    /// This metadata-only helper does not enter an executor or borrow another
+    /// scratch pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Validation`] when the input and output
+    /// shapes have different element counts or the requested layout is invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let mut backend = CpuBackend::with_threads(1)?;
+    /// let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// backend.with_linalg_pool(|context, _| {
+    ///     let output = context.reshape_tensor(&input, &[2, 1])?;
+    ///     assert_eq!(output.shape(), &[2, 1]);
+    ///     Ok(())
+    /// })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[doc(hidden)]
+    pub fn reshape_tensor(
+        &self,
+        input: &Tensor,
+        shape: &[usize],
+    ) -> tenferro_tensor::Result<Tensor> {
+        crate::structural::reshape(input, shape)
+    }
+
+    /// Return the faer policy selected by this operation context.
+    ///
+    /// This hidden public method is the owner-scoped extension contract used by
+    /// operation-family crates such as `tenferro-linalg`. Keeping the mapping
+    /// here prevents sibling crates from deriving a second CPU threading
+    /// policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuExecutionContext;
+    /// # fn inspect(context: &CpuExecutionContext<'_>) {
+    /// let _policy = context.faer_parallelism();
+    /// # }
+    /// ```
+    #[cfg(feature = "cpu-faer")]
+    #[doc(hidden)]
+    pub fn faer_parallelism(self) -> faer::Par {
+        match (
+            self.parallel_mode,
+            self.domain.executor_capabilities().inner_parallelism,
+        ) {
+            (ParallelMode::Inner, CpuInnerParallelism::Rayon) if self.thread_budget().get() > 1 => {
+                faer::Par::rayon(self.thread_budget().get())
+            }
+            _ => faer::Par::Seq,
+        }
+    }
+
+    pub(crate) fn with_native_parallelism<R>(&self, operation: impl FnOnce() -> R) -> R {
+        let policy = match (
+            self.parallel_mode,
+            self.domain.executor_capabilities().inner_parallelism,
+        ) {
+            (ParallelMode::Inner, CpuInnerParallelism::Rayon) if self.thread_budget().get() > 1 => {
+                strided_kernel::ExecutionPolicy::Rayon {
+                    max_threads: self.thread_budget(),
+                }
+            }
+            _ => strided_kernel::ExecutionPolicy::Sequential,
+        };
+        strided_kernel::with_execution_policy(policy, operation)
+    }
+}
+
+fn reclaim_tensor(buffers: &mut BufferPool, tensor: Tensor) {
+    match tensor {
+        Tensor::F32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::F64(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::I32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::I64(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::Bool(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::C32(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+        Tensor::C64(tensor) => crate::backend::reclaim_typed(buffers, tensor),
+    }
+}
+
+/// Crate-private unentered capability for one CPU operation.
+///
+/// This is the only type that owns the resource permit and may cross the
+/// selected domain executor boundary. A [`CpuExecutionContext`] is constructed
+/// only inside an installed job or an outer child job.
+#[derive(Clone, Copy)]
+pub(crate) struct CpuOperationEntry<'a> {
+    domain: &'a CpuResourceDomain,
+    permit: &'a ResourcePermit,
+}
+
+impl<'a> CpuOperationEntry<'a> {
+    pub(crate) fn new(domain: &'a CpuResourceDomain, permit: &'a ResourcePermit) -> Self {
+        Self { domain, permit }
+    }
+
+    pub(crate) fn enter<R: Send>(
+        self,
+        parallel_mode: ParallelMode,
+        operation: impl FnOnce(&CpuExecutionContext<'_>) -> R + Send,
+    ) -> Result<R, CpuDomainExecutorError> {
+        if parallel_mode == ParallelMode::Outer {
+            return Err(CpuDomainExecutorError::Scheduling {
+                message: "CPU executor install requires Sequential or Inner mode, got Outer"
+                    .to_owned(),
+            });
+        }
+        let owner = self.permit.owner();
+        with_execution_owner(owner, || {
+            install_scoped(self.domain.executor().as_ref(), || {
+                with_execution_owner(owner, || {
+                    let context = CpuExecutionContext::entered(self.domain, parallel_mode);
+                    operation(&context)
+                })
+            })
+        })
+    }
+
+    pub(crate) fn submit_outer(
+        self,
+        len: usize,
+        operation: impl Fn(usize, &CpuExecutionContext<'_>) -> Result<(), CpuDomainExecutorError> + Sync,
+    ) -> Result<(), CpuDomainExecutorError> {
+        if !self.supports_outer() {
+            return Err(CpuDomainExecutorError::Scheduling {
+                message: format!(
+                    "CPU domain {:?} does not support Outer mode",
+                    self.domain.id()
+                ),
+            });
+        }
+        let owner = self.permit.owner();
+        let lane_count = len.min(self.domain.thread_budget().get());
+        let jobs = indexed_jobs(lane_count, |lane| {
+            // INVARIANT: valid lanes partition `0..len` by residue modulo the
+            // nonzero `lane_count`, so every logical job runs exactly once
+            // while the executor can schedule at most the domain budget.
+            let mut index = lane;
+            while index < len {
+                with_execution_owner(owner, || {
+                    let context =
+                        CpuExecutionContext::entered(self.domain, ParallelMode::Sequential);
+                    operation(index, &context)
+                })?;
+                let Some(next) = index.checked_add(lane_count) else {
+                    break;
+                };
+                index = next;
+            }
+            Ok(())
+        });
+        with_execution_owner(owner, || self.domain.executor().submit(&jobs))?;
+        if let Some(index) = jobs.invalid_index_attempt() {
+            return Err(CpuDomainExecutorError::Scheduling {
+                message: format!(
+                    "executor requested scoped CPU lane index {index}, but the submission has {lane_count} lanes for {len} logical jobs"
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn preferred_engine_mode(self) -> ParallelMode {
+        if self.domain.thread_budget().get() > 1
+            && self.domain.executor_capabilities().inner_parallelism == CpuInnerParallelism::Rayon
+        {
+            ParallelMode::Inner
+        } else {
+            ParallelMode::Sequential
+        }
+    }
+
+    pub(crate) fn preferred_provider_mode(self, kind: CpuBackendKind) -> ParallelMode {
+        if self.domain.thread_budget().get() <= 1 {
+            return ParallelMode::Sequential;
+        }
+        match kind {
+            CpuBackendKind::Faer => self.preferred_engine_mode(),
+            CpuBackendKind::Blas => ParallelMode::Inner,
+        }
+    }
+
+    pub(crate) fn supports_outer(self) -> bool {
+        self.domain.thread_budget().get() > 1
+            && self.domain.executor_capabilities().outer_parallelism
     }
 }
 
@@ -472,6 +811,7 @@ pub struct CpuLayoutTransformRequest<'request, 'input, 'output> {
     input: &'request TensorRead<'input>,
     output: &'request mut TensorWrite<'output>,
     intent: CpuLayoutTransformIntent,
+    conjugate: bool,
 }
 
 impl<'request, 'input, 'output> CpuLayoutTransformRequest<'request, 'input, 'output> {
@@ -480,11 +820,13 @@ impl<'request, 'input, 'output> CpuLayoutTransformRequest<'request, 'input, 'out
         input: &'request TensorRead<'input>,
         output: &'request mut TensorWrite<'output>,
         intent: CpuLayoutTransformIntent,
+        conjugate: bool,
     ) -> Self {
         Self {
             input,
             output,
             intent,
+            conjugate,
         }
     }
 
@@ -503,14 +845,29 @@ impl<'request, 'input, 'output> CpuLayoutTransformRequest<'request, 'input, 'out
         self.intent
     }
 
+    /// Return whether materialization must conjugate each input element.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::CpuLayoutTransformRequest;
+    /// # fn inspect(request: &CpuLayoutTransformRequest<'_, '_, '_>) {
+    /// let _must_conjugate = request.conjugate();
+    /// # }
+    /// ```
+    pub fn conjugate(&self) -> bool {
+        self.conjugate
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (
         &'request TensorRead<'input>,
         &'request mut TensorWrite<'output>,
         CpuLayoutTransformIntent,
+        bool,
     ) {
-        (self.input, self.output, self.intent)
+        (self.input, self.output, self.intent, self.conjugate)
     }
 }
 
@@ -695,23 +1052,47 @@ impl<'request, 'input, 'output> CpuDotGeneralRequest<'request, 'input, 'output> 
 /// ```
 pub trait CpuGemmProvider: fmt::Debug + Send + Sync + 'static {
     /// Execute one validated GEMM.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::BackendSource`] or
+    /// [`tenferro_tensor::Error::BackendFailure`] when the provider runtime
+    /// fails. A detected inconsistency in engine-attested request metadata is
+    /// returned as [`tenferro_tensor::Error::Validation`]. Unsupported
+    /// capabilities use [`CpuProviderOutcome::Unsupported`] instead.
     fn gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome>;
 
     /// Execute one validated strided-batched GEMM.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::BackendSource`] or
+    /// [`tenferro_tensor::Error::BackendFailure`] when the provider runtime
+    /// fails. A detected inconsistency in engine-attested request metadata is
+    /// returned as [`tenferro_tensor::Error::Validation`]. Unsupported
+    /// capabilities use [`CpuProviderOutcome::Unsupported`] instead.
     fn strided_batched_gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome>;
 
     /// Execute one validated grouped GEMM.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::BackendSource`] or
+    /// [`tenferro_tensor::Error::BackendFailure`] when the provider runtime
+    /// fails. A detected inconsistency in engine-attested request metadata is
+    /// returned as [`tenferro_tensor::Error::Validation`]. Unsupported
+    /// capabilities use [`CpuProviderOutcome::Unsupported`] instead.
     fn grouped_gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuGroupedGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome>;
 }
@@ -726,9 +1107,17 @@ pub trait CpuGemmProvider: fmt::Debug + Send + Sync + 'static {
 /// ```
 pub trait CpuLayoutTransformProvider: fmt::Debug + Send + Sync + 'static {
     /// Materialize one validated input into a preallocated output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::BackendSource`] or
+    /// [`tenferro_tensor::Error::BackendFailure`] when execution fails. A
+    /// detected inconsistency in engine-attested layout or range metadata is
+    /// returned as [`tenferro_tensor::Error::Validation`]. Unsupported layouts
+    /// use [`CpuProviderOutcome::Unsupported`] instead.
     fn materialize(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuLayoutTransformRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome>;
 }
@@ -743,9 +1132,18 @@ pub trait CpuLayoutTransformProvider: fmt::Debug + Send + Sync + 'static {
 /// ```
 pub trait CpuGeneralContractionProvider: fmt::Debug + Send + Sync + 'static {
     /// Execute one complete semantic contraction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::BackendSource`] or
+    /// [`tenferro_tensor::Error::BackendFailure`] when the provider runtime
+    /// fails. A detected inconsistency in engine-attested axes or range
+    /// metadata is returned as [`tenferro_tensor::Error::Validation`].
+    /// Unsupported contractions use [`CpuProviderOutcome::Unsupported`]
+    /// instead.
     fn dot_general(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuDotGeneralRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome>;
 }
@@ -770,7 +1168,7 @@ pub struct TblisGeneralContractionProvider;
 impl CpuGeneralContractionProvider for TblisGeneralContractionProvider {
     fn dot_general(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuDotGeneralRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         #[cfg(feature = "cpu-tblis-provider")]
@@ -802,7 +1200,7 @@ pub struct FaerGemmProvider;
 impl CpuGemmProvider for FaerGemmProvider {
     fn gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         #[cfg(feature = "cpu-faer")]
@@ -820,7 +1218,7 @@ impl CpuGemmProvider for FaerGemmProvider {
 
     fn strided_batched_gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         self.gemm(context, request)
@@ -828,7 +1226,7 @@ impl CpuGemmProvider for FaerGemmProvider {
 
     fn grouped_gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuGroupedGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         #[cfg(feature = "cpu-faer")]
@@ -860,7 +1258,7 @@ pub struct BlasGemmProvider;
 impl CpuGemmProvider for BlasGemmProvider {
     fn gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         #[cfg(feature = "cpu-blas")]
@@ -878,7 +1276,7 @@ impl CpuGemmProvider for BlasGemmProvider {
 
     fn strided_batched_gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         self.gemm(context, request)
@@ -886,7 +1284,7 @@ impl CpuGemmProvider for BlasGemmProvider {
 
     fn grouped_gemm(
         &self,
-        context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuGroupedGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
         #[cfg(feature = "cpu-blas")]
@@ -918,11 +1316,19 @@ pub struct StridedLayoutTransformProvider;
 impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
     fn materialize(
         &self,
-        _context: &CpuProviderContext<'_>,
+        context: &CpuExecutionContext<'_>,
         request: CpuLayoutTransformRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        let (input, output, _intent) = request.into_parts();
-        macro_rules! dispatch {
+        context.with_native_parallelism(|| materialize_strided_layout(request))
+    }
+}
+
+fn materialize_strided_layout(
+    request: CpuLayoutTransformRequest<'_, '_, '_>,
+) -> tenferro_tensor::Result<CpuProviderOutcome> {
+    let (input, output, _intent, conjugate) = request.into_parts();
+    if conjugate {
+        macro_rules! dispatch_conjugated {
             ($owned:ident, $view:ident) => {
                 match (input, &mut *output) {
                     (
@@ -931,7 +1337,7 @@ impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
                     ) => {
                         let input = input.as_view();
                         let mut output = output.as_view_mut();
-                        crate::structural::typed_copy_view_into(
+                        crate::structural::typed_conjugate_view_into(
                             &input,
                             &mut output,
                             "cpu layout materialization",
@@ -943,7 +1349,7 @@ impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
                         TensorWrite::Tensor(Tensor::$owned(output)),
                     ) => {
                         let mut output = output.as_view_mut();
-                        crate::structural::typed_copy_view_into(
+                        crate::structural::typed_conjugate_view_into(
                             input,
                             &mut output,
                             "cpu layout materialization",
@@ -955,7 +1361,7 @@ impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
                         TensorWrite::View(TensorViewMut::$view(output)),
                     ) => {
                         let input = input.as_view();
-                        crate::structural::typed_copy_view_into(
+                        crate::structural::typed_conjugate_view_into(
                             &input,
                             output,
                             "cpu layout materialization",
@@ -966,7 +1372,7 @@ impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
                         TensorRead::View(TensorView::$view(input)),
                         TensorWrite::View(TensorViewMut::$view(output)),
                     ) => {
-                        crate::structural::typed_copy_view_into(
+                        crate::structural::typed_conjugate_view_into(
                             input,
                             output,
                             "cpu layout materialization",
@@ -977,17 +1383,79 @@ impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
                 }
             };
         }
-        dispatch!(F32, F32);
-        dispatch!(F64, F64);
-        dispatch!(I32, I32);
-        dispatch!(I64, I64);
-        dispatch!(Bool, Bool);
-        dispatch!(C32, C32);
-        dispatch!(C64, C64);
-        Ok(CpuProviderOutcome::Unsupported(
+        dispatch_conjugated!(F32, F32);
+        dispatch_conjugated!(F64, F64);
+        dispatch_conjugated!(C32, C32);
+        dispatch_conjugated!(C64, C64);
+        return Ok(CpuProviderOutcome::Unsupported(
             CpuProviderUnsupported::DType(input.dtype()),
-        ))
+        ));
     }
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            match (input, &mut *output) {
+                (
+                    TensorRead::Tensor(Tensor::$owned(input)),
+                    TensorWrite::Tensor(Tensor::$owned(output)),
+                ) => {
+                    let input = input.as_view();
+                    let mut output = output.as_view_mut();
+                    crate::structural::typed_copy_view_into(
+                        &input,
+                        &mut output,
+                        "cpu layout materialization",
+                    )?;
+                    return Ok(CpuProviderOutcome::Executed);
+                }
+                (
+                    TensorRead::View(TensorView::$view(input)),
+                    TensorWrite::Tensor(Tensor::$owned(output)),
+                ) => {
+                    let mut output = output.as_view_mut();
+                    crate::structural::typed_copy_view_into(
+                        input,
+                        &mut output,
+                        "cpu layout materialization",
+                    )?;
+                    return Ok(CpuProviderOutcome::Executed);
+                }
+                (
+                    TensorRead::Tensor(Tensor::$owned(input)),
+                    TensorWrite::View(TensorViewMut::$view(output)),
+                ) => {
+                    let input = input.as_view();
+                    crate::structural::typed_copy_view_into(
+                        &input,
+                        output,
+                        "cpu layout materialization",
+                    )?;
+                    return Ok(CpuProviderOutcome::Executed);
+                }
+                (
+                    TensorRead::View(TensorView::$view(input)),
+                    TensorWrite::View(TensorViewMut::$view(output)),
+                ) => {
+                    crate::structural::typed_copy_view_into(
+                        input,
+                        output,
+                        "cpu layout materialization",
+                    )?;
+                    return Ok(CpuProviderOutcome::Executed);
+                }
+                _ => {}
+            }
+        };
+    }
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(I32, I32);
+    dispatch!(I64, I64);
+    dispatch!(Bool, Bool);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(CpuProviderOutcome::Unsupported(
+        CpuProviderUnsupported::DType(input.dtype()),
+    ))
 }
 
 pub(crate) fn builtin_gemm_provider(kind: CpuBackendKind) -> Arc<dyn CpuGemmProvider> {
@@ -1001,55 +1469,5 @@ pub(crate) fn builtin_layout_provider() -> Arc<dyn CpuLayoutTransformProvider> {
     Arc::new(StridedLayoutTransformProvider)
 }
 
-/// Dispatch one prevalidated 1-by-1 GEMM for the provider allocation probe.
-///
-/// This is test instrumentation rather than an application-facing API. It is
-/// public only because Cargo integration tests link the library without
-/// `cfg(test)`.
-#[doc(hidden)]
-pub fn __dispatch_gemm_for_allocation_probe<'input, 'output>(
-    provider: &dyn CpuGemmProvider,
-    context: &CpuContext,
-    lhs: &TensorRead<'input>,
-    rhs: &TensorRead<'input>,
-    output: &mut TensorWrite<'output>,
-    accumulation: DotGeneralAccumulation,
-) -> tenferro_tensor::Result<CpuProviderOutcome> {
-    const SHAPE: &[usize] = &[1, 1];
-    if lhs.shape() != SHAPE || rhs.shape() != SHAPE || output.shape() != SHAPE {
-        return Err(tenferro_tensor::Error::invalid_argument(
-            "provider allocation probe",
-            "shape",
-            "the allocation probe accepts only 1-by-1 tensors",
-        ));
-    }
-    if lhs.dtype() != rhs.dtype() || lhs.dtype() != output.dtype() {
-        return Err(tenferro_tensor::Error::dtype_mismatch(
-            "provider allocation probe",
-            lhs.dtype(),
-            output.dtype(),
-        ));
-    }
-
-    let provider_context = CpuProviderContext::new(context, CpuKernelParallelism::Sequential);
-    let lhs_layout = CpuBatchedMatrixLayout::new(lhs.offset(), 1, 1, 1);
-    let rhs_layout = CpuBatchedMatrixLayout::new(rhs.offset(), 1, 1, 1);
-    let output_layout = CpuBatchedMatrixLayout::new(output.offset(), 1, 1, 1);
-    let request = CpuGemmRequest::new(
-        lhs,
-        rhs,
-        output,
-        1,
-        1,
-        1,
-        1,
-        lhs_layout,
-        rhs_layout,
-        output_layout,
-        accumulation,
-    );
-    provider.gemm(&provider_context, request)
-}
-
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

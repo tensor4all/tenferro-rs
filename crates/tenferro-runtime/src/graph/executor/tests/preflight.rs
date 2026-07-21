@@ -27,7 +27,7 @@ struct GraphGeneralProviderSpy {
 impl tenferro_cpu::provider::CpuGeneralContractionProvider for GraphGeneralProviderSpy {
     fn dot_general(
         &self,
-        _context: &tenferro_cpu::provider::CpuProviderContext<'_>,
+        _context: &tenferro_cpu::provider::CpuExecutionContext<'_>,
         _request: tenferro_cpu::provider::CpuDotGeneralRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<tenferro_cpu::provider::CpuProviderOutcome> {
         self.calls.fetch_add(1, Ordering::Relaxed);
@@ -253,7 +253,8 @@ fn compiled_graph_dot_uses_the_installed_cpu_provider_slot_once() {
             .unwrap();
     let backend = tenferro_cpu::CpuBackend::with_threads(1)
         .unwrap()
-        .with_provider_bundle(bundle);
+        .with_provider_bundle(bundle)
+        .unwrap();
     let mut executor = GraphExecutor::new(backend);
 
     let outputs = executor

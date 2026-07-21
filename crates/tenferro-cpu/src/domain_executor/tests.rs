@@ -241,6 +241,25 @@ fn indexed_jobs_rejects_index_equal_to_len_without_running_the_closure() {
 }
 
 #[test]
+fn indexed_jobs_audits_an_invalid_index_even_when_its_error_is_ignored() {
+    let jobs = indexed_jobs(2, |_| Ok(()));
+
+    assert_eq!(jobs.invalid_index_attempt(), None);
+    let _ = jobs.run(2);
+
+    assert_eq!(jobs.invalid_index_attempt(), Some(2));
+}
+
+#[test]
+fn indexed_jobs_audit_represents_usize_max_without_a_sentinel_collision() {
+    let jobs = indexed_jobs(2, |_| Ok(()));
+
+    let _ = jobs.run(usize::MAX);
+
+    assert_eq!(jobs.invalid_index_attempt(), Some(usize::MAX));
+}
+
+#[test]
 fn install_scoped_preserves_admission_error_without_running_operation() {
     let calls = AtomicUsize::new(0);
 
