@@ -32,6 +32,8 @@ use crate::eager_backend::EagerBackend;
 use crate::eager_exec::exec_op_on_tensor_reads_with_extension_executor;
 use crate::metadata::{register_scoped_metadata_batch, tensor_meta_from_tensor};
 
+mod placement_bound;
+
 use super::backward::{
     eager_forward_input_metadata, eager_forward_value, eager_residual_value,
     missing_tangent_base_key, prefill_linear_residual_values, zero_from_exact_metadata,
