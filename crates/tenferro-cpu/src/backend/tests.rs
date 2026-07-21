@@ -61,6 +61,30 @@ fn provider_context_source_cannot_reenter_or_bypass_the_executor_boundary() {
 }
 
 #[test]
+fn provider_bundle_installation_validates_lazy_exact_numa_domains_at_the_source_boundary() {
+    let backend = include_str!("../backend.rs");
+    let validation = backend
+        .split_once("fn validate_provider_bundle_for_domains")
+        .expect("backend should centralize provider/domain validation")
+        .1
+        .split_once("pub fn allocation_domain")
+        .expect("allocation-domain API should follow provider validation")
+        .0;
+
+    for required in [
+        "CpuEngineRegistry::ManagedLazy",
+        "topology.nodes()",
+        "node_domain_ids",
+        "CpuPlacementGuarantee::ExactDeclared",
+    ] {
+        assert!(
+            validation.contains(required),
+            "lazy managed provider validation must retain `{required}`"
+        );
+    }
+}
+
+#[test]
 fn native_production_entry_points_use_the_centralized_context_policy() {
     let backend = include_str!("../backend.rs");
     let exec_session = include_str!("../exec_session.rs");
@@ -147,7 +171,7 @@ fn default_backend_kind_prefers_blas_when_compiled() {
 
 #[test]
 fn provider_bundle_is_installed_at_construction_and_shared_by_clones() {
-    let bundle = crate::dot_runtime::CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+    let bundle = crate::dot_runtime::CpuProviderBundle::builder(CpuBackendKind::Faer)
         .build()
         .unwrap();
     let backend = CpuBackend::new()
@@ -174,6 +198,10 @@ struct CountingGeneralProvider {
 }
 
 impl crate::provider::CpuGeneralContractionProvider for CountingGeneralProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
     fn dot_general(
         &self,
         _context: &crate::provider::CpuExecutionContext<'_>,
@@ -187,7 +215,7 @@ impl crate::provider::CpuGeneralContractionProvider for CountingGeneralProvider 
 #[test]
 fn direct_and_cached_sessions_share_the_installed_provider_slot() {
     let calls = Arc::new(AtomicUsize::new(0));
-    let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+    let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer)
         .prefer_general_contraction_provider(Arc::new(CountingGeneralProvider {
             calls: Arc::clone(&calls),
         }))

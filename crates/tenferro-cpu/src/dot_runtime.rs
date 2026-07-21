@@ -15,7 +15,10 @@ use crate::provider::{
     CpuLayoutTransformIntent, CpuLayoutTransformProvider, CpuLayoutTransformRequest,
     CpuOperationEntry, CpuProviderOutcome, CpuProviderUnsupported,
 };
-use crate::{gemm::GemmAnalysisCache, CpuDomainExecutorError, Error, Result};
+use crate::{
+    gemm::GemmAnalysisCache, CpuDomainExecutorError, CpuDomainId, CpuPlacementGuarantee,
+    CpuProviderDomainError, CpuSet, Error, ParallelMode, Result,
+};
 
 const OP: &str = "dot_general";
 
@@ -42,18 +45,27 @@ pub enum GeneralContractionPolicy {
 
 #[derive(Debug)]
 pub(crate) struct DotGeneralRuntime {
-    kind: CpuBackendKind,
     pub(crate) general: Option<Arc<dyn CpuGeneralContractionProvider>>,
     pub(crate) gemm: Arc<dyn CpuGemmProvider>,
     pub(crate) layout: Arc<dyn CpuLayoutTransformProvider>,
+    general_capabilities: Option<crate::CpuProviderExecutionCapabilities>,
+    gemm_capabilities: crate::CpuProviderExecutionCapabilities,
+    layout_capabilities: crate::CpuProviderExecutionCapabilities,
     pub(crate) general_policy: GeneralContractionPolicy,
     grouped_scheduling: GroupedGemmScheduling,
+    capability_policy: ProviderCapabilityPolicy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GroupedGemmScheduling {
     ProviderOwned,
     EngineOuter,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderCapabilityPolicy {
+    Strict,
+    ProviderDefaultCompatibility,
 }
 
 const GROUPED_JOB_STATE_BITS: usize = 2;
@@ -204,16 +216,27 @@ pub struct CpuProviderBundle {
 }
 
 impl CpuProviderBundle {
-    pub(crate) fn standard(kind: CpuBackendKind) -> Self {
+    pub(crate) fn standard(kind: CpuBackendKind, provider_default_compatibility: bool) -> Self {
+        let gemm = builtin_gemm_provider(kind);
+        let layout = builtin_layout_provider();
+        let gemm_capabilities = gemm.execution_capabilities();
+        let layout_capabilities = layout.execution_capabilities();
         Self {
             inner: Arc::new(CpuProviderBundleInner {
                 dot_general: DotGeneralRuntime {
-                    kind,
                     general: None,
-                    gemm: builtin_gemm_provider(kind),
-                    layout: builtin_layout_provider(),
+                    gemm,
+                    layout,
+                    general_capabilities: None,
+                    gemm_capabilities,
+                    layout_capabilities,
                     general_policy: GeneralContractionPolicy::Preferred,
                     grouped_scheduling: standard_grouped_scheduling(kind),
+                    capability_policy: if provider_default_compatibility {
+                        ProviderCapabilityPolicy::ProviderDefaultCompatibility
+                    } else {
+                        ProviderCapabilityPolicy::Strict
+                    },
                 },
             }),
         }
@@ -222,24 +245,24 @@ impl CpuProviderBundle {
     /// Start a bundle builder with the standard providers for `kind`.
     pub fn builder(kind: CpuBackendKind) -> CpuProviderBundleBuilder {
         CpuProviderBundleBuilder {
-            kind,
             gemm: Some(builtin_gemm_provider(kind)),
             layout: Some(builtin_layout_provider()),
             general: None,
             general_policy: GeneralContractionPolicy::Preferred,
             grouped_scheduling: standard_grouped_scheduling(kind),
+            capability_policy: ProviderCapabilityPolicy::Strict,
         }
     }
 
     /// Start an empty custom builder.
     pub fn custom_builder() -> CpuProviderBundleBuilder {
         CpuProviderBundleBuilder {
-            kind: CpuBackendKind::default_compiled(),
             gemm: None,
             layout: None,
             general: None,
             general_policy: GeneralContractionPolicy::Preferred,
             grouped_scheduling: GroupedGemmScheduling::ProviderOwned,
+            capability_policy: ProviderCapabilityPolicy::Strict,
         }
     }
 
@@ -254,6 +277,88 @@ impl CpuProviderBundle {
 
     pub(crate) fn dot_general(&self) -> &DotGeneralRuntime {
         &self.inner.dot_general
+    }
+
+    pub(crate) fn validate_for_domain(
+        &self,
+        domain_id: CpuDomainId,
+        thread_budget: std::num::NonZeroUsize,
+        placement_guarantee: CpuPlacementGuarantee,
+        domain_cpus: &CpuSet,
+        process_allowed_cpus: &CpuSet,
+    ) -> std::result::Result<(), CpuProviderBundleInstallError> {
+        let runtime = self.dot_general();
+        let validate = |provider, capabilities| {
+            crate::provider_capability::validate_provider_for_domain(
+                capabilities,
+                thread_budget,
+                placement_guarantee,
+                domain_cpus,
+                process_allowed_cpus,
+            )
+            .map_err(|source| CpuProviderBundleInstallError::IncompatibleDomain {
+                domain_id,
+                provider,
+                source,
+            })
+        };
+
+        if let Some(capabilities) = runtime.general_capabilities {
+            validate(CpuProviderSlot::GeneralContraction, capabilities)?;
+        }
+        validate(CpuProviderSlot::Gemm, runtime.gemm_capabilities)?;
+        validate(
+            CpuProviderSlot::LayoutTransform,
+            runtime.layout_capabilities,
+        )?;
+
+        let selected_mode = if thread_budget.get() == 1 {
+            ParallelMode::Sequential
+        } else if runtime.accepts_dot_general_mode(ParallelMode::Inner) {
+            ParallelMode::Inner
+        } else {
+            ParallelMode::Sequential
+        };
+        for (provider, capabilities) in [
+            (CpuProviderSlot::Gemm, runtime.gemm_capabilities),
+            (
+                CpuProviderSlot::LayoutTransform,
+                runtime.layout_capabilities,
+            ),
+        ] {
+            if !capabilities.accepts_mode(selected_mode) {
+                return Err(CpuProviderBundleInstallError::IncompatibleDomain {
+                    domain_id,
+                    provider,
+                    source: CpuProviderDomainError::ParallelModeNotSupported {
+                        mode: selected_mode,
+                    },
+                });
+            }
+        }
+        if let Some(capabilities) = runtime.general_capabilities {
+            if !capabilities.accepts_mode(selected_mode) {
+                return Err(CpuProviderBundleInstallError::IncompatibleDomain {
+                    domain_id,
+                    provider: CpuProviderSlot::GeneralContraction,
+                    source: CpuProviderDomainError::ParallelModeNotSupported {
+                        mode: selected_mode,
+                    },
+                });
+            }
+        }
+        if runtime.grouped_scheduling == GroupedGemmScheduling::EngineOuter
+            && !runtime.gemm_capabilities.accepts_mode(ParallelMode::Outer)
+        {
+            return Err(CpuProviderBundleInstallError::IncompatibleDomain {
+                domain_id,
+                provider: CpuProviderSlot::Gemm,
+                source: CpuProviderDomainError::ParallelModeNotSupported {
+                    mode: ParallelMode::Outer,
+                },
+            });
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -305,6 +410,57 @@ fn unsupported_provider_error(capability: &'static str, reason: CpuProviderUnsup
 }
 
 impl DotGeneralRuntime {
+    fn accepts_dot_general_mode(&self, mode: crate::ParallelMode) -> bool {
+        self.general_capabilities
+            .is_none_or(|capabilities| capabilities.accepts_mode(mode))
+            && self.gemm_capabilities.accepts_mode(mode)
+            && self.layout_capabilities.accepts_mode(mode)
+    }
+
+    fn validate_strict_capability(
+        &self,
+        capabilities: crate::CpuProviderExecutionCapabilities,
+        thread_budget: usize,
+    ) -> std::result::Result<(), CpuProviderDomainError> {
+        if self.capability_policy == ProviderCapabilityPolicy::ProviderDefaultCompatibility {
+            return Ok(());
+        }
+        if capabilities.thread_count == crate::CpuThreadCountControl::GlobalOrUncontrolled {
+            return Err(CpuProviderDomainError::ThreadCountNotEnforceable {
+                thread_budget,
+                control: capabilities.thread_count,
+            });
+        }
+        Ok(())
+    }
+
+    fn dot_general_mode(
+        &self,
+        entry: &CpuOperationEntry<'_>,
+    ) -> std::result::Result<ParallelMode, CpuProviderDomainError> {
+        if self.capability_policy == ProviderCapabilityPolicy::ProviderDefaultCompatibility {
+            return Ok(entry.provider_default_compatibility_mode());
+        }
+        let thread_budget = entry.thread_budget().get();
+        if let Some(capabilities) = self.general_capabilities {
+            self.validate_strict_capability(capabilities, thread_budget)?;
+        }
+        self.validate_strict_capability(self.gemm_capabilities, thread_budget)?;
+        self.validate_strict_capability(self.layout_capabilities, thread_budget)?;
+        entry.preferred_provider_mode(|mode| self.accepts_dot_general_mode(mode))
+    }
+
+    fn grouped_mode(
+        &self,
+        entry: &CpuOperationEntry<'_>,
+    ) -> std::result::Result<ParallelMode, CpuProviderDomainError> {
+        if self.capability_policy == ProviderCapabilityPolicy::ProviderDefaultCompatibility {
+            return Ok(entry.provider_default_compatibility_mode());
+        }
+        self.validate_strict_capability(self.gemm_capabilities, entry.thread_budget().get())?;
+        entry.preferred_provider_mode(|mode| self.gemm_capabilities.accepts_mode(mode))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn execute_into(
         &self,
@@ -319,9 +475,11 @@ impl DotGeneralRuntime {
         accumulation: DotGeneralAccumulation,
         output: TensorWrite<'_>,
     ) -> Result<()> {
-        cache.bind_provider_bundle(bundle_identity);
         let validated = validate_dot_general(&lhs, &rhs, &output, config, accumulation)?;
-        let mode = entry.preferred_provider_mode(self.kind);
+        let mode = self
+            .dot_general_mode(entry)
+            .map_err(|error| Error::backend_source(OP, error))?;
+        cache.bind_provider_bundle(bundle_identity);
         entry
             .enter(mode, |provider_context| {
                 self.execute_into_validated(
@@ -508,6 +666,17 @@ impl DotGeneralRuntime {
             && entry.supports_outer()
             && config.jobs().len() > 1
         {
+            if !self
+                .gemm_capabilities
+                .accepts_mode(crate::ParallelMode::Outer)
+            {
+                return Err(Error::backend_source(
+                    "grouped_gemm",
+                    crate::CpuProviderDomainError::ParallelModeNotSupported {
+                        mode: crate::ParallelMode::Outer,
+                    },
+                ));
+            }
             return match &mut output {
                 TensorWrite::Tensor(Tensor::F32(output)) => execute_grouped_outer_typed(
                     self.gemm.as_ref(),
@@ -607,7 +776,9 @@ impl DotGeneralRuntime {
                 )),
             };
         }
-        let mode = entry.preferred_provider_mode(self.kind);
+        let mode = self
+            .grouped_mode(entry)
+            .map_err(|error| Error::backend_source("grouped_gemm", error))?;
         entry
             .enter(mode, |provider_context| {
                 let request = CpuGroupedGemmRequest::new(
@@ -940,6 +1111,24 @@ pub struct CpuProviderBundleBuildError {
     layout: bool,
 }
 
+/// Provider slot that failed construction-time domain validation.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::CpuProviderSlot;
+/// assert_ne!(CpuProviderSlot::Gemm, CpuProviderSlot::LayoutTransform);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CpuProviderSlot {
+    /// GEMM, strided-batched GEMM, and grouped-GEMM provider.
+    Gemm,
+    /// Layout materialization provider.
+    LayoutTransform,
+    /// Optional complete general-contraction provider.
+    GeneralContraction,
+}
+
 /// Failure to install a CPU provider bundle for the backend's domains.
 ///
 /// Phase 2 reserves this typed surface for construction-time domain/provider
@@ -958,12 +1147,17 @@ pub struct CpuProviderBundleBuildError {
 #[non_exhaustive]
 pub enum CpuProviderBundleInstallError {
     /// A provider capability cannot satisfy one selected resource domain.
-    #[error("CPU provider bundle is incompatible with domain {domain_id:?}: {message}")]
+    #[error(
+        "CPU provider bundle slot {provider:?} is incompatible with domain {domain_id:?}: {source}"
+    )]
     IncompatibleDomain {
         /// Domain rejected by construction-time validation.
         domain_id: tenferro_tensor::CpuDomainId,
-        /// Allocation-independent construction diagnostic.
-        message: &'static str,
+        /// Provider slot rejected by the domain contract.
+        provider: CpuProviderSlot,
+        /// Typed count, placement, or parallel-mode incompatibility.
+        #[source]
+        source: CpuProviderDomainError,
     },
 }
 
@@ -979,15 +1173,20 @@ pub enum CpuProviderBundleInstallError {
 /// ```
 #[derive(Debug)]
 pub struct CpuProviderBundleBuilder {
-    kind: CpuBackendKind,
     gemm: Option<Arc<dyn CpuGemmProvider>>,
     layout: Option<Arc<dyn CpuLayoutTransformProvider>>,
     general: Option<Arc<dyn CpuGeneralContractionProvider>>,
     general_policy: GeneralContractionPolicy,
     grouped_scheduling: GroupedGemmScheduling,
+    capability_policy: ProviderCapabilityPolicy,
 }
 
 impl CpuProviderBundleBuilder {
+    pub(crate) fn provider_default_compatibility(mut self) -> Self {
+        self.capability_policy = ProviderCapabilityPolicy::ProviderDefaultCompatibility;
+        self
+    }
+
     /// Replace the GEMM-family provider slot.
     pub fn gemm_provider(mut self, provider: Arc<dyn CpuGemmProvider>) -> Self {
         self.gemm = Some(provider);
@@ -1048,15 +1247,24 @@ impl CpuProviderBundleBuilder {
         let (Some(gemm), Some(layout)) = (self.gemm, self.layout) else {
             return Err(missing);
         };
+        let general_capabilities = self
+            .general
+            .as_ref()
+            .map(|provider| provider.execution_capabilities());
+        let gemm_capabilities = gemm.execution_capabilities();
+        let layout_capabilities = layout.execution_capabilities();
         Ok(CpuProviderBundle {
             inner: Arc::new(CpuProviderBundleInner {
                 dot_general: DotGeneralRuntime {
-                    kind: self.kind,
                     general: self.general,
                     gemm,
                     layout,
+                    general_capabilities,
+                    gemm_capabilities,
+                    layout_capabilities,
                     general_policy: self.general_policy,
                     grouped_scheduling: self.grouped_scheduling,
+                    capability_policy: self.capability_policy,
                 },
             }),
         })

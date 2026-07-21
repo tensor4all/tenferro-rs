@@ -1,15 +1,22 @@
 #![cfg(all(feature = "cpu-blas", feature = "provider-inject"))]
 
 use std::ffi::{c_char, c_void};
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, Once};
+use std::sync::{Arc, Mutex, Once};
 
 use tenferro_cpu::inject::{
     register_blas_gemm_provider_ptrs, register_lapack_provider_ptrs, BlasGemmProviderPtrSet,
     LapackProviderPtrSet, ProviderAbi,
 };
-use tenferro_cpu::{CpuBackend, CpuBackendKind};
-use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
+use tenferro_cpu::{
+    discover_cpu_topology, CpuBackend, CpuBackendError, CpuBackendKind, CpuDomainExecutor,
+    CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementGuarantee,
+    CpuProviderBundle, CpuProviderBundleInstallError, CpuProviderDomainError, CpuProviderSlot,
+    ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+};
+use tenferro_tensor::{CpuDomainId, DotGeneralConfig, Tensor, TensorDot, TypedTensor};
 
 static REGISTER_ONCE: Once = Once::new();
 static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -18,6 +25,47 @@ static DGETC2_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGESC2_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGETRF_CALLS: AtomicUsize = AtomicUsize::new(0);
 static DGETRS_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug)]
+struct InlineExternalExecutor;
+
+impl CpuDomainExecutor for InlineExternalExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        CpuDomainExecutorCapabilities {
+            worker_count: NonZeroUsize::new(1).unwrap(),
+            outer_parallelism: false,
+            inner_parallelism: CpuInnerParallelism::None,
+            reentrancy: CpuExecutorReentrancy::Rejected,
+            affinity: CpuExecutorAffinity::CallerDeclaredUnverified,
+            shutdown: CpuExecutorShutdown::CallerOwned,
+        }
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        for index in 0..jobs.len() {
+            jobs.run(index)?;
+        }
+        Ok(())
+    }
+
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        job.run()
+    }
+}
+
+fn all_allowed_external_domain(id: CpuDomainId) -> ExternalCpuDomain {
+    let topology = discover_cpu_topology().expect("test host should expose CPU topology");
+    ExternalCpuDomain::new(
+        id,
+        ResolvedCpuPlacement::AllAllowed {
+            cpus: topology.allowed_cpus().clone(),
+        },
+        Arc::new(InlineExternalExecutor),
+        NonZeroUsize::new(1).unwrap(),
+        CpuPlacementGuarantee::ExactDeclared,
+    )
+    .unwrap()
+}
 
 fn register_test_ptrs_once() {
     REGISTER_ONCE.call_once(|| unsafe {
@@ -166,6 +214,43 @@ unsafe extern "C" fn test_dgetrs(
     unsafe {
         *info = 0;
     }
+}
+
+#[test]
+fn external_managed_constructor_validates_blas_or_custom_bundle_atomically() {
+    let standard_error = CpuBackend::from_external_managed_domains(
+        CpuDomainId::new(40),
+        [all_allowed_external_domain(CpuDomainId::new(40))],
+    )
+    .unwrap_err();
+    let CpuBackendError::Tensor(tensor_error) = &standard_error else {
+        panic!("uncontrolled standard BLAS should retain the tensor error wrapper");
+    };
+    let install_error = std::error::Error::source(tensor_error)
+        .and_then(|source| source.downcast_ref::<CpuProviderBundleInstallError>())
+        .expect("standard BLAS rejection should retain the typed install source");
+    assert!(matches!(
+        install_error,
+        CpuProviderBundleInstallError::IncompatibleDomain {
+            domain_id,
+            provider: CpuProviderSlot::Gemm,
+            source: CpuProviderDomainError::ThreadCountNotEnforceable { .. },
+        } if *domain_id == CpuDomainId::new(40)
+    ));
+
+    // This fixture uses the native provider only as a controlled capability
+    // descriptor. Applications can supply their own provider implementations
+    // through the same public constructor even when BLAS is the compiled kind.
+    let controlled = CpuProviderBundle::builder(CpuBackendKind::Faer)
+        .build()
+        .unwrap();
+    let backend = CpuBackend::from_external_managed_domains_with_provider_bundle(
+        CpuDomainId::new(41),
+        [all_allowed_external_domain(CpuDomainId::new(41))],
+        controlled.clone(),
+    )
+    .unwrap();
+    assert!(backend.provider_bundle().shares_identity_with(&controlled));
 }
 
 #[test]

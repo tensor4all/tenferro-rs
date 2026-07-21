@@ -223,6 +223,51 @@ fn provider_inject_call_through_is_owned_by_the_registered_integration_fixture()
 }
 
 #[test]
+fn provider_capabilities_require_wired_per_call_controls() {
+    let provider = source("crates/tenferro-cpu/src/provider.rs");
+    let capabilities = source("crates/tenferro-cpu/src/provider_capability.rs");
+
+    assert_eq!(
+        provider.matches("fn execution_capabilities(&self)").count(),
+        7,
+        "three provider traits and four built-in providers must classify execution explicitly",
+    );
+    assert!(
+        capabilities.contains("thread_local_setter_wired")
+            && capabilities.contains("process_global_set_restore_wired")
+            && capabilities.contains("binary_thread_local_control_wired"),
+        "probe fixtures must distinguish local controls from OpenBLAS global set-and-restore",
+    );
+    let openblas = capabilities
+        .split_once("fn classify_openblas")
+        .expect("OpenBLAS classification should be explicit")
+        .1
+        .split_once("fn classify_accelerate")
+        .expect("Accelerate classification should follow OpenBLAS")
+        .0;
+    assert!(openblas.contains("uncontrolled_external_capabilities()"));
+    assert!(
+        !openblas.contains("PerCallUpperBound"),
+        "OpenBLAS global set-and-restore must never claim per-call count control",
+    );
+    let builtin = capabilities
+        .split_once("fn builtin_blas_execution_capabilities")
+        .expect("built-in BLAS capability function should exist")
+        .1
+        .split_once("pub(crate) fn validate_provider_for_domain")
+        .expect("domain validation should follow built-in classification")
+        .0;
+    assert!(
+        builtin.contains("uncontrolled_external_capabilities()"),
+        "until sound provider-specific controls are implemented, built-in BLAS must remain conservative",
+    );
+    assert!(
+        capabilities.contains("domain_cpus == process_allowed_cpus"),
+        "exact external-worker placement may use only the process-wide domain exception",
+    );
+}
+
+#[test]
 fn tblis_runtime_panic_bridge_is_temporary_and_does_not_replace_the_global_hook() {
     let tblis = source("crates/tenferro-cpu/src/gemm/tblis_gemm.rs");
 

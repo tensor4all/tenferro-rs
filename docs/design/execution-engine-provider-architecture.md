@@ -1231,6 +1231,13 @@ The external owner is responsible for:
 - executor lifetime and shutdown.
 
 Tenferro must not reconstruct or silently replace an external executor.
+External registry construction and provider validation are one atomic
+operation: the ordinary constructor validates the standard bundle, while
+`from_external_managed_domains_with_provider_bundle` accepts a caller bundle
+and returns no backend if any domain rejects it. This custom route is required
+when the compiled default is an uncontrolled BLAS adapter. In Task 7a the
+bundle covers `dot_general` providers only; linalg provider capability remains
+the separate Task 7b boundary.
 
 ### Two capability axes: thread count and placement
 
@@ -1244,32 +1251,40 @@ CPU resource capability has two independent axes:
 
 Construction or preparation probes both axes once and records the result in
 the prepared provider capability. They are not inferred from a library name
-and are not reprobed on every call. A thread budget remains an upper bound: a
-provider may use fewer threads, and a serial provider satisfies every positive
-budget.
+and are not reprobed during domain validation or execution. The current CPU
+bundle samples each provider slot's `execution_capabilities()` exactly once at
+bundle construction and retains that immutable snapshot for the bundle
+lifetime. A thread budget remains an upper bound: a provider may use fewer
+threads, and a serial provider satisfies every positive budget.
 
 Placement for a budget greater than one is enforceable only when the kernel
 runs on engine-supplied workers, as with faer and tenferro-native kernels.
 External BLAS worker pools are not modeled as a `CpuDomainExecutor`:
 
 - OpenBLAS pthread builds use a process-global, lazily created worker pool. The
-  local thread setter changes the participating count, not worker binding;
-  distributions may use `NO_AFFINITY` or their own affinity policy, and there
-  is no per-call or per-domain binding API. Its parallel BLAS server executes
-  only one multithreaded job at a time, so simultaneous multithreaded calls
-  from different domains serialize on its internal lock.
+  misleadingly named `openblas_set_num_threads_local` reads the old count,
+  calls the process-global setter, stores additional non-TLS global state, and
+  returns the old count for later restoration. The changed count is visible to
+  concurrent threads. Distributions may use `NO_AFFINITY` or their own
+  affinity policy, and there is no per-call or per-domain binding API. Its
+  parallel BLAS server executes only one multithreaded job at a time, so
+  simultaneous multithreaded calls from different domains serialize on its
+  internal lock.
 - MKL's `KMP_AFFINITY` placement is process-global rather than a per-call
   domain binding.
 - Accelerate schedules through Grand Central Dispatch, and macOS exposes no
   API for binding those workers to a selected set of cores.
 
-A budget of one is sound for both axes because the provider call executes
-inline on the already pinned calling thread. Under strict `Managed` or
-`ExternalManaged` placement, an exact domain `CpuSet` combined with an
-external BLAS budget greater than one is therefore a typed configuration or
-prepare error. It is permitted only when the selected domain equals the
-process's complete allowed CPU set, or when placement was explicitly declared
-advisory rather than exact.
+A budget of one is sound for both axes only when the provider can force
+worker-local sequential execution, because that call then runs inline on the
+already pinned calling thread. Under strict `Managed` or `ExternalManaged`
+placement, an exact domain `CpuSet` combined with a count-controlled external
+BLAS budget greater than one is a typed placement error unless the domain is
+the process's complete allowed CPU set or placement is explicitly advisory.
+An uncontrolled provider such as parallel OpenBLAS fails the independent
+thread-count contract for every finite strict bundle budget; it remains
+available only through the process-global `ProviderDefaultExclusive`
+compatibility policy.
 
 ### BLAS and faer behavior
 
@@ -1280,12 +1295,12 @@ receives the execution thread budget and provider exclusivity policy, but it
 does not receive a Rayon pool as if BLAS could execute on that pool.
 
 Thread-control capability is resolved when constructing the provider or during
-preparation, never by probing on every call. A system OpenBLAS provider may use
-`dlsym` to detect `openblas_set_num_threads_local` and
-`openblas_get_parallel()`. It claims exact thread-local control only when the
-local setter exists and `openblas_get_parallel()` reports the pthread variant;
-an OpenMP build does not receive that claim because local isolation is not
-reliable. Strict enforcement without the required capability returns a typed
+preparation, never by probing on every call. OpenBLAS symbol presence does not
+provide per-call count control: in OpenBLAS 0.3.32,
+`openblas_set_num_threads_local` is a process-global set-and-restore helper for
+both pthread and OpenMP builds, not TLS. Parallel OpenBLAS therefore remains
+`GlobalOrUncontrolled` even when that symbol is present and an adapter invokes
+it. Strict enforcement without the required capability returns a typed
 configuration or prepare error and never degrades to a global setter.
 
 Known count and placement capability is:
@@ -1294,19 +1309,37 @@ Known count and placement capability is:
 | --- | --- | --- | --- |
 | faer / native kernels | per-call executor or parallelism argument | any `N` | exact engine-supplied domain workers |
 | MKL | `mkl_set_num_threads_local` | any `N`, thread-local | process-global `KMP_AFFINITY`; not exact per domain |
-| OpenBLAS, recent pthread build | `openblas_set_num_threads_local` | any `N`, thread-local | process-global worker pool; not exact per domain |
+| OpenBLAS, pthread or OpenMP | `openblas_set_num_threads_local` calls global set and returns the old value | process-global set-and-restore; no per-call claim | process-global worker pool; not exact per domain |
+| OpenBLAS, sequential build | no worker pool | always one thread | pinned `CallingThread` |
 | Accelerate, macOS 15+ | `BLASSetThreading` | binary single/auto, thread-local | GCD workers; not exact per domain |
 | Accelerate, macOS 14 and older | `VECLIB_MAXIMUM_THREADS` | global, effectively startup-fixed | GCD workers; not exact per domain |
 | ArmPL `_mp` | OpenMP controls | probe at construction; no exact thread-local claim | external OpenMP workers; not exact per domain |
 | ArmPL serial | no worker pool | always one thread | pinned calling thread |
 | NVPL on Grace | vendor/runtime-dependent controls | probe and classify at construction | external workers; not exact per domain |
 
-For binary control, a budget of one selects single-threaded mode. An
-intermediate budget such as eight is an explicit runtime policy choice between
-clamping to one, which respects the upper bound, and returning unsupported.
-Auto mode is invalid if it may exceed the cap. If a BLAS library cannot provide
-the requested isolation, the engine does not claim NUMA placement that it
-cannot enforce.
+The table above is the target adapter policy, not a claim that every genuinely
+local setter is already wired. The current conservative Task 7a implementation
+does not yet apply and restore MKL or Accelerate local controls around a call.
+It also does not identify the linked OpenBLAS build mode in production, so it
+cannot claim the sequential-build exception. Consequently every current
+built-in BLAS descriptor, plus TBLIS, remains `GlobalOrUncontrolled` external
+workers in Task 7a. A future adapter may classify a positively identified
+sequential OpenBLAS build as `Sequential` on `CallingThread`; parallel OpenBLAS
+cannot be upgraded by wiring its `_local` symbol because the underlying count
+is process-global. `ProviderDefaultExclusive` preserves legacy `Auto`
+execution under the process-wide permit, while explicit strict provider
+bundles are rejected rather than receiving a false thread-count or
+NUMA-placement guarantee. Task 7b owns scoped guards for providers with true
+local controls and may separately classify OpenBLAS global set-and-restore for
+exclusive compatibility and diagnostics, never as per-call control.
+
+`BinaryClampToOne` has one unambiguous finite-budget meaning: its adapter
+selects single-threaded mode for every resource-domain call, including a
+budget such as eight, and never selects provider-controlled auto mode. Using
+fewer threads respects the upper-bound contract. An adapter that cannot make
+that guarantee reports `GlobalOrUncontrolled` (or rejects the request) instead.
+If a BLAS library cannot provide the requested isolation, the engine does not
+claim NUMA placement that it cannot enforce.
 
 ### Normative faer batched-GEMM policy
 
@@ -1339,8 +1372,9 @@ thresholds:
 2. For small matrices, parallelize the outer batch with a grain size roughly
    `GRAIN_SIZE / (m * n * k)` only when each inner kernel can be forced
    sequential independently on the executing worker. Eligible examples are
-   faer, MKL local control, recent pthread OpenBLAS local control, macOS 15
-   Accelerate, and intrinsically serial kernels.
+   faer, MKL local control, macOS 15 Accelerate, and intrinsically serial
+   kernels. Parallel OpenBLAS is ineligible because its count control is
+   process-global.
 3. Providers without per-worker sequential enforcement cannot use outer
    fan-out. Large matrices use a sequential outer loop with parallel inner
    kernels.
@@ -1708,11 +1742,12 @@ Required focused tests include:
 - transfers bridge source and destination event domains as first-class
   scheduled nodes, and collectives cannot be registered as arbitrary extension
   operations;
-- count and placement capability are tested independently: budget-one external
-  BLAS runs inline on a pinned domain thread, while strict exact-`CpuSet`
-  placement plus external BLAS budget greater than one is rejected unless the
-  domain is the complete process-allowed set; explicitly advisory placement is
-  accepted and remains visible in diagnostics;
+- count and placement capability are tested independently: a count-controlled
+  budget-one external BLAS runs inline on a pinned domain thread, while strict
+  exact-`CpuSet` placement plus a controlled external BLAS budget greater than
+  one is rejected unless the domain is the complete process-allowed set;
+  explicitly advisory placement is accepted only after count validation and
+  remains visible in diagnostics; parallel OpenBLAS remains uncontrolled;
 - OpenBLAS, MKL, Accelerate, ArmPL `_mp`, ArmPL serial, and NVPL construction
   probes classify thread-count and placement capability without making an
   unsupported thread-local or per-domain claim;

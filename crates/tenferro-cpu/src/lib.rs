@@ -82,6 +82,7 @@ mod indexing_alloc;
 pub mod inject;
 mod placement;
 pub mod provider;
+mod provider_capability;
 mod reduction;
 mod resource_domain;
 mod structural;
@@ -121,13 +122,17 @@ pub use domain_executor::{
 };
 pub use dot_runtime::{
     CpuProviderBundle, CpuProviderBundleBuildError, CpuProviderBundleBuilder,
-    CpuProviderBundleInstallError, GeneralContractionPolicy,
+    CpuProviderBundleInstallError, CpuProviderSlot, GeneralContractionPolicy,
 };
 pub use placement::{
     CpuEngineConstructionError, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee,
     ResolvedCpuPlacement,
 };
 pub use provider::{CpuExecutionContext, ParallelMode};
+pub use provider_capability::{
+    CpuPlacementControl, CpuProviderDomainError, CpuProviderExecutionCapabilities,
+    CpuThreadCountControl,
+};
 pub use resource_domain::{CpuDomainOwnership, ExternalCpuDomain, ExternalCpuDomainError};
 pub use topology::{
     discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,

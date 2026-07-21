@@ -164,6 +164,28 @@ provider worker affinity. External BLAS therefore supports only
 `CpuPlacement::Auto` and executes under an exclusive coordinator permit. Use
 the faer backend when tenferro-managed NUMA placement is required.
 
+Custom CPU provider bundles declare count and placement separately through
+their provider traits. Bundle installation validates those declarations
+against every registered domain, including lazily constructible managed NUMA
+domains. `CpuBackend::from_external_managed_domains_with_provider_bundle`
+performs external-domain registry construction and this validation atomically.
+The provider bundle currently covers the `dot_general` family; linalg provider
+selection remains separate. The current built-in BLAS adapter does not apply
+and restore a genuinely local setter per call, so the ordinary
+external-managed constructor rejects that strict standard BLAS bundle.
+OpenBLAS's `openblas_set_num_threads_local` does not change this conclusion:
+despite its name, it applies a process-global count and returns the old value
+for restoration, so concurrent threads can observe the temporary setting.
+Applications can use the custom-bundle constructor with an adapter that
+declares and enforces suitable controls. Parallel OpenBLAS remains available
+only through provider-owned, process-exclusive compatibility execution; it is
+not a strict per-call thread-budget guarantee.
+
+A provider declaring `BinaryClampToOne` must select its single-threaded mode
+for every finite domain budget. It must never select provider-controlled auto
+mode inside such a call; inability to guarantee that requires the conservative
+`GlobalOrUncontrolled` declaration.
+
 ## Avoid Oversubscription
 
 Do not accidentally multiply outer application parallelism by inner kernel

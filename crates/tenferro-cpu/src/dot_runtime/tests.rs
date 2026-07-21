@@ -467,6 +467,10 @@ struct GeneralSpy {
 }
 
 impl CpuGeneralContractionProvider for GeneralSpy {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
     fn dot_general(
         &self,
         _context: &CpuExecutionContext<'_>,
@@ -486,6 +490,7 @@ impl CpuGeneralContractionProvider for GeneralSpy {
 #[derive(Debug)]
 struct GemmSpy {
     behavior: GemmBehavior,
+    capabilities: crate::CpuProviderExecutionCapabilities,
     gemm_calls: Arc<Mutex<usize>>,
     strided_calls: Arc<Mutex<usize>>,
     grouped_calls: Arc<Mutex<usize>>,
@@ -504,6 +509,7 @@ impl GemmSpy {
     fn new(outcome: CpuProviderOutcome) -> Self {
         Self {
             behavior: GemmBehavior::Outcome(outcome),
+            capabilities: crate::provider_capability::engine_worker_capabilities(),
             gemm_calls: Arc::new(Mutex::new(0)),
             strided_calls: Arc::new(Mutex::new(0)),
             grouped_calls: Arc::new(Mutex::new(0)),
@@ -519,6 +525,11 @@ impl GemmSpy {
         spy
     }
 
+    fn with_capabilities(mut self, capabilities: crate::CpuProviderExecutionCapabilities) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
     fn result(&self) -> tenferro_tensor::Result<CpuProviderOutcome> {
         match self.behavior {
             GemmBehavior::Outcome(outcome) => Ok(outcome),
@@ -531,6 +542,10 @@ impl GemmSpy {
 }
 
 impl CpuGemmProvider for GemmSpy {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        self.capabilities
+    }
+
     fn gemm(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -710,6 +725,10 @@ impl CanonicalFallbackSpy {
 }
 
 impl CpuGemmProvider for CanonicalFallbackSpy {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
     fn gemm(
         &self,
         _context: &CpuExecutionContext<'_>,
@@ -741,6 +760,10 @@ struct PanicOnceGemmProvider {
 }
 
 impl CpuGemmProvider for PanicOnceGemmProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
     fn gemm(
         &self,
         _context: &CpuExecutionContext<'_>,
@@ -781,6 +804,10 @@ struct ProviderErrorSpy {
 }
 
 impl CpuGemmProvider for ProviderErrorSpy {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
     fn gemm(
         &self,
         _context: &CpuExecutionContext<'_>,
@@ -824,6 +851,10 @@ struct BarrierMutationGemmProvider {
 }
 
 impl CpuGemmProvider for BarrierMutationGemmProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        crate::provider_capability::engine_worker_capabilities()
+    }
+
     fn gemm(
         &self,
         _context: &CpuExecutionContext<'_>,
@@ -873,6 +904,10 @@ struct LayoutSpy {
 }
 
 impl CpuLayoutTransformProvider for LayoutSpy {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        StridedLayoutTransformProvider.execution_capabilities()
+    }
+
     fn materialize(
         &self,
         context: &CpuExecutionContext<'_>,
@@ -881,6 +916,157 @@ impl CpuLayoutTransformProvider for LayoutSpy {
         *self.calls.lock().unwrap() += 1;
         StridedLayoutTransformProvider.materialize(context, request)
     }
+}
+
+fn changing_capabilities(calls: &AtomicUsize) -> crate::CpuProviderExecutionCapabilities {
+    if calls.fetch_add(1, Ordering::Relaxed) == 0 {
+        crate::provider_capability::engine_worker_capabilities()
+    } else {
+        crate::CpuProviderExecutionCapabilities::default()
+    }
+}
+
+#[derive(Debug)]
+struct SnapshotGeneralProvider {
+    capability_calls: Arc<AtomicUsize>,
+    execution_calls: Arc<AtomicUsize>,
+}
+
+impl CpuGeneralContractionProvider for SnapshotGeneralProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        changing_capabilities(&self.capability_calls)
+    }
+
+    fn dot_general(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: crate::provider::CpuDotGeneralRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.execution_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(CpuProviderOutcome::Unsupported(
+            CpuProviderUnsupported::RuntimeUnavailable,
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct SnapshotGemmProvider {
+    capability_calls: Arc<AtomicUsize>,
+    execution_calls: Arc<AtomicUsize>,
+}
+
+impl CpuGemmProvider for SnapshotGemmProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        changing_capabilities(&self.capability_calls)
+    }
+
+    fn gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.execution_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(CpuProviderOutcome::Executed)
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.execution_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(CpuProviderOutcome::Executed)
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.execution_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(CpuProviderOutcome::Executed)
+    }
+}
+
+#[derive(Debug)]
+struct SnapshotLayoutProvider {
+    capability_calls: Arc<AtomicUsize>,
+}
+
+impl CpuLayoutTransformProvider for SnapshotLayoutProvider {
+    fn execution_capabilities(&self) -> crate::CpuProviderExecutionCapabilities {
+        changing_capabilities(&self.capability_calls)
+    }
+
+    fn materialize(
+        &self,
+        context: &CpuExecutionContext<'_>,
+        request: CpuLayoutTransformRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        StridedLayoutTransformProvider.materialize(context, request)
+    }
+}
+
+#[test]
+fn provider_capabilities_are_snapshotted_once_when_the_bundle_is_built() {
+    let general_capability_calls = Arc::new(AtomicUsize::new(0));
+    let gemm_capability_calls = Arc::new(AtomicUsize::new(0));
+    let layout_capability_calls = Arc::new(AtomicUsize::new(0));
+    let general_execution_calls = Arc::new(AtomicUsize::new(0));
+    let gemm_execution_calls = Arc::new(AtomicUsize::new(0));
+    let bundle = CpuProviderBundle::custom_builder()
+        .gemm_provider(Arc::new(SnapshotGemmProvider {
+            capability_calls: Arc::clone(&gemm_capability_calls),
+            execution_calls: Arc::clone(&gemm_execution_calls),
+        }))
+        .layout_transform_provider(Arc::new(SnapshotLayoutProvider {
+            capability_calls: Arc::clone(&layout_capability_calls),
+        }))
+        .prefer_general_contraction_provider(Arc::new(SnapshotGeneralProvider {
+            capability_calls: Arc::clone(&general_capability_calls),
+            execution_calls: Arc::clone(&general_execution_calls),
+        }))
+        .build()
+        .unwrap();
+
+    assert_eq!(general_capability_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(gemm_capability_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(layout_capability_calls.load(Ordering::Relaxed), 1);
+
+    let cpus = crate::CpuSet::new([crate::CpuId::new(0), crate::CpuId::new(1)]).unwrap();
+    bundle
+        .validate_for_domain(
+            crate::CpuDomainId::new(17),
+            NonZeroUsize::new(2).unwrap(),
+            crate::CpuPlacementGuarantee::ExactDeclared,
+            &cpus,
+            &cpus,
+        )
+        .unwrap();
+
+    for _ in 0..2 {
+        let (lhs, rhs, mut output, config) = route_operands();
+        let fixture = execution_context_fixture(2);
+        bundle
+            .execute_dot_general_into(
+                &fixture.entry(),
+                &mut BufferPool::new(),
+                &mut GemmAnalysisCache::default(),
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+                TensorWrite::from_tensor(&mut output),
+            )
+            .unwrap();
+    }
+
+    assert_eq!(general_execution_calls.load(Ordering::Relaxed), 2);
+    assert_eq!(gemm_execution_calls.load(Ordering::Relaxed), 2);
+    assert_eq!(general_capability_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(gemm_capability_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(layout_capability_calls.load(Ordering::Relaxed), 1);
 }
 
 fn route_operands() -> (Tensor, Tensor, Tensor, DotGeneralConfig) {
@@ -1395,6 +1581,119 @@ fn route_install_failure_precedes_provider_and_output_mutation() {
     assert_eq!(*gemm.gemm_calls.lock().unwrap(), 0);
     assert_eq!(*gemm.strided_calls.lock().unwrap(), 0);
     assert_eq!(output.as_slice::<f64>().unwrap(), before.as_slice());
+}
+
+#[test]
+fn route_budget_one_rejects_non_inline_provider_before_output_mutation() {
+    let gemm = Arc::new(
+        GemmSpy::new(CpuProviderOutcome::Executed)
+            .with_capabilities(crate::CpuProviderExecutionCapabilities::default()),
+    );
+    let bundle = route_bundle(gemm.clone(), None);
+    let (lhs, rhs, _, config) = route_operands();
+    let mut output = Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap();
+    let before = output.as_slice::<f64>().unwrap().to_vec();
+    let fixture = execution_context_fixture(1);
+
+    let error = bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    let tenferro_tensor::Error::BackendSource { source, .. } = error else {
+        panic!("provider-mode failure must retain its typed source: {error}");
+    };
+    assert!(matches!(
+        source.downcast_ref::<crate::CpuProviderDomainError>(),
+        Some(crate::CpuProviderDomainError::ThreadCountNotEnforceable {
+            thread_budget: 1,
+            ..
+        })
+    ));
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 0);
+    assert_eq!(*gemm.strided_calls.lock().unwrap(), 0);
+    assert_eq!(output.as_slice::<f64>().unwrap(), before.as_slice());
+}
+
+#[test]
+fn route_budget_one_enters_controlled_external_provider_sequentially() {
+    let capabilities = crate::CpuProviderExecutionCapabilities {
+        thread_count: crate::CpuThreadCountControl::PerCallUpperBound,
+        placement: crate::CpuPlacementControl::ExternalWorkers,
+        worker_local_sequential: true,
+        accepts_sequential: true,
+        accepts_outer: true,
+        accepts_inner: true,
+    };
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Executed).with_capabilities(capabilities));
+    let bundle = route_bundle(gemm.clone(), None);
+    let (lhs, rhs, mut output, config) = route_operands();
+    let fixture = execution_context_fixture(1);
+
+    bundle
+        .execute_dot_general_into(
+            &fixture.entry(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    assert_eq!(
+        gemm.parallelism.lock().unwrap().as_slice(),
+        &[ParallelMode::Sequential]
+    );
+}
+
+#[test]
+fn route_provider_default_compatibility_preserves_legacy_entry_modes() {
+    for (threads, expected_mode) in [(1, ParallelMode::Sequential), (2, ParallelMode::Inner)] {
+        let gemm = Arc::new(
+            GemmSpy::new(CpuProviderOutcome::Executed)
+                .with_capabilities(crate::CpuProviderExecutionCapabilities::default()),
+        );
+        let bundle = CpuProviderBundle::custom_builder()
+            .gemm_provider(gemm.clone())
+            .layout_transform_provider(Arc::new(StridedLayoutTransformProvider))
+            .provider_default_compatibility()
+            .build()
+            .unwrap();
+        let (lhs, rhs, mut output, config) = route_operands();
+        let fixture = execution_context_fixture(threads);
+
+        bundle
+            .execute_dot_general_into(
+                &fixture.entry(),
+                &mut BufferPool::new(),
+                &mut GemmAnalysisCache::default(),
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+                TensorWrite::from_tensor(&mut output),
+            )
+            .unwrap();
+
+        assert_eq!(
+            gemm.parallelism.lock().unwrap().as_slice(),
+            &[expected_mode]
+        );
+    }
 }
 
 #[test]

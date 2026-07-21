@@ -1035,7 +1035,7 @@ impl CpuBackend {
                 requested: CpuPlacement::Auto,
                 resolved,
                 engine,
-                provider_bundle: CpuProviderBundle::standard(kind),
+                provider_bundle: CpuProviderBundle::standard(kind, kind == CpuBackendKind::Blas),
                 allocation_domain: None,
             })
         }
@@ -1101,7 +1101,7 @@ impl CpuBackend {
             requested: CpuPlacement::Auto,
             resolved,
             engine: base_engine,
-            provider_bundle: CpuProviderBundle::standard(kind),
+            provider_bundle: CpuProviderBundle::standard(kind, kind == CpuBackendKind::Blas),
             allocation_domain: None,
         }
     }
@@ -1142,8 +1142,9 @@ impl CpuBackend {
     /// use std::num::NonZeroUsize;
     /// use std::sync::Arc;
     /// use tenferro_cpu::{
-    ///     discover_cpu_topology, CpuBackend, CpuContext, CpuExecutionMode,
-    ///     CpuPlacementGuarantee, ExternalCpuDomain, ResolvedCpuPlacement,
+    ///     discover_cpu_topology, CpuBackend, CpuBackendError, CpuContext,
+    ///     CpuExecutionMode, CpuPlacementGuarantee, CpuProviderBundleInstallError,
+    ///     ExternalCpuDomain, ResolvedCpuPlacement,
     /// };
     /// use tenferro_tensor::CpuDomainId;
     ///
@@ -1158,11 +1159,19 @@ impl CpuBackend {
     ///     NonZeroUsize::new(1).unwrap(),
     ///     CpuPlacementGuarantee::AdvisoryDeclared,
     /// )?;
-    /// let backend = CpuBackend::from_external_managed_domains(id, [domain])?;
-    /// assert_eq!(
-    ///     backend.execution_info().execution_mode(),
-    ///     CpuExecutionMode::ExternalManaged,
-    /// );
+    /// match CpuBackend::from_external_managed_domains(id, [domain]) {
+    ///     Ok(backend) => assert_eq!(
+    ///         backend.execution_info().execution_mode(),
+    ///         CpuExecutionMode::ExternalManaged,
+    ///     ),
+    ///     Err(CpuBackendError::Tensor(error)) => assert!(
+    ///         std::error::Error::source(&error)
+    ///             .and_then(|source| source.downcast_ref::<CpuProviderBundleInstallError>())
+    ///             .is_some(),
+    ///         "an uncontrolled compiled provider must retain its typed source",
+    ///     ),
+    ///     Err(error) => return Err(error.into()),
+    /// }
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     ///
@@ -1173,7 +1182,11 @@ impl CpuBackend {
     /// registry, duplicate domain or placement identity, a CPU outside the
     /// process-allowed set, a missing default domain, or an exact
     /// [`ResolvedCpuPlacement::AllAllowed`] declaration that differs from the
-    /// process-allowed CPU set.
+    /// process-allowed CPU set. Returns [`CpuBackendError::Tensor`] with a
+    /// [`CpuProviderBundleInstallError`] source when the compiled standard
+    /// provider cannot satisfy an external domain contract. Applications that
+    /// supply controlled providers can use
+    /// [`CpuBackend::from_external_managed_domains_with_provider_bundle`].
     pub fn from_external_managed_domains(
         default_domain: CpuDomainId,
         domains: impl IntoIterator<Item = ExternalCpuDomain>,
@@ -1182,19 +1195,93 @@ impl CpuBackend {
         let kind = CpuBackendKind::default_compiled();
         let topology = resolve_discovered_topology(kind, discover_cpu_topology())
             .map_err(|source| CpuBackendError::placement(op, source))?;
-        Self::from_external_managed_domains_with_topology_and_arbiter(
+        Self::from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
             default_domain,
             domains,
             topology,
             ResourceArbiter::global(),
+            CpuProviderBundle::standard(kind, false),
         )
     }
 
-    fn from_external_managed_domains_with_topology_and_arbiter(
+    /// Create one coordinator from caller-owned CPU domain executors and an
+    /// immutable provider bundle.
+    ///
+    /// Domain registry construction and provider compatibility validation are
+    /// atomic: no backend is returned unless `provider_bundle` satisfies every
+    /// supplied domain. The bundle currently selects `dot_general` operation-
+    /// family providers; linalg operation-family selection still follows the
+    /// compiled [`CpuBackendKind`] and is not replaced by this API.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::num::NonZeroUsize;
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{
+    ///     discover_cpu_topology, CpuBackend, CpuBackendKind, CpuContext,
+    ///     CpuExecutionMode, CpuPlacementGuarantee, CpuProviderBundle,
+    ///     ExternalCpuDomain, ResolvedCpuPlacement,
+    /// };
+    /// use tenferro_tensor::CpuDomainId;
+    ///
+    /// let topology = discover_cpu_topology()?;
+    /// let id = CpuDomainId::new(7);
+    /// let domain = ExternalCpuDomain::new(
+    ///     id,
+    ///     ResolvedCpuPlacement::AllAllowed {
+    ///         cpus: topology.allowed_cpus().clone(),
+    ///     },
+    ///     Arc::new(CpuContext::with_threads(1)?),
+    ///     NonZeroUsize::new(1).unwrap(),
+    ///     CpuPlacementGuarantee::AdvisoryDeclared,
+    /// )?;
+    /// let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer).build()?;
+    /// let backend = CpuBackend::from_external_managed_domains_with_provider_bundle(
+    ///     id,
+    ///     [domain],
+    ///     bundle.clone(),
+    /// )?;
+    /// assert_eq!(
+    ///     backend.execution_info().execution_mode(),
+    ///     CpuExecutionMode::ExternalManaged,
+    /// );
+    /// assert!(backend.provider_bundle().shares_identity_with(&bundle));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the same topology and registry errors as
+    /// [`CpuBackend::from_external_managed_domains`]. Provider incompatibility
+    /// is returned as [`CpuBackendError::Tensor`]. Calling
+    /// [`std::error::Error::source`] on that value yields the typed
+    /// [`CpuProviderBundleInstallError`], whose own source is the rejected
+    /// [`crate::CpuProviderDomainError`].
+    pub fn from_external_managed_domains_with_provider_bundle(
+        default_domain: CpuDomainId,
+        domains: impl IntoIterator<Item = ExternalCpuDomain>,
+        provider_bundle: CpuProviderBundle,
+    ) -> Result<Self, CpuBackendError> {
+        let op = "CpuBackend::from_external_managed_domains_with_provider_bundle";
+        let kind = CpuBackendKind::default_compiled();
+        let topology = resolve_discovered_topology(kind, discover_cpu_topology())
+            .map_err(|source| CpuBackendError::placement(op, source))?;
+        Self::from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
+            default_domain,
+            domains,
+            topology,
+            ResourceArbiter::global(),
+            provider_bundle,
+        )
+    }
+
+    fn from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
         default_domain: CpuDomainId,
         domains: impl IntoIterator<Item = ExternalCpuDomain>,
         topology: CpuTopology,
         arbiter: ResourceArbiter,
+        provider_bundle: CpuProviderBundle,
     ) -> Result<Self, CpuBackendError> {
         let domains: Vec<_> = domains.into_iter().collect();
         if domains.is_empty() {
@@ -1284,7 +1371,7 @@ impl CpuBackend {
         };
         let resolved = ResolvedCpuExecution::ExternalManaged(engine.placement().clone());
         let kind = CpuBackendKind::default_compiled();
-        Ok(Self {
+        let backend = Self {
             shared: Arc::new(CpuBackendState {
                 topology,
                 engines: CpuEngineRegistry::ExternalPrebuilt(ExternalEngineRegistry {
@@ -1300,9 +1387,18 @@ impl CpuBackend {
             requested: CpuPlacement::Auto,
             resolved,
             engine,
-            provider_bundle: CpuProviderBundle::standard(kind),
+            provider_bundle,
             allocation_domain: None,
-        })
+        };
+        backend
+            .validate_provider_bundle_for_domains(&backend.provider_bundle)
+            .map_err(|source| {
+                CpuBackendError::Tensor(crate::Error::backend_source(
+                    "CpuBackend ExternalManaged provider validation",
+                    source,
+                ))
+            })?;
+        Ok(backend)
     }
 
     /// Create a CPU backend using the selected compiled provider.
@@ -1734,7 +1830,7 @@ impl CpuBackend {
     ///
     /// ```
     /// use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuProviderBundle};
-    /// let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled()).build()?;
+    /// let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer).build()?;
     /// let backend = CpuBackend::new().with_provider_bundle(bundle.clone())?;
     /// assert!(backend.provider_bundle().shares_identity_with(&bundle));
     /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -1756,11 +1852,51 @@ impl CpuBackend {
 
     fn validate_provider_bundle_for_domains(
         &self,
-        _bundle: &CpuProviderBundle,
+        bundle: &CpuProviderBundle,
     ) -> Result<(), CpuProviderBundleInstallError> {
-        // Task 6 establishes one fallible installation surface. Task 7 adds
-        // provider count/placement classification to this construction-time
-        // hook without introducing a parallel `try_*` API.
+        let allowed = self.shared.topology.allowed_cpus();
+        let validate_engine = |engine: &CpuEngine| {
+            let domain = engine.domain();
+            bundle.validate_for_domain(
+                domain.id(),
+                domain.thread_budget(),
+                domain.placement_guarantee(),
+                domain.cpus(),
+                allowed,
+            )
+        };
+
+        match &self.shared.engines {
+            CpuEngineRegistry::ExternalPrebuilt(registry) => {
+                for engine in registry.by_id.values() {
+                    validate_engine(engine)?;
+                }
+            }
+            CpuEngineRegistry::ManagedLazy(registry) => {
+                validate_engine(&registry.base_engine)?;
+
+                // A placed clone retains the installed bundle. Validate every
+                // lazily constructible managed NUMA domain now rather than
+                // allowing a later `for_placement` call to bypass the bundle
+                // contract.
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                for node in self.shared.topology.nodes() {
+                    let Some(domain_id) = registry.node_domain_ids.get(&node.id()).copied() else {
+                        continue;
+                    };
+                    let budget =
+                        std::num::NonZeroUsize::new(registry.thread_budget.min(node.cpus().len()))
+                            .expect("usable topology nodes have non-empty CPU sets");
+                    bundle.validate_for_domain(
+                        domain_id,
+                        budget,
+                        CpuPlacementGuarantee::ExactDeclared,
+                        node.cpus(),
+                        allowed,
+                    )?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1779,6 +1915,11 @@ impl CpuBackend {
     /// ```
     pub fn with_dot_general_provider(mut self, provider: DotGeneralProvider) -> Self {
         let builder = CpuProviderBundle::builder(self.kind());
+        let builder = if self.resolved == ResolvedCpuExecution::ProviderDefaultExclusive {
+            builder.provider_default_compatibility()
+        } else {
+            builder
+        };
         self.provider_bundle = match provider {
             DotGeneralProvider::Base => builder,
             DotGeneralProvider::TblisIfAvailable => builder
@@ -2084,7 +2225,7 @@ impl CpuBackend {
         let owner = inherited_or_new_execution_owner();
         let permit = self.acquire_execution_permit(owner);
         let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
-        let mode = entry.preferred_provider_mode(self.kind());
+        let mode = entry.preferred_linalg_mode(self.kind());
         entry
             .enter(mode, |context| {
                 context.with_native_parallelism(|| {

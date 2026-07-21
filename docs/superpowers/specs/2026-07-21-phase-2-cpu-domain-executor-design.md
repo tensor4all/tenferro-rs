@@ -195,26 +195,31 @@ It records independently:
 - whether the provider accepts `Sequential`, `Outer`, and `Inner` calls.
 
 Faer and native providers run on engine workers. A one-thread external BLAS
-call runs inline and therefore honors both axes. A strict exact domain with an
-external-BLAS budget greater than one is rejected unless the domain is exactly
-the process-allowed CPU set. Advisory placement remains allowed only when the
-count upper bound can still be enforced, and the advisory status remains
-observable.
+call honors both axes only when the adapter can force worker-local sequential
+execution. A strict exact domain with a count-controlled external-BLAS budget
+greater than one is rejected unless the domain is exactly the process-allowed
+CPU set. Advisory placement remains allowed only when the independent count
+upper bound can still be enforced, and the advisory status remains observable.
 
 The existing explicit BLAS features classify conservatively at construction:
 
 - MKL uses its thread-local setter for count but never claims exact per-domain
   placement above one thread;
-- recent pthread OpenBLAS claims per-call count only after the local setter and
-  pthread mode are both observed;
-- OpenMP OpenBLAS and ArmPL `_mp` do not claim exact thread-local count;
+- pthread and OpenMP OpenBLAS remain `GlobalOrUncontrolled` even when
+  `openblas_set_num_threads_local` is present and wired, because that function
+  performs process-global set-and-restore rather than TLS control;
+- a positively identified sequential OpenBLAS build is `Sequential` on
+  `CallingThread` because it has no worker pool;
+- ArmPL `_mp` does not claim exact thread-local count;
 - macOS 15 Accelerate exposes binary single/auto count control; older
   Accelerate exposes only startup-global control;
 - serial ArmPL/NVPL-style providers are sequential by construction; and
 - injected or unknown BLAS remains conservative unless the injector supplies
   an explicit capability descriptor.
 
-No symbol probing occurs per operation.
+The current production built-in adapter does not identify OpenBLAS build mode,
+so Task 7a does not claim the sequential exception: every built-in BLAS remains
+`GlobalOrUncontrolled`. No symbol probing occurs per operation.
 
 Installing a replacement `CpuProviderBundle` becomes fallible because the
 bundle must be checked against every registered domain. The current infallible
