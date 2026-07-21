@@ -2134,6 +2134,7 @@ pub(crate) fn broadcast_multiply_read_with_pool(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn broadcast_multiply_value_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
@@ -2143,6 +2144,22 @@ pub(crate) fn broadcast_multiply_value_with_pool(
     rhs_shape: &[usize],
     rhs_dims: &[usize],
 ) -> crate::Result<Option<TensorValue>> {
+    broadcast_multiply_value_with_pool_in_domain(
+        buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn broadcast_multiply_value_with_pool_in_domain(
+    buffers: &mut BufferPool,
+    lhs: TensorRead<'_>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: TensorRead<'_>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+    domain: Option<crate::CpuDomainId>,
+) -> crate::Result<Option<TensorValue>> {
     let lhs_view = read_as_cpu_view(lhs.clone());
     let rhs_view = read_as_cpu_view(rhs.clone());
 
@@ -2151,8 +2168,12 @@ pub(crate) fn broadcast_multiply_value_with_pool(
             if let Some(out) = try_lazy_outer_product_with_pool(
                 buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims,
             )? {
+                let mut base = Tensor::$variant(out.base);
+                if let Some(domain) = domain {
+                    crate::backend::tag_fresh_output(&mut base, domain);
+                }
                 return Ok(Some(lazy_outer_product_value(
-                    Tensor::$variant(out.base),
+                    base,
                     out.shape,
                     out.strides,
                 )?));
@@ -2182,8 +2203,13 @@ pub(crate) fn broadcast_multiply_value_with_pool(
         _ => {}
     }
 
-    broadcast_multiply_read_with_pool(buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims)
-        .map(|tensor| tensor.map(TensorValue::from_tensor))
+    let mut tensor = broadcast_multiply_read_with_pool(
+        buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+    )?;
+    if let (Some(tensor), Some(domain)) = (&mut tensor, domain) {
+        crate::backend::tag_fresh_output(tensor, domain);
+    }
+    Ok(tensor.map(TensorValue::from_tensor))
 }
 
 /// Divide two CPU tensors elementwise.

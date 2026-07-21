@@ -10,7 +10,7 @@ use tenferro_tensor::{
     TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
 };
 
-use super::backend::reclaim_typed;
+use super::backend::{reclaim_typed, tag_fresh_output, FreshCpuOutput};
 use super::provider::CpuOperationEntry;
 use super::CpuProviderBundle;
 use super::{
@@ -72,6 +72,23 @@ impl CpuExecSession<'_> {
             })
             .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
     }
+
+    fn run_native_fresh<R: FreshCpuOutput + Send>(
+        &mut self,
+        op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let buffers = &mut *self.buffers;
+        let mode = self.entry.preferred_engine_mode();
+        self.entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| {
+                    let mut output = op(buffers)?;
+                    output.tag_fresh(context.domain_id());
+                    Ok(output)
+                })
+            })
+            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
+    }
 }
 
 impl TensorDeviceTransfer for CpuExecSession<'_> {
@@ -100,7 +117,7 @@ impl TensorDeviceTransfer for CpuExecSession<'_> {
 macro_rules! delegate {
     ($name:ident($($arg:ident : $ty:ty),*) => $body:expr) => {
         fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
-            self.run_native(|_| $body)
+            self.run_native_fresh(|_| $body)
         }
     };
 }
@@ -109,7 +126,7 @@ macro_rules! delegate {
 macro_rules! delegate_with_pool {
     ($name:ident($($arg:ident : $ty:ty),*) => $callee:path) => {
         fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
-            self.run_native(|buffers| $callee(buffers, $($arg),*))
+            self.run_native_fresh(|buffers| $callee(buffers, $($arg),*))
         }
     };
 }
@@ -119,7 +136,7 @@ impl TensorElementwise for CpuExecSession<'_> {
     delegate_with_pool!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
 
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.run_native(|buffers| elementwise::add_read_with_pool(buffers, lhs, rhs))
+        self.run_native_fresh(|buffers| elementwise::add_read_with_pool(buffers, lhs, rhs))
     }
 
     delegate_with_pool!(sub(lhs: &Tensor, rhs: &Tensor) => elementwise::sub_with_pool);
@@ -177,7 +194,7 @@ impl TensorAnalytic for CpuExecSession<'_> {
 impl TensorStructural for CpuExecSession<'_> {
     // Structural
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.run_native(|buffers| {
+        self.run_native_fresh(|buffers| {
             materialize_tensor_read(buffers, "CpuBackend::to_contiguous_read", input)
         })
     }
@@ -188,12 +205,22 @@ impl TensorStructural for CpuExecSession<'_> {
 
     delegate_with_pool!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose_with_pool);
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
+        self.run_native_fresh(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
     }
 
-    delegate!(reshape(input: &Tensor, shape: &[usize]) => structural::reshape(input, shape));
+    fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
+        self.run_native(|_| structural::reshape(input, shape))
+    }
+
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
+        let materializes = matches!(&input, TensorRead::View(_));
+        if materializes {
+            self.run_native_fresh(|buffers| {
+                structural::reshape_read_with_pool(buffers, input, shape)
+            })
+        } else {
+            self.run_native(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
+        }
     }
 
     delegate_with_pool!(broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) => structural::broadcast_in_dim_with_pool);
@@ -203,7 +230,7 @@ impl TensorStructural for CpuExecSession<'_> {
         shape: &[usize],
         dims: &[usize],
     ) -> crate::Result<Tensor> {
-        self.run_native(|buffers| {
+        self.run_native_fresh(|buffers| {
             structural::broadcast_in_dim_read_with_pool(buffers, input, shape, dims)
         })
     }
@@ -220,25 +247,25 @@ impl TensorReduction for CpuExecSession<'_> {
     delegate!(reduce_sum(input: &Tensor, axes: &[usize]) => reduction::reduce_sum(input, axes));
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| reduction::reduce_sum_read(buffers, input, axes))
+        self.run_native_fresh(|buffers| reduction::reduce_sum_read(buffers, input, axes))
     }
 
     delegate!(reduce_prod(input: &Tensor, axes: &[usize]) => reduction::reduce_prod(input, axes));
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| reduction::reduce_prod_read(buffers, input, axes))
+        self.run_native_fresh(|buffers| reduction::reduce_prod_read(buffers, input, axes))
     }
 
     delegate!(reduce_max(input: &Tensor, axes: &[usize]) => reduction::reduce_max(input, axes));
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| reduction::reduce_max_read(buffers, input, axes))
+        self.run_native_fresh(|buffers| reduction::reduce_max_read(buffers, input, axes))
     }
 
     delegate!(reduce_min(input: &Tensor, axes: &[usize]) => reduction::reduce_min(input, axes));
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| reduction::reduce_min_read(buffers, input, axes))
+        self.run_native_fresh(|buffers| reduction::reduce_min_read(buffers, input, axes))
     }
 }
 
@@ -266,6 +293,7 @@ impl CpuExecSession<'_> {
             config,
             "dot_general",
         )?;
+        self.providers.preflight_dot_general(&self.entry)?;
         let mut output = allocate_dot_output(self.buffers, dtype, output_shape)?;
         let accumulation = DotGeneralAccumulation {
             lhs_conj,
@@ -284,6 +312,7 @@ impl CpuExecSession<'_> {
             accumulation,
             TensorWrite::from_tensor(&mut output),
         )?;
+        tag_fresh_output(&mut output, self.entry.domain_id());
         Ok(output)
     }
 }
@@ -445,7 +474,7 @@ impl TensorIndexing for CpuExecSession<'_> {
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        self.run_native(|buffers| {
+        self.run_native_fresh(|buffers| {
             indexing::gather_with_pool(buffers, operand, start_indices, config)
         })
     }
@@ -455,10 +484,10 @@ impl TensorIndexing for CpuExecSession<'_> {
     delegate_with_pool!(dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) => indexing::dynamic_update_slice_with_pool);
     delegate_with_pool!(pad(input: &Tensor, config: &PadConfig) => indexing::try_pad_with_pool);
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-        self.run_native(|buffers| indexing::try_concatenate_with_pool(buffers, inputs, axis))
+        self.run_native_fresh(|buffers| indexing::try_concatenate_with_pool(buffers, inputs, axis))
     }
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| indexing::reverse_with_pool(buffers, input, axes))
+        self.run_native_fresh(|buffers| indexing::reverse_with_pool(buffers, input, axes))
     }
 }
 
@@ -482,7 +511,9 @@ impl TensorFusion for CpuExecSession<'_> {
         inputs: &[&Tensor],
         plan: &ElementwiseFusionPlan,
     ) -> crate::Result<Option<Vec<Tensor>>> {
-        self.run_native(|buffers| elementwise::elementwise_fusion_with_pool(buffers, inputs, plan))
+        self.run_native_fresh(|buffers| {
+            elementwise::elementwise_fusion_with_pool(buffers, inputs, plan)
+        })
     }
 
     fn execute_broadcast_multiply(
@@ -494,7 +525,7 @@ impl TensorFusion for CpuExecSession<'_> {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<Tensor>> {
-        self.run_native(|buffers| {
+        self.run_native_fresh(|buffers| {
             elementwise::broadcast_multiply_read_with_pool(
                 buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
             )
@@ -510,9 +541,17 @@ impl TensorFusion for CpuExecSession<'_> {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<TensorValue>> {
+        let domain = self.entry.domain_id();
         self.run_native(|buffers| {
-            elementwise::broadcast_multiply_value_with_pool(
-                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            elementwise::broadcast_multiply_value_with_pool_in_domain(
+                buffers,
+                lhs,
+                lhs_shape,
+                lhs_dims,
+                rhs,
+                rhs_shape,
+                rhs_dims,
+                Some(domain),
             )
         })
     }

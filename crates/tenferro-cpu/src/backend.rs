@@ -48,6 +48,55 @@ use super::{
     reduction, structural, CpuContext,
 };
 
+pub(crate) fn tag_fresh_output(output: &mut Tensor, domain: CpuDomainId) {
+    macro_rules! tag {
+        ($tensor:expr) => {{
+            $tensor.set_cpu_affinity(Some(domain));
+        }};
+    }
+    match output {
+        Tensor::F32(tensor) => tag!(tensor),
+        Tensor::F64(tensor) => tag!(tensor),
+        Tensor::I32(tensor) => tag!(tensor),
+        Tensor::I64(tensor) => tag!(tensor),
+        Tensor::Bool(tensor) => tag!(tensor),
+        Tensor::C32(tensor) => tag!(tensor),
+        Tensor::C64(tensor) => tag!(tensor),
+    }
+}
+
+pub(crate) trait FreshCpuOutput {
+    fn tag_fresh(&mut self, domain: CpuDomainId);
+}
+
+impl FreshCpuOutput for Tensor {
+    fn tag_fresh(&mut self, domain: CpuDomainId) {
+        tag_fresh_output(self, domain);
+    }
+}
+
+impl<T, R: TensorRank> FreshCpuOutput for TypedTensor<T, R> {
+    fn tag_fresh(&mut self, domain: CpuDomainId) {
+        self.set_cpu_affinity(Some(domain));
+    }
+}
+
+impl<T: FreshCpuOutput> FreshCpuOutput for Option<T> {
+    fn tag_fresh(&mut self, domain: CpuDomainId) {
+        if let Some(output) = self {
+            output.tag_fresh(domain);
+        }
+    }
+}
+
+impl<T: FreshCpuOutput> FreshCpuOutput for Vec<T> {
+    fn tag_fresh(&mut self, domain: CpuDomainId) {
+        for output in self {
+            output.tag_fresh(domain);
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct CpuSessionProfileEntry {
     calls: usize,
@@ -2173,7 +2222,17 @@ impl CpuBackend {
             .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
     }
 
-    fn install_with_pool<R: Send>(
+    fn try_install_fresh<R: FreshCpuOutput + Send>(
+        &self,
+        op: impl FnOnce() -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let domain = self.engine.domain().id();
+        let mut output = self.try_install(op)?;
+        output.tag_fresh(domain);
+        Ok(output)
+    }
+
+    fn install_with_pool_unmarked<R: Send>(
         &mut self,
         op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
     ) -> crate::Result<R> {
@@ -2191,6 +2250,16 @@ impl CpuBackend {
                 })
             })
             .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
+    }
+
+    fn install_with_pool<R: FreshCpuOutput + Send>(
+        &mut self,
+        op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let domain = self.engine.domain().id();
+        let mut output = self.install_with_pool_unmarked(op)?;
+        output.tag_fresh(domain);
+        Ok(output)
     }
 
     /// Run an external linalg implementation with one borrowed execution
@@ -2546,7 +2615,16 @@ impl TensorStructural for CpuBackend {
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
+        let materializes = matches!(&input, TensorRead::View(_));
+        if materializes {
+            self.install_with_pool(|buffers| {
+                structural::reshape_read_with_pool(buffers, input, shape)
+            })
+        } else {
+            self.install_with_pool_unmarked(|buffers| {
+                structural::reshape_read_with_pool(buffers, input, shape)
+            })
+        }
     }
 
     fn broadcast_in_dim(
@@ -2608,7 +2686,7 @@ impl TensorStructural for CpuBackend {
 
 impl TensorReduction for CpuBackend {
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install(|| reduction::reduce_sum(input, axes))
+        self.try_install_fresh(|| reduction::reduce_sum(input, axes))
     }
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -2616,7 +2694,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install(|| reduction::reduce_prod(input, axes))
+        self.try_install_fresh(|| reduction::reduce_prod(input, axes))
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -2624,7 +2702,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install(|| reduction::reduce_max(input, axes))
+        self.try_install_fresh(|| reduction::reduce_max(input, axes))
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -2632,7 +2710,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.try_install(|| reduction::reduce_min(input, axes))
+        self.try_install_fresh(|| reduction::reduce_min(input, axes))
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -3031,9 +3109,17 @@ impl TensorFusion for CpuBackend {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<TensorValue>> {
-        self.install_with_pool(|buffers| {
-            elementwise::broadcast_multiply_value_with_pool(
-                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+        let domain = self.engine.domain().id();
+        self.install_with_pool_unmarked(|buffers| {
+            elementwise::broadcast_multiply_value_with_pool_in_domain(
+                buffers,
+                lhs,
+                lhs_shape,
+                lhs_dims,
+                rhs,
+                rhs_shape,
+                rhs_dims,
+                Some(domain),
             )
         })
     }
