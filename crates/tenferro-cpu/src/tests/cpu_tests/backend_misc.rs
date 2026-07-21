@@ -863,7 +863,7 @@ fn cpu_structural_read_direct_helpers_cover_zero_stride_empty_and_rank_zero() {
     )
     .unwrap();
     assert_eq!(empty.shape(), &[0, 3, 2]);
-    assert_eq!(empty.as_slice::<f64>().unwrap(), &[]);
+    assert!(empty.as_slice::<f64>().unwrap().is_empty());
 
     let scalar_storage = [42.5_f64];
     let scalar = tenferro_tensor::TypedTensorView::from_slice([], [], 0, &scalar_storage).unwrap();
@@ -873,7 +873,7 @@ fn cpu_structural_read_direct_helpers_cover_zero_stride_empty_and_rank_zero() {
         &[],
     )
     .unwrap();
-    assert_eq!(scalar.shape(), &[]);
+    assert!(scalar.shape().is_empty());
     assert_eq!(scalar.as_slice::<f64>().unwrap(), &[42.5]);
 }
 
@@ -1089,7 +1089,7 @@ fn cpu_view_materialization_handles_empty_and_rank_zero_views() {
     )
     .unwrap();
     assert_eq!(empty.shape(), &[0, 3]);
-    assert_eq!(empty.as_slice().unwrap(), &[]);
+    assert!(empty.as_slice().unwrap().is_empty());
 
     let scalar_storage = [42.5_f64];
     let scalar = tenferro_tensor::TypedTensorView::from_col_major(&[], &scalar_storage).unwrap();
@@ -1099,7 +1099,7 @@ fn cpu_view_materialization_handles_empty_and_rank_zero_views() {
         "rank_zero_materialize",
     )
     .unwrap();
-    assert_eq!(scalar.shape(), &[]);
+    assert!(scalar.shape().is_empty());
     assert_eq!(scalar.as_slice().unwrap(), &[42.5]);
 }
 

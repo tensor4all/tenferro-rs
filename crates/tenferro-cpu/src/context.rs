@@ -68,7 +68,7 @@ pub enum CpuContextError {
 
 /// Reusable CPU execution context carrying CPU parallelism policy.
 ///
-/// `CpuContext` stores the requested thread count as a kernel-level
+/// `CpuContext` stores the validated non-zero thread budget as a kernel-level
 /// parallelism hint and owns the Rayon pool used by multi-threaded CPU work.
 ///
 /// # Examples
@@ -83,7 +83,9 @@ pub enum CpuContextError {
 /// ```
 #[derive(Clone, Debug)]
 pub struct CpuContext {
-    num_threads: usize,
+    // INVARIANT: every constructor validates the requested worker count before
+    // storing it, and `NonZeroUsize` preserves that proof for all later policy use.
+    thread_budget: NonZeroUsize,
     pool: Option<Arc<rayon::ThreadPool>>,
     pinned_cpus: Option<CpuSet>,
     execution_scope: Arc<ExecutionScopeState>,
@@ -173,13 +175,13 @@ impl CpuContext {
     /// [`Error::Validation`] when `num_threads` is zero, or
     /// [`Error::BackendSource`] when Rayon rejects the thread pool.
     pub fn with_threads(num_threads: usize) -> Result<Self> {
-        if num_threads == 0 {
+        let Some(thread_budget) = NonZeroUsize::new(num_threads) else {
             return Err(Error::invalid_argument(
                 "CpuContext::with_threads",
                 "configuration",
                 "thread count must be at least 1",
             ));
-        }
+        };
         let execution_scope = Arc::new(ExecutionScopeState::default());
         let pool = if num_threads == 1 {
             None
@@ -202,7 +204,7 @@ impl CpuContext {
             Some(Arc::new(pool))
         };
         Ok(Self {
-            num_threads,
+            thread_budget,
             pool,
             pinned_cpus: None,
             execution_scope,
@@ -244,9 +246,9 @@ impl CpuContext {
         num_threads: usize,
         affinity: A,
     ) -> std::result::Result<Self, CpuContextError> {
-        if num_threads == 0 {
+        let Some(thread_budget) = NonZeroUsize::new(num_threads) else {
             return Err(CpuContextError::InvalidThreadCount);
-        }
+        };
         if num_threads > cpus.len() {
             return Err(CpuContextError::TooManyWorkers {
                 workers: num_threads,
@@ -299,7 +301,7 @@ impl CpuContext {
             }
         }
         Ok(Self {
-            num_threads,
+            thread_budget,
             pool: Some(pool),
             pinned_cpus: Some(cpus),
             execution_scope,
@@ -308,7 +310,7 @@ impl CpuContext {
 
     fn single_threaded() -> Self {
         Self {
-            num_threads: 1,
+            thread_budget: NonZeroUsize::MIN,
             pool: None,
             pinned_cpus: None,
             execution_scope: Arc::new(ExecutionScopeState::default()),
@@ -326,7 +328,11 @@ impl CpuContext {
     /// assert_eq!(ctx.num_threads(), 2);
     /// ```
     pub fn num_threads(&self) -> usize {
-        self.num_threads
+        self.thread_budget.get()
+    }
+
+    pub(crate) fn nonzero_thread_budget(&self) -> NonZeroUsize {
+        self.thread_budget
     }
 
     /// Return the worker CPU domain for a pinned context.
@@ -395,12 +401,12 @@ impl CpuContext {
     #[cfg(feature = "cpu-faer")]
     #[doc(hidden)]
     pub fn faer_par(&self) -> faer::Par {
-        if self.num_threads == 1 {
+        if self.thread_budget.get() == 1 {
             faer::Par::Seq
         } else {
             // `rayon(0)` captures the ambient pool immediately, which may not
             // be this context when a provider plan is prepared outside install.
-            faer::Par::rayon(self.num_threads)
+            faer::Par::rayon(self.thread_budget.get())
         }
     }
 
@@ -413,15 +419,9 @@ impl CpuContext {
 
 impl CpuDomainExecutor for CpuContext {
     fn capabilities(&self) -> CpuDomainExecutorCapabilities {
-        // INVARIANT: every CpuContext constructor rejects zero workers, and
-        // `num_threads` is private so it cannot be invalidated after creation.
-        let worker_count = match NonZeroUsize::new(self.num_threads) {
-            Some(worker_count) => worker_count,
-            None => unreachable!("CpuContext must contain at least one worker"),
-        };
         CpuDomainExecutorCapabilities {
-            worker_count,
-            outer_parallelism: self.num_threads > 1,
+            worker_count: self.thread_budget,
+            outer_parallelism: self.thread_budget.get() > 1,
             inner_parallelism: if self.pool.is_some() {
                 CpuInnerParallelism::Rayon
             } else {

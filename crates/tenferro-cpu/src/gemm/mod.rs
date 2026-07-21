@@ -1027,16 +1027,28 @@ where
     else {
         return Ok(None);
     };
+    let lhs_row_stride = normalize_singleton_stride(dims.a_rs, dims.m, dims.k);
+    let lhs_column_stride = normalize_singleton_stride(dims.a_cs, dims.k, dims.m);
+    let rhs_row_stride = normalize_singleton_stride(dims.b_rs, dims.k, dims.n);
+    let rhs_column_stride = normalize_singleton_stride(dims.b_cs, dims.n, dims.k);
+    let output_row_stride = normalize_singleton_stride(output_row_stride, dims.m, 1);
+    let output_column_stride = normalize_singleton_stride(output_column_stride, dims.n, dims.m);
     Ok(Some(ProviderGemmPlan {
         rows: dims.m,
         columns: dims.n,
         contracted: dims.k,
         batch_count: dims.batch_total,
         lhs_layout: crate::provider::CpuBatchedMatrixLayout::new(
-            lhs_offset, dims.a_rs, dims.a_cs, dims.a_bs,
+            lhs_offset,
+            lhs_row_stride,
+            lhs_column_stride,
+            dims.a_bs,
         ),
         rhs_layout: crate::provider::CpuBatchedMatrixLayout::new(
-            rhs_offset, dims.b_rs, dims.b_cs, dims.b_bs,
+            rhs_offset,
+            rhs_row_stride,
+            rhs_column_stride,
+            dims.b_bs,
         ),
         output_layout: crate::provider::CpuBatchedMatrixLayout::new(
             output.offset(),
@@ -1045,6 +1057,15 @@ where
             output_batch_stride,
         ),
     }))
+}
+
+fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> isize {
+    if extent == 1 {
+        let fallback = fallback.max(1) as isize;
+        stride.max(fallback)
+    } else {
+        stride
+    }
 }
 
 fn prepare_provider_gemm_kind(
@@ -1695,16 +1716,6 @@ pub(crate) fn execute_tblis_general_request(
     ))
 }
 
-#[cfg(any(feature = "cpu-blas", feature = "cpu-faer"))]
-fn normalize_singleton_stride(stride: isize, extent: usize, fallback: usize) -> isize {
-    if extent == 1 {
-        let fallback = fallback.max(1) as isize;
-        stride.max(fallback)
-    } else {
-        stride
-    }
-}
-
 #[cfg(feature = "cpu-blas")]
 fn blas_lhs_layout_supported(m: usize, k: usize, row_stride: isize, col_stride: isize) -> bool {
     if row_stride == 1 {
@@ -2056,6 +2067,14 @@ where
     R: TypedTensorRead<T>,
     T: BlasGemm + Copy + Zero + PartialEq + std::ops::Mul<Output = T> + 'static,
 {
+    if descriptor.rows == 0
+        || descriptor.columns == 0
+        || descriptor.contracted == 0
+        || descriptor.batch_count == 0
+    {
+        scale_empty_contract_output(output, beta)?;
+        return Ok(CpuProviderOutcome::Executed);
+    }
     if let Some(reason) = blas_descriptor_unsupported(descriptor) {
         return Ok(CpuProviderOutcome::Unsupported(reason));
     }
@@ -2066,15 +2085,6 @@ where
             CpuProviderUnsupported::Conjugation,
         ));
     }
-    if descriptor.rows == 0
-        || descriptor.columns == 0
-        || descriptor.contracted == 0
-        || descriptor.batch_count == 0
-    {
-        scale_empty_contract_output(output, beta)?;
-        return Ok(CpuProviderOutcome::Executed);
-    }
-
     let Some(lhs_data) = lhs.host_data_opt()?.map(<[T]>::as_ptr) else {
         return Err(crate::cpu_backend_buffer_error(OP));
     };

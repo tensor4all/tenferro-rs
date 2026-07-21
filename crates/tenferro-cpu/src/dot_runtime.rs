@@ -219,7 +219,7 @@ impl DotGeneralRuntime {
         if let Some(plan) =
             crate::gemm::prepare_provider_gemm(cache, cache_slot, &lhs, &rhs, &output, config)?
         {
-            return execute_gemm_plan(
+            match execute_gemm_plan(
                 self.gemm.as_ref(),
                 &provider_context,
                 plan,
@@ -227,7 +227,15 @@ impl DotGeneralRuntime {
                 &rhs,
                 accumulation,
                 &mut output,
-            );
+            )? {
+                CpuProviderOutcome::Executed => return Ok(()),
+                CpuProviderOutcome::Unsupported(reason)
+                    if !canonical_gemm_fallback_supported(reason) =>
+                {
+                    return Err(unsupported_provider_error("GEMM", reason));
+                }
+                CpuProviderOutcome::Unsupported(_) => {}
+            }
         }
 
         self.execute_canonical_gemm(
@@ -264,6 +272,7 @@ impl DotGeneralRuntime {
             buffers,
             lhs,
             &lhs_perm,
+            accumulation.lhs_conj,
         )?;
         let rhs_canonical = match materialize_canonical_operand(
             self.layout.as_ref(),
@@ -271,6 +280,7 @@ impl DotGeneralRuntime {
             buffers,
             rhs,
             &rhs_perm,
+            accumulation.rhs_conj,
         ) {
             Ok(tensor) => tensor,
             Err(error) => {
@@ -282,6 +292,11 @@ impl DotGeneralRuntime {
         let result = {
             let lhs = TensorRead::from_tensor(&lhs_canonical);
             let rhs = TensorRead::from_tensor(&rhs_canonical);
+            let canonical_accumulation = DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                ..accumulation
+            };
             match crate::gemm::prepare_provider_gemm_canonical(
                 cache,
                 cache_slot,
@@ -290,15 +305,21 @@ impl DotGeneralRuntime {
                 output,
                 &canonical_config,
             ) {
-                Ok(Some(plan)) => execute_gemm_plan(
+                Ok(Some(plan)) => match execute_gemm_plan(
                     self.gemm.as_ref(),
                     provider_context,
                     plan,
                     &lhs,
                     &rhs,
-                    accumulation,
+                    canonical_accumulation,
                     output,
-                ),
+                ) {
+                    Ok(CpuProviderOutcome::Executed) => Ok(()),
+                    Ok(CpuProviderOutcome::Unsupported(reason)) => {
+                        Err(unsupported_provider_error("GEMM", reason))
+                    }
+                    Err(error) => Err(error),
+                },
                 Ok(None) => Err(Error::unsupported(
                     OP,
                     "configured CPU layout-plus-GEMM path cannot represent the canonical contraction",
@@ -455,18 +476,23 @@ fn execute_gemm_plan(
     rhs: &TensorRead<'_>,
     accumulation: DotGeneralAccumulation,
     output: &mut TensorWrite<'_>,
-) -> Result<()> {
+) -> Result<CpuProviderOutcome> {
     let batch_count = plan.batch_count();
     let request = plan.request(lhs, rhs, output, accumulation);
-    let outcome = if batch_count == 1 {
-        provider.gemm(context, request)?
+    if batch_count == 1 {
+        provider.gemm(context, request)
     } else {
-        provider.strided_batched_gemm(context, request)?
-    };
-    match outcome {
-        CpuProviderOutcome::Executed => Ok(()),
-        CpuProviderOutcome::Unsupported(reason) => Err(unsupported_provider_error("GEMM", reason)),
+        provider.strided_batched_gemm(context, request)
     }
+}
+
+fn canonical_gemm_fallback_supported(reason: CpuProviderUnsupported) -> bool {
+    matches!(
+        reason,
+        CpuProviderUnsupported::Layout(crate::provider::CpuOperand::Lhs)
+            | CpuProviderUnsupported::Layout(crate::provider::CpuOperand::Rhs)
+            | CpuProviderUnsupported::Conjugation
+    )
 }
 
 fn transposed_read_view<'input>(
@@ -533,6 +559,7 @@ fn materialize_canonical_operand(
     buffers: &mut BufferPool,
     input: &TensorRead<'_>,
     permutation: &[usize],
+    conjugate: bool,
 ) -> Result<Tensor> {
     let input_view = transposed_read_view(input, permutation)?;
     let mut output =
@@ -544,6 +571,7 @@ fn materialize_canonical_operand(
             &input,
             &mut output_write,
             CpuLayoutTransformIntent::CanonicalColumnMajor,
+            conjugate,
         );
         provider.materialize(context, request)
     };

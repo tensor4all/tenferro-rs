@@ -1,3 +1,4 @@
+use super::with_layout_execution_policy;
 #[cfg(feature = "cpu-blas")]
 use super::CpuOperand;
 use super::{
@@ -12,7 +13,8 @@ use super::{CpuContractionAxes, CpuDotGeneralRequest};
 use super::{CpuGroupedGemmRequest, FaerGemmProvider};
 use crate::CpuContext;
 #[cfg(feature = "cpu-faer")]
-use num_complex::{Complex32, Complex64};
+use num_complex::Complex32;
+use num_complex::Complex64;
 #[cfg(feature = "cpu-faer")]
 use tenferro_tensor::backend::GroupedGemmJob;
 #[cfg(feature = "cpu-faer")]
@@ -20,6 +22,78 @@ use tenferro_tensor::{
     ContractionScalar, TensorView, TensorViewMut, TypedTensorView, TypedTensorViewMut,
 };
 use tenferro_tensor::{DType, DotGeneralAccumulation, Tensor, TensorRead, TensorWrite};
+
+use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::ThreadId;
+use std::time::Duration;
+use strided_kernel::{map_into, StridedArray};
+
+const POLICY_TEST_LEN: usize = 1 << 17;
+
+#[derive(Default)]
+struct PolicyParticipants {
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+    thread_ids: Mutex<Vec<ThreadId>>,
+    required_concurrency: usize,
+    rendezvous_released: AtomicBool,
+    rendezvous_lock: Mutex<()>,
+    rendezvous: Condvar,
+    outside_selected_context: AtomicBool,
+}
+
+impl PolicyParticipants {
+    fn requiring(required_concurrency: usize) -> Self {
+        assert!(required_concurrency >= 2);
+        Self {
+            required_concurrency,
+            ..Self::default()
+        }
+    }
+
+    fn observe(&self, selected_context: Option<&CpuContext>) {
+        if selected_context.is_some_and(|context| !context.owns_current_worker_for_test()) {
+            self.outside_selected_context.store(true, Ordering::SeqCst);
+        }
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(active, Ordering::SeqCst);
+        {
+            let id = std::thread::current().id();
+            let mut ids = self.thread_ids.lock().unwrap();
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        if self.required_concurrency >= 2 && !self.rendezvous_released.load(Ordering::Acquire) {
+            let guard = self.rendezvous_lock.lock().unwrap();
+            if active >= self.required_concurrency {
+                self.rendezvous_released.store(true, Ordering::Release);
+                self.rendezvous.notify_all();
+            } else if !self.rendezvous_released.load(Ordering::Acquire) {
+                let _ = self
+                    .rendezvous
+                    .wait_timeout_while(guard, Duration::from_secs(2), |_| {
+                        !self.rendezvous_released.load(Ordering::Acquire)
+                    })
+                    .unwrap();
+            }
+        }
+        for _ in 0..32 {
+            std::hint::spin_loop();
+        }
+        self.active.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    fn max_active(&self) -> usize {
+        self.max_active.load(Ordering::SeqCst)
+    }
+
+    fn thread_ids(&self) -> Vec<ThreadId> {
+        self.thread_ids.lock().unwrap().clone()
+    }
+}
 
 #[allow(dead_code)]
 fn assert_object_safe(
@@ -44,6 +118,7 @@ fn provider_context_exposes_only_execution_policy() {
     let provider_context = CpuProviderContext::new(&context, CpuKernelParallelism::Sequential);
 
     assert_eq!(provider_context.thread_budget(), 1);
+    assert_eq!(provider_context.nonzero_thread_budget(), NonZeroUsize::MIN);
     assert_eq!(
         provider_context.kernel_parallelism(),
         CpuKernelParallelism::Sequential
@@ -521,6 +596,7 @@ fn layout_provider_materializes_into_preallocated_output() {
         &input,
         &mut output_write,
         CpuLayoutTransformIntent::CanonicalColumnMajor,
+        false,
     );
 
     assert_eq!(
@@ -531,4 +607,109 @@ fn layout_provider_materializes_into_preallocated_output() {
     );
     drop(output_write);
     assert_eq!(output.as_slice::<f64>().unwrap(), &[2.0, 3.0]);
+}
+
+#[test]
+fn layout_provider_fuses_conjugation_into_materialization() {
+    use super::{CpuLayoutTransformIntent, CpuLayoutTransformRequest};
+
+    let input = Tensor::from_vec_col_major(
+        vec![2],
+        vec![Complex64::new(2.0, 3.0), Complex64::new(-1.0, 4.0)],
+    )
+    .unwrap();
+    let mut output =
+        Tensor::from_vec_col_major(vec![2], vec![Complex64::new(41.0, 0.0); 2]).unwrap();
+    let input = TensorRead::from_tensor(&input);
+    let mut output_write = TensorWrite::from_tensor(&mut output);
+    let context = CpuContext::with_threads(1).unwrap();
+    let provider_context = CpuProviderContext::new(&context, CpuKernelParallelism::Sequential);
+    let request = CpuLayoutTransformRequest::new(
+        &input,
+        &mut output_write,
+        CpuLayoutTransformIntent::CanonicalColumnMajor,
+        true,
+    );
+    assert!(request.conjugate());
+
+    assert_eq!(
+        StridedLayoutTransformProvider
+            .materialize(&provider_context, request)
+            .unwrap(),
+        CpuProviderOutcome::Executed,
+    );
+    drop(output_write);
+    assert_eq!(
+        output.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(2.0, -3.0), Complex64::new(-1.0, -4.0)],
+    );
+}
+
+#[test]
+fn sequential_layout_policy_uses_one_participant_inside_a_larger_pool() {
+    let ambient = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    let selected = CpuContext::with_threads(2).unwrap();
+
+    ambient.install(|| {
+        let caller = std::thread::current().id();
+        let source = StridedArray::<usize>::from_fn_col_major(&[POLICY_TEST_LEN], |index| index[0]);
+        let mut destination = StridedArray::<usize>::col_major(&[POLICY_TEST_LEN]);
+        let participants = Arc::new(PolicyParticipants::default());
+        let observed = Arc::clone(&participants);
+        let provider_context = CpuProviderContext::new(&selected, CpuKernelParallelism::Sequential);
+
+        with_layout_execution_policy(&provider_context, || {
+            map_into(&mut destination.view_mut(), &source.view(), |value| {
+                observed.observe(None);
+                value + 1
+            })
+            .unwrap();
+        });
+
+        assert_eq!(participants.max_active(), 1);
+        assert_eq!(participants.thread_ids(), vec![caller]);
+        assert_eq!(destination.get(&[POLICY_TEST_LEN - 1]), POLICY_TEST_LEN);
+    });
+}
+
+fn assert_inner_layout_policy_uses_selected_context(selected: &CpuContext) {
+    let source = StridedArray::<usize>::from_fn_col_major(&[POLICY_TEST_LEN], |index| index[0]);
+    let mut destination = StridedArray::<usize>::col_major(&[POLICY_TEST_LEN]);
+    let participants = Arc::new(PolicyParticipants::requiring(2));
+    let observed = Arc::clone(&participants);
+    let provider_context = CpuProviderContext::new(selected, CpuKernelParallelism::Inner);
+
+    with_layout_execution_policy(&provider_context, || {
+        map_into(&mut destination.view_mut(), &source.view(), |value| {
+            observed.observe(Some(selected));
+            value + 1
+        })
+        .unwrap();
+    });
+
+    assert_eq!(participants.max_active(), 2);
+    assert_eq!(participants.thread_ids().len(), 2);
+    assert!(!participants.outside_selected_context.load(Ordering::SeqCst));
+    assert_eq!(destination.get(&[POLICY_TEST_LEN - 1]), POLICY_TEST_LEN);
+}
+
+#[test]
+fn inner_layout_policy_uses_selected_context_and_budget_not_ambient_pool() {
+    let ambient = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    let selected = CpuContext::with_threads(2).unwrap();
+
+    ambient.install(|| {
+        assert!(!selected.owns_current_worker_for_test());
+        assert_inner_layout_policy_uses_selected_context(&selected);
+    });
+    selected.install(|| {
+        assert!(selected.owns_current_worker_for_test());
+        assert_inner_layout_policy_uses_selected_context(&selected);
+    });
 }

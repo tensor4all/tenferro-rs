@@ -1,14 +1,15 @@
 use super::{
     validate_axis_groups, validate_dot_general, validate_layout_metadata, CpuProviderBundle,
 };
-use crate::buffer_pool::BufferPool;
+use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::gemm::GemmAnalysisCache;
 use crate::provider::{
     CpuGemmProvider, CpuGemmRequest, CpuGeneralContractionProvider, CpuGroupedGemmRequest,
-    CpuKernelParallelism, CpuLayoutTransformProvider, CpuLayoutTransformRequest,
+    CpuKernelParallelism, CpuLayoutTransformProvider, CpuLayoutTransformRequest, CpuOperand,
     CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported, StridedLayoutTransformProvider,
 };
 use crate::{CpuBackendKind, CpuContext};
+use num_complex::Complex64;
 use std::sync::{Arc, Mutex};
 use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 use tenferro_tensor::{
@@ -199,7 +200,7 @@ impl CpuGeneralContractionProvider for GeneralSpy {
 
 #[derive(Debug)]
 struct GemmSpy {
-    outcome: CpuProviderOutcome,
+    behavior: GemmBehavior,
     gemm_calls: Arc<Mutex<usize>>,
     strided_calls: Arc<Mutex<usize>>,
     grouped_calls: Arc<Mutex<usize>>,
@@ -208,16 +209,38 @@ struct GemmSpy {
     in_selected_pool: Arc<Mutex<Vec<bool>>>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum GemmBehavior {
+    Outcome(CpuProviderOutcome),
+    Error,
+}
+
 impl GemmSpy {
     fn new(outcome: CpuProviderOutcome) -> Self {
         Self {
-            outcome,
+            behavior: GemmBehavior::Outcome(outcome),
             gemm_calls: Arc::new(Mutex::new(0)),
             strided_calls: Arc::new(Mutex::new(0)),
             grouped_calls: Arc::new(Mutex::new(0)),
             parallelism: Arc::new(Mutex::new(Vec::new())),
             grouped_job_counts: Arc::new(Mutex::new(Vec::new())),
             in_selected_pool: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn error() -> Self {
+        let mut spy = Self::new(CpuProviderOutcome::Executed);
+        spy.behavior = GemmBehavior::Error;
+        spy
+    }
+
+    fn result(&self) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        match self.behavior {
+            GemmBehavior::Outcome(outcome) => Ok(outcome),
+            GemmBehavior::Error => Err(tenferro_tensor::Error::runtime_state(
+                "dot_general",
+                "GEMM provider spy failure",
+            )),
         }
     }
 }
@@ -233,7 +256,7 @@ impl CpuGemmProvider for GemmSpy {
             .lock()
             .unwrap()
             .push(context.kernel_parallelism());
-        Ok(self.outcome)
+        self.result()
     }
 
     fn strided_batched_gemm(
@@ -246,7 +269,7 @@ impl CpuGemmProvider for GemmSpy {
             .lock()
             .unwrap()
             .push(context.kernel_parallelism());
-        Ok(self.outcome)
+        self.result()
     }
 
     fn grouped_gemm(
@@ -267,7 +290,163 @@ impl CpuGemmProvider for GemmSpy {
             .lock()
             .unwrap()
             .push(context.cpu_context().owns_current_worker_for_test());
-        Ok(self.outcome)
+        self.result()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CanonicalFallbackBehavior {
+    Real,
+    ConjugatedComplex,
+}
+
+#[derive(Debug)]
+struct CanonicalFallbackSpy {
+    first_outcome: CpuProviderUnsupported,
+    second_terminal: Option<CanonicalFallbackTerminal>,
+    behavior: CanonicalFallbackBehavior,
+    calls: Arc<Mutex<usize>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CanonicalFallbackTerminal {
+    Unsupported(CpuProviderUnsupported),
+    Error,
+}
+
+impl CanonicalFallbackSpy {
+    fn new(first_outcome: CpuProviderUnsupported, behavior: CanonicalFallbackBehavior) -> Self {
+        Self {
+            first_outcome,
+            second_terminal: None,
+            behavior,
+            calls: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    fn rejecting_retry(
+        first_outcome: CpuProviderUnsupported,
+        second_outcome: CpuProviderUnsupported,
+    ) -> Self {
+        Self {
+            first_outcome,
+            second_terminal: Some(CanonicalFallbackTerminal::Unsupported(second_outcome)),
+            behavior: CanonicalFallbackBehavior::Real,
+            calls: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    fn erroring_retry(first_outcome: CpuProviderUnsupported) -> Self {
+        Self {
+            first_outcome,
+            second_terminal: Some(CanonicalFallbackTerminal::Error),
+            behavior: CanonicalFallbackBehavior::Real,
+            calls: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    fn execute(
+        &self,
+        request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        let call = {
+            let mut calls = self.calls.lock().unwrap();
+            *calls += 1;
+            *calls
+        };
+        if call == 1 {
+            return Ok(CpuProviderOutcome::Unsupported(self.first_outcome));
+        }
+        assert_eq!(call, 2, "canonical fallback must retry exactly once");
+        if let Some(terminal) = self.second_terminal {
+            return match terminal {
+                CanonicalFallbackTerminal::Unsupported(reason) => {
+                    Ok(CpuProviderOutcome::Unsupported(reason))
+                }
+                CanonicalFallbackTerminal::Error => Err(tenferro_tensor::Error::runtime_state(
+                    "dot_general",
+                    "canonical retry spy failure",
+                )),
+            };
+        }
+
+        let parts = request.into_parts();
+        assert_eq!(parts.lhs_layout.row_stride(), 1);
+        assert_eq!(parts.rhs_layout.row_stride(), 1);
+        assert_eq!(parts.output_layout.row_stride(), 1);
+        match self.behavior {
+            CanonicalFallbackBehavior::Real => {
+                assert!(!parts.accumulation.lhs_conj);
+                assert!(!parts.accumulation.rhs_conj);
+                match &mut *parts.output {
+                    TensorWrite::Tensor(Tensor::F64(output)) => {
+                        assert_eq!(output.host_data()?, &[41.0; 4]);
+                        output
+                            .host_data_mut()?
+                            .copy_from_slice(&[19.0, 43.0, 22.0, 50.0]);
+                    }
+                    other => panic!("unexpected fallback output: {other:?}"),
+                }
+            }
+            CanonicalFallbackBehavior::ConjugatedComplex => {
+                assert!(!parts.accumulation.lhs_conj);
+                assert!(!parts.accumulation.rhs_conj);
+                assert_eq!(
+                    parts.accumulation.alpha,
+                    ContractionScalar::C64(Complex64::new(2.0, 0.0)),
+                );
+                assert_eq!(
+                    parts.accumulation.beta,
+                    ContractionScalar::C64(Complex64::new(3.0, 0.0)),
+                );
+                match parts.lhs {
+                    TensorRead::Tensor(Tensor::C64(lhs)) => {
+                        assert_eq!(lhs.host_data()?, &[Complex64::new(1.0, -2.0)]);
+                    }
+                    other => panic!("conjugated lhs was not materialized: {other:?}"),
+                }
+                match parts.rhs {
+                    TensorRead::Tensor(Tensor::C64(rhs)) => {
+                        assert_eq!(rhs.host_data()?, &[Complex64::new(3.0, 4.0)]);
+                    }
+                    other => panic!("rhs was not materialized: {other:?}"),
+                }
+                match &mut *parts.output {
+                    TensorWrite::Tensor(Tensor::C64(output)) => {
+                        assert_eq!(output.host_data()?, &[Complex64::new(5.0, 1.0)]);
+                        output.host_data_mut()?[0] = Complex64::new(37.0, -1.0);
+                    }
+                    other => panic!("unexpected fallback output: {other:?}"),
+                }
+            }
+        }
+        Ok(CpuProviderOutcome::Executed)
+    }
+}
+
+impl CpuGemmProvider for CanonicalFallbackSpy {
+    fn gemm(
+        &self,
+        _context: &CpuProviderContext<'_>,
+        request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.execute(request)
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &CpuProviderContext<'_>,
+        request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.execute(request)
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &CpuProviderContext<'_>,
+        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        panic!("canonical fallback tests do not issue grouped GEMM")
     }
 }
 
@@ -426,7 +605,7 @@ fn route_gemm_unsupported_is_terminal() {
     let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Unsupported(
         CpuProviderUnsupported::DType(DType::F64),
     )));
-    let bundle = route_bundle(gemm, None);
+    let bundle = route_bundle(gemm.clone(), None);
     let (lhs, rhs, mut output, config) = route_operands();
     let error = bundle
         .execute_dot_general_into(
@@ -442,6 +621,219 @@ fn route_gemm_unsupported_is_terminal() {
         )
         .unwrap_err();
     assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 1);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[0.0; 4]);
+}
+
+#[test]
+fn route_gemm_output_layout_unsupported_is_terminal_without_mutation() {
+    let gemm = Arc::new(GemmSpy::new(CpuProviderOutcome::Unsupported(
+        CpuProviderUnsupported::Layout(CpuOperand::Output),
+    )));
+    let bundle = route_bundle(gemm.clone(), None);
+    let (lhs, rhs, mut output, config) = route_operands();
+
+    let error = bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(1).unwrap(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 1);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[0.0; 4]);
+}
+
+#[test]
+fn route_gemm_provider_error_is_terminal_without_mutation() {
+    let gemm = Arc::new(GemmSpy::error());
+    let bundle = route_bundle(gemm.clone(), None);
+    let (lhs, rhs, mut output, config) = route_operands();
+
+    let error = bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(1).unwrap(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config,
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::RuntimeState);
+    assert!(error.to_string().contains("GEMM provider spy failure"));
+    assert_eq!(*gemm.gemm_calls.lock().unwrap(), 1);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[0.0; 4]);
+}
+
+#[test]
+fn route_gemm_canonical_retry_unsupported_is_terminal_without_mutation() {
+    for second_outcome in [
+        CpuProviderUnsupported::Layout(CpuOperand::Lhs),
+        CpuProviderUnsupported::Conjugation,
+        CpuProviderUnsupported::DType(DType::F64),
+    ] {
+        let gemm = Arc::new(CanonicalFallbackSpy::rejecting_retry(
+            CpuProviderUnsupported::Layout(CpuOperand::Rhs),
+            second_outcome,
+        ));
+        let bundle = route_bundle(gemm.clone(), None);
+        let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+        let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+        let mut output = Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap();
+        let mut buffers = BufferPool::new();
+        <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+        <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+        let seed_stats = buffers.stats();
+
+        let error = bundle
+            .execute_dot_general_into(
+                &CpuContext::with_threads(1).unwrap(),
+                &mut buffers,
+                &mut GemmAnalysisCache::default(),
+                None,
+                TensorRead::from_tensor(&lhs),
+                TensorRead::from_tensor(&rhs),
+                &config(&[1], &[0], &[], &[]),
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+                TensorWrite::from_tensor(&mut output),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.kind(), tenferro_tensor::ErrorKind::Unsupported);
+        assert_eq!(*gemm.calls.lock().unwrap(), 2);
+        assert_eq!(output.as_slice::<f64>().unwrap(), &[41.0; 4]);
+        assert_eq!(buffers.stats(), seed_stats);
+    }
+}
+
+#[test]
+fn route_gemm_canonical_retry_error_reclaims_both_materializations() {
+    let gemm = Arc::new(CanonicalFallbackSpy::erroring_retry(
+        CpuProviderUnsupported::Layout(CpuOperand::Rhs),
+    ));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap();
+    let mut buffers = BufferPool::new();
+    <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+    <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+    let seed_stats = buffers.stats();
+
+    let error = bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(1).unwrap(),
+            &mut buffers,
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[1], &[0], &[], &[]),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.kind(), tenferro_tensor::ErrorKind::RuntimeState);
+    assert!(error.to_string().contains("canonical retry spy failure"));
+    assert_eq!(*gemm.calls.lock().unwrap(), 2);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[41.0; 4]);
+    assert_eq!(buffers.stats(), seed_stats);
+}
+
+fn assert_layout_unsupported_materializes_and_retries(operand: CpuOperand) {
+    let gemm = Arc::new(CanonicalFallbackSpy::new(
+        CpuProviderUnsupported::Layout(operand),
+        CanonicalFallbackBehavior::Real,
+    ));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
+    let mut output = Tensor::from_vec_col_major(vec![2, 2], vec![41.0_f64; 4]).unwrap();
+    let mut buffers = BufferPool::new();
+    <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+    <f64 as PoolScalar>::pool_release(&mut buffers, vec![0.0; 4]);
+    let seed_stats = buffers.stats();
+
+    bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(1).unwrap(),
+            &mut buffers,
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[1], &[0], &[], &[]),
+            DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    assert_eq!(*gemm.calls.lock().unwrap(), 2);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[19.0, 43.0, 22.0, 50.0]);
+    assert_eq!(buffers.stats(), seed_stats);
+}
+
+#[test]
+fn route_gemm_lhs_layout_unsupported_materializes_and_retries() {
+    assert_layout_unsupported_materializes_and_retries(CpuOperand::Lhs);
+}
+
+#[test]
+fn route_gemm_rhs_layout_unsupported_materializes_and_retries() {
+    assert_layout_unsupported_materializes_and_retries(CpuOperand::Rhs);
+}
+
+#[test]
+fn route_gemm_conjugation_unsupported_materializes_conjugate_and_retries() {
+    let gemm = Arc::new(CanonicalFallbackSpy::new(
+        CpuProviderUnsupported::Conjugation,
+        CanonicalFallbackBehavior::ConjugatedComplex,
+    ));
+    let bundle = route_bundle(gemm.clone(), None);
+    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 2.0)]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(3.0, 4.0)]).unwrap();
+    let mut output =
+        Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(5.0, 1.0)]).unwrap();
+    let mut accumulation = DotGeneralAccumulation::scaled(
+        ContractionScalar::C64(Complex64::new(2.0, 0.0)),
+        ContractionScalar::C64(Complex64::new(3.0, 0.0)),
+    )
+    .unwrap();
+    accumulation.lhs_conj = true;
+
+    bundle
+        .execute_dot_general_into(
+            &CpuContext::with_threads(1).unwrap(),
+            &mut BufferPool::new(),
+            &mut GemmAnalysisCache::default(),
+            None,
+            TensorRead::from_tensor(&lhs),
+            TensorRead::from_tensor(&rhs),
+            &config(&[1], &[0], &[], &[]),
+            accumulation,
+            TensorWrite::from_tensor(&mut output),
+        )
+        .unwrap();
+
+    assert_eq!(*gemm.calls.lock().unwrap(), 2);
+    assert_eq!(
+        output.as_slice::<Complex64>().unwrap(),
+        &[Complex64::new(37.0, -1.0)],
+    );
 }
 
 #[test]

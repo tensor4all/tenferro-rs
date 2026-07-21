@@ -5,6 +5,7 @@
 //! tensor metadata and reachable ranges have already been validated.
 
 use core::fmt;
+use core::num::NonZeroUsize;
 use std::sync::Arc;
 
 use tenferro_tensor::backend::GroupedGemmJob;
@@ -145,6 +146,10 @@ impl<'a> CpuProviderContext<'a> {
     /// Return the validated engine thread budget.
     pub fn thread_budget(&self) -> usize {
         self.context.num_threads()
+    }
+
+    pub(crate) fn nonzero_thread_budget(&self) -> NonZeroUsize {
+        self.context.nonzero_thread_budget()
     }
 
     /// Return whether this invocation may use inner kernel parallelism.
@@ -472,6 +477,7 @@ pub struct CpuLayoutTransformRequest<'request, 'input, 'output> {
     input: &'request TensorRead<'input>,
     output: &'request mut TensorWrite<'output>,
     intent: CpuLayoutTransformIntent,
+    conjugate: bool,
 }
 
 impl<'request, 'input, 'output> CpuLayoutTransformRequest<'request, 'input, 'output> {
@@ -480,11 +486,13 @@ impl<'request, 'input, 'output> CpuLayoutTransformRequest<'request, 'input, 'out
         input: &'request TensorRead<'input>,
         output: &'request mut TensorWrite<'output>,
         intent: CpuLayoutTransformIntent,
+        conjugate: bool,
     ) -> Self {
         Self {
             input,
             output,
             intent,
+            conjugate,
         }
     }
 
@@ -503,14 +511,47 @@ impl<'request, 'input, 'output> CpuLayoutTransformRequest<'request, 'input, 'out
         self.intent
     }
 
+    /// Return whether materialization must conjugate each input element.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::provider::{
+    ///     CpuLayoutTransformProvider, CpuLayoutTransformRequest, CpuProviderContext,
+    ///     CpuProviderOutcome, CpuProviderUnsupported,
+    /// };
+    ///
+    /// #[derive(Debug)]
+    /// struct InspectingProvider;
+    ///
+    /// impl CpuLayoutTransformProvider for InspectingProvider {
+    ///     fn materialize(
+    ///         &self,
+    ///         _context: &CpuProviderContext<'_>,
+    ///         request: CpuLayoutTransformRequest<'_, '_, '_>,
+    ///     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+    ///         let _must_conjugate = request.conjugate();
+    ///         Ok(CpuProviderOutcome::Unsupported(
+    ///             CpuProviderUnsupported::RuntimeUnavailable,
+    ///         ))
+    ///     }
+    /// }
+    ///
+    /// let _provider: &dyn CpuLayoutTransformProvider = &InspectingProvider;
+    /// ```
+    pub fn conjugate(&self) -> bool {
+        self.conjugate
+    }
+
     pub(crate) fn into_parts(
         self,
     ) -> (
         &'request TensorRead<'input>,
         &'request mut TensorWrite<'output>,
         CpuLayoutTransformIntent,
+        bool,
     ) {
-        (self.input, self.output, self.intent)
+        (self.input, self.output, self.intent, self.conjugate)
     }
 }
 
@@ -918,11 +959,40 @@ pub struct StridedLayoutTransformProvider;
 impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
     fn materialize(
         &self,
-        _context: &CpuProviderContext<'_>,
+        context: &CpuProviderContext<'_>,
         request: CpuLayoutTransformRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        let (input, output, _intent) = request.into_parts();
-        macro_rules! dispatch {
+        with_layout_execution_policy(context, || materialize_strided_layout(request))
+    }
+}
+
+fn with_layout_execution_policy<R: Send>(
+    context: &CpuProviderContext<'_>,
+    operation: impl FnOnce() -> R + Send,
+) -> R {
+    match context.kernel_parallelism() {
+        CpuKernelParallelism::Sequential => strided_kernel::with_execution_policy(
+            strided_kernel::ExecutionPolicy::Sequential,
+            operation,
+        ),
+        CpuKernelParallelism::Inner => {
+            let max_threads = context.nonzero_thread_budget();
+            context.cpu_context().install(|| {
+                strided_kernel::with_execution_policy(
+                    strided_kernel::ExecutionPolicy::Rayon { max_threads },
+                    operation,
+                )
+            })
+        }
+    }
+}
+
+fn materialize_strided_layout(
+    request: CpuLayoutTransformRequest<'_, '_, '_>,
+) -> tenferro_tensor::Result<CpuProviderOutcome> {
+    let (input, output, _intent, conjugate) = request.into_parts();
+    if conjugate {
+        macro_rules! dispatch_conjugated {
             ($owned:ident, $view:ident) => {
                 match (input, &mut *output) {
                     (
@@ -931,7 +1001,7 @@ impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
                     ) => {
                         let input = input.as_view();
                         let mut output = output.as_view_mut();
-                        crate::structural::typed_copy_view_into(
+                        crate::structural::typed_conjugate_view_into(
                             &input,
                             &mut output,
                             "cpu layout materialization",
@@ -943,7 +1013,7 @@ impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
                         TensorWrite::Tensor(Tensor::$owned(output)),
                     ) => {
                         let mut output = output.as_view_mut();
-                        crate::structural::typed_copy_view_into(
+                        crate::structural::typed_conjugate_view_into(
                             input,
                             &mut output,
                             "cpu layout materialization",
@@ -955,7 +1025,7 @@ impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
                         TensorWrite::View(TensorViewMut::$view(output)),
                     ) => {
                         let input = input.as_view();
-                        crate::structural::typed_copy_view_into(
+                        crate::structural::typed_conjugate_view_into(
                             &input,
                             output,
                             "cpu layout materialization",
@@ -966,7 +1036,7 @@ impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
                         TensorRead::View(TensorView::$view(input)),
                         TensorWrite::View(TensorViewMut::$view(output)),
                     ) => {
-                        crate::structural::typed_copy_view_into(
+                        crate::structural::typed_conjugate_view_into(
                             input,
                             output,
                             "cpu layout materialization",
@@ -977,17 +1047,79 @@ impl CpuLayoutTransformProvider for StridedLayoutTransformProvider {
                 }
             };
         }
-        dispatch!(F32, F32);
-        dispatch!(F64, F64);
-        dispatch!(I32, I32);
-        dispatch!(I64, I64);
-        dispatch!(Bool, Bool);
-        dispatch!(C32, C32);
-        dispatch!(C64, C64);
-        Ok(CpuProviderOutcome::Unsupported(
+        dispatch_conjugated!(F32, F32);
+        dispatch_conjugated!(F64, F64);
+        dispatch_conjugated!(C32, C32);
+        dispatch_conjugated!(C64, C64);
+        return Ok(CpuProviderOutcome::Unsupported(
             CpuProviderUnsupported::DType(input.dtype()),
-        ))
+        ));
     }
+    macro_rules! dispatch {
+        ($owned:ident, $view:ident) => {
+            match (input, &mut *output) {
+                (
+                    TensorRead::Tensor(Tensor::$owned(input)),
+                    TensorWrite::Tensor(Tensor::$owned(output)),
+                ) => {
+                    let input = input.as_view();
+                    let mut output = output.as_view_mut();
+                    crate::structural::typed_copy_view_into(
+                        &input,
+                        &mut output,
+                        "cpu layout materialization",
+                    )?;
+                    return Ok(CpuProviderOutcome::Executed);
+                }
+                (
+                    TensorRead::View(TensorView::$view(input)),
+                    TensorWrite::Tensor(Tensor::$owned(output)),
+                ) => {
+                    let mut output = output.as_view_mut();
+                    crate::structural::typed_copy_view_into(
+                        input,
+                        &mut output,
+                        "cpu layout materialization",
+                    )?;
+                    return Ok(CpuProviderOutcome::Executed);
+                }
+                (
+                    TensorRead::Tensor(Tensor::$owned(input)),
+                    TensorWrite::View(TensorViewMut::$view(output)),
+                ) => {
+                    let input = input.as_view();
+                    crate::structural::typed_copy_view_into(
+                        &input,
+                        output,
+                        "cpu layout materialization",
+                    )?;
+                    return Ok(CpuProviderOutcome::Executed);
+                }
+                (
+                    TensorRead::View(TensorView::$view(input)),
+                    TensorWrite::View(TensorViewMut::$view(output)),
+                ) => {
+                    crate::structural::typed_copy_view_into(
+                        input,
+                        output,
+                        "cpu layout materialization",
+                    )?;
+                    return Ok(CpuProviderOutcome::Executed);
+                }
+                _ => {}
+            }
+        };
+    }
+    dispatch!(F32, F32);
+    dispatch!(F64, F64);
+    dispatch!(I32, I32);
+    dispatch!(I64, I64);
+    dispatch!(Bool, Bool);
+    dispatch!(C32, C32);
+    dispatch!(C64, C64);
+    Ok(CpuProviderOutcome::Unsupported(
+        CpuProviderUnsupported::DType(input.dtype()),
+    ))
 }
 
 pub(crate) fn builtin_gemm_provider(kind: CpuBackendKind) -> Arc<dyn CpuGemmProvider> {
