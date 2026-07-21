@@ -593,6 +593,10 @@ seconds, then KILLs and reaps the group. Verification stops at the first
 failure. Fake-process tests cover all five commands, exact environment and
 provenance, nonzero exit, timeout, cleanup, control exceptions, and
 first-failure stop; real commands do not replace these orchestration tests.
+The requested Cargo profile is `bench`; Cargo's built-in bench profile places
+the actual probe executable at
+`$CARGO_TARGET_DIR/release/phase2e-allocation-probe`, whose regular-file
+identity and digest are bound before and after `--list-cases`.
 These checks run when the probe is implemented, when the evidence candidate is
 frozen, and again on the final committed head; workspace-wide fmt/clippy is
 not treated as coverage for this external crate.

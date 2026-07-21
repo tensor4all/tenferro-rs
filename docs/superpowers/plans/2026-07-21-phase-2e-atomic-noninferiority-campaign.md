@@ -710,7 +710,8 @@ cargo clippy --manifest-path "$PHASE2E_PROBE_DEV_ROOT/Cargo.toml" \
   --locked --all-targets -- -D warnings
 cargo build --locked --profile bench \
   --manifest-path "$PHASE2E_PROBE_DEV_ROOT/Cargo.toml"
-"$CARGO_TARGET_DIR/bench/phase2e-allocation-probe" --list-cases
+# Cargo's built-in bench profile uses the release output directory.
+"$CARGO_TARGET_DIR/release/phase2e-allocation-probe" --list-cases
 python3 scripts/phase2e_build.py verify-allocation-probe \
   --repository "$PWD"
 python3 -m unittest scripts/test_phase2e_build.py -v
