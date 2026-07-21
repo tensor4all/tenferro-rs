@@ -589,6 +589,39 @@ class ProtocolV2CampaignTests(unittest.TestCase):
             self.assertEqual(record["path"], name)
             self.assertEqual(record["sha256"], sha256(self.root / name))
 
+    def test_terminal_view_classifies_while_disk_manifest_remains_running(self) -> None:
+        terminal = copy.deepcopy(self.campaign)
+        for record in self.campaign["cases"].values():
+            record["statistical_result"] = None
+        self.campaign["validity_state"] = "RUNNING"
+        self.campaign["statistical_result"] = None
+        self.campaign["completed_at"] = ""
+        self.write_campaign()
+
+        result = classifier.classify_terminal_view(
+            self.campaign_path, terminal, self.root
+        )
+
+        persisted = json.loads(self.campaign_path.read_text())
+        self.assertEqual(persisted["validity_state"], "RUNNING")
+        self.assertEqual(result["statistical_result"], "PASS")
+        self.assertTrue((self.root / "classification.json").is_file())
+
+    def test_terminal_view_rejects_changes_outside_allowed_final_fields(self) -> None:
+        terminal = copy.deepcopy(self.campaign)
+        terminal["selected_cpu"] = 4
+        for record in self.campaign["cases"].values():
+            record["statistical_result"] = None
+        self.campaign["validity_state"] = "RUNNING"
+        self.campaign["statistical_result"] = None
+        self.campaign["completed_at"] = ""
+        self.write_campaign()
+
+        with self.assertRaisesRegex(protocol.ProtocolError, "terminal view"):
+            classifier.classify_terminal_view(
+                self.campaign_path, terminal, self.root
+            )
+
     def test_protocol_one_is_rejected(self) -> None:
         self.campaign["protocol_version"] = 1
         self.write_campaign()

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -839,6 +840,7 @@ def _observed_normative_inventory(root: pathlib.Path) -> tuple[set[str], set[str
 def _validated_classification(
     campaign_path: pathlib.Path,
     recovery_output_dir: pathlib.Path | None = None,
+    terminal_payload: Mapping[str, Any] | None = None,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -853,7 +855,12 @@ def _validated_classification(
         pathlib.Path(os.path.abspath(campaign_path)), "campaign manifest"
     )
     root = campaign_path.parent
-    campaign = _read_json(campaign_path, "campaign.json")
+    persisted_campaign = _read_json(campaign_path, "campaign.json")
+    if terminal_payload is None:
+        campaign = persisted_campaign
+    else:
+        campaign = copy.deepcopy(terminal_payload)
+        _validate_terminal_derivation(persisted_campaign, campaign)
     protocol.validate_manifest_fields(
         campaign, CAMPAIGN_FIELDS, context="campaign.json"
     )
@@ -1054,6 +1061,35 @@ def _validated_classification(
         "cases": output_cases,
     }
     return payload, campaign, root, output_records, output_contents
+
+
+def _validate_terminal_derivation(
+    running: Any, terminal: Any
+) -> None:
+    protocol.validate_manifest_fields(
+        running, CAMPAIGN_FIELDS, context="running campaign.json"
+    )
+    protocol.validate_manifest_fields(
+        terminal, CAMPAIGN_FIELDS, context="terminal campaign view"
+    )
+    expected = copy.deepcopy(terminal)
+    outputs = expected.get("classification_artifacts")
+    if type(outputs) is dict:
+        for record in outputs.values():
+            if type(record) is dict and type(record.get("path")) is str:
+                expected["artifact_inventory"].pop(record["path"], None)
+    expected["classification_artifacts"] = None
+    expected["validity_state"] = "RUNNING"
+    expected["statistical_result"] = None
+    expected["completed_at"] = ""
+    if type(expected.get("cases")) is dict:
+        for record in expected["cases"].values():
+            if type(record) is dict:
+                record["statistical_result"] = None
+    if running != expected:
+        raise protocol.ProtocolError(
+            "terminal view does not derive from the persisted RUNNING campaign"
+        )
 
 
 def load_validated_campaign(root: pathlib.Path) -> list[tuple[str, list[tuple], str]]:
@@ -1567,28 +1603,23 @@ def _verify_transaction_identity(
         raise protocol.ProtocolError("classification transaction directory changed")
 
 
-def classify_campaign(
-    campaign_path: pathlib.Path, output_dir: pathlib.Path
+def _classify_validated(
+    campaign_path: pathlib.Path,
+    output_dir: pathlib.Path,
+    *,
+    terminal_payload: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Recompute a COMPLETE campaign and atomically create or verify outputs.
-
-    The input manifest already declares its terminal statistical result.  This
-    function independently recomputes that result from its normative estimates.
-    Retained Task 2 build manifests receive strict schema, executable, and pair
-    validation here; authoritative live worktree/tool probes remain the runner
-    or aggregate validator's responsibility and are not replayed by classification.
-    When ``classification_artifacts`` is null, it creates both outputs and
-    returns their paths/digests for the caller's final atomic campaign update.
-    When both output digests are already registered, it validates without
-    rewriting.  A partial registration is always rejected.
-    """
     campaign_path = _canonical_regular_file(
         pathlib.Path(os.path.abspath(campaign_path)), "campaign manifest"
     )
     root = campaign_path.parent
     output_dir = _output_directory(root, output_dir)
-    payload, _campaign, root, registered, registered_contents = _validated_classification(
-        campaign_path, recovery_output_dir=output_dir
+    payload, _campaign, root, registered, registered_contents = (
+        _validated_classification(
+            campaign_path,
+            recovery_output_dir=output_dir,
+            terminal_payload=terminal_payload,
+        )
     )
     paths = {
         "classification.json": output_dir / "classification.json",
@@ -1623,6 +1654,28 @@ def classify_campaign(
     result = dict(payload)
     result["output_artifacts"] = records
     return result
+
+
+def classify_campaign(
+    campaign_path: pathlib.Path, output_dir: pathlib.Path
+) -> dict[str, Any]:
+    """Recompute a persisted COMPLETE campaign and create or verify outputs."""
+    return _classify_validated(
+        campaign_path, output_dir, terminal_payload=None
+    )
+
+
+def classify_terminal_view(
+    running_campaign_path: pathlib.Path,
+    terminal_payload: Mapping[str, Any],
+    output_dir: pathlib.Path,
+) -> dict[str, Any]:
+    """Classify an in-memory terminal view derived from persisted RUNNING state."""
+    return _classify_validated(
+        running_campaign_path,
+        output_dir,
+        terminal_payload=terminal_payload,
+    )
 
 
 def main() -> None:
