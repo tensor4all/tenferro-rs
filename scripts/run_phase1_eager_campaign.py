@@ -59,6 +59,10 @@ FINALIZATION_FILES = {
     FINALIZATION_MARKER,
     FINALIZATION_PUBLISH,
 }
+MARKER_EXACT = "EXACT"
+MARKER_ABSENT = "ABSENT"
+MARKER_MISMATCH = "MISMATCH"
+MARKER_UNKNOWN_IO = "UNKNOWN_IO"
 
 
 class PinnedExecutable:
@@ -295,6 +299,7 @@ class PinnedDirectory:
             parent_path, component_observer=component_observer
         )
         descriptor: int | None = None
+        failure: BaseException | None = None
         try:
             try:
                 os.mkdir(logical.name, mode=0o700, dir_fd=parent)
@@ -306,8 +311,25 @@ class PinnedDirectory:
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                 dir_fd=parent,
             )
-        finally:
-            os.close(parent)
+        except BaseException as error:
+            failure = error
+        parent_to_close = parent
+        parent = -1
+        try:
+            os.close(parent_to_close)
+        except BaseException as error:
+            if failure is None:
+                failure = error
+        if failure is not None:
+            if descriptor is not None:
+                descriptor_to_close = descriptor
+                descriptor = None
+                try:
+                    os.close(descriptor_to_close)
+                except BaseException:
+                    pass
+            raise failure
+        assert descriptor is not None
         result = cls.__new__(cls)
         result.logical_path = logical
         result.descriptor = descriptor
@@ -1371,16 +1393,22 @@ def _validate_finalization_marker(marker: Mapping[str, Any], args) -> None:
         raise protocol.ProtocolError("campaign finalization marker identity differs")
 
 
-def _marker_is_committed(
+def _probe_committed_marker(
     root: PinnedDirectory, marker: Mapping[str, Any]
-) -> bool:
-    """Probe the retained root for the exact canonical marker after interruption."""
+) -> str:
+    """Classify marker state without turning uncertain I/O into absence."""
     try:
-        return root.read_regular(FINALIZATION_MARKER) == protocol._canonical_json_bytes(
-            marker
-        )
+        content = root.read_regular(FINALIZATION_MARKER)
+    except FileNotFoundError:
+        return MARKER_ABSENT
     except BaseException:
-        return False
+        return MARKER_UNKNOWN_IO
+    try:
+        if content == protocol._canonical_json_bytes(marker):
+            return MARKER_EXACT
+        return MARKER_MISMATCH
+    except BaseException:
+        return MARKER_UNKNOWN_IO
 
 
 def _ledger_attempt(ledger: Mapping[str, Any], args) -> Mapping[str, Any]:
@@ -1425,6 +1453,8 @@ def _finalization_state_kind(
         ledger_active,
     )
     if state == ("RUNNING", False, False, False, True):
+        return "NO_RESUME"
+    if state == ("RUNNING", False, True, False, True):
         return "NO_RESUME"
     if (
         validity_state == "RUNNING"
@@ -1526,6 +1556,8 @@ def _validate_completed_campaign(
             _read_root_json(root, name)
         ) != campaign_digest:
             raise protocol.ProtocolError(f"completed recovery partial differs: {name}")
+    if FINALIZATION_STAGE in files:
+        _require_same_regular_inode(root, "campaign.json", FINALIZATION_STAGE)
     classification.classify_campaign_retained(
         root.logical_path / "campaign.json",
         root.logical_path,
@@ -1954,9 +1986,14 @@ def _run_campaign(
                 artifact_handle.descriptor, FINALIZATION_MARKER, marker
             )
         except BaseException as error:
+            marker_probe = _probe_committed_marker(artifact_handle, marker)
             if (
                 isinstance(error, protocol.AtomicWriteError) and error.committed
-            ) or _marker_is_committed(artifact_handle, marker):
+            ) or marker_probe in {
+                MARKER_EXACT,
+                MARKER_MISMATCH,
+                MARKER_UNKNOWN_IO,
+            }:
                 finalization_started = True
                 raise
             try:

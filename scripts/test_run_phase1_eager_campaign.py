@@ -1162,6 +1162,7 @@ while not os.path.exists(sys.argv[1]):
     def test_finalization_reachable_state_matrix_is_exact(self):
         expected = {
             ("RUNNING", False, False, False, True): "NO_RESUME",
+            ("RUNNING", False, True, False, True): "NO_RESUME",
             ("RUNNING", True, True, False, True): "RUNNING",
             ("RUNNING", True, True, True, True): "RUNNING",
             ("RUNNING", True, True, False, False): "RUNNING",
@@ -1230,6 +1231,154 @@ while not os.path.exists(sys.argv[1]):
             self.assertEqual(len(os.listdir("/proc/self/fd")), before + 1)
         finally:
             os.close(root_fd)
+
+    def test_create_fresh_final_parent_close_failure_closes_root_once(self):
+        for interruption in (
+            KeyboardInterrupt("parent close interrupted"),
+            SystemExit("parent close exited"),
+            OSError("parent close failed"),
+        ):
+            with self.subTest(interruption=type(interruption).__name__):
+                root = self.base / f"close-{type(interruption).__name__}"
+                before = len(os.listdir("/proc/self/fd"))
+                final_parent = None
+                injected = False
+                real_close = os.close
+
+                def observe(_path, descriptor):
+                    nonlocal final_parent
+                    final_parent = descriptor
+
+                def close_then_interrupt(descriptor):
+                    nonlocal injected
+                    real_close(descriptor)
+                    if (
+                        descriptor == final_parent
+                        and root.is_dir()
+                        and not injected
+                    ):
+                        injected = True
+                        raise interruption
+
+                with mock.patch.object(
+                    runner.os, "close", side_effect=close_then_interrupt
+                ):
+                    with self.assertRaises(type(interruption)) as raised:
+                        runner.PinnedDirectory.create_fresh(
+                            root, component_observer=observe
+                        )
+                self.assertIs(raised.exception, interruption)
+                self.assertTrue(injected)
+                self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+    def test_create_fresh_primary_failure_beats_parent_close_failure(self):
+        for failure_stage in ("mkdir", "open"):
+            for primary in (
+                KeyboardInterrupt(f"{failure_stage} interrupted"),
+                SystemExit(f"{failure_stage} exited"),
+            ):
+                with self.subTest(
+                    failure_stage=failure_stage,
+                    primary=type(primary).__name__,
+                ):
+                    root = self.base / (
+                        f"primary-{failure_stage}-{type(primary).__name__}"
+                    )
+                    before = len(os.listdir("/proc/self/fd"))
+                    final_parent = None
+                    primary_injected = False
+                    close_injected = False
+                    real_close = os.close
+                    real_mkdir = os.mkdir
+                    real_open = os.open
+
+                    def observe(_path, descriptor):
+                        nonlocal final_parent
+                        final_parent = descriptor
+
+                    def failing_mkdir(path, *positional, **keywords):
+                        nonlocal primary_injected
+                        if failure_stage == "mkdir" and path == root.name:
+                            primary_injected = True
+                            raise primary
+                        return real_mkdir(path, *positional, **keywords)
+
+                    def failing_open(path, *positional, **keywords):
+                        nonlocal primary_injected
+                        if failure_stage == "open" and path == root.name:
+                            primary_injected = True
+                            raise primary
+                        return real_open(path, *positional, **keywords)
+
+                    def close_then_fail(descriptor):
+                        nonlocal close_injected
+                        real_close(descriptor)
+                        if (
+                            descriptor == final_parent
+                            and primary_injected
+                            and not close_injected
+                        ):
+                            close_injected = True
+                            raise OSError("secondary parent close failure")
+
+                    with mock.patch.object(
+                        runner.os, "mkdir", side_effect=failing_mkdir
+                    ), mock.patch.object(
+                        runner.os, "open", side_effect=failing_open
+                    ), mock.patch.object(
+                        runner.os, "close", side_effect=close_then_fail
+                    ):
+                        with self.assertRaises(type(primary)) as raised:
+                            runner.PinnedDirectory.create_fresh(
+                                root, component_observer=observe
+                            )
+                    self.assertIs(raised.exception, primary)
+                    self.assertTrue(primary_injected)
+                    self.assertTrue(close_injected)
+                    self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+    def test_create_fresh_root_cleanup_failure_cannot_replace_parent_failure(self):
+        root = self.base / "root-cleanup-close"
+        before = len(os.listdir("/proc/self/fd"))
+        primary = KeyboardInterrupt("parent close interrupted")
+        final_parent = None
+        root_descriptor = None
+        root_close_count = 0
+        real_open = os.open
+        real_close = os.close
+
+        def observe(_path, descriptor):
+            nonlocal final_parent
+            final_parent = descriptor
+
+        def recording_open(path, *positional, **keywords):
+            nonlocal root_descriptor
+            descriptor = real_open(path, *positional, **keywords)
+            if path == root.name:
+                root_descriptor = descriptor
+            return descriptor
+
+        def close_then_fail(descriptor):
+            nonlocal root_close_count
+            if root_descriptor is not None and descriptor == root_descriptor:
+                root_close_count += 1
+            real_close(descriptor)
+            if descriptor == final_parent and root.is_dir():
+                raise primary
+            if descriptor == root_descriptor:
+                raise OSError("secondary root cleanup close failure")
+
+        with mock.patch.object(
+            runner.os, "open", side_effect=recording_open
+        ), mock.patch.object(runner.os, "close", side_effect=close_then_fail):
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                runner.PinnedDirectory.create_fresh(
+                    root, component_observer=observe
+                )
+        self.assertIs(raised.exception, primary)
+        self.assertIsNotNone(root_descriptor)
+        self.assertEqual(root_close_count, 1)
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     def test_criterion_root_swap_cannot_redirect_benchmark_scratch(self):
         args = self.arguments()
@@ -1425,6 +1574,62 @@ while not os.path.exists(sys.argv[1]):
         self.assertEqual(recovery.launch_count, 0)
         self.assertTrue(publish.is_file())
 
+    def test_completed_stage_must_remain_the_campaign_hard_link(self):
+        args = self.arguments()
+        first = FakeProcessFactory()
+
+        def interrupt(phase):
+            if phase == "published":
+                raise OSError("stop after publish")
+
+        self.assertEqual(
+            self.execute(args, first, finalization_observer=interrupt), 1
+        )
+        campaign = args.artifact_root / "campaign.json"
+        stage = args.artifact_root / runner.FINALIZATION_STAGE
+        content = stage.read_bytes()
+        self.assertEqual(campaign.stat().st_ino, stage.stat().st_ino)
+        stage.unlink()
+        stage.write_bytes(content)
+        self.assertNotEqual(campaign.stat().st_ino, stage.stat().st_ino)
+        (args.artifact_root / runner.FINALIZATION_MARKER).unlink()
+
+        recovery = FakeProcessFactory()
+        self.assertEqual(self.execute(args, recovery), 1)
+        self.assertEqual(recovery.launch_count, 0)
+        self.assertTrue(stage.is_file())
+
+    def test_stage_swap_between_publish_authentication_and_replace_is_rejected(self):
+        args = self.arguments()
+        first = FakeProcessFactory()
+        real_replace = os.replace
+        swapped = False
+
+        def swap_stage_before_publish_replace(
+            source, destination, *positional, **keywords
+        ):
+            nonlocal swapped
+            if source == runner.FINALIZATION_PUBLISH and not swapped:
+                swapped = True
+                stage = args.artifact_root / runner.FINALIZATION_STAGE
+                content = stage.read_bytes()
+                stage.unlink()
+                stage.write_bytes(content)
+            return real_replace(source, destination, *positional, **keywords)
+
+        with mock.patch.object(
+            runner.os, "replace", side_effect=swap_stage_before_publish_replace
+        ):
+            self.assertEqual(self.execute(args, first), 1)
+        self.assertTrue(swapped)
+        self.assertEqual(first.launch_count, 28 * 3 * 4)
+        campaign = args.artifact_root / "campaign.json"
+        stage = args.artifact_root / runner.FINALIZATION_STAGE
+        self.assertNotEqual(campaign.stat().st_ino, stage.stat().st_ino)
+        self.assertTrue(
+            (args.artifact_root / runner.FINALIZATION_MARKER).is_file()
+        )
+
     def test_committed_marker_durability_failure_recovers_without_measurement(self):
         args = self.arguments()
         first = FakeProcessFactory()
@@ -1502,6 +1707,154 @@ while not os.path.exists(sys.argv[1]):
                 recovery = FakeProcessFactory()
                 self.assertEqual(self.execute(args, recovery), 0)
                 self.assertEqual(recovery.launch_count, 0)
+
+    def test_marker_probe_states_distinguish_absence_mismatch_and_io_failure(self):
+        root_path = self.base / "marker-probe-root"
+        root_path.mkdir()
+        root = runner.PinnedDirectory(root_path)
+        marker = {"version": 1, "value": "expected"}
+        try:
+            self.assertEqual(
+                runner._probe_committed_marker(root, marker),
+                runner.MARKER_ABSENT,
+            )
+            root.atomic_json(runner.FINALIZATION_MARKER, {"version": 1})
+            self.assertEqual(
+                runner._probe_committed_marker(root, marker),
+                runner.MARKER_MISMATCH,
+            )
+            root.atomic_json(runner.FINALIZATION_MARKER, marker)
+            self.assertEqual(
+                runner._probe_committed_marker(root, marker),
+                runner.MARKER_EXACT,
+            )
+            with mock.patch.object(
+                root, "read_regular", side_effect=OSError("probe read failed")
+            ):
+                self.assertEqual(
+                    runner._probe_committed_marker(root, marker),
+                    runner.MARKER_UNKNOWN_IO,
+                )
+        finally:
+            root.close()
+
+    def test_marker_probe_close_error_preserves_recoverable_transaction(self):
+        for primary in (
+            KeyboardInterrupt("marker publication interrupted"),
+            SystemExit("marker publication exited"),
+        ):
+            with self.subTest(primary=type(primary).__name__):
+                args = self.arguments()
+                first = FakeProcessFactory()
+                original_write = protocol.atomic_write_json_at
+                real_close = os.close
+                marker_identity = None
+                probe_started = False
+                close_injected = False
+
+                def interrupt_after_marker(directory_fd, name, payload):
+                    nonlocal marker_identity, probe_started
+                    result = original_write(directory_fd, name, payload)
+                    if name == runner.FINALIZATION_MARKER:
+                        metadata = os.stat(
+                            name, dir_fd=directory_fd, follow_symlinks=False
+                        )
+                        marker_identity = (metadata.st_dev, metadata.st_ino)
+                        probe_started = True
+                        raise primary
+                    return result
+
+                def close_marker_then_fail(descriptor):
+                    nonlocal close_injected
+                    metadata = os.fstat(descriptor)
+                    real_close(descriptor)
+                    if (
+                        probe_started
+                        and marker_identity
+                        == (metadata.st_dev, metadata.st_ino)
+                        and not close_injected
+                    ):
+                        close_injected = True
+                        raise OSError("marker probe close failed after exact read")
+
+                with mock.patch.object(
+                    runner.protocol,
+                    "atomic_write_json_at",
+                    side_effect=interrupt_after_marker,
+                ), mock.patch.object(
+                    runner.os, "close", side_effect=close_marker_then_fail
+                ):
+                    with self.assertRaises(type(primary)) as raised:
+                        self.execute(args, first)
+                self.assertIs(raised.exception, primary)
+                self.assertTrue(close_injected)
+                self.assertTrue(
+                    (args.artifact_root / runner.FINALIZATION_STAGE).is_file()
+                )
+                self.assertTrue(
+                    (args.artifact_root / runner.FINALIZATION_MARKER).is_file()
+                )
+                ledger = json.loads(args.ledger.read_text())
+                self.assertEqual(ledger["active_attempt_id"], args.attempt_id)
+
+                recovery = FakeProcessFactory()
+                self.assertEqual(self.execute(args, recovery), 0)
+                self.assertEqual(recovery.launch_count, 0)
+
+    def test_mismatched_marker_probe_preserves_and_rejects_transaction(self):
+        args = self.arguments()
+        first = FakeProcessFactory()
+        primary = KeyboardInterrupt("marker publication interrupted")
+        original_write = protocol.atomic_write_json_at
+
+        def replace_marker_then_interrupt(directory_fd, name, payload):
+            result = original_write(directory_fd, name, payload)
+            if name == runner.FINALIZATION_MARKER:
+                (args.artifact_root / name).write_text("{}\n")
+                raise primary
+            return result
+
+        with mock.patch.object(
+            runner.protocol,
+            "atomic_write_json_at",
+            side_effect=replace_marker_then_interrupt,
+        ):
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                self.execute(args, first)
+        self.assertIs(raised.exception, primary)
+        stage = args.artifact_root / runner.FINALIZATION_STAGE
+        marker = args.artifact_root / runner.FINALIZATION_MARKER
+        self.assertTrue(stage.is_file())
+        self.assertTrue(marker.is_file())
+        ledger = json.loads(args.ledger.read_text())
+        self.assertEqual(ledger["active_attempt_id"], args.attempt_id)
+
+        recovery = FakeProcessFactory()
+        self.assertEqual(self.execute(args, recovery), 1)
+        self.assertEqual(recovery.launch_count, 0)
+        self.assertTrue(stage.is_file())
+        self.assertTrue(marker.is_file())
+
+    def test_pre_marker_stage_crash_is_preserved_without_remeasurement(self):
+        args = self.arguments()
+        first = FakeProcessFactory()
+
+        def interrupt(phase):
+            if phase == "prepared":
+                raise OSError("stop after marker publication")
+
+        self.assertEqual(
+            self.execute(args, first, finalization_observer=interrupt), 1
+        )
+        stage = args.artifact_root / runner.FINALIZATION_STAGE
+        marker = args.artifact_root / runner.FINALIZATION_MARKER
+        marker.unlink()
+        self.assertTrue(stage.is_file())
+
+        recovery = FakeProcessFactory()
+        self.assertEqual(self.execute(args, recovery), 1)
+        self.assertEqual(recovery.launch_count, 0)
+        self.assertTrue(stage.is_file())
 
     def test_recovery_rejects_symlinked_parent_component(self):
         args = self.arguments()

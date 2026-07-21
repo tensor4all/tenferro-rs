@@ -470,6 +470,7 @@ states are:
 
 ```text
 RUNNING / no  / no  / no  / yes  -> ordinary incomplete campaign; do not resume
+RUNNING / no  / yes / no  / yes  -> pre-marker crash; preserve and do not resume
 RUNNING / yes / yes / no  / yes  -> finish finalization
 RUNNING / yes / yes / yes / yes  -> finish finalization
 RUNNING / yes / yes / no  / no   -> finish finalization
@@ -481,11 +482,16 @@ COMPLETE / no  / no  / no / no   -> validate idempotently
 
 Reject every other combination before launching a benchmark.  A surviving
 publish partial must be the same regular-file inode as the stage hard link,
-not merely byte-identical.  If an arbitrary `BaseException` interrupts marker
-publication after rename, re-read the exact canonical marker through the held
-root descriptor: a match commits the finalization transaction and preserves
-all recovery files and the original exception.  Missing-file cleanup still
-fsyncs the root directory so that recovery has one durability rule.
+not merely byte-identical.  A retained stage beside `COMPLETE campaign.json`
+must likewise be the same regular-file inode left by publish-and-rename; a
+markerless `COMPLETE` with no stage represents completed cleanup and remains
+valid.  If an arbitrary `BaseException` interrupts marker publication after
+rename, probe the canonical marker through the held root descriptor as
+`EXACT`, `ABSENT`, `MISMATCH`, or `UNKNOWN_IO`.  `EXACT` resumes finalization;
+`MISMATCH` is preserved and rejected; `UNKNOWN_IO` conservatively preserves
+the transaction and original exception; only `ABSENT` permits pre-commit
+stage cleanup.  Missing-file cleanup still fsyncs the root directory so that
+recovery has one durability rule.
 
 Create and pin fresh roots through their parent directory descriptors before
 checking emptiness.  Keep classifier reads, inventory, and output publication
