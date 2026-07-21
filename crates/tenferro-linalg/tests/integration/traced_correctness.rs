@@ -99,6 +99,26 @@ fn linalg_single_output_traced_tensor_functions_eval() {
 }
 
 #[test]
+fn traced_solve_accepts_a_tiny_nonzero_complex_pivot() {
+    // What: traced solve's LU-prepared lowering preserves a representable nonzero complex pivot.
+    let scale = 2.0_f64.powi(-600);
+    let a = TracedTensor::from_tensor_concrete_shape(Tensor::C64(
+        TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(scale, 0.0)]).unwrap(),
+    ))
+    .unwrap();
+    let b = TracedTensor::from_tensor_concrete_shape(Tensor::C64(
+        TypedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(3.0 * scale, 0.0)])
+            .unwrap(),
+    ))
+    .unwrap();
+
+    let solved = a.solve(&b).unwrap();
+    let results = run_many(&[&solved]);
+
+    assert_eq!(get_c64_data(&results[0]), &[Complex64::new(3.0, 0.0)]);
+}
+
+#[test]
 fn lu_traced_tensor_returns_four_outputs() {
     let a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 2], vec![0.0, 1.0, 1.0, 0.0]))

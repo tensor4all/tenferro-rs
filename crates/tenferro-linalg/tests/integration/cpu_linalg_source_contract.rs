@@ -430,23 +430,6 @@ fn canonical_svd_gauge_uses_checked_layout_without_raw_batch_offsets() {
 }
 
 #[test]
-fn faer_lu_singularity_detection_uses_tolerance() {
-    let source = cpu_faer_linalg_source();
-
-    assert!(
-        source.contains("real_pivot_is_effectively_singular")
-            && source.contains("complex_pivot_is_effectively_singular"),
-        "faer LU solve paths should use tolerance helpers for singularity checks"
-    );
-    for needle in ["lu[(i, i)] == 0.0", "value.re == 0.0 && value.im == 0.0"] {
-        assert!(
-            !source.contains(needle),
-            "faer LU solve paths should not use exact-zero singularity checks: found {needle}"
-        );
-    }
-}
-
-#[test]
 fn cpu_eigh_complex_output_adapters_are_fallible() {
     let source = cpu_backend_source();
     let eigh_impl = source_section(&source, "fn eigh(&mut self", "fn eigh_values");

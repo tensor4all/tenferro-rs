@@ -315,6 +315,18 @@ fn complex_pivot_is_effectively_singular(
     real.hypot(imag) <= eps * max_diagonal.max(1.0)
 }
 
+fn real_pivot_is_singular(pivot: f64) -> bool {
+    // Why not reuse the full-pivot tolerance: ordinary solve follows partial-
+    // pivot LU's exact-zero contract; conditioning belongs to an explicit API.
+    pivot == 0.0
+}
+
+fn complex_pivot_is_singular(real: f64, imag: f64) -> bool {
+    // Why not use a magnitude: a squared magnitude can underflow for a
+    // representable nonzero component, while component checks cannot.
+    real == 0.0 && imag == 0.0
+}
+
 fn checked_product(
     op: &'static str,
     role: &'static str,
@@ -1337,15 +1349,8 @@ macro_rules! impl_faer_linalg_for_real {
             stack,
             Default::default(),
         );
-        let max_diagonal = (0..n)
-            .map(|i| lu[(i, i)].abs() as f64)
-            .fold(0.0, f64::max);
         for i in 0..n {
-            if real_pivot_is_effectively_singular(
-                lu[(i, i)] as f64,
-                max_diagonal,
-                <$scalar>::EPSILON as f64,
-            ) {
+            if real_pivot_is_singular(lu[(i, i)] as f64) {
                 return Err(singular_matrix("solve"));
             }
         }
@@ -2211,20 +2216,9 @@ macro_rules! impl_faer_linalg_for_complex {
             stack,
             Default::default(),
         );
-        let max_diagonal = (0..n)
-            .map(|i| {
-                let value = lu[(i, i)];
-                (value.re as f64).hypot(value.im as f64)
-            })
-            .fold(0.0, f64::max);
         for i in 0..n {
             let value = lu[(i, i)];
-            if complex_pivot_is_effectively_singular(
-                value.re as f64,
-                value.im as f64,
-                max_diagonal,
-                <$real>::EPSILON as f64,
-            ) {
+            if complex_pivot_is_singular(value.re as f64, value.im as f64) {
                 return Err(singular_matrix("solve"));
             }
         }
