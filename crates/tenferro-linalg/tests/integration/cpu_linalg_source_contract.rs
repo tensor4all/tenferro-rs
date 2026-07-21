@@ -155,6 +155,17 @@ fn cpu_backend_source() -> String {
     .unwrap_or_else(|err| panic!("CPU linalg backend source should be readable: {err}"))
 }
 
+fn cpu_crate_source(path: &str) -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("tenferro-cpu")
+            .join("src")
+            .join(path),
+    )
+    .unwrap_or_else(|err| panic!("tenferro-cpu source {path} should be readable: {err}"))
+}
+
 fn linalg_backend_trait_source() -> String {
     fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -198,6 +209,170 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
     &source[start_idx..end_idx]
 }
 
+fn rust_function_section<'a>(source: &'a str, name: &str) -> &'a str {
+    let signature = format!("fn {name}");
+    let code = rust_code_mask(source);
+    let start = code
+        .windows(signature.len())
+        .position(|window| window == signature.as_bytes())
+        .unwrap_or_else(|| panic!("source should contain function {name}"));
+    let body_start = code[start..]
+        .iter()
+        .position(|&byte| byte == b'{')
+        .map(|offset| start + offset)
+        .unwrap_or_else(|| panic!("function {name} should have a body"));
+    let mut depth = 0usize;
+    for (offset, byte) in code[body_start..].iter().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &source[start..=body_start + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("function {name} should have balanced braces")
+}
+
+fn rust_code_mask(source: &str) -> Vec<u8> {
+    let bytes = source.as_bytes();
+    let mut code = bytes.to_vec();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let end = if bytes[index..].starts_with(b"//") {
+            Some(
+                bytes[index..]
+                    .iter()
+                    .position(|&byte| byte == b'\n')
+                    .map_or(bytes.len(), |offset| index + offset),
+            )
+        } else if bytes[index..].starts_with(b"/*") {
+            Some(block_comment_end(bytes, index))
+        } else if bytes[index] == b'r' {
+            raw_string_end(bytes, index)
+        } else if bytes[index] == b'"' {
+            Some(quoted_string_end(bytes, index))
+        } else if bytes[index] == b'\'' {
+            char_literal_end(bytes, index)
+        } else {
+            None
+        };
+
+        if let Some(end) = end {
+            code[index..end].fill(b' ');
+            index = end;
+        } else {
+            index += 1;
+        }
+    }
+    code
+}
+
+fn block_comment_end(bytes: &[u8], start: usize) -> usize {
+    let mut index = start + 2;
+    let mut depth = 1usize;
+    while index < bytes.len() && depth > 0 {
+        if bytes[index..].starts_with(b"/*") {
+            depth += 1;
+            index += 2;
+        } else if bytes[index..].starts_with(b"*/") {
+            depth -= 1;
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    index
+}
+
+fn raw_string_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut quote = start + 1;
+    while bytes.get(quote) == Some(&b'#') {
+        quote += 1;
+    }
+    if bytes.get(quote) != Some(&b'"') {
+        return None;
+    }
+    let hashes = quote - start - 1;
+    let mut index = quote + 1;
+    while index < bytes.len() {
+        if bytes[index] == b'"'
+            && bytes
+                .get(index + 1..index + 1 + hashes)
+                .is_some_and(|suffix| suffix.iter().all(|&byte| byte == b'#'))
+        {
+            return Some(index + 1 + hashes);
+        }
+        index += 1;
+    }
+    Some(bytes.len())
+}
+
+fn quoted_string_end(bytes: &[u8], start: usize) -> usize {
+    let mut index = start + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index = (index + 2).min(bytes.len()),
+            b'"' => return index + 1,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
+}
+
+fn char_literal_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut index = start + 1;
+    match *bytes.get(index)? {
+        b'\\' => {
+            index += 1;
+            if bytes.get(index) == Some(&b'u') && bytes.get(index + 1) == Some(&b'{') {
+                index += 2;
+                index += bytes[index..].iter().position(|&byte| byte == b'}')? + 1;
+            } else if bytes.get(index) == Some(&b'x') {
+                index += 3;
+            } else {
+                index += 1;
+            }
+        }
+        byte if byte.is_ascii() => index += 1,
+        byte => index += utf8_char_width(byte)?,
+    }
+    (bytes.get(index) == Some(&b'\'')).then_some(index + 1)
+}
+
+fn utf8_char_width(first: u8) -> Option<usize> {
+    match first {
+        0xC2..=0xDF => Some(2),
+        0xE0..=0xEF => Some(3),
+        0xF0..=0xF4 => Some(4),
+        _ => None,
+    }
+}
+
+#[test]
+fn rust_function_section_ignores_braces_in_comments_and_literals() {
+    let source = r###"
+fn target<'a>(value: &'a str) {
+    let _ = "a string with } and an escaped quote: \" {";
+    let _ = r#"a raw string with } { and \" quotes"#;
+    let _ = '}';
+    let _ = '\u{7b}';
+    // a line comment with }
+    /* an outer { comment /* with nested } comment */ still open } */
+    let _ = value;
+}
+
+fn after() { panic!("must not be included"); }
+"###;
+
+    let section = rust_function_section(source, "target");
+    assert!(section.contains("let _ = value;"));
+    assert!(!section.contains("fn after"));
+}
+
 #[test]
 fn linalg_rustdoc_reuses_backend_in_read_examples() {
     let source = linalg_backend_trait_source();
@@ -205,6 +380,149 @@ fn linalg_rustdoc_reuses_backend_in_read_examples() {
     assert!(
         !source.contains("CpuBackend::new()."),
         "LinalgBackend rustdoc examples should bind and reuse CpuBackend instead of constructing it inline"
+    );
+}
+
+#[test]
+fn public_cpu_linalg_read_methods_keep_one_operation_entry() {
+    let source = cpu_backend_source();
+    let methods = [
+        ("triangular_solve_read", "triangular_solve_entered"),
+        ("solve_read", "solve_entered"),
+        ("svd_read", "svd_entered"),
+        ("qr_read", "qr_entered"),
+        ("eigh_read", "eigh_entered"),
+        ("cholesky_read", "cholesky_entered"),
+        ("lu_read", "lu_entered"),
+        ("full_piv_lu_read", "full_piv_lu_entered"),
+        ("eig_read", "eig_entered"),
+    ];
+    for (read, entered) in methods {
+        let section = rust_function_section(&source, read);
+        assert_eq!(
+            section.matches("self.with_linalg_pool(").count(),
+            1,
+            "{read} must enter CPU resources exactly once"
+        );
+        assert!(
+            section.contains(entered),
+            "{read} must delegate to already-entered helper {entered}"
+        );
+        assert!(
+            section.contains("context.with_materialized_tensor_read("),
+            "{read} must canonicalize through its entered execution-context proof"
+        );
+        assert!(
+            !section.contains(".to_contiguous"),
+            "{read} must not recursively enter through public to_contiguous"
+        );
+        let owned = read.trim_end_matches("_read");
+        assert!(
+            !section.contains(&format!("self.{owned}(")),
+            "{read} must not recursively enter through its owned operation"
+        );
+
+        let entered_section = rust_function_section(&source, entered);
+        for forbidden in ["with_linalg_pool", ".to_contiguous", "self."] {
+            assert!(
+                !entered_section.contains(forbidden),
+                "already-entered helper {entered} must not contain {forbidden}"
+            );
+        }
+    }
+
+    for read in ["triangular_solve_read", "solve_read"] {
+        assert_eq!(
+            rust_function_section(&source, read)
+                .matches("context.with_materialized_tensor_read(")
+                .count(),
+            2,
+            "{read} must nest scoped materialization so failure of the second input reclaims the first"
+        );
+    }
+
+    let cholesky = rust_function_section(&source, "cholesky_read");
+    let entry = cholesky
+        .find("self.with_linalg_pool(")
+        .expect("cholesky_read must have one operation entry");
+    let managed_dispatch = cholesky
+        .find("tensor_uses_backend_storage")
+        .expect("cholesky_read must retain managed-storage dispatch");
+    assert!(
+        entry < managed_dispatch,
+        "cholesky_read must enter CPU resources before choosing the managed-storage path"
+    );
+    let before_entry = &cholesky[..entry];
+    assert!(
+        !before_entry.contains("return ") && !before_entry.contains('?'),
+        "cholesky_read must not retain a fallible or early-return path before its sole operation entry"
+    );
+    let managed = rust_function_section(&source, "managed_cholesky");
+    assert!(
+        managed.contains("context: &CpuExecutionContext")
+            && managed.contains("buffers: &mut BufferPool")
+            && !managed.contains("with_linalg_pool")
+            && !managed.contains("&mut CpuBackend"),
+        "managed Cholesky must consume an already-entered context and pool without recursively entering"
+    );
+    let managed_typed = rust_function_section(&source, "managed_cholesky_typed");
+    for required in [
+        "let values = if n == 0",
+        "T::factor(context, buffers",
+        "domain.allocate(",
+        "write_managed_cholesky_output(",
+    ] {
+        assert!(
+            managed_typed.contains(required),
+            "managed Cholesky must keep zero-size, provider, allocation, and output adaptation inside its entered helper: missing {required}"
+        );
+    }
+
+    let solve = rust_function_section(&source, "solve_entered");
+    assert!(
+        solve.contains("context.reshape_tensor("),
+        "vector RHS solve must use its already-entered metadata-only reshape"
+    );
+    assert!(
+        !solve.contains("with_linalg_pool") && !solve.contains("self.reshape("),
+        "solve_entered must not reacquire resources while reshaping vector RHS"
+    );
+}
+
+#[test]
+fn cpu_linalg_materialization_requires_an_entered_context_token() {
+    let cpu_lib = cpu_crate_source("lib.rs");
+    let interop = source_section(
+        &cpu_lib,
+        "pub mod linalg_interop",
+        "pub(crate) fn cpu_backend_buffer_error",
+    );
+    assert!(
+        !interop.contains("pub fn materialize_tensor_read")
+            && !interop.contains("pub fn reshape_tensor"),
+        "linalg interop must not expose free materialize/reshape entry bypasses"
+    );
+    assert!(
+        cpu_lib.contains("pub(crate) fn materialize_tensor_read"),
+        "the raw materializer must remain crate-private"
+    );
+
+    let provider = cpu_crate_source("provider.rs");
+    let scoped = rust_function_section(&provider, "with_materialized_tensor_read");
+    assert!(
+        scoped.contains("&self")
+            && scoped.contains("crate::materialize_tensor_read")
+            && scoped.contains("reclaim_tensor(buffers, materialized)"),
+        "entered context receiver must own raw materialization and ordinary-path reclaim"
+    );
+    assert!(
+        rust_function_section(&provider, "reshape_tensor").contains("&self"),
+        "metadata-only reshape must also require the entered context receiver"
+    );
+    let entered = rust_function_section(&provider, "entered");
+    assert!(
+        !entered.trim_start().starts_with("pub "),
+        "external crates must not be able to construct an entered execution-context token"
     );
 }
 
@@ -432,7 +750,7 @@ fn canonical_svd_gauge_uses_checked_layout_without_raw_batch_offsets() {
 #[test]
 fn cpu_eigh_complex_output_adapters_are_fallible() {
     let source = cpu_backend_source();
-    let eigh_impl = source_section(&source, "fn eigh(&mut self", "fn eigh_values");
+    let eigh_impl = rust_function_section(&source, "eigh_entered");
     let c32_adapter = source_section(
         &source,
         "fn eigh_c32_outputs_to_public_tensors",

@@ -27,9 +27,6 @@ impl EngineResources {
 #[derive(Debug)]
 pub(crate) struct CpuEngine {
     domain: CpuResourceDomain,
-    // INVARIANT: this is only a concrete alias of `domain.executor` for the
-    // temporary phase-1 provider context. External engines never populate it.
-    compatibility_context: Option<Arc<CpuContext>>,
     pub(crate) resources: Mutex<EngineResources>,
 }
 
@@ -95,7 +92,6 @@ impl CpuEngine {
                 placement_guarantee,
                 CpuDomainOwnership::Managed,
             ),
-            compatibility_context: Some(context),
             resources: Mutex::new(EngineResources::new(buffer_limit)),
         }
     }
@@ -103,7 +99,6 @@ impl CpuEngine {
     pub(crate) fn from_external(domain: ExternalCpuDomain, buffer_limit: usize) -> Self {
         Self {
             domain: domain.into(),
-            compatibility_context: None,
             resources: Mutex::new(EngineResources::new(buffer_limit)),
         }
     }
@@ -114,15 +109,6 @@ impl CpuEngine {
 
     pub(crate) fn placement(&self) -> &ResolvedCpuPlacement {
         self.domain.placement()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn compatibility_context(&self) -> Option<&CpuContext> {
-        self.compatibility_context.as_deref()
-    }
-
-    pub(crate) fn compatibility_context_arc(&self) -> Option<Arc<CpuContext>> {
-        self.compatibility_context.clone()
     }
 }
 

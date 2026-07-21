@@ -131,14 +131,10 @@ fn cpu_install_accepts_send_state() {
 }
 
 #[test]
-fn cpu_backend_exec_session_uses_default_provider_scope() {
+fn cpu_backend_exec_session_defers_executor_entry_to_operations() {
     let mut backend = CpuBackend::with_threads(2).unwrap();
     backend.with_backend_session(|_| {
-        #[cfg(feature = "cpu-blas")]
         assert!(rayon::current_thread_index().is_none());
-
-        #[cfg(all(not(feature = "cpu-blas"), feature = "cpu-faer"))]
-        assert_eq!(rayon::current_num_threads(), 2);
     });
 }
 
@@ -162,39 +158,6 @@ fn cpu_backend_from_context_shares_runtime_owner() {
     let b2 = CpuBackend::from_context(ctx);
     assert_eq!(b1.num_threads(), 3);
     assert_eq!(b2.num_threads(), 3);
-}
-
-#[cfg(feature = "cpu-faer")]
-#[test]
-fn cpu_context_faer_policy_is_seq_for_one_thread() {
-    let ctx = CpuContext::with_threads(1).unwrap();
-    assert!(matches!(ctx.faer_par(), faer::Par::Seq));
-}
-
-#[cfg(feature = "cpu-faer")]
-#[test]
-fn cpu_context_faer_policy_matches_configured_workers_outside_pool() {
-    let ctx = CpuContext::with_threads(2).unwrap();
-    assert_eq!(ctx.faer_par().degree(), 2);
-}
-
-#[cfg(feature = "cpu-faer")]
-#[test]
-fn cpu_context_faer_policy_matches_configured_workers_inside_context_pool() {
-    let ctx = CpuContext::with_threads(2).unwrap();
-    let par = ctx.install(|| ctx.faer_par());
-    assert_eq!(par.degree(), 2);
-}
-
-#[cfg(feature = "cpu-faer")]
-#[test]
-fn cpu_context_faer_policy_ignores_a_different_ambient_pool_size() {
-    let ctx = CpuContext::with_threads(2).unwrap();
-    let ambient = rayon::ThreadPoolBuilder::new()
-        .num_threads(3)
-        .build()
-        .unwrap();
-    assert_eq!(ambient.install(|| ctx.faer_par().degree()), 2);
 }
 
 #[test]

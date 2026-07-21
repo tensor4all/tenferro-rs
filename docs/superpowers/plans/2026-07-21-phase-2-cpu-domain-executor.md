@@ -630,6 +630,16 @@ prevalidated disjoint output writes. Each provider call receives
 `context.sequential_child()`. `Inner` enters one checked executor install and
 runs the outer loop sequentially. `Sequential` performs neither executor call.
 
+Because `CpuDomainExecutor` is a public safe boundary, engine-owned fan-out
+must audit every job as `UNCLAIMED`, `RUNNING`, or `COMPLETE`, reject duplicate
+and out-of-range indices even when an executor discards the per-job error, and
+reject a successful submission that omitted or did not complete a job. Pack
+this required O(job_count) audit into two bits per job with four inline
+`AtomicUsize` words: groups through `2 * usize::BITS` jobs do not spill, while
+larger groups may allocate one `SmallVec` spill. This is a bounded small-group
+property, not an unbounded zero-allocation guarantee. A submit error remains
+authoritative over post-submit audit or provider errors.
+
 Retain the current normative grouped and strided-batched policy. Do not adopt
 #1426 threshold changes in this task.
 
@@ -642,6 +652,15 @@ cargo test -p tenferro-cpu dot_runtime::tests --lib
 cargo test -p tenferro-cpu gemm::tests --lib
 cargo test -p tenferro-cpu --test provider_boundary_allocation_tests
 ```
+
+The focused audit tests cover 8, 9, exactly `2 * usize::BITS`, one job beyond
+that inline threshold, and a substantially larger group. They prove inline
+versus spilled storage at each boundary, adjacent packed-state updates without
+clobbering, duplicate-while-running exclusion before provider mutation,
+ignored `len`/`usize::MAX` indices, missing and panic-interrupted jobs, exact
+provider-error preservation, and submit-error precedence. The existing public
+allocation probe must remain at or below its fixed-main baseline; it does not
+turn the bounded grouped-state property into an unbounded promise.
 
 - [ ] **Step 5: Commit**
 
@@ -885,3 +904,77 @@ Push `codex/execution-engine-through-phase9`. Comment on #1436 with commit,
 tests, performance classification, and worklog links. Update #1433's phase table
 only when every exit criterion is proven; otherwise report the exact pending
 gate without calling the phase complete.
+
+## Review follow-up addendum: scoped linalg operation entry
+
+This addendum closes the Phase 2 single-entry review seam without claiming
+Phase 2D, Phase 2E, or a performance-gate PASS. It is deliberately limited to
+the borrowed CPU linalg entry boundary and the managed Cholesky bypass found by
+task-local review.
+
+**Files and ownership seam:**
+
+- Modify `crates/tenferro-linalg/src/cpu/backend.rs`: every public CPU linalg
+  `_read` method owns exactly one `CpuBackend::with_linalg_pool` call. Helpers
+  named `*_entered` and `managed_cholesky` consume the resulting
+  `&CpuExecutionContext` and `&mut BufferPool`; they must not call back into a
+  public backend method or reacquire the executor/pool.
+- Modify `crates/tenferro-cpu/src/provider.rs` only when the materialization
+  seam itself changes. `CpuExecutionContext::with_materialized_tensor_read` is
+  the sole scoped bridge from `TensorRead` to a temporary compact host tensor,
+  and it returns ordinary-path temporaries to the same `BufferPool`.
+- Create `crates/tenferro-linalg/src/cpu/tests/single_entry.rs`: fake-executor
+  call counts, managed-domain scope observations, error/panic recovery, and
+  two-input nested materialization behavior.
+- Modify `crates/tenferro-linalg/src/cpu/tests/mod.rs`: register the new test
+  module with `mod single_entry;`.
+- Modify `crates/tenferro-linalg/src/cpu/tests/managed_cholesky.rs`: the complete
+  fake shared-allocation domain and its read/write/allocation observations.
+- Modify
+  `crates/tenferro-linalg/tests/integration/cpu_linalg_source_contract.rs`:
+  path-sensitive source guards for one entry, non-entering helpers, and the
+  private materialization token.
+
+The nine guarded borrowed entry points are `triangular_solve_read`,
+`solve_read`, `svd_read`, `qr_read`, `eigh_read`, `cholesky_read`, `lu_read`,
+`full_piv_lu_read`, and `eig_read`. The two-input paths nest
+`with_materialized_tensor_read` twice; the other seven use one scoped
+materialization or a provider-native view fast path after entry.
+
+- [x] **RED: expose the managed `cholesky_read` bypass.** Add nonzero and
+  zero-size shared-allocation-domain tests. The nonzero reproducer must observe
+  input map, output allocation, and output map/write outside the executor entry
+  in the old implementation. The zero-size reproducer must observe zero
+  installs in the old implementation. Both require `install = 1`, `submit = 0`,
+  correct output, and a successful next operation.
+- [x] **RED: make the source contract path-sensitive.** In addition to counting
+  the lexical `with_linalg_pool` occurrence, require it to precede managed
+  storage dispatch, reject a fallible/early-return prefix, and require the
+  managed helper to accept entered context/pool arguments without accepting a
+  mutable backend or calling `with_linalg_pool`.
+- [x] **GREEN: move managed work below the sole entry.** Select the provider
+  inside the entered closure, then perform managed input validation/map,
+  zero-size handling, provider factorization, shared-domain allocation, dtype
+  adaptation, output map/write, and wrapping through the non-entering helper.
+  The owned `cholesky` surface uses the same helper so owned/read parity does
+  not retain a second bypass.
+- [x] **GREEN: preserve scoped materialization and recovery.** Keep all nine
+  `_read` paths on `with_materialized_tensor_read`, preserve temporary reclaim
+  on success and ordinary error, and retain the existing documented panic
+  recovery/next-operation contract without adding pointer-identity promises.
+- [x] **Verify the feature matrix.** Run the complete linalg unit and source
+  contract suites for faer, BLAS/LAPACK, and their combined build:
+
+  ```bash
+  cargo test -p tenferro-linalg
+  RUSTFLAGS='-l dylib=openblas -l dylib=lapack' \
+    cargo test -p tenferro-linalg --no-default-features --features cpu-blas
+  RUSTFLAGS='-l dylib=openblas -l dylib=lapack' \
+    cargo test -p tenferro-linalg --features cpu-blas
+  ```
+
+  Also rerun `cargo test -p tenferro-cpu`, linalg and CPU doctests,
+  `cargo clippy` for the changed feature combinations, `cargo fmt --all
+  --check`, and the focused docs/source-contract checks. Record any
+  environment-limited injected-provider link result as a limitation, not as a
+  substituted PASS.

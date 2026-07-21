@@ -1,11 +1,11 @@
 use num_complex::{Complex32, Complex64};
 
-use crate::CpuContext;
+use crate::provider::CpuExecutionContext;
 
 pub(crate) trait FaerGemm: Sized {
     #[allow(clippy::too_many_arguments, dead_code)]
     unsafe fn strided_gemm(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         alpha: Self,
         a_ptr: *const Self,
         m: usize,
@@ -31,7 +31,7 @@ pub(crate) trait FaerGemm: Sized {
 
     #[allow(clippy::too_many_arguments, dead_code)]
     unsafe fn strided_gemm_with_conj(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         alpha: Self,
         a_ptr: *const Self,
         m: usize,
@@ -52,7 +52,7 @@ pub(crate) trait FaerGemm: Sized {
         unsafe {
             Self::strided_gemm_with_conj_par(
                 ctx,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 alpha,
                 a_ptr,
                 m,
@@ -75,7 +75,7 @@ pub(crate) trait FaerGemm: Sized {
 
     #[allow(clippy::too_many_arguments)]
     unsafe fn strided_gemm_with_conj_par(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         par: faer::Par,
         alpha: Self,
         a_ptr: *const Self,
@@ -100,7 +100,7 @@ macro_rules! impl_faer_gemm {
     ($ty:ty) => {
         impl FaerGemm for $ty {
             unsafe fn strided_gemm_with_conj_par(
-                ctx: &CpuContext,
+                ctx: &CpuExecutionContext<'_>,
                 par: faer::Par,
                 alpha: $ty,
                 a_ptr: *const $ty,

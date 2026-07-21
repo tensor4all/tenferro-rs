@@ -15,13 +15,42 @@ Overlapping CPU sets cannot hold permits concurrently; disjoint sets can.
 
 For `CpuBackendKind::Blas`, only `Auto` is valid. It resolves to a
 provider-default exclusive permit because tenferro cannot establish the CPU
-affinity of provider-owned OpenMP or native workers. Native graph segments enter
-the fixed all-allowed Rayon engine; provider calls remain outside that pool.
+affinity of provider-owned OpenMP or native workers. Native graph segments and
+provider calls both cross the selected all-allowed domain executor exactly
+once. The executor entry owns admission and caller-thread placement; the BLAS
+runtime, rather than the executor's Rayon workers, owns provider fan-out.
+
+The unentered crate-private `CpuOperationEntry` holds the selected domain and
+resource permit. It is the only CPU backend value allowed to call executor
+`install` or `submit`. Provider-facing `CpuExecutionContext` values are created
+inside an installed job or an outer child, so they are always already entered
+and expose only immutable policy/accessors. This separates executor entry,
+logical `ParallelMode`, and provider worker ownership and prevents a provider
+or operation-family implementation from re-entering the executor.
 
 A supported graph execution holds one permit and one backend session across
 Host operations, native operations, and session-capable FFI operations.
 Non-session extension runtimes are boundaries. Cache ownership follows engine
 ownership so clone handles do not duplicate retained execution state.
+The session stores `CpuOperationEntry`, not a provider context; each operation
+performs exactly one executor entry. Direct and session execution therefore
+have identical placement and call-count contracts.
+
+After that single executor entry, the already-entered
+`CpuExecutionContext` scopes tenferro-native strided work. `Inner` plus a
+selected executor that advertises Rayon uses that executor's Rayon region,
+capped by the validated operation budget. `Sequential`, every `Outer` child,
+and `Inner` backed by external workers use a sequential native policy. Thus
+native kernels never inherit an unrelated ambient Rayon pool, outer fan-out
+cannot create nested native fan-out, and an external BLAS runtime may still
+fan out independently of the sequential strided policy.
+
+If direct GEMM dispatch reports exactly `Layout(Lhs)`, `Layout(Rhs)`, or
+`Conjugation` as unsupported, dot-general materializes canonical operands and
+retries the same provider once. Conjugation is fused into materialization and
+the retry flags are cleared. Output-layout and every other unsupported reason,
+a typed provider error, or a second unsupported result are terminal. Both
+temporary operands return to the engine buffer pool on every retry exit.
 
 Backend execution is non-reentrant. An active managed Rayon scope marks both
 the root call and every owned worker; direct nesting, a spawned or stolen child

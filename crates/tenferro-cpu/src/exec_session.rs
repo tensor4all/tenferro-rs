@@ -11,18 +11,17 @@ use tenferro_tensor::{
 };
 
 use super::backend::reclaim_typed;
+use super::provider::CpuOperationEntry;
+use super::CpuProviderBundle;
 use super::{
     analytic, copy_tensor_read_into, elementwise, gemm, indexing, materialize_tensor_read,
-    reduction, structural, CpuContext,
+    reduction, structural,
 };
-use super::{CpuBackendKind, CpuProviderBundle};
 
 pub(crate) struct CpuExecSession<'a> {
-    #[cfg_attr(feature = "cpu-blas", allow(dead_code))]
-    pub(crate) ctx: &'a CpuContext,
+    pub(crate) entry: CpuOperationEntry<'a>,
     pub(crate) buffers: &'a mut BufferPool,
     pub(crate) gemm_analysis_cache: &'a mut gemm::GemmAnalysisCache,
-    pub(crate) kind: CpuBackendKind,
     pub(crate) providers: &'a CpuProviderBundle,
 }
 
@@ -61,12 +60,17 @@ fn allocate_dot_output(
 }
 
 impl CpuExecSession<'_> {
-    fn run_native<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
+    fn run_native<R: Send>(
+        &mut self,
+        op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
         let buffers = &mut *self.buffers;
-        match self.kind {
-            CpuBackendKind::Faer => op(buffers),
-            CpuBackendKind::Blas => self.ctx.install(|| op(buffers)),
-        }
+        let mode = self.entry.preferred_engine_mode();
+        self.entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| op(buffers))
+            })
+            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
     }
 }
 
@@ -92,7 +96,7 @@ impl TensorDeviceTransfer for CpuExecSession<'_> {
     }
 }
 
-/// Simple delegation: no dtype dispatch, no install.
+/// Simple delegation with one operation-level executor entry and no dtype dispatch.
 macro_rules! delegate {
     ($name:ident($($arg:ident : $ty:ty),*) => $body:expr) => {
         fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
@@ -111,7 +115,7 @@ macro_rules! delegate_with_pool {
 }
 
 impl TensorElementwise for CpuExecSession<'_> {
-    // Elementwise — direct delegation, no install
+    // Elementwise — direct delegation with one operation-level executor entry.
     delegate_with_pool!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
 
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -270,7 +274,7 @@ impl CpuExecSession<'_> {
             beta: ContractionScalar::zero(dtype)?,
         };
         self.providers.execute_dot_general_into(
-            self.ctx,
+            &self.entry,
             self.buffers,
             self.gemm_analysis_cache,
             cache_slot,
@@ -330,7 +334,7 @@ impl TensorDot for CpuExecSession<'_> {
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         self.providers.execute_dot_general_into(
-            self.ctx,
+            &self.entry,
             self.buffers,
             self.gemm_analysis_cache,
             None,
@@ -408,7 +412,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         self.providers.execute_dot_general_into(
-            self.ctx,
+            &self.entry,
             self.buffers,
             self.gemm_analysis_cache,
             cache_slot,
@@ -429,7 +433,7 @@ impl SessionCachedDot for CpuExecSession<'_> {
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
         self.providers
-            .execute_grouped_gemm(self.ctx, lhs, rhs, config, out)
+            .execute_grouped_gemm(&self.entry, lhs, rhs, config, out)
     }
 }
 
@@ -514,32 +518,5 @@ impl TensorFusion for CpuExecSession<'_> {
     }
 }
 
-#[cfg(all(test, feature = "cpu-blas"))]
-mod tests {
-    use super::*;
-    use crate::{process_cpu_affinity, CpuSet};
-
-    #[test]
-    fn blas_session_native_scope_enters_the_pinned_rayon_engine() {
-        let allowed = process_cpu_affinity().expect("Linux test requires process affinity");
-        let cpus = CpuSet::new([allowed.as_slice()[0]]).unwrap();
-        let context = CpuContext::with_pinned_cpus(cpus, 1).unwrap();
-        let mut buffers = BufferPool::new();
-        let mut gemm_analysis_cache = gemm::GemmAnalysisCache::default();
-        let providers = CpuProviderBundle::standard(CpuBackendKind::Blas);
-        let mut session = CpuExecSession {
-            ctx: &context,
-            buffers: &mut buffers,
-            gemm_analysis_cache: &mut gemm_analysis_cache,
-            kind: CpuBackendKind::Blas,
-            providers: &providers,
-        };
-
-        assert!(rayon::current_thread_index().is_none());
-        assert_eq!(
-            session.run_native(|_| rayon::current_thread_index()),
-            Some(0)
-        );
-        assert!(rayon::current_thread_index().is_none());
-    }
-}
+#[cfg(test)]
+mod tests;

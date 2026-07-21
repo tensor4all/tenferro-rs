@@ -12,14 +12,15 @@ use crate::arbiter::{
     ResourcePermit,
 };
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
-use crate::domain_executor::install_scoped;
-use crate::dot_runtime::CpuProviderBundle;
+use crate::dot_runtime::{CpuProviderBundle, CpuProviderBundleInstallError};
 use crate::engine::{CpuEngine, EngineResources};
 use crate::placement::{
     resolve_placement, resolve_placement_with_affinity, CpuEngineConstructionError,
     ResolvedCpuExecution,
 };
-use crate::provider::TblisGeneralContractionProvider;
+use crate::provider::{
+    CpuExecutionContext, CpuOperationEntry, ParallelMode, TblisGeneralContractionProvider,
+};
 use crate::{
     discover_cpu_topology, CpuDomainId, CpuDomainOwnership, CpuExecutorAffinity,
     CpuExecutorShutdown, CpuId, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee, CpuSet,
@@ -1703,9 +1704,7 @@ impl CpuBackend {
 
     #[cfg(test)]
     pub(crate) fn context_id_for_test(&self) -> usize {
-        self.engine
-            .compatibility_context_arc()
-            .map_or(0, |context| Arc::as_ptr(&context) as usize)
+        Arc::as_ptr(self.engine.domain().executor()) as *const () as usize
     }
 
     /// Return the runtime CPU provider selected by this backend.
@@ -1736,13 +1735,33 @@ impl CpuBackend {
     /// ```
     /// use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuProviderBundle};
     /// let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled()).build()?;
-    /// let backend = CpuBackend::new().with_provider_bundle(bundle.clone());
+    /// let backend = CpuBackend::new().with_provider_bundle(bundle.clone())?;
     /// assert!(backend.provider_bundle().shares_identity_with(&bundle));
-    /// # Ok::<(), tenferro_cpu::CpuProviderBundleBuildError>(())
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn with_provider_bundle(mut self, bundle: CpuProviderBundle) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuProviderBundleInstallError::IncompatibleDomain`] if a
+    /// provider cannot satisfy one of this backend's resource-domain
+    /// contracts.
+    pub fn with_provider_bundle(
+        mut self,
+        bundle: CpuProviderBundle,
+    ) -> Result<Self, CpuProviderBundleInstallError> {
+        self.validate_provider_bundle_for_domains(&bundle)?;
         self.provider_bundle = bundle;
-        self
+        Ok(self)
+    }
+
+    fn validate_provider_bundle_for_domains(
+        &self,
+        _bundle: &CpuProviderBundle,
+    ) -> Result<(), CpuProviderBundleInstallError> {
+        // Task 6 establishes one fallible installation surface. Task 7 adds
+        // provider count/placement classification to this construction-time
+        // hook without introducing a parallel `try_*` API.
+        Ok(())
     }
 
     /// Return this backend with a standard bundle configured by the legacy
@@ -1784,22 +1803,6 @@ impl CpuBackend {
     /// ```
     pub fn num_threads(&self) -> usize {
         self.engine.domain().thread_budget().get()
-    }
-
-    fn phase1_context_arc(&self, operation: &'static str) -> Arc<CpuContext> {
-        self.ensure_phase1_provider_staging(operation);
-        match self.engine.compatibility_context_arc() {
-            Some(context) => context,
-            None => unreachable!("managed CPU engines retain their phase-1 compatibility context"),
-        }
-    }
-
-    fn ensure_phase1_provider_staging(&self, operation: &'static str) {
-        if self.engine.domain().ownership() == CpuDomainOwnership::ExternalManaged {
-            panic!(
-                "{operation} cannot use an ExternalManaged CPU domain until the phase-2 execution-context migration is complete"
-            );
-        }
     }
 
     /// Number of retained typed host buffers currently held by this backend.
@@ -2008,111 +2011,90 @@ impl CpuBackend {
     /// fails because this convenience method cannot return a `Result`.
     pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
         let owner = inherited_or_new_execution_owner();
-        let _permit = self.acquire_execution_permit(owner);
-        if self.engine.domain().ownership() == CpuDomainOwnership::ExternalManaged {
-            return match install_scoped(self.engine.domain().executor().as_ref(), || {
-                with_execution_owner(owner, op)
-            }) {
-                Ok(result) => result,
-                Err(error) => panic!("CpuBackend::install external executor failed: {error}"),
-            };
+        let permit = self.acquire_execution_permit(owner);
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        match entry.enter(ParallelMode::Sequential, |_| op()) {
+            Ok(result) => result,
+            Err(error) => panic!("CpuBackend::install executor failed: {error}"),
         }
-        self.phase1_context_arc("CpuBackend::install")
-            .install_with_execution_owner(owner, op)
     }
 
-    fn install_with_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
-        let ctx = self.phase1_context_arc("CPU tensor provider execution");
+    fn try_install<R: Send>(
+        &self,
+        op: impl FnOnce() -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
         let owner = inherited_or_new_execution_owner();
         let permit = self.acquire_execution_permit(owner);
-        ctx.install_with_execution_owner(owner, || {
-            self.with_execution_resources(&permit, |resources| {
-                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                op(buffers.get_mut())
-            })
-        })
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let mode = entry.preferred_engine_mode();
+        entry
+            .enter(mode, |context| context.with_native_parallelism(op))
+            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
     }
 
-    // Selected when the BLAS provider is active; default Faer-only builds keep
-    // it dormant.
-    #[allow(dead_code)]
-    fn run_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
-        self.ensure_phase1_provider_staging("CPU tensor provider execution");
+    fn install_with_pool<R: Send>(
+        &mut self,
+        op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
         let owner = inherited_or_new_execution_owner();
-        with_execution_owner(owner, || {
-            let permit = self.acquire_execution_permit(owner);
-            self.with_execution_resources(&permit, |resources| {
-                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                op(buffers.get_mut())
+        let permit = self.acquire_execution_permit(owner);
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let mode = entry.preferred_engine_mode();
+        entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| {
+                    self.with_execution_resources(&permit, |resources| {
+                        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                        op(buffers.get_mut())
+                    })
+                })
             })
-        })
+            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
     }
 
-    fn linalg_with_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
-        match self.kind() {
-            CpuBackendKind::Faer => self.install_with_pool(op),
-            CpuBackendKind::Blas => self.run_with_pool(op),
-        }
-    }
-
-    /// Run an external linalg implementation with this backend's buffer pool.
+    /// Run an external linalg implementation with one borrowed execution
+    /// context and this backend's buffer pool.
     ///
     /// This is exposed for operation-family crates that own their backend
     /// implementation while still sharing the CPU backend's allocation pool.
-    #[doc(hidden)]
-    pub fn with_linalg_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
-        self.linalg_with_pool(op)
-    }
-
-    /// Clone the CPU context used by external linalg implementations.
     ///
-    /// # Panics
+    /// # Examples
     ///
-    /// Panics for an [`CpuExecutionMode::ExternalManaged`] backend until the
-    /// immediate phase-2 provider-context migration removes this temporary
-    /// concrete compatibility handle.
-    #[cfg(feature = "cpu-faer")]
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// let mut backend = CpuBackend::new();
+    /// backend.with_linalg_pool(|context, _pool| {
+    ///     assert!(context.thread_budget().get() >= 1);
+    ///     Ok(())
+    /// })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] with a
+    /// [`crate::CpuDomainExecutorError`] source when authoritative executor
+    /// admission fails. Errors returned by the operation-family closure are
+    /// propagated unchanged.
     #[doc(hidden)]
-    pub fn linalg_context(&self) -> Arc<CpuContext> {
-        self.phase1_context_arc("CpuBackend::linalg_context")
-    }
-
-    // Selected when the Faer provider handles cached GEMM execution; some
-    // feature combinations compile only the uncached or BLAS path.
-    #[allow(dead_code)]
-    fn install_with_pool_and_gemm_cache<R: Send>(
+    pub fn with_linalg_pool<R: Send>(
         &mut self,
-        gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
-        op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R + Send,
-    ) -> R {
-        let ctx = self.phase1_context_arc("cached CPU tensor provider execution");
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
         let owner = inherited_or_new_execution_owner();
         let permit = self.acquire_execution_permit(owner);
-        ctx.install_with_execution_owner(owner, || {
-            self.with_execution_resources(&permit, |resources| {
-                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                op(buffers.get_mut(), gemm_analysis_cache)
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let mode = entry.preferred_provider_mode(self.kind());
+        entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| {
+                    self.with_execution_resources(&permit, |resources| {
+                        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                        op(context, buffers.get_mut())
+                    })
+                })
             })
-        })
-    }
-
-    // Selected when the BLAS provider handles cached GEMM execution; default
-    // Faer-only builds keep it dormant.
-    #[allow(dead_code)]
-    fn run_with_pool_and_gemm_cache<R>(
-        &mut self,
-        gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
-        op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R,
-    ) -> R {
-        self.ensure_phase1_provider_staging("cached CPU tensor provider execution");
-        let owner = inherited_or_new_execution_owner();
-        with_execution_owner(owner, || {
-            let permit = self.acquire_execution_permit(owner);
-            self.with_execution_resources(&permit, |resources| {
-                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                op(buffers.get_mut(), gemm_analysis_cache)
-            })
-        })
+            .map_err(|error| crate::Error::backend_source("CPU linalg execution", error))?
     }
 
     fn with_execution_resources<R>(
@@ -2407,7 +2389,7 @@ impl TensorStructural for CpuBackend {
     }
 
     fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
-        self.install(|| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
+        self.try_install(|| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
     }
 
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
@@ -2419,7 +2401,7 @@ impl TensorStructural for CpuBackend {
     }
 
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| structural::reshape(input, shape))
+        self.try_install(|| structural::reshape(input, shape))
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
@@ -2485,7 +2467,7 @@ impl TensorStructural for CpuBackend {
 
 impl TensorReduction for CpuBackend {
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_sum(input, axes))
+        self.try_install(|| reduction::reduce_sum(input, axes))
     }
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -2493,7 +2475,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_prod(input, axes))
+        self.try_install(|| reduction::reduce_prod(input, axes))
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -2501,7 +2483,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_max(input, axes))
+        self.try_install(|| reduction::reduce_max(input, axes))
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -2509,7 +2491,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_min(input, axes))
+        self.try_install(|| reduction::reduce_min(input, axes))
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -2767,24 +2749,19 @@ impl CpuBackend {
         cache: Option<&mut gemm::GemmAnalysisCache>,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
-        // Temporary Task-5 boundary: the phase-1 session/provider staging type
-        // still borrows a concrete CpuContext. Task 6 removes this handle and
-        // routes the same session through the authoritative domain executor.
-        let ctx = self.phase1_context_arc("CpuBackend::with_backend_session");
-        let kind = self.kind();
         let providers = self.provider_bundle.clone();
         let owner = inherited_or_new_execution_owner();
         let permit = self.acquire_execution_permit(owner);
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
         let run = || {
             self.with_execution_resources(&permit, |resources| {
                 let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
                 let cache = cache.unwrap_or(&mut resources.gemm_analysis_cache);
                 let session_started = Instant::now();
                 let mut session = CpuExecSession {
-                    ctx: ctx.as_ref(),
+                    entry,
                     buffers: buffers.get_mut(),
                     gemm_analysis_cache: cache,
-                    kind,
                     providers: &providers,
                 };
                 record_cpu_session_profile(
@@ -2800,10 +2777,7 @@ impl CpuBackend {
                 result
             })
         };
-        match kind {
-            CpuBackendKind::Faer => ctx.install_with_execution_owner(owner, run),
-            CpuBackendKind::Blas => with_execution_owner(owner, run),
-        }
+        with_execution_owner(owner, run)
     }
 }
 
@@ -2876,7 +2850,7 @@ where
         src: &TypedTensorView<'_, T, R>,
         dst: &mut TypedTensorViewMut<'_, T, R>,
     ) -> crate::Result<()> {
-        self.install(|| structural::typed_copy_view_into(src, dst, "CpuBackend::copy_into"))
+        self.try_install(|| structural::typed_copy_view_into(src, dst, "CpuBackend::copy_into"))
     }
 }
 

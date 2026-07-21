@@ -1104,35 +1104,68 @@ still-pending storage.
 - a thread budget;
 - admission-control state.
 
-The engine selects a domain and passes a per-execution context:
+The engine first creates one crate-private, unentered operation capability:
 
 ```rust
+pub(crate) struct CpuOperationEntry<'a> {
+    domain: &'a CpuResourceDomain,
+    permit: &'a ResourcePermit,
+}
+
 pub struct CpuExecutionContext<'a> {
     domain: &'a CpuResourceDomain,
-    lease: &'a CpuResourceLease,
-    thread_budget: usize,
+    parallel_mode: ParallelMode,
 }
 ```
 
-Providers consume this context. They do not choose a NUMA node, query ambient
-Rayon state, or acquire a second resource permit. The outer execution acquires
-one lease. Internal provider and composite calls receive the existing context
-and reuse that lease by direct delegation. They do not re-enter `CpuBackend`.
-This prevents nested oversubscription and makes the thread budget a single
-engine-owned policy.
+`CpuOperationEntry` alone owns checked executor `install` and `submit`. It
+constructs a `CpuExecutionContext` only after entering the selected executor:
+inside the installed sequential/inner job, or separately inside each submitted
+outer child. Consequently every public `CpuExecutionContext` is already
+entered. It exposes immutable domain facts and logical policy, but has no
+install, submit, mode-mutation, child-construction, permit, or scheduling-error
+surface.
+
+Providers consume the already-entered context. They do not choose a NUMA node,
+query ambient Rayon state, acquire a second resource permit, or re-enter the
+executor. The outer operation holds one permit. Internal provider and composite
+calls reuse the borrowed context by direct delegation and do not re-enter
+`CpuBackend`. This prevents nested oversubscription and makes the thread budget
+a single engine-owned policy.
 
 CPU execution uses an object-safe `CpuDomainExecutor` with two distinct
-operations: `submit` for outer scheduling and synchronous `install` for an
-inner parallel region. `ScopedCpuJob` permits a borrowed synchronous job, and
-the standard distribution includes a Rayon adapter. The executor advertises
-worker count, submit/install support, reentrancy, and external affinity and
-shutdown guarantees. CPU set, NUMA identity, and thread budget belong to
-`CpuResourceDomain`, not to the executor object.
+operations: `submit` for outer scheduling and synchronous `install` for one
+sequential or inner operation entry. `ScopedCpuJob` permits a borrowed
+synchronous job, and the standard distribution includes a Rayon adapter. The
+executor advertises worker count, submit/install support, reentrancy, and
+external affinity and shutdown guarantees. CPU set, NUMA identity, and thread
+budget belong to `CpuResourceDomain`, not to the executor object.
 
 Every operation receives `ParallelMode::Outer`, `Inner`, or `Sequential`.
-Providers may not use ambient Rayon or independently submit nested work. A
-composite contraction or batched linalg implementation chooses outer versus
-inner parallelism once, and all delegated providers honor that choice.
+The executor-entry mechanism, logical mode, and owner of provider workers are
+separate axes:
+
+| Selected operation | Executor calls | Entered provider context | Fan-out owner |
+|---|---:|---|---|
+| Sequential top-level | install = 1, submit = 0 | Sequential | none |
+| Inner engine workers (faer/native) | install = 1, submit = 0 | Inner | selected Rayon executor |
+| Inner external workers (BLAS) | install = 1, submit = 0 | Inner | external provider runtime |
+| Outer | install = 0, submit = 1 | Sequential in every child | executor |
+
+`ParallelMode::Inner` does not itself imply that
+`CpuDomainExecutorCapabilities::inner_parallelism` is Rayon. An external-worker
+provider still crosses the selected executor once for admission and placement,
+then owns its provider fan-out. Task 7 adds construction-time count and
+placement capability classification; until then the BLAS selection is the
+unavoidable backend-kind special case. No path may use that pending work to
+bypass executor installation.
+
+Providers may not use ambient Rayon or independently submit nested executor
+work. A composite contraction or batched linalg implementation chooses outer
+versus inner parallelism once, and all delegated providers honor that choice.
+Direct backend calls and backend-session operations use the same
+`CpuOperationEntry` boundary. `with_linalg_pool` enters internally and passes
+an already-entered context to the operation-family implementation.
 
 ### Re-entry during migration
 

@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 /// Inner parallel-region support offered by a CPU domain executor.
 ///
@@ -199,8 +200,11 @@ pub trait ScopedCpuJob: Send {
     ///
     /// # Errors
     ///
-    /// Returns the executor admission, scheduling, cancellation, or panic-bridge
-    /// failure observed while running the job.
+    /// Returns [`CpuDomainExecutorError::Admission`],
+    /// [`CpuDomainExecutorError::Scheduling`],
+    /// [`CpuDomainExecutorError::Cancellation`], or
+    /// [`CpuDomainExecutorError::PanicBridge`] when that failure is observed
+    /// while running the job.
     fn run(&mut self) -> Result<(), CpuDomainExecutorError>;
 }
 
@@ -282,8 +286,11 @@ pub trait ScopedCpuJobs: Sync {
     ///
     /// # Errors
     ///
-    /// Returns the executor admission, scheduling, cancellation, or panic-bridge
-    /// failure observed while running the indexed job.
+    /// Returns [`CpuDomainExecutorError::Admission`],
+    /// [`CpuDomainExecutorError::Scheduling`],
+    /// [`CpuDomainExecutorError::Cancellation`], or
+    /// [`CpuDomainExecutorError::PanicBridge`] when that failure is observed
+    /// while running the indexed job.
     fn run(&self, index: usize) -> Result<(), CpuDomainExecutorError>;
 }
 
@@ -504,13 +511,67 @@ where
 pub(crate) struct IndexedJobs<F> {
     len: usize,
     run: F,
+    invalid_index_attempt: InvalidIndexAudit,
+}
+
+const INVALID_INDEX_EMPTY: u8 = 0;
+const INVALID_INDEX_WRITING: u8 = 1;
+const INVALID_INDEX_READY: u8 = 2;
+
+// INVARIANT: the two-phase state publishes every usize value, including
+// usize::MAX, without a sentinel collision. Valid `run` calls never touch this
+// audit, and the post-submit Acquire observes the selected invalid index after
+// its Release publication without locking or allocating.
+struct InvalidIndexAudit {
+    state: AtomicU8,
+    index: AtomicUsize,
+}
+
+impl InvalidIndexAudit {
+    const fn new() -> Self {
+        Self {
+            state: AtomicU8::new(INVALID_INDEX_EMPTY),
+            index: AtomicUsize::new(0),
+        }
+    }
+
+    fn record(&self, index: usize) {
+        if self
+            .state
+            .compare_exchange(
+                INVALID_INDEX_EMPTY,
+                INVALID_INDEX_WRITING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            self.index.store(index, Ordering::Relaxed);
+            self.state.store(INVALID_INDEX_READY, Ordering::Release);
+        }
+    }
+
+    fn load(&self) -> Option<usize> {
+        (self.state.load(Ordering::Acquire) == INVALID_INDEX_READY)
+            .then(|| self.index.load(Ordering::Relaxed))
+    }
 }
 
 pub(crate) fn indexed_jobs<F>(len: usize, run: F) -> IndexedJobs<F>
 where
     F: Fn(usize) -> Result<(), CpuDomainExecutorError> + Sync,
 {
-    IndexedJobs { len, run }
+    IndexedJobs {
+        len,
+        run,
+        invalid_index_attempt: InvalidIndexAudit::new(),
+    }
+}
+
+impl<F> IndexedJobs<F> {
+    pub(crate) fn invalid_index_attempt(&self) -> Option<usize> {
+        self.invalid_index_attempt.load()
+    }
 }
 
 impl<F> ScopedCpuJobs for IndexedJobs<F>
@@ -523,6 +584,7 @@ where
 
     fn run(&self, index: usize) -> Result<(), CpuDomainExecutorError> {
         if index >= self.len {
+            self.invalid_index_attempt.record(index);
             return Err(CpuDomainExecutorError::Scheduling {
                 message: format!(
                     "executor requested scoped CPU job index {index}, but the submission has {} jobs",

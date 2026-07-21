@@ -78,18 +78,27 @@ counts still apply to tenferro-owned CPU kernels and fallback paths.
 ## CPU Operation Parallelism
 
 `CpuContext` owns the Rayon pool used by tenferro-owned CPU tensor kernels.
-Standalone backend calls and compiled `BackendSession` execution enter that
-pool before dispatching tensor-sized kernels.
+Standalone backend calls and compiled `BackendSession` operations cross the
+selected domain executor exactly once before dispatch. Provider-facing
+execution contexts are already entered and cannot install or submit nested
+executor work.
+
+Inside that entry, tenferro-native strided kernels use the policy selected by
+`CpuExecutionContext`: `Inner` work whose selected executor advertises Rayon
+uses only that executor up to its validated budget, while `Sequential`,
+engine-outer children, and external-worker `Inner` contexts stay sequential.
+An ambient Rayon pool is never an implicit fallback. External BLAS/LAPACK
+workers remain provider-owned and may fan out independently.
 
 | Operation family | Threading behavior |
 | --- | --- |
-| Elementwise and analytic ops | `strided-kernel` map/zip kernels run under `CpuContext` and can use Rayon when the context has more than one thread. |
-| Reductions | `strided-kernel::reduce_axis` runs under `CpuContext` and can use Rayon when the context has more than one thread. |
-| View materialization, transpose/permute, broadcast, convert, and diagonal extraction | `strided-kernel` copy/map kernels run under `CpuContext` and can use Rayon for tensor-sized copies. |
-| `dot_general` through `cpu-faer` | faer receives `Par::Seq` for one-thread contexts and explicit `Par::rayon(n)` using the configured context degree for multi-thread contexts. |
+| Elementwise and analytic ops | `strided-kernel` map/zip kernels use the already-entered context's native policy. Rayon-capable `Inner` may use the selected executor; all other modes above are sequential. |
+| Reductions | `strided-kernel::reduce_axis` uses the same selected native policy and never ambient Rayon. |
+| View materialization, transpose/permute, broadcast, convert, and diagonal extraction | `strided-kernel` copy/map kernels use the same selected native policy; layout fallback and linalg input materialization are included. |
+| `dot_general` through `cpu-faer` | faer receives `Par::rayon(n)` only for `Inner` execution whose selected executor advertises Rayon and whose validated budget is greater than one; otherwise it receives `Par::Seq`. |
 | GEMM and linalg through `cpu-blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
 | Supported `dot_general` contractions through `cpu-tblis` | TBLIS owns provider threading; unsupported TBLIS shapes fall back to the compiled faer/BLAS provider. |
-| Indexing, scatter/gather, slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside `CpuContext::install`, and source comments mark the intentional sequential path. |
+| Indexing, scatter/gather, slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside the selected executor entry, and source comments mark the intentional sequential path. |
 
 CPU affine-strided copy, permutation, broadcast, map, zip-map, and axis
 reduction delegate to `strided-rs`, while tenferro supplies operation semantics,

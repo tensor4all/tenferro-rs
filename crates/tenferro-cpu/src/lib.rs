@@ -14,6 +14,15 @@
 //! # Ok::<(), tenferro_tensor::Error>(())
 //! ```
 
+// `provider-inject` unit tests deliberately omit the broad default-backend
+// suite below because no fixture has registered its FFI symbols. That makes
+// private helpers referenced only by the broad suite appear unused in this one
+// test build; call-through coverage lives in the registered integration test.
+#![cfg_attr(
+    all(test, feature = "provider-inject"),
+    allow(dead_code, unused_imports)
+)]
+
 #[cfg(not(any(feature = "cpu-faer", feature = "cpu-blas")))]
 compile_error!(
     "enable at least one fallback CPU backend: cpu-faer or cpu-blas; cpu-tblis is an optional contraction provider"
@@ -112,12 +121,13 @@ pub use domain_executor::{
 };
 pub use dot_runtime::{
     CpuProviderBundle, CpuProviderBundleBuildError, CpuProviderBundleBuilder,
-    GeneralContractionPolicy,
+    CpuProviderBundleInstallError, GeneralContractionPolicy,
 };
 pub use placement::{
     CpuEngineConstructionError, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee,
     ResolvedCpuPlacement,
 };
+pub use provider::{CpuExecutionContext, ParallelMode};
 pub use resource_domain::{CpuDomainOwnership, ExternalCpuDomain, ExternalCpuDomainError};
 pub use topology::{
     discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
@@ -418,5 +428,9 @@ pub(crate) fn flat_to_multi(mut flat: usize, shape: &[usize], out: &mut [usize])
     }
 }
 
-#[cfg(test)]
+// `provider-inject` owns call-through coverage in the serialized integration
+// fixture, which registers every BLAS symbol before the first operation.  The
+// broad unit suite selects the compiled default backend and therefore must not
+// call an intentionally unregistered injected symbol.
+#[cfg(all(test, not(feature = "provider-inject")))]
 mod tests;

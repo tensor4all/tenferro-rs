@@ -44,6 +44,98 @@ fn cpu_tensor_kernel_parallel_features_are_wired() {
 }
 
 #[test]
+fn provider_context_source_cannot_reenter_or_bypass_the_executor_boundary() {
+    let provider = include_str!("../provider.rs");
+    let dot_runtime = include_str!("../dot_runtime.rs");
+    let exec_session = include_str!("../exec_session.rs");
+
+    assert!(provider.contains("pub(crate) struct CpuOperationEntry"));
+    assert!(!provider.contains("pub fn install<R: Send>"));
+    assert!(!provider.contains("pub fn submit(&self"));
+    assert!(!provider.contains("fn with_parallel_mode"));
+    assert!(!provider.contains("fn sequential_child"));
+    assert!(!dot_runtime.contains("direct_blas"));
+    assert!(!dot_runtime.contains("context.ownership()"));
+    assert!(exec_session.contains("pub(crate) entry: CpuOperationEntry"));
+    assert!(!exec_session.contains("pub(crate) context: CpuExecutionContext"));
+}
+
+#[test]
+fn native_production_entry_points_use_the_centralized_context_policy() {
+    let backend = include_str!("../backend.rs");
+    let exec_session = include_str!("../exec_session.rs");
+
+    let try_install = backend
+        .split_once("fn try_install")
+        .unwrap()
+        .1
+        .split_once("fn install_with_pool")
+        .unwrap()
+        .0;
+    let install_with_pool = backend
+        .split_once("fn install_with_pool")
+        .unwrap()
+        .1
+        .split_once("pub fn with_linalg_pool")
+        .unwrap()
+        .0;
+    let run_native = exec_session
+        .split_once("fn run_native")
+        .unwrap()
+        .1
+        .split_once("impl TensorDeviceTransfer")
+        .unwrap()
+        .0;
+
+    for source in [try_install, install_with_pool, run_native] {
+        assert!(source.contains("preferred_engine_mode"));
+        assert!(source.contains("with_native_parallelism"));
+        assert!(!source.contains("enter(ParallelMode::Sequential"));
+    }
+}
+
+#[test]
+fn native_kernel_modules_cannot_select_ambient_or_ad_hoc_execution_policies() {
+    let provider = include_str!("../provider.rs");
+    let native_modules = [
+        ("analytic", include_str!("../analytic.rs")),
+        ("elementwise", include_str!("../elementwise.rs")),
+        ("indexing", include_str!("../indexing.rs")),
+        ("reduction", include_str!("../reduction.rs")),
+        ("structural", include_str!("../structural.rs")),
+    ];
+
+    assert!(!provider.contains("ExecutionPolicy::AmbientRayon"));
+    assert_eq!(
+        provider
+            .matches("strided_kernel::with_execution_policy(")
+            .count(),
+        1
+    );
+    for (name, source) in native_modules {
+        assert!(
+            !source.contains("ExecutionPolicy::") && !source.contains("with_execution_policy("),
+            "{name} must inherit native policy from CpuExecutionContext"
+        );
+        assert!(
+            !source.contains("rayon::") && !source.contains("into_par_iter("),
+            "{name} must not fan out through ambient Rayon"
+        );
+    }
+}
+
+#[test]
+fn direct_native_scope_uses_the_selected_rayon_budget() {
+    let backend = CpuBackend::with_threads(2).unwrap();
+    let participants = backend
+        .try_install(|| Ok(crate::provider::tests::run_unscoped_native_map(true)))
+        .unwrap();
+
+    assert_eq!(participants.max_active(), 2);
+    assert_eq!(participants.thread_count(), 2);
+}
+
+#[test]
 fn default_backend_kind_prefers_blas_when_compiled() {
     let backend = CpuBackend::new();
 
@@ -58,7 +150,9 @@ fn provider_bundle_is_installed_at_construction_and_shared_by_clones() {
     let bundle = crate::dot_runtime::CpuProviderBundle::builder(CpuBackendKind::default_compiled())
         .build()
         .unwrap();
-    let backend = CpuBackend::new().with_provider_bundle(bundle.clone());
+    let backend = CpuBackend::new()
+        .with_provider_bundle(bundle.clone())
+        .unwrap();
     let cloned = backend.clone();
 
     assert!(Arc::ptr_eq(backend.provider_bundle.inner(), bundle.inner()));
@@ -82,7 +176,7 @@ struct CountingGeneralProvider {
 impl crate::provider::CpuGeneralContractionProvider for CountingGeneralProvider {
     fn dot_general(
         &self,
-        _context: &crate::provider::CpuProviderContext<'_>,
+        _context: &crate::provider::CpuExecutionContext<'_>,
         _request: crate::provider::CpuDotGeneralRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<crate::provider::CpuProviderOutcome> {
         self.calls.fetch_add(1, AtomicOrdering::Relaxed);
@@ -101,7 +195,8 @@ fn direct_and_cached_sessions_share_the_installed_provider_slot() {
         .unwrap();
     let mut backend = CpuBackend::with_threads(1)
         .unwrap()
-        .with_provider_bundle(bundle);
+        .with_provider_bundle(bundle)
+        .unwrap();
     let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
     let config = DotGeneralConfig {
@@ -216,9 +311,12 @@ fn placement_handle_clones_share_coordinator_engine_and_resources() {
         placed.resolved_placement(),
         Some(ResolvedCpuPlacement::AllAllowed { .. })
     ));
-    placed.with_linalg_pool(|pool| {
-        <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
-    });
+    placed
+        .with_linalg_pool(|_, pool| {
+            <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
+            Ok(())
+        })
+        .unwrap();
     assert_eq!(clone.buffer_pool_len().unwrap(), 1);
 }
 
@@ -853,10 +951,12 @@ fn unavailable_blas_backend_kind_reports_config_errors() {
         crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES,
         CpuBackendKind::Blas,
     );
-    let retained = backend.with_linalg_pool(|pool| {
-        <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
-        pool.len()
-    });
+    let retained = backend
+        .with_linalg_pool(|_, pool| {
+            <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0]);
+            Ok(pool.len())
+        })
+        .unwrap();
     assert_eq!(retained, 1);
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
@@ -916,24 +1016,27 @@ fn cpu_session_profile_helpers_cover_current_profile_mode() {
 fn with_linalg_pool_restores_backend_pool_and_context() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
 
-    let len_inside_pool = backend.with_linalg_pool(|pool| {
-        <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0, 3.0, 4.0]);
-        pool.len()
-    });
+    let len_inside_pool = backend
+        .with_linalg_pool(|context, pool| {
+            assert_eq!(context.thread_budget().get(), 1);
+            <f64 as PoolScalar>::pool_release(pool, vec![1.0, 2.0, 3.0, 4.0]);
+            Ok(pool.len())
+        })
+        .unwrap();
 
     assert_eq!(len_inside_pool, 1);
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
-
-    #[cfg(feature = "cpu-faer")]
-    assert_eq!(backend.linalg_context().num_threads(), 1);
 }
 
 #[test]
 fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
     let mut backend = CpuBackend::with_threads(1).unwrap();
-    backend.with_linalg_pool(|pool| {
-        <f64 as PoolScalar>::pool_release(pool, Vec::with_capacity(1024));
-    });
+    backend
+        .with_linalg_pool(|_, pool| {
+            <f64 as PoolScalar>::pool_release(pool, Vec::with_capacity(1024));
+            Ok(())
+        })
+        .unwrap();
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
     assert_eq!(
         backend.buffer_pool_stats().unwrap().capacity_bytes,
@@ -941,7 +1044,7 @@ fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
     );
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.with_linalg_pool::<()>(|pool| {
+        let _ = backend.with_linalg_pool::<()>(|_, pool| {
             let _in_flight = unsafe { <f64 as PoolScalar>::pool_acquire(pool, 1024) };
             assert_eq!(pool.retained_capacity_bytes(), 0);
             panic!("forced panic after pool acquisition");
@@ -960,21 +1063,6 @@ fn linalg_pool_acquire_then_panic_replenishes_buffer_but_reports_poison() {
         backend.buffer_pool_len().unwrap_err().kind(),
         tenferro_tensor::ErrorKind::RuntimeState
     );
-}
-
-#[test]
-#[cfg(feature = "cpu-faer")]
-fn cached_faer_gemm_pool_helper_enters_owned_rayon_pool() {
-    let ambient_threads = rayon::current_num_threads();
-    let configured_threads = if ambient_threads == 2 { 3 } else { 2 };
-    let mut backend =
-        CpuBackend::with_threads_and_kind(configured_threads, CpuBackendKind::Faer).unwrap();
-    let mut cache = gemm::GemmAnalysisCache::default();
-
-    let seen_threads =
-        backend.install_with_pool_and_gemm_cache(&mut cache, |_, _| rayon::current_num_threads());
-
-    assert_eq!(seen_threads, configured_threads);
 }
 
 #[test]

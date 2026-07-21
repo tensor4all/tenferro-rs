@@ -9,9 +9,7 @@ use num_complex::{Complex32, Complex64};
 #[cfg(feature = "cpu-faer")]
 use super::linalg::faer_linalg;
 use crate::LinalgBackend;
-#[cfg(feature = "cpu-faer")]
-use tenferro_cpu::linalg_interop::BufferPool;
-use tenferro_cpu::{CpuBackend, CpuContext};
+use tenferro_cpu::CpuBackend;
 use tenferro_tensor::backend::TensorBackend;
 use tenferro_tensor::config::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
@@ -286,3 +284,4 @@ mod backend;
 mod dtype;
 mod linalg;
 mod managed_cholesky;
+mod single_entry;

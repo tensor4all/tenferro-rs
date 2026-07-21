@@ -1334,7 +1334,7 @@ fn test_with_linalg_pool_reports_poison_after_panic() {
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.with_linalg_pool::<()>(|_| panic!("forced linalg panic"));
+        let _ = backend.with_linalg_pool::<()>(|_, _| panic!("forced linalg panic"));
     }));
 
     assert!(result.is_err());

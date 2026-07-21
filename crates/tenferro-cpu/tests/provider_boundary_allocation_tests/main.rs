@@ -1,16 +1,23 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use tenferro_cpu::provider::{
-    __dispatch_gemm_for_allocation_probe, CpuGemmProvider, CpuGemmRequest, CpuGroupedGemmRequest,
-    CpuProviderContext, CpuProviderOutcome, CpuProviderUnsupported,
+    CpuDotGeneralRequest, CpuExecutionContext, CpuGeneralContractionProvider, CpuProviderOutcome,
 };
-use tenferro_cpu::{CpuBackend, CpuContext};
+use tenferro_cpu::{
+    discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
+    CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementGuarantee,
+    CpuProviderBundle, ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+};
 use tenferro_tensor::{
-    DType, DotGeneralAccumulation, DotGeneralConfig, SliceConfig, Tensor, TensorBuffer, TensorDot,
-    TensorElementwise, TensorIndexing, TensorRead, TensorReduction, TensorWrite,
+    BackendSessionHost, CpuDomainId, DType, DotGeneralAccumulation, DotGeneralConfig, SliceConfig,
+    Tensor, TensorBuffer, TensorDot, TensorElementwise, TensorIndexing, TensorRead,
+    TensorReduction, TensorWrite,
 };
 
 struct CountingAllocator;
@@ -76,87 +83,137 @@ fn assert_not_above_baseline(case: &str, actual: AllocationCount, baseline: Allo
 }
 
 #[derive(Debug)]
-struct UnsupportedGemm;
+struct ValueWritingGeneralProvider {
+    calls: Arc<AtomicUsize>,
+}
 
-impl CpuGemmProvider for UnsupportedGemm {
-    fn gemm(
-        &self,
-        _context: &CpuProviderContext<'_>,
-        _request: CpuGemmRequest<'_, '_, '_>,
-    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        Ok(CpuProviderOutcome::Unsupported(
-            CpuProviderUnsupported::RuntimeUnavailable,
-        ))
+#[derive(Debug)]
+struct InlineExecutor;
+
+impl CpuDomainExecutor for InlineExecutor {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        CpuDomainExecutorCapabilities {
+            worker_count: NonZeroUsize::new(1).unwrap(),
+            outer_parallelism: false,
+            inner_parallelism: CpuInnerParallelism::None,
+            reentrancy: CpuExecutorReentrancy::Rejected,
+            affinity: CpuExecutorAffinity::None,
+            shutdown: CpuExecutorShutdown::CallerOwned,
+        }
     }
 
-    fn strided_batched_gemm(
-        &self,
-        _context: &CpuProviderContext<'_>,
-        _request: CpuGemmRequest<'_, '_, '_>,
-    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        Ok(CpuProviderOutcome::Unsupported(
-            CpuProviderUnsupported::RuntimeUnavailable,
-        ))
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> Result<(), CpuDomainExecutorError> {
+        for index in 0..jobs.len() {
+            jobs.run(index)?;
+        }
+        Ok(())
     }
 
-    fn grouped_gemm(
+    fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
+        job.run()
+    }
+}
+
+impl CpuGeneralContractionProvider for ValueWritingGeneralProvider {
+    fn dot_general(
         &self,
-        _context: &CpuProviderContext<'_>,
-        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+        _context: &CpuExecutionContext<'_>,
+        mut request: CpuDotGeneralRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        Ok(CpuProviderOutcome::Unsupported(
-            CpuProviderUnsupported::RuntimeUnavailable,
-        ))
+        let lhs = request
+            .lhs()
+            .as_tensor()
+            .ok_or_else(|| {
+                tenferro_tensor::Error::runtime_state(
+                    "allocation_probe",
+                    "expected an owned lhs tensor",
+                )
+            })?
+            .as_slice::<f64>()?[0];
+        let rhs = request
+            .rhs()
+            .as_tensor()
+            .ok_or_else(|| {
+                tenferro_tensor::Error::runtime_state(
+                    "allocation_probe",
+                    "expected an owned rhs tensor",
+                )
+            })?
+            .as_slice::<f64>()?[0];
+        let TensorWrite::Tensor(output) = request.output() else {
+            return Err(tenferro_tensor::Error::runtime_state(
+                "allocation_probe",
+                "expected an owned output tensor",
+            ));
+        };
+        output.as_slice_mut::<f64>()?[0] = lhs * rhs;
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        Ok(CpuProviderOutcome::Executed)
     }
 }
 
 #[test]
-fn warmed_borrowed_request_dispatch_does_not_allocate() {
-    let _probe = PROBE_LOCK.lock().unwrap();
-    let provider = UnsupportedGemm;
-    let context = CpuContext::with_threads(1).unwrap();
-    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![2.0_f64]).unwrap();
-    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![3.0_f64]).unwrap();
+fn warmed_public_session_request_provider_dispatch_does_not_allocate() {
+    let _probe = PROBE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    const WARMUP: usize = 32;
+    const ITERATIONS: usize = 10_000;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let providers = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+        .require_general_contraction_provider(Arc::new(ValueWritingGeneralProvider {
+            calls: Arc::clone(&calls),
+        }))
+        .build()
+        .unwrap();
+    let domain_id = CpuDomainId::new(1);
+    let allowed_cpus = discover_cpu_topology().unwrap().allowed_cpus().clone();
+    let domain = ExternalCpuDomain::new(
+        domain_id,
+        ResolvedCpuPlacement::AllAllowed { cpus: allowed_cpus },
+        Arc::new(InlineExecutor),
+        NonZeroUsize::new(1).unwrap(),
+        CpuPlacementGuarantee::ExactDeclared,
+    )
+    .unwrap();
+    let mut backend = CpuBackend::from_external_managed_domains(domain_id, [domain])
+        .unwrap()
+        .with_provider_bundle(providers)
+        .unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![black_box(2.0_f64)]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![black_box(3.0_f64)]).unwrap();
     let mut output = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64]).unwrap();
-    let lhs = TensorRead::from_tensor(&lhs);
-    let rhs = TensorRead::from_tensor(&rhs);
-    let mut output = TensorWrite::from_tensor(&mut output);
+    let config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
     let accumulation = DotGeneralAccumulation::overwrite(DType::F64).unwrap();
 
-    for _ in 0..32 {
-        let _ = black_box(
-            __dispatch_gemm_for_allocation_probe(
-                &provider,
-                &context,
-                &lhs,
-                &rhs,
-                &mut output,
-                accumulation,
-            )
-            .unwrap(),
-        );
-    }
+    let count = backend.with_backend_session(|session| {
+        let mut dispatch = || {
+            session
+                .dot_general_read_into_accum(
+                    TensorRead::from_tensor(black_box(&lhs)),
+                    TensorRead::from_tensor(black_box(&rhs)),
+                    black_box(&config),
+                    black_box(accumulation),
+                    TensorWrite::from_tensor(black_box(&mut output)),
+                )
+                .unwrap();
+            black_box(output.as_slice::<f64>().unwrap()[0]);
+        };
+        for _ in 0..WARMUP {
+            dispatch();
+        }
+        count_repeated(&mut dispatch, ITERATIONS)
+    });
 
-    ALLOCATIONS.store(0, Ordering::Relaxed);
-    BYTES.store(0, Ordering::Relaxed);
-    COUNTING.store(true, Ordering::SeqCst);
-    for _ in 0..10_000 {
-        let _ = black_box(
-            __dispatch_gemm_for_allocation_probe(
-                &provider,
-                &context,
-                &lhs,
-                &rhs,
-                &mut output,
-                accumulation,
-            )
-            .unwrap(),
-        );
-    }
-    COUNTING.store(false, Ordering::SeqCst);
-
-    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
-    assert_eq!(BYTES.load(Ordering::Relaxed), 0);
+    assert_eq!(count.allocations, 0);
+    assert_eq!(count.bytes, 0);
+    assert_eq!(calls.load(Ordering::Relaxed), WARMUP + ITERATIONS);
+    assert_eq!(black_box(output.as_slice::<f64>().unwrap()[0]), 6.0);
 }
 
 #[test]
@@ -168,7 +225,9 @@ fn warmed_tiny_cpu_backend_cases_do_not_exceed_fixed_main_allocations() {
     // Baselines were measured with this identical setup at immutable commit
     // 85855e272b1495611deb601a9ee06f3546772c3c using the default cpu-faer
     // feature set. Setup and 32 warm-up iterations are outside counted loops.
-    let _probe = PROBE_LOCK.lock().unwrap();
+    let _probe = PROBE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     const ITERATIONS: usize = 100;
     let mut backend = CpuBackend::with_threads(1).unwrap();
     let matrix = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();

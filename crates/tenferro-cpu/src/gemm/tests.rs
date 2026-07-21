@@ -12,13 +12,15 @@ use super::blas_gemm::BlasGemmBatch;
 #[cfg(feature = "cpu-faer")]
 use super::faer_gemm::FaerGemm;
 #[cfg(feature = "cpu-faer")]
-use crate::CpuContext;
+use crate::provider::tests::execution_context_fixture;
+#[cfg(feature = "cpu-faer")]
+use crate::provider::ParallelMode;
 #[cfg(feature = "cpu-blas")]
 use num_complex::Complex64;
 use tenferro_tensor::RuntimeCacheControl;
-use tenferro_tensor::{DotGeneralConfig, TensorDot, TypedTensor};
+use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDot, TypedTensor};
 #[cfg(feature = "cpu-faer")]
-use tenferro_tensor::{Tensor, TensorRead, TensorView};
+use tenferro_tensor::{TensorRead, TensorView};
 
 #[test]
 fn provider_bundle_identity_reuses_and_invalidates_slots_without_aba() {
@@ -375,7 +377,9 @@ fn faer_read_transposed_view_uses_provider_runtime() {
     assert_eq!(out.as_slice::<f64>().unwrap(), &[50.0, 122.0, 68.0, 167.0]);
 }
 
-#[cfg(feature = "cpu-blas")]
+// `provider-inject` call-through tests live in serialized integration fixtures
+// that register every FFI symbol before use.
+#[cfg(all(feature = "cpu-blas", not(feature = "provider-inject")))]
 #[test]
 fn blas_dot_general_contract_trailing_rhs_dim() {
     let lhs =
@@ -398,7 +402,9 @@ fn blas_dot_general_contract_trailing_rhs_dim() {
     assert_eq!(out.as_slice::<f64>().unwrap(), &[89.0, 116.0, 98.0, 128.0]);
 }
 
-#[cfg(feature = "cpu-blas")]
+// `provider-inject` call-through tests live in serialized integration fixtures
+// that register every FFI symbol before use.
+#[cfg(all(feature = "cpu-blas", not(feature = "provider-inject")))]
 #[test]
 fn blas_complex_conj_trans_executes_without_materializing_transposed_operand() {
     let a = [
@@ -529,11 +535,10 @@ fn faer_strided_gemm_accumulates_with_nontrivial_beta() {
     let a = [1.0, 0.0, 0.0, 1.0];
     let b = [10.0, 20.0, 30.0, 40.0];
     let mut c = [1.0, 2.0, 3.0, 4.0];
-    let ctx = CpuContext::with_threads(1).unwrap();
-
-    unsafe {
+    let fixture = execution_context_fixture(1);
+    fixture.with_context(ParallelMode::Sequential, |context| unsafe {
         <f64 as FaerGemm>::strided_gemm(
-            &ctx,
+            context,
             1.0,
             a.as_ptr(),
             2,
@@ -549,7 +554,7 @@ fn faer_strided_gemm_accumulates_with_nontrivial_beta() {
             1,
             2,
         );
-    }
+    });
 
     assert_eq!(c, [12.0, 24.0, 36.0, 48.0]);
 }
@@ -560,11 +565,10 @@ fn faer_strided_gemm_accumulates_with_unit_beta_without_prescaling() {
     let a = [1.0, 0.0, 0.0, 1.0];
     let b = [10.0, 20.0, 30.0, 40.0];
     let mut c = [1.0, 2.0, 3.0, 4.0];
-    let ctx = CpuContext::with_threads(1).unwrap();
-
-    unsafe {
+    let fixture = execution_context_fixture(1);
+    fixture.with_context(ParallelMode::Sequential, |context| unsafe {
         <f64 as FaerGemm>::strided_gemm(
-            &ctx,
+            context,
             1.0,
             a.as_ptr(),
             2,
@@ -580,7 +584,7 @@ fn faer_strided_gemm_accumulates_with_unit_beta_without_prescaling() {
             1,
             2,
         );
-    }
+    });
 
     assert_eq!(c, [11.0, 22.0, 33.0, 44.0]);
 }

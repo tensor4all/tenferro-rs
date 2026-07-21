@@ -17,10 +17,7 @@ fn engine_caps_workers_to_its_cpu_domain_and_owns_resources() {
     let engine =
         CpuEngine::new_managed(CpuDomainId::new(0), placement.clone(), usize::MAX, 0).unwrap();
 
-    assert_eq!(
-        engine.compatibility_context().unwrap().num_threads(),
-        selected.len()
-    );
+    assert_eq!(engine.domain().thread_budget().get(), selected.len());
     assert_eq!(engine.placement(), &placement);
     assert_eq!(engine.domain().id(), CpuDomainId::new(0));
     assert_eq!(engine.domain().ownership(), CpuDomainOwnership::Managed);
@@ -47,11 +44,8 @@ fn engine_from_context_preserves_placement_context_and_resources() {
     );
 
     assert_eq!(engine.placement(), &placement);
-    assert_eq!(engine.compatibility_context().unwrap().num_threads(), 1);
-    assert!(Arc::ptr_eq(
-        &engine.compatibility_context_arc().unwrap(),
-        &context
-    ));
+    assert_eq!(engine.domain().thread_budget().get(), 1);
+    assert_eq!(Arc::strong_count(&context), 2);
     assert_eq!(engine.domain().id(), CpuDomainId::new(3));
     assert_eq!(
         engine.domain().placement_guarantee(),
@@ -98,7 +92,7 @@ fn external_engine_moves_the_resource_domain_without_a_staging_context() {
         engine.domain().ownership(),
         CpuDomainOwnership::ExternalManaged
     );
-    assert!(engine.compatibility_context().is_none());
+    assert_eq!(engine.domain().thread_budget().get(), 1);
     assert_eq!(
         engine
             .resources

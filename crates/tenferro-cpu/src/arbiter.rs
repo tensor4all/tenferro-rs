@@ -42,6 +42,10 @@ pub(crate) fn inherited_or_new_execution_owner() -> ResourceOwner {
     ResourceOwner::fresh()
 }
 
+pub(crate) fn current_execution_owner() -> Option<ResourceOwner> {
+    EXECUTION_OWNER.with(Cell::get)
+}
+
 pub(crate) fn with_execution_owner<R>(owner: ResourceOwner, op: impl FnOnce() -> R) -> R {
     struct RestoreOwner(Option<ResourceOwner>);
 
@@ -327,6 +331,7 @@ impl ResourceArbiter {
                 return Ok(ResourcePermit {
                     inner: Arc::clone(&self.inner),
                     id,
+                    owner,
                     reentrant,
                 });
             }
@@ -376,6 +381,7 @@ impl ResourceArbiter {
         Ok(Some(ResourcePermit {
             inner: Arc::clone(&self.inner),
             id,
+            owner,
             reentrant,
         }))
     }
@@ -418,12 +424,17 @@ impl ResourceArbiter {
 pub(crate) struct ResourcePermit {
     inner: Arc<ArbiterInner>,
     id: u64,
+    owner: ResourceOwner,
     reentrant: bool,
 }
 
 impl ResourcePermit {
     pub(crate) fn is_reentrant(&self) -> bool {
         self.reentrant
+    }
+
+    pub(crate) fn owner(&self) -> ResourceOwner {
+        self.owner
     }
 }
 
