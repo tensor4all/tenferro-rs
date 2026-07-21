@@ -41,6 +41,7 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
     ),
     "docs": (
         "python3 scripts/test-check-docs-site.py",
+        "python3 scripts/test-gen-dep-graph.py",
         "python3 scripts/test-doc-consistency.py",
         "python3 scripts/test-repository-rules-review.py",
         "python3 scripts/check-guide-dependency-snippets.py",

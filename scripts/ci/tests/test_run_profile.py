@@ -79,6 +79,15 @@ class RunProfileTests(unittest.TestCase):
                     "--cargo-profile ci" in joined or "--profile ci" in joined
                 )
 
+    def test_docs_profile_checks_dependency_footprint_generator(self) -> None:
+        commands = commands_for("docs")
+
+        self.assertIn("python3 scripts/test-gen-dep-graph.py", commands)
+        self.assertLess(
+            commands.index("python3 scripts/test-gen-dep-graph.py"),
+            commands.index("bash scripts/build_docs_site.sh"),
+        )
+
     def test_full_profile_expands_named_profiles_once(self) -> None:
         expanded = expand_profiles(["full"])
         self.assertEqual(
