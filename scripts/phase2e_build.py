@@ -9,19 +9,26 @@ evidence orchestrator.
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import hashlib
 import json
 import os
 import pathlib
 import re
+import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
+import tomllib
 from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Any
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from scripts import phase2e_protocol as protocol
 
@@ -130,6 +137,15 @@ QUERY_DEADLINE_SECONDS = 300
 BUILD_DEADLINE_SECONDS = 1800
 TERMINATION_GRACE_SECONDS = 5
 
+ALLOCATION_PROBE_SOURCE_ROOT = pathlib.Path("scripts/phase2e/allocation-probe")
+ALLOCATION_PROBE_TEMPLATE = pathlib.Path("Cargo.toml.in")
+ALLOCATION_PROBE_SOURCES = (pathlib.Path("src/main.rs"), pathlib.Path("src/tests.rs"))
+ALLOCATION_PROBE_BINARY = "phase2e-allocation-probe"
+ALLOCATION_PROBE_ROOT_PLACEHOLDER = "__TENFERRO_REPOSITORY_ROOT__"
+ALLOCATION_PROBE_FMT_DEADLINE_SECONDS = 300
+ALLOCATION_PROBE_COMMAND_DEADLINE_SECONDS = 1800
+ALLOCATION_PROBE_LIST_DEADLINE_SECONDS = 30
+
 _ROLE_SOURCE_DELTAS = {
     "direct-current-main-baseline": ("frozen-benchmark-harness",),
     "common-lock-normalized-baseline": (
@@ -182,6 +198,19 @@ class CommandResult:
     failure_reason: str | None
     terminated: bool
     killed: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class AllocationProbeVerification:
+    """Immutable source, lock, binary, and case-inventory proof."""
+
+    template_sha256: str
+    source_sha256: dict[str, str]
+    generated_manifest_sha256: str
+    generated_source_sha256: dict[str, str]
+    lock_sha256: str
+    binary_sha256: str
+    case_inventory: tuple[str, ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1093,6 +1122,62 @@ def build_command_plan(
             "build",
             _absolute_tool_command(BENCH_COMMAND, cargo),
             BUILD_DEADLINE_SECONDS,
+        ),
+    )
+
+
+def allocation_probe_command_plan(
+    manifest: pathlib.Path, binary: pathlib.Path, cargo: str
+) -> tuple[CommandSpec, ...]:
+    """Return the five exact external-probe verification commands."""
+    manifest = pathlib.Path(manifest)
+    binary = pathlib.Path(binary)
+    cargo_path = pathlib.Path(cargo)
+    if not manifest.is_absolute() or not binary.is_absolute() or not cargo_path.is_absolute():
+        raise protocol.ProtocolError("allocation probe command paths must be absolute")
+    return (
+        CommandSpec(
+            "fmt",
+            (str(cargo_path), "fmt", "--manifest-path", str(manifest), "--", "--check"),
+            ALLOCATION_PROBE_FMT_DEADLINE_SECONDS,
+        ),
+        CommandSpec(
+            "test",
+            (str(cargo_path), "test", "--manifest-path", str(manifest)),
+            ALLOCATION_PROBE_COMMAND_DEADLINE_SECONDS,
+        ),
+        CommandSpec(
+            "clippy",
+            (
+                str(cargo_path),
+                "clippy",
+                "--manifest-path",
+                str(manifest),
+                "--locked",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ),
+            ALLOCATION_PROBE_COMMAND_DEADLINE_SECONDS,
+        ),
+        CommandSpec(
+            "build",
+            (
+                str(cargo_path),
+                "build",
+                "--locked",
+                "--profile",
+                "bench",
+                "--manifest-path",
+                str(manifest),
+            ),
+            ALLOCATION_PROBE_COMMAND_DEADLINE_SECONDS,
+        ),
+        CommandSpec(
+            "list-cases",
+            (str(binary), "--list-cases"),
+            ALLOCATION_PROBE_LIST_DEADLINE_SECONDS,
         ),
     )
 
@@ -2169,6 +2254,460 @@ def _revalidate_role_build_observations(
         )
 
 
+def _allocation_probe_input_bytes(
+    repository: pathlib.Path,
+) -> tuple[pathlib.Path, bytes, dict[pathlib.Path, bytes]]:
+    repository = pathlib.Path(repository)
+    try:
+        metadata = repository.lstat()
+        canonical = repository.resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot inspect allocation probe repository {repository}: {error}"
+        ) from error
+    if not repository.is_absolute() or not stat.S_ISDIR(metadata.st_mode) or canonical != repository:
+        raise protocol.ProtocolError(
+            "allocation probe repository must be an absolute canonical directory"
+        )
+    source_root = repository / ALLOCATION_PROBE_SOURCE_ROOT
+    try:
+        root_metadata = source_root.lstat()
+        canonical_source_root = source_root.resolve(strict=True)
+        root_entries = {entry.name: entry for entry in os.scandir(source_root)}
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot inspect allocation probe source inventory: {error}"
+        ) from error
+    if canonical_source_root != source_root or not stat.S_ISDIR(root_metadata.st_mode) or set(root_entries) != {
+        ALLOCATION_PROBE_TEMPLATE.name,
+        "src",
+    }:
+        raise protocol.ProtocolError("allocation probe source inventory mismatch")
+    if root_entries[ALLOCATION_PROBE_TEMPLATE.name].is_symlink() or not root_entries[
+        ALLOCATION_PROBE_TEMPLATE.name
+    ].is_file(follow_symlinks=False):
+        raise protocol.ProtocolError("allocation probe template is not a regular file")
+    src_entry = root_entries["src"]
+    if src_entry.is_symlink() or not src_entry.is_dir(follow_symlinks=False):
+        raise protocol.ProtocolError("allocation probe src is not a regular directory")
+    try:
+        source_entries = {entry.name: entry for entry in os.scandir(source_root / "src")}
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot inspect allocation probe src inventory: {error}"
+        ) from error
+    expected_names = {path.name for path in ALLOCATION_PROBE_SOURCES}
+    if set(source_entries) != expected_names:
+        raise protocol.ProtocolError("allocation probe src inventory mismatch")
+    for name, entry in source_entries.items():
+        if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+            raise protocol.ProtocolError(
+                f"allocation probe source is not a regular file: {name}"
+            )
+    template = _read_regular_bytes(source_root / ALLOCATION_PROBE_TEMPLATE)
+    sources = {
+        relative: _read_regular_bytes(source_root / relative)
+        for relative in ALLOCATION_PROBE_SOURCES
+    }
+    return source_root, template, sources
+
+
+def _toml_escape_string_content(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+
+
+def _render_allocation_probe_manifest(
+    template: bytes, repository: pathlib.Path
+) -> bytes:
+    try:
+        text = template.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise protocol.ProtocolError("allocation probe template is not UTF-8") from error
+    if text.count(ALLOCATION_PROBE_ROOT_PLACEHOLDER) != 3:
+        raise protocol.ProtocolError(
+            "allocation probe template must use exactly one repository-root token kind"
+        )
+    without_placeholder = text.replace(ALLOCATION_PROBE_ROOT_PLACEHOLDER, "")
+    if re.search(r"__TENFERRO_[A-Z0-9_]+__", without_placeholder):
+        raise protocol.ProtocolError("allocation probe template contains a foreign token")
+    rendered = text.replace(
+        ALLOCATION_PROBE_ROOT_PLACEHOLDER,
+        _toml_escape_string_content(str(repository)),
+    ).encode("utf-8")
+    _validate_allocation_probe_manifest(rendered, repository)
+    return rendered
+
+
+def _validate_allocation_probe_manifest(payload: bytes, repository: pathlib.Path) -> None:
+    try:
+        decoded = tomllib.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise protocol.ProtocolError("generated allocation probe manifest is invalid") from error
+    if decoded.get("package", {}).get("name") != ALLOCATION_PROBE_BINARY:
+        raise protocol.ProtocolError("allocation probe package name mismatch")
+    dependencies = decoded.get("dependencies")
+    expected_names = {"tenferro-ad", "tenferro-cpu", "tenferro-tensor"}
+    if type(dependencies) is not dict or set(dependencies) != expected_names:
+        raise protocol.ProtocolError("allocation probe dependency set mismatch")
+    for name in sorted(expected_names):
+        item = dependencies[name]
+        expected_path = repository / "crates" / name
+        if type(item) is not dict or item.get("default-features") is not False:
+            raise protocol.ProtocolError(f"allocation probe dependency contract mismatch: {name}")
+        if set(item) - {"path", "default-features", "features"}:
+            raise protocol.ProtocolError(f"allocation probe dependency fields mismatch: {name}")
+        path_value = item.get("path")
+        if type(path_value) is not str:
+            raise protocol.ProtocolError(f"allocation probe dependency path is invalid: {name}")
+        path = pathlib.Path(path_value)
+        try:
+            canonical = path.resolve(strict=True)
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"allocation probe dependency path cannot be resolved: {name}"
+            ) from error
+        if not path.is_absolute() or path != expected_path or canonical != expected_path:
+            raise protocol.ProtocolError(f"allocation probe dependency path mismatch: {name}")
+        expected_features = ["cpu-faer"] if name != "tenferro-tensor" else None
+        if item.get("features") != expected_features:
+            if not (expected_features is None and "features" not in item):
+                raise protocol.ProtocolError(
+                    f"allocation probe dependency features mismatch: {name}"
+                )
+
+
+def _write_new_regular(path: pathlib.Path, payload: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o644)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot create generated probe file {path}: {error}") from error
+    primary: BaseException | None = None
+    try:
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("short generated probe write")
+            offset += written
+        os.fsync(descriptor)
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            if primary is None:
+                raise protocol.ProtocolError(
+                    f"cannot close generated probe file {path}: {error}"
+                ) from error
+
+
+def _validate_generated_probe_inventory(root: pathlib.Path, *, lock_required: bool) -> None:
+    expected_root = {"Cargo.toml", "src"}
+    if lock_required:
+        expected_root.add("Cargo.lock")
+    try:
+        entries = {entry.name: entry for entry in os.scandir(root)}
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot inspect generated probe inventory: {error}") from error
+    if set(entries) != expected_root:
+        raise protocol.ProtocolError("generated allocation probe inventory mismatch")
+    for name in expected_root - {"src"}:
+        if entries[name].is_symlink() or not entries[name].is_file(follow_symlinks=False):
+            raise protocol.ProtocolError(f"generated probe path is not regular: {name}")
+    if entries["src"].is_symlink() or not entries["src"].is_dir(follow_symlinks=False):
+        raise protocol.ProtocolError("generated probe src is not a regular directory")
+    src_entries = {entry.name: entry for entry in os.scandir(root / "src")}
+    if set(src_entries) != {"main.rs", "tests.rs"}:
+        raise protocol.ProtocolError("generated allocation probe src inventory mismatch")
+    if any(entry.is_symlink() or not entry.is_file(follow_symlinks=False) for entry in src_entries.values()):
+        raise protocol.ProtocolError("generated allocation probe source is not regular")
+
+
+def _probe_digests(
+    root: pathlib.Path, template: bytes, sources: Mapping[pathlib.Path, bytes]
+) -> tuple[str, dict[str, str], str, dict[str, str]]:
+    source_sha256 = {str(path): sha256_bytes(payload) for path, payload in sources.items()}
+    generated_sources = {
+        str(path): protocol.sha256_file(root / path) for path in ALLOCATION_PROBE_SOURCES
+    }
+    return (
+        sha256_bytes(template),
+        source_sha256,
+        protocol.sha256_file(root / "Cargo.toml"),
+        generated_sources,
+    )
+
+
+def _validate_probe_state(
+    repository: pathlib.Path,
+    root: pathlib.Path,
+    template: bytes,
+    sources: Mapping[pathlib.Path, bytes],
+    *,
+    lock_required: bool,
+) -> None:
+    _, current_template, current_sources = _allocation_probe_input_bytes(repository)
+    if current_template != template or current_sources != sources:
+        raise protocol.ProtocolError("allocation probe source changed during verification")
+    _validate_generated_probe_inventory(root, lock_required=lock_required)
+    if _read_regular_bytes(root / "Cargo.toml") != _render_allocation_probe_manifest(
+        template, repository
+    ):
+        raise protocol.ProtocolError("generated allocation probe manifest changed")
+    for relative, payload in sources.items():
+        if _read_regular_bytes(root / relative) != payload:
+            raise protocol.ProtocolError(f"generated allocation probe source changed: {relative}")
+
+
+def _seed_probe_cargo_home(cargo_home: pathlib.Path, cache_source: pathlib.Path) -> None:
+    cargo_home.mkdir()
+    cache_source = pathlib.Path(cache_source)
+    for name in ("registry", "git"):
+        source = cache_source / name
+        try:
+            metadata = source.lstat()
+            canonical = source.resolve(strict=True)
+        except OSError as error:
+            raise protocol.ProtocolError(f"cannot inspect Cargo cache {source}: {error}") from error
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise protocol.ProtocolError(f"Cargo cache is not a directory: {source}")
+        os.symlink(canonical, cargo_home / name, target_is_directory=True)
+    (cargo_home / ".package-cache").touch()
+    validate_controlled_cargo_home(cargo_home)
+
+
+def _regular_executable_sha256(path: pathlib.Path) -> str:
+    try:
+        metadata = path.lstat()
+        canonical = path.resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot inspect allocation probe binary {path}: {error}") from error
+    if not stat.S_ISREG(metadata.st_mode) or canonical != path or not os.access(path, os.X_OK):
+        raise protocol.ProtocolError("allocation probe binary is not a canonical executable")
+    return protocol.sha256_file(path)
+
+
+def _require_probe_command(
+    step: CommandSpec,
+    result: CommandResult,
+    *,
+    cwd: pathlib.Path,
+    environment: Mapping[str, str],
+) -> None:
+    if result.argv != step.argv or result.deadline_seconds != step.deadline_seconds:
+        raise protocol.ProtocolError(f"allocation probe {step.name} result identity mismatch")
+    if result.cwd != str(cwd) or result.environment != dict(sorted(environment.items())):
+        raise protocol.ProtocolError(f"allocation probe {step.name} result provenance mismatch")
+    if result.validity_state != "COMPLETE" or result.returncode != 0:
+        raise protocol.ProtocolError(
+            f"allocation probe {step.name} failed: {result.failure_reason or 'nonzero-exit'}"
+        )
+
+
+def _cleanup_probe_root(root: pathlib.Path, primary: BaseException | None) -> None:
+    try:
+        shutil.rmtree(root)
+    except BaseException as error:
+        if primary is None:
+            raise protocol.ProtocolError(
+                f"cannot clean allocation probe temporary root {root}: {error}"
+            ) from error
+
+
+def _verify_allocation_probe_with_dependencies(
+    repository: pathlib.Path,
+    *,
+    cargo: ResolvedTool,
+    command_runner: Callable[..., CommandResult],
+    temporary_root_factory: Callable[[], pathlib.Path],
+    cache_source: pathlib.Path,
+) -> AllocationProbeVerification:
+    """Test seam for the authoritative five-step allocation-probe verifier."""
+    if not isinstance(cargo, ResolvedTool) or cargo.name != "cargo":
+        raise protocol.ProtocolError("allocation probe verifier requires Cargo identity")
+    validate_resolved_tool(cargo)
+    source_root, template, sources = _allocation_probe_input_bytes(repository)
+    del source_root
+    root: pathlib.Path | None = None
+    primary: BaseException | None = None
+    try:
+        root = pathlib.Path(temporary_root_factory())
+        root_metadata = root.lstat()
+        if (
+            not root.is_absolute()
+            or not stat.S_ISDIR(root_metadata.st_mode)
+            or root.resolve(strict=True) != root
+        ):
+            raise protocol.ProtocolError("allocation probe temporary root is invalid")
+        if any(root.iterdir()):
+            raise protocol.ProtocolError("allocation probe temporary root is not empty")
+        generated = root / "generated"
+        generated_src = generated / "src"
+        target = root / "target"
+        home = root / "home"
+        cargo_home = root / "cargo-home"
+        generated_src.mkdir(parents=True)
+        target.mkdir()
+        home.mkdir()
+        _seed_probe_cargo_home(cargo_home, cache_source)
+        manifest_payload = _render_allocation_probe_manifest(template, repository)
+        _write_new_regular(generated / "Cargo.toml", manifest_payload)
+        for relative, payload in sources.items():
+            _write_new_regular(generated / relative, payload)
+        _validate_probe_state(
+            repository, generated, template, sources, lock_required=False
+        )
+
+        git_path = shutil.which("git")
+        if git_path is None:
+            raise protocol.ProtocolError("cannot locate Git for the sealed Cargo PATH")
+        path_components = [cargo.path.parent, pathlib.Path(git_path).resolve().parent]
+        controlled_path = os.pathsep.join(
+            str(path) for index, path in enumerate(path_components) if path not in path_components[:index]
+        )
+        environment = protocol.cargo_environment(
+            path=controlled_path,
+            home=str(home),
+            cargo_home=str(cargo_home),
+            target_dir=str(target),
+        )
+        manifest = generated / "Cargo.toml"
+        binary = target / "release" / ALLOCATION_PROBE_BINARY
+        plan = allocation_probe_command_plan(manifest, binary, str(cargo.path))
+        lock_sha256: str | None = None
+        binary_sha256: str | None = None
+        list_output: str | None = None
+        for index, step in enumerate(plan):
+            executable_identity = cargo if index < 4 else None
+            if step.name == "list-cases":
+                binary_sha256 = _regular_executable_sha256(binary)
+            result = command_runner(
+                step.argv,
+                cwd=generated,
+                environment=environment,
+                deadline_seconds=step.deadline_seconds,
+                executable_identity=executable_identity,
+            )
+            _require_probe_command(
+                step, result, cwd=generated, environment=environment
+            )
+            if step.name == "test":
+                _validate_probe_state(
+                    repository, generated, template, sources, lock_required=True
+                )
+                lock_sha256 = protocol.sha256_file(generated / "Cargo.lock")
+            elif index < 1:
+                _validate_probe_state(
+                    repository, generated, template, sources, lock_required=False
+                )
+            else:
+                _validate_probe_state(
+                    repository, generated, template, sources, lock_required=True
+                )
+                if lock_sha256 is None or protocol.sha256_file(
+                    generated / "Cargo.lock"
+                ) != lock_sha256:
+                    raise protocol.ProtocolError("allocation probe Cargo.lock changed")
+            if step.name == "list-cases":
+                if binary_sha256 != _regular_executable_sha256(binary):
+                    raise protocol.ProtocolError("allocation probe binary changed during list-cases")
+                if result.stderr:
+                    raise protocol.ProtocolError("allocation probe list-cases wrote stderr")
+                list_output = result.stdout
+
+        expected_output = json.dumps(
+            list(protocol.CANONICAL_CASES), separators=(",", ":")
+        ) + "\n"
+        if list_output != expected_output:
+            raise protocol.ProtocolError("allocation probe list-cases inventory mismatch")
+        decoded = json.loads(list_output)
+        if type(decoded) is not list or any(type(case) is not str for case in decoded):
+            raise protocol.ProtocolError("allocation probe list-cases schema mismatch")
+        inventory = tuple(decoded)
+        if inventory != tuple(protocol.CANONICAL_CASES):
+            raise protocol.ProtocolError("allocation probe list-cases order mismatch")
+        if lock_sha256 is None or binary_sha256 is None:
+            raise AssertionError("allocation probe proof was not completed")
+        template_sha256, source_sha256, manifest_sha256, generated_sha256 = _probe_digests(
+            generated, template, sources
+        )
+        return AllocationProbeVerification(
+            template_sha256=template_sha256,
+            source_sha256=source_sha256,
+            generated_manifest_sha256=manifest_sha256,
+            generated_source_sha256=generated_sha256,
+            lock_sha256=lock_sha256,
+            binary_sha256=binary_sha256,
+            case_inventory=inventory,
+        )
+    except OSError as error:
+        wrapped = protocol.ProtocolError(
+            f"allocation probe verification filesystem failure: {error}"
+        )
+        primary = wrapped
+        raise wrapped from error
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        if root is not None:
+            _cleanup_probe_root(root, primary)
+
+
+def _discover_cargo() -> ResolvedTool:
+    rustup = shutil.which("rustup")
+    if rustup is None:
+        raise protocol.ProtocolError("cannot locate rustup to resolve Cargo")
+    try:
+        completed = subprocess.run(
+            [rustup, "which", "cargo"],
+            capture_output=True,
+            text=True,
+            timeout=ALLOCATION_PROBE_LIST_DEADLINE_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise protocol.ProtocolError(f"cannot resolve Cargo through rustup: {error}") from error
+    if completed.returncode != 0 or not completed.stdout.strip():
+        raise protocol.ProtocolError(f"rustup cannot resolve Cargo: {completed.stderr.strip()}")
+    lines = completed.stdout.splitlines()
+    if len(lines) != 1:
+        raise protocol.ProtocolError("rustup returned an ambiguous Cargo path")
+    return _resolve_tool("cargo", pathlib.Path(lines[0]))
+
+
+def verify_allocation_probe(repository: pathlib.Path) -> AllocationProbeVerification:
+    """Verify the tracked external allocation probe in fresh owned state."""
+    cargo = _discover_cargo()
+    cache_path = pathlib.Path(
+        os.environ.get("CARGO_HOME", str(pathlib.Path.home() / ".cargo"))
+    )
+    try:
+        cache_source = cache_path.resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot resolve Cargo cache source {cache_path}: {error}"
+        ) from error
+    return _verify_allocation_probe_with_dependencies(
+        pathlib.Path(repository),
+        cargo=cargo,
+        command_runner=run_bounded_command,
+        temporary_root_factory=lambda: pathlib.Path(
+            tempfile.mkdtemp(prefix="phase2e-allocation-probe.")
+        ),
+        cache_source=cache_source,
+    )
+
+
 def _canonical_directory(path: pathlib.Path, context: str) -> pathlib.Path:
     path = pathlib.Path(path)
     try:
@@ -2211,5 +2750,27 @@ def _validate_sha256(value: str, context: str) -> None:
         raise protocol.ProtocolError(f"{context} must be a lowercase SHA-256")
 
 
+def main(argv: list[str] | None = None) -> int:
+    """Run one strict Phase 2E build-helper subcommand."""
+    parser = argparse.ArgumentParser(prog="phase2e_build.py", exit_on_error=False)
+    subparsers = parser.add_subparsers(dest="command")
+    verify = subparsers.add_parser("verify-allocation-probe", exit_on_error=False)
+    verify.add_argument("--repository", required=True)
+    try:
+        arguments = parser.parse_args(argv)
+    except (argparse.ArgumentError, SystemExit) as error:
+        print(f"phase2e build error: {error}", file=sys.stderr)
+        return 2
+    if arguments.command != "verify-allocation-probe":
+        print("phase2e build error: a supported subcommand is required", file=sys.stderr)
+        return 2
+    try:
+        verify_allocation_probe(pathlib.Path(arguments.repository))
+    except protocol.ProtocolError as error:
+        print(f"phase2e build error: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit("Phase 2E build orchestration is imported by the outer runner")
+    raise SystemExit(main())

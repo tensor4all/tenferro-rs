@@ -99,6 +99,85 @@ def system_tool_path() -> str:
     return os.pathsep.join(map(str, directories))
 
 
+def write_probe_fixture(repository: pathlib.Path) -> pathlib.Path:
+    source = repository / "scripts/phase2e/allocation-probe"
+    (source / "src").mkdir(parents=True)
+    (source / "Cargo.toml.in").write_text(
+        """[package]
+name = "phase2e-allocation-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tenferro-ad = { path = "__TENFERRO_REPOSITORY_ROOT__/crates/tenferro-ad", default-features = false, features = ["cpu-faer"] }
+tenferro-cpu = { path = "__TENFERRO_REPOSITORY_ROOT__/crates/tenferro-cpu", default-features = false, features = ["cpu-faer"] }
+tenferro-tensor = { path = "__TENFERRO_REPOSITORY_ROOT__/crates/tenferro-tensor", default-features = false }
+"""
+    )
+    (source / "src/main.rs").write_text("fn main() {}\n")
+    (source / "src/tests.rs").write_text("#[test]\nfn probe() {}\n")
+    for name in ("tenferro-ad", "tenferro-cpu", "tenferro-tensor"):
+        (repository / "crates" / name).mkdir(parents=True)
+    return source
+
+
+class FakeProbeRunner:
+    def __init__(
+        self,
+        *,
+        fail_at: str | None = None,
+        interrupt: BaseException | None = None,
+        failure_reason: str = "nonzero-exit",
+    ):
+        self.fail_at = fail_at
+        self.interrupt = interrupt
+        self.failure_reason = failure_reason
+        self.calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    def __call__(self, argv, **kwargs):
+        argv = tuple(argv)
+        self.calls.append((argv, dict(kwargs)))
+        if "fmt" in argv:
+            name = "fmt"
+        elif "test" in argv:
+            name = "test"
+        elif "clippy" in argv:
+            name = "clippy"
+        elif "build" in argv:
+            name = "build"
+        else:
+            name = "list-cases"
+        if self.interrupt is not None and name == self.fail_at:
+            raise self.interrupt
+        cwd = pathlib.Path(kwargs["cwd"])
+        environment = kwargs["environment"]
+        if name == "test":
+            (cwd / "Cargo.lock").write_bytes(b"frozen-lock\n")
+        elif name == "build":
+            binary = pathlib.Path(environment["CARGO_TARGET_DIR"]) / "release" / build.ALLOCATION_PROBE_BINARY
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_bytes(b"probe-binary")
+            binary.chmod(0o755)
+        stdout = ""
+        if name == "list-cases":
+            stdout = json.dumps(list(protocol.CANONICAL_CASES), separators=(",", ":")) + "\n"
+        returncode = 9 if name == self.fail_at else 0
+        return build.CommandResult(
+            argv=argv,
+            cwd=str(cwd),
+            environment=dict(environment),
+            deadline_seconds=kwargs["deadline_seconds"],
+            returncode=returncode,
+            stdout=stdout,
+            stderr="failed" if returncode else "",
+            validity_state="COMPLETE" if returncode == 0 else "INCONCLUSIVE",
+            failure_reason=None if returncode == 0 else self.failure_reason,
+            terminated=returncode != 0 and self.failure_reason == "deadline-exceeded",
+            killed=returncode != 0 and self.failure_reason == "deadline-exceeded",
+        )
+
+
 class IdentityAndDeltaTests(unittest.TestCase):
     def test_immutable_identities_commands_and_field_axes(self) -> None:
         self.assertEqual(
@@ -569,6 +648,49 @@ class LockWorktreeAndInventoryTests(unittest.TestCase):
 
 
 class CargoEnvironmentAndCommandTests(unittest.TestCase):
+    def test_allocation_probe_command_plan_is_exact_and_bounded(self) -> None:
+        manifest = pathlib.Path("/tmp/generated/Cargo.toml")
+        binary = pathlib.Path("/tmp/target/bench/phase2e-allocation-probe")
+        plan = build.allocation_probe_command_plan(manifest, binary, "/bin/cargo")
+        self.assertEqual(
+            [(step.name, step.deadline_seconds) for step in plan],
+            [
+                ("fmt", 300),
+                ("test", 1800),
+                ("clippy", 1800),
+                ("build", 1800),
+                ("list-cases", 30),
+            ],
+        )
+        self.assertEqual(
+            [step.argv for step in plan],
+            [
+                ("/bin/cargo", "fmt", "--manifest-path", str(manifest), "--", "--check"),
+                ("/bin/cargo", "test", "--manifest-path", str(manifest)),
+                (
+                    "/bin/cargo",
+                    "clippy",
+                    "--manifest-path",
+                    str(manifest),
+                    "--locked",
+                    "--all-targets",
+                    "--",
+                    "-D",
+                    "warnings",
+                ),
+                (
+                    "/bin/cargo",
+                    "build",
+                    "--locked",
+                    "--profile",
+                    "bench",
+                    "--manifest-path",
+                    str(manifest),
+                ),
+                (str(binary), "--list-cases"),
+            ],
+        )
+
     def test_cargo_environment_is_controlled_and_drops_ambient_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             controlled = pathlib.Path(temporary) / "controlled-bin"
@@ -667,6 +789,289 @@ class CargoEnvironmentAndCommandTests(unittest.TestCase):
                 requested_features=build.REQUESTED_FEATURES,
                 no_default_features=True,
             )
+
+
+class AllocationProbeVerifierTests(unittest.TestCase):
+    def fixture(self, root: pathlib.Path):
+        repository = root / "repository"
+        repository.mkdir()
+        write_probe_fixture(repository)
+        cargo = write_fake_tool(root / "tools", "cargo")
+        cache = root / "cache"
+        (cache / "registry").mkdir(parents=True)
+        (cache / "git").mkdir()
+        owned = root / "owned"
+
+        def make_root():
+            owned.mkdir()
+            return owned
+
+        identity = build.ResolvedTool("cargo", cargo, protocol.sha256_file(cargo))
+        return repository, identity, cache, owned, make_root
+
+    def test_verifier_runs_exact_five_steps_with_sealed_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository, cargo, cache, owned, make_root = self.fixture(root)
+            runner = FakeProbeRunner()
+            result = build._verify_allocation_probe_with_dependencies(
+                repository,
+                cargo=cargo,
+                command_runner=runner,
+                temporary_root_factory=make_root,
+                cache_source=cache,
+            )
+            self.assertEqual(
+                [step[0][1] for step in runner.calls[:4]],
+                ["fmt", "test", "clippy", "build"],
+            )
+            self.assertEqual(runner.calls[4][0][1:], ("--list-cases",))
+            self.assertEqual(
+                [call[1]["deadline_seconds"] for call in runner.calls],
+                [300, 1800, 1800, 1800, 30],
+            )
+            for argv, kwargs in runner.calls[:4]:
+                self.assertEqual(argv[0], str(cargo.path))
+                self.assertTrue(pathlib.Path(argv[0]).is_absolute())
+                self.assertEqual(kwargs["executable_identity"], cargo)
+                self.assertEqual(
+                    set(kwargs["environment"]),
+                    {
+                        "PATH",
+                        "HOME",
+                        "LC_ALL",
+                        "TZ",
+                        *protocol.THREAD_ENV,
+                        "CARGO_HOME",
+                        "CARGO_TARGET_DIR",
+                        "CARGO_INCREMENTAL",
+                        "CARGO_NET_OFFLINE",
+                    },
+                )
+            self.assertIsNone(runner.calls[4][1]["executable_identity"])
+            self.assertEqual(result.case_inventory, tuple(protocol.CANONICAL_CASES))
+            self.assertEqual(result.source_sha256, result.generated_source_sha256)
+            self.assertEqual(
+                result.template_sha256,
+                protocol.sha256_file(
+                    repository
+                    / build.ALLOCATION_PROBE_SOURCE_ROOT
+                    / build.ALLOCATION_PROBE_TEMPLATE
+                ),
+            )
+            self.assertRegex(result.lock_sha256, r"^[0-9a-f]{64}$")
+            self.assertRegex(result.binary_sha256, r"^[0-9a-f]{64}$")
+            self.assertFalse(owned.exists())
+
+    def test_each_noncomplete_step_stops_immediately_and_cleans(self) -> None:
+        for reason in ("nonzero-exit", "deadline-exceeded"):
+            for failing_index, name in enumerate(
+                ("fmt", "test", "clippy", "build", "list-cases")
+            ):
+                with self.subTest(name=name, reason=reason), tempfile.TemporaryDirectory() as temporary:
+                    root = pathlib.Path(temporary)
+                    repository, cargo, cache, owned, make_root = self.fixture(root)
+                    runner = FakeProbeRunner(fail_at=name, failure_reason=reason)
+                    with self.assertRaisesRegex(protocol.ProtocolError, name):
+                        build._verify_allocation_probe_with_dependencies(
+                            repository,
+                            cargo=cargo,
+                            command_runner=runner,
+                            temporary_root_factory=make_root,
+                            cache_source=cache,
+                        )
+                    self.assertEqual(len(runner.calls), failing_index + 1)
+                    self.assertFalse(owned.exists())
+
+    def test_control_exceptions_preserve_identity_and_cleanup(self) -> None:
+        for exception in (KeyboardInterrupt("cancel"), SystemExit(17)):
+            with self.subTest(exception=type(exception).__name__), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                repository, cargo, cache, owned, make_root = self.fixture(root)
+                runner = FakeProbeRunner(fail_at="clippy", interrupt=exception)
+                with self.assertRaises(type(exception)) as caught:
+                    build._verify_allocation_probe_with_dependencies(
+                        repository,
+                        cargo=cargo,
+                        command_runner=runner,
+                        temporary_root_factory=make_root,
+                        cache_source=cache,
+                    )
+                self.assertIs(caught.exception, exception)
+                self.assertFalse(owned.exists())
+
+    def test_cleanup_failure_never_replaces_active_exception(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository, cargo, cache, _, make_root = self.fixture(root)
+            interruption = KeyboardInterrupt("primary")
+            runner = FakeProbeRunner(fail_at="fmt", interrupt=interruption)
+            with mock.patch.object(build.shutil, "rmtree", side_effect=OSError("cleanup")):
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    build._verify_allocation_probe_with_dependencies(
+                        repository,
+                        cargo=cargo,
+                        command_runner=runner,
+                        temporary_root_factory=make_root,
+                        cache_source=cache,
+                    )
+            self.assertIs(caught.exception, interruption)
+
+    def test_source_mutation_and_foreign_inventory_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository, cargo, cache, owned, make_root = self.fixture(root)
+            source = repository / build.ALLOCATION_PROBE_SOURCE_ROOT / "src/main.rs"
+
+            class MutatingRunner(FakeProbeRunner):
+                def __call__(self, argv, **kwargs):
+                    result = super().__call__(argv, **kwargs)
+                    source.write_text("fn changed() {}\n")
+                    return result
+
+            with self.assertRaisesRegex(protocol.ProtocolError, "source.*changed"):
+                build._verify_allocation_probe_with_dependencies(
+                    repository,
+                    cargo=cargo,
+                    command_runner=MutatingRunner(),
+                    temporary_root_factory=make_root,
+                    cache_source=cache,
+                )
+            self.assertFalse(owned.exists())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository, cargo, cache, owned, make_root = self.fixture(root)
+            (repository / build.ALLOCATION_PROBE_SOURCE_ROOT / "extra").write_text("x")
+            runner = FakeProbeRunner()
+            with self.assertRaisesRegex(protocol.ProtocolError, "inventory"):
+                build._verify_allocation_probe_with_dependencies(
+                    repository,
+                    cargo=cargo,
+                    command_runner=runner,
+                    temporary_root_factory=make_root,
+                    cache_source=cache,
+                )
+            self.assertEqual(runner.calls, [])
+            self.assertFalse(owned.exists())
+
+    def test_template_generated_source_and_symlink_mutations_are_rejected(self) -> None:
+        for relative in ("Cargo.toml.in", "src/main.rs"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                repository, cargo, cache, owned, make_root = self.fixture(root)
+                tracked = repository / build.ALLOCATION_PROBE_SOURCE_ROOT / relative
+
+                class TrackedMutatingRunner(FakeProbeRunner):
+                    def __call__(self, argv, **kwargs):
+                        result = super().__call__(argv, **kwargs)
+                        tracked.write_bytes(tracked.read_bytes() + b"\n")
+                        return result
+
+                with self.assertRaisesRegex(protocol.ProtocolError, "source changed"):
+                    build._verify_allocation_probe_with_dependencies(
+                        repository,
+                        cargo=cargo,
+                        command_runner=TrackedMutatingRunner(),
+                        temporary_root_factory=make_root,
+                        cache_source=cache,
+                    )
+                self.assertFalse(owned.exists())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository, cargo, cache, owned, make_root = self.fixture(root)
+
+            class GeneratedMutatingRunner(FakeProbeRunner):
+                def __call__(self, argv, **kwargs):
+                    result = super().__call__(argv, **kwargs)
+                    generated = pathlib.Path(kwargs["cwd"]) / "src/main.rs"
+                    generated.write_bytes(generated.read_bytes() + b"\n")
+                    return result
+
+            with self.assertRaisesRegex(protocol.ProtocolError, "generated.*source changed"):
+                build._verify_allocation_probe_with_dependencies(
+                    repository,
+                    cargo=cargo,
+                    command_runner=GeneratedMutatingRunner(),
+                    temporary_root_factory=make_root,
+                    cache_source=cache,
+                )
+            self.assertFalse(owned.exists())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository, cargo, cache, owned, make_root = self.fixture(root)
+            source = repository / build.ALLOCATION_PROBE_SOURCE_ROOT / "src/main.rs"
+            source.unlink()
+            source.symlink_to("tests.rs")
+            runner = FakeProbeRunner()
+            with self.assertRaisesRegex(protocol.ProtocolError, "not a regular file"):
+                build._verify_allocation_probe_with_dependencies(
+                    repository,
+                    cargo=cargo,
+                    command_runner=runner,
+                    temporary_root_factory=make_root,
+                    cache_source=cache,
+                )
+            self.assertEqual(runner.calls, [])
+            self.assertFalse(owned.exists())
+
+    def test_manifest_dependency_contract_is_parsed_not_text_matched(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository, cargo, cache, owned, make_root = self.fixture(root)
+            template = repository / build.ALLOCATION_PROBE_SOURCE_ROOT / "Cargo.toml.in"
+            template.write_text(template.read_text().replace(
+                'features = ["cpu-faer"]', 'features = ["cpu-blas"]', 1
+            ))
+            runner = FakeProbeRunner()
+            with self.assertRaisesRegex(protocol.ProtocolError, "features mismatch"):
+                build._verify_allocation_probe_with_dependencies(
+                    repository,
+                    cargo=cargo,
+                    command_runner=runner,
+                    temporary_root_factory=make_root,
+                    cache_source=cache,
+                )
+            self.assertEqual(runner.calls, [])
+            self.assertFalse(owned.exists())
+
+    def test_lock_mutation_after_creation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            repository, cargo, cache, owned, make_root = self.fixture(root)
+
+            class LockMutatingRunner(FakeProbeRunner):
+                def __call__(self, argv, **kwargs):
+                    result = super().__call__(argv, **kwargs)
+                    if "clippy" in argv:
+                        (pathlib.Path(kwargs["cwd"]) / "Cargo.lock").write_bytes(b"changed")
+                    return result
+
+            with self.assertRaisesRegex(protocol.ProtocolError, "Cargo.lock changed"):
+                build._verify_allocation_probe_with_dependencies(
+                    repository,
+                    cargo=cargo,
+                    command_runner=LockMutatingRunner(),
+                    temporary_root_factory=make_root,
+                    cache_source=cache,
+                )
+            self.assertFalse(owned.exists())
+
+    def test_main_is_import_safe_strict_and_returns_typed_error(self) -> None:
+        with mock.patch.object(
+            build, "verify_allocation_probe", return_value=mock.sentinel.result
+        ) as verify:
+            self.assertEqual(
+                build.main(
+                    ["verify-allocation-probe", "--repository", "/tmp/repository"]
+                ),
+                0,
+            )
+            verify.assert_called_once_with(pathlib.Path("/tmp/repository"))
+        self.assertNotEqual(build.main([]), 0)
+        self.assertNotEqual(build.main(["unknown"]), 0)
 
 
 class ResolvedToolchainTests(unittest.TestCase):
