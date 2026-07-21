@@ -53,6 +53,12 @@ EXECUTABLE_SEALS = (
 )
 FINALIZATION_STAGE = ".campaign-final.json"
 FINALIZATION_MARKER = ".campaign-finalization.json"
+FINALIZATION_PUBLISH = ".campaign-publish.json"
+FINALIZATION_FILES = {
+    FINALIZATION_STAGE,
+    FINALIZATION_MARKER,
+    FINALIZATION_PUBLISH,
+}
 
 
 class PinnedExecutable:
@@ -239,18 +245,26 @@ class PinnedDirectory:
         logical_path: pathlib.Path,
         *,
         pinned_observer: Callable[["PinnedDirectory"], None] | None = None,
+        component_observer: Callable[[pathlib.Path, int], None] | None = None,
     ) -> "PinnedDirectory":
         """Create/open and prove an empty root through one retained descriptor."""
         logical = pathlib.Path(os.path.abspath(logical_path))
         parent_path = logical.parent
-        if parent_path.resolve(strict=True) != parent_path:
-            raise protocol.ProtocolError("campaign root parent must be canonical")
-        parent = os.open(
-            parent_path,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-        )
+        parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
         descriptor: int | None = None
         try:
+            opened_path = pathlib.Path("/")
+            for component in parent_path.parts[1:]:
+                child = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=parent,
+                )
+                os.close(parent)
+                parent = child
+                opened_path /= component
+                if component_observer is not None:
+                    component_observer(opened_path, parent)
             try:
                 os.mkdir(logical.name, mode=0o700, dir_fd=parent)
                 os.fsync(parent)
@@ -1347,6 +1361,91 @@ def _ledger_attempt(ledger: Mapping[str, Any], args) -> Mapping[str, Any]:
     return matches[0]
 
 
+def _require_closed_attempt(
+    ledger: Mapping[str, Any], args, statistical_result: str
+) -> None:
+    attempt = _ledger_attempt(ledger, args)
+    if (
+        ledger["active_attempt_id"] is not None
+        or attempt["state"] != "COMPLETE"
+        or attempt["validity_state"] != "COMPLETE"
+        or attempt["statistical_result"] != statistical_result
+    ):
+        raise protocol.ProtocolError("finalization ledger terminal state differs")
+
+
+def _publish_staged_campaign(root: PinnedDirectory) -> None:
+    try:
+        os.link(
+            FINALIZATION_STAGE,
+            FINALIZATION_PUBLISH,
+            src_dir_fd=root.descriptor,
+            dst_dir_fd=root.descriptor,
+            follow_symlinks=False,
+        )
+        os.fsync(root.descriptor)
+    except FileExistsError:
+        if root.read_regular(FINALIZATION_PUBLISH) != root.read_regular(
+            FINALIZATION_STAGE
+        ):
+            raise protocol.ProtocolError("finalization publish partial differs")
+    os.replace(
+        FINALIZATION_PUBLISH,
+        "campaign.json",
+        src_dir_fd=root.descriptor,
+        dst_dir_fd=root.descriptor,
+    )
+
+
+def _unlink_finalization_file(root: PinnedDirectory, name: str) -> None:
+    try:
+        os.unlink(name, dir_fd=root.descriptor)
+    except FileNotFoundError:
+        return
+    os.fsync(root.descriptor)
+
+
+def _validate_completed_campaign(
+    root: PinnedDirectory,
+    args,
+    ledger: Mapping[str, Any],
+    *,
+    marker: Mapping[str, Any] | None,
+    files: set[str],
+) -> tuple[dict[str, Any], int]:
+    campaign = _read_root_json(root, "campaign.json")
+    statistical_result = campaign.get("statistical_result")
+    if (
+        campaign.get("validity_state") != "COMPLETE"
+        or statistical_result not in {"PASS", "FAIL", "INCONCLUSIVE"}
+        or campaign.get("comparison_kind") != args.comparison_kind
+        or campaign.get("candidate_sha") != ledger["candidate_sha"]
+    ):
+        raise protocol.ProtocolError("completed recovery campaign identity differs")
+    campaign_digest = protocol.sha256_json(campaign)
+    if marker is not None:
+        if (
+            marker["campaign_sha256"] != campaign_digest
+            or marker["candidate_sha"] != campaign["candidate_sha"]
+            or marker["statistical_result"] != statistical_result
+        ):
+            raise protocol.ProtocolError("completed recovery marker differs")
+    for name in (FINALIZATION_STAGE, FINALIZATION_PUBLISH):
+        if name in files and protocol.sha256_json(
+            _read_root_json(root, name)
+        ) != campaign_digest:
+            raise protocol.ProtocolError(f"completed recovery partial differs: {name}")
+    classification.classify_campaign_retained(
+        root.logical_path / "campaign.json",
+        root.logical_path,
+        root_descriptor=root.descriptor,
+        ignored_root_files=set(FINALIZATION_FILES),
+    )
+    root.validate_link()
+    _require_closed_attempt(ledger, args, statistical_result)
+    return campaign, EXIT_BY_RESULT[("COMPLETE", statistical_result)]
+
+
 def _recover_finalization(args, atomic_writer) -> int | None:
     artifact_path = pathlib.Path(os.path.abspath(args.artifact_root))
     try:
@@ -1358,19 +1457,43 @@ def _recover_finalization(args, atomic_writer) -> int | None:
     root = PinnedDirectory(artifact_path)
     try:
         files, _directories = root.inventory()
-        if FINALIZATION_MARKER not in files:
+        if "campaign.json" not in files:
+            if files.intersection(FINALIZATION_FILES):
+                raise protocol.ProtocolError(
+                    "finalization partial exists without campaign.json"
+                )
             return None
-        marker = _read_root_json(root, FINALIZATION_MARKER)
-        _validate_finalization_marker(marker, args)
         ledger_path = pathlib.Path(args.ledger).resolve(strict=True)
         ledger = _read_json(ledger_path, "evidence ledger")
         protocol.validate_ledger(ledger)
-        if ledger["candidate_sha"] != marker["candidate_sha"]:
-            raise protocol.ProtocolError("finalization ledger candidate differs")
+        marker = None
+        if FINALIZATION_MARKER in files:
+            marker = _read_root_json(root, FINALIZATION_MARKER)
+            _validate_finalization_marker(marker, args)
+            if ledger["candidate_sha"] != marker["candidate_sha"]:
+                raise protocol.ProtocolError("finalization ledger candidate differs")
 
-        staged = FINALIZATION_STAGE in files
-        terminal_name = FINALIZATION_STAGE if staged else "campaign.json"
-        terminal = _read_root_json(root, terminal_name)
+        persisted = _read_root_json(root, "campaign.json")
+        if persisted.get("validity_state") == "COMPLETE":
+            _campaign, exit_code = _validate_completed_campaign(
+                root, args, ledger, marker=marker, files=files
+            )
+            for name in (
+                FINALIZATION_MARKER,
+                FINALIZATION_PUBLISH,
+                FINALIZATION_STAGE,
+            ):
+                _unlink_finalization_file(root, name)
+            root.validate_link()
+            return exit_code
+
+        if marker is None:
+            return None
+        if persisted.get("validity_state") != "RUNNING":
+            raise protocol.ProtocolError("finalization persisted campaign is not RUNNING")
+        if FINALIZATION_STAGE not in files:
+            raise protocol.ProtocolError("finalization stage is missing")
+        terminal = _read_root_json(root, FINALIZATION_STAGE)
         if protocol.sha256_json(terminal) != marker["campaign_sha256"]:
             raise protocol.ProtocolError("finalization campaign digest differs")
         if (
@@ -1380,18 +1503,16 @@ def _recover_finalization(args, atomic_writer) -> int | None:
             or terminal.get("statistical_result") != marker["statistical_result"]
         ):
             raise protocol.ProtocolError("finalization campaign identity differs")
-
-        if staged:
-            classification.classify_terminal_view(
-                artifact_path / "campaign.json",
-                terminal,
-                artifact_path,
-                root_descriptor=root.descriptor,
-            )
+        classification.classify_terminal_view(
+            artifact_path / "campaign.json",
+            terminal,
+            artifact_path,
+            root_descriptor=root.descriptor,
+        )
         root.validate_link()
 
         attempt = _ledger_attempt(ledger, args)
-        if attempt["state"] == "RUNNING":
+        if attempt["state"] == "RUNNING" and ledger["active_attempt_id"] == args.attempt_id:
             _close_ledger(
                 ledger_path,
                 ledger,
@@ -1400,26 +1521,23 @@ def _recover_finalization(args, atomic_writer) -> int | None:
                 "COMPLETE",
                 atomic_writer,
             )
-        elif (
-            attempt["state"] != "COMPLETE"
-            or attempt["validity_state"] != "COMPLETE"
-            or attempt["statistical_result"] != marker["statistical_result"]
-        ):
-            raise protocol.ProtocolError("finalization ledger terminal state differs")
+            ledger = _read_json(ledger_path, "evidence ledger")
+            protocol.validate_ledger(ledger)
+        else:
+            _require_closed_attempt(ledger, args, marker["statistical_result"])
 
-        if staged:
-            os.replace(
-                FINALIZATION_STAGE,
-                "campaign.json",
-                src_dir_fd=root.descriptor,
-                dst_dir_fd=root.descriptor,
-            )
+        _publish_staged_campaign(root)
         os.fsync(root.descriptor)
         root.validate_link()
-        os.unlink(FINALIZATION_MARKER, dir_fd=root.descriptor)
-        os.fsync(root.descriptor)
+        files, _directories = root.inventory()
+        _campaign, exit_code = _validate_completed_campaign(
+            root, args, ledger, marker=marker, files=files
+        )
+        _unlink_finalization_file(root, FINALIZATION_MARKER)
+        _unlink_finalization_file(root, FINALIZATION_PUBLISH)
+        _unlink_finalization_file(root, FINALIZATION_STAGE)
         root.validate_link()
-        return EXIT_BY_RESULT[("COMPLETE", marker["statistical_result"])]
+        return exit_code
     finally:
         root.close()
 
@@ -1734,7 +1852,10 @@ def _run_campaign(
             protocol.atomic_write_json_at(
                 artifact_handle.descriptor, FINALIZATION_MARKER, marker
             )
-        except BaseException:
+        except BaseException as error:
+            if isinstance(error, protocol.AtomicWriteError) and error.committed:
+                finalization_started = True
+                raise
             try:
                 os.unlink(FINALIZATION_STAGE, dir_fd=artifact_handle.descriptor)
                 os.fsync(artifact_handle.descriptor)
@@ -1757,20 +1878,26 @@ def _run_campaign(
             finalization_observer("ledger_closed")
         if campaign_write_observer is not None:
             campaign_write_observer(manifest_path, terminal)
-        os.replace(
-            FINALIZATION_STAGE,
-            "campaign.json",
-            src_dir_fd=artifact_handle.descriptor,
-            dst_dir_fd=artifact_handle.descriptor,
-        )
+        _publish_staged_campaign(artifact_handle)
         if finalization_observer is not None:
             finalization_observer("published")
         os.fsync(artifact_handle.descriptor)
         if finalization_observer is not None:
             finalization_observer("directory_synced")
         artifact_handle.validate_link()
-        os.unlink(FINALIZATION_MARKER, dir_fd=artifact_handle.descriptor)
-        os.fsync(artifact_handle.descriptor)
+        closed_ledger = _read_json(pathlib.Path(args.ledger), "evidence ledger")
+        protocol.validate_ledger(closed_ledger)
+        files, _directories = artifact_handle.inventory()
+        _validate_completed_campaign(
+            artifact_handle,
+            args,
+            closed_ledger,
+            marker=marker,
+            files=files,
+        )
+        _unlink_finalization_file(artifact_handle, FINALIZATION_MARKER)
+        _unlink_finalization_file(artifact_handle, FINALIZATION_PUBLISH)
+        _unlink_finalization_file(artifact_handle, FINALIZATION_STAGE)
         artifact_handle.validate_link()
         campaign = terminal
         return EXIT_BY_RESULT[("COMPLETE", terminal["statistical_result"])]

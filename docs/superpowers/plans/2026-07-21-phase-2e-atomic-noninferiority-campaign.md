@@ -453,6 +453,17 @@ after interruption before or after ledger closure, rename, directory fsync, or
 marker cleanup; unknown or mismatched partials are rejected.  This is not
 measurement resume.
 
+Recovery must fully revalidate a published `COMPLETE` campaign through the
+retained artifact descriptor: strict campaign/run/build/Criterion schemas,
+every artifact digest and directory, both classifier outputs, and the exact
+closed ledger attempt/result.  A committed marker write whose parent fsync
+fails retains the RUNNING campaign, active ledger, stage, and marker for that
+same recovery.  A `COMPLETE` campaign with a matching closed ledger remains
+idempotently recoverable even after marker removal; it is never treated as a
+fresh measurement root.  Keep the exact final stage until marker removal and
+its directory fsync have completed, and reject contradictory active/closed
+ledger combinations or any mismatched partial.
+
 Create and pin fresh roots through their parent directory descriptors before
 checking emptiness.  Keep classifier reads, inventory, and output publication
 relative to the retained artifact descriptor without resolving
@@ -465,6 +476,10 @@ normal child exit with non-reaping `waitid(..., WNOWAIT)` so the final host
 sample is captured before reap; after reap, detect and kill any surviving
 process-group members.  Cleanup must preserve `KeyboardInterrupt` and
 `SystemExit` while still terminating the whole process group.
+
+Open every absolute parent component from `/` with retained directory
+descriptors and `O_DIRECTORY | O_NOFOLLOW`; do not resolve-check a parent and
+then reopen it by pathname before creating the fresh child root.
 
 - [ ] **Step 4: Run runner and classifier tests GREEN**
 

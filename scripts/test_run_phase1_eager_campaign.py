@@ -1125,6 +1125,30 @@ while not os.path.exists(sys.argv[1]):
         self.assertEqual(fake.launch_count, 0)
         self.assertEqual(list(replacement.iterdir()), [])
 
+    def test_fresh_root_parent_swap_cannot_redirect_creation(self):
+        parent = self.base / "fresh-parent"
+        parent.mkdir()
+        root = parent / "artifact"
+        detached = self.base / "fresh-parent-detached"
+        replacement = self.base / "fresh-parent-replacement"
+        swapped = False
+
+        def swap_parent(opened_path, _descriptor):
+            nonlocal swapped
+            if opened_path == parent and not swapped:
+                swapped = True
+                parent.rename(detached)
+                replacement.mkdir()
+                parent.symlink_to(replacement, target_is_directory=True)
+
+        with self.assertRaisesRegex(protocol.ProtocolError, "identity changed"):
+            runner.PinnedDirectory.create_fresh(
+                root, component_observer=swap_parent
+            )
+
+        self.assertTrue((detached / "artifact").is_dir())
+        self.assertEqual(list(replacement.iterdir()), [])
+
     def test_criterion_root_swap_cannot_redirect_benchmark_scratch(self):
         args = self.arguments()
         fake = FakeProcessFactory(
@@ -1254,6 +1278,70 @@ while not os.path.exists(sys.argv[1]):
                 ledger = json.loads(args.ledger.read_text())
                 self.assertIsNone(ledger["active_attempt_id"])
 
+    def test_published_recovery_revalidates_all_classification_artifacts(self):
+        args = self.arguments()
+        first = FakeProcessFactory()
+
+        def interrupt(phase):
+            if phase == "published":
+                raise OSError("stop after publish")
+
+        self.assertEqual(
+            self.execute(args, first, finalization_observer=interrupt), 1
+        )
+        classification_path = args.artifact_root / "classification.json"
+        classification_path.write_text("{}\n")
+
+        recovery = FakeProcessFactory()
+        self.assertEqual(self.execute(args, recovery), 1)
+        self.assertEqual(recovery.launch_count, 0)
+        self.assertTrue(
+            (args.artifact_root / runner.FINALIZATION_MARKER).is_file()
+        )
+
+    def test_committed_marker_durability_failure_recovers_without_measurement(self):
+        args = self.arguments()
+        first = FakeProcessFactory()
+        original = protocol.atomic_write_json_at
+        injected = False
+
+        def committed_marker_failure(directory_fd, name, payload):
+            nonlocal injected
+            result = original(directory_fd, name, payload)
+            if name == runner.FINALIZATION_MARKER and not injected:
+                injected = True
+                raise protocol.AtomicWriteDurabilityError(
+                    "marker installed but parent fsync failed"
+                )
+            return result
+
+        with mock.patch.object(
+            runner.protocol,
+            "atomic_write_json_at",
+            side_effect=committed_marker_failure,
+        ):
+            self.assertEqual(self.execute(args, first), 1)
+
+        manifest = json.loads((args.artifact_root / "campaign.json").read_text())
+        ledger = json.loads(args.ledger.read_text())
+        self.assertEqual(manifest["validity_state"], "RUNNING")
+        self.assertEqual(ledger["active_attempt_id"], args.attempt_id)
+        self.assertTrue((args.artifact_root / runner.FINALIZATION_STAGE).is_file())
+        self.assertTrue((args.artifact_root / runner.FINALIZATION_MARKER).is_file())
+
+        recovery = FakeProcessFactory()
+        self.assertEqual(self.execute(args, recovery), 0)
+        self.assertEqual(recovery.launch_count, 0)
+
+    def test_completed_campaign_rerun_is_idempotent_without_launch(self):
+        args = self.arguments()
+        first = FakeProcessFactory()
+        self.assertEqual(self.execute(args, first), 0)
+
+        rerun = FakeProcessFactory()
+        self.assertEqual(self.execute(args, rerun), 0)
+        self.assertEqual(rerun.launch_count, 0)
+
     def test_mismatched_finalization_partial_is_rejected_without_launch(self):
         args = self.arguments()
         first = FakeProcessFactory()
@@ -1275,7 +1363,12 @@ while not os.path.exists(sys.argv[1]):
         self.assertEqual(recovery.launch_count, 0)
 
     def test_finalization_rename_fsync_and_cleanup_failures_are_recoverable(self):
-        for operation in ("rename", "dir_fsync", "cleanup"):
+        for operation in (
+            "rename",
+            "dir_fsync",
+            "cleanup",
+            "marker_unlink_fsync",
+        ):
             with self.subTest(operation=operation):
                 args = self.arguments()
                 first = FakeProcessFactory()
@@ -1283,10 +1376,11 @@ while not os.path.exists(sys.argv[1]):
                 real_fsync = os.fsync
                 real_unlink = os.unlink
                 injected = False
+                marker_seen = False
 
                 def replace_once(source, destination, *positional, **keywords):
                     nonlocal injected
-                    if operation == "rename" and source == runner.FINALIZATION_STAGE:
+                    if operation == "rename" and source == runner.FINALIZATION_PUBLISH:
                         injected = True
                         raise OSError("injected final campaign rename failure")
                     return real_replace(source, destination, *positional, **keywords)
@@ -1303,18 +1397,36 @@ while not os.path.exists(sys.argv[1]):
                     return real_unlink(path, *positional, **keywords)
 
                 def fsync_once(descriptor):
-                    nonlocal injected
-                    if operation == "dir_fsync" and not injected:
+                    nonlocal injected, marker_seen
+                    entries = set()
+                    if operation in {"dir_fsync", "marker_unlink_fsync"}:
                         try:
                             entries = set(os.listdir(descriptor))
                         except OSError:
-                            entries = set()
+                            pass
+                        marker_seen = marker_seen or (
+                            runner.FINALIZATION_MARKER in entries
+                        )
+                    if operation == "dir_fsync" and not injected:
                         if (
                             runner.FINALIZATION_MARKER in entries
-                            and runner.FINALIZATION_STAGE not in entries
+                            and runner.FINALIZATION_STAGE in entries
+                            and runner.FINALIZATION_PUBLISH not in entries
                         ):
                             injected = True
                             raise OSError("injected final directory fsync failure")
+                    if (
+                        operation == "marker_unlink_fsync"
+                        and marker_seen
+                        and not injected
+                    ):
+                        if (
+                            runner.FINALIZATION_MARKER not in entries
+                            and runner.FINALIZATION_STAGE in entries
+                            and "campaign.json" in entries
+                        ):
+                            injected = True
+                            raise OSError("injected marker unlink fsync failure")
                     return real_fsync(descriptor)
 
                 with mock.patch.object(

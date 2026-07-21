@@ -47,6 +47,7 @@ CLASSIFICATION_FILENAMES = ("classification.json", "summary.md")
 RUNNER_FINALIZATION_FILES = {
     ".campaign-final.json",
     ".campaign-finalization.json",
+    ".campaign-publish.json",
 }
 TRANSACTION_DIRECTORY = ".classification-transaction"
 TRANSACTION_FILENAMES = (
@@ -1084,6 +1085,7 @@ def _validated_classification(
     campaign_path: pathlib.Path,
     recovery_output_dir: pathlib.Path | None = None,
     terminal_payload: Mapping[str, Any] | None = None,
+    ignored_root_files: set[str] | None = None,
 ) -> tuple[
     dict[str, Any],
     dict[str, Any],
@@ -1258,7 +1260,9 @@ def _validated_classification(
     observed, observed_directories = _observed_normative_inventory(
         root,
         ignored_files=(
-            RUNNER_FINALIZATION_FILES if terminal_payload is not None else None
+            ignored_root_files
+            if ignored_root_files is not None
+            else (RUNNER_FINALIZATION_FILES if terminal_payload is not None else None)
         ),
     )
     expected_files = {"campaign.json", *expected_inventory}
@@ -1886,6 +1890,7 @@ def _classify_validated(
     output_dir: pathlib.Path,
     *,
     terminal_payload: Mapping[str, Any] | None,
+    ignored_root_files: set[str] | None = None,
 ) -> dict[str, Any]:
     campaign_path = _canonical_regular_file(
         pathlib.Path(os.path.abspath(campaign_path)), "campaign manifest"
@@ -1897,6 +1902,7 @@ def _classify_validated(
             campaign_path,
             recovery_output_dir=output_dir,
             terminal_payload=terminal_payload,
+            ignored_root_files=ignored_root_files,
         )
     )
     paths = {
@@ -1988,6 +1994,46 @@ def classify_terminal_view(
         or _directory_identity(logical_current) != expected_identity
     ):
         raise protocol.ProtocolError("terminal view root identity changed")
+    return result
+
+
+def classify_campaign_retained(
+    campaign_path: pathlib.Path,
+    output_dir: pathlib.Path,
+    *,
+    root_descriptor: int,
+    ignored_root_files: set[str] | None = None,
+) -> dict[str, Any]:
+    """Fully revalidate COMPLETE evidence through a retained campaign root."""
+    logical_campaign = pathlib.Path(os.path.abspath(campaign_path))
+    if logical_campaign.name != "campaign.json":
+        raise protocol.ProtocolError("retained classification requires campaign.json")
+    logical_root = logical_campaign.parent
+    logical_output = pathlib.Path(os.path.abspath(output_dir))
+    try:
+        output_relative = logical_output.relative_to(logical_root)
+    except ValueError as error:
+        raise protocol.ProtocolError(
+            "classification output dir is outside campaign root"
+        ) from error
+    retained_root, expected_identity = _retained_root_path(root_descriptor)
+    result = _classify_validated(
+        retained_root / "campaign.json",
+        retained_root / output_relative,
+        terminal_payload=None,
+        ignored_root_files=ignored_root_files,
+    )
+    if _directory_identity(os.fstat(root_descriptor)) != expected_identity:
+        raise protocol.ProtocolError("retained campaign root descriptor changed")
+    try:
+        logical_current = os.stat(logical_root, follow_symlinks=False)
+    except OSError as error:
+        raise protocol.ProtocolError("retained campaign root identity changed") from error
+    if (
+        not stat.S_ISDIR(logical_current.st_mode)
+        or _directory_identity(logical_current) != expected_identity
+    ):
+        raise protocol.ProtocolError("retained campaign root identity changed")
     return result
 
 
