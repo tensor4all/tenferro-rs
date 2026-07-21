@@ -401,7 +401,14 @@ def _open_retained_directory_path(path: pathlib.Path, *, create: bool = False) -
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                 dir_fd=descriptor,
             )
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except BaseException as error:
+                try:
+                    os.close(child)
+                except BaseException:
+                    pass
+                raise error
             descriptor = child
         return descriptor
     except BaseException:

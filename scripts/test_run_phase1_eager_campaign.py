@@ -586,6 +586,7 @@ while True:
     signal.pause()
 """
         identity_path = self.base / "descendant.identity"
+        identity_path.touch()
         process = subprocess.Popen(
             (sys.executable, "-c", script, str(identity_path)),
             stdout=subprocess.DEVNULL,
@@ -595,15 +596,24 @@ while True:
         descendant = None
         try:
             deadline = time.monotonic() + 5
+            last_identity = ""
             while time.monotonic() < deadline:
-                if identity_path.exists():
-                    descendant, process_group = map(
-                        int, identity_path.read_text().split()
-                    )
-                    break
+                try:
+                    last_identity = identity_path.read_text()
+                    fields = last_identity.split()
+                    if len(fields) == 2:
+                        descendant, process_group = map(int, fields)
+                        break
+                except (FileNotFoundError, ValueError):
+                    pass
+                if process.poll() is not None:
+                    self.fail("leader exited before publishing identity")
                 time.sleep(0.01)
             else:
-                self.fail("descendant did not publish identity")
+                self.fail(
+                    "descendant did not publish complete identity: "
+                    f"{last_identity!r}"
+                )
             self.assertEqual(process_group, process.pid)
 
             terminated, killed, failures = runner._terminate_group(
@@ -1149,6 +1159,78 @@ while not os.path.exists(sys.argv[1]):
         self.assertTrue((detached / "artifact").is_dir())
         self.assertEqual(list(replacement.iterdir()), [])
 
+    def test_finalization_reachable_state_matrix_is_exact(self):
+        expected = {
+            ("RUNNING", False, False, False, True): "NO_RESUME",
+            ("RUNNING", True, True, False, True): "RUNNING",
+            ("RUNNING", True, True, True, True): "RUNNING",
+            ("RUNNING", True, True, False, False): "RUNNING",
+            ("RUNNING", True, True, True, False): "RUNNING",
+            ("COMPLETE", True, True, False, False): "COMPLETE",
+            ("COMPLETE", False, True, False, False): "COMPLETE",
+            ("COMPLETE", False, False, False, False): "COMPLETE",
+        }
+        for validity in ("RUNNING", "COMPLETE"):
+            for marker in (False, True):
+                for stage in (False, True):
+                    for publish in (False, True):
+                        for ledger_active in (False, True):
+                            key = (
+                                validity,
+                                marker,
+                                stage,
+                                publish,
+                                ledger_active,
+                            )
+                            with self.subTest(state=key):
+                                if key in expected:
+                                    self.assertEqual(
+                                        runner._finalization_state_kind(*key),
+                                        expected[key],
+                                    )
+                                else:
+                                    with self.assertRaises(protocol.ProtocolError):
+                                        runner._finalization_state_kind(*key)
+
+    def test_component_close_failure_preserves_primary_and_closes_child(self):
+        root = self.base / "component-close-root"
+        nested = root / "nested"
+        nested.mkdir(parents=True)
+        before = len(os.listdir("/proc/self/fd"))
+        interruption = KeyboardInterrupt("old descriptor close interrupted")
+        real_close = os.close
+        calls = 0
+
+        def close_then_interrupt(descriptor):
+            nonlocal calls
+            calls += 1
+            real_close(descriptor)
+            if calls == 1:
+                raise interruption
+
+        with mock.patch.object(runner.os, "close", side_effect=close_then_interrupt):
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                runner.PinnedDirectory.create_fresh(root / "new")
+        self.assertIs(raised.exception, interruption)
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            calls = 0
+            with mock.patch.object(
+                runner.classification.os,
+                "close",
+                side_effect=close_then_interrupt,
+            ):
+                with self.assertRaises(KeyboardInterrupt) as raised:
+                    runner.classification._open_retained_directory_path(
+                        pathlib.Path(f"/proc/self/fd/{root_fd}/nested")
+                    )
+            self.assertIs(raised.exception, interruption)
+            self.assertEqual(len(os.listdir("/proc/self/fd")), before + 1)
+        finally:
+            os.close(root_fd)
+
     def test_criterion_root_swap_cannot_redirect_benchmark_scratch(self):
         args = self.arguments()
         fake = FakeProcessFactory(
@@ -1299,6 +1381,50 @@ while not os.path.exists(sys.argv[1]):
             (args.artifact_root / runner.FINALIZATION_MARKER).is_file()
         )
 
+    def test_published_recovery_rejects_missing_stage_as_unreachable(self):
+        args = self.arguments()
+        first = FakeProcessFactory()
+
+        def interrupt(phase):
+            if phase == "published":
+                raise OSError("stop after publish")
+
+        self.assertEqual(
+            self.execute(args, first, finalization_observer=interrupt), 1
+        )
+        (args.artifact_root / runner.FINALIZATION_STAGE).unlink()
+
+        recovery = FakeProcessFactory()
+        self.assertEqual(self.execute(args, recovery), 1)
+        self.assertEqual(recovery.launch_count, 0)
+        self.assertTrue(
+            (args.artifact_root / runner.FINALIZATION_MARKER).is_file()
+        )
+
+    def test_publish_partial_must_be_the_stage_hard_link(self):
+        args = self.arguments()
+        first = FakeProcessFactory()
+        real_replace = os.replace
+
+        def fail_publish(source, destination, *positional, **keywords):
+            if source == runner.FINALIZATION_PUBLISH:
+                raise OSError("stop with publish link")
+            return real_replace(source, destination, *positional, **keywords)
+
+        with mock.patch.object(runner.os, "replace", side_effect=fail_publish):
+            self.assertEqual(self.execute(args, first), 1)
+        stage = args.artifact_root / runner.FINALIZATION_STAGE
+        publish = args.artifact_root / runner.FINALIZATION_PUBLISH
+        content = publish.read_bytes()
+        publish.unlink()
+        publish.write_bytes(content)
+        self.assertNotEqual(stage.stat().st_ino, publish.stat().st_ino)
+
+        recovery = FakeProcessFactory()
+        self.assertEqual(self.execute(args, recovery), 1)
+        self.assertEqual(recovery.launch_count, 0)
+        self.assertTrue(publish.is_file())
+
     def test_committed_marker_durability_failure_recovers_without_measurement(self):
         args = self.arguments()
         first = FakeProcessFactory()
@@ -1332,6 +1458,92 @@ while not os.path.exists(sys.argv[1]):
         recovery = FakeProcessFactory()
         self.assertEqual(self.execute(args, recovery), 0)
         self.assertEqual(recovery.launch_count, 0)
+
+    def test_raw_marker_post_replace_interruption_preserves_transaction(self):
+        for interruption in (
+            KeyboardInterrupt("marker fsync interrupted"),
+            SystemExit("marker fsync exited"),
+        ):
+            with self.subTest(interruption=type(interruption).__name__):
+                args = self.arguments()
+                first = FakeProcessFactory()
+                original = protocol.atomic_write_json_at
+                injected = False
+
+                def interrupt_after_marker(directory_fd, name, payload):
+                    nonlocal injected
+                    result = original(directory_fd, name, payload)
+                    if name == runner.FINALIZATION_MARKER and not injected:
+                        injected = True
+                        raise interruption
+                    return result
+
+                with mock.patch.object(
+                    runner.protocol,
+                    "atomic_write_json_at",
+                    side_effect=interrupt_after_marker,
+                ):
+                    with self.assertRaises(type(interruption)) as raised:
+                        self.execute(args, first)
+                self.assertIs(raised.exception, interruption)
+                manifest = json.loads(
+                    (args.artifact_root / "campaign.json").read_text()
+                )
+                ledger = json.loads(args.ledger.read_text())
+                self.assertEqual(manifest["validity_state"], "RUNNING")
+                self.assertEqual(ledger["active_attempt_id"], args.attempt_id)
+                self.assertTrue(
+                    (args.artifact_root / runner.FINALIZATION_STAGE).is_file()
+                )
+                self.assertTrue(
+                    (args.artifact_root / runner.FINALIZATION_MARKER).is_file()
+                )
+
+                recovery = FakeProcessFactory()
+                self.assertEqual(self.execute(args, recovery), 0)
+                self.assertEqual(recovery.launch_count, 0)
+
+    def test_recovery_rejects_symlinked_parent_component(self):
+        args = self.arguments()
+        parent = self.base / "recovery-parent"
+        parent.mkdir()
+        args.artifact_root = parent / "artifact"
+        first = FakeProcessFactory()
+
+        def interrupt(phase):
+            if phase == "prepared":
+                raise OSError("stop with active finalization")
+
+        self.assertEqual(
+            self.execute(args, first, finalization_observer=interrupt), 1
+        )
+        detached = self.base / "recovery-parent-detached"
+        parent.rename(detached)
+        parent.symlink_to(detached, target_is_directory=True)
+
+        recovery = FakeProcessFactory()
+        self.assertEqual(self.execute(args, recovery), 1)
+        self.assertEqual(recovery.launch_count, 0)
+
+    def test_missing_finalization_file_still_fsyncs_root(self):
+        root_path = self.base / "unlink-fsync-root"
+        root_path.mkdir()
+        root = runner.PinnedDirectory(root_path)
+        calls = []
+        try:
+            with mock.patch.object(
+                runner.os,
+                "unlink",
+                side_effect=FileNotFoundError("already absent"),
+            ), mock.patch.object(
+                runner.os,
+                "fsync",
+                side_effect=lambda descriptor: calls.append(descriptor),
+            ):
+                runner._unlink_finalization_file(root, "absent")
+            self.assertEqual(calls, [root.descriptor])
+        finally:
+            root.close()
 
     def test_completed_campaign_rerun_is_idempotent_without_launch(self):
         args = self.arguments()

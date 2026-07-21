@@ -464,6 +464,29 @@ fresh measurement root.  Keep the exact final stage until marker removal and
 its directory fsync have completed, and reject contradictory active/closed
 ledger combinations or any mismatched partial.
 
+The recovery recognizer is an exact allow-list.  With columns
+`campaign / marker / stage / publish / ledger-active`, the only reachable
+states are:
+
+```text
+RUNNING / no  / no  / no  / yes  -> ordinary incomplete campaign; do not resume
+RUNNING / yes / yes / no  / yes  -> finish finalization
+RUNNING / yes / yes / yes / yes  -> finish finalization
+RUNNING / yes / yes / no  / no   -> finish finalization
+RUNNING / yes / yes / yes / no   -> finish finalization
+COMPLETE / yes / yes / no / no   -> validate, then clean marker and stage
+COMPLETE / no  / yes / no / no   -> validate, then clean stage
+COMPLETE / no  / no  / no / no   -> validate idempotently
+```
+
+Reject every other combination before launching a benchmark.  A surviving
+publish partial must be the same regular-file inode as the stage hard link,
+not merely byte-identical.  If an arbitrary `BaseException` interrupts marker
+publication after rename, re-read the exact canonical marker through the held
+root descriptor: a match commits the finalization transaction and preserves
+all recovery files and the original exception.  Missing-file cleanup still
+fsyncs the root directory so that recovery has one durability rule.
+
 Create and pin fresh roots through their parent directory descriptors before
 checking emptiness.  Keep classifier reads, inventory, and output publication
 relative to the retained artifact descriptor without resolving

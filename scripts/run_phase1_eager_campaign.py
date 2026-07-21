@@ -213,15 +213,56 @@ def _sha256_open_file(descriptor: int) -> str:
     return digest.hexdigest()
 
 
+def _advance_directory_descriptor(parent: int, child: int) -> int:
+    """Transfer directory ownership without leaking on an interrupted close."""
+    try:
+        os.close(parent)
+    except BaseException as error:
+        try:
+            os.close(child)
+        except BaseException:
+            pass
+        raise error
+    return child
+
+
+def _open_absolute_directory(
+    logical_path: pathlib.Path,
+    *,
+    component_observer: Callable[[pathlib.Path, int], None] | None = None,
+) -> int:
+    """Open an absolute directory one no-follow component at a time."""
+    logical = pathlib.Path(os.path.abspath(logical_path))
+    descriptor = os.open(
+        "/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    )
+    try:
+        opened_path = pathlib.Path("/")
+        for component in logical.parts[1:]:
+            child = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+            descriptor = _advance_directory_descriptor(descriptor, child)
+            opened_path /= component
+            if component_observer is not None:
+                component_observer(opened_path, descriptor)
+        return descriptor
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except BaseException:
+            pass
+        raise
+
+
 class PinnedDirectory:
     """A no-follow directory identity retained across pathname replacement."""
 
     def __init__(self, logical_path: pathlib.Path):
-        self.logical_path = pathlib.Path(logical_path)
-        self.descriptor = os.open(
-            self.logical_path,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-        )
+        self.logical_path = pathlib.Path(os.path.abspath(logical_path))
+        self.descriptor = _open_absolute_directory(self.logical_path)
         try:
             metadata = os.fstat(self.descriptor)
             self.identity = (metadata.st_dev, metadata.st_ino)
@@ -250,21 +291,11 @@ class PinnedDirectory:
         """Create/open and prove an empty root through one retained descriptor."""
         logical = pathlib.Path(os.path.abspath(logical_path))
         parent_path = logical.parent
-        parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        parent = _open_absolute_directory(
+            parent_path, component_observer=component_observer
+        )
         descriptor: int | None = None
         try:
-            opened_path = pathlib.Path("/")
-            for component in parent_path.parts[1:]:
-                child = os.open(
-                    component,
-                    os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-                    dir_fd=parent,
-                )
-                os.close(parent)
-                parent = child
-                opened_path /= component
-                if component_observer is not None:
-                    component_observer(opened_path, parent)
             try:
                 os.mkdir(logical.name, mode=0o700, dir_fd=parent)
                 os.fsync(parent)
@@ -348,15 +379,7 @@ class PinnedDirectory:
                     os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                     dir_fd=descriptor,
                 )
-                try:
-                    os.close(descriptor)
-                except BaseException:
-                    try:
-                        os.close(child)
-                    except BaseException:
-                        pass
-                    raise
-                descriptor = child
+                descriptor = _advance_directory_descriptor(descriptor, child)
             return descriptor
         except BaseException:
             try:
@@ -1348,6 +1371,18 @@ def _validate_finalization_marker(marker: Mapping[str, Any], args) -> None:
         raise protocol.ProtocolError("campaign finalization marker identity differs")
 
 
+def _marker_is_committed(
+    root: PinnedDirectory, marker: Mapping[str, Any]
+) -> bool:
+    """Probe the retained root for the exact canonical marker after interruption."""
+    try:
+        return root.read_regular(FINALIZATION_MARKER) == protocol._canonical_json_bytes(
+            marker
+        )
+    except BaseException:
+        return False
+
+
 def _ledger_attempt(ledger: Mapping[str, Any], args) -> Mapping[str, Any]:
     matches = [
         attempt
@@ -1374,6 +1409,64 @@ def _require_closed_attempt(
         raise protocol.ProtocolError("finalization ledger terminal state differs")
 
 
+def _finalization_state_kind(
+    validity_state: str,
+    marker_exists: bool,
+    stage_exists: bool,
+    publish_exists: bool,
+    ledger_active: bool,
+) -> str:
+    """Classify only crash states reachable by the finalization protocol."""
+    state = (
+        validity_state,
+        marker_exists,
+        stage_exists,
+        publish_exists,
+        ledger_active,
+    )
+    if state == ("RUNNING", False, False, False, True):
+        return "NO_RESUME"
+    if (
+        validity_state == "RUNNING"
+        and marker_exists
+        and stage_exists
+    ):
+        return "RUNNING"
+    if (
+        validity_state == "COMPLETE"
+        and not ledger_active
+        and not publish_exists
+        and ((marker_exists and stage_exists) or not marker_exists)
+    ):
+        return "COMPLETE"
+    raise protocol.ProtocolError("unreachable campaign finalization state")
+
+
+def _require_same_regular_inode(
+    root: PinnedDirectory, first: str, second: str
+) -> None:
+    try:
+        first_metadata = os.stat(
+            first, dir_fd=root.descriptor, follow_symlinks=False
+        )
+        second_metadata = os.stat(
+            second, dir_fd=root.descriptor, follow_symlinks=False
+        )
+    except OSError as error:
+        raise protocol.ProtocolError(
+            "cannot authenticate finalization publish partial"
+        ) from error
+    if (
+        not stat.S_ISREG(first_metadata.st_mode)
+        or not stat.S_ISREG(second_metadata.st_mode)
+        or (first_metadata.st_dev, first_metadata.st_ino)
+        != (second_metadata.st_dev, second_metadata.st_ino)
+    ):
+        raise protocol.ProtocolError(
+            "finalization publish partial is not the stage hard link"
+        )
+
+
 def _publish_staged_campaign(root: PinnedDirectory) -> None:
     try:
         os.link(
@@ -1385,10 +1478,8 @@ def _publish_staged_campaign(root: PinnedDirectory) -> None:
         )
         os.fsync(root.descriptor)
     except FileExistsError:
-        if root.read_regular(FINALIZATION_PUBLISH) != root.read_regular(
-            FINALIZATION_STAGE
-        ):
-            raise protocol.ProtocolError("finalization publish partial differs")
+        pass
+    _require_same_regular_inode(root, FINALIZATION_STAGE, FINALIZATION_PUBLISH)
     os.replace(
         FINALIZATION_PUBLISH,
         "campaign.json",
@@ -1401,7 +1492,7 @@ def _unlink_finalization_file(root: PinnedDirectory, name: str) -> None:
     try:
         os.unlink(name, dir_fd=root.descriptor)
     except FileNotFoundError:
-        return
+        pass
     os.fsync(root.descriptor)
 
 
@@ -1474,7 +1565,21 @@ def _recover_finalization(args, atomic_writer) -> int | None:
                 raise protocol.ProtocolError("finalization ledger candidate differs")
 
         persisted = _read_root_json(root, "campaign.json")
-        if persisted.get("validity_state") == "COMPLETE":
+        active_attempt = ledger["active_attempt_id"]
+        if active_attempt not in (None, args.attempt_id):
+            raise protocol.ProtocolError(
+                "finalization ledger has a different active attempt"
+            )
+        state_kind = _finalization_state_kind(
+            persisted.get("validity_state"),
+            FINALIZATION_MARKER in files,
+            FINALIZATION_STAGE in files,
+            FINALIZATION_PUBLISH in files,
+            active_attempt == args.attempt_id,
+        )
+        if state_kind == "NO_RESUME":
+            return None
+        if state_kind == "COMPLETE":
             _campaign, exit_code = _validate_completed_campaign(
                 root, args, ledger, marker=marker, files=files
             )
@@ -1487,12 +1592,8 @@ def _recover_finalization(args, atomic_writer) -> int | None:
             root.validate_link()
             return exit_code
 
-        if marker is None:
-            return None
-        if persisted.get("validity_state") != "RUNNING":
-            raise protocol.ProtocolError("finalization persisted campaign is not RUNNING")
-        if FINALIZATION_STAGE not in files:
-            raise protocol.ProtocolError("finalization stage is missing")
+        assert state_kind == "RUNNING"
+        assert marker is not None
         terminal = _read_root_json(root, FINALIZATION_STAGE)
         if protocol.sha256_json(terminal) != marker["campaign_sha256"]:
             raise protocol.ProtocolError("finalization campaign digest differs")
@@ -1853,7 +1954,9 @@ def _run_campaign(
                 artifact_handle.descriptor, FINALIZATION_MARKER, marker
             )
         except BaseException as error:
-            if isinstance(error, protocol.AtomicWriteError) and error.committed:
+            if (
+                isinstance(error, protocol.AtomicWriteError) and error.committed
+            ) or _marker_is_committed(artifact_handle, marker):
                 finalization_started = True
                 raise
             try:
