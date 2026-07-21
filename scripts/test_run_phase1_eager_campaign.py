@@ -689,7 +689,21 @@ while True:
                 validity = json.loads(
                     (args.artifact_root / pair["validity_path"]).read_text()
                 )
-                roles.extend(run["role"] for run in validity["runs"])
+                for run in validity["runs"]:
+                    roles.append(run["role"])
+                    self.assertEqual(
+                        run["environment_sha256"],
+                        protocol.sha256_json(run["environment"]),
+                    )
+                    self.assertEqual(run["environment"], expected)
+                    self.assertEqual(run["argv"][0], run["executable"]["launch_path"])
+                    self.assertEqual(
+                        run["criterion_binding"], manifest["criterion_binding"]
+                    )
+                    self.assertEqual(
+                        run["environment"]["CRITERION_HOME"],
+                        run["criterion_binding"]["actual_home"],
+                    )
         self.assertEqual(set(roles), set(protocol.RUN_ROLES))
         self.assertEqual(len(roles), 336)
         first_log = next(args.artifact_root.rglob("sentinel_before.stdout.log"))
@@ -698,6 +712,19 @@ while True:
         self.assertEqual(
             preamble["environment_sha256"], protocol.sha256_json(expected)
         )
+
+    def test_runtime_environment_uses_authoritative_manifest_payload(self):
+        args = self.arguments()
+        candidate = json.loads(args.candidate_build_manifest.read_text())
+        authoritative_environment = dict(candidate["environment"])
+        candidate["environment"] = authoritative_environment
+        tampered = json.loads(args.candidate_build_manifest.read_text())
+        tampered["environment"]["HOME"] = "/attacker-controlled"
+        write_json(args.candidate_build_manifest, tampered)
+
+        environment = runner._runtime_environment(candidate, pathlib.Path("/proc/fd"))
+
+        self.assertEqual(environment["HOME"], authoritative_environment["HOME"])
 
     def test_launch_exception_finalizes_readable_terminal_manifest(self):
         args = self.arguments()
@@ -862,6 +889,208 @@ while True:
         finally:
             pinned.close()
 
+    @unittest.skipUnless(
+        os.name == "posix"
+        and sys.platform.startswith("linux")
+        and hasattr(os, "memfd_create"),
+        "requires Linux sealed memfd execution",
+    )
+    def test_sealed_executable_cannot_run_transient_source_mutation(self):
+        executable = self.base / "sealed-source"
+        side_effect = self.base / "malicious-ran"
+        original = b"#!/bin/sh\nprintf 'safe\\n'\n"
+        malicious = (
+            "#!/bin/sh\n"
+            f"touch {side_effect}\n"
+            "printf 'malicious\\n'\n"
+        ).encode()
+        executable.write_bytes(original)
+        executable.chmod(0o755)
+        pinned = runner.PinnedExecutable.open(
+            executable, protocol.sha256_file(executable)
+        )
+        try:
+            executable.write_bytes(malicious)
+            completed = subprocess.run(
+                (str(pinned.launch_path),),
+                pass_fds=(pinned.descriptor,),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            executable.write_bytes(original)
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout, "safe\n")
+            self.assertFalse(side_effect.exists())
+            self.assertEqual(
+                runner.fcntl.fcntl(pinned.descriptor, runner.fcntl.F_GET_SEALS),
+                runner.EXECUTABLE_SEALS,
+            )
+            pinned.validate()
+        finally:
+            pinned.close()
+
+    def test_sealed_executable_setup_preserves_base_exception_without_fd_leak(self):
+        executable = self.base / "sealed-cancel-source"
+        executable.write_text("#!/bin/sh\nexit 0\n")
+        executable.chmod(0o755)
+        interruption = KeyboardInterrupt("sealing cancelled")
+        before = len(os.listdir("/proc/self/fd"))
+
+        with mock.patch.object(
+            runner.fcntl,
+            "fcntl",
+            side_effect=interruption,
+        ):
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                runner.PinnedExecutable.open(
+                    executable, protocol.sha256_file(executable)
+                )
+
+        self.assertIs(raised.exception, interruption)
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+    @unittest.skipUnless(
+        os.name == "posix" and sys.platform.startswith("linux"),
+        "requires Linux wait/proc process monitoring",
+    )
+    def test_real_normal_exit_has_valid_endpoint_monitor_sample(self):
+        executable = self.base / "normal-exit-script"
+        executable.write_text("#!/bin/sh\nexit 0\n")
+        executable.chmod(0o755)
+        pinned = runner.PinnedExecutable.open(
+            executable, protocol.sha256_file(executable)
+        )
+        artifact_root = self.base / "real-monitor-artifacts"
+        artifact_root.mkdir()
+        artifact = runner.PinnedDirectory(artifact_root)
+        pair = "case/pair1"
+        pair_fd = artifact.open_directory(pair, create=True)
+        os.close(pair_fd)
+        selected_cpu = min(os.sched_getaffinity(0))
+        try:
+            record, reason = runner._process_record(
+                command=(str(pinned.launch_path),),
+                environment=dict(os.environ),
+                cwd=self.base,
+                artifact_root=artifact,
+                pair_relative=pair,
+                role="sentinel_before",
+                identity="candidate",
+                binary_sha=pinned.digest,
+                executable=pinned,
+                selected_cpu=selected_cpu,
+                allowed_count=len(os.sched_getaffinity(0)),
+                process_factory=subprocess.Popen,
+                signal_process_group=os.killpg,
+                monotonic=time.monotonic,
+                sleep=time.sleep,
+                affinity_provider=os.sched_getaffinity,
+                load_provider=lambda: 0.0,
+                build_process_provider=lambda: [],
+                inherited_descriptors=(),
+                root_validators=(artifact.validate_link,),
+            )
+
+            self.assertIsNone(reason)
+            self.assertEqual(record["exit_status"], 0)
+            self.assertEqual(record["monitor_samples"][0]["phase"], "start")
+            self.assertEqual(record["monitor_samples"][-1]["phase"], "end")
+            self.assertEqual(
+                record["monitor_samples"][-1]["observed_affinity"],
+                str(selected_cpu),
+            )
+        finally:
+            artifact.close()
+            pinned.close()
+
+    @unittest.skipUnless(
+        os.name == "posix" and sys.platform.startswith("linux"),
+        "requires Linux process groups and /proc",
+    )
+    def test_real_normal_exit_kills_and_invalidates_surviving_descendant(self):
+        executable = self.base / "normal-exit-with-child.py"
+        executable.write_text(
+            """#!/usr/bin/env python3
+import os
+import signal
+import sys
+import time
+
+child = os.fork()
+if child == 0:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    for descriptor in (1, 2):
+        os.close(descriptor)
+    with open(sys.argv[1], "w", encoding="utf-8") as identity:
+        identity.write(str(os.getpid()))
+        identity.flush()
+        os.fsync(identity.fileno())
+    while True:
+        signal.pause()
+while not os.path.exists(sys.argv[1]):
+    time.sleep(0.001)
+"""
+        )
+        executable.chmod(0o755)
+        identity = self.base / "normal-child.pid"
+        pinned = runner.PinnedExecutable.open(
+            executable, protocol.sha256_file(executable)
+        )
+        artifact_root = self.base / "normal-child-artifacts"
+        artifact_root.mkdir()
+        artifact = runner.PinnedDirectory(artifact_root)
+        pair = "case/pair1"
+        os.close(artifact.open_directory(pair, create=True))
+        selected_cpu = min(os.sched_getaffinity(0))
+        descendant = None
+        try:
+            cleanup_started = time.monotonic()
+            record, reason = runner._process_record(
+                command=(str(pinned.launch_path), str(identity)),
+                environment=dict(os.environ),
+                cwd=self.base,
+                artifact_root=artifact,
+                pair_relative=pair,
+                role="sentinel_before",
+                identity="candidate",
+                binary_sha=pinned.digest,
+                executable=pinned,
+                selected_cpu=selected_cpu,
+                allowed_count=len(os.sched_getaffinity(0)),
+                process_factory=subprocess.Popen,
+                signal_process_group=os.killpg,
+                monotonic=time.monotonic,
+                sleep=time.sleep,
+                affinity_provider=os.sched_getaffinity,
+                load_provider=lambda: 0.0,
+                build_process_provider=lambda: [],
+                inherited_descriptors=(),
+                root_validators=(artifact.validate_link,),
+            )
+            cleanup_elapsed = time.monotonic() - cleanup_started
+            descendant = int(identity.read_text())
+
+            self.assertIn("benchmark-process-survivor", reason)
+            self.assertTrue(record["process_group_cleanup"]["survivor_observed"])
+            self.assertGreaterEqual(
+                cleanup_elapsed, runner.TERMINATION_GRACE_SECONDS
+            )
+            deadline = time.monotonic() + 5
+            while pathlib.Path(f"/proc/{descendant}").exists():
+                if time.monotonic() >= deadline:
+                    self.fail("normal-exit descendant survived cleanup")
+                time.sleep(0.01)
+        finally:
+            if descendant is not None:
+                try:
+                    os.kill(descendant, signal.SIGKILL)
+                except OSError:
+                    pass
+            artifact.close()
+            pinned.close()
+
     def test_artifact_root_swap_cannot_redirect_campaign_writes(self):
         args = self.arguments()
         fake = FakeProcessFactory(
@@ -877,6 +1106,25 @@ while True:
         manifest = json.loads((detached / "campaign.json").read_text())
         self.assertEqual(manifest["validity_state"], "INCONCLUSIVE")
 
+    def test_fresh_root_is_pinned_before_emptiness_validation(self):
+        args = self.arguments()
+        fake = FakeProcessFactory()
+        replacement = args.artifact_root.with_name("fresh-root-replacement")
+
+        def swap_after_pin(label, handle):
+            if label != "artifact":
+                return
+            detached = handle.logical_path.with_name("fresh-root-detached")
+            handle.logical_path.rename(detached)
+            replacement.mkdir()
+            handle.logical_path.symlink_to(replacement, target_is_directory=True)
+
+        code = self.execute(args, fake, root_pin_observer=swap_after_pin)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(fake.launch_count, 0)
+        self.assertEqual(list(replacement.iterdir()), [])
+
     def test_criterion_root_swap_cannot_redirect_benchmark_scratch(self):
         args = self.arguments()
         fake = FakeProcessFactory(
@@ -890,6 +1138,22 @@ while True:
         detached, outside = fake.detached_roots["criterion"]
         self.assertEqual(list(outside.iterdir()), [])
         self.assertTrue(any(detached.rglob("estimates.json")))
+
+    def test_root_swap_during_final_child_cannot_produce_pass(self):
+        args = self.arguments()
+        fake = FakeProcessFactory(
+            swap_artifact_root_at=28 * 3 * 4,
+            artifact_root=args.artifact_root.resolve(),
+        )
+
+        code = self.execute(args, fake)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(fake.launch_count, 28 * 3 * 4)
+        detached, outside = fake.detached_roots["artifact"]
+        self.assertEqual(list(outside.iterdir()), [])
+        manifest = json.loads((detached / "campaign.json").read_text())
+        self.assertEqual(manifest["validity_state"], "INCONCLUSIVE")
 
     def test_terminal_atomic_record_failure_returns_one(self):
         args = self.arguments()
@@ -961,6 +1225,110 @@ while True:
         ledger = json.loads(args.ledger.read_text())
         self.assertIsNone(ledger["active_attempt_id"])
 
+    def test_finalization_failures_recover_without_remeasurement(self):
+        for phase in ("prepared", "ledger_closed", "published", "directory_synced"):
+            with self.subTest(phase=phase):
+                args = self.arguments()
+                first = FakeProcessFactory()
+                injected = False
+
+                def interrupt(selected_phase):
+                    nonlocal injected
+                    if selected_phase == phase and not injected:
+                        injected = True
+                        raise OSError(f"injected finalization failure: {phase}")
+
+                self.assertEqual(
+                    self.execute(args, first, finalization_observer=interrupt),
+                    1,
+                )
+                self.assertEqual(first.launch_count, 28 * 3 * 4)
+
+                recovery = FakeProcessFactory()
+                self.assertEqual(self.execute(args, recovery), 0)
+                self.assertEqual(recovery.launch_count, 0)
+                manifest = json.loads(
+                    (args.artifact_root / "campaign.json").read_text()
+                )
+                self.assertEqual(manifest["validity_state"], "COMPLETE")
+                ledger = json.loads(args.ledger.read_text())
+                self.assertIsNone(ledger["active_attempt_id"])
+
+    def test_mismatched_finalization_partial_is_rejected_without_launch(self):
+        args = self.arguments()
+        first = FakeProcessFactory()
+
+        def interrupt(phase):
+            if phase == "prepared":
+                raise OSError("stop after finalization prepare")
+
+        self.assertEqual(
+            self.execute(args, first, finalization_observer=interrupt), 1
+        )
+        stage = args.artifact_root / runner.FINALIZATION_STAGE
+        payload = json.loads(stage.read_text())
+        payload["completed_at"] = "tampered"
+        write_json(stage, payload)
+
+        recovery = FakeProcessFactory()
+        self.assertEqual(self.execute(args, recovery), 1)
+        self.assertEqual(recovery.launch_count, 0)
+
+    def test_finalization_rename_fsync_and_cleanup_failures_are_recoverable(self):
+        for operation in ("rename", "dir_fsync", "cleanup"):
+            with self.subTest(operation=operation):
+                args = self.arguments()
+                first = FakeProcessFactory()
+                real_replace = os.replace
+                real_fsync = os.fsync
+                real_unlink = os.unlink
+                injected = False
+
+                def replace_once(source, destination, *positional, **keywords):
+                    nonlocal injected
+                    if operation == "rename" and source == runner.FINALIZATION_STAGE:
+                        injected = True
+                        raise OSError("injected final campaign rename failure")
+                    return real_replace(source, destination, *positional, **keywords)
+
+                def unlink_once(path, *positional, **keywords):
+                    nonlocal injected
+                    if (
+                        operation == "cleanup"
+                        and path == runner.FINALIZATION_MARKER
+                        and not injected
+                    ):
+                        injected = True
+                        raise OSError("injected final marker cleanup failure")
+                    return real_unlink(path, *positional, **keywords)
+
+                def fsync_once(descriptor):
+                    nonlocal injected
+                    if operation == "dir_fsync" and not injected:
+                        try:
+                            entries = set(os.listdir(descriptor))
+                        except OSError:
+                            entries = set()
+                        if (
+                            runner.FINALIZATION_MARKER in entries
+                            and runner.FINALIZATION_STAGE not in entries
+                        ):
+                            injected = True
+                            raise OSError("injected final directory fsync failure")
+                    return real_fsync(descriptor)
+
+                with mock.patch.object(
+                    runner.os, "replace", side_effect=replace_once
+                ), mock.patch.object(
+                    runner.os, "fsync", side_effect=fsync_once
+                ), mock.patch.object(runner.os, "unlink", side_effect=unlink_once):
+                    self.assertEqual(self.execute(args, first), 1)
+                self.assertTrue(injected)
+
+                recovery = FakeProcessFactory()
+                self.assertEqual(self.execute(args, recovery), 0)
+                self.assertEqual(recovery.launch_count, 0)
+
     def test_complete_manifest_is_written_once_after_ledger_close(self):
         args = self.arguments()
         fake = FakeProcessFactory()
@@ -1013,7 +1381,10 @@ while True:
 
         self.assertEqual(self.execute(args, fake, atomic_writer=fail_ledger_close), 1)
         manifest = json.loads((args.artifact_root / "campaign.json").read_text())
-        self.assertEqual(manifest["validity_state"], "INCONCLUSIVE")
+        self.assertEqual(manifest["validity_state"], "RUNNING")
+        recovery = FakeProcessFactory()
+        self.assertEqual(self.execute(args, recovery), 0)
+        self.assertEqual(recovery.launch_count, 0)
 
     def test_exact_exit_mapping_for_statistical_results(self):
         for result, expected in (("PASS", 0), ("FAIL", 3), ("INCONCLUSIVE", 4)):

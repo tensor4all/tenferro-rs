@@ -446,10 +446,25 @@ Retain descriptors for campaign roots and benchmark executables, validate
 their identities after every child process, and perform owned I/O relative to
 those descriptors.  Revalidate builds through `BuildConfig` at the public
 entry point.  At successful completion, classify the in-memory terminal view,
-close the ledger, then atomically replace the sole durable `RUNNING` manifest
-with `COMPLETE`; any failure before that final replacement must leave no false
-`COMPLETE` record.  Cleanup must preserve `KeyboardInterrupt` and `SystemExit`
-while still terminating the whole process group.
+prepare and fsync a fixed final-campaign stage and hash marker, close the ledger,
+then atomically replace the sole durable `RUNNING` manifest with `COMPLETE`.
+The marker permits finalization-only recovery without benchmark remeasurement
+after interruption before or after ledger closure, rename, directory fsync, or
+marker cleanup; unknown or mismatched partials are rejected.  This is not
+measurement resume.
+
+Create and pin fresh roots through their parent directory descriptors before
+checking emptiness.  Keep classifier reads, inventory, and output publication
+relative to the retained artifact descriptor without resolving
+`/proc/self/fd/N` back to a pathname.  Snapshot each validated executable into
+a write/grow/shrink/seal-protected Linux memfd and launch only that immutable
+snapshot.  Record and strictly validate each run's exact argv, sealed
+environment and digest, source/snapshot executable identity, Criterion logical
+root and actual descriptor binding, and process-group cleanup outcome.  Observe
+normal child exit with non-reaping `waitid(..., WNOWAIT)` so the final host
+sample is captured before reap; after reap, detect and kill any surviving
+process-group members.  Cleanup must preserve `KeyboardInterrupt` and
+`SystemExit` while still terminating the whole process group.
 
 - [ ] **Step 4: Run runner and classifier tests GREEN**
 

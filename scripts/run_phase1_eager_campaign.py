@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -44,30 +45,49 @@ EXIT_BY_RESULT = {
     ("COMPLETE", "FAIL"): 3,
     ("COMPLETE", "INCONCLUSIVE"): 4,
 }
+EXECUTABLE_SEALS = (
+    fcntl.F_SEAL_WRITE
+    | fcntl.F_SEAL_GROW
+    | fcntl.F_SEAL_SHRINK
+    | fcntl.F_SEAL_SEAL
+)
+FINALIZATION_STAGE = ".campaign-final.json"
+FINALIZATION_MARKER = ".campaign-finalization.json"
 
 
 class PinnedExecutable:
-    """One no-follow executable identity retained for the campaign lifetime."""
+    """A retained source identity plus an immutable executable snapshot."""
 
-    def __init__(self, logical_path: pathlib.Path, descriptor: int, digest: str):
+    def __init__(
+        self,
+        logical_path: pathlib.Path,
+        source_descriptor: int,
+        descriptor: int,
+        digest: str,
+    ):
         self.logical_path = logical_path
+        self.source_descriptor = source_descriptor
         self.descriptor = descriptor
-        metadata = os.fstat(descriptor)
+        metadata = os.fstat(source_descriptor)
         self.device = metadata.st_dev
         self.inode = metadata.st_ino
+        snapshot = os.fstat(descriptor)
+        self.snapshot_device = snapshot.st_dev
+        self.snapshot_inode = snapshot.st_ino
         self.digest = digest
 
     @classmethod
     def open(cls, path: pathlib.Path, expected_digest: str) -> "PinnedExecutable":
         logical = pathlib.Path(path)
-        descriptor = os.open(
+        source_descriptor = os.open(
             logical,
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
         )
+        descriptor: int | None = None
         failure: BaseException | None = None
         result = None
         try:
-            metadata = os.fstat(descriptor)
+            metadata = os.fstat(source_descriptor)
             if not stat.S_ISREG(metadata.st_mode):
                 raise protocol.ProtocolError(
                     f"benchmark executable is not regular: {logical}"
@@ -76,18 +96,50 @@ class PinnedExecutable:
                 raise protocol.ProtocolError(
                     f"benchmark executable is not executable: {logical}"
                 )
-            digest = _sha256_open_file(descriptor)
+            digest = _sha256_open_file(source_descriptor)
             if digest != expected_digest:
                 raise protocol.ProtocolError(
                     f"benchmark executable digest differs: {logical}"
                 )
-            result = cls(logical, descriptor, digest)
+            descriptor = os.memfd_create(
+                "phase2e-eager-executable",
+                os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
+            )
+            os.lseek(source_descriptor, 0, os.SEEK_SET)
+            while True:
+                chunk = os.read(source_descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(descriptor, view)
+                    if written <= 0:
+                        raise OSError("short executable snapshot write")
+                    view = view[written:]
+            os.fchmod(descriptor, 0o500)
+            if _sha256_open_file(descriptor) != expected_digest:
+                raise protocol.ProtocolError("executable snapshot digest differs")
+            fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, EXECUTABLE_SEALS)
+            if fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) != EXECUTABLE_SEALS:
+                raise protocol.ProtocolError("executable snapshot seals differ")
+            if _sha256_open_file(source_descriptor) != expected_digest:
+                raise protocol.ProtocolError(
+                    f"benchmark executable changed while sealing: {logical}"
+                )
+            result = cls(
+                logical, source_descriptor, descriptor, expected_digest
+            )
             result.validate()
         except BaseException as error:
             failure = error
         if failure is not None:
             try:
-                os.close(descriptor)
+                if descriptor is not None:
+                    os.close(descriptor)
+            except BaseException:
+                pass
+            try:
+                os.close(source_descriptor)
             except BaseException:
                 pass
             raise failure
@@ -105,12 +157,17 @@ class PinnedExecutable:
         return path
 
     def validate(self) -> None:
-        opened = os.fstat(self.descriptor)
+        opened = os.fstat(self.source_descriptor)
         current = os.stat(self.logical_path, follow_symlinks=False)
+        snapshot = os.fstat(self.descriptor)
         if (
             not stat.S_ISREG(current.st_mode)
             or (opened.st_dev, opened.st_ino) != (self.device, self.inode)
             or (current.st_dev, current.st_ino) != (self.device, self.inode)
+            or _sha256_open_file(self.source_descriptor) != self.digest
+            or (snapshot.st_dev, snapshot.st_ino)
+            != (self.snapshot_device, self.snapshot_inode)
+            or fcntl.fcntl(self.descriptor, fcntl.F_GET_SEALS) != EXECUTABLE_SEALS
             or _sha256_open_file(self.descriptor) != self.digest
         ):
             raise protocol.ProtocolError(
@@ -118,7 +175,15 @@ class PinnedExecutable:
             )
 
     def close(self) -> None:
-        os.close(self.descriptor)
+        failure: BaseException | None = None
+        for descriptor in (self.descriptor, self.source_descriptor):
+            try:
+                os.close(descriptor)
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+        if failure is not None:
+            raise failure
 
 
 def _sha256_open_file(descriptor: int) -> str:
@@ -164,6 +229,63 @@ class PinnedDirectory:
         except BaseException:
             try:
                 os.close(self.descriptor)
+            except BaseException:
+                pass
+            raise
+
+    @classmethod
+    def create_fresh(
+        cls,
+        logical_path: pathlib.Path,
+        *,
+        pinned_observer: Callable[["PinnedDirectory"], None] | None = None,
+    ) -> "PinnedDirectory":
+        """Create/open and prove an empty root through one retained descriptor."""
+        logical = pathlib.Path(os.path.abspath(logical_path))
+        parent_path = logical.parent
+        if parent_path.resolve(strict=True) != parent_path:
+            raise protocol.ProtocolError("campaign root parent must be canonical")
+        parent = os.open(
+            parent_path,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        descriptor: int | None = None
+        try:
+            try:
+                os.mkdir(logical.name, mode=0o700, dir_fd=parent)
+                os.fsync(parent)
+            except FileExistsError:
+                pass
+            descriptor = os.open(
+                logical.name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=parent,
+            )
+        finally:
+            os.close(parent)
+        result = cls.__new__(cls)
+        result.logical_path = logical
+        result.descriptor = descriptor
+        try:
+            metadata = os.fstat(descriptor)
+            result.identity = (metadata.st_dev, metadata.st_ino)
+            result.proc_path = pathlib.Path(f"/proc/self/fd/{descriptor}")
+            if not sys.platform.startswith("linux") or not result.proc_path.exists():
+                raise protocol.ProtocolError(
+                    "pinned campaign roots require Linux /proc/self/fd"
+                )
+            if pinned_observer is not None:
+                pinned_observer(result)
+            result.validate_link()
+            if os.listdir(descriptor):
+                raise protocol.ProtocolError(
+                    f"campaign root must be empty: {logical}"
+                )
+            result.validate_link()
+            return result
+        except BaseException:
+            try:
+                os.close(descriptor)
             except BaseException:
                 pass
             raise
@@ -445,8 +567,11 @@ def _is_within(path: pathlib.Path, parent: pathlib.Path) -> bool:
 
 
 def _prepare_roots(
-    artifact_root: pathlib.Path, criterion_root: pathlib.Path
-) -> tuple[pathlib.Path, pathlib.Path]:
+    artifact_root: pathlib.Path,
+    criterion_root: pathlib.Path,
+    *,
+    root_pin_observer: Callable[[str, PinnedDirectory], None] | None = None,
+) -> tuple[PinnedDirectory, PinnedDirectory]:
     artifact_input = pathlib.Path(os.path.abspath(artifact_root))
     criterion_input = pathlib.Path(os.path.abspath(criterion_root))
     artifact = artifact_input.resolve(strict=False)
@@ -455,12 +580,27 @@ def _prepare_roots(
         criterion, artifact
     ):
         raise protocol.ProtocolError("artifact and Criterion roots must be disjoint")
-    prepared_artifact = protocol.prepare_empty_root(artifact_input)
-    prepared_criterion = protocol.prepare_empty_root(criterion_input)
-    return (
-        prepared_artifact.resolve(strict=True),
-        prepared_criterion.resolve(strict=True),
+    artifact_handle = PinnedDirectory.create_fresh(
+        artifact_input,
+        pinned_observer=(
+            None
+            if root_pin_observer is None
+            else lambda handle: root_pin_observer("artifact", handle)
+        ),
     )
+    try:
+        criterion_handle = PinnedDirectory.create_fresh(
+            criterion_input,
+            pinned_observer=(
+                None
+                if root_pin_observer is None
+                else lambda handle: root_pin_observer("criterion", handle)
+            ),
+        )
+    except BaseException:
+        artifact_handle.close()
+        raise
+    return artifact_handle, criterion_handle
 
 
 def _read_json(path: pathlib.Path, context: str) -> dict[str, Any]:
@@ -474,7 +614,12 @@ def _build_inputs(
     args,
     validated_builds: Mapping[str, Mapping[str, Any]],
     authoritative_paths: Mapping[str, pathlib.Path] | None,
-) -> tuple[dict[str, Any], dict[str, pathlib.Path], dict[str, str]]:
+) -> tuple[
+    dict[str, Any],
+    dict[str, pathlib.Path],
+    dict[str, str],
+    dict[str, Mapping[str, Any]],
+]:
     paths = {
         "baseline": pathlib.Path(args.baseline_build_manifest).resolve(strict=True),
         "candidate": pathlib.Path(args.candidate_build_manifest).resolve(strict=True),
@@ -526,14 +671,13 @@ def _build_inputs(
         }
         for identity in ("baseline", "candidate")
     }
-    return records, binaries, binary_shas
+    return records, binaries, binary_shas, manifests
 
 
 def _runtime_environment(
-    candidate_manifest_path: pathlib.Path, criterion_root: pathlib.Path
+    candidate_manifest: Mapping[str, Any], criterion_root: pathlib.Path
 ) -> dict[str, str]:
-    manifest = _read_json(candidate_manifest_path, "candidate build manifest")
-    environment = manifest["environment"]
+    environment = candidate_manifest["environment"]
     return protocol.runtime_environment(
         path=environment["PATH"],
         home=environment["HOME"],
@@ -574,7 +718,7 @@ def _sample_host(
     try:
         affinity = format_cpu_list(affinity_provider(pid))
     except (ProcessLookupError, PermissionError, OSError):
-        affinity = ""
+        affinity = _proc_allowed_cpu_list(pid)
     processes = build_process_provider()
     return {
         "sequence": sequence,
@@ -585,6 +729,40 @@ def _sample_host(
         "cargo_processes": [record for record in processes if record.get("name") == "cargo"],
         "rustc_processes": [record for record in processes if record.get("name") == "rustc"],
     }
+
+
+def _proc_allowed_cpu_list(pid: int) -> str:
+    """Read the affinity of an exited-but-unreaped Linux child."""
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf-8") as status:
+            for line in status:
+                if line.startswith("Cpus_allowed_list:"):
+                    return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _exited_without_reaping(process) -> bool:
+    """Observe a real child exit while retaining its proc endpoint metadata."""
+    if not isinstance(process, subprocess.Popen):
+        return process.poll() is not None
+    flags = os.WEXITED | os.WNOHANG | os.WNOWAIT
+    while True:
+        try:
+            return os.waitid(os.P_PID, process.pid, flags) is not None
+        except InterruptedError:
+            continue
+
+
+def _process_group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _best_effort_signal(
@@ -644,6 +822,37 @@ def _terminate_group(process, signal_process_group) -> tuple[bool, bool, list[st
     return terminated, killed, failures
 
 
+def _cleanup_reaped_process_group(
+    process_group: int,
+    signal_process_group,
+    monotonic,
+    sleep,
+) -> tuple[bool, bool, list[str]]:
+    """Give descendants the fixed TERM grace, then kill the whole group."""
+    failures: list[str] = []
+    terminated = _best_effort_signal(
+        process_group, signal.SIGTERM, signal_process_group
+    )
+    if not terminated:
+        failures.append("term-signal-failed")
+    deadline = float(monotonic()) + TERMINATION_GRACE_SECONDS
+    while float(monotonic()) < deadline:
+        sleep(min(0.1, deadline - float(monotonic())))
+    killed = _best_effort_signal(
+        process_group, signal.SIGKILL, signal_process_group
+    )
+    if not killed:
+        failures.append("kill-signal-failed")
+    disappearance_deadline = float(monotonic()) + TERMINATION_GRACE_SECONDS
+    while _process_group_exists(process_group):
+        now = float(monotonic())
+        if now >= disappearance_deadline:
+            failures.append("kill-group-survived")
+            break
+        sleep(min(0.01, disappearance_deadline - now))
+    return terminated, killed, failures
+
+
 def _process_record(
     *,
     command: tuple[str, ...],
@@ -666,7 +875,16 @@ def _process_record(
     build_process_provider,
     inherited_descriptors: tuple[int, ...],
     root_validators: tuple[Callable[[], None], ...],
+    criterion_binding: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str | None]:
+    if criterion_binding is None:
+        actual_home = environment.get("CRITERION_HOME", "")
+        criterion_binding = {
+            "logical_path": actual_home,
+            "actual_home": actual_home,
+            "device": 0,
+            "inode": 0,
+        }
     stdout_name = f"{role}.stdout.log"
     stderr_name = f"{role}.stderr.log"
     stdout_relative = f"{pair_relative}/{stdout_name}"
@@ -677,15 +895,22 @@ def _process_record(
         "environment_sha256": protocol.sha256_json(dict(sorted(environment.items()))),
         "executable": {
             "logical_path": str(executable.logical_path),
-            "device": executable.device,
-            "inode": executable.inode,
-            "sha256": executable.digest,
+            "source_device": executable.device,
+            "source_inode": executable.inode,
+            "snapshot_device": executable.snapshot_device,
+            "snapshot_inode": executable.snapshot_inode,
+            "snapshot_sha256": executable.digest,
+            "launch_path": str(executable.launch_path),
         },
+        "criterion_binding": dict(criterion_binding),
     }
     process = None
     samples = []
     timed_out = False
     cleanup_failures: list[str] = []
+    cleanup_terminated = False
+    cleanup_killed = False
+    survivor_observed = False
     stdout_descriptor = artifact_root.open_file(
         stdout_relative, os.O_WRONLY | os.O_CREAT | os.O_EXCL
     )
@@ -702,6 +927,9 @@ def _process_record(
         stdout.write(json.dumps(preamble, sort_keys=True) + "\n")
         stdout.flush()
         try:
+            executable.validate()
+            for validate_root in root_validators:
+                validate_root()
             process = process_factory(
                 list(command),
                 cwd=str(cwd),
@@ -733,22 +961,21 @@ def _process_record(
                 validate_root()
             deadline = started + PROCESS_DEADLINE_SECONDS
             while True:
-                status = process.poll()
-                if status is not None:
+                if _exited_without_reaping(process):
                     break
                 now = float(monotonic())
                 if now >= deadline:
                     timed_out = True
-                    _terminated, _killed, cleanup_failures = _terminate_group(
+                    cleanup_terminated, cleanup_killed, cleanup_failures = _terminate_group(
                         process, signal_process_group
                     )
                     status = process.returncode
                     break
                 sleep(min(1.0, deadline - now))
-                if process.poll() is None:
+                if not _exited_without_reaping(process):
                     if float(monotonic()) >= deadline:
                         timed_out = True
-                        _terminated, _killed, cleanup_failures = _terminate_group(
+                        cleanup_terminated, cleanup_killed, cleanup_failures = _terminate_group(
                             process, signal_process_group
                         )
                         status = process.returncode
@@ -778,6 +1005,25 @@ def _process_record(
                     monotonic=lambda: ended,
                 )
             )
+            if not timed_out:
+                status = process.wait()
+                if isinstance(process, subprocess.Popen) and _process_group_exists(
+                    process.pid
+                ):
+                    survivor_observed = True
+                    cleanup_failures.append("normal-exit-group-survivor")
+                    cleanup_terminated, cleanup_killed, survivor_failures = (
+                        _cleanup_reaped_process_group(
+                            process.pid,
+                            signal_process_group,
+                            monotonic,
+                            sleep,
+                        )
+                    )
+                    cleanup_failures.extend(survivor_failures)
+            executable.validate()
+            for validate_root in root_validators:
+                validate_root()
         except BaseException:
             if process is not None:
                 try:
@@ -791,6 +1037,8 @@ def _process_record(
         reason = "benchmark-process-timeout"
         if cleanup_failures:
             reason += ":" + "+".join(cleanup_failures)
+    elif cleanup_failures:
+        reason = "benchmark-process-survivor:" + "+".join(cleanup_failures)
     elif status != 0:
         reason = f"benchmark-process-exit:{status}"
     elif any(
@@ -813,6 +1061,19 @@ def _process_record(
             "process_started_monotonic": started,
             "process_ended_monotonic": ended,
             "monitor_samples": samples,
+            "argv": list(command),
+            "environment": dict(sorted(environment.items())),
+            "environment_sha256": protocol.sha256_json(
+                dict(sorted(environment.items()))
+            ),
+            "executable": copy.deepcopy(preamble["executable"]),
+            "criterion_binding": dict(criterion_binding),
+            "process_group_cleanup": {
+                "survivor_observed": survivor_observed,
+                "term_signal_sent": cleanup_terminated,
+                "kill_signal_sent": cleanup_killed,
+                "failures": cleanup_failures,
+            },
         },
         reason,
     )
@@ -955,14 +1216,14 @@ def _initial_campaign(
     build_records,
     selected_cpu: int,
     allowed_cpus: set[int],
+    candidate_sha: str,
+    criterion_binding: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
         "protocol_version": protocol.PROTOCOL_VERSION,
         "protocol_sha256": protocol.sha256_file(pathlib.Path(protocol.__file__)),
         "classifier_sha256": protocol.sha256_file(pathlib.Path(classification.__file__)),
-        "candidate_sha": _read_json(
-            pathlib.Path(args.candidate_build_manifest), "candidate build manifest"
-        )["head"],
+        "candidate_sha": candidate_sha,
         "comparison_kind": args.comparison_kind,
         "build_manifests": build_records,
         "selected_cpu": selected_cpu,
@@ -972,6 +1233,7 @@ def _initial_campaign(
         "thread_environment": dict(THREAD_ENVIRONMENT),
         "orders": list(PAIR_ORDERS),
         "criterion": dict(classification.CRITERION_SETTINGS),
+        "criterion_binding": dict(criterion_binding),
         "validity_state": "RUNNING",
         "statistical_result": None,
         "completed_at": "",
@@ -1029,6 +1291,139 @@ def _close_ledger(
     atomic_writer(ledger_path, closed)
 
 
+def _finalization_marker(terminal: Mapping[str, Any], args) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "candidate_sha": terminal["candidate_sha"],
+        "comparison_kind": args.comparison_kind,
+        "attempt_id": args.attempt_id,
+        "campaign_sha256": protocol.sha256_json(terminal),
+        "statistical_result": terminal["statistical_result"],
+    }
+
+
+def _read_root_json(root: PinnedDirectory, relative: str) -> dict[str, Any]:
+    try:
+        value = json.loads(root.read_regular(relative))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise protocol.ProtocolError(f"invalid finalization JSON: {relative}") from error
+    if type(value) is not dict:
+        raise protocol.ProtocolError(f"finalization JSON is not an object: {relative}")
+    return value
+
+
+def _validate_finalization_marker(marker: Mapping[str, Any], args) -> None:
+    protocol.validate_manifest_fields(
+        marker,
+        {
+            "version": int,
+            "candidate_sha": str,
+            "comparison_kind": str,
+            "attempt_id": int,
+            "campaign_sha256": str,
+            "statistical_result": str,
+        },
+        context="campaign finalization marker",
+    )
+    if (
+        marker["version"] != 1
+        or marker["comparison_kind"] != args.comparison_kind
+        or marker["attempt_id"] != args.attempt_id
+        or marker["statistical_result"] not in {"PASS", "FAIL", "INCONCLUSIVE"}
+    ):
+        raise protocol.ProtocolError("campaign finalization marker identity differs")
+
+
+def _ledger_attempt(ledger: Mapping[str, Any], args) -> Mapping[str, Any]:
+    matches = [
+        attempt
+        for attempt in ledger["attempts"]
+        if attempt["stage"] == "timing"
+        and attempt["lane"] == args.comparison_kind
+        and attempt["attempt_id"] == args.attempt_id
+    ]
+    if len(matches) != 1:
+        raise protocol.ProtocolError("finalization ledger attempt is not unique")
+    return matches[0]
+
+
+def _recover_finalization(args, atomic_writer) -> int | None:
+    artifact_path = pathlib.Path(os.path.abspath(args.artifact_root))
+    try:
+        metadata = os.lstat(artifact_path)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISDIR(metadata.st_mode):
+        return None
+    root = PinnedDirectory(artifact_path)
+    try:
+        files, _directories = root.inventory()
+        if FINALIZATION_MARKER not in files:
+            return None
+        marker = _read_root_json(root, FINALIZATION_MARKER)
+        _validate_finalization_marker(marker, args)
+        ledger_path = pathlib.Path(args.ledger).resolve(strict=True)
+        ledger = _read_json(ledger_path, "evidence ledger")
+        protocol.validate_ledger(ledger)
+        if ledger["candidate_sha"] != marker["candidate_sha"]:
+            raise protocol.ProtocolError("finalization ledger candidate differs")
+
+        staged = FINALIZATION_STAGE in files
+        terminal_name = FINALIZATION_STAGE if staged else "campaign.json"
+        terminal = _read_root_json(root, terminal_name)
+        if protocol.sha256_json(terminal) != marker["campaign_sha256"]:
+            raise protocol.ProtocolError("finalization campaign digest differs")
+        if (
+            terminal.get("candidate_sha") != marker["candidate_sha"]
+            or terminal.get("comparison_kind") != args.comparison_kind
+            or terminal.get("validity_state") != "COMPLETE"
+            or terminal.get("statistical_result") != marker["statistical_result"]
+        ):
+            raise protocol.ProtocolError("finalization campaign identity differs")
+
+        if staged:
+            classification.classify_terminal_view(
+                artifact_path / "campaign.json",
+                terminal,
+                artifact_path,
+                root_descriptor=root.descriptor,
+            )
+        root.validate_link()
+
+        attempt = _ledger_attempt(ledger, args)
+        if attempt["state"] == "RUNNING":
+            _close_ledger(
+                ledger_path,
+                ledger,
+                args,
+                marker["statistical_result"],
+                "COMPLETE",
+                atomic_writer,
+            )
+        elif (
+            attempt["state"] != "COMPLETE"
+            or attempt["validity_state"] != "COMPLETE"
+            or attempt["statistical_result"] != marker["statistical_result"]
+        ):
+            raise protocol.ProtocolError("finalization ledger terminal state differs")
+
+        if staged:
+            os.replace(
+                FINALIZATION_STAGE,
+                "campaign.json",
+                src_dir_fd=root.descriptor,
+                dst_dir_fd=root.descriptor,
+            )
+        os.fsync(root.descriptor)
+        root.validate_link()
+        os.unlink(FINALIZATION_MARKER, dir_fd=root.descriptor)
+        os.fsync(root.descriptor)
+        root.validate_link()
+        return EXIT_BY_RESULT[("COMPLETE", marker["statistical_result"])]
+    finally:
+        root.close()
+
+
 def _run_campaign(
     args,
     *,
@@ -1045,6 +1440,8 @@ def _run_campaign(
     atomic_writer=protocol.atomic_write_json,
     campaign_write_observer: Callable[[pathlib.Path, Mapping[str, Any]], None]
     | None = None,
+    root_pin_observer: Callable[[str, PinnedDirectory], None] | None = None,
+    finalization_observer: Callable[[str], None] | None = None,
 ) -> int:
     manifest_path = None
     campaign = None
@@ -1054,23 +1451,40 @@ def _run_campaign(
     artifact_handle: PinnedDirectory | None = None
     criterion_handle: PinnedDirectory | None = None
     pair_descriptor: int | None = None
+    finalization_started = False
     current = {"case": "<startup>", "pair": 0, "role": "<none>"}
     try:
+        recovered = _recover_finalization(args, atomic_writer)
+        if recovered is not None:
+            return recovered
         if args.comparison_kind not in protocol.LANE_NAMES:
             raise protocol.ProtocolError("invalid comparison kind")
         if args.normalized_load_limit != 0.25:
             raise protocol.ProtocolError("normalized load limit must be exactly 0.25")
-        artifact_root, criterion_root = _prepare_roots(
-            args.artifact_root, args.criterion_root
+        artifact_handle, criterion_handle = _prepare_roots(
+            args.artifact_root,
+            args.criterion_root,
+            root_pin_observer=root_pin_observer,
         )
+        artifact_root = artifact_handle.logical_path
+        criterion_root = criterion_handle.logical_path
         args.artifact_root = artifact_root
         args.criterion_root = criterion_root
-        artifact_handle = PinnedDirectory(artifact_root)
-        criterion_handle = PinnedDirectory(criterion_root)
-        build_records, binaries, binary_shas = _build_inputs(
+        build_records, binaries, binary_shas, build_manifests = _build_inputs(
             args, validated_builds, authoritative_manifest_paths
         )
         pinned_executables = _pin_executables(binaries, binary_shas)
+        for identity, executable in pinned_executables.items():
+            build_records[identity].update(
+                {
+                    "executable_path": str(executable.logical_path),
+                    "executable_device": executable.device,
+                    "executable_inode": executable.inode,
+                    "snapshot_sha256": executable.digest,
+                    "snapshot_device": executable.snapshot_device,
+                    "snapshot_inode": executable.snapshot_inode,
+                }
+            )
         for path in (
             pathlib.Path(args.baseline_build_manifest).resolve(),
             pathlib.Path(args.candidate_build_manifest).resolve(),
@@ -1086,14 +1500,22 @@ def _run_campaign(
         selected_cpu = min(allowed_cpus) if args.cpu is None else args.cpu
         if selected_cpu not in allowed_cpus:
             raise protocol.ProtocolError("selected CPU is not process-allowed")
+        criterion_binding = {
+            "logical_path": str(criterion_root),
+            "actual_home": str(criterion_handle.proc_path),
+            "device": criterion_handle.identity[0],
+            "inode": criterion_handle.identity[1],
+        }
         environment = _runtime_environment(
-            pathlib.Path(args.candidate_build_manifest), criterion_handle.proc_path
+            build_manifests["candidate"], criterion_handle.proc_path
         )
         campaign = _initial_campaign(
             args,
             build_records=build_records,
             selected_cpu=selected_cpu,
             allowed_cpus=allowed_cpus,
+            candidate_sha=build_manifests["candidate"]["head"],
+            criterion_binding=criterion_binding,
         )
         if ledger.get("candidate_sha") != campaign["candidate_sha"]:
             raise protocol.ProtocolError(
@@ -1174,6 +1596,7 @@ def _run_campaign(
                             artifact_handle.validate_link,
                             criterion_handle.validate_link,
                         ),
+                        criterion_binding=criterion_binding,
                     )
                     runs.append(record)
                     for name in (
@@ -1303,6 +1726,24 @@ def _run_campaign(
         )
         if verified["statistical_result"] != terminal["statistical_result"]:
             raise protocol.ProtocolError("classifier result differs after registration")
+        protocol.atomic_write_json_at(
+            artifact_handle.descriptor, FINALIZATION_STAGE, terminal
+        )
+        marker = _finalization_marker(terminal, args)
+        try:
+            protocol.atomic_write_json_at(
+                artifact_handle.descriptor, FINALIZATION_MARKER, marker
+            )
+        except BaseException:
+            try:
+                os.unlink(FINALIZATION_STAGE, dir_fd=artifact_handle.descriptor)
+                os.fsync(artifact_handle.descriptor)
+            except BaseException:
+                pass
+            raise
+        finalization_started = True
+        if finalization_observer is not None:
+            finalization_observer("prepared")
         _close_ledger(
             pathlib.Path(args.ledger),
             ledger,
@@ -1312,10 +1753,32 @@ def _run_campaign(
             atomic_writer,
         )
         ledger_closed = True
-        write_campaign(terminal)
+        if finalization_observer is not None:
+            finalization_observer("ledger_closed")
+        if campaign_write_observer is not None:
+            campaign_write_observer(manifest_path, terminal)
+        os.replace(
+            FINALIZATION_STAGE,
+            "campaign.json",
+            src_dir_fd=artifact_handle.descriptor,
+            dst_dir_fd=artifact_handle.descriptor,
+        )
+        if finalization_observer is not None:
+            finalization_observer("published")
+        os.fsync(artifact_handle.descriptor)
+        if finalization_observer is not None:
+            finalization_observer("directory_synced")
+        artifact_handle.validate_link()
+        os.unlink(FINALIZATION_MARKER, dir_fd=artifact_handle.descriptor)
+        os.fsync(artifact_handle.descriptor)
+        artifact_handle.validate_link()
         campaign = terminal
         return EXIT_BY_RESULT[("COMPLETE", terminal["statistical_result"])]
     except BaseException as error:
+        if finalization_started:
+            if not isinstance(error, Exception):
+                raise error
+            return 1
         if ledger_closed:
             if not isinstance(error, Exception):
                 raise error

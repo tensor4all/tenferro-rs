@@ -14,7 +14,7 @@ import re
 import stat
 import sys
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 try:
@@ -44,6 +44,10 @@ CRITERION_SETTINGS = {
 CANONICAL_CASES = protocol.CANONICAL_CASES
 STATISTICAL_RESULTS = frozenset(("PASS", "FAIL", "INCONCLUSIVE"))
 CLASSIFICATION_FILENAMES = ("classification.json", "summary.md")
+RUNNER_FINALIZATION_FILES = {
+    ".campaign-final.json",
+    ".campaign-finalization.json",
+}
 TRANSACTION_DIRECTORY = ".classification-transaction"
 TRANSACTION_FILENAMES = (
     "staged-classification.json",
@@ -68,6 +72,7 @@ CAMPAIGN_FIELDS = {
     "thread_environment": dict,
     "orders": list,
     "criterion": dict,
+    "criterion_binding": dict,
     "validity_state": str,
     "statistical_result": (str, type(None)),
     "completed_at": str,
@@ -80,6 +85,12 @@ BUILD_RECORD_FIELDS = {
     "sha256": str,
     "role": str,
     "executable_sha256": str,
+    "executable_path": str,
+    "executable_device": int,
+    "executable_inode": int,
+    "snapshot_sha256": str,
+    "snapshot_device": int,
+    "snapshot_inode": int,
 }
 CASE_FIELDS = {
     "benchmark": str,
@@ -113,6 +124,33 @@ RUN_FIELDS = {
     "process_started_monotonic": (int, float),
     "process_ended_monotonic": (int, float),
     "monitor_samples": list,
+    "argv": list,
+    "environment": dict,
+    "environment_sha256": str,
+    "executable": dict,
+    "criterion_binding": dict,
+    "process_group_cleanup": dict,
+}
+EXECUTABLE_FIELDS = {
+    "logical_path": str,
+    "source_device": int,
+    "source_inode": int,
+    "snapshot_device": int,
+    "snapshot_inode": int,
+    "snapshot_sha256": str,
+    "launch_path": str,
+}
+CRITERION_BINDING_FIELDS = {
+    "logical_path": str,
+    "actual_home": str,
+    "device": int,
+    "inode": int,
+}
+PROCESS_GROUP_CLEANUP_FIELDS = {
+    "survivor_observed": bool,
+    "term_signal_sent": bool,
+    "kill_signal_sent": bool,
+    "failures": list,
 }
 MONITOR_SAMPLE_FIELDS = {
     "sequence": int,
@@ -246,6 +284,7 @@ def _read_regular_snapshot(path: pathlib.Path) -> tuple[bytes, str]:
     """Read one absolute regular path through held no-follow directory fds."""
     absolute = pathlib.Path(os.path.abspath(path))
     parts = absolute.parts
+    retained = _retained_proc_components(absolute)
     descriptors: list[int] = []
     directory_links: list[tuple[int, str, tuple[int, int]]] = []
     file_identity = lambda item: (
@@ -255,9 +294,21 @@ def _read_regular_snapshot(path: pathlib.Path) -> tuple[bytes, str]:
         item.st_mtime_ns,
     )
     try:
-        parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        if retained is None:
+            parent = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+            components = parts[1:-1]
+            leaf = parts[-1]
+        else:
+            root_descriptor, relative_parts = retained
+            if not relative_parts:
+                raise protocol.ProtocolError(
+                    f"evidence path is not a regular file: {absolute}"
+                )
+            parent = os.dup(root_descriptor)
+            components = relative_parts[:-1]
+            leaf = relative_parts[-1]
         descriptors.append(parent)
-        for component in parts[1:-1]:
+        for component in components:
             child = os.open(
                 component,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -269,7 +320,7 @@ def _read_regular_snapshot(path: pathlib.Path) -> tuple[bytes, str]:
             parent = child
             descriptors.append(child)
         descriptor = os.open(
-            parts[-1],
+            leaf,
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
             dir_fd=parent,
         )
@@ -284,7 +335,7 @@ def _read_regular_snapshot(path: pathlib.Path) -> tuple[bytes, str]:
                 break
             chunks.append(chunk)
         after = os.fstat(descriptor)
-        current = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+        current = os.stat(leaf, dir_fd=parent, follow_symlinks=False)
         if file_identity(before) != file_identity(after) or file_identity(
             after
         ) != file_identity(current):
@@ -309,6 +360,55 @@ def _read_regular_snapshot(path: pathlib.Path) -> tuple[bytes, str]:
                 os.close(descriptor)
             except OSError:
                 pass
+
+
+def _retained_proc_components(
+    path: pathlib.Path,
+) -> tuple[int, tuple[str, ...]] | None:
+    absolute = pathlib.Path(os.path.abspath(path))
+    parts = absolute.parts
+    if len(parts) < 5 or parts[:4] != ("/", "proc", "self", "fd"):
+        return None
+    try:
+        descriptor = int(parts[4])
+        opened = os.fstat(descriptor)
+    except (ValueError, OSError) as error:
+        raise protocol.ProtocolError(f"invalid retained root path: {absolute}") from error
+    if not stat.S_ISDIR(opened.st_mode):
+        raise protocol.ProtocolError(f"retained root is not a directory: {absolute}")
+    return descriptor, tuple(parts[5:])
+
+
+def _open_retained_directory_path(path: pathlib.Path, *, create: bool = False) -> int:
+    retained = _retained_proc_components(path)
+    if retained is None:
+        return os.open(
+            path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+        )
+    root_descriptor, components = retained
+    descriptor = os.dup(root_descriptor)
+    try:
+        for component in components:
+            if create:
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                    os.fsync(descriptor)
+                except FileExistsError:
+                    pass
+            child = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except BaseException:
+            pass
+        raise
 
 
 def read_json(path: pathlib.Path) -> Any:
@@ -395,6 +495,8 @@ def _canonical_regular_file(path: pathlib.Path, context: str) -> pathlib.Path:
     if not path.is_absolute():
         raise protocol.ProtocolError(f"{context} path must be absolute")
     require_file(path)
+    if _retained_proc_components(path) is not None:
+        return path
     try:
         canonical = path.resolve(strict=True)
     except OSError as error:
@@ -414,6 +516,8 @@ def _relative_artifact_path(root: pathlib.Path, value: str, context: str) -> pat
         raise protocol.ProtocolError(f"{context} path is not canonical POSIX text")
     path = root.joinpath(*relative.parts)
     require_file(path)
+    if _retained_proc_components(root) is not None:
+        return path
     try:
         canonical = path.resolve(strict=True)
     except OSError as error:
@@ -434,7 +538,9 @@ def _artifact_record(record: Any, context: str) -> str:
     return digest
 
 
-def _validate_build_manifests(campaign: Mapping[str, Any]) -> dict[str, str]:
+def _validate_build_manifests(
+    campaign: Mapping[str, Any],
+) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     records = campaign["build_manifests"]
     if set(records) != {"baseline", "candidate"}:
         raise protocol.ProtocolError(
@@ -461,6 +567,7 @@ def _validate_build_manifests(campaign: Mapping[str, Any]) -> dict[str, str]:
         require_sha256(
             record["executable_sha256"], f"{identity} executable SHA-256"
         )
+        require_sha256(record["snapshot_sha256"], f"{identity} snapshot SHA-256")
         if record["role"] != expected_roles[identity]:
             raise protocol.ProtocolError(f"{identity} build role is inconsistent")
         path = _canonical_regular_file(
@@ -485,6 +592,20 @@ def _validate_build_manifests(campaign: Mapping[str, Any]) -> dict[str, str]:
         if identity == "candidate" and manifest.get("head") != campaign["candidate_sha"]:
             raise protocol.ProtocolError("candidate build commit identity differs")
         build.validate_build_manifest(manifest)
+        executable_metadata = os.stat(
+            manifest["executable"], follow_symlinks=False
+        )
+        expected_executable = {
+            "executable_path": manifest["executable"],
+            "executable_device": executable_metadata.st_dev,
+            "executable_inode": executable_metadata.st_ino,
+            "snapshot_sha256": manifest["executable_sha256"],
+        }
+        for field, expected_value in expected_executable.items():
+            if record[field] != expected_value:
+                raise protocol.ProtocolError(
+                    f"{identity} executable record differs: {field}"
+                )
         if _read_regular_snapshot(pathlib.Path(manifest["executable"]))[1] != manifest[
             "executable_sha256"
         ]:
@@ -494,7 +615,7 @@ def _validate_build_manifests(campaign: Mapping[str, Any]) -> dict[str, str]:
     build.validate_pair(
         campaign["comparison_kind"], manifests["baseline"], manifests["candidate"]
     )
-    return executable_shas
+    return executable_shas, manifests
 
 
 def _validate_monitor_samples(
@@ -576,6 +697,11 @@ def _validate_run(
     selected_cpu: int,
     load_limit: float,
     context: str,
+    expected_argv_tail: list[str],
+    build_manifest: Mapping[str, Any],
+    build_record: Mapping[str, Any],
+    criterion_binding: Mapping[str, Any],
+    candidate_environment: Mapping[str, str],
 ) -> None:
     protocol.validate_manifest_fields(run, RUN_FIELDS, context=f"{context} {role}")
     expected = {
@@ -592,6 +718,69 @@ def _validate_run(
             raise protocol.ProtocolError(
                 f"{context} {role}: run identity differs: {field}"
             )
+    protocol.validate_manifest_fields(
+        run["executable"], EXECUTABLE_FIELDS, context=f"{context} {role} executable"
+    )
+    executable = run["executable"]
+    expected_executable = {
+        "logical_path": build_manifest["executable"],
+        "source_device": build_record["executable_device"],
+        "source_inode": build_record["executable_inode"],
+        "snapshot_sha256": binary_sha256,
+        "snapshot_device": build_record["snapshot_device"],
+        "snapshot_inode": build_record["snapshot_inode"],
+    }
+    for field, value in expected_executable.items():
+        if executable[field] != value:
+            raise protocol.ProtocolError(
+                f"{context} {role}: executable identity differs: {field}"
+            )
+    require_sha256(executable["snapshot_sha256"], f"{context} {role} snapshot")
+    if (
+        type(executable["snapshot_device"]) is not int
+        or type(executable["snapshot_inode"]) is not int
+        or executable["snapshot_device"] < 0
+        or executable["snapshot_inode"] <= 0
+        or re.fullmatch(r"/proc/self/fd/[0-9]+", executable["launch_path"])
+        is None
+    ):
+        raise protocol.ProtocolError(f"{context} {role}: invalid executable snapshot")
+    expected_argv = [executable["launch_path"], *expected_argv_tail]
+    if run["argv"] != expected_argv:
+        raise protocol.ProtocolError(f"{context} {role}: argv differs")
+    protocol.validate_manifest_fields(
+        run["criterion_binding"],
+        CRITERION_BINDING_FIELDS,
+        context=f"{context} {role} Criterion binding",
+    )
+    if run["criterion_binding"] != criterion_binding:
+        raise protocol.ProtocolError(f"{context} {role}: Criterion binding differs")
+    expected_environment = protocol.runtime_environment(
+        path=candidate_environment["PATH"],
+        home=candidate_environment["HOME"],
+        criterion_home=criterion_binding["actual_home"],
+    )
+    if run["environment"] != expected_environment:
+        raise protocol.ProtocolError(f"{context} {role}: environment differs")
+    require_sha256(run["environment_sha256"], f"{context} {role} environment")
+    if run["environment_sha256"] != protocol.sha256_json(expected_environment):
+        raise protocol.ProtocolError(
+            f"{context} {role}: environment digest differs"
+        )
+    protocol.validate_manifest_fields(
+        run["process_group_cleanup"],
+        PROCESS_GROUP_CLEANUP_FIELDS,
+        context=f"{context} {role} process group cleanup",
+    )
+    if run["process_group_cleanup"] != {
+        "survivor_observed": False,
+        "term_signal_sent": False,
+        "kill_signal_sent": False,
+        "failures": [],
+    }:
+        raise protocol.ProtocolError(
+            f"{context} {role}: process group cleanup was required"
+        )
     process_started = _finite_real(
         run["process_started_monotonic"], f"{context} {role}: process start"
     )
@@ -621,6 +810,10 @@ def _validate_pair(
     allowed_count: int,
     load_limit: float,
     binary_shas: Mapping[str, str],
+    build_manifests: Mapping[str, Mapping[str, Any]],
+    build_records: Mapping[str, Mapping[str, Any]],
+    criterion_binding: Mapping[str, Any],
+    candidate_environment: Mapping[str, str],
     inventory: Mapping[str, Any],
     snapshots: Mapping[str, bytes],
 ) -> tuple[dict[str, float | int | str], set[str]]:
@@ -699,7 +892,17 @@ def _validate_pair(
         ("baseline", "candidate") if order == "A/B" else ("candidate", "baseline")
     )
     run_identities = ("candidate", *target_identities, "candidate")
-    for run, role, binary in zip(runs, RUN_ROLES, run_identities):
+    target_name = f"phase2e-target-{case}-p{pair}"
+    sentinel_name = f"phase2e-sentinel-{case}-p{pair}"
+    argv_tails = (
+        ["--bench", CANONICAL_CASES["lazy_neg_1"], "--save-baseline", sentinel_name, "--noplot"],
+        ["--bench", CANONICAL_CASES[case], "--save-baseline", target_name, "--noplot"],
+        ["--bench", CANONICAL_CASES[case], "--baseline", target_name, "--noplot"],
+        ["--bench", CANONICAL_CASES["lazy_neg_1"], "--baseline", sentinel_name, "--noplot"],
+    )
+    for run, role, binary, argv_tail in zip(
+        runs, RUN_ROLES, run_identities, argv_tails
+    ):
         _validate_run(
             run,
             role=role,
@@ -708,6 +911,11 @@ def _validate_pair(
             selected_cpu=selected_cpu,
             load_limit=load_limit,
             context=context,
+            expected_argv_tail=argv_tail,
+            build_manifest=build_manifests[binary],
+            build_record=build_records[binary],
+            criterion_binding=criterion_binding,
+            candidate_environment=candidate_environment,
         )
 
     monitor_path = pair_directory / "monitor-samples.json"
@@ -816,9 +1024,43 @@ def _classification_artifact_records(
     return validated, relatives, contents
 
 
-def _observed_normative_inventory(root: pathlib.Path) -> tuple[set[str], set[str]]:
+def _observed_normative_inventory(
+    root: pathlib.Path, *, ignored_files: set[str] | None = None
+) -> tuple[set[str], set[str]]:
     files: set[str] = set()
     directories: set[str] = set()
+    if _retained_proc_components(root) is not None:
+        root_fd = _open_retained_directory_path(root)
+
+        def visit(directory_fd: int, prefix: str) -> None:
+            for name in sorted(os.listdir(directory_fd)):
+                relative = f"{prefix}/{name}" if prefix else name
+                metadata = os.stat(
+                    name, dir_fd=directory_fd, follow_symlinks=False
+                )
+                if stat.S_ISDIR(metadata.st_mode):
+                    directories.add(relative)
+                    child = os.open(
+                        name,
+                        os.O_RDONLY
+                        | os.O_DIRECTORY
+                        | os.O_CLOEXEC
+                        | os.O_NOFOLLOW,
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        visit(child, relative)
+                    finally:
+                        os.close(child)
+                else:
+                    files.add(relative)
+
+        try:
+            visit(root_fd, "")
+        finally:
+            os.close(root_fd)
+        files.difference_update(ignored_files or set())
+        return files, directories
     try:
         paths = tuple(root.rglob("*"))
     except OSError as error:
@@ -834,6 +1076,7 @@ def _observed_normative_inventory(root: pathlib.Path) -> tuple[set[str], set[str
             directories.add(path.relative_to(root).as_posix())
             continue
         files.add(path.relative_to(root).as_posix())
+    files.difference_update(ignored_files or set())
     return files, directories
 
 
@@ -889,6 +1132,22 @@ def _validated_classification(
         raise protocol.ProtocolError("campaign.json: pair order differs")
     if campaign["criterion"] != CRITERION_SETTINGS:
         raise protocol.ProtocolError("campaign.json: Criterion settings differ")
+    protocol.validate_manifest_fields(
+        campaign["criterion_binding"],
+        CRITERION_BINDING_FIELDS,
+        context="campaign.json Criterion binding",
+    )
+    criterion_binding = campaign["criterion_binding"]
+    if (
+        not pathlib.Path(criterion_binding["logical_path"]).is_absolute()
+        or re.fullmatch(r"/proc/self/fd/[0-9]+", criterion_binding["actual_home"])
+        is None
+        or type(criterion_binding["device"]) is not int
+        or type(criterion_binding["inode"]) is not int
+        or criterion_binding["device"] < 0
+        or criterion_binding["inode"] <= 0
+    ):
+        raise protocol.ProtocolError("campaign.json: invalid Criterion root binding")
     if campaign["thread_environment"] != THREAD_ENVIRONMENT:
         raise protocol.ProtocolError("campaign.json: thread environment differs")
 
@@ -914,7 +1173,7 @@ def _validated_classification(
     )
     if load_limit != 0.25:
         raise protocol.ProtocolError("campaign.json: normalized load limit differs")
-    binary_shas = _validate_build_manifests(campaign)
+    binary_shas, build_manifests = _validate_build_manifests(campaign)
 
     inventory, snapshots = _validate_artifact_inventory(
         root, campaign["artifact_inventory"]
@@ -962,6 +1221,10 @@ def _validated_classification(
                 allowed_count=allowed_count,
                 load_limit=load_limit,
                 binary_shas=binary_shas,
+                build_manifests=build_manifests,
+                build_records=campaign["build_manifests"],
+                criterion_binding=campaign["criterion_binding"],
+                candidate_environment=build_manifests["candidate"]["environment"],
                 inventory=inventory,
                 snapshots=snapshots,
             )
@@ -992,7 +1255,12 @@ def _validated_classification(
             "campaign.json: normative artifact inventory differs; "
             f"missing={missing}, extra={extra}"
         )
-    observed, observed_directories = _observed_normative_inventory(root)
+    observed, observed_directories = _observed_normative_inventory(
+        root,
+        ignored_files=(
+            RUNNER_FINALIZATION_FILES if terminal_payload is not None else None
+        ),
+    )
     expected_files = {"campaign.json", *expected_inventory}
     if output_records is None and recovery_output_dir is not None:
         recovery_relative = recovery_output_dir.relative_to(root)
@@ -1167,6 +1435,16 @@ def _output_directory(root: pathlib.Path, output_dir: pathlib.Path) -> pathlib.P
     output_dir = pathlib.Path(os.path.abspath(output_dir))
     if root != output_dir and root not in output_dir.parents:
         raise protocol.ProtocolError("classification output dir is outside campaign root")
+    if _retained_proc_components(root) is not None:
+        descriptor = _open_retained_directory_path(output_dir, create=True)
+        try:
+            if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise protocol.ProtocolError(
+                    "classification output dir is not a directory"
+                )
+        finally:
+            os.close(descriptor)
+        return output_dir
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
         metadata = output_dir.lstat()
@@ -1267,7 +1545,9 @@ def _read_regular_at(directory_fd: int, name: str) -> tuple[bytes, str]:
 
 
 def _verify_directory_path(path: pathlib.Path, descriptor: int) -> None:
-    current = os.stat(path, follow_symlinks=False)
+    current = os.stat(
+        path, follow_symlinks=_retained_proc_components(path) is not None
+    )
     opened = os.fstat(descriptor)
     if not stat.S_ISDIR(current.st_mode) or _directory_identity(
         current
@@ -1462,9 +1742,7 @@ def _run_output_transaction(
     output_dir: pathlib.Path,
     contents: Mapping[str, bytes],
 ) -> None:
-    output_fd = os.open(
-        output_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
-    )
+    output_fd = _open_retained_directory_path(output_dir)
     transaction_fd: int | None = None
     try:
         _verify_directory_path(output_dir, output_fd)
@@ -1671,6 +1949,7 @@ def classify_terminal_view(
     output_dir: pathlib.Path,
     *,
     root_descriptor: int | None = None,
+    retained_root_observer: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Classify an in-memory terminal view derived from persisted RUNNING state."""
     if root_descriptor is None:
@@ -1691,6 +1970,8 @@ def classify_terminal_view(
             "classification output dir is outside campaign root"
         ) from error
     retained_root, expected_identity = _retained_root_path(root_descriptor)
+    if retained_root_observer is not None:
+        retained_root_observer()
     result = _classify_validated(
         retained_root / "campaign.json",
         retained_root / output_relative,
@@ -1698,6 +1979,15 @@ def classify_terminal_view(
     )
     if _directory_identity(os.fstat(root_descriptor)) != expected_identity:
         raise protocol.ProtocolError("terminal view root descriptor changed")
+    try:
+        logical_current = os.stat(logical_root, follow_symlinks=False)
+    except OSError as error:
+        raise protocol.ProtocolError("terminal view root identity changed") from error
+    if (
+        not stat.S_ISDIR(logical_current.st_mode)
+        or _directory_identity(logical_current) != expected_identity
+    ):
+        raise protocol.ProtocolError("terminal view root identity changed")
     return result
 
 
@@ -1707,8 +1997,7 @@ def _retained_root_path(
     try:
         opened = os.fstat(root_descriptor)
         proc_path = pathlib.Path(f"/proc/self/fd/{root_descriptor}")
-        retained = proc_path.resolve(strict=True)
-        current = retained.stat(follow_symlinks=False)
+        current = os.stat(proc_path)
     except OSError as error:
         raise protocol.ProtocolError(
             f"cannot resolve retained campaign root: {error}"
@@ -1720,7 +2009,7 @@ def _retained_root_path(
         or _directory_identity(current) != identity
     ):
         raise protocol.ProtocolError("retained campaign root identity differs")
-    return retained, identity
+    return proc_path, identity
 
 
 def main() -> None:

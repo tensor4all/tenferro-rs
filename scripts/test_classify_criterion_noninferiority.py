@@ -91,9 +91,15 @@ def make_run(
     binary: str,
     binary_sha256: str,
     *,
+    argv_tail: list[str],
+    build_record: dict,
+    build_manifest: dict,
+    criterion_binding: dict,
+    environment: dict,
     selected_cpu: int = 3,
     load: float = 0.10,
 ) -> dict:
+    launch_path = f"/proc/self/fd/{100 if binary == 'baseline' else 101}"
     return {
         "role": role,
         "binary": binary,
@@ -105,6 +111,25 @@ def make_run(
         "process_started_monotonic": 0.0,
         "process_ended_monotonic": 7.0,
         "monitor_samples": monitor_samples(selected_cpu, load),
+        "argv": [launch_path, *argv_tail],
+        "environment": copy.deepcopy(environment),
+        "environment_sha256": protocol.sha256_json(environment),
+        "executable": {
+            "logical_path": build_manifest["executable"],
+            "source_device": build_record["executable_device"],
+            "source_inode": build_record["executable_inode"],
+            "snapshot_device": 1,
+            "snapshot_inode": 100 if binary == "baseline" else 101,
+            "snapshot_sha256": binary_sha256,
+            "launch_path": launch_path,
+        },
+        "criterion_binding": copy.deepcopy(criterion_binding),
+        "process_group_cleanup": {
+            "survivor_observed": False,
+            "term_signal_sent": False,
+            "kill_signal_sent": False,
+            "failures": [],
+        },
     }
 
 
@@ -175,12 +200,33 @@ def make_build_manifests(root: pathlib.Path) -> dict[str, dict[str, str]]:
             "sha256": sha256(path),
             "role": role,
             "executable_sha256": payload["executable_sha256"],
+            "executable_path": payload["executable"],
+            "executable_device": executable.stat().st_dev,
+            "executable_inode": executable.stat().st_ino,
+            "snapshot_sha256": payload["executable_sha256"],
+            "snapshot_device": 1,
+            "snapshot_inode": 100 if identity == "baseline" else 101,
         }
     return records
 
 
 def make_campaign(root: pathlib.Path, build_root: pathlib.Path) -> dict:
     build_manifests = make_build_manifests(build_root)
+    build_payloads = {
+        identity: json.loads(pathlib.Path(record["path"]).read_text())
+        for identity, record in build_manifests.items()
+    }
+    criterion_binding = {
+        "logical_path": str((build_root / "criterion").resolve()),
+        "actual_home": "/proc/self/fd/999",
+        "device": root.stat().st_dev,
+        "inode": root.stat().st_ino,
+    }
+    candidate_environment = protocol.runtime_environment(
+        path=build_payloads["candidate"]["environment"]["PATH"],
+        home=build_payloads["candidate"]["environment"]["HOME"],
+        criterion_home=criterion_binding["actual_home"],
+    )
     cases: dict[str, dict] = {}
     inventory: dict[str, dict[str, str]] = {}
     for case, benchmark in protocol.CANONICAL_CASES.items():
@@ -198,14 +244,42 @@ def make_campaign(root: pathlib.Path, build_root: pathlib.Path) -> dict:
             write_estimate(change)
             write_estimate(sentinel)
 
-            runs = [
-                make_run(
-                    role,
-                    binary,
-                    build_manifests[binary]["executable_sha256"],
+            target_name = f"phase2e-target-{case}-p{pair}"
+            sentinel_name = f"phase2e-sentinel-{case}-p{pair}"
+            argv_tails = (
+                [
+                    "--bench",
+                    protocol.CANONICAL_CASES["lazy_neg_1"],
+                    "--save-baseline",
+                    sentinel_name,
+                    "--noplot",
+                ],
+                ["--bench", benchmark, "--save-baseline", target_name, "--noplot"],
+                ["--bench", benchmark, "--baseline", target_name, "--noplot"],
+                [
+                    "--bench",
+                    protocol.CANONICAL_CASES["lazy_neg_1"],
+                    "--baseline",
+                    sentinel_name,
+                    "--noplot",
+                ],
+            )
+            runs = []
+            for role, binary, argv_tail in zip(
+                protocol.RUN_ROLES, identities, argv_tails
+            ):
+                runs.append(
+                    make_run(
+                        role,
+                        binary,
+                        build_manifests[binary]["executable_sha256"],
+                        argv_tail=argv_tail,
+                        build_record=build_manifests[binary],
+                        build_manifest=build_payloads[binary],
+                        criterion_binding=criterion_binding,
+                        environment=candidate_environment,
+                    )
                 )
-                for role, binary in zip(protocol.RUN_ROLES, identities)
-            ]
             local_artifacts: dict[str, dict[str, str]] = {}
             for run in runs:
                 for stream_name in ("stdout_artifact", "stderr_artifact"):
@@ -278,6 +352,7 @@ def make_campaign(root: pathlib.Path, build_root: pathlib.Path) -> dict:
         "thread_environment": dict(protocol.THREAD_ENV),
         "orders": list(protocol.PAIR_ORDERS),
         "criterion": CRITERION_SETTINGS,
+        "criterion_binding": criterion_binding,
         "validity_state": "COMPLETE",
         "statistical_result": "PASS",
         "completed_at": "2026-07-20T00:00:00+00:00",
@@ -574,11 +649,7 @@ class ProtocolV2CampaignTests(unittest.TestCase):
         self.assertTrue(summary_path.is_file())
         self.assertEqual(
             json.loads(classification_path.read_text()),
-            {
-                key: value
-                for key, value in result.items()
-                if key != "output_artifacts"
-            },
+            {key: value for key, value in result.items() if key != "output_artifacts"},
         )
         self.assertIn("campaign=PASS", summary_path.read_text())
         self.assertEqual(
@@ -588,6 +659,37 @@ class ProtocolV2CampaignTests(unittest.TestCase):
         for name, record in result["output_artifacts"].items():
             self.assertEqual(record["path"], name)
             self.assertEqual(record["sha256"], sha256(self.root / name))
+
+    def test_tampered_run_argv_environment_and_root_binding_are_rejected(self) -> None:
+        mutations = {
+            "argv": lambda run: run["argv"].__setitem__(1, "--tampered"),
+            "environment": lambda run: run["environment"].__setitem__(
+                "HOME", "/tampered"
+            ),
+            "Criterion binding": lambda run: run["criterion_binding"].__setitem__(
+                "inode", run["criterion_binding"]["inode"] + 1
+            ),
+            "snapshot_inode": lambda run: run["executable"].__setitem__(
+                "snapshot_inode", run["executable"]["snapshot_inode"] + 1
+            ),
+        }
+        original_campaign = copy.deepcopy(self.campaign)
+        validity_path = self.root / "lazy_neg_1/pair1/validity.json"
+        original_validity = json.loads(validity_path.read_text())
+        for expected, mutate in mutations.items():
+            with self.subTest(expected=expected):
+                self.campaign = copy.deepcopy(original_campaign)
+                validity = copy.deepcopy(original_validity)
+                mutate(validity["runs"][0])
+                self.rewrite_validity(validity_path, validity)
+                self.write_campaign()
+
+                with self.assertRaisesRegex(protocol.ProtocolError, expected):
+                    classifier.classify_campaign(self.campaign_path, self.root)
+
+        self.campaign = copy.deepcopy(original_campaign)
+        self.rewrite_validity(validity_path, original_validity)
+        self.write_campaign()
 
     def test_terminal_view_classifies_while_disk_manifest_remains_running(self) -> None:
         terminal = copy.deepcopy(self.campaign)
@@ -622,7 +724,7 @@ class ProtocolV2CampaignTests(unittest.TestCase):
                 self.campaign_path, terminal, self.root
             )
 
-    def test_terminal_view_root_fd_survives_logical_root_swap(self) -> None:
+    def test_terminal_view_root_fd_rejects_race_without_redirecting_outputs(self) -> None:
         terminal = copy.deepcopy(self.campaign)
         for record in self.campaign["cases"].values():
             record["statistical_result"] = None
@@ -633,19 +735,21 @@ class ProtocolV2CampaignTests(unittest.TestCase):
         descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
         detached = self.base / "timing-detached"
         outside = self.base / "timing-outside"
-        try:
+
+        def swap_after_retention():
             self.root.rename(detached)
             outside.mkdir()
             self.root.symlink_to(outside, target_is_directory=True)
 
-            result = classifier.classify_terminal_view(
-                self.campaign_path,
-                terminal,
-                self.root,
-                root_descriptor=descriptor,
-            )
-
-            self.assertEqual(result["statistical_result"], "PASS")
+        try:
+            with self.assertRaisesRegex(protocol.ProtocolError, "root identity changed"):
+                classifier.classify_terminal_view(
+                    self.campaign_path,
+                    terminal,
+                    self.root,
+                    root_descriptor=descriptor,
+                    retained_root_observer=swap_after_retention,
+                )
             self.assertTrue((detached / "classification.json").is_file())
             self.assertEqual(list(outside.iterdir()), [])
         finally:
