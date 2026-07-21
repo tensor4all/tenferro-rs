@@ -1,0 +1,10 @@
+[package]
+name = "phase2e-allocation-probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tenferro-ad = { path = "__TENFERRO_REPOSITORY_ROOT__/crates/tenferro-ad", default-features = false, features = ["cpu-faer"] }
+tenferro-cpu = { path = "__TENFERRO_REPOSITORY_ROOT__/crates/tenferro-cpu", default-features = false, features = ["cpu-faer"] }
+tenferro-tensor = { path = "__TENFERRO_REPOSITORY_ROOT__/crates/tenferro-tensor", default-features = false }
