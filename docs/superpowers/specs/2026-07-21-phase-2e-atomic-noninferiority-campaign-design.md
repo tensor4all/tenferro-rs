@@ -442,7 +442,7 @@ tenferro measurement worktree. Its source and manifest-template SHA-256 values
 are fixed in the root evidence manifest. The orchestrator generates three
 probe manifests whose manifest-template substitution is limited to the
 canonical tenferro path, links one probe executable to each tenferro build with
-`default-features = false, features = ["cpu-faer"]`, and records the probe
+the frozen dependency/feature contract below, and records the probe
 binary, resolved feature graph, tenferro source, lock, toolchain, profile, and
 sealed build-environment digests.
 
@@ -469,16 +469,45 @@ cargo tree --locked --manifest-path <generated>/Cargo.toml \
   --target <host-target> -e features
 ```
 
-The generated manifest already fixes the probe dependency's
-`default-features = false` and `features = ["cpu-faer"]`; the manifest bytes
-and those fields are independently validated before the graph is accepted.
+The generated manifest has exactly three direct dependencies at canonical
+repository-root-relative paths: `crates/tenferro-ad`,
+`crates/tenferro-cpu`, and `crates/tenferro-tensor`. All three set
+`default-features = false`; AD and CPU enable exactly
+`features = ["cpu-faer"]`, while tensor enables no features. The tracked
+template contains one kind of repository-root token, substituted only as
+TOML-safe string content. The verifier parses the generated TOML and rejects
+wrong dependency names, paths, default-feature settings, feature lists,
+foreign roots, paths outside the repository, or noncanonical spellings.
+
+Every generated probe is a unique external temporary crate. The verifier
+byte-copies the tracked `src/main.rs` and `src/tests.rs` into its own `src/`,
+rejecting symlinks, special files, extra inventory, and digest drift before or
+after verification. Only `Cargo.toml` is generated; a `[[bin]]` entry may not
+point back into tracked source. Build evidence binds the template plus tracked
+and generated source digests. `cargo test` creates the generated
+`Cargo.lock`; subsequent locked clippy and build commands must leave its bytes
+unchanged. Generated source, target, HOME, and controlled Cargo-cache state are
+cleaned on success, nonzero exit, timeout, `KeyboardInterrupt`, and
+`SystemExit`, without replacing the primary failure.
+
+The probe also has a nonmeasurement `--list-cases` mode. It prints the compact
+JSON array of all 28 canonical case strings in protocol order followed by one
+LF, emits no other stdout, and exits 0. Rust tests bind every name to its exact
+operation, mode, and size. The Python verifier executes the bench-built binary
+and byte-compares its inventory and order with
+`tuple(protocol.CANONICAL_CASES)`. Unknown arguments exit 1, emit no allocation
+record, and diagnose only on stderr.
 
 The probe uses one fixed `System`-allocator counting wrapper and launches a
 fresh single-thread process for each case. Inputs and runtime are constructed,
-then 256 warm-up operations run, the allocation counters reset, and exactly
-4,096 operations run inside the measured region. Every output is consumed and
-dropped through the same `black_box` semantics as the timing harness before
-the final snapshot. Each comparison runs six processes per case in the fixed
+then 256 warm-up operations run; every warm-up output is consumed and dropped
+and all temporaries settle before the allocation counters reset. Exactly 4,096
+operations then run inside the measured region. Each measured input and output
+is black-boxed, every output is dropped within its iteration, and only a
+primitive checksum accumulator survives. The final snapshot is taken
+immediately after the loop and output drops; recording is disabled before any
+serialization or printing, so output allocations are excluded. Each
+comparison runs six processes per case in the fixed
 orders `A/B`, `B/A`, `A/B`, producing three observations per binary across one
 indivisible 28-case matrix. A crash, missing case, unequal repetition count,
 or inconsistent within-binary count is a whole-probe validity `INCONCLUSIVE`,
@@ -506,21 +535,67 @@ zero-initialized allocation, in-place-or-moving reallocation, deallocation,
 failure injection, reset, and overflow without relying on optimizer-elidable
 allocations.
 
+Allocation count, allocated bytes, and failures are independent `AtomicU64`
+counters. Updates are checked and never wrap: an overflowing counter remains
+unchanged, `counter_overflow` becomes true, and any successful updates to the
+other counters remain visible as invalid evidence. Tests independently seed
+each overflow and cover zero-delta state transitions only through the safe
+state-machine API. Reset and snapshot are protocol-defined quiescent points
+with no concurrent allocator calls. Relaxed atomic ordering is sufficient for
+the counters but does not make concurrent reset or snapshot valid.
+
 Every unsafe allocator delegation is an explicit `unsafe` block with an
-adjacent `// SAFETY:` note. The note states that the `GlobalAlloc` caller's
-pointer/layout contract is forwarded unchanged to the same `System` allocator,
-and that the wrapper never dereferences or changes the returned pointer; it
-only updates atomic counters afterward. Boundary tests cover valid alloc,
-zeroed alloc, realloc, and dealloc sequences plus null/failure behavior. The
-implementation does not rely on the implicit unsafe context of an `unsafe fn`.
+adjacent boundary-specific `// SAFETY:` note. The note states that the
+`GlobalAlloc` caller's pointer/layout contract is forwarded unchanged to the
+same `System` allocator, and that the wrapper never dereferences or changes the
+returned pointer; it classifies the returned null/success result before
+updating counters. The implementation does not rely on the implicit unsafe
+context of an `unsafe fn`. Boundary tests use only nonzero valid layouts,
+non-null live pointers, and positive realloc sizes. They never allocate a
+zero-sized layout, reallocate or deallocate null, or deallocate an invalid
+pointer. One valid lifecycle covers `alloc`, `alloc_zeroed`, `realloc`, and
+`dealloc`. Injected null is tested only for `alloc`, `alloc_zeroed`, and
+`realloc`; after failed realloc the original pointer remains live and is
+deallocated exactly once with its original layout. `dealloc` has no failure
+result or injected-failure test.
+
+Measured consumption is allocation-free. `shape_token` starts from rank and
+folds every dimension using wrapping base 257, with exact-value tests. Lazy
+cases black-box `shape()`, compute the shape token, invoke and match
+`tensor_read()`, black-box its tensor, and add storage tag `Tensor = 1` or
+`View = 2`. Materialized cases call `materialized()`, black-box its shape and
+first `f64`, and combine that value with the shape token. Both tokens must be
+finite. Iteration `i` performs
+`checksum += token * ((i + 1) as f64)` and black-boxes the accumulator. Exact
+checksums for all 28 cases are frozen using triangular factor
+`4096 * 4097 / 2` and known outputs/tags.
+
+A measured run emits exactly one compact JSON object, with lexicographically
+sorted keys, followed by one LF and no other stdout:
+`allocation_count: u64`, `allocated_bytes: u64`,
+`allocation_failures: u64`, canonical-string `case`, finite-f64 `checksum`,
+`counter_overflow: bool`, and `repetitions: 4096`. Unknown keys are forbidden.
+Exit 0 requires zero failures, false overflow, and all run checks valid.
+Failure or overflow emits the same record and exits 2. Unknown case or argv,
+runtime/tensor failure, or serialization failure emits no stdout, writes a
+diagnostic to stderr, and exits 1. Task 6 revalidates exact JSON types (a bool
+is not an integer), checksum finiteness, repetition count, canonical case,
+one-line framing, and record/exit-code consistency.
 
 Because the generated probe crate lives outside the Cargo workspace, its
-dedicated verifier creates a fresh generated manifest and runs `cargo fmt
---check`, its complete tests, all-target `cargo clippy -- -D warnings`, and the
-locked bench-profile build explicitly. These checks run when the probe is
-implemented, when the evidence candidate is frozen, and again on the final
-committed head; workspace-wide fmt/clippy is not treated as coverage for this
-external crate.
+dedicated verifier creates a fresh generated crate and runs, in order,
+`cargo fmt --check` with a 300-second deadline, complete tests with 1,800
+seconds, locked all-target clippy with `-D warnings` with 1,800 seconds, locked
+bench-profile build with 1,800 seconds, and the built binary's `--list-cases`
+with 30 seconds. Every subprocess starts a new process group and uses the
+existing bounded runner: timeout or control exception sends TERM, waits five
+seconds, then KILLs and reaps the group. Verification stops at the first
+failure. Fake-process tests cover all five commands, exact environment and
+provenance, nonzero exit, timeout, cleanup, control exceptions, and
+first-failure stop; real commands do not replace these orchestration tests.
+These checks run when the probe is implemented, when the evidence candidate is
+frozen, and again on the final committed head; workspace-wide fmt/clippy is
+not treated as coverage for this external crate.
 
 The direct-current-main and common-lock comparisons have separate atomic
 allocation manifests. For every observation of every case, candidate

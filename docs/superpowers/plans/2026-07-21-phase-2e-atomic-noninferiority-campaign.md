@@ -552,7 +552,13 @@ reset, `alloc`, `alloc_zeroed`, `realloc`, `dealloc`, injected failure, and
 checked overflow in module-local `src/tests.rs`, following the repository's
 unit-test organization rule. Tests use the wrapper's test-only failure/seed
 controls and assert monotonic positive counts/bytes; they do not assert whether
-the system reallocates in place.
+the system reallocates in place. Unsafe delegate tests use only non-zero valid
+`Layout` values. They never call `alloc` or `alloc_zeroed` with a zero-size
+layout, `realloc` with a null pointer or zero new size, or `dealloc` with a null
+or invalid pointer. The valid lifecycle covers all four methods. Injected-null
+tests cover only `alloc`, `alloc_zeroed`, and `realloc`; after a failed
+`realloc`, the original pointer remains live and is deallocated exactly once
+with its original layout. `dealloc` has no failure-result contract.
 
 Define `TestAllocator` inside `src/tests.rs` as the same counter state machine
 with an injectable delegate; production `CountingSystem` uses `System`
@@ -584,10 +590,28 @@ Expected: compile failure because the probe implementation is absent.
 
 - [ ] **Step 3: Implement the counting allocator and 28 cases**
 
-The manifest uses path dependencies with
-`default-features = false, features = ["cpu-faer"]`. The global allocator
-delegates once to `System` and records successful allocation events with
-checked atomics:
+The manifest's exact direct path dependency set is `tenferro-ad`,
+`tenferro-cpu`, and `tenferro-tensor` at the canonical repository paths beneath
+`crates/`. All three use `default-features = false`; `tenferro-ad` and
+`tenferro-cpu` enable only `features = ["cpu-faer"]`, while
+`tenferro-tensor` enables no features. `Cargo.toml.in` has one kind of
+repository-root token rendered as TOML-safe string content. Parse the generated
+TOML and reject wrong dependency names, features, or foreign, outside, or
+noncanonical paths.
+
+Generate each probe in a unique external temporary root. Copy the tracked
+`src/main.rs` and `src/tests.rs` byte-for-byte into `<generated>/src`, rejecting
+symlinks, special files, extra inventory, or digest drift before and after the
+commands. Generate only `Cargo.toml`; do not point `[[bin]]` back into tracked
+source. Bind the template and tracked/generated source SHA-256 digests in the
+verification record. `cargo test` creates `Cargo.lock`; locked clippy/build
+must leave its bytes unchanged. Keep target, HOME, and controlled Cargo-cache
+paths outside the generated manifest root and clean all temporary state on
+success, failure, timeout, `KeyboardInterrupt`, or `SystemExit` without
+replacing the primary exception.
+
+The global allocator delegates once to `System` and records successful
+allocation events with checked atomics:
 
 ```rust
 unsafe impl GlobalAlloc for CountingSystem {
@@ -626,18 +650,56 @@ unsafe impl GlobalAlloc for CountingSystem {
 Keep every allocator call in an explicit unsafe block with its adjacent
 boundary-specific `// SAFETY:` explanation; do not rely on the implicit unsafe
 body of `unsafe fn`. The module-local tests must exercise the valid pointer and
-layout lifecycle plus null/failure behavior across all four delegate methods.
+layout lifecycle plus injected null behavior on only the three allocating
+methods. Production delegates first, classifies null/success, then updates
+independent allocation-count, allocated-bytes, and failure `AtomicU64`
+counters. Every update is checked and non-wrapping. Overflow leaves that
+counter unchanged, sets `counter_overflow`, preserves other partial updates as
+invalid evidence, and makes the observation non-passing. Zero-delta and the
+three independent seeded-overflow tests use only the safe state-machine API.
+Reset and snapshot are protocol-defined quiescent points with no concurrent
+allocator calls; atomic ordering does not make concurrent reset/snapshot valid.
 
-Parse exactly the canonical case names. Construct tensors/runtime before 256
-warm-ups, reset, execute 4,096 iterations, consume lazy results with
-`shape()` plus `tensor_read()`, consume materialized results with
-`materialized()` plus the first `f64`, and print one sorted JSON record with
-case, repetitions, checksum, allocation count/bytes/failures, and overflow.
-Extend `phase2e_build.py` with `verify-allocation-probe --repository <path>`.
-It creates a unique temporary generated-manifest root and runs the exact fmt,
-test, all-target clippy, and bench-build commands below with bounded subprocess
-deadlines. Add fake-process tests for all four commands and nonzero/timeout
-propagation.
+Parse exactly the 28 canonical names in protocol order. `--list-cases` prints
+their compact JSON array plus one LF, no other stdout, and exits 0. Unknown
+arguments print only a stderr diagnostic and exit 1. Rust tests freeze every
+name's mode, operation, and size. The Python verifier executes the bench-built
+binary and requires byte-exact equality with
+`tuple(protocol.CANONICAL_CASES)`, including order.
+
+Construct inputs/runtime before 256 warm-ups; consume and drop every warm-up
+output and settle temporaries before reset. Execute exactly 4,096 measured
+iterations. Allocation-free `shape_token` starts from rank and folds each
+dimension with wrapping base 257. Lazy consumption invokes and black-boxes both
+`shape()` and `tensor_read()`, includes storage tag `Tensor=1` or `View=2`, and
+returns a finite shape/tag token. Materialized consumption invokes
+`materialized()`, black-boxes shape and first `f64`, and combines that value
+with the shape token. Iteration `i` performs
+`checksum += token * ((i + 1) as f64)` and black-boxes the primitive
+accumulator. Tests freeze finite checksums for all 28 cases using triangular
+factor `4096 * 4097 / 2`.
+
+Take the snapshot immediately after the measured loop and output drops,
+disable recording, then serialize/print. Valid and allocator-invalid runs emit
+exactly one compact, lexicographically key-sorted seven-field JSON object plus
+one LF and no other stdout. Its exact fields/types are
+`allocation_count: u64`, `allocated_bytes: u64`,
+`allocation_failures: u64`, canonical-string `case`, finite-f64 `checksum`,
+`counter_overflow: bool`, and `repetitions: 4096`; unknown keys are forbidden.
+Exit 0 requires zero failures, no overflow, and valid execution. Failure or
+overflow emits that same record and exits 2. Unknown case/argv,
+runtime/tensor, or serialization errors emit no stdout, diagnose on stderr,
+and exit 1.
+
+Extend `phase2e_build.py` with import-safe strict subcommand
+`verify-allocation-probe --repository <path>`. Reuse `run_bounded_command`,
+absolute executable identities, the sealed environment, new process groups,
+TERM, five-second grace, KILL, and bounded reap; stop at the first failure.
+Deadlines are fmt 300 seconds; test, locked all-target clippy, and locked bench
+build 1,800 seconds each; and list-cases 30 seconds. Fake-process tests cover
+all five commands, source/inventory/digest provenance, exact environment,
+nonzero/timeout/control-exception cleanup, and first-failure stop. Real commands
+do not replace these orchestration tests.
 
 - [ ] **Step 4: Run probe tests GREEN**
 
@@ -645,16 +707,20 @@ propagation.
 cargo fmt --manifest-path "$PHASE2E_PROBE_DEV_ROOT/Cargo.toml" -- --check
 cargo test --manifest-path "$PHASE2E_PROBE_DEV_ROOT/Cargo.toml"
 cargo clippy --manifest-path "$PHASE2E_PROBE_DEV_ROOT/Cargo.toml" \
-  --all-targets -- -D warnings
+  --locked --all-targets -- -D warnings
 cargo build --locked --profile bench \
   --manifest-path "$PHASE2E_PROBE_DEV_ROOT/Cargo.toml"
+"$CARGO_TARGET_DIR/bench/phase2e-allocation-probe" --list-cases
 python3 scripts/phase2e_build.py verify-allocation-probe \
   --repository "$PWD"
+python3 -m unittest scripts/test_phase2e_build.py -v
+python3 -m py_compile scripts/phase2e_build.py scripts/test_phase2e_build.py
 ```
 
 Expected: formatting is clean, all tests pass, clippy reports no warnings, the
-bench-profile binary builds, and the helper independently reproduces all four
-checks from a fresh generated root.
+bench-profile binary builds, list-cases exactly matches the protocol inventory,
+the helper independently reproduces all five checks from a fresh generated
+root, and the Python fake-process/unit and syntax checks pass.
 
 - [ ] **Step 5: Commit**
 
@@ -711,6 +777,12 @@ register it in the allocation ledger before the first process. Compare
 corresponding oriented observations without averaging or selecting minima.
 Give every probe process a 30-second deadline and apply the common five-second
 process-group termination/kill protocol before writing validity inconclusive.
+Parse every probe record with the exact seven-key schema from Task 5: reject
+unknown or missing keys, wrong JSON types (including bool where integer is
+required), nonfinite checksum, a repetition count other than 4,096,
+noncanonical case, extra framing or stdout, and any inconsistency between the
+record and process exit code. Bind the separately queried exact case inventory
+and order into the campaign manifest.
 
 - [ ] **Step 4: Run tests GREEN**
 
