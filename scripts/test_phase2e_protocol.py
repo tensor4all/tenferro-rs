@@ -141,6 +141,119 @@ class RuntimeEnvironmentTests(unittest.TestCase):
 
 
 class AtomicJsonAndHashTests(unittest.TestCase):
+    def test_atomic_json_at_remains_bound_to_held_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            root = base / "root"
+            root.mkdir()
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            detached = base / "detached"
+            outside = base / "outside"
+            try:
+                root.rename(detached)
+                outside.mkdir()
+                root.symlink_to(outside, target_is_directory=True)
+
+                protocol.atomic_write_json_at(
+                    descriptor, "campaign.json", {"state": "RUNNING"}
+                )
+
+                self.assertEqual(
+                    json.loads((detached / "campaign.json").read_text()),
+                    {"state": "RUNNING"},
+                )
+                self.assertEqual(list(outside.iterdir()), [])
+                with self.assertRaises(protocol.ProtocolError):
+                    protocol.atomic_write_json_at(
+                        descriptor, "escape/campaign.json", {}
+                    )
+            finally:
+                os.close(descriptor)
+
+    def test_atomic_json_at_handles_short_writes_and_fsyncs_file_and_directory(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            real_write = os.write
+            real_fsync = os.fsync
+            fsynced = []
+
+            def short_write(fd, payload):
+                return real_write(fd, bytes(payload[:3]))
+
+            def tracking_fsync(fd):
+                fsynced.append(fd)
+                return real_fsync(fd)
+
+            try:
+                with mock.patch.object(
+                    protocol.os, "write", side_effect=short_write
+                ), mock.patch.object(
+                    protocol.os, "fsync", side_effect=tracking_fsync
+                ):
+                    protocol.atomic_write_json_at(
+                        descriptor, "campaign.json", {"answer": 42}
+                    )
+                self.assertEqual(
+                    json.loads((root / "campaign.json").read_text()),
+                    {"answer": 42},
+                )
+                self.assertGreaterEqual(len(fsynced), 2)
+                self.assertEqual(fsynced[-1], descriptor)
+            finally:
+                os.close(descriptor)
+
+    def test_atomic_json_at_preserves_base_exception_and_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            target = root / "campaign.json"
+            target.write_text('{"old":true}\n')
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            before_fds = len(os.listdir("/proc/self/fd"))
+            interruption = KeyboardInterrupt("write cancelled")
+            try:
+                with mock.patch.object(
+                    protocol.os, "write", side_effect=interruption
+                ):
+                    with self.assertRaises(KeyboardInterrupt) as caught:
+                        protocol.atomic_write_json_at(
+                            descriptor, "campaign.json", {"answer": 42}
+                        )
+                self.assertIs(caught.exception, interruption)
+                self.assertEqual(target.read_text(), '{"old":true}\n')
+                self.assertEqual(
+                    len(list(root.glob(".campaign.json.write-*.tmp"))), 1
+                )
+                self.assertEqual(len(os.listdir("/proc/self/fd")), before_fds)
+            finally:
+                os.close(descriptor)
+
+    def test_atomic_json_at_replace_failure_is_precommit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            target = root / "campaign.json"
+            target.write_text('{"old":true}\n')
+            descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                with mock.patch.object(
+                    protocol.os,
+                    "replace",
+                    side_effect=OSError("replace failed"),
+                ):
+                    with self.assertRaises(protocol.AtomicWriteError) as caught:
+                        protocol.atomic_write_json_at(
+                            descriptor, "campaign.json", {"answer": 42}
+                        )
+                self.assertFalse(caught.exception.committed)
+                self.assertEqual(target.read_text(), '{"old":true}\n')
+                self.assertEqual(
+                    len(list(root.glob(".campaign.json.write-*.tmp"))), 1
+                )
+            finally:
+                os.close(descriptor)
+
     def test_atomic_json_is_deterministic_sorted_and_collision_free(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)

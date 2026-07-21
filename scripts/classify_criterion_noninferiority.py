@@ -1669,13 +1669,58 @@ def classify_terminal_view(
     running_campaign_path: pathlib.Path,
     terminal_payload: Mapping[str, Any],
     output_dir: pathlib.Path,
+    *,
+    root_descriptor: int | None = None,
 ) -> dict[str, Any]:
     """Classify an in-memory terminal view derived from persisted RUNNING state."""
-    return _classify_validated(
-        running_campaign_path,
-        output_dir,
+    if root_descriptor is None:
+        return _classify_validated(
+            running_campaign_path,
+            output_dir,
+            terminal_payload=terminal_payload,
+        )
+    logical_campaign = pathlib.Path(os.path.abspath(running_campaign_path))
+    if logical_campaign.name != "campaign.json":
+        raise protocol.ProtocolError("terminal view requires campaign.json")
+    logical_root = logical_campaign.parent
+    logical_output = pathlib.Path(os.path.abspath(output_dir))
+    try:
+        output_relative = logical_output.relative_to(logical_root)
+    except ValueError as error:
+        raise protocol.ProtocolError(
+            "classification output dir is outside campaign root"
+        ) from error
+    retained_root, expected_identity = _retained_root_path(root_descriptor)
+    result = _classify_validated(
+        retained_root / "campaign.json",
+        retained_root / output_relative,
         terminal_payload=terminal_payload,
     )
+    if _directory_identity(os.fstat(root_descriptor)) != expected_identity:
+        raise protocol.ProtocolError("terminal view root descriptor changed")
+    return result
+
+
+def _retained_root_path(
+    root_descriptor: int,
+) -> tuple[pathlib.Path, tuple[int, int]]:
+    try:
+        opened = os.fstat(root_descriptor)
+        proc_path = pathlib.Path(f"/proc/self/fd/{root_descriptor}")
+        retained = proc_path.resolve(strict=True)
+        current = retained.stat(follow_symlinks=False)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot resolve retained campaign root: {error}"
+        ) from error
+    identity = _directory_identity(opened)
+    if (
+        not stat.S_ISDIR(opened.st_mode)
+        or not stat.S_ISDIR(current.st_mode)
+        or _directory_identity(current) != identity
+    ):
+        raise protocol.ProtocolError("retained campaign root identity differs")
+    return retained, identity
 
 
 def main() -> None:

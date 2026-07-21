@@ -381,6 +381,17 @@ git commit -m "feat(perf): classify atomic phase 2e campaigns"
 
 - Modify: `scripts/run_phase1_eager_campaign.py`
 - Modify: `scripts/test_run_phase1_eager_campaign.py`
+- Modify: `scripts/classify_criterion_noninferiority.py`
+- Modify: `scripts/test_classify_criterion_noninferiority.py`
+- Modify: `scripts/phase2e_protocol.py`
+- Modify: `scripts/test_phase2e_protocol.py`
+
+The classifier and protocol files are in scope because an atomic runner must
+classify an in-memory terminal view while the durable manifest remains
+`RUNNING`, and must commit artifacts relative to caller-retained directory
+descriptors.  These are prerequisites for preventing false `COMPLETE` records
+and pathname-swap redirection; they do not create a second campaign state
+machine.
 
 - [ ] **Step 1: Add failing whole-campaign tests**
 
@@ -431,6 +442,15 @@ Copy every Criterion estimate into its pair directory before hashing. Treat
 `CRITERION_HOME` as non-normative scratch and never resume a `RUNNING`
 manifest.
 
+Retain descriptors for campaign roots and benchmark executables, validate
+their identities after every child process, and perform owned I/O relative to
+those descriptors.  Revalidate builds through `BuildConfig` at the public
+entry point.  At successful completion, classify the in-memory terminal view,
+close the ledger, then atomically replace the sole durable `RUNNING` manifest
+with `COMPLETE`; any failure before that final replacement must leave no false
+`COMPLETE` record.  Cleanup must preserve `KeyboardInterrupt` and `SystemExit`
+while still terminating the whole process group.
+
 - [ ] **Step 4: Run runner and classifier tests GREEN**
 
 ```bash
@@ -445,6 +465,8 @@ Expected: all tests pass.
 
 ```bash
 git add scripts/run_phase1_eager_campaign.py scripts/test_run_phase1_eager_campaign.py
+git add scripts/classify_criterion_noninferiority.py scripts/test_classify_criterion_noninferiority.py
+git add scripts/phase2e_protocol.py scripts/test_phase2e_protocol.py
 git commit -m "feat(perf): make eager campaign atomic"
 ```
 

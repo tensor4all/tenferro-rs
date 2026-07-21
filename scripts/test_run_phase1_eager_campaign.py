@@ -6,12 +6,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import inspect
 import json
+import os
 import pathlib
 import signal
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 from scripts import phase2e_build as build
 from scripts import phase2e_protocol as protocol
@@ -55,6 +60,7 @@ def make_build_manifests(
         executable = target_dir / "release/deps/eager_dispatch_baseline"
         executable.parent.mkdir(parents=True)
         executable.write_bytes(f"{identity} executable".encode())
+        executable.chmod(0o755)
         environment = protocol.cargo_environment(
             path=tools.path,
             home=str((root / "home").resolve()),
@@ -148,6 +154,12 @@ class FakeProcess:
         return self.returncode
 
     def wait(self, timeout=None):
+        if (
+            self.factory.wait_exception is not None
+            and not self.factory.wait_exception_raised
+        ):
+            self.factory.wait_exception_raised = True
+            raise self.factory.wait_exception
         if self.returncode is not None:
             return self.returncode
         if self.survives_term and not self.factory.killed.get(self.pid):
@@ -166,6 +178,16 @@ class FakeProcessFactory:
         statistical_result="PASS",
         raise_at=None,
         raise_exception=None,
+        target_interval=None,
+        wait_exception=None,
+        signal_exception=None,
+        swap_executable_at=None,
+        mutate_executable_at=None,
+        executable_path=None,
+        swap_artifact_root_at=None,
+        artifact_root=None,
+        swap_criterion_root_at=None,
+        criterion_root=None,
     ) -> None:
         self.invalid_at = invalid_at
         self.timeout_at = timeout_at
@@ -173,6 +195,19 @@ class FakeProcessFactory:
         self.statistical_result = statistical_result
         self.raise_at = raise_at
         self.raise_exception = raise_exception
+        self.target_interval = target_interval
+        self.wait_exception = wait_exception
+        self.signal_exception = signal_exception
+        self.swap_executable_at = swap_executable_at
+        self.mutate_executable_at = mutate_executable_at
+        self.executable_path = executable_path
+        self.swap_artifact_root_at = swap_artifact_root_at
+        self.artifact_root = artifact_root
+        self.swap_criterion_root_at = swap_criterion_root_at
+        self.criterion_root = criterion_root
+        self.detached_roots = {}
+        self.wait_exception_raised = False
+        self.signal_exception_raised = False
         self.launch_count = 0
         self.launches = []
         self.processes = {}
@@ -182,6 +217,17 @@ class FakeProcessFactory:
         self.launch_count += 1
         if self.raise_at == self.launch_count:
             raise self.raise_exception or RuntimeError("injected launch failure")
+        if self.swap_executable_at == self.launch_count:
+            replacement = self.executable_path.with_name("replacement-benchmark")
+            replacement.write_bytes(b"replacement executable")
+            replacement.chmod(0o755)
+            os.replace(replacement, self.executable_path)
+        if self.mutate_executable_at == self.launch_count:
+            self.executable_path.write_bytes(b"mutated executable")
+        if self.swap_artifact_root_at == self.launch_count:
+            self._swap_root("artifact", self.artifact_root)
+        if self.swap_criterion_root_at == self.launch_count:
+            self._swap_root("criterion", self.criterion_root)
         process = FakeProcess(
             self,
             self.launch_count,
@@ -194,8 +240,19 @@ class FakeProcessFactory:
         self.processes[process.pid] = process
         return process
 
+    def _swap_root(self, name, path):
+        detached = path.with_name(f"{path.name}-detached")
+        outside = path.with_name(f"{path.name}-outside")
+        path.rename(detached)
+        outside.mkdir()
+        path.symlink_to(outside, target_is_directory=True)
+        self.detached_roots[name] = (detached, outside)
+
     def signal_group(self, pid, requested_signal):
         process = self.processes[pid]
+        if self.signal_exception is not None and not self.signal_exception_raised:
+            self.signal_exception_raised = True
+            raise self.signal_exception
         if requested_signal == signal.SIGTERM and not process.survives_term:
             process.returncode = -15
         if requested_signal == signal.SIGKILL:
@@ -228,7 +285,9 @@ class FakeProcessFactory:
             return
         self._write_estimate(directory / "new/estimates.json", -0.01, 0.01)
         is_sentinel = "sentinel" in name
-        if is_sentinel or self.statistical_result == "PASS":
+        if not is_sentinel and self.target_interval is not None:
+            lower, upper = self.target_interval
+        elif is_sentinel or self.statistical_result == "PASS":
             lower, upper = -0.01, 0.02
         elif self.statistical_result == "INCONCLUSIVE":
             lower, upper = -0.01, 0.06
@@ -277,8 +336,15 @@ class AtomicCampaignTests(unittest.TestCase):
         allowed_cpu_provider = kwargs.pop(
             "allowed_cpu_provider", lambda: {3, 4, 5, 6}
         )
-        return runner.run_campaign(
+        baseline = json.loads(args.baseline_build_manifest.read_text())
+        candidate = json.loads(args.candidate_build_manifest.read_text())
+        validated_builds = {
+            baseline["role"]: baseline,
+            candidate["role"]: candidate,
+        }
+        return runner._run_campaign(
             args,
+            validated_builds=validated_builds,
             process_factory=factory,
             allowed_cpu_provider=allowed_cpu_provider,
             signal_process_group=factory.signal_group,
@@ -311,6 +377,18 @@ class AtomicCampaignTests(unittest.TestCase):
         self.assertFalse(
             any("_rejected" in path.parts for path in args.artifact_root.rglob("*"))
         )
+
+    def test_target_estimate_is_preserved_before_same_benchmark_sentinel(self):
+        args = self.arguments()
+        fake = FakeProcessFactory(target_interval=(0.06, 0.08))
+
+        code = self.execute(args, fake)
+
+        self.assertEqual(code, 3)
+        estimate = runner.classification.read_change(
+            args.artifact_root / "lazy_neg_1/pair1/change-estimates.json"
+        )
+        self.assertEqual(estimate[:2], (0.06, 0.08))
 
     def test_first_invalid_process_closes_whole_campaign_without_retry(self):
         args = self.arguments()
@@ -375,6 +453,68 @@ class AtomicCampaignTests(unittest.TestCase):
         self.assertEqual(args.ledger.read_bytes(), original)
         self.assertEqual(fake.launch_count, 0)
 
+    def test_startup_keyboard_interrupt_is_preserved_without_fd_leak(self):
+        args = self.arguments()
+        original = args.ledger.read_bytes()
+        fake = FakeProcessFactory()
+        interruption = KeyboardInterrupt("startup interrupted")
+        before = len(os.listdir("/proc/self/fd"))
+
+        with self.assertRaises(KeyboardInterrupt) as raised:
+            self.execute(
+                args,
+                fake,
+                allowed_cpu_provider=lambda: (_ for _ in ()).throw(interruption),
+            )
+
+        self.assertIs(raised.exception, interruption)
+        self.assertEqual(args.ledger.read_bytes(), original)
+        self.assertEqual(fake.launch_count, 0)
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+    def test_pinned_atomic_json_preserves_primary_base_exception(self):
+        root = self.base / "pinned-root"
+        root.mkdir()
+        handle = runner.PinnedDirectory(root)
+        interruption = KeyboardInterrupt("atomic write interrupted")
+        real_close = os.close
+        close_calls = 0
+
+        def close_parent_then_fail(descriptor):
+            nonlocal close_calls
+            close_calls += 1
+            real_close(descriptor)
+            if close_calls == 1:
+                raise OSError("parent close failed")
+
+        try:
+            with mock.patch.object(
+                runner.protocol,
+                "atomic_write_json_at",
+                side_effect=interruption,
+            ), mock.patch.object(
+                runner.os,
+                "close",
+                side_effect=close_parent_then_fail,
+            ):
+                with self.assertRaises(KeyboardInterrupt) as raised:
+                    handle.atomic_json("campaign.json", {})
+            self.assertIs(raised.exception, interruption)
+        finally:
+            handle.close()
+
+    def test_ledger_candidate_mismatch_is_rejected_before_mutation(self):
+        args = self.arguments()
+        mismatched = protocol.new_ledger("d" * 40)
+        protocol.atomic_write_json(args.ledger, mismatched)
+        original = args.ledger.read_bytes()
+        fake = FakeProcessFactory()
+
+        self.assertEqual(self.execute(args, fake), 1)
+
+        self.assertEqual(args.ledger.read_bytes(), original)
+        self.assertEqual(fake.launch_count, 0)
+
     def test_quiet_wait_is_bounded_to_300_one_second_polls(self):
         args = self.arguments()
         fake = FakeProcessFactory()
@@ -399,7 +539,7 @@ class AtomicCampaignTests(unittest.TestCase):
         self.assertEqual(process.returncode, -9)
         self.assertTrue(fake.killed[process.pid])
 
-    def test_process_timeout_does_not_kill_after_term_succeeds(self):
+    def test_process_timeout_kills_group_even_after_leader_term_succeeds(self):
         args = self.arguments()
         fake = FakeProcessFactory(timeout_at=1)
 
@@ -407,8 +547,125 @@ class AtomicCampaignTests(unittest.TestCase):
 
         self.assertEqual(code, 2)
         process = fake.processes[10_001]
-        self.assertEqual(process.returncode, -15)
-        self.assertNotIn(process.pid, fake.killed)
+        self.assertEqual(process.returncode, -9)
+        self.assertTrue(fake.killed[process.pid])
+
+    @unittest.skipUnless(
+        os.name == "posix" and sys.platform.startswith("linux"),
+        "requires Linux process groups and /proc",
+    )
+    def test_real_cleanup_kills_descendant_after_leader_exits(self):
+        script = """
+import os
+import signal
+import sys
+
+leader_group = os.getpgrp()
+reaper = os.fork()
+if reaper == 0:
+    os.setpgid(0, 0)
+    for descriptor in (1, 2):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+    child = os.fork()
+    if child == 0:
+        os.setpgid(0, leader_group)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        with open(sys.argv[1], "w", encoding="utf-8") as identity:
+            identity.write(f"{os.getpid()} {os.getpgrp()}\\n")
+            identity.flush()
+            os.fsync(identity.fileno())
+        while True:
+            signal.pause()
+    os.waitpid(child, 0)
+    os._exit(0)
+
+while True:
+    signal.pause()
+"""
+        identity_path = self.base / "descendant.identity"
+        process = subprocess.Popen(
+            (sys.executable, "-c", script, str(identity_path)),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        descendant = None
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if identity_path.exists():
+                    descendant, process_group = map(
+                        int, identity_path.read_text().split()
+                    )
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("descendant did not publish identity")
+            self.assertEqual(process_group, process.pid)
+
+            terminated, killed, failures = runner._terminate_group(
+                process, os.killpg
+            )
+
+            self.assertTrue(terminated)
+            self.assertTrue(killed)
+            self.assertEqual(failures, [])
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if not pathlib.Path(f"/proc/{descendant}").exists():
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("descendant process survived group cleanup")
+        finally:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            if descendant is not None:
+                try:
+                    os.kill(descendant, signal.SIGKILL)
+                except OSError:
+                    pass
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=1)
+
+    def test_timeout_wait_keyboard_interrupt_is_cleaned_and_propagated(self):
+        args = self.arguments()
+        interruption = KeyboardInterrupt("wait cancelled")
+        fake = FakeProcessFactory(
+            timeout_at=1,
+            survive_term_at=1,
+            wait_exception=interruption,
+        )
+
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            self.execute(args, fake)
+
+        self.assertIs(caught.exception, interruption)
+        manifest = json.loads((args.artifact_root / "campaign.json").read_text())
+        self.assertEqual(manifest["validity_state"], "INCONCLUSIVE")
+
+    def test_timeout_signal_base_exception_is_cleaned_and_propagated(self):
+        args = self.arguments()
+        interruption = SystemExit("signal cancelled")
+        fake = FakeProcessFactory(
+            timeout_at=1,
+            survive_term_at=1,
+            signal_exception=interruption,
+        )
+
+        with self.assertRaises(SystemExit) as caught:
+            self.execute(args, fake)
+
+        self.assertIs(caught.exception, interruption)
+        self.assertTrue(fake.killed[fake.processes[10_001].pid])
 
     def test_every_launch_records_complete_sealed_environment_and_four_roles(self):
         args = self.arguments()
@@ -418,8 +675,9 @@ class AtomicCampaignTests(unittest.TestCase):
         expected = protocol.runtime_environment(
             path=fake.launches[0]["env"]["PATH"],
             home=fake.launches[0]["env"]["HOME"],
-            criterion_home=str(args.criterion_root.resolve()),
+            criterion_home=fake.launches[0]["env"]["CRITERION_HOME"],
         )
+        self.assertTrue(expected["CRITERION_HOME"].startswith("/proc/self/fd/"))
         self.assertEqual(
             {tuple(sorted(item["env"].items())) for item in fake.launches},
             {tuple(sorted(expected.items()))},
@@ -465,6 +723,7 @@ class AtomicCampaignTests(unittest.TestCase):
         args = self.arguments()
         interruption = KeyboardInterrupt("injected cancellation")
         fake = FakeProcessFactory(raise_at=1, raise_exception=interruption)
+        before_fds = len(os.listdir("/proc/self/fd"))
 
         with self.assertRaises(KeyboardInterrupt) as caught:
             self.execute(args, fake)
@@ -473,25 +732,168 @@ class AtomicCampaignTests(unittest.TestCase):
         manifest = json.loads((args.artifact_root / "campaign.json").read_text())
         self.assertEqual(manifest["validity_state"], "INCONCLUSIVE")
         self.assertIn("KeyboardInterrupt", manifest["invalid"]["reason"])
+        self.assertEqual(len(os.listdir("/proc/self/fd")), before_fds)
+
+    def test_terminal_write_failure_does_not_replace_base_exception(self):
+        args = self.arguments()
+        interruption = KeyboardInterrupt("original cancellation")
+        fake = FakeProcessFactory(raise_at=1, raise_exception=interruption)
+
+        def fail_terminal(path, payload):
+            if (
+                path.name == "campaign.json"
+                and payload.get("validity_state") == "INCONCLUSIVE"
+            ):
+                raise protocol.AtomicWriteError("terminal failed", committed=False)
+
+        with self.assertRaises(KeyboardInterrupt) as caught:
+            self.execute(args, fake, campaign_write_observer=fail_terminal)
+
+        self.assertIs(caught.exception, interruption)
+
+    def test_prefix_inventory_failure_does_not_replace_base_exception(self):
+        args = self.arguments()
+        interruption = KeyboardInterrupt("original cancellation")
+        fake = FakeProcessFactory(raise_at=1, raise_exception=interruption)
+
+        with mock.patch.object(
+            runner.PinnedDirectory,
+            "inventory",
+            side_effect=OSError("inventory failed"),
+        ):
+            with self.assertRaises(KeyboardInterrupt) as caught:
+                self.execute(args, fake)
+
+        self.assertIs(caught.exception, interruption)
 
     def test_criterion_estimate_copy_is_byte_exact_and_rejects_symlink(self):
-        source = self.base / "estimate.json"
-        destination = self.base / "copied.json"
+        source_root = self.base / "criterion-copy-source"
+        destination_root = self.base / "criterion-copy-destination"
+        source_root.mkdir()
+        destination_root.mkdir()
+        source = source_root / "estimate.json"
         payload = b'{"mean":{"point_estimate":0.125}}\n'
         source.write_bytes(payload)
+        source_handle = runner.PinnedDirectory(source_root)
+        destination_handle = runner.PinnedDirectory(destination_root)
+        try:
+            runner._copy_regular_at(
+                source_handle,
+                "estimate.json",
+                destination_handle.descriptor,
+                "copied.json",
+            )
 
-        runner._copy_regular(source, destination)
+            self.assertEqual((destination_root / "copied.json").read_bytes(), payload)
+            (source_root / "estimate-link.json").symlink_to(source)
+            with self.assertRaises(protocol.ProtocolError):
+                runner._copy_regular_at(
+                    source_handle,
+                    "estimate-link.json",
+                    destination_handle.descriptor,
+                    "must-not-exist.json",
+                )
+        finally:
+            destination_handle.close()
+            source_handle.close()
 
-        self.assertEqual(destination.read_bytes(), payload)
-        link = self.base / "estimate-link.json"
-        link.symlink_to(source)
-        with self.assertRaises(protocol.ProtocolError):
-            runner._copy_regular(link, self.base / "must-not-exist.json")
+    def test_executable_path_swap_cannot_redirect_launch(self):
+        args = self.arguments()
+        candidate = json.loads(args.candidate_build_manifest.read_text())
+        executable = pathlib.Path(candidate["executable"])
+        original_inode = executable.stat().st_ino
+        fake = FakeProcessFactory(
+            swap_executable_at=1,
+            executable_path=executable,
+        )
+
+        code = self.execute(args, fake)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(fake.launch_count, 1)
+        launch = fake.launches[0]
+        self.assertTrue(launch["argv"][0].startswith("/proc/self/fd/"))
+        self.assertIn(int(launch["argv"][0].rsplit("/", 1)[1]), launch["pass_fds"])
+        self.assertNotEqual(executable.stat().st_ino, original_inode)
+
+    def test_executable_same_inode_mutation_during_run_is_invalid(self):
+        args = self.arguments()
+        candidate = json.loads(args.candidate_build_manifest.read_text())
+        fake = FakeProcessFactory(
+            mutate_executable_at=1,
+            executable_path=pathlib.Path(candidate["executable"]),
+        )
+
+        code = self.execute(args, fake)
+
+        self.assertEqual(code, 2)
+        self.assertEqual(fake.launch_count, 1)
+        manifest = json.loads((args.artifact_root / "campaign.json").read_text())
+        self.assertIn("executable", manifest["invalid"]["reason"])
+
+    @unittest.skipUnless(
+        os.name == "posix" and sys.platform.startswith("linux"),
+        "requires Linux /proc/self/fd executable launch",
+    )
+    def test_real_pinned_executable_ignores_path_replacement(self):
+        executable = self.base / "pinned-script"
+        executable.write_text("#!/bin/sh\nprintf 'old\\n'\n")
+        executable.chmod(0o755)
+        digest = protocol.sha256_file(executable)
+        pinned = runner.PinnedExecutable.open(executable, digest)
+        try:
+            replacement = self.base / "replacement-script"
+            replacement.write_text("#!/bin/sh\nprintf 'new\\n'\n")
+            replacement.chmod(0o755)
+            os.replace(replacement, executable)
+
+            completed = subprocess.run(
+                (str(pinned.launch_path),),
+                pass_fds=(pinned.descriptor,),
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout, "old\n")
+            with self.assertRaisesRegex(protocol.ProtocolError, "identity changed"):
+                pinned.validate()
+        finally:
+            pinned.close()
+
+    def test_artifact_root_swap_cannot_redirect_campaign_writes(self):
+        args = self.arguments()
+        fake = FakeProcessFactory(
+            swap_artifact_root_at=1,
+            artifact_root=args.artifact_root.resolve(),
+        )
+
+        code = self.execute(args, fake)
+
+        self.assertEqual(code, 2)
+        detached, outside = fake.detached_roots["artifact"]
+        self.assertEqual(list(outside.iterdir()), [])
+        manifest = json.loads((detached / "campaign.json").read_text())
+        self.assertEqual(manifest["validity_state"], "INCONCLUSIVE")
+
+    def test_criterion_root_swap_cannot_redirect_benchmark_scratch(self):
+        args = self.arguments()
+        fake = FakeProcessFactory(
+            swap_criterion_root_at=1,
+            criterion_root=args.criterion_root.resolve(),
+        )
+
+        code = self.execute(args, fake)
+
+        self.assertEqual(code, 2)
+        detached, outside = fake.detached_roots["criterion"]
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertTrue(any(detached.rglob("estimates.json")))
 
     def test_terminal_atomic_record_failure_returns_one(self):
         args = self.arguments()
         fake = FakeProcessFactory(invalid_at=1)
-        original = protocol.atomic_write_json
 
         def fail_terminal(path, payload):
             if (
@@ -499,32 +901,99 @@ class AtomicCampaignTests(unittest.TestCase):
                 and payload.get("validity_state") == "INCONCLUSIVE"
             ):
                 raise protocol.AtomicWriteError("terminal write failed", committed=False)
-            return original(path, payload)
 
-        self.assertEqual(self.execute(args, fake, atomic_writer=fail_terminal), 1)
+        self.assertEqual(
+            self.execute(args, fake, campaign_write_observer=fail_terminal), 1
+        )
 
-    def test_complete_registration_atomic_failure_returns_one(self):
+    def test_running_checkpoint_failure_is_finalized_inconclusive(self):
         args = self.arguments()
         fake = FakeProcessFactory()
-        original = protocol.atomic_write_json
+        running_writes = 0
+
+        def fail_second_running_checkpoint(path, payload):
+            nonlocal running_writes
+            if (
+                path.name == "campaign.json"
+                and payload.get("validity_state") == "RUNNING"
+            ):
+                running_writes += 1
+                if running_writes == 2:
+                    raise protocol.AtomicWriteError(
+                        "checkpoint write failed", committed=False
+                    )
+
+        self.assertEqual(
+            self.execute(
+                args,
+                fake,
+                campaign_write_observer=fail_second_running_checkpoint,
+            ),
+            2,
+        )
+        manifest = json.loads((args.artifact_root / "campaign.json").read_text())
+        self.assertEqual(manifest["validity_state"], "INCONCLUSIVE")
+        self.assertIn("checkpoint write failed", manifest["invalid"]["reason"])
+
+    def test_only_final_complete_write_failure_leaves_running_manifest(self):
+        args = self.arguments()
+        fake = FakeProcessFactory()
         complete_writes = 0
 
-        def fail_registered_complete(path, payload):
+        def fail_only_complete(path, payload):
             nonlocal complete_writes
             if (
                 path.name == "campaign.json"
                 and payload.get("validity_state") == "COMPLETE"
             ):
                 complete_writes += 1
-                if complete_writes == 2:
-                    raise protocol.AtomicWriteError(
-                        "registered terminal write failed", committed=False
-                    )
-            return original(path, payload)
+                raise protocol.AtomicWriteError(
+                    "final terminal write failed", committed=False
+                )
 
         self.assertEqual(
-            self.execute(args, fake, atomic_writer=fail_registered_complete), 1
+            self.execute(args, fake, campaign_write_observer=fail_only_complete),
+            1,
         )
+        self.assertEqual(complete_writes, 1)
+        manifest = json.loads((args.artifact_root / "campaign.json").read_text())
+        self.assertEqual(manifest["validity_state"], "RUNNING")
+        ledger = json.loads(args.ledger.read_text())
+        self.assertIsNone(ledger["active_attempt_id"])
+
+    def test_complete_manifest_is_written_once_after_ledger_close(self):
+        args = self.arguments()
+        fake = FakeProcessFactory()
+        original = protocol.atomic_write_json
+        events = []
+
+        def record_ledger_close(path, payload):
+            if path == args.ledger and payload.get("active_attempt_id") is None:
+                events.append("ledger-close")
+
+            return original(path, payload)
+
+        def record_campaign_complete(path, payload):
+            if (
+                path.name == "campaign.json"
+                and payload.get("validity_state") == "COMPLETE"
+            ):
+                events.append("campaign-complete")
+                self.assertEqual(
+                    set(payload["classification_artifacts"]),
+                    {"classification.json", "summary.md"},
+                )
+
+        self.assertEqual(
+            self.execute(
+                args,
+                fake,
+                atomic_writer=record_ledger_close,
+                campaign_write_observer=record_campaign_complete,
+            ),
+            0,
+        )
+        self.assertEqual(events, ["ledger-close", "campaign-complete"])
 
     def test_terminal_ledger_close_atomic_failure_returns_one(self):
         args = self.arguments()
@@ -544,7 +1013,7 @@ class AtomicCampaignTests(unittest.TestCase):
 
         self.assertEqual(self.execute(args, fake, atomic_writer=fail_ledger_close), 1)
         manifest = json.loads((args.artifact_root / "campaign.json").read_text())
-        self.assertEqual(manifest["validity_state"], "COMPLETE")
+        self.assertEqual(manifest["validity_state"], "INCONCLUSIVE")
 
     def test_exact_exit_mapping_for_statistical_results(self):
         for result, expected in (("PASS", 0), ("FAIL", 3), ("INCONCLUSIVE", 4)):
@@ -565,11 +1034,45 @@ class AtomicCampaignTests(unittest.TestCase):
             "--comparison-kind",
             "--baseline-build-manifest",
             "--candidate-build-manifest",
+            "--repository",
+            "--build-evidence-root",
+            "--build-scratch-root",
+            "--candidate-commit",
+            "--controlled-path",
+            "--controlled-home",
+            "--controlled-cargo-home",
             "--ledger",
             "--artifact-root",
             "--criterion-root",
         ):
             self.assertIn(required, options)
+
+    def test_public_runner_has_no_validated_build_bypass(self):
+        public = inspect.signature(runner.run_campaign)
+        private = inspect.signature(runner._run_campaign)
+
+        self.assertNotIn("validated_builds", public.parameters)
+        self.assertIn("validated_builds", private.parameters)
+
+    def test_public_runner_rejects_fabricated_builds_before_ledger_mutation(self):
+        args = self.arguments()
+        candidate = json.loads(args.candidate_build_manifest.read_text())
+        environment = candidate["environment"]
+        args.repository = SCRIPT.parent.parent.resolve()
+        args.build_evidence_root = args.baseline_build_manifest.parent
+        args.build_scratch_root = self.base / "missing-authoritative-scratch"
+        args.candidate_commit = "c" * 40
+        args.controlled_path = environment["PATH"]
+        args.controlled_home = pathlib.Path(environment["HOME"])
+        args.controlled_cargo_home = pathlib.Path(environment["CARGO_HOME"])
+        original = args.ledger.read_bytes()
+        fake = FakeProcessFactory()
+
+        code = runner.run_campaign(args, process_factory=fake)
+
+        self.assertEqual(code, 1)
+        self.assertEqual(args.ledger.read_bytes(), original)
+        self.assertEqual(fake.launch_count, 0)
 
 
 if __name__ == "__main__":

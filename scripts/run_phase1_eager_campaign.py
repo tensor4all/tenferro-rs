@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -45,6 +46,319 @@ EXIT_BY_RESULT = {
 }
 
 
+class PinnedExecutable:
+    """One no-follow executable identity retained for the campaign lifetime."""
+
+    def __init__(self, logical_path: pathlib.Path, descriptor: int, digest: str):
+        self.logical_path = logical_path
+        self.descriptor = descriptor
+        metadata = os.fstat(descriptor)
+        self.device = metadata.st_dev
+        self.inode = metadata.st_ino
+        self.digest = digest
+
+    @classmethod
+    def open(cls, path: pathlib.Path, expected_digest: str) -> "PinnedExecutable":
+        logical = pathlib.Path(path)
+        descriptor = os.open(
+            logical,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+        failure: BaseException | None = None
+        result = None
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise protocol.ProtocolError(
+                    f"benchmark executable is not regular: {logical}"
+                )
+            if metadata.st_mode & 0o111 == 0:
+                raise protocol.ProtocolError(
+                    f"benchmark executable is not executable: {logical}"
+                )
+            digest = _sha256_open_file(descriptor)
+            if digest != expected_digest:
+                raise protocol.ProtocolError(
+                    f"benchmark executable digest differs: {logical}"
+                )
+            result = cls(logical, descriptor, digest)
+            result.validate()
+        except BaseException as error:
+            failure = error
+        if failure is not None:
+            try:
+                os.close(descriptor)
+            except BaseException:
+                pass
+            raise failure
+        if result is None:
+            raise RuntimeError("executable pin completed without a result")
+        return result
+
+    @property
+    def launch_path(self) -> pathlib.Path:
+        path = pathlib.Path(f"/proc/self/fd/{self.descriptor}")
+        if not sys.platform.startswith("linux") or not path.exists():
+            raise protocol.ProtocolError(
+                "pinned executable launch requires Linux /proc/self/fd"
+            )
+        return path
+
+    def validate(self) -> None:
+        opened = os.fstat(self.descriptor)
+        current = os.stat(self.logical_path, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or (opened.st_dev, opened.st_ino) != (self.device, self.inode)
+            or (current.st_dev, current.st_ino) != (self.device, self.inode)
+            or _sha256_open_file(self.descriptor) != self.digest
+        ):
+            raise protocol.ProtocolError(
+                f"benchmark executable identity changed: {self.logical_path}"
+            )
+
+    def close(self) -> None:
+        os.close(self.descriptor)
+
+
+def _sha256_open_file(descriptor: int) -> str:
+    before = os.fstat(descriptor)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            break
+        digest.update(chunk)
+    after = os.fstat(descriptor)
+    identity = lambda item: (
+        item.st_dev,
+        item.st_ino,
+        item.st_size,
+        item.st_mtime_ns,
+    )
+    if not stat.S_ISREG(before.st_mode) or identity(before) != identity(after):
+        raise protocol.ProtocolError("open executable changed while hashing")
+    return digest.hexdigest()
+
+
+class PinnedDirectory:
+    """A no-follow directory identity retained across pathname replacement."""
+
+    def __init__(self, logical_path: pathlib.Path):
+        self.logical_path = pathlib.Path(logical_path)
+        self.descriptor = os.open(
+            self.logical_path,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        try:
+            metadata = os.fstat(self.descriptor)
+            self.identity = (metadata.st_dev, metadata.st_ino)
+            self.validate_link()
+            proc_path = pathlib.Path(f"/proc/self/fd/{self.descriptor}")
+            if not sys.platform.startswith("linux") or not proc_path.exists():
+                raise protocol.ProtocolError(
+                    "pinned campaign roots require Linux /proc/self/fd"
+                )
+            self.proc_path = proc_path
+        except BaseException:
+            try:
+                os.close(self.descriptor)
+            except BaseException:
+                pass
+            raise
+
+    def validate_link(self) -> None:
+        try:
+            current = os.stat(self.logical_path, follow_symlinks=False)
+            opened = os.fstat(self.descriptor)
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"campaign root identity changed: {self.logical_path}: {error}"
+            ) from error
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino) != self.identity
+            or (opened.st_dev, opened.st_ino) != self.identity
+        ):
+            raise protocol.ProtocolError(
+                f"campaign root identity changed: {self.logical_path}"
+            )
+
+    @staticmethod
+    def _parts(relative: str) -> tuple[str, ...]:
+        path = pathlib.PurePosixPath(relative)
+        if (
+            not relative
+            or path.is_absolute()
+            or path.as_posix() != relative
+            or any(part in {"", ".", ".."} for part in path.parts)
+        ):
+            raise protocol.ProtocolError(f"invalid root-relative path: {relative}")
+        return path.parts
+
+    def open_directory(self, relative: str, *, create: bool = False) -> int:
+        descriptor = os.dup(self.descriptor)
+        try:
+            for component in self._parts(relative):
+                if create:
+                    try:
+                        os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                        os.fsync(descriptor)
+                    except FileExistsError:
+                        pass
+                child = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+                try:
+                    os.close(descriptor)
+                except BaseException:
+                    try:
+                        os.close(child)
+                    except BaseException:
+                        pass
+                    raise
+                descriptor = child
+            return descriptor
+        except BaseException:
+            try:
+                os.close(descriptor)
+            except BaseException:
+                pass
+            raise
+
+    def _open_parent(self, relative: str, *, create: bool = False) -> tuple[int, str]:
+        parts = self._parts(relative)
+        if len(parts) == 1:
+            return os.dup(self.descriptor), parts[0]
+        parent = self.open_directory("/".join(parts[:-1]), create=create)
+        return parent, parts[-1]
+
+    def open_file(
+        self, relative: str, flags: int, mode: int = 0o600
+    ) -> int:
+        parent, name = self._open_parent(relative)
+        descriptor: int | None = None
+        failure: BaseException | None = None
+        try:
+            try:
+                descriptor = os.open(
+                    name,
+                    flags | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    mode,
+                    dir_fd=parent,
+                )
+            except FileNotFoundError:
+                raise
+            except OSError as error:
+                raise protocol.ProtocolError(
+                    f"cannot open root artifact {relative}: {error}"
+                ) from error
+        except BaseException as error:
+            failure = error
+        try:
+            os.close(parent)
+        except BaseException as error:
+            if failure is None:
+                failure = error
+        if failure is not None:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except BaseException:
+                    pass
+            raise failure
+        assert descriptor is not None
+        return descriptor
+
+    def atomic_json(self, relative: str, payload: Any) -> None:
+        parent, name = self._open_parent(relative)
+        failure: BaseException | None = None
+        try:
+            protocol.atomic_write_json_at(parent, name, payload)
+        except BaseException as error:
+            failure = error
+        try:
+            os.close(parent)
+        except BaseException as error:
+            if failure is None:
+                failure = error
+        if failure is not None:
+            raise failure
+
+    def read_regular(self, relative: str) -> bytes:
+        descriptor = self.open_file(relative, os.O_RDONLY | os.O_NONBLOCK)
+        failure: BaseException | None = None
+        content = b""
+        try:
+            before = os.fstat(descriptor)
+            chunks = []
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            after = os.fstat(descriptor)
+            identity = lambda item: (
+                item.st_dev,
+                item.st_ino,
+                item.st_size,
+                item.st_mtime_ns,
+            )
+            if not stat.S_ISREG(before.st_mode) or identity(before) != identity(after):
+                raise protocol.ProtocolError(
+                    f"root artifact changed while reading: {relative}"
+                )
+            content = b"".join(chunks)
+        except BaseException as error:
+            failure = error
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            if failure is None:
+                failure = error
+        if failure is not None:
+            raise failure
+        return content
+
+    def inventory(self) -> tuple[set[str], set[str]]:
+        files: set[str] = set()
+        directories: set[str] = set()
+
+        def visit(directory_fd: int, prefix: str) -> None:
+            for name in sorted(os.listdir(directory_fd)):
+                relative = f"{prefix}/{name}" if prefix else name
+                metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if stat.S_ISDIR(metadata.st_mode):
+                    directories.add(relative)
+                    child = os.open(
+                        name,
+                        os.O_RDONLY
+                        | os.O_DIRECTORY
+                        | os.O_CLOEXEC
+                        | os.O_NOFOLLOW,
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        visit(child, relative)
+                    finally:
+                        os.close(child)
+                elif stat.S_ISREG(metadata.st_mode):
+                    files.add(relative)
+                else:
+                    raise protocol.ProtocolError(
+                        f"invalid root artifact type: {relative}"
+                    )
+
+        visit(self.descriptor, "")
+        return files, directories
+
+    def close(self) -> None:
+        os.close(self.descriptor)
+
+
 def utc_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -71,6 +385,10 @@ def criterion_directory(criterion_root: pathlib.Path, benchmark: str) -> pathlib
         raise protocol.ProtocolError(f"unexpected benchmark identifier: {benchmark}")
     group = f"{components[0]}_{components[1]}"
     return criterion_root / group / components[2] / components[3]
+
+
+def criterion_relative(benchmark: str, suffix: str) -> str:
+    return criterion_directory(pathlib.Path(""), benchmark).joinpath(suffix).as_posix()
 
 
 def run_identities(order: str) -> tuple[str, str, str, str]:
@@ -152,7 +470,11 @@ def _read_json(path: pathlib.Path, context: str) -> dict[str, Any]:
     return value
 
 
-def _build_inputs(args) -> tuple[dict[str, Any], dict[str, pathlib.Path], dict[str, str]]:
+def _build_inputs(
+    args,
+    validated_builds: Mapping[str, Mapping[str, Any]],
+    authoritative_paths: Mapping[str, pathlib.Path] | None,
+) -> tuple[dict[str, Any], dict[str, pathlib.Path], dict[str, str]]:
     paths = {
         "baseline": pathlib.Path(args.baseline_build_manifest).resolve(strict=True),
         "candidate": pathlib.Path(args.candidate_build_manifest).resolve(strict=True),
@@ -161,6 +483,29 @@ def _build_inputs(args) -> tuple[dict[str, Any], dict[str, pathlib.Path], dict[s
         identity: _read_json(path, f"{identity} build manifest")
         for identity, path in paths.items()
     }
+    expected_baseline_role = {
+        "direct-current-main": "direct-current-main-baseline",
+        "common-lock-normalized": "common-lock-normalized-baseline",
+    }[args.comparison_kind]
+    expected = {
+        "baseline": validated_builds.get(expected_baseline_role),
+        "candidate": validated_builds.get("candidate"),
+    }
+    if any(expected[identity] is None for identity in expected):
+        raise protocol.ProtocolError("validated build set is incomplete")
+    if any(manifests[identity] != expected[identity] for identity in manifests):
+        raise protocol.ProtocolError(
+            "retained build manifest differs from authoritative validation"
+        )
+    if authoritative_paths is not None:
+        required_paths = {
+            "baseline": pathlib.Path(authoritative_paths[expected_baseline_role]),
+            "candidate": pathlib.Path(authoritative_paths["candidate"]),
+        }
+        if any(paths[name] != required_paths[name].resolve() for name in paths):
+            raise protocol.ProtocolError(
+                "build manifest path differs from authoritative evidence root"
+            )
     build.validate_pair(args.comparison_kind, manifests["baseline"], manifests["candidate"])
     binaries = {
         identity: pathlib.Path(manifest["executable"]).resolve(strict=True)
@@ -194,6 +539,25 @@ def _runtime_environment(
         home=environment["HOME"],
         criterion_home=str(criterion_root),
     )
+
+
+def _pin_executables(
+    binaries: Mapping[str, pathlib.Path], binary_shas: Mapping[str, str]
+) -> dict[str, PinnedExecutable]:
+    pinned: dict[str, PinnedExecutable] = {}
+    try:
+        for identity in ("baseline", "candidate"):
+            pinned[identity] = PinnedExecutable.open(
+                binaries[identity], binary_shas[identity]
+            )
+    except BaseException:
+        for executable in pinned.values():
+            try:
+                executable.close()
+            except BaseException:
+                pass
+        raise
+    return pinned
 
 
 def _sample_host(
@@ -230,34 +594,53 @@ def _best_effort_signal(
         signal_process_group(pid, requested_signal)
     except ProcessLookupError:
         return True
-    except BaseException:
+    except Exception:
         return False
     return True
 
 
 def _terminate_group(process, signal_process_group) -> tuple[bool, bool, list[str]]:
     failures = []
-    terminated = _best_effort_signal(process.pid, signal.SIGTERM, signal_process_group)
+    primary: BaseException | None = None
+    try:
+        terminated = _best_effort_signal(
+            process.pid, signal.SIGTERM, signal_process_group
+        )
+    except BaseException as error:
+        primary = error
+        terminated = False
     if not terminated:
         failures.append("term-signal-failed")
     try:
         process.wait(timeout=TERMINATION_GRACE_SECONDS)
-        return terminated, False, failures
     except subprocess.TimeoutExpired:
         pass
-    except BaseException as error:
+    except Exception as error:
         failures.append(f"term-wait-failed:{type(error).__name__}")
-        if process.returncode is not None:
-            return terminated, False, failures
-    killed = _best_effort_signal(process.pid, signal.SIGKILL, signal_process_group)
+    except BaseException as error:
+        if primary is None:
+            primary = error
+    try:
+        killed = _best_effort_signal(
+            process.pid, signal.SIGKILL, signal_process_group
+        )
+    except BaseException as error:
+        if primary is None:
+            primary = error
+        killed = False
     if not killed:
         failures.append("kill-signal-failed")
     try:
         process.wait(timeout=TERMINATION_GRACE_SECONDS)
     except subprocess.TimeoutExpired:
         failures.append("kill-wait-timeout")
-    except BaseException as error:
+    except Exception as error:
         failures.append(f"kill-wait-failed:{type(error).__name__}")
+    except BaseException as error:
+        if primary is None:
+            primary = error
+    if primary is not None:
+        raise primary
     return terminated, killed, failures
 
 
@@ -266,11 +649,12 @@ def _process_record(
     command: tuple[str, ...],
     environment: Mapping[str, str],
     cwd: pathlib.Path,
-    stdout_path: pathlib.Path,
-    stderr_path: pathlib.Path,
+    artifact_root: PinnedDirectory,
+    pair_relative: str,
     role: str,
     identity: str,
     binary_sha: str,
+    executable: PinnedExecutable,
     selected_cpu: int,
     allowed_count: int,
     process_factory,
@@ -280,18 +664,40 @@ def _process_record(
     affinity_provider,
     load_provider,
     build_process_provider,
+    inherited_descriptors: tuple[int, ...],
+    root_validators: tuple[Callable[[], None], ...],
 ) -> tuple[dict[str, Any], str | None]:
+    stdout_name = f"{role}.stdout.log"
+    stderr_name = f"{role}.stderr.log"
+    stdout_relative = f"{pair_relative}/{stdout_name}"
+    stderr_relative = f"{pair_relative}/{stderr_name}"
     preamble = {
         "argv": list(command),
         "environment": dict(sorted(environment.items())),
         "environment_sha256": protocol.sha256_json(dict(sorted(environment.items()))),
+        "executable": {
+            "logical_path": str(executable.logical_path),
+            "device": executable.device,
+            "inode": executable.inode,
+            "sha256": executable.digest,
+        },
     }
     process = None
     samples = []
     timed_out = False
     cleanup_failures: list[str] = []
-    with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
-        "w", encoding="utf-8"
+    stdout_descriptor = artifact_root.open_file(
+        stdout_relative, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    )
+    try:
+        stderr_descriptor = artifact_root.open_file(
+            stderr_relative, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        )
+    except BaseException:
+        os.close(stdout_descriptor)
+        raise
+    with os.fdopen(stdout_descriptor, "w", encoding="utf-8") as stdout, os.fdopen(
+        stderr_descriptor, "w", encoding="utf-8"
     ) as stderr:
         stdout.write(json.dumps(preamble, sort_keys=True) + "\n")
         stdout.flush()
@@ -304,6 +710,9 @@ def _process_record(
                 stderr=stderr,
                 text=True,
                 start_new_session=True,
+                pass_fds=tuple(
+                    sorted({executable.descriptor, *inherited_descriptors})
+                ),
                 preexec_fn=lambda: os.sched_setaffinity(0, {selected_cpu}),
             )
             started = float(monotonic())
@@ -319,6 +728,9 @@ def _process_record(
                     monotonic=monotonic,
                 )
             )
+            executable.validate()
+            for validate_root in root_validators:
+                validate_root()
             deadline = started + PROCESS_DEADLINE_SECONDS
             while True:
                 status = process.poll()
@@ -396,8 +808,8 @@ def _process_record(
             "binary_sha256": binary_sha,
             "validity_state": "COMPLETE" if reason is None else "INCONCLUSIVE",
             "exit_status": int(status if status is not None else -1),
-            "stdout_artifact": stdout_path.name,
-            "stderr_artifact": stderr_path.name,
+            "stdout_artifact": stdout_name,
+            "stderr_artifact": stderr_name,
             "process_started_monotonic": started,
             "process_ended_monotonic": ended,
             "monitor_samples": samples,
@@ -406,57 +818,51 @@ def _process_record(
     )
 
 
-def _copy_regular(source: pathlib.Path, destination: pathlib.Path) -> None:
-    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
-    try:
-        descriptor = os.open(source, flags)
-    except OSError as error:
-        raise protocol.ProtocolError(
-            f"cannot open Criterion estimate {source}: {error}"
-        ) from error
-    try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise protocol.ProtocolError(f"Criterion estimate is not regular: {source}")
-        chunks = []
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        after = os.fstat(descriptor)
-        current = source.stat(follow_symlinks=False)
-        identity = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns)
-        if identity(before) != identity(after) or identity(after) != identity(current):
-            raise protocol.ProtocolError(f"Criterion estimate changed: {source}")
-    finally:
-        os.close(descriptor)
-    output = os.open(
-        destination,
+def _copy_regular_at(
+    source_root: PinnedDirectory,
+    source_relative: str,
+    destination_directory: int,
+    destination_name: str,
+) -> None:
+    content = source_root.read_regular(source_relative)
+    descriptor = os.open(
+        destination_name,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
         0o600,
+        dir_fd=destination_directory,
     )
+    failure: BaseException | None = None
     try:
-        view = memoryview(b"".join(chunks))
+        view = memoryview(content)
         while view:
-            written = os.write(output, view)
+            try:
+                written = os.write(descriptor, view)
+            except InterruptedError:
+                continue
             if written <= 0:
                 raise OSError("short Criterion estimate copy")
             view = view[written:]
-        os.fsync(output)
-    finally:
-        os.close(output)
+        os.fsync(descriptor)
+    except BaseException as error:
+        failure = error
+    try:
+        os.close(descriptor)
+    except BaseException as error:
+        if failure is None:
+            failure = error
+    if failure is not None:
+        raise failure
+    os.fsync(destination_directory)
 
 
-def _artifact_record(path: pathlib.Path) -> dict[str, str]:
-    return {"sha256": protocol.sha256_file(path)}
+def _artifact_record(root: PinnedDirectory, relative: str) -> dict[str, str]:
+    return {"sha256": hashlib.sha256(root.read_regular(relative)).hexdigest()}
 
 
 def _record_artifact(
-    campaign: dict[str, Any], root: pathlib.Path, path: pathlib.Path
+    campaign: dict[str, Any], root: PinnedDirectory, relative: str
 ) -> dict[str, str]:
-    relative = path.relative_to(root).as_posix()
-    record = _artifact_record(path)
+    record = _artifact_record(root, relative)
     if relative in campaign["artifact_inventory"]:
         raise protocol.ProtocolError(f"artifact registered more than once: {relative}")
     campaign["artifact_inventory"][relative] = record
@@ -464,22 +870,15 @@ def _record_artifact(
 
 
 def _synchronize_prefix_inventory(
-    campaign: dict[str, Any], artifact_root: pathlib.Path
+    campaign: dict[str, Any], artifact_root: PinnedDirectory
 ) -> None:
     """Make an invalid campaign's inventory match every durable prefix file."""
     discovered: dict[str, dict[str, str]] = {}
-    for path in sorted(artifact_root.rglob("*")):
-        metadata = path.lstat()
-        if stat.S_ISDIR(metadata.st_mode):
-            continue
-        relative = path.relative_to(artifact_root).as_posix()
+    files, _directories = artifact_root.inventory()
+    for relative in sorted(files):
         if relative == "campaign.json":
             continue
-        if not stat.S_ISREG(metadata.st_mode):
-            raise protocol.ProtocolError(
-                f"invalid artifact-prefix file type: {relative}"
-            )
-        discovered[relative] = _artifact_record(path)
+        discovered[relative] = _artifact_record(artifact_root, relative)
     campaign["artifact_inventory"] = discovered
 
 
@@ -517,11 +916,12 @@ def _pair_specs(case: str, benchmark: str, pair: int, order: str):
 
 
 def _write_monitor_artifact(
-    pair_dir: pathlib.Path, case: str, pair: int, runs: list[dict[str, Any]]
-) -> pathlib.Path:
-    path = pair_dir / "monitor-samples.json"
-    protocol.atomic_write_json(
-        path,
+    pair_directory: int, case: str, pair: int, runs: list[dict[str, Any]]
+) -> str:
+    name = "monitor-samples.json"
+    protocol.atomic_write_json_at(
+        pair_directory,
+        name,
         {
             "protocol_version": protocol.PROTOCOL_VERSION,
             "case": case,
@@ -529,7 +929,7 @@ def _write_monitor_artifact(
             "runs": {run["role"]: copy.deepcopy(run["monitor_samples"]) for run in runs},
         },
     )
-    return path
+    return name
 
 
 def _invalid_campaign(
@@ -584,12 +984,15 @@ def _initial_campaign(
     }
 
 
-def _declare_results(campaign: dict[str, Any], root: pathlib.Path) -> str:
+def _declare_results(campaign: dict[str, Any], root: PinnedDirectory) -> str:
     results = {}
     for case in sorted(CANONICAL_CASES):
         intervals = []
         for pair, order in enumerate(PAIR_ORDERS, start=1):
-            estimate = classification.read_change(root / case / f"pair{pair}/change-estimates.json")
+            relative = f"{case}/pair{pair}/change-estimates.json"
+            estimate = classification._read_change_content(
+                root.read_regular(relative), relative
+            )
             intervals.append(
                 classification.invert_interval(*estimate) if order == "B/A" else {
                     "lower": estimate[0], "upper": estimate[1], "point": estimate[2]
@@ -626,9 +1029,11 @@ def _close_ledger(
     atomic_writer(ledger_path, closed)
 
 
-def run_campaign(
+def _run_campaign(
     args,
     *,
+    validated_builds: Mapping[str, Mapping[str, Any]],
+    authoritative_manifest_paths: Mapping[str, pathlib.Path] | None = None,
     process_factory=subprocess.Popen,
     signal_process_group=os.killpg,
     monotonic=time.monotonic,
@@ -638,10 +1043,17 @@ def run_campaign(
     load_provider=lambda: os.getloadavg()[0],
     build_process_provider=exact_build_processes,
     atomic_writer=protocol.atomic_write_json,
+    campaign_write_observer: Callable[[pathlib.Path, Mapping[str, Any]], None]
+    | None = None,
 ) -> int:
     manifest_path = None
     campaign = None
     ledger = None
+    ledger_closed = False
+    pinned_executables: dict[str, PinnedExecutable] = {}
+    artifact_handle: PinnedDirectory | None = None
+    criterion_handle: PinnedDirectory | None = None
+    pair_descriptor: int | None = None
     current = {"case": "<startup>", "pair": 0, "role": "<none>"}
     try:
         if args.comparison_kind not in protocol.LANE_NAMES:
@@ -653,7 +1065,12 @@ def run_campaign(
         )
         args.artifact_root = artifact_root
         args.criterion_root = criterion_root
-        build_records, binaries, binary_shas = _build_inputs(args)
+        artifact_handle = PinnedDirectory(artifact_root)
+        criterion_handle = PinnedDirectory(criterion_root)
+        build_records, binaries, binary_shas = _build_inputs(
+            args, validated_builds, authoritative_manifest_paths
+        )
+        pinned_executables = _pin_executables(binaries, binary_shas)
         for path in (
             pathlib.Path(args.baseline_build_manifest).resolve(),
             pathlib.Path(args.candidate_build_manifest).resolve(),
@@ -670,7 +1087,7 @@ def run_campaign(
         if selected_cpu not in allowed_cpus:
             raise protocol.ProtocolError("selected CPU is not process-allowed")
         environment = _runtime_environment(
-            pathlib.Path(args.candidate_build_manifest), criterion_root
+            pathlib.Path(args.candidate_build_manifest), criterion_handle.proc_path
         )
         campaign = _initial_campaign(
             args,
@@ -678,13 +1095,23 @@ def run_campaign(
             selected_cpu=selected_cpu,
             allowed_cpus=allowed_cpus,
         )
+        if ledger.get("candidate_sha") != campaign["candidate_sha"]:
+            raise protocol.ProtocolError(
+                "evidence ledger candidate differs from candidate build"
+            )
         opened = protocol.open_attempt(
             ledger, "timing", args.comparison_kind, args.attempt_id
         )
         atomic_writer(ledger_path, opened)
         ledger = opened
         manifest_path = artifact_root / "campaign.json"
-        atomic_writer(manifest_path, campaign)
+
+        def write_campaign(payload: Mapping[str, Any]) -> None:
+            if campaign_write_observer is not None:
+                campaign_write_observer(manifest_path, payload)
+            artifact_handle.atomic_json("campaign.json", payload)
+
+        write_campaign(campaign)
 
         for case in sorted(CANONICAL_CASES):
             benchmark = CANONICAL_CASES[case]
@@ -699,16 +1126,18 @@ def run_campaign(
                     build_process_provider=build_process_provider,
                 )
                 if quiet_error is not None:
-                    _synchronize_prefix_inventory(campaign, artifact_root)
+                    _synchronize_prefix_inventory(campaign, artifact_handle)
                     terminal = _invalid_campaign(campaign, reason=quiet_error, **current)
-                    atomic_writer(manifest_path, terminal)
+                    write_campaign(terminal)
                     _close_ledger(
                         pathlib.Path(args.ledger), ledger, args, None, "INCONCLUSIVE", atomic_writer
                     )
                     return 2
 
-                pair_dir = artifact_root / case / f"pair{pair}"
-                pair_dir.mkdir(parents=True)
+                pair_relative = f"{case}/pair{pair}"
+                pair_descriptor = artifact_handle.open_directory(
+                    pair_relative, create=True
+                )
                 runs = []
                 local_artifacts = {}
                 invalid_reason = None
@@ -716,19 +1145,21 @@ def run_campaign(
                     case, benchmark, pair, order
                 ):
                     current = {"case": case, "pair": pair, "role": role}
-                    stdout_path = pair_dir / f"{role}.stdout.log"
-                    stderr_path = pair_dir / f"{role}.stderr.log"
                     record, invalid_reason = _process_record(
                         command=benchmark_command(
-                            binaries[identity], run_benchmark, option, name
+                            pinned_executables[identity].launch_path,
+                            run_benchmark,
+                            option,
+                            name,
                         ),
                         environment=environment,
                         cwd=pathlib.Path(args.working_directory),
-                        stdout_path=stdout_path,
-                        stderr_path=stderr_path,
+                        artifact_root=artifact_handle,
+                        pair_relative=pair_relative,
                         role=role,
                         identity=identity,
                         binary_sha=binary_shas[identity],
+                        executable=pinned_executables[identity],
                         selected_cpu=selected_cpu,
                         allowed_count=len(allowed_cpus),
                         process_factory=process_factory,
@@ -738,53 +1169,77 @@ def run_campaign(
                         affinity_provider=affinity_provider,
                         load_provider=load_provider,
                         build_process_provider=build_process_provider,
+                        inherited_descriptors=(criterion_handle.descriptor,),
+                        root_validators=(
+                            artifact_handle.validate_link,
+                            criterion_handle.validate_link,
+                        ),
                     )
                     runs.append(record)
-                    for path in (stdout_path, stderr_path):
-                        local_artifacts[path.name] = _record_artifact(
-                            campaign, artifact_root, path
+                    for name in (
+                        f"{role}.stdout.log",
+                        f"{role}.stderr.log",
+                    ):
+                        local_artifacts[name] = _record_artifact(
+                            campaign, artifact_handle, f"{pair_relative}/{name}"
                         )
                     campaign["cases"][case]["active_pair"] = {
                         "pair": pair,
                         "order": order,
                         "runs": copy.deepcopy(runs),
                     }
-                    atomic_writer(manifest_path, campaign)
+                    write_campaign(campaign)
                     if invalid_reason is not None:
                         break
+                    if role == "second_target":
+                        _copy_regular_at(
+                            criterion_handle,
+                            criterion_relative(benchmark, "change/estimates.json"),
+                            pair_descriptor,
+                            "change-estimates.json",
+                        )
+                        local_artifacts["change-estimates.json"] = _record_artifact(
+                            campaign,
+                            artifact_handle,
+                            f"{pair_relative}/change-estimates.json",
+                        )
+                        write_campaign(campaign)
+                    elif role == "sentinel_after":
+                        _copy_regular_at(
+                            criterion_handle,
+                            criterion_relative(
+                                SENTINEL_BENCHMARK, "change/estimates.json"
+                            ),
+                            pair_descriptor,
+                            "sentinel-change-estimates.json",
+                        )
+                        local_artifacts[
+                            "sentinel-change-estimates.json"
+                        ] = _record_artifact(
+                            campaign,
+                            artifact_handle,
+                            f"{pair_relative}/sentinel-change-estimates.json",
+                        )
+                        write_campaign(campaign)
 
                 if invalid_reason is None:
-                    target_source = criterion_directory(criterion_root, benchmark)
-                    sentinel_source = criterion_directory(
-                        criterion_root, SENTINEL_BENCHMARK
-                    )
-                    _copy_regular(
-                        target_source / "change/estimates.json",
-                        pair_dir / "change-estimates.json",
-                    )
-                    _copy_regular(
-                        sentinel_source / "change/estimates.json",
-                        pair_dir / "sentinel-change-estimates.json",
-                    )
-                    sentinel = classification.read_change(
-                        pair_dir / "sentinel-change-estimates.json"
+                    sentinel = classification._read_change_content(
+                        artifact_handle.read_regular(
+                            f"{pair_relative}/sentinel-change-estimates.json"
+                        ),
+                        f"{pair_relative}/sentinel-change-estimates.json",
                     )
                     if classification.sentinel_breached(sentinel[0], sentinel[1]):
                         invalid_reason = "sentinel interval breaches drift band"
 
-                monitor_path = _write_monitor_artifact(pair_dir, case, pair, runs)
-                local_artifacts[monitor_path.name] = _record_artifact(
-                    campaign, artifact_root, monitor_path
+                monitor_name = _write_monitor_artifact(
+                    pair_descriptor, case, pair, runs
                 )
-                for estimate_name in (
-                    "change-estimates.json",
-                    "sentinel-change-estimates.json",
-                ):
-                    estimate_path = pair_dir / estimate_name
-                    if estimate_path.is_file():
-                        local_artifacts[estimate_name] = _record_artifact(
-                            campaign, artifact_root, estimate_path
-                        )
+                local_artifacts[monitor_name] = _record_artifact(
+                    campaign,
+                    artifact_handle,
+                    f"{pair_relative}/{monitor_name}",
+                )
                 validity = {
                     "protocol_version": protocol.PROTOCOL_VERSION,
                     "case": case,
@@ -798,62 +1253,86 @@ def run_campaign(
                 }
                 if invalid_reason is not None:
                     validity["reason"] = invalid_reason
-                validity_path = pair_dir / "validity.json"
-                atomic_writer(validity_path, validity)
-                validity_record = _record_artifact(campaign, artifact_root, validity_path)
+                protocol.atomic_write_json_at(
+                    pair_descriptor, "validity.json", validity
+                )
+                validity_relative = f"{pair_relative}/validity.json"
+                validity_record = _record_artifact(
+                    campaign, artifact_handle, validity_relative
+                )
                 campaign["cases"][case].pop("active_pair", None)
                 if invalid_reason is not None:
-                    _synchronize_prefix_inventory(campaign, artifact_root)
+                    _synchronize_prefix_inventory(campaign, artifact_handle)
                     terminal = _invalid_campaign(
                         campaign, reason=invalid_reason, **current
                     )
-                    atomic_writer(manifest_path, terminal)
+                    write_campaign(terminal)
                     _close_ledger(
                         pathlib.Path(args.ledger), ledger, args, None, "INCONCLUSIVE", atomic_writer
                     )
                     return 2
                 campaign["cases"][case]["pairs"][str(pair)] = {
                     "order": order,
-                    "validity_path": validity_path.relative_to(artifact_root).as_posix(),
+                    "validity_path": validity_relative,
                     "validity_sha256": validity_record["sha256"],
                 }
-                atomic_writer(manifest_path, campaign)
+                os.close(pair_descriptor)
+                pair_descriptor = None
+                write_campaign(campaign)
 
-        campaign["statistical_result"] = _declare_results(campaign, artifact_root)
-        campaign["validity_state"] = "COMPLETE"
-        campaign["completed_at"] = utc_now()
-        atomic_writer(manifest_path, campaign)
-        classified = classification.classify_campaign(manifest_path, artifact_root)
-        campaign["classification_artifacts"] = classified["output_artifacts"]
+        terminal = copy.deepcopy(campaign)
+        terminal["statistical_result"] = _declare_results(terminal, artifact_handle)
+        terminal["validity_state"] = "COMPLETE"
+        terminal["completed_at"] = utc_now()
+        classified = classification.classify_terminal_view(
+            manifest_path,
+            terminal,
+            artifact_root,
+            root_descriptor=artifact_handle.descriptor,
+        )
+        terminal["classification_artifacts"] = classified["output_artifacts"]
         for record in classified["output_artifacts"].values():
-            campaign["artifact_inventory"][record["path"]] = {
+            terminal["artifact_inventory"][record["path"]] = {
                 "sha256": record["sha256"]
             }
-        atomic_writer(manifest_path, campaign)
-        verified = classification.classify_campaign(manifest_path, artifact_root)
-        if verified["statistical_result"] != campaign["statistical_result"]:
+        verified = classification.classify_terminal_view(
+            manifest_path,
+            terminal,
+            artifact_root,
+            root_descriptor=artifact_handle.descriptor,
+        )
+        if verified["statistical_result"] != terminal["statistical_result"]:
             raise protocol.ProtocolError("classifier result differs after registration")
         _close_ledger(
             pathlib.Path(args.ledger),
             ledger,
             args,
-            campaign["statistical_result"],
+            terminal["statistical_result"],
             "COMPLETE",
             atomic_writer,
         )
-        return EXIT_BY_RESULT[("COMPLETE", campaign["statistical_result"])]
+        ledger_closed = True
+        write_campaign(terminal)
+        campaign = terminal
+        return EXIT_BY_RESULT[("COMPLETE", terminal["statistical_result"])]
     except BaseException as error:
-        if isinstance(error, protocol.AtomicWriteError):
+        if ledger_closed:
+            if not isinstance(error, Exception):
+                raise error
             return 1
         if manifest_path is None or campaign is None or ledger is None:
+            if not isinstance(error, Exception):
+                raise error
             return 1
         try:
-            _synchronize_prefix_inventory(campaign, pathlib.Path(args.artifact_root))
+            _synchronize_prefix_inventory(campaign, artifact_handle)
         except BaseException as inventory_error:
-            error = protocol.ProtocolError(
-                f"{type(error).__name__}: {error}; "
-                f"prefix-inventory-error: {type(inventory_error).__name__}: {inventory_error}"
-            )
+            if isinstance(error, Exception):
+                error = protocol.ProtocolError(
+                    f"{type(error).__name__}: {error}; "
+                    "prefix-inventory-error: "
+                    f"{type(inventory_error).__name__}: {inventory_error}"
+                )
         terminal = _invalid_campaign(
             campaign,
             case=current["case"],
@@ -862,15 +1341,68 @@ def run_campaign(
             reason=f"{type(error).__name__}: {error}",
         )
         try:
-            atomic_writer(manifest_path, terminal)
+            write_campaign(terminal)
             _close_ledger(
                 pathlib.Path(args.ledger), ledger, args, None, "INCONCLUSIVE", atomic_writer
             )
         except BaseException:
+            if not isinstance(error, Exception):
+                raise error
             return 1
         if not isinstance(error, Exception):
             raise
         return 2
+    finally:
+        primary = sys.exc_info()[1]
+        close_failure: BaseException | None = None
+        if pair_descriptor is not None:
+            try:
+                os.close(pair_descriptor)
+            except BaseException as error:
+                close_failure = error
+        for executable in pinned_executables.values():
+            try:
+                executable.close()
+            except BaseException as error:
+                if close_failure is None:
+                    close_failure = error
+        for root_handle in (criterion_handle, artifact_handle):
+            if root_handle is None:
+                continue
+            try:
+                root_handle.close()
+            except BaseException as error:
+                if close_failure is None:
+                    close_failure = error
+        if primary is None and close_failure is not None:
+            raise close_failure
+
+
+def run_campaign(args, **runtime_seams) -> int:
+    """Authoritatively revalidate persisted builds, then run one campaign."""
+    try:
+        config = build.BuildConfig(
+            repository=pathlib.Path(args.repository),
+            evidence_root=pathlib.Path(args.build_evidence_root),
+            scratch_root=pathlib.Path(args.build_scratch_root),
+            candidate_commit=args.candidate_commit,
+            path=args.controlled_path,
+            home=pathlib.Path(args.controlled_home),
+            cargo_home=pathlib.Path(args.controlled_cargo_home),
+        )
+        validated = build.validate_build_set(config)
+        authoritative_paths = {
+            role: config.evidence_root / relative
+            for role, relative in build.BUILD_MANIFEST_PATHS.items()
+        }
+    except Exception:
+        return 1
+    return _run_campaign(
+        args,
+        validated_builds=validated,
+        authoritative_manifest_paths=authoritative_paths,
+        **runtime_seams,
+    )
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -880,6 +1412,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--baseline-build-manifest", required=True, type=pathlib.Path)
     parser.add_argument("--candidate-build-manifest", required=True, type=pathlib.Path)
+    parser.add_argument("--repository", required=True, type=pathlib.Path)
+    parser.add_argument("--build-evidence-root", required=True, type=pathlib.Path)
+    parser.add_argument("--build-scratch-root", required=True, type=pathlib.Path)
+    parser.add_argument("--candidate-commit", required=True)
+    parser.add_argument("--controlled-path", required=True)
+    parser.add_argument("--controlled-home", required=True, type=pathlib.Path)
+    parser.add_argument("--controlled-cargo-home", required=True, type=pathlib.Path)
     parser.add_argument("--ledger", required=True, type=pathlib.Path)
     parser.add_argument("--attempt-id", required=True, type=int)
     parser.add_argument("--artifact-root", required=True, type=pathlib.Path)

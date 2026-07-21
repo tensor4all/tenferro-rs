@@ -622,6 +622,35 @@ class ProtocolV2CampaignTests(unittest.TestCase):
                 self.campaign_path, terminal, self.root
             )
 
+    def test_terminal_view_root_fd_survives_logical_root_swap(self) -> None:
+        terminal = copy.deepcopy(self.campaign)
+        for record in self.campaign["cases"].values():
+            record["statistical_result"] = None
+        self.campaign["validity_state"] = "RUNNING"
+        self.campaign["statistical_result"] = None
+        self.campaign["completed_at"] = ""
+        self.write_campaign()
+        descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY)
+        detached = self.base / "timing-detached"
+        outside = self.base / "timing-outside"
+        try:
+            self.root.rename(detached)
+            outside.mkdir()
+            self.root.symlink_to(outside, target_is_directory=True)
+
+            result = classifier.classify_terminal_view(
+                self.campaign_path,
+                terminal,
+                self.root,
+                root_descriptor=descriptor,
+            )
+
+            self.assertEqual(result["statistical_result"], "PASS")
+            self.assertTrue((detached / "classification.json").is_file())
+            self.assertEqual(list(outside.iterdir()), [])
+        finally:
+            os.close(descriptor)
+
     def test_protocol_one_is_rejected(self) -> None:
         self.campaign["protocol_version"] = 1
         self.write_campaign()

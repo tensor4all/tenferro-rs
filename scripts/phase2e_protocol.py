@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import pathlib
+import secrets
 import stat
 import tempfile
 from collections.abc import Mapping
@@ -287,6 +288,85 @@ def atomic_write_json(path: pathlib.Path, payload: Any) -> None:
         if cause is not None:
             raise failure from cause
         raise failure
+
+
+def atomic_write_json_at(
+    directory_descriptor: int, name: str, payload: Any
+) -> None:
+    """Atomically replace one leaf JSON file below a caller-held directory fd."""
+    if (
+        type(name) is not str
+        or not name
+        or name in {".", ".."}
+        or "/" in name
+    ):
+        raise ProtocolError("atomic JSON leaf name is invalid")
+    try:
+        directory_metadata = os.fstat(directory_descriptor)
+    except OSError as error:
+        raise AtomicWriteError(
+            f"cannot inspect parent directory for {name}: {error}", committed=False
+        ) from error
+    if not stat.S_ISDIR(directory_metadata.st_mode):
+        raise ProtocolError("atomic JSON parent descriptor is not a directory")
+    encoded = _canonical_json_bytes(payload)
+    temporary_name = f".{name}.write-{secrets.token_hex(16)}.tmp"
+    try:
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory_descriptor,
+        )
+    except OSError as error:
+        raise AtomicWriteError(
+            f"cannot create temporary for {name}: {error}", committed=False
+        ) from error
+
+    failure: BaseException | None = None
+    try:
+        view = memoryview(encoded)
+        while view:
+            try:
+                written = os.write(descriptor, view)
+            except InterruptedError:
+                continue
+            if written <= 0:
+                raise OSError("short JSON write")
+            view = view[written:]
+        os.fsync(descriptor)
+    except BaseException as error:
+        failure = error
+    try:
+        os.close(descriptor)
+    except BaseException as error:
+        if failure is None:
+            failure = error
+    if failure is not None:
+        if isinstance(failure, OSError):
+            raise AtomicWriteError(
+                f"cannot write and fsync temporary for {name}: {failure}",
+                committed=False,
+            ) from failure
+        raise failure
+
+    try:
+        os.replace(
+            temporary_name,
+            name,
+            src_dir_fd=directory_descriptor,
+            dst_dir_fd=directory_descriptor,
+        )
+    except OSError as error:
+        raise AtomicWriteError(
+            f"cannot replace {name}: {error}", committed=False
+        ) from error
+    try:
+        os.fsync(directory_descriptor)
+    except OSError as error:
+        raise AtomicWriteDurabilityError(
+            f"replacement committed for {name}, but parent fsync failed: {error}"
+        ) from error
 
 
 def _close_descriptor(descriptor: int) -> OSError | None:
