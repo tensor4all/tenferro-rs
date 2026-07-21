@@ -46,6 +46,18 @@ impl EagerBackend {
         Self::Cpu(backend)
     }
 
+    pub(crate) fn cpu_snapshot(&self) -> Option<CpuBackend> {
+        match self {
+            Self::Cpu(backend) => Some(backend.clone()),
+            #[cfg(test)]
+            Self::Recording(_) => None,
+            #[cfg(feature = "cuda")]
+            Self::Cuda(_) => None,
+            #[cfg(feature = "webgpu")]
+            Self::WebGpu(_) => None,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn recording_cpu(materializations: Arc<AtomicUsize>) -> Self {
         Self::Recording(RecordingBackend {
