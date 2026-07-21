@@ -148,16 +148,16 @@ jobs:
           check_permission() {
             local login="$1"
             local role="$2"
-            local perm
+            local repository_role
 
-            perm="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${login}/permission" --jq .permission)"
+            repository_role="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${login}/permission" --jq .role_name)"
 
-            case "${perm}" in
+            case "${repository_role}" in
               admin|maintain)
-                echo "OK: ${role} ${login} has '${perm}' permission and is allowed to launch RunPod CI."
+                echo "OK: ${role} ${login} has '${repository_role}' repository role and is allowed to launch RunPod CI."
                 ;;
               *)
-                echo "::error::${role} ${login} has '${perm}' permission, which is not allowed to launch RunPod CI (requires admin or maintain)."
+                echo "::error::${role} ${login} has '${repository_role}' repository role, which is not allowed to launch RunPod CI (requires admin or maintain)."
                 exit 1
               ;;
             esac

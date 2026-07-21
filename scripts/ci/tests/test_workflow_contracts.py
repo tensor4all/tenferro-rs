@@ -93,6 +93,35 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("GPU validation not required", text)
         self.assertIn("GPU_REQUIRED: ${{ needs.authorize.outputs.gpu_required }}", text)
 
+    def test_runpod_authorization_uses_repository_roles(self) -> None:
+        text = read(".github/workflows/runpod-gpu-test.yml")
+        authorization = text[
+            text.index("          check_permission() {") : text.index(
+                "          classify_pr_paths() {"
+            )
+        ]
+        self.assertIn("--jq .role_name", authorization)
+        self.assertNotIn("--jq .permission", authorization)
+        self.assertIn("admin|maintain)", authorization)
+        self.assertEqual(
+            re.findall(r'^[ \t]+check_permission "[^\n]+$', text, re.MULTILINE),
+            [
+                '            check_permission "${pr_author}" "PR author"',
+                '            check_permission "${WORKFLOW_RUN_ACTOR}" "Source workflow actor"',
+                '            check_permission "${GITHUB_ACTOR}" "Workflow actor"',
+                '              check_permission "${pr_author}" "PR author"',
+            ],
+        )
+
+    def test_review_labels_are_authorized_by_repository_role(self) -> None:
+        text = read(".github/workflows/review_bot.yml")
+        self.assertEqual(
+            text.count('const allowed = new Set(["admin", "maintain"]);'), 2
+        )
+        self.assertEqual(text.count("allowed.has(data.role_name)"), 2)
+        self.assertNotIn("allowed.has(data.permission)", text)
+        self.assertEqual(text.count("has ${data.role_name} repository role"), 2)
+
     def test_runpod_secret_stays_on_trusted_hosted_jobs(self) -> None:
         text = read(".github/workflows/runpod-gpu-test.yml")
         run_gpu = text[
