@@ -129,6 +129,55 @@ def runtime_environment(
     return result
 
 
+def cargo_environment(
+    *, path: str, home: str, cargo_home: str, target_dir: str
+) -> dict[str, str]:
+    """Construct the sealed Cargo environment for Phase 2E build processes."""
+    values = {
+        "PATH": path,
+        "HOME": home,
+        "CARGO_HOME": cargo_home,
+        "CARGO_TARGET_DIR": target_dir,
+    }
+    for name, value in values.items():
+        if not isinstance(value, str):
+            raise ProtocolError(f"{name} must be a string")
+        paths = value.split(os.pathsep) if name == "PATH" else [value]
+        if not paths or any(
+            not item or not pathlib.Path(item).is_absolute() for item in paths
+        ):
+            raise ProtocolError(f"{name} must be an absolute path")
+        if name == "PATH":
+            normalized: list[pathlib.Path] = []
+            for item in paths:
+                candidate = pathlib.Path(item)
+                try:
+                    metadata = candidate.lstat()
+                    canonical = candidate.resolve(strict=True)
+                except OSError as error:
+                    raise ProtocolError(
+                        f"PATH component cannot be inspected: {candidate}: {error}"
+                    ) from error
+                if not stat.S_ISDIR(metadata.st_mode) or canonical != candidate:
+                    raise ProtocolError(
+                        f"PATH component must be a canonical regular directory: {candidate}"
+                    )
+                if candidate in normalized:
+                    raise ProtocolError(f"PATH component is duplicated: {candidate}")
+                normalized.append(candidate)
+
+    result = runtime_environment(path=path, home=home)
+    result.update(
+        {
+            "CARGO_HOME": cargo_home,
+            "CARGO_TARGET_DIR": target_dir,
+            "CARGO_INCREMENTAL": "0",
+            "CARGO_NET_OFFLINE": "true",
+        }
+    )
+    return result
+
+
 def _canonical_json_bytes(payload: Any) -> bytes:
     try:
         rendered = json.dumps(

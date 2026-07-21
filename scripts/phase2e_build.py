@@ -1,0 +1,2215 @@
+#!/usr/bin/env python3
+"""Build and validate provenance-bound Phase 2E benchmark binaries.
+
+The module deliberately treats source trees, lock files, Cargo inputs, and the
+resulting executable as one build identity.  All external commands run in a
+new process group with fixed deadlines so a failed build cannot outlive the
+evidence orchestrator.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import json
+import os
+import pathlib
+import re
+import signal
+import stat
+import subprocess
+import tempfile
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
+from typing import Any
+
+from scripts import phase2e_protocol as protocol
+
+
+IMPLEMENTATION_BASELINE = "85855e272b1495611deb601a9ee06f3546772c3c"
+HARNESS_COMMIT = "4471d6145c4d8793de3a96f8d99400c24ca8c6d1"
+OLD_STRIDED = "10fc972d3c0f8cdfd4ecb45d21d815aebfd7d1f2"
+COMMON_STRIDED = "6b0b4a46b7dd9a9ea1677a0d596c0b4adab1acbc"
+
+BENCH_COMMAND = (
+    "cargo",
+    "bench",
+    "--locked",
+    "--no-run",
+    "-p",
+    "tenferro-ad",
+    "--bench",
+    "eager_dispatch_baseline",
+    "--no-default-features",
+    "--features",
+    "cpu-faer",
+)
+REQUESTED_FEATURES = ("cpu-faer",)
+
+INVARIANT_FIELDS = frozenset(
+    {
+        "protocol_version",
+        "toolchain",
+        "target",
+        "profile",
+        "requested_features",
+        "provider",
+        "benchmark_sha256",
+        "benchmark_stanza_sha256",
+        "command_template",
+        "config_chain_sha256",
+    }
+)
+ROLE_FIELDS = frozenset(
+    {
+        "role",
+        "head",
+        "tracked_tree_sha256",
+        "resolved_features_sha256",
+        "lock_sha256",
+        "worktree",
+        "target_dir",
+        "executable",
+        "executable_sha256",
+    }
+)
+AUDIT_FIELDS = frozenset(
+    {
+        "validity_state",
+        "source_delta",
+        "commands",
+        "environment",
+        "cargo_config_chain",
+    }
+)
+
+ROOT_CARGO_PATH = pathlib.Path("Cargo.toml")
+AD_CARGO_PATH = pathlib.Path("crates/tenferro-ad/Cargo.toml")
+BENCH_SOURCE_PATH = pathlib.Path(
+    "crates/tenferro-ad/benches/eager_dispatch_baseline.rs"
+)
+FROZEN_HARNESS_PATHS = (AD_CARGO_PATH, BENCH_SOURCE_PATH)
+STRIDED_DEPENDENCIES = (
+    "strided-view",
+    "strided-traits",
+    "strided-perm",
+    "strided-kernel",
+    "strided-einsum2",
+)
+BASELINE_DELTAS = ("frozen-benchmark-harness", "five-strided-pins")
+BENCH_STANZA = (
+    "[[bench]]\n"
+    'name = "eager_dispatch_baseline"\n'
+    "harness = false\n\n"
+)
+
+_LOCK_PATHS = {
+    "direct": pathlib.Path("builds/locks/direct-current-main.Cargo.lock"),
+    "common": pathlib.Path("builds/locks/common.Cargo.lock"),
+    "direct-probe": pathlib.Path(
+        "builds/locks/direct-current-main-probe.Cargo.lock"
+    ),
+    "common-probe": pathlib.Path("builds/locks/common-probe.Cargo.lock"),
+}
+LOCK_PATHS = MappingProxyType(_LOCK_PATHS)
+
+_BUILD_MANIFEST_PATHS = {
+    "direct-current-main-baseline": pathlib.Path(
+        "builds/direct-current-main-baseline.json"
+    ),
+    "common-lock-normalized-baseline": pathlib.Path(
+        "builds/common-lock-normalized-baseline.json"
+    ),
+    "candidate": pathlib.Path("builds/candidate.json"),
+}
+BUILD_MANIFEST_PATHS = MappingProxyType(_BUILD_MANIFEST_PATHS)
+
+LOCK_COMMAND = ("cargo", "generate-lockfile")
+METADATA_COMMAND = ("cargo", "metadata", "--locked", "--format-version", "1")
+QUERY_DEADLINE_SECONDS = 300
+BUILD_DEADLINE_SECONDS = 1800
+TERMINATION_GRACE_SECONDS = 5
+
+_ROLE_SOURCE_DELTAS = {
+    "direct-current-main-baseline": ("frozen-benchmark-harness",),
+    "common-lock-normalized-baseline": (
+        "frozen-benchmark-harness",
+        "five-strided-pins",
+    ),
+    "candidate": (),
+}
+_BUILD_ROLES = tuple(_ROLE_SOURCE_DELTAS)
+
+
+@dataclasses.dataclass(frozen=True)
+class WorktreeSpec:
+    """One dedicated build worktree and its starting commit."""
+
+    role: str
+    path: pathlib.Path
+    start_commit: str
+
+
+@dataclasses.dataclass(frozen=True)
+class CommandSpec:
+    """One exact Cargo command and its wall-clock deadline."""
+
+    name: str
+    argv: tuple[str, ...]
+    deadline_seconds: int
+
+    def to_manifest(self) -> dict[str, Any]:
+        """Return the deterministic JSON form recorded in a build manifest."""
+        return {
+            "name": self.name,
+            "argv": list(self.argv),
+            "deadline_seconds": self.deadline_seconds,
+        }
+
+
+@dataclasses.dataclass(frozen=True)
+class CommandResult:
+    """Complete captured outcome of one bounded child process."""
+
+    argv: tuple[str, ...]
+    cwd: str
+    environment: dict[str, str]
+    deadline_seconds: int
+    returncode: int | None
+    stdout: str
+    stderr: str
+    validity_state: str
+    failure_reason: str | None
+    terminated: bool
+    killed: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class WorktreeProof:
+    """Source and configuration identity observed around one build."""
+
+    head: str
+    tracked_tree_sha256: str
+    benchmark_sha256: str
+    benchmark_stanza_sha256: str
+    cargo_config_chain: tuple[dict[str, str], ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class BuildConfig:
+    """Caller-owned roots and identity for one three-role build set."""
+
+    repository: pathlib.Path
+    evidence_root: pathlib.Path
+    scratch_root: pathlib.Path
+    candidate_commit: str
+    path: str
+    home: pathlib.Path
+    cargo_home: pathlib.Path
+
+
+@dataclasses.dataclass(frozen=True)
+class BuildSetResult:
+    """Terminal validity and manifests from one build-set invocation."""
+
+    validity_state: str
+    manifests: dict[str, dict[str, Any]]
+    failure: CommandResult | None
+
+
+@dataclasses.dataclass(frozen=True)
+class ResolvedTool:
+    """Canonical executable identity frozen before evidence mutation."""
+
+    name: str
+    path: pathlib.Path
+    sha256: str
+
+
+@dataclasses.dataclass(frozen=True)
+class ResolvedToolchain:
+    """Minimal controlled PATH and the three required executable identities."""
+
+    path: str
+    git: ResolvedTool
+    cargo: ResolvedTool
+    rustc: ResolvedTool
+
+
+def resolve_toolchain(path: str) -> ResolvedToolchain:
+    """Resolve a canonical minimal PATH containing exactly the required tools."""
+    if not isinstance(path, str) or not path:
+        raise protocol.ProtocolError("controlled PATH must be a nonempty string")
+    raw_components = path.split(os.pathsep)
+    components: list[pathlib.Path] = []
+    for raw in raw_components:
+        candidate = pathlib.Path(raw)
+        if not raw or not candidate.is_absolute():
+            raise protocol.ProtocolError("controlled PATH components must be absolute")
+        try:
+            metadata = candidate.lstat()
+            canonical = candidate.resolve(strict=True)
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"cannot inspect controlled PATH component {candidate}: {error}"
+            ) from error
+        if not stat.S_ISDIR(metadata.st_mode) or canonical != candidate:
+            raise protocol.ProtocolError(
+                f"controlled PATH component is not a canonical regular directory: {candidate}"
+            )
+        if candidate in components:
+            raise protocol.ProtocolError(
+                f"controlled PATH component is duplicated: {candidate}"
+            )
+        components.append(candidate)
+
+    required = ("git", "cargo", "rustc")
+    candidates: dict[str, list[pathlib.Path]] = {name: [] for name in required}
+    used_directories: set[pathlib.Path] = set()
+    for directory in components:
+        for name in required:
+            executable = directory / name
+            if executable.exists() or executable.is_symlink():
+                candidates[name].append(executable)
+                used_directories.add(directory)
+    unused = [directory for directory in components if directory not in used_directories]
+    if unused:
+        raise protocol.ProtocolError(
+            f"controlled PATH contains unneeded components: {unused}"
+        )
+
+    resolved: dict[str, ResolvedTool] = {}
+    for name in required:
+        matches = candidates[name]
+        if len(matches) != 1:
+            raise protocol.ProtocolError(
+                f"controlled PATH must resolve {name} exactly once, found {len(matches)}"
+            )
+        executable = matches[0]
+        resolved[name] = _resolve_tool(name, executable)
+    normalized_path = os.pathsep.join(str(component) for component in components)
+    return ResolvedToolchain(
+        path=normalized_path,
+        git=resolved["git"],
+        cargo=resolved["cargo"],
+        rustc=resolved["rustc"],
+    )
+
+
+def _resolve_tool(name: str, path: pathlib.Path) -> ResolvedTool:
+    path = pathlib.Path(path)
+    try:
+        metadata = path.lstat()
+        canonical = path.resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot inspect {name} executable {path}: {error}"
+        ) from error
+    if not stat.S_ISREG(metadata.st_mode) or canonical != path:
+        raise protocol.ProtocolError(
+            f"{name} executable must be a canonical regular file: {path}"
+        )
+    if not os.access(path, os.X_OK):
+        raise protocol.ProtocolError(f"{name} executable is not executable: {path}")
+    return ResolvedTool(name=name, path=path, sha256=protocol.sha256_file(path))
+
+
+def validate_resolved_tool(tool: ResolvedTool) -> None:
+    """Reject replacement or metadata drift of a previously resolved tool."""
+    if not isinstance(tool, ResolvedTool) or tool.name not in ("git", "cargo", "rustc"):
+        raise protocol.ProtocolError("resolved tool identity is invalid")
+    observed = _resolve_tool(tool.name, tool.path)
+    if observed != tool:
+        raise protocol.ProtocolError(f"resolved {tool.name} executable changed: {tool.path}")
+
+
+def validate_resolved_toolchain(tools: ResolvedToolchain) -> None:
+    """Revalidate every executable and the minimal normalized PATH."""
+    if not isinstance(tools, ResolvedToolchain):
+        raise protocol.ProtocolError("resolved toolchain identity is invalid")
+    observed = resolve_toolchain(tools.path)
+    if observed != tools:
+        raise protocol.ProtocolError("resolved toolchain changed")
+
+
+def normalized_root_cargo(payload: bytes) -> bytes:
+    """Replace exactly the five declared strided revisions."""
+    if not isinstance(payload, bytes):
+        raise protocol.ProtocolError("root Cargo.toml payload must be bytes")
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise protocol.ProtocolError("root Cargo.toml is not UTF-8") from error
+
+    if text.count(OLD_STRIDED) != len(STRIDED_DEPENDENCIES):
+        raise protocol.ProtocolError(
+            "root Cargo.toml does not contain exactly five old strided revisions"
+        )
+
+    rendered_lines: list[str] = []
+    replaced: set[str] = set()
+    for line in text.splitlines(keepends=True):
+        matching = [
+            dependency
+            for dependency in STRIDED_DEPENDENCIES
+            if re.match(rf"^{re.escape(dependency)}\s*=", line)
+        ]
+        if matching:
+            dependency = matching[0]
+            if dependency in replaced or line.count(OLD_STRIDED) != 1:
+                raise protocol.ProtocolError(
+                    f"invalid old strided pin for dependency {dependency}"
+                )
+            line = line.replace(OLD_STRIDED, COMMON_STRIDED)
+            replaced.add(dependency)
+        rendered_lines.append(line)
+
+    if replaced != set(STRIDED_DEPENDENCIES):
+        missing = sorted(set(STRIDED_DEPENDENCIES) - replaced)
+        raise protocol.ProtocolError(f"missing strided dependency pins: {missing}")
+    rendered = "".join(rendered_lines)
+    if OLD_STRIDED in rendered or rendered.count(COMMON_STRIDED) < len(replaced):
+        raise protocol.ProtocolError("strided revision replacement was incomplete")
+    return rendered.encode("utf-8")
+
+
+def validate_source_delta(
+    role: str,
+    baseline_files: Mapping[pathlib.Path, bytes],
+    harness_files: Mapping[pathlib.Path, bytes],
+    changed_files: Mapping[pathlib.Path, bytes],
+) -> None:
+    """Accept only the frozen harness and optional five-pin normalization."""
+    if role not in (
+        "direct-current-main-baseline",
+        "common-lock-normalized-baseline",
+    ):
+        raise protocol.ProtocolError(f"invalid baseline role: {role}")
+    mappings = (baseline_files, harness_files, changed_files)
+    if any(not isinstance(item, Mapping) for item in mappings):
+        raise protocol.ProtocolError("source snapshots must be mappings")
+
+    try:
+        baseline_ad = baseline_files[AD_CARGO_PATH]
+        harness_ad = harness_files[AD_CARGO_PATH]
+        harness_bench = harness_files[BENCH_SOURCE_PATH]
+    except KeyError as error:
+        raise protocol.ProtocolError(f"source snapshot is missing {error.args[0]}") from error
+    if not all(isinstance(item, bytes) for item in (baseline_ad, harness_ad, harness_bench)):
+        raise protocol.ProtocolError("source snapshot payloads must be bytes")
+
+    stanza = BENCH_STANZA.encode("utf-8")
+    if harness_ad.count(stanza) != 1 or harness_ad.replace(stanza, b"", 1) != baseline_ad:
+        raise protocol.ProtocolError(
+            "harness Cargo.toml delta is not the exact benchmark stanza"
+        )
+
+    expected = {
+        AD_CARGO_PATH: harness_ad,
+        BENCH_SOURCE_PATH: harness_bench,
+    }
+    if role == "common-lock-normalized-baseline":
+        try:
+            expected[ROOT_CARGO_PATH] = normalized_root_cargo(
+                baseline_files[ROOT_CARGO_PATH]
+            )
+        except KeyError as error:
+            raise protocol.ProtocolError("baseline is missing root Cargo.toml") from error
+
+    if set(changed_files) != set(expected):
+        raise protocol.ProtocolError(
+            "baseline delta paths do not match the predeclared source delta"
+        )
+    for path, expected_bytes in expected.items():
+        actual = changed_files[path]
+        if not isinstance(actual, bytes) or actual != expected_bytes:
+            raise protocol.ProtocolError(f"baseline delta has an unexpected hunk: {path}")
+
+
+def worktree_specs(scratch_root: pathlib.Path, candidate_commit: str) -> tuple[WorktreeSpec, ...]:
+    """Return the three distinct worktrees required for one build set."""
+    scratch_root = pathlib.Path(scratch_root)
+    _validate_commit(candidate_commit, "candidate commit")
+    return (
+        WorktreeSpec(
+            "direct-current-main-baseline",
+            scratch_root / "direct-current-main-baseline",
+            IMPLEMENTATION_BASELINE,
+        ),
+        WorktreeSpec(
+            "common-lock-normalized-baseline",
+            scratch_root / "common-lock-normalized-baseline",
+            IMPLEMENTATION_BASELINE,
+        ),
+        WorktreeSpec("candidate", scratch_root / "candidate", candidate_commit),
+    )
+
+
+def prepare_fresh_worktree_destination(path: pathlib.Path) -> pathlib.Path:
+    """Create or accept an empty directory reserved for a new worktree."""
+    return protocol.prepare_empty_root(pathlib.Path(path))
+
+
+class GitSourceControl:
+    """Git-backed materialization and worktree provenance verifier."""
+
+    def __init__(
+        self,
+        repository: pathlib.Path,
+        *,
+        path: str,
+        home: pathlib.Path,
+        tools: ResolvedToolchain | None = None,
+        implementation_baseline: str = IMPLEMENTATION_BASELINE,
+        harness_commit: str = HARNESS_COMMIT,
+    ) -> None:
+        self.repository = pathlib.Path(repository).resolve()
+        self.tools = resolve_toolchain(path) if tools is None else tools
+        validate_resolved_toolchain(self.tools)
+        if self.tools.path != path:
+            raise protocol.ProtocolError("Git source-control PATH is not normalized")
+        self.path = self.tools.path
+        self.home = pathlib.Path(home).resolve()
+        self.implementation_baseline = implementation_baseline
+        self.harness_commit = harness_commit
+        _validate_commit(implementation_baseline, "implementation baseline")
+        _validate_commit(harness_commit, "harness commit")
+
+    def validate_role_source(
+        self, role: str, head: str, expected_candidate: str
+    ) -> None:
+        """Revalidate a declared candidate or exact baseline measurement commit."""
+        _validate_commit(head, f"{role} build HEAD")
+        _validate_commit(expected_candidate, "expected candidate commit")
+        if role == "candidate":
+            if head != expected_candidate:
+                raise protocol.ProtocolError("candidate build HEAD mismatch")
+            observed = self._git(("rev-parse", f"{head}^{{commit}}"), cwd=self.repository)
+            if observed.strip() != head:
+                raise protocol.ProtocolError("candidate build HEAD is not a repository commit")
+            return
+        if role not in (
+            "direct-current-main-baseline",
+            "common-lock-normalized-baseline",
+        ):
+            raise protocol.ProtocolError(f"invalid build source role: {role}")
+        self._validate_measurement_commit(role, head)
+
+    def create_worktree(self, spec: WorktreeSpec) -> None:
+        """Attach one detached, empty-destination worktree at its declared commit."""
+        if not isinstance(spec, WorktreeSpec):
+            raise protocol.ProtocolError("invalid worktree specification")
+        self._git(
+            ("worktree", "add", "--detach", str(spec.path), spec.start_commit),
+            cwd=self.repository,
+        )
+        observed = self._git(("rev-parse", "HEAD"), cwd=spec.path).strip()
+        if observed != spec.start_commit:
+            raise protocol.ProtocolError(
+                f"fresh worktree HEAD mismatch for {spec.role}: {observed}"
+            )
+
+    def materialize_baseline(self, spec: WorktreeSpec) -> str:
+        """Create and verify one direct or five-pin normalized measurement commit."""
+        if spec.role not in (
+            "direct-current-main-baseline",
+            "common-lock-normalized-baseline",
+        ):
+            raise protocol.ProtocolError(f"cannot materialize non-baseline role {spec.role}")
+        if spec.start_commit != self.implementation_baseline:
+            raise protocol.ProtocolError("baseline worktree starts at the wrong commit")
+        self._git(
+            (
+                "checkout",
+                self.harness_commit,
+                "--",
+                str(AD_CARGO_PATH),
+                str(BENCH_SOURCE_PATH),
+            ),
+            cwd=spec.path,
+        )
+        paths = [AD_CARGO_PATH, BENCH_SOURCE_PATH]
+        if spec.role == "common-lock-normalized-baseline":
+            root_cargo = spec.path / ROOT_CARGO_PATH
+            _replace_regular_bytes(
+                root_cargo,
+                normalized_root_cargo(_read_regular_bytes(root_cargo)),
+            )
+            paths.append(ROOT_CARGO_PATH)
+        self._git(("add", "--", *(str(path) for path in paths)), cwd=spec.path)
+        self._validate_staged_delta(spec)
+        commit_environment = {
+            "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00",
+            "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00",
+        }
+        self._git(
+            (
+                "-c",
+                "user.name=Phase 2E Builder",
+                "-c",
+                "user.email=phase2e-builder@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "-m",
+                f"perf: materialize {spec.role}",
+            ),
+            cwd=spec.path,
+            extra_environment=commit_environment,
+        )
+        head = self._git(("rev-parse", "HEAD"), cwd=spec.path).strip()
+        _validate_commit(head, f"{spec.role} measurement commit")
+        self._validate_measurement_commit(spec.role, head)
+        return head
+
+    def validate_worktree(
+        self,
+        path: pathlib.Path,
+        expected_head: str,
+        expected_lock: pathlib.Path,
+    ) -> WorktreeProof:
+        """Recompute clean tracked, ignored-lock, config, and benchmark proofs."""
+        path = pathlib.Path(path).resolve()
+        head = self._git(("rev-parse", "HEAD"), cwd=path).strip()
+        if head != expected_head:
+            raise protocol.ProtocolError(
+                f"worktree HEAD mismatch: expected {expected_head}, got {head}"
+            )
+        status = self._git(
+            ("status", "--porcelain=v1", "--untracked-files=all"), cwd=path
+        )
+        if status:
+            raise protocol.ProtocolError(f"worktree contains a source delta: {status!r}")
+        tracked = {
+            pathlib.Path(item)
+            for item in self._git(("ls-files", "-z"), cwd=path).split("\0")
+            if item
+        }
+        ignored = {
+            pathlib.Path(item)
+            for item in self._git(
+                ("ls-files", "--others", "--ignored", "--exclude-standard", "-z"),
+                cwd=path,
+            ).split("\0")
+            if item
+        }
+        expected_ignored = {pathlib.Path("Cargo.lock")}
+        validate_ignored_inventory(ignored, expected_ignored)
+        validate_filesystem_inventory(
+            path, expected_ignored, tracked_paths=tracked
+        )
+        installed_lock = path / "Cargo.lock"
+        if protocol.sha256_file(installed_lock) != protocol.sha256_file(expected_lock):
+            raise protocol.ProtocolError("worktree Cargo.lock is not root-owned input")
+
+        tree_inventory = self._git(
+            ("ls-tree", "-r", "-z", "--full-tree", "HEAD"), cwd=path
+        ).encode("utf-8")
+        benchmark = path / BENCH_SOURCE_PATH
+        benchmark_sha256 = protocol.sha256_file(benchmark)
+        ad_cargo = _read_regular_bytes(path / AD_CARGO_PATH)
+        stanza = BENCH_STANZA.encode("utf-8")
+        if ad_cargo.count(stanza) != 1:
+            raise protocol.ProtocolError("benchmark target stanza is missing or duplicated")
+        config_chain = self._cargo_config_chain(path, tracked)
+        return WorktreeProof(
+            head=head,
+            tracked_tree_sha256=sha256_bytes(tree_inventory),
+            benchmark_sha256=benchmark_sha256,
+            benchmark_stanza_sha256=sha256_bytes(stanza),
+            cargo_config_chain=tuple(config_chain),
+        )
+
+    def _validate_staged_delta(self, spec: WorktreeSpec) -> None:
+        names = {
+            pathlib.Path(item)
+            for item in self._git(
+                ("diff", "--cached", "--name-only", "-z"), cwd=spec.path
+            ).split("\0")
+            if item
+        }
+        changed = {path: _read_regular_bytes(spec.path / path) for path in names}
+        validate_source_delta(
+            spec.role,
+            {
+                ROOT_CARGO_PATH: self._show_bytes(
+                    self.implementation_baseline, ROOT_CARGO_PATH
+                ),
+                AD_CARGO_PATH: self._show_bytes(
+                    self.implementation_baseline, AD_CARGO_PATH
+                ),
+            },
+            {
+                AD_CARGO_PATH: self._show_bytes(self.harness_commit, AD_CARGO_PATH),
+                BENCH_SOURCE_PATH: self._show_bytes(
+                    self.harness_commit, BENCH_SOURCE_PATH
+                ),
+            },
+            changed,
+        )
+
+    def _validate_measurement_commit(self, role: str, commit: str) -> None:
+        names = {
+            pathlib.Path(item)
+            for item in self._git(
+                (
+                    "diff",
+                    "--name-only",
+                    "-z",
+                    self.implementation_baseline,
+                    commit,
+                ),
+                cwd=self.repository,
+            ).split("\0")
+            if item
+        }
+        changed = {path: self._show_bytes(commit, path) for path in names}
+        validate_source_delta(
+            role,
+            {
+                ROOT_CARGO_PATH: self._show_bytes(
+                    self.implementation_baseline, ROOT_CARGO_PATH
+                ),
+                AD_CARGO_PATH: self._show_bytes(
+                    self.implementation_baseline, AD_CARGO_PATH
+                ),
+            },
+            {
+                AD_CARGO_PATH: self._show_bytes(self.harness_commit, AD_CARGO_PATH),
+                BENCH_SOURCE_PATH: self._show_bytes(
+                    self.harness_commit, BENCH_SOURCE_PATH
+                ),
+            },
+            changed,
+        )
+
+    def _cargo_config_chain(
+        self, worktree: pathlib.Path, tracked: set[pathlib.Path]
+    ) -> list[dict[str, str]]:
+        entries: list[dict[str, str]] = []
+        locations = (worktree, *worktree.parents)
+        for directory in locations:
+            for name in ("config", "config.toml"):
+                candidate = directory / ".cargo" / name
+                if not candidate.exists() and not candidate.is_symlink():
+                    continue
+                try:
+                    relative = candidate.relative_to(worktree)
+                except ValueError as error:
+                    raise protocol.ProtocolError(
+                        f"ancestor Cargo config is forbidden: {candidate}"
+                    ) from error
+                if relative not in tracked:
+                    raise protocol.ProtocolError(
+                        f"untracked repository Cargo config is forbidden: {relative}"
+                    )
+                entries.append(
+                    {"path": str(relative), "sha256": protocol.sha256_file(candidate)}
+                )
+        return sorted(entries, key=lambda item: item["path"])
+
+    def _show_bytes(self, commit: str, path: pathlib.Path) -> bytes:
+        return self._git(("show", f"{commit}:{path.as_posix()}"), cwd=self.repository).encode(
+            "utf-8"
+        )
+
+    def _git(
+        self,
+        arguments: tuple[str, ...],
+        *,
+        cwd: pathlib.Path,
+        extra_environment: Mapping[str, str] | None = None,
+    ) -> str:
+        environment = protocol.runtime_environment(
+            path=self.path, home=str(self.home)
+        )
+        if extra_environment is not None:
+            environment.update(extra_environment)
+        outcome = run_bounded_command(
+            (str(self.tools.git.path), *arguments),
+            cwd=cwd,
+            environment=environment,
+            deadline_seconds=QUERY_DEADLINE_SECONDS,
+            executable_identity=self.tools.git,
+        )
+        if outcome.validity_state != "COMPLETE":
+            raise protocol.ProtocolError(
+                f"Git command failed: {outcome.argv!r}; stderr={outcome.stderr!r}"
+            )
+        return outcome.stdout
+
+
+def _read_regular_bytes(path: pathlib.Path) -> bytes:
+    path = pathlib.Path(path)
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot open lock source {path}: {error}") from error
+    primary: BaseException | None = None
+    chunks: list[bytes] = []
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise protocol.ProtocolError(f"lock source is not a regular file: {path}")
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError as error:
+        primary = error
+        raise protocol.ProtocolError(f"cannot read lock source {path}: {error}") from error
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            if primary is None:
+                raise protocol.ProtocolError(
+                    f"cannot close lock source {path}: {error}"
+                ) from error
+    return b"".join(chunks)
+
+
+def _replace_regular_bytes(path: pathlib.Path, payload: bytes) -> None:
+    path = pathlib.Path(path)
+    if not isinstance(payload, bytes):
+        raise protocol.ProtocolError("replacement payload must be bytes")
+    descriptor: int | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.replace-", suffix=".tmp", dir=path.parent
+        )
+        temporary = pathlib.Path(temporary_name)
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("short source replacement write")
+            offset += written
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot replace source file {path}: {error}") from error
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def copy_root_owned_lock(
+    evidence_root: pathlib.Path, lock_name: str, source: pathlib.Path
+) -> pathlib.Path:
+    """Atomically create one immutable root-owned lock copy without overwrite."""
+    if lock_name not in LOCK_PATHS:
+        raise protocol.ProtocolError(f"unknown Phase 2E lock role: {lock_name}")
+    evidence_root = pathlib.Path(evidence_root)
+    destination = evidence_root / LOCK_PATHS[lock_name]
+    payload = _read_regular_bytes(pathlib.Path(source))
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot create lock evidence directory {destination.parent}: {error}"
+        ) from error
+    if destination.exists() or destination.is_symlink():
+        raise protocol.ProtocolError(f"root-owned lock already exists: {destination}")
+
+    descriptor: int | None = None
+    temporary: pathlib.Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.copy-",
+            suffix=".tmp",
+            dir=destination.parent,
+        )
+        temporary = pathlib.Path(temporary_name)
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("short lock write")
+            offset += written
+        os.fsync(descriptor)
+        os.fchmod(descriptor, 0o444)
+        os.close(descriptor)
+        descriptor = None
+        os.link(temporary, destination, follow_symlinks=False)
+        temporary.unlink()
+        directory = os.open(
+            destination.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+        )
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except FileExistsError as error:
+        raise protocol.ProtocolError(
+            f"root-owned lock already exists: {destination}"
+        ) from error
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot create root-owned lock {destination}: {error}"
+        ) from error
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+    if protocol.sha256_file(destination) != sha256_bytes(payload):
+        raise protocol.ProtocolError(f"root-owned lock copy changed: {destination}")
+    return destination
+
+
+def install_root_owned_lock(
+    root_owned_lock: pathlib.Path, worktree: pathlib.Path
+) -> pathlib.Path:
+    """Atomically install exact root-owned lock bytes as worktree Cargo.lock."""
+    payload = _read_regular_bytes(pathlib.Path(root_owned_lock))
+    worktree = pathlib.Path(worktree)
+    destination = worktree / "Cargo.lock"
+    descriptor: int | None = None
+    temporary: pathlib.Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".Cargo.lock.install-", suffix=".tmp", dir=worktree
+        )
+        temporary = pathlib.Path(temporary_name)
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("short Cargo.lock write")
+            offset += written
+        os.fsync(descriptor)
+        os.fchmod(descriptor, 0o444)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(temporary, destination)
+        directory = os.open(worktree, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot install root-owned Cargo.lock in {worktree}: {error}"
+        ) from error
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+    if protocol.sha256_file(destination) != sha256_bytes(payload):
+        raise protocol.ProtocolError(f"installed Cargo.lock changed: {destination}")
+    return destination
+
+
+def validate_ignored_inventory(
+    actual_paths: set[pathlib.Path], allowed_paths: set[pathlib.Path]
+) -> None:
+    """Require the ignored-file inventory to equal its explicit allowlist."""
+    actual = {_validate_relative_path(path) for path in actual_paths}
+    allowed = {_validate_relative_path(path) for path in allowed_paths}
+    if actual != allowed:
+        raise protocol.ProtocolError(
+            f"ignored inventory mismatch: expected {sorted(map(str, allowed))}, "
+            f"got {sorted(map(str, actual))}"
+        )
+
+
+def validate_filesystem_inventory(
+    root: pathlib.Path,
+    allowed_ignored: set[pathlib.Path],
+    *,
+    tracked_paths: set[pathlib.Path] | None = None,
+) -> None:
+    """Reject every worktree path outside Git, tracked files, and root Cargo.lock."""
+    root = pathlib.Path(root)
+    try:
+        root_metadata = root.lstat()
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot inspect worktree {root}: {error}") from error
+    if not stat.S_ISDIR(root_metadata.st_mode):
+        raise protocol.ProtocolError(f"worktree is not a regular directory: {root}")
+
+    ignored = {_validate_relative_path(path) for path in allowed_ignored}
+    tracked = {
+        _validate_relative_path(path) for path in (tracked_paths or set())
+    }
+    allowed_files = ignored | tracked | {pathlib.Path(".git")}
+    allowed_directories: set[pathlib.Path] = set()
+    for path in allowed_files:
+        allowed_directories.update(path.parents)
+    allowed_directories.discard(pathlib.Path("."))
+
+    for directory, directory_names, file_names in os.walk(root, followlinks=False):
+        current = pathlib.Path(directory)
+        for name in [*directory_names, *file_names]:
+            path = current / name
+            relative = path.relative_to(root)
+            if relative == pathlib.Path(".git") or relative.parts[:1] == (".git",):
+                continue
+            if path.is_dir() and not path.is_symlink():
+                if relative in allowed_directories:
+                    continue
+            elif relative in allowed_files:
+                if relative in ignored:
+                    metadata = path.lstat()
+                    if not stat.S_ISREG(metadata.st_mode):
+                        raise protocol.ProtocolError(
+                            f"allowed ignored path is not a regular file: {relative}"
+                        )
+                continue
+            raise protocol.ProtocolError(f"unexpected worktree path: {relative}")
+
+
+def validate_controlled_cargo_home(cargo_home: pathlib.Path) -> None:
+    """Accept pre-seeded Cargo caches but reject config and credentials."""
+    cargo_home = pathlib.Path(cargo_home)
+    try:
+        metadata = cargo_home.lstat()
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot inspect CARGO_HOME {cargo_home}: {error}") from error
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise protocol.ProtocolError(f"CARGO_HOME is not a regular directory: {cargo_home}")
+    for name in ("config", "config.toml", "credentials", "credentials.toml"):
+        path = cargo_home / name
+        if path.exists() or path.is_symlink():
+            raise protocol.ProtocolError(f"controlled CARGO_HOME contains forbidden {name}")
+
+
+def feature_query_command(
+    target: str,
+    *,
+    package: str | None,
+    requested_features: tuple[str, ...],
+    no_default_features: bool,
+    manifest_path: pathlib.Path | None = None,
+) -> tuple[str, ...]:
+    """Construct a build-matching Cargo feature query."""
+    if not isinstance(target, str) or not target:
+        raise protocol.ProtocolError("feature-query target must be a nonempty string")
+    if (package is None) == (manifest_path is None):
+        raise protocol.ProtocolError(
+            "feature query requires exactly one package or manifest path"
+        )
+    if not requested_features or any(
+        not isinstance(feature, str) or not feature for feature in requested_features
+    ):
+        raise protocol.ProtocolError("requested feature tuple must be nonempty strings")
+    argv = ["cargo", "tree", "--locked", "--target", target]
+    if package is not None:
+        argv.extend(("-p", package))
+    else:
+        if manifest_path is None:
+            raise AssertionError("manifest path disappeared after XOR validation")
+        manifest = pathlib.Path(manifest_path)
+        if not manifest.is_absolute():
+            raise protocol.ProtocolError("feature-query manifest path must be absolute")
+        argv.extend(("--manifest-path", str(manifest)))
+    if no_default_features:
+        argv.append("--no-default-features")
+    argv.extend(("--features", ",".join(requested_features), "-e", "features"))
+    return tuple(argv)
+
+
+def timing_feature_command(target: str) -> tuple[str, ...]:
+    """Return the exact timing-binary feature query required by protocol v2."""
+    return feature_query_command(
+        target,
+        package="tenferro-ad",
+        requested_features=REQUESTED_FEATURES,
+        no_default_features=True,
+    )
+
+
+def validate_feature_query(
+    argv: tuple[str, ...],
+    *,
+    target: str,
+    package: str | None,
+    requested_features: tuple[str, ...],
+    no_default_features: bool,
+    manifest_path: pathlib.Path | None = None,
+) -> None:
+    """Reject workspace-default or otherwise non-build-matching queries."""
+    expected = feature_query_command(
+        target,
+        package=package,
+        requested_features=requested_features,
+        no_default_features=no_default_features,
+        manifest_path=manifest_path,
+    )
+    if tuple(argv) != expected:
+        raise protocol.ProtocolError(
+            f"feature query does not match build inputs: expected {expected!r}"
+        )
+
+
+def _absolute_tool_command(
+    template: tuple[str, ...], tool: ResolvedTool
+) -> tuple[str, ...]:
+    if not template or template[0] != tool.name:
+        raise protocol.ProtocolError(
+            f"command template does not belong to resolved {tool.name}"
+        )
+    return (str(tool.path), *template[1:])
+
+
+def build_command_plan(
+    target: str, cargo: ResolvedTool
+) -> tuple[CommandSpec, ...]:
+    """Return absolute metadata, feature, and bench-build commands in fixed order."""
+    if cargo.name != "cargo":
+        raise protocol.ProtocolError("build command plan requires the resolved Cargo tool")
+    return (
+        CommandSpec(
+            "metadata",
+            _absolute_tool_command(METADATA_COMMAND, cargo),
+            QUERY_DEADLINE_SECONDS,
+        ),
+        CommandSpec(
+            "features",
+            _absolute_tool_command(timing_feature_command(target), cargo),
+            QUERY_DEADLINE_SECONDS,
+        ),
+        CommandSpec(
+            "build",
+            _absolute_tool_command(BENCH_COMMAND, cargo),
+            BUILD_DEADLINE_SECONDS,
+        ),
+    )
+
+
+def _signal_group(
+    pid: int, requested_signal: signal.Signals, signal_process_group: Callable[[int, int], None]
+) -> None:
+    try:
+        signal_process_group(pid, requested_signal)
+    except ProcessLookupError:
+        return
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot signal process group {pid} with {requested_signal.name}: {error}"
+        ) from error
+
+
+def _timeout_text(value: str | bytes | None, fallback: str) -> str:
+    if value is None:
+        return fallback
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _timeout_streams(
+    error: subprocess.TimeoutExpired, stdout: str, stderr: str
+) -> tuple[str, str]:
+    return (
+        _timeout_text(error.output, stdout),
+        _timeout_text(error.stderr, stderr),
+    )
+
+
+def _try_signal_group(
+    pid: int,
+    requested_signal: signal.Signals,
+    signal_process_group: Callable[[int, int], None],
+) -> bool:
+    try:
+        _signal_group(pid, requested_signal, signal_process_group)
+    except protocol.ProtocolError:
+        return False
+    return True
+
+
+def _best_effort_signal_group(
+    pid: int,
+    requested_signal: signal.Signals,
+    signal_process_group: Callable[[int, int], None],
+) -> bool:
+    try:
+        return _try_signal_group(pid, requested_signal, signal_process_group)
+    except BaseException:
+        return False
+
+
+def _force_kill_and_bounded_drain(
+    process: Any,
+    signal_process_group: Callable[[int, int], None],
+) -> None:
+    """Best-effort final cleanup that cannot replace an active exception."""
+    _best_effort_signal_group(
+        process.pid, signal.SIGKILL, signal_process_group
+    )
+    try:
+        process.communicate(timeout=TERMINATION_GRACE_SECONDS)
+    except BaseException:
+        pass
+
+
+def _finish_timed_out_command(
+    argv: tuple[str, ...],
+    *,
+    cwd: pathlib.Path,
+    actual_environment: Mapping[str, str],
+    deadline_seconds: int,
+    process: Any,
+    timeout: subprocess.TimeoutExpired,
+    signal_process_group: Callable[[int, int], None],
+    executable_identity: ResolvedTool | None,
+) -> CommandResult:
+    """Bound and record normal timeout cleanup; cancellation is guarded outside."""
+    stdout, stderr = _timeout_streams(timeout, "", "")
+    cleanup_failures: list[str] = []
+    terminated = _try_signal_group(
+        process.pid, signal.SIGTERM, signal_process_group
+    )
+    killed = False
+    if not terminated:
+        cleanup_failures.append("term-signal-failed")
+        killed = _try_signal_group(
+            process.pid, signal.SIGKILL, signal_process_group
+        )
+        if not killed:
+            cleanup_failures.append("kill-signal-failed")
+        try:
+            stdout, stderr = process.communicate(
+                timeout=TERMINATION_GRACE_SECONDS
+            )
+        except subprocess.TimeoutExpired as drain_timeout:
+            stdout, stderr = _timeout_streams(
+                drain_timeout, stdout, stderr
+            )
+            cleanup_failures.append("post-kill-drain-timeout")
+        except Exception:
+            cleanup_failures.append("post-kill-drain-failed")
+    else:
+        try:
+            stdout, stderr = process.communicate(
+                timeout=TERMINATION_GRACE_SECONDS
+            )
+        except subprocess.TimeoutExpired as grace_timeout:
+            stdout, stderr = _timeout_streams(
+                grace_timeout, stdout, stderr
+            )
+        except Exception:
+            cleanup_failures.append("term-drain-failed")
+        # communicate() only observes the leader and its pipes; descendants in
+        # the process group may still be alive after it returns successfully.
+        killed = _try_signal_group(
+            process.pid, signal.SIGKILL, signal_process_group
+        )
+        if not killed:
+            cleanup_failures.append("kill-signal-failed")
+        try:
+            stdout, stderr = process.communicate(
+                timeout=TERMINATION_GRACE_SECONDS
+            )
+        except subprocess.TimeoutExpired as drain_timeout:
+            stdout, stderr = _timeout_streams(
+                drain_timeout, stdout, stderr
+            )
+            cleanup_failures.append("post-kill-drain-timeout")
+        except Exception:
+            cleanup_failures.append("post-kill-drain-failed")
+    if executable_identity is not None:
+        validate_resolved_tool(executable_identity)
+    reason = "deadline-exceeded"
+    if cleanup_failures:
+        reason += ":" + "+".join(cleanup_failures)
+    return CommandResult(
+        argv=tuple(argv),
+        cwd=str(pathlib.Path(cwd)),
+        environment=dict(actual_environment),
+        deadline_seconds=deadline_seconds,
+        returncode=getattr(process, "returncode", None),
+        stdout=stdout,
+        stderr=stderr,
+        validity_state="INCONCLUSIVE",
+        failure_reason=reason,
+        terminated=terminated,
+        killed=killed,
+    )
+
+
+def run_bounded_command(
+    argv: tuple[str, ...],
+    *,
+    cwd: pathlib.Path,
+    environment: Mapping[str, str],
+    deadline_seconds: int,
+    process_factory: Callable[..., Any] = subprocess.Popen,
+    signal_process_group: Callable[[int, int], None] = os.killpg,
+    executable_identity: ResolvedTool | None = None,
+) -> CommandResult:
+    """Run one child group and convert timeout/nonzero outcomes to INCONCLUSIVE."""
+    if not argv or any(not isinstance(part, str) or not part for part in argv):
+        raise protocol.ProtocolError("command argv must contain nonempty strings")
+    if type(deadline_seconds) is not int or deadline_seconds <= 0:
+        raise protocol.ProtocolError("command deadline must be a positive integer")
+    actual_environment = dict(sorted(environment.items()))
+    if any(
+        type(key) is not str or type(value) is not str
+        for key, value in actual_environment.items()
+    ):
+        raise protocol.ProtocolError("command environment must contain only strings")
+    if executable_identity is not None:
+        validate_resolved_tool(executable_identity)
+        if argv[0] != str(executable_identity.path):
+            raise protocol.ProtocolError(
+                "launched argv does not name the resolved executable"
+            )
+
+    try:
+        process = process_factory(
+            list(argv),
+            cwd=str(pathlib.Path(cwd)),
+            env=actual_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot launch command {argv!r}: {error}") from error
+
+    try:
+        stdout, stderr = process.communicate(timeout=deadline_seconds)
+    except subprocess.TimeoutExpired as timeout:
+        try:
+            return _finish_timed_out_command(
+                argv,
+                cwd=cwd,
+                actual_environment=actual_environment,
+                deadline_seconds=deadline_seconds,
+                process=process,
+                timeout=timeout,
+                signal_process_group=signal_process_group,
+                executable_identity=executable_identity,
+            )
+        except BaseException:
+            _force_kill_and_bounded_drain(process, signal_process_group)
+            raise
+    except BaseException:
+        term_succeeded = _best_effort_signal_group(
+            process.pid, signal.SIGTERM, signal_process_group
+        )
+        if term_succeeded:
+            try:
+                process.communicate(timeout=TERMINATION_GRACE_SECONDS)
+            except BaseException:
+                pass
+        _force_kill_and_bounded_drain(process, signal_process_group)
+        raise
+
+    if executable_identity is not None:
+        validate_resolved_tool(executable_identity)
+    returncode = getattr(process, "returncode", None)
+    complete = returncode == 0
+    return CommandResult(
+        argv=tuple(argv),
+        cwd=str(pathlib.Path(cwd)),
+        environment=actual_environment,
+        deadline_seconds=deadline_seconds,
+        returncode=returncode,
+        stdout=stdout,
+        stderr=stderr,
+        validity_state="COMPLETE" if complete else "INCONCLUSIVE",
+        failure_reason=None if complete else "nonzero-exit",
+        terminated=False,
+        killed=False,
+    )
+
+
+def _toolchain_manifest(
+    tools: ResolvedToolchain, cargo_version: str, rustc_version: str
+) -> dict[str, Any]:
+    if not cargo_version or not rustc_version:
+        raise protocol.ProtocolError("toolchain probe returned empty version output")
+    return {
+        "git": {
+            "path": str(tools.git.path),
+            "sha256": tools.git.sha256,
+        },
+        "cargo": {
+            "path": str(tools.cargo.path),
+            "sha256": tools.cargo.sha256,
+            "version": cargo_version,
+        },
+        "rustc": {
+            "path": str(tools.rustc.path),
+            "sha256": tools.rustc.sha256,
+            "version": rustc_version,
+        },
+    }
+
+
+def _rustc_host(stdout: str, context: str) -> str:
+    match = re.search(r"^host:\s*(\S+)\s*$", stdout, re.MULTILINE)
+    if match is None:
+        raise protocol.ProtocolError(f"{context} rustc probe did not report host target")
+    return match.group(1)
+
+
+def build_all(
+    config: BuildConfig,
+) -> BuildSetResult:
+    """Build with authoritative dependencies and reopen persisted evidence."""
+    _validate_build_config(config)
+    tools = resolve_toolchain(config.path)
+    validate_resolved_toolchain(tools)
+    validate_controlled_cargo_home(config.cargo_home)
+    source_control = GitSourceControl(
+        config.repository,
+        path=tools.path,
+        home=config.home,
+        tools=tools,
+    )
+    result = _build_all_with_dependencies(
+        config,
+        source_control=source_control,
+        command_runner=run_bounded_command,
+    )
+    if result.validity_state != "COMPLETE":
+        return result
+    manifests = validate_build_set(config)
+    return BuildSetResult("COMPLETE", manifests, None)
+
+
+def _build_all_with_dependencies(
+    config: BuildConfig,
+    *,
+    source_control: Any,
+    command_runner: Callable[..., CommandResult],
+) -> BuildSetResult:
+    """Test seam for one build after dependencies establish their authority."""
+    _validate_build_config(config)
+    tools = resolve_toolchain(config.path)
+    validate_resolved_toolchain(tools)
+    scratch_root = prepare_fresh_worktree_destination(config.scratch_root)
+    protocol.prepare_empty_root(config.home)
+    validate_controlled_cargo_home(config.cargo_home)
+
+    specs = worktree_specs(scratch_root, config.candidate_commit)
+    source_tools = getattr(source_control, "tools", None)
+    if not isinstance(source_tools, ResolvedToolchain):
+        raise protocol.ProtocolError(
+            "source-control context has no resolved toolchain identity"
+        )
+    if source_tools != tools:
+        raise protocol.ProtocolError(
+            "source-control executable identity differs from build toolchain"
+        )
+    for spec in specs:
+        prepare_fresh_worktree_destination(spec.path)
+        source_control.create_worktree(spec)
+
+    heads = {"candidate": config.candidate_commit}
+    for spec in specs[:2]:
+        heads[spec.role] = source_control.materialize_baseline(spec)
+        _validate_commit(heads[spec.role], f"{spec.role} measurement commit")
+
+    target_dirs = {
+        spec.role: scratch_root / "targets" / spec.role for spec in specs
+    }
+    for target_dir in target_dirs.values():
+        try:
+            target_dir.mkdir(parents=True)
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"cannot create external Cargo target directory {target_dir}: {error}"
+            ) from error
+
+    role_toolchains: dict[str, dict[str, Any]] = {}
+    role_targets: dict[str, str] = {}
+    for spec in specs:
+        environment = protocol.cargo_environment(
+            path=tools.path,
+            home=str(config.home),
+            cargo_home=str(config.cargo_home),
+            target_dir=str(target_dirs[spec.role]),
+        )
+        rustc = _run_build_command(
+            command_runner,
+            (str(tools.rustc.path), "--version", "--verbose"),
+            cwd=spec.path,
+            environment=environment,
+            deadline_seconds=QUERY_DEADLINE_SECONDS,
+            executable_identity=tools.rustc,
+        )
+        if rustc.validity_state != "COMPLETE":
+            return BuildSetResult("INCONCLUSIVE", {}, rustc)
+        cargo = _run_build_command(
+            command_runner,
+            (str(tools.cargo.path), "--version", "--verbose"),
+            cwd=spec.path,
+            environment=environment,
+            deadline_seconds=QUERY_DEADLINE_SECONDS,
+            executable_identity=tools.cargo,
+        )
+        if cargo.validity_state != "COMPLETE":
+            return BuildSetResult("INCONCLUSIVE", {}, cargo)
+        host_target = _rustc_host(rustc.stdout, f"role-local {spec.role}")
+        role_targets[spec.role] = host_target
+        role_toolchains[spec.role] = _toolchain_manifest(
+            tools, cargo.stdout.strip(), rustc.stdout.strip()
+        )
+
+    reference_role = specs[0].role
+    for spec in specs[1:]:
+        if role_targets[spec.role] != role_targets[reference_role]:
+            raise protocol.ProtocolError(
+                f"role-local host target differs: {reference_role} vs {spec.role}"
+            )
+        if role_toolchains[spec.role] != role_toolchains[reference_role]:
+            raise protocol.ProtocolError(
+                f"role-local toolchain differs: {reference_role} vs {spec.role}"
+            )
+    host_target = role_targets[reference_role]
+
+    specs_by_role = {spec.role: spec for spec in specs}
+    lock_generators = {
+        "direct": specs_by_role["direct-current-main-baseline"],
+        "common": specs_by_role["candidate"],
+    }
+    generated_locks: dict[str, pathlib.Path] = {}
+    for lock_name, spec in lock_generators.items():
+        environment = protocol.cargo_environment(
+            path=tools.path,
+            home=str(config.home),
+            cargo_home=str(config.cargo_home),
+            target_dir=str(target_dirs[spec.role]),
+        )
+        outcome = _run_build_command(
+            command_runner,
+            _absolute_tool_command(LOCK_COMMAND, tools.cargo),
+            cwd=spec.path,
+            environment=environment,
+            deadline_seconds=QUERY_DEADLINE_SECONDS,
+            executable_identity=tools.cargo,
+        )
+        if outcome.validity_state != "COMPLETE":
+            return BuildSetResult("INCONCLUSIVE", {}, outcome)
+        generated = spec.path / "Cargo.lock"
+        protocol.sha256_file(generated)
+        generated_locks[lock_name] = copy_root_owned_lock(
+            config.evidence_root, lock_name, generated
+        )
+
+    role_locks = {
+        "direct-current-main-baseline": generated_locks["direct"],
+        "common-lock-normalized-baseline": generated_locks["common"],
+        "candidate": generated_locks["common"],
+    }
+    for spec in specs:
+        install_root_owned_lock(role_locks[spec.role], spec.path)
+
+    manifests: dict[str, dict[str, Any]] = {}
+    for spec in specs:
+        owned_lock = role_locks[spec.role]
+        before = source_control.validate_worktree(
+            spec.path, heads[spec.role], owned_lock
+        )
+        _validate_worktree_proof(before, heads[spec.role])
+        environment = protocol.cargo_environment(
+            path=tools.path,
+            home=str(config.home),
+            cargo_home=str(config.cargo_home),
+            target_dir=str(target_dirs[spec.role]),
+        )
+        outcomes: dict[str, CommandResult] = {}
+        command_plan = build_command_plan(host_target, tools.cargo)
+        for command in command_plan:
+            outcome = _run_build_command(
+                command_runner,
+                command.argv,
+                cwd=spec.path,
+                environment=environment,
+                deadline_seconds=command.deadline_seconds,
+                executable_identity=tools.cargo,
+            )
+            if outcome.validity_state != "COMPLETE":
+                return BuildSetResult("INCONCLUSIVE", {}, outcome)
+            outcomes[command.name] = outcome
+        try:
+            metadata = json.loads(outcomes["metadata"].stdout)
+        except (TypeError, ValueError) as error:
+            raise protocol.ProtocolError("cargo metadata returned malformed JSON") from error
+        if type(metadata) is not dict or type(metadata.get("packages")) is not list:
+            raise protocol.ProtocolError("cargo metadata output has an invalid schema")
+        if not outcomes["features"].stdout.strip():
+            raise protocol.ProtocolError("Cargo feature graph is empty")
+        executable = parse_bench_executable(
+            outcomes["build"].stdout + "\n" + outcomes["build"].stderr,
+            target_dirs[spec.role],
+        )
+        after = source_control.validate_worktree(
+            spec.path, heads[spec.role], owned_lock
+        )
+        _validate_worktree_proof(after, heads[spec.role])
+        if before != after:
+            raise protocol.ProtocolError(
+                f"worktree provenance changed during build: {spec.role}"
+            )
+        config_chain = [dict(item) for item in before.cargo_config_chain]
+        manifest = {
+            "protocol_version": protocol.PROTOCOL_VERSION,
+            "toolchain": role_toolchains[spec.role],
+            "target": role_targets[spec.role],
+            "profile": "bench",
+            "requested_features": list(REQUESTED_FEATURES),
+            "provider": "Faer",
+            "benchmark_sha256": before.benchmark_sha256,
+            "benchmark_stanza_sha256": before.benchmark_stanza_sha256,
+            "command_template": list(BENCH_COMMAND),
+            "config_chain_sha256": protocol.sha256_json(config_chain),
+            "role": spec.role,
+            "head": heads[spec.role],
+            "tracked_tree_sha256": before.tracked_tree_sha256,
+            "resolved_features_sha256": sha256_bytes(
+                outcomes["features"].stdout.encode("utf-8")
+            ),
+            "lock_sha256": protocol.sha256_file(owned_lock),
+            "worktree": str(spec.path.resolve()),
+            "target_dir": str(target_dirs[spec.role].resolve()),
+            "executable": str(executable),
+            "executable_sha256": protocol.sha256_file(executable),
+            "validity_state": "COMPLETE",
+            "source_delta": list(_ROLE_SOURCE_DELTAS[spec.role]),
+            "commands": [
+                command.to_manifest() for command in command_plan
+            ],
+            "environment": environment,
+            "cargo_config_chain": config_chain,
+        }
+        validate_build_manifest(manifest)
+        manifests[spec.role] = manifest
+
+    validate_pair(
+        "direct-current-main",
+        manifests["direct-current-main-baseline"],
+        manifests["candidate"],
+    )
+    validate_pair(
+        "common-lock-normalized",
+        manifests["common-lock-normalized-baseline"],
+        manifests["candidate"],
+    )
+    for role, manifest in manifests.items():
+        destination = config.evidence_root / BUILD_MANIFEST_PATHS[role]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        protocol.atomic_write_json(destination, manifest)
+        try:
+            destination.chmod(0o444)
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"cannot make build manifest read-only {destination}: {error}"
+            ) from error
+    return BuildSetResult("COMPLETE", manifests, None)
+
+
+def _run_build_command(
+    command_runner: Callable[..., CommandResult],
+    argv: tuple[str, ...],
+    *,
+    cwd: pathlib.Path,
+    environment: Mapping[str, str],
+    deadline_seconds: int,
+    executable_identity: ResolvedTool,
+) -> CommandResult:
+    validate_resolved_tool(executable_identity)
+    if not argv or argv[0] != str(executable_identity.path):
+        raise protocol.ProtocolError(
+            "build command does not use its resolved absolute executable"
+        )
+    outcome = command_runner(
+        argv,
+        cwd=pathlib.Path(cwd),
+        environment=dict(environment),
+        deadline_seconds=deadline_seconds,
+    )
+    validate_resolved_tool(executable_identity)
+    if not isinstance(outcome, CommandResult):
+        raise protocol.ProtocolError("command runner returned an invalid result")
+    if outcome.argv != tuple(argv):
+        raise protocol.ProtocolError("command result argv does not match launched argv")
+    if pathlib.Path(outcome.cwd) != pathlib.Path(cwd):
+        raise protocol.ProtocolError("command result cwd does not match launched cwd")
+    if outcome.environment != dict(sorted(environment.items())):
+        raise protocol.ProtocolError("command result environment does not match launch")
+    if outcome.deadline_seconds != deadline_seconds:
+        raise protocol.ProtocolError("command result deadline does not match launch")
+    if outcome.validity_state not in ("COMPLETE", "INCONCLUSIVE"):
+        raise protocol.ProtocolError("command result validity state is invalid")
+    return outcome
+
+
+def _validate_worktree_proof(proof: WorktreeProof, expected_head: str) -> None:
+    if not isinstance(proof, WorktreeProof):
+        raise protocol.ProtocolError("source-control adapter returned invalid proof")
+    if proof.head != expected_head:
+        raise protocol.ProtocolError("worktree proof HEAD mismatch")
+    _validate_commit(proof.head, "worktree proof HEAD")
+    for name, value in (
+        ("tracked tree", proof.tracked_tree_sha256),
+        ("benchmark", proof.benchmark_sha256),
+        ("benchmark stanza", proof.benchmark_stanza_sha256),
+    ):
+        _validate_sha256(value, name)
+    if any(type(item) is not dict for item in proof.cargo_config_chain):
+        raise protocol.ProtocolError("Cargo config chain entries must be dictionaries")
+
+
+def _validate_build_config(config: BuildConfig) -> None:
+    if not isinstance(config, BuildConfig):
+        raise protocol.ProtocolError("build config has an invalid type")
+    _validate_commit(config.candidate_commit, "candidate commit")
+    protocol.cargo_environment(
+        path=config.path,
+        home=str(config.home),
+        cargo_home=str(config.cargo_home),
+        target_dir=str(config.scratch_root / "validation-target"),
+    )
+    for name in ("repository", "evidence_root"):
+        path = pathlib.Path(getattr(config, name))
+        try:
+            metadata = path.lstat()
+        except OSError as error:
+            raise protocol.ProtocolError(f"cannot inspect {name} {path}: {error}") from error
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise protocol.ProtocolError(f"{name} is not a regular directory: {path}")
+        if not path.is_absolute():
+            raise protocol.ProtocolError(f"{name} must be absolute: {path}")
+    for name in ("scratch_root", "home", "cargo_home"):
+        if not pathlib.Path(getattr(config, name)).is_absolute():
+            raise protocol.ProtocolError(f"{name} must be absolute")
+    resolved = {
+        name: pathlib.Path(getattr(config, name)).resolve()
+        for name in ("repository", "evidence_root", "scratch_root", "home", "cargo_home")
+    }
+    for outer_name, outer in resolved.items():
+        for inner_name, inner in resolved.items():
+            if outer_name >= inner_name:
+                continue
+            pair = {outer_name, inner_name}
+            if pair == {"repository", "evidence_root"}:
+                repository = resolved["repository"]
+                evidence_root = resolved["evidence_root"]
+                if repository in evidence_root.parents:
+                    continue
+            if outer == inner or outer in inner.parents or inner in outer.parents:
+                raise protocol.ProtocolError(
+                    f"build roots must be disjoint: {outer_name} and {inner_name}"
+                )
+
+
+def parse_bench_executable(output: str, target_dir: pathlib.Path) -> pathlib.Path:
+    """Parse exactly one Cargo bench executable and bind it below target dir."""
+    if not isinstance(output, str):
+        raise protocol.ProtocolError("Cargo build output must be text")
+    candidates: list[pathlib.Path] = []
+    pattern = re.compile(r"^Executable\s+.+\s+\((.+)\)$")
+    for line in output.splitlines():
+        match = pattern.match(line.strip())
+        if match is not None:
+            candidates.append(pathlib.Path(match.group(1)))
+    if len(candidates) != 1:
+        raise protocol.ProtocolError(
+            f"expected exactly one Cargo bench executable, found {len(candidates)}"
+        )
+    target = pathlib.Path(os.path.abspath(target_dir))
+    try:
+        target_metadata = target.lstat()
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot inspect CARGO_TARGET_DIR {target}: {error}"
+        ) from error
+    if not stat.S_ISDIR(target_metadata.st_mode):
+        raise protocol.ProtocolError(f"CARGO_TARGET_DIR is not a regular directory: {target}")
+    executable = candidates[0]
+    if not executable.is_absolute():
+        executable = target / executable
+    executable = pathlib.Path(os.path.abspath(executable))
+    try:
+        executable.relative_to(target)
+    except ValueError as error:
+        raise protocol.ProtocolError(
+            f"bench executable is outside CARGO_TARGET_DIR: {executable}"
+        ) from error
+    protocol.sha256_file(executable)
+    return executable
+
+
+def _toolchain_from_manifest(payload: Any) -> ResolvedToolchain:
+    if type(payload) is not dict or set(payload) != {"git", "cargo", "rustc"}:
+        raise protocol.ProtocolError("build manifest toolchain schema mismatch")
+    tools: dict[str, ResolvedTool] = {}
+    for name in ("git", "cargo", "rustc"):
+        item = payload[name]
+        expected_fields = {"path", "sha256"}
+        if name != "git":
+            expected_fields.add("version")
+        if type(item) is not dict or set(item) != expected_fields:
+            raise protocol.ProtocolError(
+                f"build manifest {name} tool schema mismatch"
+            )
+        if name != "git" and (
+            type(item["version"]) is not str or not item["version"]
+        ):
+            raise protocol.ProtocolError(
+                f"build manifest {name} version must be nonempty"
+            )
+        if type(item["path"]) is not str or not item["path"]:
+            raise protocol.ProtocolError(
+                f"build manifest {name} path must be nonempty text"
+            )
+        _validate_sha256(item["sha256"], f"{name} executable")
+        tool = ResolvedTool(
+            name=name,
+            path=pathlib.Path(item["path"]),
+            sha256=item["sha256"],
+        )
+        validate_resolved_tool(tool)
+        tools[name] = tool
+    directories: list[pathlib.Path] = []
+    for name in ("git", "cargo", "rustc"):
+        directory = tools[name].path.parent
+        if directory not in directories:
+            directories.append(directory)
+    return ResolvedToolchain(
+        path=os.pathsep.join(map(str, directories)),
+        git=tools["git"],
+        cargo=tools["cargo"],
+        rustc=tools["rustc"],
+    )
+
+
+def validate_build_manifest(manifest: Mapping[str, Any]) -> None:
+    """Validate one strict COMPLETE build manifest and re-hash its executable."""
+    schema: dict[str, type | tuple[type, ...]] = {
+        **{name: object for name in INVARIANT_FIELDS | ROLE_FIELDS},
+        **{name: object for name in AUDIT_FIELDS},
+    }
+    schema.update(
+        {
+            "protocol_version": int,
+            "toolchain": dict,
+            "target": str,
+            "profile": str,
+            "requested_features": list,
+            "provider": str,
+            "benchmark_sha256": str,
+            "benchmark_stanza_sha256": str,
+            "command_template": list,
+            "config_chain_sha256": str,
+            "role": str,
+            "head": str,
+            "tracked_tree_sha256": str,
+            "resolved_features_sha256": str,
+            "lock_sha256": str,
+            "worktree": str,
+            "target_dir": str,
+            "executable": str,
+            "executable_sha256": str,
+            "validity_state": str,
+            "source_delta": list,
+            "commands": list,
+            "environment": dict,
+            "cargo_config_chain": list,
+        }
+    )
+    protocol.validate_manifest_fields(manifest, schema, context="build manifest")
+    if manifest["protocol_version"] != protocol.PROTOCOL_VERSION:
+        raise protocol.ProtocolError("build manifest protocol version mismatch")
+    role = manifest["role"]
+    if role not in _BUILD_ROLES:
+        raise protocol.ProtocolError(f"invalid build role: {role}")
+    if manifest["validity_state"] != "COMPLETE":
+        raise protocol.ProtocolError("build manifest is not validity COMPLETE")
+    if manifest["profile"] != "bench":
+        raise protocol.ProtocolError("build manifest profile must be bench")
+    if manifest["requested_features"] != list(REQUESTED_FEATURES):
+        raise protocol.ProtocolError("build manifest requested feature tuple mismatch")
+    if manifest["provider"] != "Faer":
+        raise protocol.ProtocolError("build manifest provider must be Faer")
+    if manifest["command_template"] != list(BENCH_COMMAND):
+        raise protocol.ProtocolError("build manifest command template mismatch")
+    if manifest["source_delta"] != list(_ROLE_SOURCE_DELTAS[role]):
+        raise protocol.ProtocolError("build manifest source delta mismatch")
+    _validate_commit(manifest["head"], "build HEAD")
+    for field in (
+        "tracked_tree_sha256",
+        "resolved_features_sha256",
+        "lock_sha256",
+        "benchmark_sha256",
+        "benchmark_stanza_sha256",
+        "config_chain_sha256",
+        "executable_sha256",
+    ):
+        _validate_sha256(manifest[field], field)
+
+    tools = _toolchain_from_manifest(manifest["toolchain"])
+
+    expected_commands = [
+        command.to_manifest()
+        for command in build_command_plan(manifest["target"], tools.cargo)
+    ]
+    if manifest["commands"] != expected_commands:
+        raise protocol.ProtocolError("build manifest actual command sequence mismatch")
+    if protocol.sha256_json(manifest["cargo_config_chain"]) != manifest["config_chain_sha256"]:
+        raise protocol.ProtocolError("Cargo config chain digest mismatch")
+
+    environment = manifest["environment"]
+    target_dir = pathlib.Path(manifest["target_dir"])
+    worktree = pathlib.Path(manifest["worktree"])
+    executable = pathlib.Path(manifest["executable"])
+    if not target_dir.is_absolute() or not worktree.is_absolute() or not executable.is_absolute():
+        raise protocol.ProtocolError("build manifest paths must be absolute")
+    expected_environment = protocol.cargo_environment(
+        path=environment.get("PATH"),
+        home=environment.get("HOME"),
+        cargo_home=environment.get("CARGO_HOME"),
+        target_dir=str(target_dir),
+    )
+    if environment != expected_environment:
+        raise protocol.ProtocolError("build manifest environment is not sealed")
+    path_components = environment["PATH"].split(os.pathsep)
+    tool_directories = {
+        str(tool.path.parent) for tool in (tools.git, tools.cargo, tools.rustc)
+    }
+    if set(path_components) != tool_directories or len(path_components) != len(
+        tool_directories
+    ):
+        raise protocol.ProtocolError(
+            "build manifest PATH is not the minimal resolved tool path"
+        )
+    try:
+        executable.resolve().relative_to(target_dir.resolve())
+    except ValueError as error:
+        raise protocol.ProtocolError("build executable is outside target directory") from error
+    if protocol.sha256_file(executable) != manifest["executable_sha256"]:
+        raise protocol.ProtocolError("build executable digest mismatch")
+
+
+def validate_pair(
+    comparison_kind: str,
+    baseline: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> None:
+    """Validate invariant equality and only predeclared role differences."""
+    validate_build_manifest(baseline)
+    validate_build_manifest(candidate)
+    expected_baseline_role = {
+        "direct-current-main": "direct-current-main-baseline",
+        "common-lock-normalized": "common-lock-normalized-baseline",
+    }.get(comparison_kind)
+    if expected_baseline_role is None:
+        raise protocol.ProtocolError(f"invalid comparison kind: {comparison_kind}")
+    if baseline["role"] != expected_baseline_role or candidate["role"] != "candidate":
+        raise protocol.ProtocolError("build manifest roles do not match comparison kind")
+    for field in INVARIANT_FIELDS:
+        if baseline[field] != candidate[field]:
+            raise protocol.ProtocolError(f"build invariant field differs: {field}")
+    if baseline["commands"] != candidate["commands"]:
+        raise protocol.ProtocolError("actual Cargo command sequence differs by role")
+    if baseline["cargo_config_chain"] != candidate["cargo_config_chain"]:
+        raise protocol.ProtocolError("Cargo config chain differs by role")
+    if _normalized_environment(baseline) != _normalized_environment(candidate):
+        raise protocol.ProtocolError("sealed Cargo environment differs beyond target path")
+    if comparison_kind == "common-lock-normalized":
+        if baseline["lock_sha256"] != candidate["lock_sha256"]:
+            raise protocol.ProtocolError("normalized pair does not share the common lock")
+    elif baseline["lock_sha256"] == candidate["lock_sha256"]:
+        raise protocol.ProtocolError("direct comparison unexpectedly shares one lock")
+
+
+def validate_build_set(
+    config: BuildConfig,
+) -> dict[str, dict[str, Any]]:
+    """Reopen persisted builds using the authoritative Git source validator."""
+    _validate_build_config(config)
+    tools = resolve_toolchain(config.path)
+    validate_resolved_toolchain(tools)
+    validate_controlled_cargo_home(config.cargo_home)
+    source_control = GitSourceControl(
+        config.repository,
+        path=tools.path,
+        home=config.home,
+        tools=tools,
+    )
+    return _validate_build_set_with_source_control(
+        config,
+        source_control,
+        command_runner=run_bounded_command,
+    )
+
+
+def _validate_build_set_with_source_control(
+    config: BuildConfig,
+    source_control: Any,
+    *,
+    command_runner: Callable[..., CommandResult],
+) -> dict[str, dict[str, Any]]:
+    """Test seam for validation after the caller establishes source authority."""
+    _validate_build_config(config)
+    tools = resolve_toolchain(config.path)
+    validate_resolved_toolchain(tools)
+    validate_controlled_cargo_home(config.cargo_home)
+    source_tools = getattr(source_control, "tools", None)
+    if not isinstance(source_tools, ResolvedToolchain):
+        raise protocol.ProtocolError(
+            "source-control context has no resolved toolchain identity"
+        )
+    if source_tools != tools:
+        raise protocol.ProtocolError(
+            "source-control executable identity differs from validation toolchain"
+        )
+    if not callable(
+        getattr(source_control, "validate_role_source", None)
+    ) or not callable(getattr(source_control, "validate_worktree", None)):
+        raise protocol.ProtocolError(
+            "source-control context cannot authoritatively revalidate build inputs"
+        )
+
+    evidence_root = pathlib.Path(config.evidence_root)
+    manifests: dict[str, dict[str, Any]] = {}
+    for role, relative in BUILD_MANIFEST_PATHS.items():
+        path = evidence_root / relative
+        try:
+            decoded = json.loads(_read_regular_bytes(path).decode("utf-8"))
+        except UnicodeDecodeError as error:
+            raise protocol.ProtocolError(f"build manifest is not UTF-8: {path}") from error
+        except json.JSONDecodeError as error:
+            raise protocol.ProtocolError(f"build manifest is malformed JSON: {path}") from error
+        if type(decoded) is not dict:
+            raise protocol.ProtocolError(f"build manifest is not an object: {path}")
+        validate_build_manifest(decoded)
+        if decoded["role"] != role:
+            raise protocol.ProtocolError(f"build manifest stored under wrong role: {path}")
+        manifests[role] = decoded
+
+    direct_sha256 = protocol.sha256_file(evidence_root / LOCK_PATHS["direct"])
+    common_sha256 = protocol.sha256_file(evidence_root / LOCK_PATHS["common"])
+    if manifests["direct-current-main-baseline"]["lock_sha256"] != direct_sha256:
+        raise protocol.ProtocolError("direct baseline is not bound to root-owned direct lock")
+    for role in ("common-lock-normalized-baseline", "candidate"):
+        if manifests[role]["lock_sha256"] != common_sha256:
+            raise protocol.ProtocolError(
+                f"{role} is not bound to the root-owned common lock"
+            )
+
+    role_locks = {
+        "direct-current-main-baseline": evidence_root / LOCK_PATHS["direct"],
+        "common-lock-normalized-baseline": evidence_root / LOCK_PATHS["common"],
+        "candidate": evidence_root / LOCK_PATHS["common"],
+    }
+    for role, manifest in manifests.items():
+        expected_worktree = _canonical_directory(
+            pathlib.Path(config.scratch_root) / role,
+            f"{role} worktree",
+        )
+        expected_target = _canonical_directory(
+            pathlib.Path(config.scratch_root) / "targets" / role,
+            f"{role} target directory",
+        )
+        if pathlib.Path(manifest["worktree"]) != expected_worktree:
+            raise protocol.ProtocolError(f"{role} worktree path is not authoritative")
+        if pathlib.Path(manifest["target_dir"]) != expected_target:
+            raise protocol.ProtocolError(f"{role} target path is not authoritative")
+        executable = pathlib.Path(manifest["executable"])
+        try:
+            canonical_executable = executable.resolve(strict=True)
+            canonical_executable.relative_to(expected_target)
+        except (OSError, ValueError) as error:
+            raise protocol.ProtocolError(
+                f"{role} executable is not under its authoritative target"
+            ) from error
+        if canonical_executable != executable:
+            raise protocol.ProtocolError(f"{role} executable path is not canonical")
+
+        manifest_tools = _toolchain_from_manifest(manifest["toolchain"])
+        if any(
+            getattr(manifest_tools, name) != getattr(tools, name)
+            for name in ("git", "cargo", "rustc")
+        ):
+            raise protocol.ProtocolError(f"{role} tool executable identity changed")
+        environment = manifest["environment"]
+        if environment["PATH"] != tools.path:
+            raise protocol.ProtocolError(f"{role} PATH differs from controlled tools")
+        if environment["HOME"] != str(pathlib.Path(config.home)):
+            raise protocol.ProtocolError(f"{role} HOME differs from validation context")
+        if environment["CARGO_HOME"] != str(pathlib.Path(config.cargo_home)):
+            raise protocol.ProtocolError(
+                f"{role} CARGO_HOME differs from validation context"
+            )
+
+        source_control.validate_role_source(
+            role, manifest["head"], config.candidate_commit
+        )
+        proof = source_control.validate_worktree(
+            expected_worktree,
+            manifest["head"],
+            role_locks[role],
+        )
+        _validate_worktree_proof(proof, manifest["head"])
+        expected_proof = {
+            "tracked_tree_sha256": proof.tracked_tree_sha256,
+            "benchmark_sha256": proof.benchmark_sha256,
+            "benchmark_stanza_sha256": proof.benchmark_stanza_sha256,
+            "cargo_config_chain": [dict(item) for item in proof.cargo_config_chain],
+        }
+        for field, observed in expected_proof.items():
+            if manifest[field] != observed:
+                raise protocol.ProtocolError(
+                    f"{role} persisted source proof differs: {field}"
+                )
+        if protocol.sha256_json(expected_proof["cargo_config_chain"]) != manifest[
+            "config_chain_sha256"
+        ]:
+            raise protocol.ProtocolError(
+                f"{role} persisted Cargo config proof differs"
+            )
+        _revalidate_role_build_observations(
+            role,
+            manifest,
+            tools=tools,
+            command_runner=command_runner,
+        )
+    validate_pair(
+        "direct-current-main",
+        manifests["direct-current-main-baseline"],
+        manifests["candidate"],
+    )
+    validate_pair(
+        "common-lock-normalized",
+        manifests["common-lock-normalized-baseline"],
+        manifests["candidate"],
+    )
+    return manifests
+
+
+def _revalidate_role_build_observations(
+    role: str,
+    manifest: Mapping[str, Any],
+    *,
+    tools: ResolvedToolchain,
+    command_runner: Callable[..., CommandResult],
+) -> None:
+    worktree = pathlib.Path(manifest["worktree"])
+    environment = manifest["environment"]
+    probes = (
+        (
+            "rustc version",
+            (str(tools.rustc.path), "--version", "--verbose"),
+            tools.rustc,
+        ),
+        (
+            "cargo version",
+            (str(tools.cargo.path), "--version", "--verbose"),
+            tools.cargo,
+        ),
+        (
+            "resolved features",
+            _absolute_tool_command(
+                timing_feature_command(manifest["target"]), tools.cargo
+            ),
+            tools.cargo,
+        ),
+    )
+    outcomes: dict[str, CommandResult] = {}
+    for name, argv, executable_identity in probes:
+        outcome = _run_build_command(
+            command_runner,
+            argv,
+            cwd=worktree,
+            environment=environment,
+            deadline_seconds=QUERY_DEADLINE_SECONDS,
+            executable_identity=executable_identity,
+        )
+        if outcome.validity_state != "COMPLETE":
+            raise protocol.ProtocolError(
+                f"{role} persisted {name} probe did not complete"
+            )
+        outcomes[name] = outcome
+
+    toolchain = manifest["toolchain"]
+    rustc_version = outcomes["rustc version"].stdout.strip()
+    cargo_version = outcomes["cargo version"].stdout.strip()
+    if rustc_version != toolchain["rustc"]["version"]:
+        raise protocol.ProtocolError(f"{role} persisted rustc version differs")
+    if cargo_version != toolchain["cargo"]["version"]:
+        raise protocol.ProtocolError(f"{role} persisted cargo version differs")
+    if _rustc_host(rustc_version, f"persisted {role}") != manifest["target"]:
+        raise protocol.ProtocolError(f"{role} persisted host target differs")
+    features = outcomes["resolved features"].stdout
+    if not features.strip():
+        raise protocol.ProtocolError(f"{role} persisted Cargo feature graph is empty")
+    if sha256_bytes(features.encode("utf-8")) != manifest[
+        "resolved_features_sha256"
+    ]:
+        raise protocol.ProtocolError(
+            f"{role} persisted resolved feature graph differs"
+        )
+
+
+def _canonical_directory(path: pathlib.Path, context: str) -> pathlib.Path:
+    path = pathlib.Path(path)
+    try:
+        metadata = path.lstat()
+        canonical = path.resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot inspect {context} {path}: {error}") from error
+    if not stat.S_ISDIR(metadata.st_mode) or canonical != path:
+        raise protocol.ProtocolError(f"{context} is not a canonical regular directory: {path}")
+    return canonical
+
+
+def sha256_bytes(payload: bytes) -> str:
+    """Hash an in-memory immutable build input."""
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _normalized_environment(manifest: Mapping[str, Any]) -> dict[str, str]:
+    environment = dict(manifest["environment"])
+    if environment.get("CARGO_TARGET_DIR") != manifest["target_dir"]:
+        raise protocol.ProtocolError("CARGO_TARGET_DIR is not bound to role target_dir")
+    environment["CARGO_TARGET_DIR"] = "<ROLE_TARGET_DIR>"
+    return environment
+
+
+def _validate_relative_path(path: pathlib.Path) -> pathlib.Path:
+    path = pathlib.Path(path)
+    if path.is_absolute() or path == pathlib.Path(".") or ".." in path.parts:
+        raise protocol.ProtocolError(f"inventory path must be relative and contained: {path}")
+    return path
+
+
+def _validate_commit(value: str, context: str) -> None:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise protocol.ProtocolError(f"{context} must be a full lowercase SHA-1")
+
+
+def _validate_sha256(value: str, context: str) -> None:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise protocol.ProtocolError(f"{context} must be a lowercase SHA-256")
+
+
+if __name__ == "__main__":
+    raise SystemExit("Phase 2E build orchestration is imported by the outer runner")
