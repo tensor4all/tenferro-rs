@@ -1023,10 +1023,23 @@ def validate_terminal_evidence(
     evidence_root: pathlib.Path, *, candidate: str, repository: pathlib.Path,
     source_inventory: Sequence[Mapping[str, str]], common_lock: pathlib.Path,
 ) -> None:
+    for component in ("dispatch-gates", "characterization"):
+        directory = evidence_root / component
+        _revalidate_normative_path(directory)
+        failure_records = list(directory.glob("failure-manifest*.json"))
+        if failure_records:
+            raise protocol.ProtocolError(
+                f"terminal {component} has an INCONCLUSIVE failure record"
+            )
     dispatch_path = evidence_root / "dispatch-gates/manifest.json"
     characterization_path = evidence_root / "characterization/manifest.json"
     dispatch = _read_json(dispatch_path)
     characterization = _read_json(characterization_path)
+    if (
+        dispatch.get("validity_state") == "INCONCLUSIVE"
+        or characterization.get("validity_state") == "INCONCLUSIVE"
+    ):
+        raise protocol.ProtocolError("terminal evidence is INCONCLUSIVE")
     protocol_digest = sha256_file(repository / "scripts/phase2e_protocol.py")
     tree = subprocess.run(
         ("git", "ls-tree", "-r", "-z", "--full-tree", candidate), cwd=repository,
@@ -1338,13 +1351,49 @@ def _own_inconclusive(
     if hasattr(error, "stdout") and hasattr(error, "stderr"):
         for name, payload in (("stdout", error.stdout), ("stderr", error.stderr)):
             path = evidence_root / "failure" / f"{name}.log"
-            if not path.exists():
-                _write_new_bytes(path, payload.encode())
-            failure["failure"][name] = {
-                "path": str(path.resolve()), "sha256": sha256_file(path)
+            if _write_exclusive_or_same(path, payload.encode()):
+                failure["failure"][name] = {
+                    "path": str(path.absolute()), "sha256": sha256_file(path)
+                }
+    for component in ("dispatch-gates", "characterization"):
+        directory = evidence_root / component
+        terminal = directory / "manifest.json"
+        record = dict(failure)
+        base_encoded = (
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        try:
+            terminal_bytes = _read_regular_bytes(terminal)
+        except protocol.ProtocolError:
+            target = terminal
+            encoded = base_encoded
+        else:
+            if terminal_bytes == base_encoded:
+                continue
+            record["existing_terminal"] = {
+                "path": str(terminal.absolute()),
+                "sha256": hashlib.sha256(terminal_bytes).hexdigest(),
             }
-    atomic_write_json(evidence_root / "dispatch-gates/manifest.json", failure)
-    atomic_write_json(evidence_root / "characterization/manifest.json", failure)
+            target = directory / "failure-manifest.json"
+            encoded = (
+                json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode("utf-8")
+        if not _write_exclusive_or_same(target, encoded):
+            digest = hashlib.sha256(encoded).hexdigest()
+            fallback = directory / f"failure-manifest-{digest}.json"
+            _write_exclusive_or_same(fallback, encoded)
+
+
+def _write_exclusive_or_same(path: pathlib.Path, payload: bytes) -> bool:
+    """Create one deterministic failure artifact or accept identical replay."""
+    try:
+        _write_new_bytes(path, payload)
+        return True
+    except protocol.ProtocolError:
+        try:
+            return _read_regular_bytes(path) == payload
+        except protocol.ProtocolError:
+            return False
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1359,14 +1408,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         known, _unknown = probe.parse_known_args(arguments)
         if identities:
             identity = identities[0]
-            identity.revalidate()
-            lock = identity.path / build.LOCK_PATHS["common"]
             try:
-                _read_regular_bytes(lock)
-            except protocol.ProtocolError:
+                identity.revalidate()
+                lock = identity.path / build.LOCK_PATHS["common"]
+                try:
+                    _read_regular_bytes(lock)
+                except protocol.ProtocolError:
+                    pass
+                else:
+                    _own_inconclusive(identity.path, known.candidate, error)
+            except Exception:
+                # Failure ownership is best-effort and must never replace the
+                # original typed execution/protocol exception.
                 pass
-            else:
-                _own_inconclusive(identity.path, known.candidate, error)
         raise
     finally:
         global _ACTIVE_ROOT_IDENTITY

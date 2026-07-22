@@ -232,6 +232,120 @@ class InventoryTests(unittest.TestCase):
 
 
 class ProvenanceTests(unittest.TestCase):
+    def _post_publication_failure(
+        self, published: tuple[str, ...], *, occupied_sidecar: bool = False,
+    ) -> tuple[pathlib.Path, dict[str, bytes], protocol.ProtocolError]:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        base = pathlib.Path(temporary.name)
+        root = base / "evidence"
+        root.mkdir(mode=0o700)
+        lock = root / build.LOCK_PATHS["common"]
+        lock.parent.mkdir(parents=True)
+        lock.write_bytes(b"locked\n")
+        before: dict[str, bytes] = {}
+        for component in published:
+            terminal = root / component / "manifest.json"
+            terminal.parent.mkdir(parents=True, exist_ok=True)
+            payload = b'{"validity_state":"PASS"}\n'
+            terminal.write_bytes(payload)
+            before[component] = payload
+        if occupied_sidecar:
+            sidecar = root / "dispatch-gates/failure-manifest.json"
+            sidecar.parent.mkdir(parents=True, exist_ok=True)
+            sidecar.write_bytes(b"occupied\n")
+            before["occupied-sidecar"] = sidecar.read_bytes()
+        original = protocol.ProtocolError("post-publication terminal failure")
+
+        def fail_after_publication(_arguments, identity_sink):
+            identity = protocol.PreparedRootIdentity(root)
+            identity_sink(identity)
+            gates._ACTIVE_ROOT_IDENTITY = identity
+            raise original
+
+        with (
+            mock.patch.object(gates, "_run_main", side_effect=fail_after_publication),
+            self.assertRaises(protocol.ProtocolError) as raised,
+        ):
+            gates.main([
+                "--evidence-root", str(root), "--candidate", "a" * 40,
+            ])
+        self.assertIs(raised.exception, original)
+        return root, before, original
+
+    def test_post_dispatch_publication_failure_owns_both_components(self) -> None:
+        root, before, _original = self._post_publication_failure(("dispatch-gates",))
+        self.assertEqual(
+            (root / "dispatch-gates/manifest.json").read_bytes(),
+            before["dispatch-gates"],
+        )
+        dispatch_failure = json.loads(
+            (root / "dispatch-gates/failure-manifest.json").read_text()
+        )
+        characterization_failure = json.loads(
+            (root / "characterization/manifest.json").read_text()
+        )
+        self.assertEqual(dispatch_failure["validity_state"], "INCONCLUSIVE")
+        self.assertEqual(characterization_failure["validity_state"], "INCONCLUSIVE")
+        self.assertEqual(
+            dispatch_failure["existing_terminal"]["sha256"],
+            hashlib.sha256(before["dispatch-gates"]).hexdigest(),
+        )
+        inventory_before = {
+            path.relative_to(root): path.read_bytes()
+            for path in root.rglob("*") if path.is_file()
+        }
+        gates._own_inconclusive(
+            root, "a" * 40, protocol.ProtocolError("post-publication terminal failure")
+        )
+        inventory_after = {
+            path.relative_to(root): path.read_bytes()
+            for path in root.rglob("*") if path.is_file()
+        }
+        self.assertEqual(inventory_after, inventory_before)
+
+    def test_terminal_validation_failure_never_rewrites_pass_manifests(self) -> None:
+        components = ("dispatch-gates", "characterization")
+        root, before, _original = self._post_publication_failure(components)
+        for component in components:
+            self.assertEqual(
+                (root / component / "manifest.json").read_bytes(), before[component]
+            )
+            failure = json.loads(
+                (root / component / "failure-manifest.json").read_text()
+            )
+            self.assertEqual(failure["validity_state"], "INCONCLUSIVE")
+            self.assertEqual(failure["failure"]["message"], "post-publication terminal failure")
+
+    def test_failure_sidecar_collision_uses_deterministic_exclusive_fallback(self) -> None:
+        root, before, original = self._post_publication_failure(
+            ("dispatch-gates", "characterization"), occupied_sidecar=True,
+        )
+        occupied = root / "dispatch-gates/failure-manifest.json"
+        self.assertEqual(occupied.read_bytes(), before["occupied-sidecar"])
+        fallbacks = sorted((root / "dispatch-gates").glob("failure-manifest-*.json"))
+        self.assertEqual(len(fallbacks), 1)
+        self.assertEqual(json.loads(fallbacks[0].read_text())["failure"]["message"], str(original))
+        inventory_before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+        gates._own_inconclusive(root, "a" * 40, original)
+        inventory_after = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+        self.assertEqual(inventory_after, inventory_before)
+
+    def test_terminal_validator_rejects_failure_sidecar_before_partial_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            dispatch = root / "dispatch-gates"
+            dispatch.mkdir()
+            (dispatch / "manifest.json").write_text('{"validity_state":"PASS"}\n')
+            (dispatch / "failure-manifest.json").write_text(
+                '{"validity_state":"INCONCLUSIVE"}\n'
+            )
+            with self.assertRaisesRegex(protocol.ProtocolError, "INCONCLUSIVE"):
+                gates.validate_terminal_evidence(
+                    root, candidate="a" * 40, repository=pathlib.Path.cwd(),
+                    source_inventory=[], common_lock=pathlib.Path.cwd() / "Cargo.lock",
+                )
+
     def test_main_never_owns_failure_artifacts_through_rejected_root_alias(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)

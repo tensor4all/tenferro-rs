@@ -311,3 +311,23 @@ unchanged target inventory. Root/ancestor replacement and nested-parent swap
 tests also pass. The combined Python protocol/build/gate suite passed 159 tests.
 A real filesystem smoke created a 0700 held root, exclusively wrote and read one
 nested manifest, revalidated its device/inode, and inventoried exactly one file.
+
+## Cycle 9 failure-terminal publication
+
+INCONCLUSIVE ownership now respects already-published terminal manifests. If a
+component has no canonical manifest, its failure record is published there. If
+a canonical manifest already exists, it remains byte-identical and an exclusive
+`failure-manifest.json` sidecar binds its path and SHA-256. A conflicting primary
+sidecar is also preserved; ownership falls back to the deterministic exclusive
+`failure-manifest-<payload-digest>.json` name. Identical replays are no-ops, so
+repeated handler invocation neither grows nor changes the evidence inventory.
+
+Failure publication is best-effort and cannot replace the original typed
+exception, including root-identity, permission, and sidecar collision failures.
+Terminal validation checks for failure sidecars before reading PASS manifests
+and rejects canonical INCONCLUSIVE manifests explicitly, so a partial PASS can
+never be accepted as final success. Focused tests cover failure after dispatch
+publication, failure after both publications during terminal validation,
+preexisting sidecar collision, exact existing-terminal digests, repeat behavior,
+unchanged PASS bytes/inventory, and preservation of the original exception
+object.
