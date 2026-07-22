@@ -47,6 +47,13 @@ different artifact roots.
   finalization, so recovery preserves the exact launch descriptor and reason.
 - Require persisted allocation probe `protocol_version` to have exact integer
   type and exact value.
+- Treat failed-tail checkpoint control exceptions as primary while retaining
+  ordinary checkpoint I/O errors behind the probe validation error.
+- Pin and repeatedly validate the outer-root pathname identity without adding
+  recursive parent locks. This detects rename/recreate and rejects success, but
+  does not claim to eliminate path-I/O TOCTOU against a nonconforming mutator.
+- Retain the first child-reaper `BaseException` while independently attempting
+  join, terminate, post-terminate join, kill, and final join for every child.
 
 ## Rejected alternatives
 
@@ -129,8 +136,38 @@ future regression fails promptly instead of hanging the test runner.
 - `python3 -m py_compile` for all six Phase 2E Python implementation/test
   modules and `git diff --check` passed.
 
+## Cycle 7 verification results
+
+- Failed-tail checkpoint `KeyboardInterrupt` and `SystemExit` injections are
+  re-raised as the exact primary object with the injected traceback tail after
+  best-effort finalization; recovery performs zero relaunches. Ordinary
+  checkpoint `OSError` remains secondary to probe validation.
+- Fresh execution and recovery tests rename the outer root and recreate its
+  pathname with a copied ledger and lock. Both reject success with a typed
+  identity error, and the replacement ACTIVE ledger remains byte-unchanged.
+  Direct close and active-control precedence tests cover exact-once descriptor
+  cleanup and control-primary suppression.
+- Reaper tests inject join and terminate control failures. Every applicable
+  terminate/join/kill/final-join step still runs for every child before the
+  exact first failure object is re-raised.
+- `python3 -m unittest scripts.test_phase2e_build scripts.test_run_phase2e_allocation_campaign`:
+  131 passed.
+- `python3 -m unittest scripts.test_phase2e_protocol scripts.test_run_phase1_eager_campaign -v`:
+  109 passed.
+- `python3 -m py_compile` for all six Phase 2E Python implementation/test
+  modules and `git diff --check` passed.
+
 ## Residual risks
 
 The lock contract assumes the accepted orchestrator has already created an
 empty canonical regular `orchestrator.lock`. The allocation child intentionally
 does not create, replace, truncate, or delete that authority.
+
+The allocation child is not the global pathname owner. Its guarantee covers
+conforming concurrent runners within the same retained outer-root inode. A
+standalone process that renames and recreates the outer pathname while ignoring
+advisory locks violates the external protocol; identity checks reject the
+observed mutation but cannot make path lookup plus path-based ledger I/O
+atomic. Task 10 of the umbrella plan may accept the complete campaign only if
+the single outer orchestrator enforces the global index lock, durable `ACTIVE`
+reservation, root ownership, and index-then-root lock order.

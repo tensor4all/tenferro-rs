@@ -233,24 +233,61 @@ def release_and_reap_processes(
     join_timeout_seconds: float = 2.0,
 ) -> None:
     failure = None
+
+    def retain_failure(context, error):
+        nonlocal failure
+        if failure is None:
+            failure = error
+        else:
+            build._record_suppressed_failure(failure, context, error)
+
     try:
         release.write_bytes(b"release")
     except BaseException as error:
-        failure = error
+        retain_failure("child release marker", error)
     for process in processes:
         try:
             process.join(join_timeout_seconds)
-            if process.is_alive():
-                process.terminate()
-                process.join(join_timeout_seconds)
-            if process.is_alive():
-                process.kill()
-                process.join(join_timeout_seconds)
-            if process.is_alive():
-                raise AssertionError(f"child process survived cleanup: {process.pid}")
         except BaseException as error:
-            if failure is None:
-                failure = error
+            retain_failure("initial child join", error)
+        try:
+            alive = process.is_alive()
+        except BaseException as error:
+            retain_failure("child liveness after initial join", error)
+            alive = True
+        if alive:
+            try:
+                process.terminate()
+            except BaseException as error:
+                retain_failure("child terminate", error)
+            try:
+                process.join(join_timeout_seconds)
+            except BaseException as error:
+                retain_failure("child join after terminate", error)
+            try:
+                alive = process.is_alive()
+            except BaseException as error:
+                retain_failure("child liveness after terminate", error)
+                alive = True
+            if alive:
+                try:
+                    process.kill()
+                except BaseException as error:
+                    retain_failure("child kill", error)
+                try:
+                    process.join(join_timeout_seconds)
+                except BaseException as error:
+                    retain_failure("final child join", error)
+                try:
+                    alive = process.is_alive()
+                except BaseException as error:
+                    retain_failure("final child liveness", error)
+                    alive = True
+        if alive:
+            retain_failure(
+                "child process cleanup",
+                AssertionError(f"child process survived cleanup: {process.pid}"),
+            )
     if failure is not None:
         raise failure
 
@@ -948,12 +985,9 @@ class AllocationCampaignTests(unittest.TestCase):
                 terminal["invalid_reason"], failed_observation["invalid_reason"]
             )
 
-    def test_failed_probe_checkpoint_failure_is_suppressed_behind_probe_error(self) -> None:
+    def test_ordinary_failed_probe_checkpoint_failure_is_secondary(self) -> None:
         runner = load_runner()
-        for checkpoint_error in (
-            OSError("injected failed observation checkpoint failure"),
-            KeyboardInterrupt("interrupt failed observation checkpoint"),
-        ):
+        for checkpoint_error in (OSError("failed observation checkpoint"),):
             with self.subTest(
                 checkpoint_error=type(checkpoint_error).__name__
             ), tempfile.TemporaryDirectory() as temporary:
@@ -1005,6 +1039,77 @@ class AllocationCampaignTests(unittest.TestCase):
                 primary, _context, secondary = matching[0]
                 self.assertIsInstance(primary, protocol.ProtocolError)
                 self.assertIs(secondary, checkpoint_error)
+
+    def test_failed_probe_checkpoint_control_is_primary_and_recoverable(self) -> None:
+        runner = load_runner()
+        for exception_type in (KeyboardInterrupt, SystemExit):
+            with self.subTest(
+                exception_type=exception_type.__name__
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, probes, tenferro = fixture(root)
+                interruption = exception_type("interrupt failed observation checkpoint")
+                injected_traceback = None
+                original_atomic_write = runner.protocol.atomic_write_json_at
+
+                def interrupt_failed_observation(directory_fd, name, payload):
+                    nonlocal injected_traceback
+                    if (
+                        name == "allocation.json"
+                        and payload.get("validity_state") == "RUNNING"
+                        and payload.get("launch_count") == 1
+                        and payload.get("observations")
+                        and payload["observations"][-1].get("record") is None
+                    ):
+                        try:
+                            raise interruption
+                        except BaseException as caught:
+                            injected_traceback = caught.__traceback__
+                            raise
+                    return original_atomic_write(directory_fd, name, payload)
+
+                commands = FakeCommandRunner(invalid_at=1)
+                caught = None
+                caught_traceback = None
+                try:
+                    with mock.patch.object(
+                        runner.protocol,
+                        "atomic_write_json_at",
+                        side_effect=interrupt_failed_observation,
+                    ):
+                        runner._run_comparison(
+                            args,
+                            probe_manifests=probes,
+                            tenferro_manifests=tenferro,
+                            command_runner=commands,
+                        )
+                except BaseException as error:
+                    caught = error
+                    caught_traceback = error.__traceback__
+                self.assertIs(caught, interruption)
+                self.assertIsNotNone(caught_traceback)
+                while caught_traceback.tb_next is not None:
+                    caught_traceback = caught_traceback.tb_next
+                self.assertIs(caught_traceback, injected_traceback)
+                self.assertEqual(len(commands.calls), 1)
+
+                terminal = json.loads(
+                    (args.artifact_root / "allocation.json").read_text()
+                )
+                self.assertEqual(terminal["validity_state"], "INCONCLUSIVE")
+                self.assertEqual(terminal["launch_count"], 1)
+                self.assertIsNone(terminal["observations"][-1]["record"])
+                recovery = FakeCommandRunner()
+                self.assertEqual(
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=recovery,
+                    ),
+                    2,
+                )
+                self.assertEqual(recovery.calls, [])
 
     def test_running_manifest_exists_after_ledger_registration_before_launch(self) -> None:
         runner = load_runner()
@@ -1880,6 +1985,76 @@ class AllocationCampaignTests(unittest.TestCase):
                 [(interruption, "orchestrator lock release", close_error)],
             )
 
+    def test_lock_close_rejects_replaced_outer_root_path_and_closes_fds(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = pathlib.Path(temporary)
+            outer = parent / "evidence"
+            outer.mkdir()
+            args, _probes, _tenferro = fixture(outer)
+            lock = runner.EvidenceLock.acquire(args.ledger)
+            descriptors = (lock.descriptor, lock.root_descriptor)
+            os.rename(outer, parent / "retained-evidence")
+            outer.mkdir()
+            with self.assertRaisesRegex(
+                protocol.ProtocolError,
+                "outer evidence root pathname identity changed",
+            ):
+                lock.close()
+            for descriptor in descriptors:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+    def test_control_primary_suppresses_real_outer_root_identity_failure(self) -> None:
+        runner = load_runner()
+        for exception_type in (KeyboardInterrupt, SystemExit):
+            with self.subTest(
+                exception_type=exception_type.__name__
+            ), tempfile.TemporaryDirectory() as temporary:
+                parent = pathlib.Path(temporary)
+                outer = parent / "evidence"
+                outer.mkdir()
+                args, probes, tenferro = fixture(outer)
+                moved = parent / "retained-evidence"
+                interruption = exception_type("interrupt after outer-root replacement")
+                injected_traceback = None
+
+                def replace_and_interrupt(*_args, **_kwargs):
+                    nonlocal injected_traceback
+                    os.rename(outer, moved)
+                    outer.mkdir()
+                    (outer / "evidence-ledger.json").write_bytes(
+                        (moved / "evidence-ledger.json").read_bytes()
+                    )
+                    (outer / "orchestrator.lock").write_bytes(b"")
+                    try:
+                        raise interruption
+                    except BaseException as caught:
+                        injected_traceback = caught.__traceback__
+                        raise
+
+                caught = None
+                caught_traceback = None
+                try:
+                    with mock.patch.object(
+                        runner,
+                        "_run_comparison_locked",
+                        side_effect=replace_and_interrupt,
+                    ):
+                        runner._run_comparison(
+                            args,
+                            probe_manifests=probes,
+                            tenferro_manifests=tenferro,
+                        )
+                except BaseException as error:
+                    caught = error
+                    caught_traceback = error.__traceback__
+                self.assertIs(caught, interruption)
+                self.assertIsNotNone(caught_traceback)
+                while caught_traceback.tb_next is not None:
+                    caught_traceback = caught_traceback.tb_next
+                self.assertIs(caught_traceback, injected_traceback)
+
     def test_two_processes_serialize_one_attempt_and_bind_one_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -1938,6 +2113,106 @@ class AllocationCampaignTests(unittest.TestCase):
                 str(args.artifact_root.resolve()),
             )
 
+    def test_outer_root_path_replacement_cannot_close_same_reservation(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = pathlib.Path(temporary)
+            outer = parent / "evidence"
+            outer.mkdir()
+            args, probes, tenferro = fixture(outer)
+            moved = parent / "retained-evidence"
+
+            class ReplacingRunner(FakeCommandRunner):
+                replacement_ledger = None
+
+                def __call__(self, *call_args, **call_kwargs):
+                    result = super().__call__(*call_args, **call_kwargs)
+                    if len(self.calls) == 1:
+                        os.rename(outer, moved)
+                        outer.mkdir()
+                        self.replacement_ledger = (
+                            moved / "evidence-ledger.json"
+                        ).read_bytes()
+                        (outer / "evidence-ledger.json").write_bytes(
+                            self.replacement_ledger
+                        )
+                        (outer / "orchestrator.lock").write_bytes(b"")
+                    return result
+
+            commands = ReplacingRunner(candidate_count=6, candidate_bytes=63)
+            with self.assertRaisesRegex(
+                protocol.ProtocolError,
+                "outer evidence root pathname identity changed",
+            ):
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=commands,
+                )
+            self.assertEqual(len(commands.calls), 1)
+            self.assertEqual(
+                (outer / "evidence-ledger.json").read_bytes(),
+                commands.replacement_ledger,
+            )
+            replacement = json.loads(
+                (outer / "evidence-ledger.json").read_text()
+            )
+            self.assertEqual(replacement["active_attempt_id"], 1)
+            self.assertEqual(replacement["attempts"][-1]["state"], "RUNNING")
+            self.assertFalse((outer / "attempt").exists())
+
+    def test_recovery_rejects_outer_root_path_replacement(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = pathlib.Path(temporary)
+            outer = parent / "evidence"
+            outer.mkdir()
+            args, probes, tenferro = fixture(outer)
+            self.assertEqual(
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=FakeCommandRunner(
+                        candidate_count=6, candidate_bytes=63
+                    ),
+                ),
+                0,
+            )
+            moved = parent / "retained-evidence"
+            original_cleanup = runner._cleanup_finalization
+            replacement_ledger = None
+
+            def replace_after_cleanup(handle):
+                nonlocal replacement_ledger
+                original_cleanup(handle)
+                os.rename(outer, moved)
+                outer.mkdir()
+                replacement_ledger = (
+                    moved / "evidence-ledger.json"
+                ).read_bytes()
+                (outer / "evidence-ledger.json").write_bytes(replacement_ledger)
+                (outer / "orchestrator.lock").write_bytes(b"")
+
+            recovery = FakeCommandRunner()
+            with mock.patch.object(
+                runner, "_cleanup_finalization", side_effect=replace_after_cleanup
+            ), self.assertRaisesRegex(
+                protocol.ProtocolError,
+                "outer evidence root pathname identity changed",
+            ):
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=recovery,
+                )
+            self.assertEqual(recovery.calls, [])
+            self.assertEqual(
+                (outer / "evidence-ledger.json").read_bytes(), replacement_ledger
+            )
+
     def test_failed_ready_assertion_reaps_child_process(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -1960,6 +2235,74 @@ class AllocationCampaignTests(unittest.TestCase):
                 )
             self.assertFalse(process.is_alive())
             self.assertIsNotNone(process.exitcode)
+
+    def test_reaper_attempts_every_escalation_after_control_failures(self) -> None:
+        class FailingProcess:
+            pid = 12345
+
+            def __init__(self, *, join_failure=None, terminate_failure=None):
+                self.join_failure = join_failure
+                self.terminate_failure = terminate_failure
+                self.join_calls = 0
+                self.alive = True
+                self.calls = []
+
+            def join(self, timeout):
+                self.join_calls += 1
+                self.calls.append(("join", timeout))
+                if self.join_calls == 1 and self.join_failure is not None:
+                    raise self.join_failure
+                if self.join_calls == 3:
+                    self.alive = False
+
+            def is_alive(self):
+                self.calls.append(("is_alive",))
+                return self.alive
+
+            def terminate(self):
+                self.calls.append(("terminate",))
+                if self.terminate_failure is not None:
+                    raise self.terminate_failure
+
+            def kill(self):
+                self.calls.append(("kill",))
+
+        for phase in ("join", "terminate"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temporary:
+                primary = KeyboardInterrupt(f"interrupt child {phase}")
+                secondary = SystemExit(f"interrupt after child {phase}")
+                process = FailingProcess(
+                    join_failure=primary if phase == "join" else None,
+                    terminate_failure=(
+                        secondary if phase == "join" else primary
+                    ),
+                )
+                sibling = FailingProcess()
+                caught = None
+                try:
+                    release_and_reap_processes(
+                        [process, sibling],
+                        pathlib.Path(temporary) / "release",
+                        join_timeout_seconds=0.25,
+                    )
+                except BaseException as error:
+                    caught = error
+                self.assertIs(caught, primary)
+                self.assertFalse(process.alive)
+                self.assertFalse(sibling.alive)
+                self.assertEqual(
+                    process.calls,
+                    [
+                        ("join", 0.25),
+                        ("is_alive",),
+                        ("terminate",),
+                        ("join", 0.25),
+                        ("is_alive",),
+                        ("kill",),
+                        ("join", 0.25),
+                        ("is_alive",),
+                    ],
+                )
 
     def test_process_crash_releases_lock_and_bound_root_recovers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

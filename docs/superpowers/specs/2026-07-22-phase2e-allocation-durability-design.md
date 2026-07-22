@@ -14,13 +14,32 @@ finalization contracts remain unchanged.
 runner first opens and exclusively locks the canonical outer evidence directory.
 While holding that directory lock, it resolves the ledger and opens and locks
 `orchestrator.lock` relative to the pinned directory descriptor, without
-following symlinks. Holding both locks for the whole attempt prevents atomic
-replacement of the lockfile pathname from bypassing serialization. It never
-locks the replaceable ledger inode. A cleanup error is suppressed only behind
-an active primary failure, including a control exception. After any normal
+following symlinks. Holding both locks for the whole attempt prevents a
+conforming allocation runner on the same retained outer-root inode from using
+a replacement lockfile inode to bypass serialization. It never locks the
+replaceable ledger inode. A cleanup error is suppressed only behind an active
+primary failure, including a control exception. After any normal
 PASS/FAIL/INCONCLUSIVE outcome, an ordinary cleanup failure becomes a typed
 protocol error and a cleanup control exception is re-raised unchanged. Every
 descriptor is closed exactly once.
+
+The trust boundary does not recurse into an unbounded chain of parent locks.
+The umbrella architecture assigns one outer orchestrator ownership of every
+child: it holds the global index lock, validates the matching durable `ACTIVE`
+reservation, then acquires the root lock in index-then-root order. The
+allocation child pins the accepted outer-root device/inode and validates that
+the canonical pathname still names it after acquisition, immediately before
+and after path-based ledger access and campaign/recovery transitions, before a
+normal return, and during close. A rename-and-recreate therefore cannot be
+accepted as the same reservation or yield a successful child result.
+
+These checks detect mutation; they do not make pathname lookup and path-based
+ledger I/O an indivisible transaction, and they do not prevent a standalone
+malicious process from ignoring advisory locks. Such mutation is an external
+protocol violation. Task 10 of the umbrella plan may accept a complete Phase 2E
+campaign only after the outer orchestrator implements and tests the global
+index lock, `ACTIVE` reservation, single-root ownership, and index-then-root
+lifecycle.
 
 Allocation ledger attempts gain exact artifact ownership fields: canonical
 root path, device, inode, and ownership state. Timing attempts carry the same
@@ -81,7 +100,10 @@ inventory and preserves a recomputed COMPLETE PASS/FAIL when all 168 records
 were successful. When a launched probe fails validation, its canonical
 `record = null` observation is atomically checkpointed before finalization; a
 later finalization interruption therefore recovers the same launch descriptor
-and reason without relaunching.
+and reason without relaunching. An ordinary checkpoint failure remains
+secondary to the probe validation error. `KeyboardInterrupt` or `SystemExit`
+during that checkpoint instead remains the exact primary object and traceback;
+the runner best-effort finalizes the durable failed tail and then re-raises it.
 
 ## Verification
 
@@ -91,11 +113,15 @@ initialization crash windows, pre/post-commit atomic-write states, normal and
 exceptional cleanup precedence, control-exception identity, and a real
 two-process race that replaces `orchestrator.lock` while the first process is
 blocked. Process readiness assertions are inside cleanup scopes whose bounded
-join escalates through terminate and kill, and a deliberate missing-readiness
-test proves no child remains alive. Existing focused allocation/build tests and
-the shared protocol plus Phase 1 suites must remain green.
+join escalates through terminate and kill. Each join, liveness check,
+terminate, kill, and final join is independently guarded, so the first
+`BaseException` is retained while every child still receives all applicable
+reaping steps. A deliberate missing-readiness test proves no child remains
+alive. Existing focused allocation/build tests and the shared protocol plus
+Phase 1 suites must remain green.
 
 Locking only the ledger or only the lockfile is rejected: both pathnames can be
 atomically replaced with new inodes. The pinned outer-directory lock is the
-stable serialization layer, while the relative lockfile validation preserves
-the accepted orchestrator authority contract.
+serialization layer for conforming runners on that retained inode, while the
+relative lockfile validation preserves the accepted orchestrator authority
+contract. Global pathname ownership remains the outer orchestrator's duty.
