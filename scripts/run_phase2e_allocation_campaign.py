@@ -59,6 +59,99 @@ FINALIZATION_FILES = {
     FINALIZATION_MARKER,
     FINALIZATION_PUBLISH,
 }
+ORCHESTRATOR_LOCK = "orchestrator.lock"
+LEDGER_NAME = "evidence-ledger.json"
+
+
+class EvidenceLock:
+    """One-shot owner for the stable outer-root orchestrator lock."""
+
+    def __init__(self, descriptor: int, path: pathlib.Path) -> None:
+        self.descriptor: int | None = descriptor
+        self.path = path
+
+    @classmethod
+    def acquire(cls, ledger_path: pathlib.Path) -> "EvidenceLock":
+        ledger_path = pathlib.Path(ledger_path)
+        try:
+            canonical_ledger = ledger_path.resolve(strict=True)
+            canonical_parent = ledger_path.parent.resolve(strict=True)
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"cannot resolve allocation ledger lock authority: {error}"
+            ) from error
+        if (
+            ledger_path != canonical_ledger
+            or ledger_path.name != LEDGER_NAME
+            or ledger_path.parent != canonical_parent
+        ):
+            raise protocol.ProtocolError(
+                "allocation ledger must be canonical outer-root evidence-ledger.json"
+            )
+        lock_path = canonical_parent / ORCHESTRATOR_LOCK
+        try:
+            expected = lock_path.lstat()
+            descriptor = os.open(
+                lock_path, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW
+            )
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"cannot open canonical orchestrator lock: {error}"
+            ) from error
+        failure: BaseException | None = None
+        try:
+            actual = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(expected.st_mode)
+                or not stat.S_ISREG(actual.st_mode)
+                or expected.st_size != 0
+                or (expected.st_dev, expected.st_ino)
+                != (actual.st_dev, actual.st_ino)
+                or os.get_inheritable(descriptor)
+            ):
+                raise protocol.ProtocolError(
+                    "orchestrator lock is not the exact canonical regular file"
+                )
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        except BaseException as error:
+            failure = error
+        if failure is not None:
+            try:
+                os.close(descriptor)
+            except BaseException as close_error:
+                build._record_suppressed_failure(
+                    failure, "orchestrator lock close", close_error
+                )
+            if isinstance(failure, Exception) and not isinstance(
+                failure, protocol.ProtocolError
+            ):
+                raise protocol.ProtocolError(
+                    f"cannot acquire orchestrator lock: {failure}"
+                ) from failure
+            raise failure
+        return cls(descriptor, lock_path)
+
+    def close(self) -> None:
+        descriptor = self.descriptor
+        if descriptor is None:
+            return
+        self.descriptor = None
+        failure: BaseException | None = None
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        except BaseException as error:
+            failure = error
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            if failure is None:
+                failure = error
+            else:
+                build._record_suppressed_failure(
+                    failure, "orchestrator lock descriptor close", error
+                )
+        if failure is not None:
+            raise failure
 
 
 def _strict_json_object(payload: str, context: str) -> dict[str, Any]:
@@ -111,6 +204,13 @@ def parse_probe_record(stdout: str, requested_case: str, returncode: int | None)
     if type(returncode) is not int or returncode != 0:
         raise protocol.ProtocolError("allocation probe exit/record relation is invalid")
     record = _strict_json_object(stdout, "allocation probe stdout")
+    _validate_probe_record_mapping(record, requested_case)
+    return record
+
+
+def _validate_probe_record_mapping(
+    record: Mapping[str, Any], requested_case: str
+) -> None:
     if set(record) != RECORD_FIELDS:
         raise protocol.ProtocolError("allocation probe record schema mismatch")
     for name in ("allocated_bytes", "allocation_count", "allocation_failures"):
@@ -128,14 +228,12 @@ def parse_probe_record(stdout: str, requested_case: str, returncode: int | None)
         raise protocol.ProtocolError("allocation probe repetition contract mismatch")
     if record["allocation_failures"] != 0 or record["counter_overflow"]:
         raise protocol.ProtocolError("allocation probe counters report invalid measurement")
-    return record
 
 
 def _read_json(path: pathlib.Path, context: str) -> dict[str, Any]:
-    try:
-        decoded = json.loads(build._read_regular_bytes(path).decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise protocol.ProtocolError(f"{context} is malformed") from error
+    decoded = protocol.decode_canonical_json_bytes(
+        build._read_regular_bytes(path), context
+    )
     if type(decoded) is not dict:
         raise protocol.ProtocolError(f"{context} is not an object")
     return decoded
@@ -224,8 +322,39 @@ def _validate_inputs(
     for role in roles:
         probe = probe_manifests[role]
         tenferro = tenferro_manifests[role]
-        if type(probe) is not dict or set(probe) != required:
-            raise protocol.ProtocolError(f"{role} probe build manifest schema mismatch")
+        protocol.validate_manifest_fields(
+            probe,
+            {
+                "protocol_version": int,
+                "role": str,
+                "head": str,
+                "target": str,
+                "profile": str,
+                "validity_state": str,
+                "generated_root": str,
+                "target_dir": str,
+                "executable": str,
+                "executable_sha256": str,
+                "lock_name": str,
+                "lock_sha256": str,
+                "cargo_config_chain": list,
+                "config_chain_sha256": str,
+                "resolved_features": str,
+                "resolved_features_sha256": str,
+                "template_sha256": str,
+                "source_sha256": dict,
+                "generated_manifest_sha256": str,
+                "generated_source_sha256": dict,
+                "case_inventory": list,
+                "repetitions": int,
+                "build_commands": list,
+                "build_environment": dict,
+                "environment": dict,
+                "toolchain_sha256": str,
+                "tenferro_build_manifest_sha256": str,
+            },
+            context=f"{role} probe build manifest",
+        )
         if (
             probe["protocol_version"] != protocol.PROTOCOL_VERSION
             or probe["role"] != role
@@ -364,6 +493,27 @@ def _finalization_marker(terminal: Mapping[str, Any], args, exit_code: int) -> d
     }
 
 
+def _validate_finalization_marker(
+    marker: Mapping[str, Any], expected: Mapping[str, Any]
+) -> None:
+    protocol.validate_manifest_fields(
+        marker,
+        {
+            "version": int,
+            "candidate_sha": str,
+            "comparison_kind": str,
+            "attempt_id": int,
+            "campaign_sha256": str,
+            "validity_state": str,
+            "gate": (str, type(None)),
+            "exit_code": int,
+        },
+        context="allocation finalization marker",
+    )
+    if marker != expected:
+        raise protocol.ProtocolError("allocation finalization marker differs")
+
+
 def _publish_staged_allocation(root: PinnedDirectory) -> None:
     try:
         os.link(
@@ -408,8 +558,37 @@ def _cleanup_finalization(root: PinnedDirectory) -> None:
 
 
 def _validate_terminal_allocation(
-    terminal: Mapping[str, Any], ledger: Mapping[str, Any], args
+    terminal: Mapping[str, Any],
+    ledger: Mapping[str, Any],
+    args,
+    probe_manifests: Mapping[str, Mapping[str, Any]],
+    tenferro_manifests: Mapping[str, Mapping[str, Any]],
+    *,
+    validate_live_sources: bool = True,
 ) -> int:
+    protocol.validate_manifest_fields(
+        terminal,
+        {
+            "protocol_version": int,
+            "protocol_sha256": str,
+            "comparison_kind": str,
+            "attempt_id": int,
+            "validity_state": str,
+            "gate": (str, type(None)),
+            "case_inventory": list,
+            "repetitions": int,
+            "observation_orders": list,
+            "expected_launch_count": int,
+            "launch_count": int,
+            "observations": list,
+            "invalid_reason": (str, type(None)),
+            "probe_builds": dict,
+            "tenferro_builds": dict,
+            "role_locks": dict,
+            "executable_identities": dict,
+        },
+        context="allocation manifest",
+    )
     validity = terminal.get("validity_state")
     gate = terminal.get("gate")
     if (
@@ -417,6 +596,10 @@ def _validate_terminal_allocation(
         or terminal.get("protocol_sha256") != PROTOCOL_SHA256
         or terminal.get("comparison_kind") != args.comparison_kind
         or terminal.get("attempt_id") != args.attempt_id
+        or terminal.get("case_inventory") != list(protocol.CANONICAL_CASES)
+        or type(terminal.get("repetitions")) is not int
+        or terminal.get("repetitions") != REPETITIONS
+        or terminal.get("observation_orders") != list(OBSERVATION_ORDERS)
         or terminal.get("expected_launch_count") != EXPECTED_LAUNCH_COUNT
         or validity not in ("COMPLETE", "INCONCLUSIVE")
         or (validity == "COMPLETE" and gate not in EXIT_BY_GATE)
@@ -425,6 +608,159 @@ def _validate_terminal_allocation(
         != ledger["candidate_sha"]
     ):
         raise protocol.ProtocolError("terminal allocation identity differs")
+    baseline_role = {
+        "direct-current-main": "direct-current-main-baseline",
+        "common-lock-normalized": "common-lock-normalized-baseline",
+    }[args.comparison_kind]
+    candidate_role = "candidate"
+    relevant = (baseline_role, candidate_role)
+    if terminal["probe_builds"] != {
+        role: probe_manifests[role] for role in relevant
+    } or terminal["tenferro_builds"] != {
+        role: tenferro_manifests[role] for role in relevant
+    }:
+        raise protocol.ProtocolError("allocation embedded build authority differs")
+    if terminal["role_locks"] != {
+        role: probe_manifests[role]["lock_sha256"] for role in relevant
+    }:
+        raise protocol.ProtocolError("allocation embedded lock authority differs")
+    if set(terminal["executable_identities"]) != set(relevant):
+        raise protocol.ProtocolError("allocation executable role inventory differs")
+    for role in relevant:
+        identity = terminal["executable_identities"][role]
+        protocol.validate_manifest_fields(
+            identity,
+            {
+                "logical_path": str,
+                "source_device": int,
+                "source_inode": int,
+                "snapshot_device": int,
+                "snapshot_inode": int,
+                "sha256": str,
+            },
+            context=f"{role} allocation executable identity",
+        )
+        executable = pathlib.Path(probe_manifests[role]["executable"])
+        metadata = executable.stat() if validate_live_sources else None
+        if (
+            identity["logical_path"] != str(executable)
+            or identity["sha256"] != probe_manifests[role]["executable_sha256"]
+            or (
+                metadata is not None
+                and (identity["source_device"], identity["source_inode"])
+                != (metadata.st_dev, metadata.st_ino)
+            )
+            or any(
+                type(identity[name]) is not int
+                or identity[name] < 0
+                or identity[name] > (1 << 64) - 1
+                for name in (
+                    "source_device",
+                    "source_inode",
+                    "snapshot_device",
+                    "snapshot_inode",
+                )
+            )
+        ):
+            raise protocol.ProtocolError(f"{role} allocation executable authority differs")
+
+    observations = terminal["observations"]
+    if terminal["launch_count"] != len(observations):
+        raise protocol.ProtocolError("allocation launch count differs from observations")
+    if validity == "COMPLETE":
+        if (
+            terminal["launch_count"] != EXPECTED_LAUNCH_COUNT
+            or terminal["invalid_reason"] is not None
+        ):
+            raise protocol.ProtocolError("complete allocation evidence is incomplete")
+    elif (
+        not terminal["invalid_reason"]
+        or terminal["launch_count"] > EXPECTED_LAUNCH_COUNT
+    ):
+        raise protocol.ProtocolError("inconclusive allocation reason/prefix is invalid")
+
+    expected = []
+    for case in protocol.CANONICAL_CASES:
+        for observation, order in enumerate(OBSERVATION_ORDERS, start=1):
+            identities = (
+                (baseline_role, candidate_role)
+                if order == "A/B"
+                else (candidate_role, baseline_role)
+            )
+            for position, role in enumerate(identities, start=1):
+                expected.append((case, observation, order, position, role))
+    measurements: dict[tuple[str, str], list[tuple[int, int]]] = {
+        (case, role): [] for case in protocol.CANONICAL_CASES for role in relevant
+    }
+    pair_records: dict[tuple[str, int], dict[str, Mapping[str, Any]]] = {}
+    failed_record_seen = False
+    for index, observation_record in enumerate(observations, start=1):
+        if type(observation_record) is not dict:
+            raise protocol.ProtocolError("allocation observation is not an object")
+        record = observation_record.get("record")
+        expected_fields = {
+            "launch_index",
+            "case",
+            "observation",
+            "order",
+            "position",
+            "role",
+            "record",
+        }
+        if record is None:
+            expected_fields.add("invalid_reason")
+        if set(observation_record) != expected_fields:
+            raise protocol.ProtocolError("allocation observation schema differs")
+        case, ordinal, order, position, role = expected[index - 1]
+        if (
+            type(observation_record["launch_index"]) is not int
+            or observation_record["launch_index"] != index
+            or type(observation_record["observation"]) is not int
+            or (
+                observation_record["case"],
+                observation_record["observation"],
+                observation_record["order"],
+                observation_record["position"],
+                observation_record["role"],
+            )
+            != (case, ordinal, order, position, role)
+        ):
+            raise protocol.ProtocolError("allocation observation sequence differs")
+        if record is None:
+            if (
+                validity != "INCONCLUSIVE"
+                or index != len(observations)
+                or type(observation_record["invalid_reason"]) is not str
+                or observation_record["invalid_reason"] != terminal["invalid_reason"]
+            ):
+                raise protocol.ProtocolError("allocation failure location differs")
+            failed_record_seen = True
+            continue
+        if failed_record_seen:
+            raise protocol.ProtocolError("allocation observation follows a failed record")
+        _validate_probe_record_mapping(record, case)
+        measurements[(case, role)].append(
+            (record["allocation_count"], record["allocated_bytes"])
+        )
+        pair_records.setdefault((case, ordinal), {})[role] = record
+
+    recomputed_gate = "PASS"
+    if validity == "COMPLETE":
+        for values in measurements.values():
+            if len(values) != len(OBSERVATION_ORDERS) or len(set(values)) != 1:
+                raise protocol.ProtocolError("allocation observations are inconsistent")
+        for pair in pair_records.values():
+            if set(pair) != set(relevant):
+                raise protocol.ProtocolError("allocation pair is incomplete")
+            baseline = pair[baseline_role]
+            candidate = pair[candidate_role]
+            if (
+                candidate["allocation_count"] > baseline["allocation_count"]
+                or candidate["allocated_bytes"] > baseline["allocated_bytes"]
+            ):
+                recomputed_gate = "FAIL"
+        if gate != recomputed_gate:
+            raise protocol.ProtocolError("allocation gate differs from recomputation")
     return EXIT_BY_GATE[gate] if validity == "COMPLETE" else 2
 
 
@@ -446,6 +782,40 @@ def _require_closed_allocation_attempt(
         raise protocol.ProtocolError("terminal allocation ledger differs")
 
 
+def _validate_running_allocation(
+    running: Mapping[str, Any],
+    ledger: Mapping[str, Any],
+    args,
+    probe_manifests: Mapping[str, Mapping[str, Any]],
+    tenferro_manifests: Mapping[str, Mapping[str, Any]],
+) -> None:
+    if (
+        running.get("validity_state") != "RUNNING"
+        or running.get("gate") is not None
+        or running.get("invalid_reason") is not None
+        or type(running.get("observations")) is not list
+        or any(
+            type(observation) is not dict or observation.get("record") is None
+            for observation in running.get("observations", [])
+        )
+    ):
+        raise protocol.ProtocolError("running allocation manifest state is invalid")
+    candidate = copy.deepcopy(dict(running))
+    candidate["validity_state"] = "INCONCLUSIVE"
+    candidate["invalid_reason"] = "recovery validation sentinel"
+    if (
+        _validate_terminal_allocation(
+            candidate,
+            ledger,
+            args,
+            probe_manifests,
+            tenferro_manifests,
+        )
+        != 2
+    ):
+        raise protocol.ProtocolError("running allocation validation exit differs")
+
+
 def _root_json_commit_state(
     root: PinnedDirectory, relative: str, expected: Mapping[str, Any]
 ) -> str:
@@ -460,6 +830,76 @@ def _root_json_commit_state(
         if content == protocol._canonical_json_bytes(expected)
         else "MISMATCH"
     )
+
+
+def _write_path_json_exact(
+    path: pathlib.Path,
+    payload: Mapping[str, Any],
+    writer: Callable[[pathlib.Path, Any], None],
+) -> None:
+    try:
+        writer(path, payload)
+    except BaseException as primary:
+        try:
+            committed = build._read_regular_bytes(path) == protocol._canonical_json_bytes(
+                payload
+            )
+        except BaseException:
+            committed = False
+        if not committed or not isinstance(primary, Exception):
+            raise
+
+
+def _write_root_json_exact(
+    root: PinnedDirectory, relative: str, payload: Mapping[str, Any]
+) -> None:
+    try:
+        root.atomic_json(relative, payload)
+    except BaseException as primary:
+        if (
+            _root_json_commit_state(root, relative, payload) != "EXACT"
+            or not isinstance(primary, Exception)
+        ):
+            raise
+
+
+def _create_exclusive_pinned_directory(path: pathlib.Path) -> PinnedDirectory:
+    path = pathlib.Path(os.path.abspath(path))
+    parent = path.parent
+    try:
+        parent_metadata = parent.lstat()
+        canonical_parent = parent.resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot inspect allocation artifact parent: {error}"
+        ) from error
+    if not stat.S_ISDIR(parent_metadata.st_mode) or parent != canonical_parent:
+        raise protocol.ProtocolError("allocation artifact parent is not canonical")
+    parent_descriptor = os.open(
+        parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    )
+    failure: BaseException | None = None
+    try:
+        os.mkdir(path.name, mode=0o700, dir_fd=parent_descriptor)
+        os.fsync(parent_descriptor)
+    except BaseException as error:
+        failure = error
+    try:
+        os.close(parent_descriptor)
+    except BaseException as error:
+        if failure is None:
+            failure = error
+        else:
+            build._record_suppressed_failure(
+                failure, "allocation artifact parent close", error
+            )
+    if failure is not None:
+        if isinstance(failure, Exception):
+            raise protocol.ProtocolError(
+                f"cannot exclusively create allocation artifact root: {failure}"
+            ) from failure
+        raise failure
+    return PinnedDirectory(path)
 
 
 def _inconclusive_terminal(
@@ -508,7 +948,19 @@ def _finalize_allocation(
     terminal: dict[str, Any],
     exit_code: int,
     atomic_writer: Callable[[pathlib.Path, Any], None],
+    probe_manifests: Mapping[str, Mapping[str, Any]],
+    tenferro_manifests: Mapping[str, Mapping[str, Any]],
 ) -> int:
+    validated_exit = _validate_terminal_allocation(
+        terminal,
+        ledger,
+        args,
+        probe_manifests,
+        tenferro_manifests,
+        validate_live_sources=False,
+    )
+    if validated_exit != exit_code:
+        raise protocol.ProtocolError("allocation finalization exit differs")
     try:
         root.atomic_json(FINALIZATION_STAGE, terminal)
     except BaseException as primary:
@@ -521,6 +973,20 @@ def _finalize_allocation(
             ) from primary
         fallback = _inconclusive_terminal(terminal, primary)
         try:
+            if (
+                _validate_terminal_allocation(
+                    fallback,
+                    ledger,
+                    args,
+                    probe_manifests,
+                    tenferro_manifests,
+                    validate_live_sources=False,
+                )
+                != 2
+            ):
+                raise protocol.ProtocolError(
+                    "allocation fallback finalization exit differs"
+                )
             root.atomic_json(FINALIZATION_STAGE, fallback)
             _finish_staged_allocation(
                 root,
@@ -550,14 +1016,58 @@ def _finalize_allocation(
     )
 
 
-def _recover_finalization(args, atomic_writer) -> int | None:
+def _recover_finalization(
+    args,
+    atomic_writer,
+    probe_manifests: Mapping[str, Mapping[str, Any]],
+    tenferro_manifests: Mapping[str, Mapping[str, Any]],
+) -> int | None:
     artifact_path = pathlib.Path(os.path.abspath(args.artifact_root))
+    ledger_path = pathlib.Path(args.ledger).resolve(strict=True)
+    ledger = _read_json(ledger_path, "allocation ledger")
+    protocol.validate_ledger(ledger)
+    matches = [
+        attempt
+        for attempt in ledger["attempts"]
+        if attempt["stage"] == "allocation"
+        and attempt["lane"] == args.comparison_kind
+        and attempt["attempt_id"] == args.attempt_id
+    ]
+    if len(matches) > 1:
+        raise protocol.ProtocolError("allocation recovery attempt is duplicated")
+    attempt = matches[0] if matches else None
+    if attempt is None:
+        if artifact_path.exists():
+            raise protocol.ProtocolError("allocation artifact root has no ledger owner")
+        return None
+    if attempt["artifact_root"] != str(artifact_path):
+        raise protocol.ProtocolError("allocation attempt belongs to a different artifact root")
+    if attempt["artifact_state"] == "RESERVED":
+        if attempt["state"] == "RUNNING":
+            _close_ledger(
+                ledger_path,
+                ledger,
+                args,
+                None,
+                "INCONCLUSIVE",
+                atomic_writer,
+            )
+            return 2
+        if attempt["state"] == "INCONCLUSIVE":
+            return 2
+        raise protocol.ProtocolError("reserved allocation attempt is not recoverable")
+    if attempt["artifact_state"] != "BOUND":
+        raise protocol.ProtocolError("allocation attempt artifact is not bound")
     try:
         metadata = artifact_path.lstat()
     except FileNotFoundError:
-        return None
-    if not stat.S_ISDIR(metadata.st_mode):
-        raise protocol.ProtocolError("allocation artifact root is not a directory")
+        raise protocol.ProtocolError("bound allocation artifact root is missing")
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or (metadata.st_dev, metadata.st_ino)
+        != (attempt["artifact_device"], attempt["artifact_inode"])
+    ):
+        raise protocol.ProtocolError("bound allocation artifact identity differs")
     root = PinnedDirectory(artifact_path)
     outcome: int | None = None
     primary: BaseException | None = None
@@ -570,16 +1080,15 @@ def _recover_finalization(args, atomic_writer) -> int | None:
         ):
             raise protocol.ProtocolError("allocation recovery inventory is invalid")
         persisted = _read_root_json(root, "allocation.json")
-        ledger_path = pathlib.Path(args.ledger).resolve(strict=True)
-        ledger = _read_json(ledger_path, "allocation ledger")
-        protocol.validate_ledger(ledger)
         active = ledger["active_attempt_id"]
         marker_present = FINALIZATION_MARKER in files
         stage_present = FINALIZATION_STAGE in files
         if persisted.get("validity_state") in ("COMPLETE", "INCONCLUSIVE"):
             if active is not None:
                 raise protocol.ProtocolError("terminal allocation has active ledger attempt")
-            exit_code = _validate_terminal_allocation(persisted, ledger, args)
+            exit_code = _validate_terminal_allocation(
+                persisted, ledger, args, probe_manifests, tenferro_manifests
+            )
             _require_closed_allocation_attempt(ledger, args, persisted)
             persisted_digest = protocol.sha256_json(persisted)
             if stage_present and protocol.sha256_json(
@@ -600,13 +1109,18 @@ def _recover_finalization(args, atomic_writer) -> int | None:
                 )
             if marker_present:
                 terminal_marker = _read_root_json(root, FINALIZATION_MARKER)
-                if terminal_marker.get("campaign_sha256") != persisted_digest:
-                    raise protocol.ProtocolError("terminal allocation marker differs")
+                _validate_finalization_marker(
+                    terminal_marker,
+                    _finalization_marker(persisted, args, exit_code),
+                )
             _cleanup_finalization(root)
             outcome = exit_code
             return outcome
         if persisted.get("validity_state") != "RUNNING":
             raise protocol.ProtocolError("allocation finalization state is unreachable")
+        _validate_running_allocation(
+            persisted, ledger, args, probe_manifests, tenferro_manifests
+        )
         if marker_present and not stage_present:
             raise protocol.ProtocolError("allocation marker exists without its stage")
         if stage_present:
@@ -617,7 +1131,9 @@ def _recover_finalization(args, atomic_writer) -> int | None:
             )
             root.atomic_json(FINALIZATION_STAGE, terminal)
             stage_present = True
-        exit_code = _validate_terminal_allocation(terminal, ledger, args)
+        exit_code = _validate_terminal_allocation(
+            terminal, ledger, args, probe_manifests, tenferro_manifests
+        )
         expected_marker = _finalization_marker(terminal, args, exit_code)
         if marker_present:
             marker = _read_root_json(root, FINALIZATION_MARKER)
@@ -635,31 +1151,7 @@ def _recover_finalization(args, atomic_writer) -> int | None:
                 if not isinstance(primary, Exception):
                     raise
             marker = expected_marker
-        if (
-            set(marker)
-            != {
-                "version",
-                "candidate_sha",
-                "comparison_kind",
-                "attempt_id",
-                "campaign_sha256",
-                "validity_state",
-                "gate",
-                "exit_code",
-            }
-            or
-            marker.get("version") != 1
-            or marker.get("comparison_kind") != args.comparison_kind
-            or marker.get("attempt_id") != args.attempt_id
-            or marker.get("campaign_sha256") != protocol.sha256_json(terminal)
-            or marker.get("candidate_sha") != ledger["candidate_sha"]
-            or marker.get("exit_code") not in (0, 2, 3)
-        ):
-            raise protocol.ProtocolError("allocation finalization marker differs")
-        if marker != expected_marker:
-            raise protocol.ProtocolError("allocation finalization marker content differs")
-        if marker.get("exit_code") != exit_code:
-            raise protocol.ProtocolError("allocation finalization exit differs")
+        _validate_finalization_marker(marker, expected_marker)
         if active == args.attempt_id:
             _close_ledger(
                 ledger_path,
@@ -700,12 +1192,9 @@ def _recover_finalization(args, atomic_writer) -> int | None:
 
 
 def _read_root_json(root: PinnedDirectory, relative: str) -> dict[str, Any]:
-    try:
-        decoded = json.loads(root.read_regular(relative))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise protocol.ProtocolError(
-            f"allocation finalization JSON is malformed: {relative}"
-        ) from error
+    decoded = protocol.decode_canonical_json_bytes(
+        root.read_regular(relative), f"allocation finalization JSON {relative}"
+    )
     if type(decoded) is not dict:
         raise protocol.ProtocolError(
             f"allocation finalization JSON is not an object: {relative}"
@@ -720,6 +1209,8 @@ def _run_comparison_in_root(
     probe_manifests: Mapping[str, Mapping[str, Any]],
     tenferro_manifests: Mapping[str, Mapping[str, Any]],
     pinned_executables: Mapping[str, PinnedExecutable],
+    ledger: dict[str, Any],
+    campaign: dict[str, Any],
     command_runner: Callable[..., build.CommandResult] = build.run_bounded_command,
     atomic_writer: Callable[[pathlib.Path, Any], None] = protocol.atomic_write_json,
 ) -> int:
@@ -728,25 +1219,9 @@ def _run_comparison_in_root(
         args.comparison_kind, probe_manifests, tenferro_manifests
     )
     ledger_path = pathlib.Path(args.ledger).resolve(strict=True)
-    ledger = _read_json(ledger_path, "allocation ledger")
-    protocol.validate_ledger(ledger)
-    if ledger["candidate_sha"] != probe_manifests[candidate_role]["head"]:
-        raise protocol.ProtocolError("allocation ledger candidate differs")
-    ledger = protocol.open_attempt(
-        ledger, "allocation", args.comparison_kind, args.attempt_id
-    )
-    atomic_writer(ledger_path, ledger)
-    campaign = _initial_manifest(
-        args,
-        probe_manifests,
-        tenferro_manifests,
-        baseline_role,
-        pinned_executables,
-    )
     gate = "PASS"
     invalid_reason = None
     try:
-        artifact_handle.atomic_json("allocation.json", campaign)
         for case in protocol.CANONICAL_CASES:
             per_binary: dict[str, list[tuple[int, int]]] = {
                 baseline_role: [],
@@ -838,7 +1313,15 @@ def _run_comparison_in_root(
         campaign["invalid_reason"] = f"{type(primary).__name__}: {primary}"
         try:
             _finalize_allocation(
-                artifact_handle, ledger_path, ledger, args, campaign, 2, atomic_writer
+                artifact_handle,
+                ledger_path,
+                ledger,
+                args,
+                campaign,
+                2,
+                atomic_writer,
+                probe_manifests,
+                tenferro_manifests,
             )
         except BaseException as secondary:
             build._record_suppressed_failure(primary, "allocation finalization", secondary)
@@ -848,7 +1331,15 @@ def _run_comparison_in_root(
         campaign["gate"] = None
         campaign["invalid_reason"] = invalid_reason
         return _finalize_allocation(
-            artifact_handle, ledger_path, ledger, args, campaign, 2, atomic_writer
+            artifact_handle,
+            ledger_path,
+            ledger,
+            args,
+            campaign,
+            2,
+            atomic_writer,
+            probe_manifests,
+            tenferro_manifests,
         )
     campaign["validity_state"] = "COMPLETE"
     campaign["gate"] = gate
@@ -860,10 +1351,12 @@ def _run_comparison_in_root(
         campaign,
         EXIT_BY_GATE[gate],
         atomic_writer,
+        probe_manifests,
+        tenferro_manifests,
     )
 
 
-def _run_comparison(
+def _run_comparison_locked(
     args,
     *,
     probe_manifests: Mapping[str, Mapping[str, Any]],
@@ -873,7 +1366,9 @@ def _run_comparison(
 ) -> int:
     """Pin a fresh attempt root and preserve primary failures while closing it."""
     _validate_inputs(args.comparison_kind, probe_manifests, tenferro_manifests)
-    recovered = _recover_finalization(args, atomic_writer)
+    recovered = _recover_finalization(
+        args, atomic_writer, probe_manifests, tenferro_manifests
+    )
     if recovered is not None:
         return recovered
     artifact_handle: PinnedDirectory | None = None
@@ -884,18 +1379,52 @@ def _run_comparison(
         baseline_role, candidate_role = _validate_inputs(
             args.comparison_kind, probe_manifests, tenferro_manifests
         )
+        ledger_path = pathlib.Path(args.ledger).resolve(strict=True)
+        ledger = _read_json(ledger_path, "allocation ledger")
+        protocol.validate_ledger(ledger)
+        if ledger["candidate_sha"] != probe_manifests[candidate_role]["head"]:
+            raise protocol.ProtocolError("allocation ledger candidate differs")
+        artifact_path = pathlib.Path(os.path.abspath(args.artifact_root))
+        ledger = protocol.open_attempt(
+            ledger,
+            "allocation",
+            args.comparison_kind,
+            args.attempt_id,
+            artifact_root=str(artifact_path),
+        )
+        _write_path_json_exact(ledger_path, ledger, atomic_writer)
         for role in (baseline_role, candidate_role):
             probe = probe_manifests[role]
             pinned_executables[role] = PinnedExecutable.open(
                 pathlib.Path(probe["executable"]), probe["executable_sha256"]
             )
-        artifact_handle = PinnedDirectory.create_fresh(args.artifact_root)
+        artifact_handle = _create_exclusive_pinned_directory(artifact_path)
+        campaign = _initial_manifest(
+            args,
+            probe_manifests,
+            tenferro_manifests,
+            baseline_role,
+            pinned_executables,
+        )
+        _write_root_json_exact(artifact_handle, "allocation.json", campaign)
+        ledger = protocol.bind_attempt_artifact(
+            ledger,
+            "allocation",
+            args.comparison_kind,
+            args.attempt_id,
+            artifact_root=str(artifact_path),
+            artifact_device=artifact_handle.identity[0],
+            artifact_inode=artifact_handle.identity[1],
+        )
+        _write_path_json_exact(ledger_path, ledger, atomic_writer)
         outcome = _run_comparison_in_root(
             args,
             artifact_handle=artifact_handle,
             probe_manifests=probe_manifests,
             tenferro_manifests=tenferro_manifests,
             pinned_executables=pinned_executables,
+            ledger=ledger,
+            campaign=campaign,
             command_runner=command_runner,
             atomic_writer=atomic_writer,
         )
@@ -931,6 +1460,47 @@ def _run_comparison(
                     f"cannot close allocation pinned resource: {close_failure}"
                 ) from close_failure
             raise close_failure
+
+
+def _run_comparison(
+    args,
+    *,
+    probe_manifests: Mapping[str, Mapping[str, Any]],
+    tenferro_manifests: Mapping[str, Mapping[str, Any]],
+    command_runner: Callable[..., build.CommandResult] = build.run_bounded_command,
+    atomic_writer: Callable[[pathlib.Path, Any], None] = protocol.atomic_write_json,
+) -> int:
+    """Serialize one allocation attempt under the stable outer-root lock."""
+    _validate_inputs(args.comparison_kind, probe_manifests, tenferro_manifests)
+    lock = EvidenceLock.acquire(pathlib.Path(args.ledger))
+    primary: BaseException | None = None
+    outcome: int | None = None
+    try:
+        outcome = _run_comparison_locked(
+            args,
+            probe_manifests=probe_manifests,
+            tenferro_manifests=tenferro_manifests,
+            command_runner=command_runner,
+            atomic_writer=atomic_writer,
+        )
+        return outcome
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try:
+            lock.close()
+        except BaseException as error:
+            if primary is not None:
+                build._record_suppressed_failure(
+                    primary, "orchestrator lock release", error
+                )
+            elif outcome is None:
+                if isinstance(error, Exception):
+                    raise protocol.ProtocolError(
+                        f"cannot release orchestrator lock: {error}"
+                    ) from error
+                raise
 
 
 def build_argument_parser() -> argparse.ArgumentParser:

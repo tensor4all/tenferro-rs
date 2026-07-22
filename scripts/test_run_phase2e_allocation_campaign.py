@@ -4,15 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import contextlib
 import importlib.util
 import io
 import json
+import multiprocessing
 import os
 import pathlib
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -121,6 +124,100 @@ class FakeCommandRunner:
         )
 
 
+class ProcessCommandRunner:
+    def __init__(
+        self,
+        launch_log: pathlib.Path,
+        *,
+        ready: pathlib.Path | None = None,
+        release: pathlib.Path | None = None,
+        crash_on_first: bool = False,
+    ) -> None:
+        self.launch_log = launch_log
+        self.ready = ready
+        self.release = release
+        self.crash_on_first = crash_on_first
+        self.calls = 0
+
+    def __call__(
+        self,
+        argv,
+        *,
+        cwd,
+        environment,
+        deadline_seconds,
+        inherited_descriptors,
+        **_kwargs,
+    ):
+        self.calls += 1
+        descriptor = inherited_descriptors[0]
+        payload = pathlib.Path(argv[0]).read_bytes()
+        with self.launch_log.open("ab") as stream:
+            stream.write(b"launch\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        if self.calls == 1 and self.crash_on_first:
+            os._exit(17)
+        if self.calls == 1 and self.ready is not None:
+            self.ready.write_bytes(b"ready")
+            while self.release is not None and not self.release.exists():
+                time.sleep(0.01)
+        role = {
+            b"direct-baseline": "direct-current-main-baseline",
+            b"common-baseline": "common-lock-normalized-baseline",
+            b"candidate": "candidate",
+        }[payload]
+        candidate = role == "candidate"
+        return build.CommandResult(
+            argv=tuple(argv),
+            cwd=str(cwd),
+            environment=dict(sorted(environment.items())),
+            deadline_seconds=deadline_seconds,
+            returncode=0,
+            stdout=record(
+                argv[1],
+                count=6 if candidate else 7,
+                allocated_bytes=63 if candidate else 64,
+            ),
+            stderr="",
+            validity_state="COMPLETE",
+            failure_reason=None,
+            terminated=False,
+            killed=False,
+            inherited_descriptors=(descriptor,),
+        )
+
+
+def run_campaign_process(
+    args,
+    probes,
+    tenferro,
+    launch_log,
+    result_queue,
+    *,
+    ready=None,
+    release=None,
+    crash_on_first=False,
+) -> None:
+    runner = load_runner()
+    try:
+        result = runner._run_comparison(
+            args,
+            probe_manifests=probes,
+            tenferro_manifests=tenferro,
+            command_runner=ProcessCommandRunner(
+                launch_log,
+                ready=ready,
+                release=release,
+                crash_on_first=crash_on_first,
+            ),
+        )
+    except BaseException as error:
+        result_queue.put((type(error).__name__, str(error)))
+    else:
+        result_queue.put(("exit", result))
+
+
 def fixture(root: pathlib.Path, lane: str = "direct-current-main"):
     tool_dir = root / "tools"
     tool_dir.mkdir()
@@ -206,11 +303,15 @@ def fixture(root: pathlib.Path, lane: str = "direct-current-main"):
         probes[role]["tenferro_build_manifest_sha256"] = protocol.sha256_json(
             tenferro[role]
         )
-    ledger = root / "ledger.json"
+    ledger = root / "evidence-ledger.json"
     ledger_payload = protocol.new_ledger("c" * 40)
     if lane == "common-lock-normalized":
         ledger_payload = protocol.open_attempt(
-            ledger_payload, "allocation", "direct-current-main", 1
+            ledger_payload,
+            "allocation",
+            "direct-current-main",
+            1,
+            artifact_root=str((root / "direct-attempt").resolve()),
         )
         ledger_payload = protocol.close_attempt(
             ledger_payload,
@@ -219,7 +320,8 @@ def fixture(root: pathlib.Path, lane: str = "direct-current-main"):
             1,
             "PASS",
         )
-    ledger.write_text(json.dumps(ledger_payload) + "\n")
+    protocol.atomic_write_json(ledger, ledger_payload)
+    (root / "orchestrator.lock").write_bytes(b"")
     artifact = root / "attempt"
     args = argparse.Namespace(
         comparison_kind=lane,
@@ -524,11 +626,12 @@ class AllocationCampaignTests(unittest.TestCase):
             ):
                 path = evidence / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps(mapping[role]) + "\n")
-        ledger = evidence / "ledger.json"
-        ledger.write_text(
-            json.dumps(protocol.new_ledger(tenferro["candidate"]["head"])) + "\n"
+                protocol.atomic_write_json(path, mapping[role])
+        ledger = evidence / "evidence-ledger.json"
+        protocol.atomic_write_json(
+            ledger, protocol.new_ledger(tenferro["candidate"]["head"])
         )
+        (evidence / "orchestrator.lock").write_bytes(b"")
         args = argparse.Namespace(
             comparison_kind="direct-current-main",
             ledger=ledger,
@@ -1048,6 +1151,501 @@ class AllocationCampaignTests(unittest.TestCase):
                 self.assertIsNone(ledger["active_attempt_id"])
                 self.assertEqual(len(ledger["attempts"]), 1)
 
+    def test_fabricated_closed_pass_without_observations_is_rejected(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            ledger = json.loads(args.ledger.read_text())
+            args.artifact_root.mkdir()
+            ledger = protocol.open_attempt(
+                ledger,
+                "allocation",
+                args.comparison_kind,
+                args.attempt_id,
+                artifact_root=str(args.artifact_root.resolve()),
+            )
+            metadata = args.artifact_root.stat()
+            ledger = protocol.bind_attempt_artifact(
+                ledger,
+                "allocation",
+                args.comparison_kind,
+                args.attempt_id,
+                artifact_root=str(args.artifact_root.resolve()),
+                artifact_device=metadata.st_dev,
+                artifact_inode=metadata.st_ino,
+            )
+            ledger = protocol.close_attempt(
+                ledger,
+                "allocation",
+                args.comparison_kind,
+                args.attempt_id,
+                "PASS",
+            )
+            protocol.atomic_write_json(args.ledger, ledger)
+            protocol.atomic_write_json(
+                args.artifact_root / "allocation.json",
+                {
+                    "protocol_version": protocol.PROTOCOL_VERSION,
+                    "protocol_sha256": runner.PROTOCOL_SHA256,
+                    "comparison_kind": args.comparison_kind,
+                    "attempt_id": args.attempt_id,
+                    "expected_launch_count": 168,
+                    "validity_state": "COMPLETE",
+                    "gate": "PASS",
+                    "tenferro_builds": {
+                        "candidate": {"head": tenferro["candidate"]["head"]}
+                    },
+                },
+            )
+            commands = FakeCommandRunner()
+            with self.assertRaises(protocol.ProtocolError):
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=commands,
+                )
+            self.assertEqual(commands.calls, [])
+
+    def test_reserved_initialization_crash_closes_without_touching_unproven_root(self) -> None:
+        runner = load_runner()
+        for root_state in ("absent", "empty", "running"):
+            with self.subTest(root_state=root_state), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, probes, tenferro = fixture(root)
+                ledger = json.loads(args.ledger.read_text())
+                ledger = protocol.open_attempt(
+                    ledger,
+                    "allocation",
+                    args.comparison_kind,
+                    args.attempt_id,
+                    artifact_root=str(args.artifact_root.resolve()),
+                )
+                protocol.atomic_write_json(args.ledger, ledger)
+                if root_state != "absent":
+                    args.artifact_root.mkdir()
+                if root_state == "running":
+                    (args.artifact_root / "allocation.json").write_text("untrusted\n")
+                before = (
+                    None
+                    if root_state == "absent"
+                    else {
+                        path.name: path.read_bytes()
+                        for path in args.artifact_root.iterdir()
+                    }
+                )
+                commands = FakeCommandRunner()
+                self.assertEqual(
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=commands,
+                    ),
+                    2,
+                )
+                self.assertEqual(commands.calls, [])
+                closed = json.loads(args.ledger.read_text())
+                self.assertIsNone(closed["active_attempt_id"])
+                self.assertEqual(closed["attempts"][0]["state"], "INCONCLUSIVE")
+                if before is None:
+                    self.assertFalse(args.artifact_root.exists())
+                else:
+                    self.assertEqual(
+                        {
+                            path.name: path.read_bytes()
+                            for path in args.artifact_root.iterdir()
+                        },
+                        before,
+                    )
+
+    def test_initialization_atomic_write_matrix_is_recoverable(self) -> None:
+        runner = load_runner()
+        for phase in ("reservation", "manifest", "binding"):
+            for committed in (False, True):
+                with self.subTest(
+                    phase=phase, committed=committed
+                ), tempfile.TemporaryDirectory() as temporary:
+                    root = pathlib.Path(temporary)
+                    args, probes, tenferro = fixture(root)
+                    commands = FakeCommandRunner(candidate_count=6, candidate_bytes=63)
+                    original_path_write = protocol.atomic_write_json
+                    original_root_write = runner.protocol.atomic_write_json_at
+                    injected = False
+
+                    def fail_path_write(path, payload):
+                        nonlocal injected
+                        selected = None
+                        if pathlib.Path(path) == args.ledger and payload.get(
+                            "active_attempt_id"
+                        ) == args.attempt_id:
+                            attempt = payload["attempts"][-1]
+                            selected = (
+                                "reservation"
+                                if attempt["artifact_state"] == "RESERVED"
+                                else "binding"
+                            )
+                        if selected == phase and not injected:
+                            injected = True
+                            if committed:
+                                original_path_write(path, payload)
+                            raise OSError(f"injected {phase} path write")
+                        return original_path_write(path, payload)
+
+                    def fail_root_write(directory_fd, name, payload):
+                        nonlocal injected
+                        if (
+                            phase == "manifest"
+                            and name == "allocation.json"
+                            and not injected
+                        ):
+                            injected = True
+                            if committed:
+                                original_root_write(directory_fd, name, payload)
+                            raise OSError("injected manifest write")
+                        return original_root_write(directory_fd, name, payload)
+
+                    with mock.patch.object(
+                        runner.protocol,
+                        "atomic_write_json_at",
+                        side_effect=fail_root_write,
+                    ):
+                        if committed:
+                            self.assertEqual(
+                                runner._run_comparison(
+                                    args,
+                                    probe_manifests=probes,
+                                    tenferro_manifests=tenferro,
+                                    command_runner=commands,
+                                    atomic_writer=fail_path_write,
+                                ),
+                                0,
+                            )
+                            self.assertEqual(len(commands.calls), 168)
+                        else:
+                            with self.assertRaises(protocol.ProtocolError):
+                                runner._run_comparison(
+                                    args,
+                                    probe_manifests=probes,
+                                    tenferro_manifests=tenferro,
+                                    command_runner=commands,
+                                    atomic_writer=fail_path_write,
+                                )
+                            self.assertEqual(commands.calls, [])
+                    self.assertTrue(injected)
+
+                    if not committed:
+                        recovery = FakeCommandRunner(
+                            candidate_count=6, candidate_bytes=63
+                        )
+                        expected = 0 if phase == "reservation" else 2
+                        self.assertEqual(
+                            runner._run_comparison(
+                                args,
+                                probe_manifests=probes,
+                                tenferro_manifests=tenferro,
+                                command_runner=recovery,
+                            ),
+                            expected,
+                        )
+                        self.assertEqual(
+                            len(recovery.calls), 168 if expected == 0 else 0
+                        )
+                    ledger = json.loads(args.ledger.read_text())
+                    self.assertIsNone(ledger["active_attempt_id"])
+
+    def test_missing_or_nonregular_orchestrator_lock_rejects_before_launch(self) -> None:
+        runner = load_runner()
+        for corruption in ("missing", "symlink", "directory"):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, probes, tenferro = fixture(root)
+                lock = args.ledger.parent / "orchestrator.lock"
+                lock.unlink()
+                if corruption == "symlink":
+                    lock.symlink_to(args.ledger)
+                elif corruption == "directory":
+                    lock.mkdir()
+                commands = FakeCommandRunner()
+                with self.assertRaises(protocol.ProtocolError):
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=commands,
+                    )
+                self.assertEqual(commands.calls, [])
+                self.assertFalse(args.artifact_root.exists())
+
+    def test_orchestrator_lock_control_exception_closes_descriptor_once(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, _probes, _tenferro = fixture(root)
+            interruption = KeyboardInterrupt("stop lock acquisition")
+            real_close = runner.os.close
+            closed = []
+
+            def interrupt_flock(_descriptor, _operation):
+                raise interruption
+
+            def tracking_close(descriptor):
+                closed.append(descriptor)
+                return real_close(descriptor)
+
+            with mock.patch.object(
+                runner.fcntl, "flock", side_effect=interrupt_flock
+            ), mock.patch.object(runner.os, "close", side_effect=tracking_close):
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    runner.EvidenceLock.acquire(args.ledger)
+            self.assertIs(caught.exception, interruption)
+            self.assertEqual(len(closed), 1)
+
+            lock = runner.EvidenceLock.acquire(args.ledger)
+            descriptor = lock.descriptor
+            lock.close()
+            lock.close()
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_two_processes_serialize_one_attempt_and_bind_one_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            second_args = copy.copy(args)
+            second_args.artifact_root = root / "foreign-attempt"
+            launch_log = root / "launches.log"
+            ready = root / "first-ready"
+            release = root / "release-first"
+            context = multiprocessing.get_context("fork")
+            results = context.Queue()
+            first = context.Process(
+                target=run_campaign_process,
+                args=(args, probes, tenferro, launch_log, results),
+                kwargs={"ready": ready, "release": release},
+            )
+            second = context.Process(
+                target=run_campaign_process,
+                args=(second_args, probes, tenferro, launch_log, results),
+            )
+            first.start()
+            deadline = time.monotonic() + 10
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(ready.exists())
+            second.start()
+            try:
+                time.sleep(0.2)
+                self.assertTrue(second.is_alive())
+                self.assertEqual(launch_log.read_text().splitlines(), ["launch"])
+            finally:
+                release.write_bytes(b"release")
+                first.join(20)
+                second.join(20)
+            self.assertEqual((first.exitcode, second.exitcode), (0, 0))
+            outcomes = {results.get(timeout=2), results.get(timeout=2)}
+            self.assertIn(("exit", 0), outcomes)
+            self.assertTrue(
+                any(
+                    kind == "ProtocolError" and "different artifact root" in detail
+                    for kind, detail in outcomes
+                )
+            )
+            self.assertEqual(len(launch_log.read_text().splitlines()), 168)
+            self.assertFalse(second_args.artifact_root.exists())
+            ledger = json.loads(args.ledger.read_text())
+            self.assertEqual(len(ledger["attempts"]), 1)
+            self.assertEqual(
+                ledger["attempts"][0]["artifact_root"],
+                str(args.artifact_root.resolve()),
+            )
+
+    def test_process_crash_releases_lock_and_bound_root_recovers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            launch_log = root / "crash-launches.log"
+            context = multiprocessing.get_context("fork")
+            results = context.Queue()
+            process = context.Process(
+                target=run_campaign_process,
+                args=(args, probes, tenferro, launch_log, results),
+                kwargs={"crash_on_first": True},
+            )
+            process.start()
+            process.join(20)
+            self.assertEqual(process.exitcode, 17)
+            self.assertEqual(launch_log.read_text().splitlines(), ["launch"])
+            recovery = FakeCommandRunner()
+            self.assertEqual(
+                load_runner()._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=recovery,
+                ),
+                2,
+            )
+            self.assertEqual(recovery.calls, [])
+            terminal = json.loads(
+                (args.artifact_root / "allocation.json").read_text()
+            )
+            self.assertEqual(terminal["validity_state"], "INCONCLUSIVE")
+            ledger = json.loads(args.ledger.read_text())
+            self.assertIsNone(ledger["active_attempt_id"])
+
+    def test_terminal_mutation_matrix_is_rejected_without_launches(self) -> None:
+        runner = load_runner()
+
+        def mutations(terminal):
+            cases = []
+
+            def changed(name, edit):
+                payload = copy.deepcopy(terminal)
+                edit(payload)
+                cases.append((name, payload))
+
+            changed("drop", lambda value: value["observations"].pop())
+            changed(
+                "extra",
+                lambda value: value["observations"].append(
+                    copy.deepcopy(value["observations"][-1])
+                ),
+            )
+            changed(
+                "reorder",
+                lambda value: value["observations"].__setitem__(
+                    slice(0, 2), reversed(value["observations"][:2])
+                ),
+            )
+            changed(
+                "duplicate-launch",
+                lambda value: value["observations"][1].__setitem__(
+                    "launch_index", value["observations"][0]["launch_index"]
+                ),
+            )
+            changed("role", lambda value: value["observations"][0].__setitem__("role", "candidate"))
+            changed("case", lambda value: value["observations"][0].__setitem__("case", "foreign"))
+            changed("order", lambda value: value["observations"][0].__setitem__("order", "B/A"))
+            changed("position", lambda value: value["observations"][0].__setitem__("position", 2))
+            changed(
+                "observation",
+                lambda value: value["observations"][0].__setitem__("observation", 2),
+            )
+            changed(
+                "count",
+                lambda value: value["observations"][0]["record"].__setitem__(
+                    "allocation_count", 999
+                ),
+            )
+            changed(
+                "bytes",
+                lambda value: value["observations"][0]["record"].__setitem__(
+                    "allocated_bytes", 999
+                ),
+            )
+            changed("gate", lambda value: value.__setitem__("gate", "FAIL"))
+            changed("launch-count", lambda value: value.__setitem__("launch_count", 167))
+            changed(
+                "build",
+                lambda value: value["tenferro_builds"]["candidate"].__setitem__(
+                    "head", "0" * 40
+                ),
+            )
+            changed(
+                "lock",
+                lambda value: value["role_locks"].__setitem__("candidate", "0" * 64),
+            )
+            changed(
+                "executable",
+                lambda value: value["executable_identities"]["candidate"].__setitem__(
+                    "sha256", "0" * 64
+                ),
+            )
+            changed("top-extra", lambda value: value.__setitem__("extra", None))
+            return cases
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            commands = FakeCommandRunner(candidate_count=6, candidate_bytes=63)
+            self.assertEqual(
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=commands,
+                ),
+                0,
+            )
+            terminal = json.loads((args.artifact_root / "allocation.json").read_text())
+            for name, mutated in mutations(terminal):
+                with self.subTest(name=name):
+                    protocol.atomic_write_json(
+                        args.artifact_root / "allocation.json", mutated
+                    )
+                    recovery = FakeCommandRunner()
+                    with self.assertRaises(protocol.ProtocolError):
+                        runner._run_comparison(
+                            args,
+                            probe_manifests=probes,
+                            tenferro_manifests=tenferro,
+                            command_runner=recovery,
+                        )
+                    self.assertEqual(recovery.calls, [])
+            protocol.atomic_write_json(args.artifact_root / "allocation.json", terminal)
+
+    def test_persisted_terminal_rejects_duplicate_nonfinite_and_noncanonical_json(self) -> None:
+        runner = load_runner()
+        for corruption in ("duplicate", "nonfinite", "noncanonical"):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, probes, tenferro = fixture(root)
+                commands = FakeCommandRunner(candidate_count=6, candidate_bytes=63)
+                self.assertEqual(
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=commands,
+                    ),
+                    0,
+                )
+                path = args.artifact_root / "allocation.json"
+                content = path.read_text()
+                if corruption == "duplicate":
+                    content = content.replace("{", '{"gate":"PASS",', 1)
+                elif corruption == "nonfinite":
+                    content = content.replace("{", '{"poison":NaN,', 1)
+                else:
+                    content = json.dumps(json.loads(content)) + "\n"
+                path.write_text(content)
+                with self.assertRaises(protocol.ProtocolError):
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=FakeCommandRunner(),
+                    )
+
+    def test_probe_repetitions_require_exact_integer_type(self) -> None:
+        runner = load_runner()
+        for invalid in (4096.0, True):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, probes, tenferro = fixture(root)
+                probes["candidate"]["repetitions"] = invalid
+                commands = FakeCommandRunner()
+                with self.assertRaises(protocol.ProtocolError):
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=commands,
+                    )
+                self.assertEqual(commands.calls, [])
+
     def test_cleanup_failure_during_recovery_is_idempotent(self) -> None:
         runner = load_runner()
         for committed in (False, True):
@@ -1280,7 +1878,7 @@ class AllocationCampaignTests(unittest.TestCase):
             for role, relative in build.BUILD_MANIFEST_PATHS.items():
                 path = args.tenferro_manifest_root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(json.dumps(tenferro[role]) + "\n")
+                protocol.atomic_write_json(path, tenferro[role])
             commands = FakeCommandRunner(candidate_count=6, candidate_bytes=63)
             with mock.patch.object(runner.build, "validate_build_manifest"), mock.patch.object(
                 runner.build, "validate_allocation_probe_set", return_value=probes

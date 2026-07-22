@@ -3335,13 +3335,19 @@ class AllocationProbeBuildPlanTests(unittest.TestCase):
                     "generated_root",
                     observed["direct-current-main-baseline"]["generated_root"],
                 ),
+                "repetitions-float": lambda value: value.__setitem__(
+                    "repetitions", 4096.0
+                ),
+                "repetitions-bool": lambda value: value.__setitem__(
+                    "repetitions", True
+                ),
             }
             for name, mutate in mutations.items():
                 with self.subTest(mutation=name):
                     candidate = json.loads(json.dumps(original_manifest))
                     mutate(candidate)
                     candidate_manifest_path.chmod(0o644)
-                    candidate_manifest_path.write_text(json.dumps(candidate) + "\n")
+                    protocol.atomic_write_json(candidate_manifest_path, candidate)
                     candidate_manifest_path.chmod(0o444)
                     with self.assertRaises(protocol.ProtocolError):
                         build._validate_allocation_probe_set_with_dependencies(
@@ -3351,8 +3357,28 @@ class AllocationProbeBuildPlanTests(unittest.TestCase):
                             command_runner=command_runner,
                         )
             candidate_manifest_path.chmod(0o644)
-            candidate_manifest_path.write_text(json.dumps(original_manifest) + "\n")
+            protocol.atomic_write_json(candidate_manifest_path, original_manifest)
             candidate_manifest_path.chmod(0o444)
+
+            for corruption in ("duplicate", "nonfinite", "noncanonical"):
+                with self.subTest(corruption=corruption):
+                    content = protocol._canonical_json_bytes(original_manifest).decode()
+                    if corruption == "duplicate":
+                        content = content.replace("{", '{"repetitions":4096,', 1)
+                    elif corruption == "nonfinite":
+                        content = content.replace("{", '{"poison":NaN,', 1)
+                    else:
+                        content = json.dumps(original_manifest) + "\n"
+                    candidate_manifest_path.chmod(0o644)
+                    candidate_manifest_path.write_text(content)
+                    candidate_manifest_path.chmod(0o444)
+                    with self.assertRaises(protocol.ProtocolError):
+                        build._validate_allocation_probe_set_with_dependencies(
+                            evidence,
+                            manifests,
+                            repository=repository,
+                            command_runner=command_runner,
+                        )
 
     def test_probe_config_chain_rejects_ancestor_and_foreign_configs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

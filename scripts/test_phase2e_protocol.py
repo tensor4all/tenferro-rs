@@ -639,7 +639,14 @@ def retry_then_normalized_pass(stage_name: str) -> dict:
     assert "next_transition_ordinal" in ledger, (
         "ledger must persist the next global transition ordinal"
     )
-    ledger = protocol.open_attempt(ledger, stage_name, "direct-current-main", 1)
+    ownership = (
+        {"artifact_root": "/evidence/direct-attempt-1"}
+        if stage_name == "allocation"
+        else {}
+    )
+    ledger = protocol.open_attempt(
+        ledger, stage_name, "direct-current-main", 1, **ownership
+    )
     ledger = protocol.close_attempt(
         ledger,
         stage_name,
@@ -648,12 +655,24 @@ def retry_then_normalized_pass(stage_name: str) -> dict:
         None,
         validity_state="INCONCLUSIVE",
     )
-    ledger = protocol.open_attempt(ledger, stage_name, "direct-current-main", 2)
+    ownership = (
+        {"artifact_root": "/evidence/direct-attempt-2"}
+        if stage_name == "allocation"
+        else {}
+    )
+    ledger = protocol.open_attempt(
+        ledger, stage_name, "direct-current-main", 2, **ownership
+    )
     ledger = protocol.close_attempt(
         ledger, stage_name, "direct-current-main", 2, "PASS"
     )
+    ownership = (
+        {"artifact_root": "/evidence/normalized-attempt-1"}
+        if stage_name == "allocation"
+        else {}
+    )
     ledger = protocol.open_attempt(
-        ledger, stage_name, "common-lock-normalized", 1
+        ledger, stage_name, "common-lock-normalized", 1, **ownership
     )
     return protocol.close_attempt(
         ledger, stage_name, "common-lock-normalized", 1, "PASS"
@@ -723,9 +742,83 @@ class LedgerTests(unittest.TestCase):
         )
         self.assertEqual(ledger["next_transition_ordinal"], 6)
 
+    def test_attempt_artifact_ownership_schema_is_exact(self) -> None:
+        ledger = protocol.new_ledger("a" * 40)
+        timing = protocol.open_attempt(
+            ledger, "timing", "direct-current-main", 1
+        )
+        self.assertEqual(
+            {
+                name: timing["attempts"][0][name]
+                for name in (
+                    "artifact_root",
+                    "artifact_device",
+                    "artifact_inode",
+                    "artifact_state",
+                )
+            },
+            {
+                "artifact_root": None,
+                "artifact_device": None,
+                "artifact_inode": None,
+                "artifact_state": "NOT_APPLICABLE",
+            },
+        )
+
+        ledger = protocol.new_ledger("a" * 40)
+        with self.assertRaises(protocol.ProtocolError):
+            protocol.open_attempt(
+                ledger, "allocation", "direct-current-main", 1
+            )
+        reserved = protocol.open_attempt(
+            ledger,
+            "allocation",
+            "direct-current-main",
+            1,
+            artifact_root="/evidence/allocation-1",
+        )
+        attempt = reserved["attempts"][0]
+        self.assertEqual(attempt["artifact_root"], "/evidence/allocation-1")
+        self.assertEqual(attempt["artifact_state"], "RESERVED")
+        self.assertIsNone(attempt["artifact_device"])
+        self.assertIsNone(attempt["artifact_inode"])
+
+        bound = protocol.bind_attempt_artifact(
+            reserved,
+            "allocation",
+            "direct-current-main",
+            1,
+            artifact_root="/evidence/allocation-1",
+            artifact_device=12,
+            artifact_inode=34,
+        )
+        attempt = bound["attempts"][0]
+        self.assertEqual(
+            (attempt["artifact_state"], attempt["artifact_device"], attempt["artifact_inode"]),
+            ("BOUND", 12, 34),
+        )
+        for name, invalid in (
+            ("artifact_device", True),
+            ("artifact_inode", -1),
+            ("artifact_inode", 1 << 64),
+            ("artifact_root", "relative"),
+            ("artifact_state", "FOREIGN"),
+        ):
+            with self.subTest(name=name):
+                mutated = copy.deepcopy(bound)
+                mutated["attempts"][0][name] = invalid
+                with self.assertRaises(protocol.ProtocolError):
+                    protocol.validate_ledger(mutated)
+
     def test_only_validity_inconclusive_permits_a_whole_lane_retry(self) -> None:
         ledger = protocol.new_ledger("a" * 40)
-        ledger = protocol.open_attempt(ledger, "allocation", "direct-current-main", 1)
+        ledger = protocol.open_attempt(
+            ledger,
+            "allocation",
+            "direct-current-main",
+            1,
+            artifact_root="/evidence/direct-attempt-1",
+        )
         ledger = protocol.close_attempt(
             ledger,
             "allocation",
@@ -737,7 +830,13 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(
             lane(ledger, "allocation", "direct-current-main")["state"], "RETRYABLE"
         )
-        ledger = protocol.open_attempt(ledger, "allocation", "direct-current-main", 2)
+        ledger = protocol.open_attempt(
+            ledger,
+            "allocation",
+            "direct-current-main",
+            2,
+            artifact_root="/evidence/direct-attempt-2",
+        )
         ledger = protocol.close_attempt(
             ledger, "allocation", "direct-current-main", 2, "PASS"
         )

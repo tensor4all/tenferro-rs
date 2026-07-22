@@ -193,6 +193,37 @@ def _canonical_json_bytes(payload: Any) -> bytes:
     return (rendered + "\n").encode("utf-8")
 
 
+def decode_canonical_json_bytes(payload: bytes, context: str) -> Any:
+    """Decode one exact canonical JSON document with strict number semantics."""
+    if type(payload) is not bytes or type(context) is not str or not context:
+        raise ProtocolError("canonical JSON decoder arguments are invalid")
+
+    def reject_duplicates(pairs):
+        decoded_object = {}
+        for key, value in pairs:
+            if key in decoded_object:
+                raise ProtocolError(f"{context} contains duplicate key: {key}")
+            decoded_object[key] = value
+        return decoded_object
+
+    try:
+        text = payload.decode("utf-8")
+        decoded = json.loads(
+            text,
+            object_pairs_hook=reject_duplicates,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ProtocolError(f"{context} contains non-finite number: {value}")
+            ),
+        )
+    except ProtocolError:
+        raise
+    except (UnicodeDecodeError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ProtocolError(f"{context} is malformed canonical JSON") from error
+    if payload != _canonical_json_bytes(decoded):
+        raise ProtocolError(f"{context} is not canonical JSON")
+    return decoded
+
+
 def atomic_write_json(path: pathlib.Path, payload: Any) -> None:
     """Replace *path* with canonical JSON under the documented commit boundary."""
     path = pathlib.Path(path)
@@ -605,6 +636,10 @@ def _validate_ledger(ledger: dict[str, Any]) -> None:
                 "state": str,
                 "validity_state": str,
                 "statistical_result": (str, type(None)),
+                "artifact_root": (str, type(None)),
+                "artifact_device": (int, type(None)),
+                "artifact_inode": (int, type(None)),
+                "artifact_state": str,
             },
             context="ledger attempt",
         )
@@ -625,6 +660,38 @@ def _validate_ledger(ledger: dict[str, Any]) -> None:
         state = attempt["state"]
         validity_state = attempt["validity_state"]
         statistical_result = attempt["statistical_result"]
+        artifact_root = attempt["artifact_root"]
+        artifact_device = attempt["artifact_device"]
+        artifact_inode = attempt["artifact_inode"]
+        artifact_state = attempt["artifact_state"]
+        if attempt["stage"] == "timing":
+            if (
+                artifact_root is not None
+                or artifact_device is not None
+                or artifact_inode is not None
+                or artifact_state != "NOT_APPLICABLE"
+            ):
+                raise ProtocolError("timing attempt has allocation artifact ownership")
+        elif (
+            type(artifact_root) is not str
+            or not pathlib.Path(artifact_root).is_absolute()
+            or os.path.normpath(artifact_root) != artifact_root
+            or artifact_state not in {"RESERVED", "BOUND"}
+        ):
+            raise ProtocolError("allocation attempt artifact reservation is invalid")
+        if artifact_state == "RESERVED":
+            if artifact_device is not None or artifact_inode is not None:
+                raise ProtocolError("reserved allocation artifact has an identity")
+        elif artifact_state == "BOUND":
+            if (
+                type(artifact_device) is not int
+                or type(artifact_inode) is not int
+                or artifact_device < 0
+                or artifact_inode < 0
+                or artifact_device > (1 << 64) - 1
+                or artifact_inode > (1 << 64) - 1
+            ):
+                raise ProtocolError("bound allocation artifact identity is invalid")
         if state == "RUNNING":
             if (
                 validity_state != "RUNNING"
@@ -818,7 +885,12 @@ def _find_attempt(
 
 
 def open_attempt(
-    ledger: dict[str, Any], stage_name: str, lane_name: str, attempt_id: int
+    ledger: dict[str, Any],
+    stage_name: str,
+    lane_name: str,
+    attempt_id: int,
+    *,
+    artifact_root: str | None = None,
 ) -> dict[str, Any]:
     """Register and open the next whole-lane attempt."""
     _validate_ledger(ledger)
@@ -828,6 +900,18 @@ def open_attempt(
         raise ProtocolError("another attempt is already running")
     if stage_name not in STAGE_NAMES or lane_name not in LANE_NAMES:
         raise ProtocolError(f"unknown ledger stage/lane: {stage_name}/{lane_name}")
+    if stage_name == "allocation":
+        if (
+            type(artifact_root) is not str
+            or not pathlib.Path(artifact_root).is_absolute()
+            or os.path.normpath(artifact_root) != artifact_root
+        ):
+            raise ProtocolError("allocation attempt requires a canonical artifact root")
+        artifact_state = "RESERVED"
+    else:
+        if artifact_root is not None:
+            raise ProtocolError("timing attempt cannot reserve an allocation artifact")
+        artifact_state = "NOT_APPLICABLE"
 
     updated = copy.deepcopy(ledger)
     _, lane_record = _stage_and_lane(updated, stage_name, lane_name)
@@ -852,10 +936,52 @@ def open_attempt(
             "state": "RUNNING",
             "validity_state": "RUNNING",
             "statistical_result": None,
+            "artifact_root": artifact_root,
+            "artifact_device": None,
+            "artifact_inode": None,
+            "artifact_state": artifact_state,
         }
     )
     updated["next_transition_ordinal"] += 1
     updated["active_attempt_id"] = attempt_id
+    _validate_ledger(updated)
+    return updated
+
+
+def bind_attempt_artifact(
+    ledger: dict[str, Any],
+    stage_name: str,
+    lane_name: str,
+    attempt_id: int,
+    *,
+    artifact_root: str,
+    artifact_device: int,
+    artifact_inode: int,
+) -> dict[str, Any]:
+    """Bind a reserved allocation attempt to one pinned directory identity."""
+    _validate_ledger(ledger)
+    if ledger["active_attempt_id"] != attempt_id:
+        raise ProtocolError("allocation artifact attempt is not active")
+    attempt = _find_attempt(ledger["attempts"], stage_name, lane_name, attempt_id)
+    if (
+        stage_name != "allocation"
+        or attempt["state"] != "RUNNING"
+        or attempt["artifact_state"] != "RESERVED"
+        or type(artifact_root) is not str
+        or artifact_root != attempt["artifact_root"]
+        or type(artifact_device) is not int
+        or type(artifact_inode) is not int
+        or artifact_device < 0
+        or artifact_inode < 0
+        or artifact_device > (1 << 64) - 1
+        or artifact_inode > (1 << 64) - 1
+    ):
+        raise ProtocolError("allocation artifact binding differs from reservation")
+    updated = copy.deepcopy(ledger)
+    bound = _find_attempt(updated["attempts"], stage_name, lane_name, attempt_id)
+    bound["artifact_device"] = artifact_device
+    bound["artifact_inode"] = artifact_inode
+    bound["artifact_state"] = "BOUND"
     _validate_ledger(updated)
     return updated
 

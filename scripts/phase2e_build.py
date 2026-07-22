@@ -2253,12 +2253,9 @@ def _validate_build_set_with_source_control(
     manifests: dict[str, dict[str, Any]] = {}
     for role, relative in BUILD_MANIFEST_PATHS.items():
         path = evidence_root / relative
-        try:
-            decoded = json.loads(_read_regular_bytes(path).decode("utf-8"))
-        except UnicodeDecodeError as error:
-            raise protocol.ProtocolError(f"build manifest is not UTF-8: {path}") from error
-        except json.JSONDecodeError as error:
-            raise protocol.ProtocolError(f"build manifest is malformed JSON: {path}") from error
+        decoded = protocol.decode_canonical_json_bytes(
+            _read_regular_bytes(path), f"build manifest {path}"
+        )
         if type(decoded) is not dict:
             raise protocol.ProtocolError(f"build manifest is not an object: {path}")
         validate_build_manifest(decoded)
@@ -3192,10 +3189,9 @@ def _validate_allocation_probe_set_with_dependencies(
     reference_source = None
     for role, relative in PROBE_BUILD_MANIFEST_PATHS.items():
         path = evidence_root / relative
-        try:
-            decoded = json.loads(_read_regular_bytes(path).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise protocol.ProtocolError(f"probe build manifest is malformed: {path}") from error
+        decoded = protocol.decode_canonical_json_bytes(
+            _read_regular_bytes(path), f"probe build manifest {path}"
+        )
         if type(decoded) is not dict or set(decoded) != required:
             raise protocol.ProtocolError(f"{role} probe build manifest schema mismatch")
         expected_lock = (
@@ -3212,6 +3208,7 @@ def _validate_allocation_probe_set_with_dependencies(
             or decoded["lock_name"] != expected_lock
             or decoded["lock_sha256"] != lock_digests[expected_lock]
             or decoded["case_inventory"] != list(protocol.CANONICAL_CASES)
+            or type(decoded["repetitions"]) is not int
             or decoded["repetitions"] != 4096
             or type(tenferro) is not dict
             or decoded["head"] != tenferro.get("head")
