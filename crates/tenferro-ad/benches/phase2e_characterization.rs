@@ -1,9 +1,10 @@
 use std::hint::black_box;
+use std::io::Write as _;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, Criterion};
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::{
     process_cpu_affinity, CpuBackend, CpuContext, CpuPlacement, CpuPlacementGuarantee, CpuSet,
@@ -22,6 +23,7 @@ fn tensor(shape: Vec<usize>, salt: usize) -> Tensor {
     .unwrap()
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn current_cpu() -> usize {
     unsafe extern "C" {
         fn sched_getcpu() -> std::ffi::c_int;
@@ -29,6 +31,11 @@ fn current_cpu() -> usize {
     // SAFETY: sched_getcpu has no arguments or preconditions.
     let cpu = unsafe { sched_getcpu() };
     usize::try_from(cpu).expect("Phase 2E affinity audit requires sched_getcpu")
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn current_cpu() -> usize {
+    panic!("Phase 2E affinity observation is supported only on Linux/Android")
 }
 
 fn maybe_write_affinity(key: &str, backend: &CpuBackend, ownership: &str, budget: usize) {
@@ -54,14 +61,16 @@ fn maybe_write_affinity(key: &str, backend: &CpuBackend, ownership: &str, budget
     } else {
         "ExactDeclared"
     };
-    std::fs::write(
-        path,
-        format!(
-            "{{\"key\":{key:?},\"ownership\":{ownership:?},\"guarantee\":{guarantee:?},\"budget\":{budget},\"worker_count\":{},\"declared_cpus\":{declared:?},\"observations\":{observations:?}}}\n",
-            info.worker_count(),
-        ),
-    )
-    .unwrap();
+    let output = format!(
+        "{{\"key\":{key:?},\"ownership\":{ownership:?},\"guarantee\":{guarantee:?},\"budget\":{budget},\"worker_count\":{},\"declared_cpus\":{declared:?},\"observations\":{observations:?}}}\n",
+        info.worker_count(),
+    );
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .unwrap();
+    file.write_all(output.as_bytes()).unwrap();
 }
 
 fn phase2e_characterization(c: &mut Criterion) {
@@ -178,4 +187,8 @@ criterion_group! {
         .confidence_level(0.95);
     targets = phase2e_characterization
 }
-criterion_main!(benches);
+#[cfg(any(target_os = "linux", target_os = "android"))]
+criterion::criterion_main!(benches);
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn main() {}

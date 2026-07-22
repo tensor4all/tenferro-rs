@@ -11,8 +11,8 @@ import os
 import pathlib
 import signal
 import shutil
+import stat
 import subprocess
-import tempfile
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -67,11 +67,7 @@ BANNED_DISPATCH_PATTERNS = ("string_key", ".get(operation_name)", ".get(&format!
 
 
 def sha256_file(path: pathlib.Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return protocol.sha256_file(path)
 
 
 def canonical_keys() -> tuple[set[str], set[str]]:
@@ -382,20 +378,56 @@ def compose_characterization(cpu: Mapping[str, Any], ad: Mapping[str, Any]) -> d
     }
 
 
+def _capacity_values(capacity_provenance: Mapping[str, Any]) -> tuple[int, int, int]:
+    required = {
+        "process_allowed_cpus", "process_allowed_capacity",
+        "managed_node_cpus", "managed_node_capacity", "usable_numa_nodes",
+    }
+    if set(capacity_provenance) != required:
+        raise protocol.ProtocolError("capacity provenance has the wrong schema")
+    process_cpus = capacity_provenance["process_allowed_cpus"]
+    managed_cpus = capacity_provenance["managed_node_cpus"]
+    available_cpus = capacity_provenance["process_allowed_capacity"]
+    managed_capacity = capacity_provenance["managed_node_capacity"]
+    usable_numa_nodes = capacity_provenance["usable_numa_nodes"]
+    if (
+        not isinstance(process_cpus, list)
+        or not isinstance(managed_cpus, list)
+        or not all(type(cpu) is int and cpu >= 0 for cpu in [*process_cpus, *managed_cpus])
+        or len(set(process_cpus)) != len(process_cpus)
+        or len(set(managed_cpus)) != len(managed_cpus)
+        or not set(managed_cpus).issubset(process_cpus)
+        or available_cpus != len(process_cpus)
+        or managed_capacity != len(managed_cpus)
+        or available_cpus < 1
+        or managed_capacity < 1
+        or type(usable_numa_nodes) is not int
+        or usable_numa_nodes < 0
+    ):
+        raise protocol.ProtocolError("capacity provenance is invalid")
+    return available_cpus, managed_capacity, usable_numa_nodes
+
+
 def attach_hardware_validity(
-    characterization: dict[str, Any], *, available_cpus: int, usable_numa_nodes: int,
+    characterization: dict[str, Any], *, capacity_provenance: Mapping[str, Any],
 ) -> None:
-    if available_cpus < 1 or usable_numa_nodes < 0:
-        raise protocol.ProtocolError("hardware availability counts are invalid")
+    available_cpus, managed_capacity, usable_numa_nodes = _capacity_values(
+        capacity_provenance
+    )
+    characterization["capacity_provenance"] = dict(capacity_provenance)
     for row in characterization["rows"]:
         budget = row["budget"]
+        placement_capacity = (
+            managed_capacity if row["key"].startswith("managed-exact/") else available_cpus
+        )
+        row["placement_capacity"] = placement_capacity
         row["affinity_hardware_skip"] = (
             {
                 "kind": "InsufficientAllowedCpus",
                 "required": budget,
-                "available": available_cpus,
+                "available": placement_capacity,
             }
-            if row["surface"] not in {"U-O", "U-I"} and available_cpus < budget
+            if row["surface"] not in {"U-O", "U-I"} and placement_capacity < budget
             else None
         )
     cross_socket = characterization.get("cross_socket_locality")
@@ -418,18 +450,30 @@ def _parse_cpu_list(value: str) -> set[int]:
     return cpus
 
 
-def hardware_availability() -> tuple[int, int]:
+def hardware_availability() -> dict[str, Any]:
     allowed = set(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else set(
         range(os.cpu_count() or 1)
     )
-    usable_nodes = 0
-    for cpu_list in pathlib.Path("/sys/devices/system/node").glob("node[0-9]*/cpulist"):
+    usable_node_cpus: list[list[int]] = []
+    cpu_lists = pathlib.Path("/sys/devices/system/node").glob("node[0-9]*/cpulist")
+    for cpu_list in sorted(
+        cpu_lists, key=lambda path: int(path.parent.name.removeprefix("node"))
+    ):
         try:
             node_cpus = _parse_cpu_list(cpu_list.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        usable_nodes += bool(node_cpus & allowed)
-    return len(allowed), usable_nodes
+        intersection = sorted(node_cpus & allowed)
+        if intersection:
+            usable_node_cpus.append(intersection)
+    managed = usable_node_cpus[0] if usable_node_cpus else sorted(allowed)
+    return {
+        "process_allowed_cpus": sorted(allowed),
+        "process_allowed_capacity": len(allowed),
+        "managed_node_cpus": managed,
+        "managed_node_capacity": len(managed),
+        "usable_numa_nodes": len(usable_node_cpus),
+    }
 
 
 def source_item(source: str, signature: str) -> str:
@@ -769,18 +813,21 @@ def run_bench_row(
 def _write_new_bytes(path: pathlib.Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with path.open("xb") as stream:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-    except FileExistsError as error:
-        raise protocol.ProtocolError(f"normative artifact already exists: {path}") from error
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot create normative artifact {path}: {error}") from error
 
 
 def capture_bench_row(
     executable: pathlib.Path, row_key: str, *, repository: pathlib.Path,
     environment: Mapping[str, str], criterion_home: pathlib.Path,
-    evidence_root: pathlib.Path, hardware_skip: Mapping[str, Any] | None = None,
+    evidence_root: pathlib.Path, placement_capacity: int,
+    hardware_skip: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one fresh Criterion row and preserve its normative output bytes."""
     row_id = row_key.replace("/", "__")
@@ -790,6 +837,7 @@ def capture_bench_row(
             "row_id": row_id,
             "key": row_key,
             "hardware_skip": dict(hardware_skip),
+            "placement_capacity": placement_capacity,
             "latency_ns": None,
             "artifacts": {},
         }
@@ -806,7 +854,7 @@ def capture_bench_row(
     affinity_path = criterion_home / "affinity.json"
     if not affinity_path.is_file():
         raise protocol.ProtocolError(f"row {row_key} lacks its actual fixture affinity artifact")
-    affinity = json.loads(affinity_path.read_text(encoding="utf-8"))
+    affinity = json.loads(_read_regular_bytes(affinity_path).decode("utf-8"))
     budget = int(row_key.split("/budget-", 1)[1].split("/", 1)[0])
     ownership = row_key.split("/", 1)[0]
     observations = affinity.get("observations")
@@ -817,6 +865,7 @@ def capture_bench_row(
         or affinity.get("budget") != budget
         or affinity.get("worker_count") != budget
         or not isinstance(declared, list)
+        or not all(type(cpu) is int and cpu >= 0 for cpu in declared)
         or not isinstance(observations, list)
         or len(observations) != budget
         or any(
@@ -831,13 +880,24 @@ def capture_bench_row(
     exact = ownership != "external-advisory"
     if affinity.get("guarantee") != (
         "ExactDeclared" if exact else "AdvisoryDeclared"
-    ) or (exact and (not declared or any(item[1] not in declared for item in observations))):
+    ) or (
+        type(placement_capacity) is not int
+        or placement_capacity < budget
+        or len(set(declared)) < budget
+        or (
+            exact
+            and (
+                any(item[1] not in declared for item in observations)
+                or len({item[1] for item in observations}) != budget
+            )
+        )
+    ):
         raise protocol.ProtocolError(f"row {row_key} fixture escaped exact placement")
     artifacts = {
         "stdout": (destination / "stdout.log", result.stdout.encode()),
         "stderr": (destination / "stderr.log", result.stderr.encode()),
-        "criterion_estimates": (destination / "estimates.json", estimates[0].read_bytes()),
-        "fixture_affinity": (destination / "affinity.json", affinity_path.read_bytes()),
+        "criterion_estimates": (destination / "estimates.json", _read_regular_bytes(estimates[0])),
+        "fixture_affinity": (destination / "affinity.json", _read_regular_bytes(affinity_path)),
     }
     for path, payload in artifacts.values():
         _write_new_bytes(path, payload)
@@ -864,6 +924,7 @@ def capture_bench_row(
         "row_id": row_id,
         "key": row_key,
         "hardware_skip": None,
+        "placement_capacity": placement_capacity,
         "latency_ns": latency,
         "artifacts": {
             name: {"path": str(path.resolve()), "sha256": sha256_file(path)}
@@ -873,25 +934,55 @@ def capture_bench_row(
 
 
 def atomic_write_json(path: pathlib.Path, value: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    _write_new_bytes(path, payload.encode("utf-8"))
+
+
+def _read_regular_bytes(path: pathlib.Path) -> bytes:
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        pathlib.Path(temporary).unlink(missing_ok=True)
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                raise protocol.ProtocolError(f"normative artifact is not regular: {path}")
+            return stream.read()
+    except protocol.ProtocolError:
         raise
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot read normative artifact {path}: {error}") from error
 
 
 def _read_json(path: pathlib.Path) -> dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(_read_regular_bytes(path).decode("utf-8"))
     if not isinstance(value, dict):
         raise protocol.ProtocolError(f"JSON artifact is not an object: {path}")
     return value
+
+
+def normative_regular_files(root: pathlib.Path) -> set[pathlib.Path]:
+    """Inventory regular artifacts without following links or accepting special files."""
+    files: set[pathlib.Path] = set()
+    pending = [pathlib.Path(root)]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError as error:
+            raise protocol.ProtocolError(f"cannot inventory {directory}: {error}") from error
+        for entry in entries:
+            path = pathlib.Path(entry.path)
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                raise protocol.ProtocolError(f"cannot inventory {path}: {error}") from error
+            if stat.S_ISDIR(metadata.st_mode):
+                pending.append(path)
+            elif stat.S_ISREG(metadata.st_mode):
+                files.add(path.absolute())
+            else:
+                raise protocol.ProtocolError(f"normative artifact is not regular: {path}")
+    return files
 
 
 def validate_terminal_evidence(
@@ -927,10 +1018,21 @@ def validate_terminal_evidence(
     if not isinstance(rows, list) or len(rows) != 47:
         raise protocol.ProtocolError("terminal characterization row inventory is invalid")
     rows_by_key = {row.get("key"): row for row in rows if isinstance(row, dict)}
+    capacity_provenance = characterization.get("capacity_provenance")
+    if not isinstance(capacity_provenance, Mapping):
+        raise protocol.ProtocolError("terminal capacity provenance is missing")
+    available_cpus, managed_capacity, _usable_nodes = _capacity_values(capacity_provenance)
     for row in rows:
         if not isinstance(row, dict) or row.get("hardware_skip") is not None:
             raise protocol.ProtocolError("correctness rows must never hardware-skip")
         _validate_hardware_skip({"hardware_skip": row.get("affinity_hardware_skip")})
+        expected_capacity = (
+            managed_capacity
+            if row.get("key", "").startswith("managed-exact/")
+            else available_cpus
+        )
+        if row.get("placement_capacity") != expected_capacity:
+            raise protocol.ProtocolError("row placement capacity disagrees with provenance")
     cross_socket = characterization.get("cross_socket_locality")
     if not isinstance(cross_socket, dict):
         raise protocol.ProtocolError("cross-socket hardware validity is missing")
@@ -980,7 +1082,11 @@ def validate_terminal_evidence(
         hardware_skip = record.get("hardware_skip")
         _validate_hardware_skip(record)
         expected_skip = rows_by_key[key].get("affinity_hardware_skip")
-        if hardware_skip != expected_skip:
+        if (
+            hardware_skip != expected_skip
+            or record.get("placement_capacity")
+            != rows_by_key[key].get("placement_capacity")
+        ):
             raise protocol.ProtocolError(f"latency {key} hardware skip mismatch")
         if hardware_skip is not None:
             if record.get("latency_ns") is not None or artifact_records:
@@ -1015,7 +1121,7 @@ def validate_terminal_evidence(
             "path": str(build_path.resolve()), "sha256": sha256_file(build_path)
         }:
             raise protocol.ProtocolError(f"characterization {owner} build digest mismatch")
-    actual_files = {path.resolve() for path in evidence_root.rglob("*") if path.is_file()}
+    actual_files = normative_regular_files(evidence_root)
     if actual_files != expected_files:
         raise protocol.ProtocolError("terminal evidence recursive file inventory mismatch")
 
@@ -1032,16 +1138,11 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cargo-home", required=True, type=pathlib.Path)
     args = parser.parse_args(argv)
     validate_candidate_worktree(args.repository, args.candidate)
+    evidence_root = protocol.prepare_empty_root(args.evidence_root)
     scratch_root = validate_external_scratch_root(
-        args.repository, args.evidence_root, args.scratch_root
+        args.repository, evidence_root, args.scratch_root
     )
     source_inventory = validate_source_contract(args.repository)
-    evidence_root = args.evidence_root.resolve()
-    if evidence_root.exists():
-        if any(evidence_root.iterdir()):
-            raise protocol.ProtocolError("Task 7 evidence root must be initially empty")
-    else:
-        evidence_root.mkdir(mode=0o700, parents=True)
     common_lock = args.common_lock.resolve(strict=True)
     common_destination = evidence_root / build.LOCK_PATHS["common"]
     common_destination.parent.mkdir(parents=True)
@@ -1091,11 +1192,10 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
     cpu = _read_json(pathlib.Path(manifests["cpu"]["artifact"]))
     ad = _read_json(pathlib.Path(manifests["ad"]["artifact"]))
     characterization = compose_characterization(cpu, ad)
-    available_cpus, usable_numa_nodes = hardware_availability()
+    capacity_provenance = hardware_availability()
     attach_hardware_validity(
         characterization,
-        available_cpus=available_cpus,
-        usable_numa_nodes=usable_numa_nodes,
+        capacity_provenance=capacity_provenance,
     )
     bench_digests = {}
     bench_manifests = {}
@@ -1120,6 +1220,7 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
                             executable, row["key"], repository=args.repository,
                             environment=runtime_environment,
                             criterion_home=row_scratch, evidence_root=evidence_root,
+                            placement_capacity=row["placement_capacity"],
                             hardware_skip=row["affinity_hardware_skip"],
                         ))
                     finally:

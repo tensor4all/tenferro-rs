@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -117,10 +118,39 @@ def artifacts() -> tuple[dict[str, object], dict[str, object]]:
 
 
 class InventoryTests(unittest.TestCase):
+    def test_asymmetric_numa_capacities_are_bound_per_placement(self) -> None:
+        cpu, ad = artifacts()
+        composed = gates.compose_characterization(cpu, ad)
+        capacity = {
+            "process_allowed_cpus": [0, 1, 2, 3],
+            "process_allowed_capacity": 4,
+            "managed_node_cpus": [0],
+            "managed_node_capacity": 1,
+            "usable_numa_nodes": 1,
+        }
+        gates.attach_hardware_validity(composed, capacity_provenance=capacity)
+        managed = next(
+            item for item in composed["rows"]
+            if item["key"] == "managed-exact/budget-2/D-N"
+        )
+        external = next(
+            item for item in composed["rows"]
+            if item["key"] == "external-exact/budget-2/D-N"
+        )
+        self.assertEqual(managed["placement_capacity"], 1)
+        self.assertEqual(managed["affinity_hardware_skip"]["available"], 1)
+        self.assertEqual(external["placement_capacity"], 4)
+        self.assertIsNone(external["affinity_hardware_skip"])
+        self.assertEqual(composed["capacity_provenance"], capacity)
+
     def test_real_hardware_skips_are_typed_but_correctness_never_skips(self) -> None:
         cpu, ad = artifacts()
         composed = gates.compose_characterization(cpu, ad)
-        gates.attach_hardware_validity(composed, available_cpus=1, usable_numa_nodes=1)
+        gates.attach_hardware_validity(composed, capacity_provenance={
+            "process_allowed_cpus": [0], "process_allowed_capacity": 1,
+            "managed_node_cpus": [0], "managed_node_capacity": 1,
+            "usable_numa_nodes": 1,
+        })
         for item in composed["rows"]:
             self.assertIsNone(item["hardware_skip"])
             if item["surface"] in {"U-O", "U-I"} or item["budget"] == 1:
@@ -202,6 +232,96 @@ class InventoryTests(unittest.TestCase):
 
 
 class ProvenanceTests(unittest.TestCase):
+    def test_runner_rejects_symlink_evidence_root_before_build(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            real = root / "real-evidence"
+            real.mkdir()
+            alias = root / "evidence-link"
+            alias.symlink_to(real, target_is_directory=True)
+            scratch = root / "scratch"
+            scratch.mkdir()
+            with (
+                mock.patch.object(gates, "validate_candidate_worktree"),
+                mock.patch.object(
+                    gates, "validate_external_scratch_root", return_value=scratch
+                ),
+                mock.patch.object(gates, "validate_source_contract", return_value=[]),
+                mock.patch.object(
+                    build, "build_dispatch_and_characterization_artifacts"
+                ) as build_artifacts,
+                self.assertRaises(protocol.ProtocolError),
+            ):
+                gates._run_main(
+                    [
+                        "--repository", str(pathlib.Path.cwd()),
+                        "--evidence-root", str(alias),
+                        "--candidate", "a" * 40,
+                        "--common-lock", str(pathlib.Path.cwd() / "Cargo.lock"),
+                        "--scratch-root", str(scratch),
+                        "--path", "/usr/bin",
+                        "--home", str(root),
+                        "--cargo-home", str(root),
+                    ]
+                )
+            build_artifacts.assert_not_called()
+
+    def test_normative_reads_inventory_and_writes_reject_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            target = root / "target.json"
+            target.write_text("{}", encoding="utf-8")
+            link = root / "link.json"
+            link.symlink_to(target)
+            with self.assertRaises(protocol.ProtocolError):
+                gates._read_json(link)
+            with self.assertRaises(protocol.ProtocolError):
+                gates._write_new_bytes(link, b"replacement")
+            with self.assertRaises(protocol.ProtocolError):
+                gates.atomic_write_json(link, {"replacement": True})
+            special = root / "special"
+            os.mkfifo(special)
+            with self.assertRaises(protocol.ProtocolError):
+                gates.normative_regular_files(root)
+
+    def test_rust_evidence_writers_are_exclusive_and_non_following(self) -> None:
+        paths = (
+            "crates/tenferro-cpu/src/tests/phase2e.rs",
+            "crates/tenferro-ad/src/eager/tests/phase2e.rs",
+            "crates/tenferro-cpu/benches/numa_execution.rs",
+            "crates/tenferro-ad/benches/phase2e_characterization.rs",
+        )
+        for relative in paths:
+            source = pathlib.Path(relative).read_text()
+            self.assertIn("create_new(true)", source, relative)
+            self.assertIn("write_all", source, relative)
+            self.assertNotIn("std::fs::write(", source, relative)
+
+    def test_phase2e_rust_targets_have_non_linux_compile_gates(self) -> None:
+        repository = pathlib.Path(__file__).resolve().parents[1]
+        for relative in (
+            "crates/tenferro-cpu/src/tests.rs",
+            "crates/tenferro-ad/src/eager/tests.rs",
+        ):
+            source = (repository / relative).read_text()
+            self.assertIn(
+                '#[cfg(any(target_os = "linux", target_os = "android"))]\nmod phase2e;',
+                source,
+                relative,
+            )
+        for relative in (
+            "crates/tenferro-cpu/benches/numa_execution.rs",
+            "crates/tenferro-ad/benches/phase2e_characterization.rs",
+        ):
+            source = (repository / relative).read_text()
+            self.assertIn(
+                '#[cfg(any(target_os = "linux", target_os = "android"))]\nfn current_cpu()',
+                source,
+                relative,
+            )
+            self.assertIn('#[cfg(not(any(target_os = "linux", target_os = "android")))]', source)
+            self.assertIn("fn main() {}", source, relative)
+
     def test_operation_observer_is_custom_cfg_only_not_a_cargo_feature(self) -> None:
         cpu_manifest = pathlib.Path("crates/tenferro-cpu/Cargo.toml").read_text()
         ad_manifest = pathlib.Path("crates/tenferro-ad/Cargo.toml").read_text()
@@ -488,7 +608,7 @@ class ProvenanceTests(unittest.TestCase):
                 record = gates.capture_bench_row(
                     executable, "managed-exact/budget-2/D-N", repository=root,
                     environment={"PATH": "/controlled"}, criterion_home=scratch,
-                    evidence_root=root / "evidence",
+                    evidence_root=root / "evidence", placement_capacity=2,
                 )
             self.assertEqual(record["latency_ns"], {
                 "point_estimate": 12.0, "lower_bound": 10.0,
@@ -501,6 +621,35 @@ class ProvenanceTests(unittest.TestCase):
                     record["artifacts"][name]["sha256"], gates.sha256_file(artifact)
                 )
 
+    def test_exact_bench_row_requires_budget_distinct_cpu_observations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            executable = root / "bench-bin"
+            executable.write_bytes(b"binary")
+            scratch = root / "criterion"
+            estimate = scratch / "criterion-id/new/estimates.json"
+            estimate.parent.mkdir(parents=True)
+            estimate.write_text(json.dumps({"mean": {"confidence_interval": {
+                "confidence_level": 0.95, "lower_bound": 10.0, "upper_bound": 14.0,
+            }, "point_estimate": 12.0}}))
+            (scratch / "affinity.json").write_text(json.dumps({
+                "key": "managed-exact/budget-2/D-N",
+                "ownership": "managed-exact",
+                "guarantee": "ExactDeclared",
+                "budget": 2,
+                "worker_count": 2,
+                "declared_cpus": [0, 1],
+                "placement_capacity": 2,
+                "observations": [[0, 0], [1, 0]],
+            }))
+            completed = subprocess.CompletedProcess([], 0, "", "")
+            with mock.patch.object(gates, "run_bench_row", return_value=completed):
+                with self.assertRaisesRegex(protocol.ProtocolError, "placement"):
+                    gates.capture_bench_row(
+                        executable, "managed-exact/budget-2/D-N", repository=root,
+                        environment={"PATH": "/controlled"}, criterion_home=scratch,
+                        evidence_root=root / "evidence", placement_capacity=2,
+                    )
     def test_latency_hardware_skip_does_not_launch_or_create_fake_estimates(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -514,13 +663,14 @@ class ProvenanceTests(unittest.TestCase):
                     executable, "managed-exact/budget-4/D-N", repository=root,
                     environment=protocol.runtime_environment(path="/bin", home="/tmp/home"),
                     criterion_home=root / "criterion", evidence_root=root / "evidence",
-                    hardware_skip=skip,
+                    placement_capacity=1, hardware_skip=skip,
                 )
             run.assert_not_called()
             self.assertEqual(record, {
                 "row_id": "managed-exact__budget-4__D-N",
                 "key": "managed-exact/budget-4/D-N",
                 "hardware_skip": skip,
+                "placement_capacity": 1,
                 "latency_ns": None,
                 "artifacts": {},
             })

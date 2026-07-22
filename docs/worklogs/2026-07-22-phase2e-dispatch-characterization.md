@@ -256,3 +256,31 @@ used the protocol environment to emit `[[0, 32]]` plus one Criterion estimate.
 The preserved Cycle 5 tree was revalidated from a detached exact `ebb5fb6c`
 worktree, so its candidate-bound protocol digest and 193-file inventory were
 checked without substituting the Cycle 6 protocol.
+
+## Cycle 7 portability, filesystem, and asymmetric-capacity hardening
+
+The owning runner now validates the unresolved evidence-root path before any
+canonicalization or build, rejects final and ancestor symlinks, inventories
+only non-symlink regular files and directories, and uses exclusive/no-follow
+normative reads and writes. CPU and AD dispatch evidence plus benchmark
+affinity writers likewise use `create_new(true)` and one bounded `write_all`
+instead of replace/rename writers. Existing artifacts can therefore neither be
+followed nor overwritten.
+
+Hardware validity is now placement-specific. The manifest binds the exact
+process-allowed CPU list/capacity and the numerically first usable managed NUMA
+node CPU list/capacity. Managed rows skip against the latter, while external
+exact/advisory rows skip against the process-wide capacity. Successful exact
+rows require one distinct observed CPU per worker as well as containment in the
+declared CPU set. Terminal validation rechecks the capacity provenance, every
+row's selected capacity, and every latency record's binding.
+
+Phase 2E test modules are compiled only on Linux/Android. Both Criterion bench
+targets keep a portable fallback `main`, while the `sched_getcpu` observer is
+target-gated. The combined protocol/build/gate suite passed 156 tests. Focused
+CPU and AD evidence tests passed, `cargo test --workspace --all-targets` passed,
+and workspace all-target Clippy passed with warnings denied. Rustfmt and
+`git diff --check` passed. Focused real Criterion smoke rows emitted exclusive
+affinity artifacts: managed-exact B=1 D-N measured about 33.1 microseconds and
+managed-exact B=1 E-N about 29.1 microseconds on this host. No full owning E2E
+was run in this cycle; the preserved Cycle 5 evidence tree remains untouched.

@@ -1,4 +1,5 @@
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1115,9 +1116,11 @@ fn write_evidence(evidence: &Evidence) -> std::io::Result<()> {
         .unwrap();
     }
     output.push_str("]}}\n");
-    let temporary = directory.join("cpu-evidence.json.partial");
-    std::fs::write(&temporary, output)?;
-    std::fs::rename(temporary, directory.join("cpu-evidence.json"))
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(directory.join("cpu-evidence.json"))?;
+    file.write_all(output.as_bytes())
 }
 
 #[test]

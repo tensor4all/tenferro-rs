@@ -26,6 +26,7 @@ use tenferro_tensor::{
     TensorReduction, TensorStructural,
 };
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod phase2e;
 use tenferro_tensor::{
     CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,

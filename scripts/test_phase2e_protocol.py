@@ -98,6 +98,21 @@ class EmptyRootTests(unittest.TestCase):
             with self.assertRaises(protocol.ProtocolError):
                 protocol.prepare_empty_root(regular_file)
 
+    def test_prepare_empty_root_rejects_final_and_ancestor_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            real_parent = base / "real"
+            real_parent.mkdir()
+            final_target = real_parent / "target"
+            final_target.mkdir()
+            final_link = base / "final-link"
+            final_link.symlink_to(final_target, target_is_directory=True)
+            ancestor_link = base / "ancestor-link"
+            ancestor_link.symlink_to(real_parent, target_is_directory=True)
+            for path in (final_link, ancestor_link / "new-root"):
+                with self.subTest(path=path), self.assertRaises(protocol.ProtocolError):
+                    protocol.prepare_empty_root(path)
+
 
 class RuntimeEnvironmentTests(unittest.TestCase):
     def test_runtime_environment_is_an_exact_allowlist(self) -> None:

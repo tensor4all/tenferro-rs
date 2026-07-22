@@ -94,7 +94,18 @@ CANONICAL_CASES = MappingProxyType(_canonical_cases())
 
 def prepare_empty_root(root: pathlib.Path) -> pathlib.Path:
     """Create or accept an empty regular directory and reject all other roots."""
-    root = pathlib.Path(root)
+    root = pathlib.Path(os.path.abspath(root))
+    current = pathlib.Path(root.anchor)
+    for component in root.parts[1:]:
+        current /= component
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            break
+        except OSError as error:
+            raise ProtocolError(f"cannot inspect evidence root {root}: {error}") from error
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ProtocolError(f"evidence root traverses a symbolic link: {current}")
     try:
         metadata = root.lstat()
     except FileNotFoundError:
@@ -102,6 +113,12 @@ def prepare_empty_root(root: pathlib.Path) -> pathlib.Path:
             root.mkdir(parents=True)
         except OSError as error:
             raise ProtocolError(f"cannot create evidence root {root}: {error}") from error
+        try:
+            metadata = root.lstat()
+        except OSError as error:
+            raise ProtocolError(f"cannot inspect evidence root {root}: {error}") from error
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ProtocolError(f"evidence root is not a regular directory: {root}")
         return root
     except OSError as error:
         raise ProtocolError(f"cannot inspect evidence root {root}: {error}") from error
