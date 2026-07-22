@@ -68,6 +68,14 @@ workspace member into one `core` cluster.
   crates and dependencies without coupling correctness to layout-engine
   coordinates.
 
+## Content-Sizing Refinement
+
+After visual review, the canonical DOT was tightened without introducing fixed
+geometry: nodes use `fixedsize=false` and compact label margins, clusters use
+local ranking and an explicit 8-point content margin, and graph/rank/node
+spacing was reduced. The regenerated image was inspected at 1800 pixels wide;
+labels, cluster headings, borders, and arrowheads remain unclipped and aligned.
+
 ## Verification Performed
 
 - TDD red/green cycles for current layer classification, Graphviz invocation,
