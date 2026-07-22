@@ -65,8 +65,6 @@ AFFINITY_ROWS = frozenset(
     for ownership in ("managed-exact", "external-exact", "external-advisory")
     for budget in (1, 2, 4)
     for surface in ("D-N", "D-D", "G-O", "E-N", "E-D")
-) | frozenset(
-    ("external-no-outer/budget-2/U-O", "external-no-inner/budget-2/U-I")
 )
 
 
@@ -143,17 +141,40 @@ def runtime_environment(
             raise ProtocolError("affinity parameters require CRITERION_HOME")
         criterion_root = pathlib.Path(criterion_home)
         destination = pathlib.Path(affinity_file)
+        try:
+            root_metadata = criterion_root.lstat()
+            resolved_root = criterion_root.resolve(strict=True)
+        except OSError as error:
+            raise ProtocolError(
+                f"CRITERION_HOME cannot be inspected for affinity evidence: {error}"
+            ) from error
+        expected_destination = criterion_root / "affinity.json"
         if (
-            not criterion_root.is_absolute()
-            or criterion_root != pathlib.Path(os.path.abspath(criterion_root))
-            or not destination.is_absolute()
-            or destination != pathlib.Path(os.path.abspath(destination))
-            or destination == criterion_root
-            or criterion_root not in destination.parents
+            not stat.S_ISDIR(root_metadata.st_mode)
+            or resolved_root != criterion_root
+            or destination != expected_destination
         ):
             raise ProtocolError(
-                "affinity file must be a canonical absolute path below CRITERION_HOME"
+                "affinity file must be exactly canonical CRITERION_HOME/affinity.json"
             )
+        try:
+            destination_metadata = destination.lstat()
+        except FileNotFoundError:
+            destination_metadata = None
+        except OSError as error:
+            raise ProtocolError(f"affinity file cannot be inspected: {error}") from error
+        if destination_metadata is not None and not stat.S_ISREG(
+            destination_metadata.st_mode
+        ):
+            raise ProtocolError("affinity file may not be a symlink or special file")
+        try:
+            resolved_destination = destination.resolve(
+                strict=destination_metadata is not None
+            )
+        except OSError as error:
+            raise ProtocolError(f"affinity file cannot be resolved: {error}") from error
+        if resolved_destination != expected_destination:
+            raise ProtocolError("affinity file path is not canonical")
     result = {
         "PATH": path,
         "HOME": home,

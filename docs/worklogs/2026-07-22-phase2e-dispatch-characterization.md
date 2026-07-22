@@ -214,11 +214,14 @@ in `RUSTFLAGS`. The manifest binds that complete string and cfg name in
 augmented flags. Characterization benchmark builds omit these flags.
 
 `phase2e_protocol.runtime_environment` owns the optional affinity-row contract.
-`affinity_row` and `affinity_file` are paired parameters; the row must have the
-canonical Phase 2E key shape and the file must be a canonical absolute path
-below `CRITERION_HOME`. The constructor emits the exact two environment keys.
-The row runner calls that constructor once and does not mutate either the
-caller environment or the returned environment.
+`affinity_row` and `affinity_file` are paired parameters. The row must be one of
+the exact 45 successful benchmark keys; the U-O and U-I correctness-only rows
+are excluded. `CRITERION_HOME` must be an existing canonical non-symlink
+directory, and the file must be exactly its canonical, non-symlink
+`affinity.json` child. The constructor rejects symlink roots, symlink or special
+destinations, descendant aliases, and `..` aliases before execution. It emits
+the exact two environment keys. The row runner calls that constructor once and
+does not mutate either the caller environment or the returned environment.
 
 Focused custom-cfg execution of the real AD f64[65536] E-N workload produced
 nonempty primary and fresh-recovery operation worker pairs for all nine rows.
@@ -243,3 +246,13 @@ Dispatch terminal SHA-256 was
 characterization terminal SHA-256 was
 `8b44a6e396bf7241a5f37ed71614f82cd04d828c770b47e5b95f4d385cac676c`.
 An independent post-run invocation of `validate_terminal_evidence` passed.
+
+Cycle 6 tightened the affinity environment schema without changing benchmark
+execution. The immutable row inventory is exactly the 45 successful benchmark
+keys, and path validation is exact and symlink-safe as described above. The
+combined protocol/build/gate suite passed 149 tests, Python bytecode compilation
+and `git diff --check` passed, and an actual managed-exact B=1 D-N benchmark row
+used the protocol environment to emit `[[0, 32]]` plus one Criterion estimate.
+The preserved Cycle 5 tree was revalidated from a detached exact `ebb5fb6c`
+worktree, so its candidate-bound protocol digest and 193-file inventory were
+checked without substituting the Cycle 6 protocol.

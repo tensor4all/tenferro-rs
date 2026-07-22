@@ -140,21 +140,76 @@ class RuntimeEnvironmentTests(unittest.TestCase):
         self.assertEqual(set(with_criterion), set(without_criterion) | {"CRITERION_HOME"})
 
     def test_runtime_environment_adds_paired_affinity_parameters(self) -> None:
-        environment = protocol.runtime_environment(
-            path="/bin",
-            home="/tmp/h",
-            criterion_home="/tmp/criterion",
-            affinity_row="managed-exact/budget-2/D-N",
-            affinity_file="/tmp/criterion/affinity.json",
-        )
-        self.assertEqual(
-            environment["TENFERRO_PHASE2E_AFFINITY_ROW"],
-            "managed-exact/budget-2/D-N",
-        )
-        self.assertEqual(
-            environment["TENFERRO_PHASE2E_AFFINITY_FILE"],
-            "/tmp/criterion/affinity.json",
-        )
+        with tempfile.TemporaryDirectory() as temporary:
+            criterion = pathlib.Path(temporary) / "criterion"
+            criterion.mkdir()
+            affinity = criterion / "affinity.json"
+            environment = protocol.runtime_environment(
+                path="/bin",
+                home="/tmp/h",
+                criterion_home=str(criterion),
+                affinity_row="managed-exact/budget-2/D-N",
+                affinity_file=str(affinity),
+            )
+            self.assertEqual(
+                environment["TENFERRO_PHASE2E_AFFINITY_ROW"],
+                "managed-exact/budget-2/D-N",
+            )
+            self.assertEqual(
+                environment["TENFERRO_PHASE2E_AFFINITY_FILE"],
+                str(affinity),
+            )
+
+    def test_affinity_row_inventory_is_exactly_the_45_benchmark_keys(self) -> None:
+        self.assertEqual(len(protocol.AFFINITY_ROWS), 45)
+        self.assertNotIn("external-no-outer/budget-2/U-O", protocol.AFFINITY_ROWS)
+        self.assertNotIn("external-no-inner/budget-2/U-I", protocol.AFFINITY_ROWS)
+
+    def test_affinity_file_is_exact_and_symlink_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            criterion = base / "criterion"
+            criterion.mkdir()
+            exact = criterion / "affinity.json"
+            protocol.runtime_environment(
+                path="/bin",
+                home="/tmp/h",
+                criterion_home=str(criterion),
+                affinity_row="managed-exact/budget-2/D-N",
+                affinity_file=str(exact),
+            )
+
+            root_link = base / "criterion-link"
+            root_link.symlink_to(criterion, target_is_directory=True)
+            destination_target = base / "outside.json"
+            destination_target.write_text("outside", encoding="utf-8")
+            destination_link = criterion / "affinity.json"
+            destination_link.symlink_to(destination_target)
+            descendant = criterion / "descendant"
+            descendant.mkdir()
+            for root, destination in (
+                (root_link, root_link / "affinity.json"),
+                (criterion, destination_link),
+            ):
+                with self.subTest(root=root, destination=destination), self.assertRaises(
+                    protocol.ProtocolError
+                ):
+                    protocol.runtime_environment(
+                        path="/bin",
+                        home="/tmp/h",
+                        criterion_home=str(root),
+                        affinity_row="managed-exact/budget-2/D-N",
+                        affinity_file=str(destination),
+                    )
+            destination_link.unlink()
+            with self.assertRaises(protocol.ProtocolError):
+                protocol.runtime_environment(
+                    path="/bin",
+                    home="/tmp/h",
+                    criterion_home=str(criterion),
+                    affinity_row="managed-exact/budget-2/D-N",
+                    affinity_file=str(descendant / ".." / "affinity.json"),
+                )
 
     def test_runtime_environment_rejects_unpaired_or_invalid_affinity_parameters(self) -> None:
         invalid = (
@@ -166,6 +221,14 @@ class RuntimeEnvironmentTests(unittest.TestCase):
             },
             {
                 "affinity_row": "managed-exact/budget-2/U-O",
+                "affinity_file": "/tmp/criterion/affinity.json",
+            },
+            {
+                "affinity_row": "external-no-outer/budget-2/U-O",
+                "affinity_file": "/tmp/criterion/affinity.json",
+            },
+            {
+                "affinity_row": "external-no-inner/budget-2/U-I",
                 "affinity_file": "/tmp/criterion/affinity.json",
             },
             {

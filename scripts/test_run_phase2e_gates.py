@@ -368,6 +368,7 @@ class ProvenanceTests(unittest.TestCase):
             root = pathlib.Path(temporary)
             executable = root / "bench-bin"
             executable.write_bytes(b"binary")
+            (root / "criterion").mkdir()
             completed = __import__("subprocess").CompletedProcess([], 0, "", "")
             sealed = protocol.runtime_environment(path="/controlled", home="/empty-home")
             original = dict(sealed)
