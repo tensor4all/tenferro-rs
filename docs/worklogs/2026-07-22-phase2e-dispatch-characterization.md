@@ -190,3 +190,13 @@ success. Only a host with fewer than two usable nodes may emit the typed
   declared CPU set. This host exposes one usable NUMA node, so the executable
   cross-socket probe emitted only the typed
   `InsufficientNumaNodes { required: 2, available: 1 }` skip.
+- A clean immutable Cycle 4 candidate at `d0bbf07c` completed the owning CLI
+  end to end: all four fresh builds, both direct evidence executables, 47
+  composed correctness rows, and 45/45 real Criterion latency rows passed.
+  Every latency row contains its independently hashed fixture-affinity artifact;
+  recursive terminal validation found exactly 193 files. Dispatch terminal
+  SHA-256 was
+  `e79b92e79966b1959c38bdfe41f7cd3bc340f5ad7837d6bd6aa50dde1d9e9858`;
+  characterization terminal SHA-256 was
+  `0b583b599cc1dfb7e74500da0f699ea51e3f5a8d9ed9db7fa48e2faa0a093421`.
+  An independent post-run invocation of `validate_terminal_evidence` passed.
