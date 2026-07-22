@@ -30,6 +30,7 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
         LinalgAdOpKind::Eig,
         LinalgAdOpKind::EigVals,
         LinalgAdOpKind::TriangularSolve,
+        LinalgAdOpKind::SvdFull,
     ];
 
     let manifest = all_linalg_ad_support();
@@ -70,6 +71,22 @@ fn linalg_ad_support_manifest_marks_partial_decomposition_outputs() {
         LinalgAdRuleSupport::SupportedViaLinearize,
     );
     assert_output_status(eig, "eigenvectors", LinalgAdRuleSupport::Unsupported);
+}
+
+#[test]
+fn linalg_ad_support_manifest_marks_full_svd_unsupported() {
+    let svd_full = linalg_ad_support(LinalgAdOpKind::SvdFull);
+    assert_eq!(svd_full.linearize, LinalgAdRuleSupport::Unsupported);
+    assert_eq!(svd_full.transpose, LinalgAdRuleSupport::Unsupported);
+    assert_eq!(svd_full.jvp.status, LinalgAdRuleSupport::Unsupported);
+    assert_eq!(svd_full.vjp.status, LinalgAdRuleSupport::Unsupported);
+    assert_output_status(svd_full, "u", LinalgAdRuleSupport::Unsupported);
+    assert_output_status(
+        svd_full,
+        "singular_values",
+        LinalgAdRuleSupport::Unsupported,
+    );
+    assert_output_status(svd_full, "vt", LinalgAdRuleSupport::Unsupported);
 }
 
 #[test]

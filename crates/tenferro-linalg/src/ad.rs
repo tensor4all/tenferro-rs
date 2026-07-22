@@ -128,6 +128,11 @@ impl ExtensionLinearizeRule for LinalgAdRule {
                 derivative_eps,
                 ctx,
             ),
+            // Full-matrices SVD is value-only; AD is intentionally unsupported
+            // (recorded as such in the linalg AD support manifest). Emit no
+            // tangent rather than a silent thin-SVD derivative, matching the
+            // LuFactor unsupported precedent above.
+            LinalgOp::SvdFull => Ok(vec![None; op.output_count()]),
             LinalgOp::SvdVals { derivative_eps } => {
                 rules::linearize_svd_values(builder, primal_in, tangent_in, derivative_eps, ctx)
             }
@@ -224,6 +229,7 @@ impl ExtensionLinearTransposeRule for LinalgAdRule {
             | LinalgOp::LuFactor
             | LinalgOp::FullPivLu
             | LinalgOp::Svd { .. }
+            | LinalgOp::SvdFull
             | LinalgOp::SvdVals { .. }
             | LinalgOp::Qr { .. }
             | LinalgOp::Eigh { .. }
@@ -1049,6 +1055,7 @@ mod tests {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
                 gauge: SvdGauge::Raw,
             },
+            LinalgOp::SvdFull,
             LinalgOp::SvdVals {
                 derivative_eps: DEFAULT_DECOMPOSITION_DERIVATIVE_EPS,
             },

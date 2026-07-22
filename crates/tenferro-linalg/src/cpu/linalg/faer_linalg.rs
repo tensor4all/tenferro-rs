@@ -64,6 +64,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
+        full: bool,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
     fn svd_values_2d(
         ctx: &CpuContext,
@@ -105,6 +106,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         mat: MatRef<'_, Self>,
         m: usize,
         n: usize,
+        full: bool,
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
     fn qr_core(
@@ -1548,10 +1550,11 @@ macro_rules! impl_faer_linalg_for_real {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
+        full: bool,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "svd")?;
         let mat = Self::faer_mat_ref_compact(input.host_data()?, m, n);
-        Self::svd_core(ctx, buffers, mat, m, n, input.placement())
+        Self::svd_core(ctx, buffers, mat, m, n, full, input.placement())
     }
 
     fn svd_values_2d(
@@ -1655,17 +1658,26 @@ macro_rules! impl_faer_linalg_for_real {
         mat: MatRef<'_, Self>,
         m: usize,
         n: usize,
+        full: bool,
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let k = m.min(n);
-        let mut u = Mat::zeros(m, k);
-        let mut v = Mat::zeros(n, k);
+        // Full mode returns the square unitary factors `U (m x m)` and
+        // `V (n x n)`; thin mode keeps only the leading `k` vectors. The
+        // singular-value count is `k` in both modes.
+        let (u_cols, v_cols, vectors) = if full {
+            (m, n, faer::linalg::svd::ComputeSvdVectors::Full)
+        } else {
+            (k, k, faer::linalg::svd::ComputeSvdVectors::Thin)
+        };
+        let mut u = Mat::zeros(m, u_cols);
+        let mut v = Mat::zeros(n, v_cols);
         let mut s = Diag::zeros(k);
         let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<Self>(
             m,
             n,
-            faer::linalg::svd::ComputeSvdVectors::Thin,
-            faer::linalg::svd::ComputeSvdVectors::Thin,
+            vectors,
+            vectors,
             ctx.faer_par(),
             Default::default(),
         ));
@@ -1682,20 +1694,20 @@ macro_rules! impl_faer_linalg_for_real {
         .map_err(|_| decomposition_failed("svd"))?;
 
         let u = tensor_from_vec_with_template(
-            vec![m, k],
+            vec![m, u_cols],
             col_major_vec_from_mat(buffers, u.as_ref())?,
             placement,
         )?;
         let s =
             tensor_from_vec_with_template(vec![k], vec_from_diag(buffers, s.as_ref()), placement)?;
-        let vt_len = checked_product("svd", "right singular vectors", &[k, n])?;
+        let vt_len = checked_product("svd", "right singular vectors", &[v_cols, n])?;
         let mut vt_data = buffers.acquire_with_capacity::<Self>(vt_len);
         for j in 0..n {
-            for i in 0..k {
+            for i in 0..v_cols {
                 vt_data.push(v[(j, i)]);
             }
         }
-        let vt = tensor_from_vec_with_template(vec![k, n], vt_data, placement)?;
+        let vt = tensor_from_vec_with_template(vec![v_cols, n], vt_data, placement)?;
 
         Ok(vec![u, s, vt])
     }
@@ -2424,10 +2436,11 @@ macro_rules! impl_faer_linalg_for_complex {
         ctx: &CpuContext,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
+        full: bool,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         let (m, n) = matrix_dims(input, "svd")?;
         let mat = Self::faer_mat_ref_compact(input.host_data()?, m, n);
-        Self::svd_core(ctx, buffers, mat, m, n, input.placement())
+        Self::svd_core(ctx, buffers, mat, m, n, full, input.placement())
     }
 
     fn svd_values_2d(
@@ -2551,6 +2564,7 @@ macro_rules! impl_faer_linalg_for_complex {
         mat: MatRef<'_, Self>,
         m: usize,
         n: usize,
+        full: bool,
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
         // Cast Self (Complex32/64) to $faer_complex (faer::c32/c64) for faer calls.
@@ -2565,14 +2579,22 @@ macro_rules! impl_faer_linalg_for_complex {
             )
         };
         let k = m.min(n);
-        let mut u = Mat::zeros(m, k);
-        let mut v = Mat::zeros(n, k);
+        // Full mode returns the square unitary factors `U (m x m)` and
+        // `V (n x n)`; thin mode keeps only the leading `k` vectors. The
+        // singular-value count is `k` in both modes.
+        let (u_cols, v_cols, vectors) = if full {
+            (m, n, faer::linalg::svd::ComputeSvdVectors::Full)
+        } else {
+            (k, k, faer::linalg::svd::ComputeSvdVectors::Thin)
+        };
+        let mut u = Mat::zeros(m, u_cols);
+        let mut v = Mat::zeros(n, v_cols);
         let mut s = Diag::zeros(k);
         let mut mem = MemBuffer::new(faer::linalg::svd::svd_scratch::<$faer_complex>(
             m,
             n,
-            faer::linalg::svd::ComputeSvdVectors::Thin,
-            faer::linalg::svd::ComputeSvdVectors::Thin,
+            vectors,
+            vectors,
             ctx.faer_par(),
             Default::default(),
         ));
@@ -2589,7 +2611,7 @@ macro_rules! impl_faer_linalg_for_complex {
         .map_err(|_| decomposition_failed("svd"))?;
 
         let u = tensor_from_vec_with_template(
-            vec![m, k],
+            vec![m, u_cols],
             $vec_from_mat(buffers, u.as_ref())?,
             placement,
         )?;
@@ -2598,14 +2620,14 @@ macro_rules! impl_faer_linalg_for_complex {
             $vec_from_real_diag(buffers, s.as_ref()),
             placement,
         )?;
-        let vt_len = checked_product("svd", "right singular vectors", &[k, n])?;
+        let vt_len = checked_product("svd", "right singular vectors", &[v_cols, n])?;
         let mut vt_data = buffers.acquire_with_capacity::<Self>(vt_len);
         for j in 0..n {
-            for i in 0..k {
+            for i in 0..v_cols {
                 vt_data.push(v[(j, i)].conj());
             }
         }
-        let vt = tensor_from_vec_with_template(vec![k, n], vt_data, placement)?;
+        let vt = tensor_from_vec_with_template(vec![v_cols, n], vt_data, placement)?;
 
         Ok(vec![u, s, vt])
     }
@@ -3077,7 +3099,38 @@ pub(crate) fn svd<T: FaerLinalg>(
         ]);
     }
     batched_multi_result("svd", buffers, input, 2, |buffers, batch| {
-        T::svd_2d(ctx, buffers, batch)
+        T::svd_2d(ctx, buffers, batch, false)
+    })
+}
+
+pub(crate) fn svd_full<T: FaerLinalg>(
+    ctx: &CpuContext,
+    buffers: &mut BufferPool,
+    input: &TypedTensor<T>,
+) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
+    if has_zero_dim(input.shape()) {
+        let (m, n, batch_shape) = matrix_core_and_batch(input, "svd_full")?;
+        let k = m.min(n);
+        return Ok(vec![
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(m, m, batch_shape),
+                Vec::new(),
+                input.placement(),
+            )?,
+            tensor_from_vec_with_template(
+                vector_with_batch_shape(k, batch_shape),
+                Vec::new(),
+                input.placement(),
+            )?,
+            tensor_from_vec_with_template(
+                matrix_with_batch_shape(n, n, batch_shape),
+                Vec::new(),
+                input.placement(),
+            )?,
+        ]);
+    }
+    batched_multi_result("svd_full", buffers, input, 2, |buffers, batch| {
+        T::svd_2d(ctx, buffers, batch, true)
     })
 }
 
@@ -3224,7 +3277,7 @@ pub(crate) fn svd_view<T: FaerLinalg + 'static>(
     let placement = view.placement().clone();
     let base = host_base_ptr(&view)?;
     let mat = unsafe { T::faer_mat_ref_strided(base, m, n, view.strides()[0], view.strides()[1]) };
-    T::svd_core(ctx, buffers, mat, m, n, &placement)
+    T::svd_core(ctx, buffers, mat, m, n, false, &placement)
 }
 
 pub(crate) fn qr_view<T: FaerLinalg + 'static>(

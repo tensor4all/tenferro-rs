@@ -521,6 +521,42 @@ impl LinalgBackend for CpuBackend {
         }
     }
 
+    fn svd_full(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("svd_full", input)?;
+        match linalg_provider_kind(self.kind(), "svd_full")? {
+            CpuLinalgProvider::Faer => {
+                #[cfg(feature = "cpu-faer")]
+                {
+                    let ctx = self.linalg_context();
+                    self.with_linalg_pool(|buffers| match input {
+                        Tensor::F32(t) => linalg::faer::svd_full(ctx.as_ref(), buffers, t)
+                            .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
+                        Tensor::F64(t) => linalg::faer::svd_full(ctx.as_ref(), buffers, t)
+                            .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                        Tensor::C32(t) => linalg::faer::svd_full(ctx.as_ref(), buffers, t)
+                            .and_then(svd_c32_outputs_to_public_tensors),
+                        Tensor::C64(t) => linalg::faer::svd_full(ctx.as_ref(), buffers, t)
+                            .and_then(svd_c64_outputs_to_public_tensors),
+                        _ => Err(unsupported_dtype("svd_full", input.dtype())),
+                    })
+                }
+                #[cfg(not(feature = "cpu-faer"))]
+                {
+                    Err(unsupported_provider("svd_full", self.kind()))
+                }
+            }
+            // The LAPACK provider is intentionally not wired for full-matrices
+            // SVD in this slice; it returns a typed error instead of silently
+            // computing a thin decomposition. Full-SVD callers select the faer
+            // provider (the default) or download to host and use it explicitly.
+            CpuLinalgProvider::Blas => Err(tenferro_tensor::Error::unsupported(
+                "svd_full",
+                "CPU LAPACK provider does not implement full-matrices SVD; \
+                 use the faer provider for full SVD",
+            )),
+        }
+    }
+
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("svd_values", input)?;
         match linalg_provider_kind(self.kind(), "svd_values")? {
