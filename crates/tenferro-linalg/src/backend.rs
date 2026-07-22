@@ -211,6 +211,27 @@ pub trait LinalgBackend: TensorBackend {
         Ok(outputs)
     }
 
+    /// Compute public full-matrices SVD outputs `(U, S, Vt)` with `U` shaped
+    /// `m x m` and `Vt` shaped `n x n`, so the trailing `Vt` rows span the
+    /// input's right nullspace.
+    ///
+    /// # Errors
+    ///
+    /// The default implementation returns `Error::Unsupported`: a backend that
+    /// does not implement the full variant reports it explicitly rather than
+    /// silently falling back to the thin decomposition. Implementing backends
+    /// may additionally return `Error::Validation` for an unsupported rank or
+    /// dtype and a typed backend source when the solver fails.
+    fn svd_full(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        Err(tenferro_tensor::Error::unsupported(
+            "svd_full",
+            format!(
+                "backend {} does not implement full-matrices SVD",
+                std::any::type_name::<Self>()
+            ),
+        ))
+    }
+
     #[doc(hidden)]
     fn svd_values(&mut self, _input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         Err(tenferro_tensor::Error::unsupported(
