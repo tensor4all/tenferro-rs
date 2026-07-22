@@ -624,13 +624,15 @@ def _recover_finalization(args, atomic_writer) -> int | None:
         else:
             try:
                 root.atomic_json(FINALIZATION_MARKER, expected_marker)
-            except BaseException:
+            except BaseException as primary:
                 if (
                     _root_json_commit_state(
                         root, FINALIZATION_MARKER, expected_marker
                     )
                     != "EXACT"
                 ):
+                    raise
+                if not isinstance(primary, Exception):
                     raise
             marker = expected_marker
         if (

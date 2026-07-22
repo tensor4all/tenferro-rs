@@ -1152,6 +1152,123 @@ class AllocationCampaignTests(unittest.TestCase):
                 )
                 self.assertEqual(recovery.calls, [])
 
+    def test_recovery_marker_control_exception_preserves_identity_and_traceback(self) -> None:
+        runner = load_runner()
+        for exception_type in (KeyboardInterrupt, SystemExit):
+            for committed in (False, True):
+                with self.subTest(
+                    exception_type=exception_type.__name__, committed=committed
+                ), tempfile.TemporaryDirectory() as temporary:
+                    root = pathlib.Path(temporary)
+                    args, probes, tenferro = fixture(root)
+                    commands = FakeCommandRunner(candidate_count=6, candidate_bytes=63)
+                    original_atomic_write = runner.protocol.atomic_write_json_at
+
+                    def leave_marker_absent(directory_fd, selected_name, payload):
+                        if selected_name == runner.FINALIZATION_MARKER:
+                            raise OSError("leave recovery marker absent")
+                        return original_atomic_write(directory_fd, selected_name, payload)
+
+                    with mock.patch.object(
+                        runner.protocol,
+                        "atomic_write_json_at",
+                        side_effect=leave_marker_absent,
+                    ), self.assertRaises(protocol.ProtocolError):
+                        runner._run_comparison(
+                            args,
+                            probe_manifests=probes,
+                            tenferro_manifests=tenferro,
+                            command_runner=commands,
+                        )
+                    self.assertEqual(len(commands.calls), 168)
+
+                    interruption = exception_type("interrupt recovery marker")
+                    injected_traceback = None
+
+                    def interrupt_marker(directory_fd, selected_name, payload):
+                        nonlocal injected_traceback
+                        if selected_name == runner.FINALIZATION_MARKER:
+                            if committed:
+                                original_atomic_write(
+                                    directory_fd, selected_name, payload
+                                )
+                            try:
+                                raise interruption
+                            except BaseException as caught:
+                                injected_traceback = caught.__traceback__
+                                raise
+                        return original_atomic_write(
+                            directory_fd, selected_name, payload
+                        )
+
+                    original_close = runner.PinnedDirectory.close
+
+                    def failing_close(handle):
+                        original_close(handle)
+                        raise OSError("secondary recovery close failure")
+
+                    recovery = FakeCommandRunner()
+                    caught = None
+                    caught_traceback = None
+                    try:
+                        with mock.patch.object(
+                            runner.protocol,
+                            "atomic_write_json_at",
+                            side_effect=interrupt_marker,
+                        ), mock.patch.object(
+                            runner.PinnedDirectory, "close", failing_close
+                        ):
+                            runner._run_comparison(
+                                args,
+                                probe_manifests=probes,
+                                tenferro_manifests=tenferro,
+                                command_runner=recovery,
+                            )
+                    except BaseException as error:
+                        caught = error
+                        caught_traceback = error.__traceback__
+                    self.assertIs(caught, interruption)
+                    self.assertIsNotNone(caught_traceback)
+                    while caught_traceback.tb_next is not None:
+                        caught_traceback = caught_traceback.tb_next
+                    self.assertIs(caught_traceback, injected_traceback)
+                    self.assertEqual(recovery.calls, [])
+                    self.assertEqual(len(commands.calls), 168)
+
+                    partial_files = {
+                        path.name for path in args.artifact_root.iterdir()
+                    }
+                    self.assertIn(runner.FINALIZATION_STAGE, partial_files)
+                    self.assertEqual(
+                        runner.FINALIZATION_MARKER in partial_files, committed
+                    )
+                    persisted = json.loads(
+                        (args.artifact_root / "allocation.json").read_text()
+                    )
+                    self.assertEqual(persisted["validity_state"], "RUNNING")
+                    ledger = json.loads(args.ledger.read_text())
+                    self.assertEqual(ledger["active_attempt_id"], args.attempt_id)
+
+                    final_recovery = FakeCommandRunner()
+                    self.assertEqual(
+                        runner._run_comparison(
+                            args,
+                            probe_manifests=probes,
+                            tenferro_manifests=tenferro,
+                            command_runner=final_recovery,
+                        ),
+                        0,
+                    )
+                    self.assertEqual(final_recovery.calls, [])
+                    terminal = json.loads(
+                        (args.artifact_root / "allocation.json").read_text()
+                    )
+                    self.assertEqual(
+                        (terminal["validity_state"], terminal["gate"]),
+                        ("COMPLETE", "PASS"),
+                    )
+                    self.assertEqual(terminal["launch_count"], 168)
+
     def test_public_persisted_campaign_runs_exact_matrix(self) -> None:
         runner = load_runner()
         with tempfile.TemporaryDirectory() as temporary:
