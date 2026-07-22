@@ -129,3 +129,15 @@ five-second measurement, 100 samples, and 95% confidence.
 - Cycle 3 Rust hardening passed 515 CPU tests, 71 AD tests, 142 combined
   protocol/gate/build Python tests, both exact `cpu-faer` characterization bench
   builds, and CPU/AD Clippy with warnings denied.
+- A clean temporary Cycle 3 candidate at `324771ad` completed the Task 7 owning
+  CLI end to end: four fresh builds, two direct evidence tests, 47 composed
+  correctness rows, and 45/45 real Criterion latency rows passed. This host had
+  no allowed-CPU skip and one usable NUMA node, so cross-socket locality recorded
+  typed `InsufficientNumaNodes { required: 2, available: 1 }`. Recursive terminal
+  validation found exactly 148 files. Dispatch terminal SHA-256 was
+  `fffe2c2efbfa0d8ee8adf4bccbffd285f362b9587edd1bc96291f8d1f99fd746`;
+  characterization terminal SHA-256 was
+  `9dd04de48479bb594841388bfdf5ce0aac5fe461d4a9179e174aa28bec96c6a1`.
+  The complete 19/19 gate-test suite, including the focused synthetic
+  insufficient-CPU cases, also passed and proves that skipped latency rows
+  launch no benchmark and contain neither estimates nor artifacts.
