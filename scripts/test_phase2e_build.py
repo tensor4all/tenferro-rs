@@ -3105,11 +3105,25 @@ class AllocationProbeBuildPlanTests(unittest.TestCase):
         manifest = pathlib.Path("/probe/Cargo.toml")
         binary = pathlib.Path("/target/release/phase2e-allocation-probe")
         plan = build.allocation_probe_build_only_command_plan(
-            manifest, binary, "/tools/cargo"
+            manifest, binary, "/tools/cargo", "x86_64-unknown-linux-gnu"
         )
-        self.assertEqual([step.name for step in plan], ["build", "list-cases"])
+        self.assertEqual([step.name for step in plan], ["features", "build", "list-cases"])
         self.assertEqual(
             plan[0].argv,
+            (
+                "/tools/cargo",
+                "tree",
+                "--locked",
+                "--manifest-path",
+                str(manifest),
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "-e",
+                "features",
+            ),
+        )
+        self.assertEqual(
+            plan[1].argv,
             (
                 "/tools/cargo",
                 "build",
@@ -3120,7 +3134,7 @@ class AllocationProbeBuildPlanTests(unittest.TestCase):
                 str(manifest),
             ),
         )
-        self.assertEqual(plan[1].argv, (str(binary), "--list-cases"))
+        self.assertEqual(plan[2].argv, (str(binary), "--list-cases"))
 
     def test_probe_builder_runs_two_lock_generations_and_three_independent_builds(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -3160,8 +3174,20 @@ class AllocationProbeBuildPlanTests(unittest.TestCase):
             manifests = {
                 role: {
                     "role": role,
-                    "head": ("c" if role == "candidate" else "d") * 40,
+                    "head": {
+                        "direct-current-main-baseline": "d" * 40,
+                        "common-lock-normalized-baseline": "e" * 40,
+                        "candidate": "c" * 40,
+                    }[role],
                     "toolchain": toolchain,
+                    "target": "x86_64-unknown-linux-gnu",
+                    "worktree": str((scratch / role).resolve()),
+                    "environment": protocol.cargo_environment(
+                        path=tools.path,
+                        home=str(home.resolve()),
+                        cargo_home=str(cargo_home.resolve()),
+                        target_dir=str((scratch / "targets" / role).resolve()),
+                    ),
                 }
                 for role in build.BUILD_MANIFEST_PATHS
             }
@@ -3187,12 +3213,12 @@ class AllocationProbeBuildPlanTests(unittest.TestCase):
                         binary.parent.mkdir(parents=True)
                         binary.write_bytes(f"binary:{cwd.parent.name}\n".encode())
                         binary.chmod(0o755)
-                    stdout = (
-                        json.dumps(list(protocol.CANONICAL_CASES), separators=(",", ":"))
-                        + "\n"
-                        if argv[0].endswith(build.ALLOCATION_PROBE_BINARY)
-                        else ""
-                    )
+                    if len(argv) > 1 and argv[1] == "tree":
+                        stdout = f"phase2e-allocation-probe v0.0.0 ({cwd})\n"
+                    elif argv[0].endswith(build.ALLOCATION_PROBE_BINARY):
+                        stdout = json.dumps(list(protocol.CANONICAL_CASES), separators=(",", ":")) + "\n"
+                    else:
+                        stdout = ""
                     return build.CommandResult(
                         argv=argv,
                         cwd=str(cwd),
@@ -3215,7 +3241,7 @@ class AllocationProbeBuildPlanTests(unittest.TestCase):
                 command_runner=command_runner,
             )
             self.assertEqual(tuple(observed), tuple(build.BUILD_MANIFEST_PATHS))
-            self.assertEqual(len(command_runner.calls), 8)
+            self.assertEqual(len(command_runner.calls), 14)
             self.assertEqual(
                 sum(argv[1:2] == ("generate-lockfile",) for argv in command_runner.calls),
                 2,
@@ -3232,6 +3258,113 @@ class AllocationProbeBuildPlanTests(unittest.TestCase):
                 observed["candidate"]["lock_sha256"],
                 observed["direct-current-main-baseline"]["lock_sha256"],
             )
+            for role, manifest in observed.items():
+                self.assertEqual(manifest["target"], "x86_64-unknown-linux-gnu")
+                self.assertEqual(manifest["cargo_config_chain"], [])
+                self.assertEqual(
+                    manifest["config_chain_sha256"], protocol.sha256_json([])
+                )
+                self.assertEqual(
+                    manifest["resolved_features_sha256"],
+                    build.sha256_bytes(manifest["resolved_features"].encode()),
+                )
+                self.assertEqual(
+                    manifest["build_commands"][0]["argv"],
+                    list(
+                        build.allocation_probe_build_only_command_plan(
+                            pathlib.Path(manifest["generated_root"]) / "Cargo.toml",
+                            pathlib.Path(manifest["executable"]),
+                            str(tools.cargo.path),
+                            manifest["target"],
+                        )[0].argv
+                    ),
+                )
+
+            tracked_source = repository / "scripts/phase2e/allocation-probe/src/main.rs"
+            original_source = tracked_source.read_bytes()
+            tracked_source.write_bytes(original_source + b"// mutation\n")
+            with self.assertRaises(protocol.ProtocolError):
+                build._validate_allocation_probe_set_with_dependencies(
+                    evidence,
+                    manifests,
+                    repository=repository,
+                    command_runner=command_runner,
+                )
+            tracked_source.write_bytes(original_source)
+
+            candidate_root = pathlib.Path(observed["candidate"]["generated_root"])
+            foreign = candidate_root / "foreign"
+            foreign.write_text("foreign")
+            with self.assertRaises(protocol.ProtocolError):
+                build._validate_allocation_probe_set_with_dependencies(
+                    evidence,
+                    manifests,
+                    repository=repository,
+                    command_runner=command_runner,
+                )
+            foreign.unlink()
+
+            candidate_manifest_path = (
+                evidence / build.PROBE_BUILD_MANIFEST_PATHS["candidate"]
+            )
+            original_manifest = json.loads(candidate_manifest_path.read_text())
+            mutations = {
+                "target": lambda value: value.__setitem__(
+                    "target", "aarch64-unknown-linux-gnu"
+                ),
+                "config-chain": lambda value: value.__setitem__(
+                    "cargo_config_chain",
+                    [{"path": ".cargo/config.toml", "sha256": "0" * 64}],
+                ),
+                "config-hash": lambda value: value.__setitem__(
+                    "config_chain_sha256", "0" * 64
+                ),
+                "feature-graph": lambda value: value.__setitem__(
+                    "resolved_features", "forged graph\n"
+                ),
+                "feature-hash": lambda value: value.__setitem__(
+                    "resolved_features_sha256", "0" * 64
+                ),
+                "command": lambda value: value["build_commands"][0]["argv"].append(
+                    "--foreign"
+                ),
+                "environment": lambda value: value["build_environment"].__setitem__(
+                    "HOME", "/foreign"
+                ),
+                "generated-root": lambda value: value.__setitem__(
+                    "generated_root",
+                    observed["direct-current-main-baseline"]["generated_root"],
+                ),
+            }
+            for name, mutate in mutations.items():
+                with self.subTest(mutation=name):
+                    candidate = json.loads(json.dumps(original_manifest))
+                    mutate(candidate)
+                    candidate_manifest_path.chmod(0o644)
+                    candidate_manifest_path.write_text(json.dumps(candidate) + "\n")
+                    candidate_manifest_path.chmod(0o444)
+                    with self.assertRaises(protocol.ProtocolError):
+                        build._validate_allocation_probe_set_with_dependencies(
+                            evidence,
+                            manifests,
+                            repository=repository,
+                            command_runner=command_runner,
+                        )
+            candidate_manifest_path.chmod(0o644)
+            candidate_manifest_path.write_text(json.dumps(original_manifest) + "\n")
+            candidate_manifest_path.chmod(0o444)
+
+    def test_probe_config_chain_rejects_ancestor_and_foreign_configs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            generated = root / "scratch/generated"
+            generated.mkdir(parents=True)
+            self.assertEqual(build._allocation_probe_cargo_config_chain(generated), [])
+            cargo_config = root / ".cargo/config.toml"
+            cargo_config.parent.mkdir()
+            cargo_config.write_text("[build]\n")
+            with self.assertRaises(protocol.ProtocolError):
+                build._allocation_probe_cargo_config_chain(generated)
 
 
 if __name__ == "__main__":

@@ -1259,11 +1259,42 @@ def allocation_probe_command_plan(
 
 
 def allocation_probe_build_only_command_plan(
-    manifest: pathlib.Path, binary: pathlib.Path, cargo: str
+    manifest: pathlib.Path, binary: pathlib.Path, cargo: str, target: str
 ) -> tuple[CommandSpec, ...]:
-    """Return the locked bench build and independent inventory query."""
+    """Return the exact feature proof, locked build, and inventory query."""
     full = allocation_probe_command_plan(manifest, binary, cargo)
-    return (full[3], full[4])
+    return (
+        CommandSpec(
+            "features",
+            (
+                str(pathlib.Path(cargo)),
+                "tree",
+                "--locked",
+                "--manifest-path",
+                str(pathlib.Path(manifest)),
+                "--target",
+                target,
+                "-e",
+                "features",
+            ),
+            QUERY_DEADLINE_SECONDS,
+        ),
+        full[3],
+        full[4],
+    )
+
+
+def _allocation_probe_cargo_config_chain(root: pathlib.Path) -> list[dict[str, str]]:
+    """Prove an external generated crate cannot inherit an ancestor Cargo config."""
+    root = pathlib.Path(root)
+    for directory in (root, *root.parents):
+        for name in ("config", "config.toml"):
+            candidate = directory / ".cargo" / name
+            if candidate.exists() or candidate.is_symlink():
+                raise protocol.ProtocolError(
+                    f"foreign allocation-probe Cargo config is forbidden: {candidate}"
+                )
+    return []
 
 
 def _signal_group(
@@ -2840,6 +2871,9 @@ def _probe_build_manifest(
     build_commands: tuple[CommandSpec, ...],
     build_environment: Mapping[str, str],
     runtime_environment: Mapping[str, str],
+    target: str,
+    cargo_config_chain: list[dict[str, str]],
+    resolved_features: str,
 ) -> dict[str, Any]:
     template_sha256, source_sha256, manifest_sha256, generated_sha256 = (
         _probe_digests(generated, template, sources)
@@ -2848,6 +2882,7 @@ def _probe_build_manifest(
         "protocol_version": protocol.PROTOCOL_VERSION,
         "role": spec.role,
         "head": tenferro_manifest["head"],
+        "target": target,
         "profile": spec.profile,
         "validity_state": "COMPLETE",
         "generated_root": str(generated.resolve()),
@@ -2856,6 +2891,10 @@ def _probe_build_manifest(
         "executable_sha256": _regular_executable_sha256(executable),
         "lock_name": spec.lock_name,
         "lock_sha256": protocol.sha256_file(owned_lock),
+        "cargo_config_chain": cargo_config_chain,
+        "config_chain_sha256": protocol.sha256_json(cargo_config_chain),
+        "resolved_features": resolved_features,
+        "resolved_features_sha256": sha256_bytes(resolved_features.encode("utf-8")),
         "template_sha256": template_sha256,
         "source_sha256": source_sha256,
         "generated_manifest_sha256": manifest_sha256,
@@ -2906,6 +2945,7 @@ def _build_allocation_probe_set_with_dependencies(
             cargo_home=str(pathlib.Path(config.cargo_home).resolve()),
             target_dir=str(target.resolve()),
         )
+        _allocation_probe_cargo_config_chain(generated)
 
     lock_generators = {
         "direct-probe": specs[0].role,
@@ -2937,10 +2977,12 @@ def _build_allocation_probe_set_with_dependencies(
         owned_lock = owned_locks[spec.lock_name]
         install_root_owned_lock(owned_lock, generated)
         binary = target / "release" / ALLOCATION_PROBE_BINARY
+        host_target = tenferro_manifests[spec.role]["target"]
         plan = allocation_probe_build_only_command_plan(
-            generated / "Cargo.toml", binary, str(tools.cargo.path)
+            generated / "Cargo.toml", binary, str(tools.cargo.path), host_target
         )
         list_output = None
+        resolved_features = None
         for step in plan:
             binary_before = (
                 _regular_executable_sha256(binary)
@@ -2952,8 +2994,16 @@ def _build_allocation_probe_set_with_dependencies(
                 cwd=generated,
                 environment=build_environments[spec.role],
                 deadline_seconds=step.deadline_seconds,
-                executable_identity=tools.cargo if step.name == "build" else None,
+                executable_identity=tools.cargo
+                if step.name in ("features", "build")
+                else None,
             )
+            if step.name == "features":
+                if not result.stdout.strip() or result.stderr:
+                    raise protocol.ProtocolError(
+                        "allocation probe resolved feature graph is invalid"
+                    )
+                resolved_features = result.stdout
             _require_probe_command(
                 step,
                 result,
@@ -2969,7 +3019,7 @@ def _build_allocation_probe_set_with_dependencies(
                     raise protocol.ProtocolError("allocation probe inventory wrote stderr")
                 list_output = result.stdout
         expected_output = json.dumps(list(expected_inventory), separators=(",", ":")) + "\n"
-        if list_output != expected_output:
+        if list_output != expected_output or resolved_features is None:
             raise protocol.ProtocolError(f"{spec.role} allocation probe inventory mismatch")
         _current_root, current_template, current_sources = _allocation_probe_input_bytes(
             config.repository
@@ -3003,12 +3053,20 @@ def _build_allocation_probe_set_with_dependencies(
             build_commands=plan,
             build_environment=build_environments[spec.role],
             runtime_environment=runtime_environment,
+            target=host_target,
+            cargo_config_chain=_allocation_probe_cargo_config_chain(generated),
+            resolved_features=resolved_features,
         )
         spec.manifest_path.parent.mkdir(parents=True, exist_ok=True)
         protocol.atomic_write_json(spec.manifest_path, manifest)
         spec.manifest_path.chmod(0o444)
         manifests[spec.role] = manifest
-    return validate_allocation_probe_set(config.evidence_root, tenferro_manifests)
+    return _validate_allocation_probe_set_with_dependencies(
+        config.evidence_root,
+        tenferro_manifests,
+        repository=config.repository,
+        command_runner=command_runner,
+    )
 
 
 def build_allocation_probe_set(config: BuildConfig) -> dict[str, dict[str, Any]]:
@@ -3024,9 +3082,12 @@ def build_allocation_probe_set(config: BuildConfig) -> dict[str, dict[str, Any]]
     )
 
 
-def validate_allocation_probe_set(
+def _validate_allocation_probe_set_with_dependencies(
     evidence_root: pathlib.Path,
     tenferro_manifests: Mapping[str, Mapping[str, Any]],
+    *,
+    repository: pathlib.Path,
+    command_runner: Callable[..., CommandResult] = run_bounded_command,
 ) -> dict[str, dict[str, Any]]:
     """Reopen and validate the three persisted role-bound probe manifests."""
     evidence_root = pathlib.Path(evidence_root)
@@ -3034,6 +3095,7 @@ def validate_allocation_probe_set(
         "protocol_version",
         "role",
         "head",
+        "target",
         "profile",
         "validity_state",
         "generated_root",
@@ -3042,6 +3104,10 @@ def validate_allocation_probe_set(
         "executable_sha256",
         "lock_name",
         "lock_sha256",
+        "cargo_config_chain",
+        "config_chain_sha256",
+        "resolved_features",
+        "resolved_features_sha256",
         "template_sha256",
         "source_sha256",
         "generated_manifest_sha256",
@@ -3055,10 +3121,13 @@ def validate_allocation_probe_set(
         "tenferro_build_manifest_sha256",
     }
     lock_digests = {
-        name: protocol.sha256_file(evidence_root / LOCK_PATHS[name])
+        name: sha256_bytes(_read_regular_bytes(evidence_root / LOCK_PATHS[name]))
         for name in ("direct-probe", "common-probe")
     }
     manifests = {}
+    _source_root, tracked_template, tracked_sources = _allocation_probe_input_bytes(
+        pathlib.Path(repository)
+    )
     reference_source = None
     for role, relative in PROBE_BUILD_MANIFEST_PATHS.items():
         path = evidence_root / relative
@@ -3085,6 +3154,7 @@ def validate_allocation_probe_set(
             or decoded["repetitions"] != 4096
             or type(tenferro) is not dict
             or decoded["head"] != tenferro.get("head")
+            or decoded["target"] != tenferro.get("target")
             or decoded["tenferro_build_manifest_sha256"]
             != protocol.sha256_json(tenferro)
             or decoded["toolchain_sha256"]
@@ -3094,6 +3164,8 @@ def validate_allocation_probe_set(
         for field in (
             "executable_sha256",
             "lock_sha256",
+            "config_chain_sha256",
+            "resolved_features_sha256",
             "template_sha256",
             "generated_manifest_sha256",
             "toolchain_sha256",
@@ -3108,8 +3180,28 @@ def validate_allocation_probe_set(
                 raise protocol.ProtocolError(f"{role} probe source digest schema mismatch")
             for name, digest in mapping.items():
                 _validate_sha256(digest, f"{role} probe {mapping_name}/{name}")
-        if decoded["source_sha256"] != decoded["generated_source_sha256"]:
+        expected_source_sha256 = {
+            str(path): sha256_bytes(payload) for path, payload in tracked_sources.items()
+        }
+        if (
+            decoded["template_sha256"] != sha256_bytes(tracked_template)
+            or decoded["source_sha256"] != expected_source_sha256
+            or decoded["generated_source_sha256"] != expected_source_sha256
+        ):
             raise protocol.ProtocolError(f"{role} generated probe source digest mismatch")
+        if (
+            decoded["cargo_config_chain"]
+            != _allocation_probe_cargo_config_chain(
+                generated_root := pathlib.Path(decoded["generated_root"])
+            )
+            or decoded["config_chain_sha256"]
+            != protocol.sha256_json(decoded["cargo_config_chain"])
+            or type(decoded["resolved_features"]) is not str
+            or not decoded["resolved_features"].strip()
+            or decoded["resolved_features_sha256"]
+            != sha256_bytes(decoded["resolved_features"].encode("utf-8"))
+        ):
+            raise protocol.ProtocolError(f"{role} probe Cargo proof mismatch")
         source_identity = (
             decoded["template_sha256"],
             decoded["source_sha256"],
@@ -3120,12 +3212,47 @@ def validate_allocation_probe_set(
         elif source_identity != reference_source:
             raise protocol.ProtocolError("probe source identity differs across roles")
         executable = pathlib.Path(decoded["executable"])
-        generated_root = _canonical_directory(
-            pathlib.Path(decoded["generated_root"]), f"{role} generated probe root"
+        tenferro_root = _canonical_directory(
+            pathlib.Path(tenferro["worktree"]), f"{role} tenferro worktree"
         )
+        expected_generated_root = (
+            tenferro_root.parent / "allocation-probes" / role
+        )
+        generated_root = _canonical_directory(
+            generated_root, f"{role} generated probe root"
+        )
+        if generated_root != expected_generated_root:
+            raise protocol.ProtocolError(
+                f"{role} generated probe root is not authoritative"
+            )
+        _validate_generated_probe_inventory(generated_root, lock_required=True)
+        if _read_regular_bytes(
+            generated_root / "Cargo.toml"
+        ) != _render_allocation_probe_manifest(tracked_template, tenferro_root):
+            raise protocol.ProtocolError(f"{role} persisted generated manifest differs")
+        if sha256_bytes(
+            _read_regular_bytes(generated_root / "Cargo.toml")
+        ) != decoded["generated_manifest_sha256"]:
+            raise protocol.ProtocolError(
+                f"{role} persisted generated manifest digest differs"
+            )
+        for relative, payload in tracked_sources.items():
+            if _read_regular_bytes(generated_root / relative) != payload:
+                raise protocol.ProtocolError(
+                    f"{role} persisted generated source differs: {relative}"
+                )
+        if sha256_bytes(_read_regular_bytes(generated_root / "Cargo.lock")) != decoded[
+            "lock_sha256"
+        ]:
+            raise protocol.ProtocolError(f"{role} persisted generated lock differs")
         target_dir = _canonical_directory(
             pathlib.Path(decoded["target_dir"]), f"{role} probe target directory"
         )
+        expected_target_dir = (
+            tenferro_root.parent / "allocation-probe-targets" / role
+        )
+        if target_dir != expected_target_dir:
+            raise protocol.ProtocolError(f"{role} probe target is not authoritative")
         if executable.parent.parent != target_dir:
             raise protocol.ProtocolError(f"{role} probe executable is outside target")
         if _regular_executable_sha256(executable) != decoded["executable_sha256"]:
@@ -3138,6 +3265,15 @@ def validate_allocation_probe_set(
             target_dir=str(target_dir),
         ):
             raise protocol.ProtocolError(f"{role} probe build environment is not sealed")
+        tenferro_environment = tenferro.get("environment")
+        if (
+            type(tenferro_environment) is not dict
+            or any(
+                build_environment[name] != tenferro_environment[name]
+                for name in ("PATH", "HOME", "CARGO_HOME")
+            )
+        ):
+            raise protocol.ProtocolError(f"{role} probe build environment differs")
         commands = decoded["build_commands"]
         if type(commands) is not list or not commands or type(commands[0]) is not dict:
             raise protocol.ProtocolError(f"{role} probe build command schema mismatch")
@@ -3150,18 +3286,81 @@ def validate_allocation_probe_set(
         expected_commands = [
             command.to_manifest()
             for command in allocation_probe_build_only_command_plan(
-                generated_root / "Cargo.toml", executable, argv[0]
+                generated_root / "Cargo.toml", executable, argv[0], decoded["target"]
             )
         ]
         if commands != expected_commands:
             raise protocol.ProtocolError(f"{role} probe build commands differ")
+        feature_step = allocation_probe_build_only_command_plan(
+            generated_root / "Cargo.toml", executable, argv[0], decoded["target"]
+        )[0]
+        feature_result = command_runner(
+            feature_step.argv,
+            cwd=generated_root,
+            environment=build_environment,
+            deadline_seconds=feature_step.deadline_seconds,
+            executable_identity=tools.cargo,
+        )
+        _require_probe_command(
+            feature_step,
+            feature_result,
+            cwd=generated_root,
+            environment=build_environment,
+        )
+        if feature_result.stderr or feature_result.stdout != decoded["resolved_features"]:
+            raise protocol.ProtocolError(f"{role} persisted resolved feature graph differs")
+        _validate_generated_probe_inventory(generated_root, lock_required=True)
+        if (
+            _read_regular_bytes(generated_root / "Cargo.toml")
+            != _render_allocation_probe_manifest(tracked_template, tenferro_root)
+            or any(
+                _read_regular_bytes(generated_root / relative) != payload
+                for relative, payload in tracked_sources.items()
+            )
+            or sha256_bytes(_read_regular_bytes(generated_root / "Cargo.lock"))
+            != decoded["lock_sha256"]
+            or _regular_executable_sha256(executable)
+            != decoded["executable_sha256"]
+        ):
+            raise protocol.ProtocolError(
+                f"{role} persisted probe changed during feature validation"
+            )
         environment = decoded["environment"]
         if type(environment) is not dict or environment != protocol.runtime_environment(
             path=environment.get("PATH"), home=environment.get("HOME")
         ):
             raise protocol.ProtocolError(f"{role} probe runtime environment is not sealed")
+        if any(
+            environment[name] != tenferro_environment[name]
+            for name in ("PATH", "HOME")
+        ):
+            raise protocol.ProtocolError(f"{role} probe runtime environment differs")
         manifests[role] = decoded
+    direct = manifests["direct-current-main-baseline"]
+    common = manifests["common-lock-normalized-baseline"]
+    if (
+        direct["head"] == common["head"]
+        or direct["executable"] == common["executable"]
+    ):
+        raise protocol.ProtocolError(
+            "direct and common allocation baselines are not distinct"
+        )
     return manifests
+
+
+def validate_allocation_probe_set(
+    evidence_root: pathlib.Path,
+    tenferro_manifests: Mapping[str, Mapping[str, Any]],
+    *,
+    repository: pathlib.Path,
+) -> dict[str, dict[str, Any]]:
+    """Authoritatively re-run and validate persisted allocation-probe evidence."""
+    return _validate_allocation_probe_set_with_dependencies(
+        evidence_root,
+        tenferro_manifests,
+        repository=repository,
+        command_runner=run_bounded_command,
+    )
 
 
 def _canonical_directory(path: pathlib.Path, context: str) -> pathlib.Path:

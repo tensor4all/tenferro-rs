@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
+import os
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts import phase2e_build as build
 from scripts import phase2e_protocol as protocol
@@ -59,11 +63,17 @@ class FakeCommandRunner:
         self.invalid_at = invalid_at
         self.malformed_at = malformed_at
         self.calls = []
+        self.identities = []
 
     def __call__(self, argv, *, cwd, environment, deadline_seconds, **_kwargs):
-        self.calls.append((tuple(argv), pathlib.Path(cwd), dict(environment), deadline_seconds))
-        ordinal = len(self.calls)
         identity = pathlib.Path(argv[0]).name
+        if identity.isdigit() and pathlib.Path(argv[0]).parent == pathlib.Path("/proc/self/fd"):
+            identity = pathlib.Path(os.readlink(argv[0])).name
+            payload = pathlib.Path(argv[0]).read_bytes()
+            identity = "candidate-probe" if payload == b"candidate" else "baseline-probe"
+        self.calls.append((tuple(argv), pathlib.Path(cwd), dict(environment), deadline_seconds))
+        self.identities.append(identity)
+        ordinal = len(self.calls)
         case = argv[1]
         if ordinal == self.malformed_at:
             stdout = "{}\n"
@@ -106,16 +116,25 @@ def fixture(root: pathlib.Path, lane: str = "direct-current-main"):
     probes = {}
     tenferro = {}
     for role in roles:
-        binary_name = "candidate-probe" if role == "candidate" else "baseline-probe"
+        binary_name = {
+            "direct-current-main-baseline": "direct-baseline-probe",
+            "common-lock-normalized-baseline": "common-baseline-probe",
+            "candidate": "candidate-probe",
+        }[role]
         binary = root / role / binary_name
         binary.parent.mkdir()
-        binary.write_bytes(role.encode())
+        binary.write_bytes(b"candidate" if role == "candidate" else b"baseline")
         binary.chmod(0o755)
         lock_name = "direct-probe" if role == "direct-current-main-baseline" else "common-probe"
         probes[role] = {
             "protocol_version": protocol.PROTOCOL_VERSION,
             "role": role,
-            "head": ("c" if role == "candidate" else "d") * 40,
+            "head": {
+                "direct-current-main-baseline": "d" * 40,
+                "common-lock-normalized-baseline": "e" * 40,
+                "candidate": "c" * 40,
+            }[role],
+            "target": "x86_64-unknown-linux-gnu",
             "profile": "bench",
             "validity_state": "COMPLETE",
             "generated_root": str(binary.parent.resolve()),
@@ -124,6 +143,12 @@ def fixture(root: pathlib.Path, lane: str = "direct-current-main"):
             "executable_sha256": protocol.sha256_file(binary),
             "lock_name": lock_name,
             "lock_sha256": ("7" if lock_name == "direct-probe" else "8") * 64,
+            "cargo_config_chain": [],
+            "config_chain_sha256": protocol.sha256_json([]),
+            "resolved_features": "phase2e-allocation-probe v0.0.0\n",
+            "resolved_features_sha256": build.sha256_bytes(
+                b"phase2e-allocation-probe v0.0.0\n"
+            ),
             "template_sha256": "1" * 64,
             "source_sha256": {"src/main.rs": "2" * 64, "src/tests.rs": "3" * 64},
             "generated_manifest_sha256": "4" * 64,
@@ -147,6 +172,8 @@ def fixture(root: pathlib.Path, lane: str = "direct-current-main"):
             "head": probes[role]["head"],
             "validity_state": "COMPLETE",
             "lock_sha256": probes[role]["lock_sha256"],
+            "target": probes[role]["target"],
+            "worktree": str((root / role).resolve()),
         }
         probes[role]["tenferro_build_manifest_sha256"] = protocol.sha256_json(
             tenferro[role]
@@ -203,6 +230,32 @@ class AllocationRecordTests(unittest.TestCase):
                 with self.assertRaises(protocol.ProtocolError):
                     runner.parse_probe_record(record(case), case, returncode)
 
+    def test_record_parser_rejects_duplicate_known_keys(self) -> None:
+        runner = load_runner()
+        case = next(iter(protocol.CANONICAL_CASES))
+        original = record(case)
+        for key, changed in (
+            ("allocated_bytes", "65"),
+            ("allocation_count", "8"),
+            ("allocation_failures", "1"),
+            ("case", '"foreign"'),
+            ("checksum", "2.5"),
+            ("counter_overflow", "true"),
+            ("repetitions", "4095"),
+        ):
+            marker = f'"{key}":'
+            start = original.index(marker)
+            value_start = start + len(marker)
+            value_end = original.find(",", value_start)
+            if value_end < 0:
+                value_end = original.find("}", value_start)
+            value = original[value_start:value_end]
+            for duplicate in (value, changed):
+                payload = original[:value_end] + f',"{key}":{duplicate}' + original[value_end:]
+                with self.subTest(key=key, duplicate=duplicate):
+                    with self.assertRaises(protocol.ProtocolError):
+                        runner.parse_probe_record(payload, case, 0)
+
 
 class AllocationCampaignTests(unittest.TestCase):
     def test_complete_campaign_launches_exact_fresh_fixed_matrix_and_passes(self) -> None:
@@ -231,13 +284,18 @@ class AllocationCampaignTests(unittest.TestCase):
                         ("candidate-probe", case),
                     ]
                 )
-            observed = [(pathlib.Path(call[0][0]).name, call[0][1]) for call in commands.calls]
+            observed = [
+                (identity, call[0][1])
+                for identity, call in zip(commands.identities, commands.calls, strict=True)
+            ]
             self.assertEqual(observed, expected)
             self.assertTrue(all(call[3] == 30 for call in commands.calls))
-            for argv, cwd, environment, _deadline in commands.calls:
+            for identity, (argv, cwd, environment, _deadline) in zip(
+                commands.identities, commands.calls, strict=True
+            ):
                 role = (
                     "candidate"
-                    if pathlib.Path(argv[0]).name == "candidate-probe"
+                    if identity == "candidate-probe"
                     else "direct-current-main-baseline"
                 )
                 self.assertEqual(cwd, root.resolve())
@@ -385,7 +443,7 @@ class AllocationCampaignTests(unittest.TestCase):
                 if (
                     self.mode == "inconsistent"
                     and len(self.calls) == 6
-                    and pathlib.Path(argv[0]).name == "candidate-probe"
+                    and self.identities[-1] == "candidate-probe"
                 ):
                     return build.CommandResult(
                         **{**result.__dict__, "stdout": record(argv[1], count=8)}
@@ -407,6 +465,215 @@ class AllocationCampaignTests(unittest.TestCase):
                     2,
                 )
                 self.assertEqual(len(commands.calls), expected_launches)
+
+    def test_logical_binary_replacement_after_pin_cannot_change_executed_bytes(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            candidate = pathlib.Path(probes["candidate"]["executable"])
+
+            class ReplacingRunner(FakeCommandRunner):
+                def __call__(self, argv, **kwargs):
+                    if not self.calls:
+                        replacement = candidate.with_name("replacement")
+                        replacement.write_bytes(b"foreign")
+                        replacement.chmod(0o755)
+                        os.replace(replacement, candidate)
+                    return super().__call__(argv, **kwargs)
+
+            commands = ReplacingRunner(candidate_count=6, candidate_bytes=63)
+            self.assertEqual(
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=commands,
+                ),
+                0,
+            )
+            self.assertEqual(len(commands.calls), 168)
+            self.assertTrue(
+                all(
+                    pathlib.Path(argv[0]).parent == pathlib.Path("/proc/self/fd")
+                    for argv, *_ in commands.calls
+                )
+            )
+            manifest = json.loads((args.artifact_root / "allocation.json").read_text())
+            identity = manifest["executable_identities"]["candidate"]
+            self.assertNotEqual(identity["source_inode"], candidate.stat().st_ino)
+            self.assertEqual(identity["sha256"], probes["candidate"]["executable_sha256"])
+
+    def test_same_inode_mutation_after_pin_is_rejected_before_that_role_launch(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            candidate = pathlib.Path(probes["candidate"]["executable"])
+
+            class MutatingRunner(FakeCommandRunner):
+                def __call__(self, argv, **kwargs):
+                    result = super().__call__(argv, **kwargs)
+                    if len(self.calls) == 1:
+                        candidate.write_bytes(b"mutated-in-place")
+                    return result
+
+            commands = MutatingRunner()
+            self.assertEqual(
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=commands,
+                ),
+                2,
+            )
+            self.assertEqual(len(commands.calls), 1)
+
+    def test_root_close_after_complete_cannot_change_pass_exit(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            original_close = runner.PinnedDirectory.close
+            calls = []
+
+            def failing_close(handle):
+                calls.append(handle.logical_path)
+                original_close(handle)
+                raise OSError("injected root close failure")
+
+            with mock.patch.object(runner.PinnedDirectory, "close", failing_close):
+                self.assertEqual(
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=FakeCommandRunner(
+                            candidate_count=6, candidate_bytes=63
+                        ),
+                    ),
+                    0,
+                )
+            self.assertEqual(calls, [args.artifact_root.resolve()])
+
+    def test_committed_finalization_recovers_without_rerunning_or_double_close(self) -> None:
+        runner = load_runner()
+        for failure_point in ("ledger-close", "publish"):
+            with self.subTest(
+                failure_point=failure_point
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, probes, tenferro = fixture(root)
+                commands = FakeCommandRunner(candidate_count=6, candidate_bytes=63)
+                original_publish = runner._publish_staged_allocation
+
+                def failing_writer(path, payload):
+                    if (
+                        failure_point == "ledger-close"
+                        and pathlib.Path(path) == args.ledger
+                        and payload.get("active_attempt_id") is None
+                    ):
+                        raise OSError("injected ledger close failure")
+                    protocol.atomic_write_json(path, payload)
+
+                def failing_publish(_root):
+                    raise OSError("injected publish failure")
+
+                if failure_point == "publish":
+                    runner._publish_staged_allocation = failing_publish
+                try:
+                    with self.assertRaises(OSError):
+                        runner._run_comparison(
+                            args,
+                            probe_manifests=probes,
+                            tenferro_manifests=tenferro,
+                            command_runner=commands,
+                            atomic_writer=failing_writer,
+                        )
+                finally:
+                    runner._publish_staged_allocation = original_publish
+                self.assertEqual(len(commands.calls), 168)
+                recovery_commands = FakeCommandRunner()
+                self.assertEqual(
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=recovery_commands,
+                    ),
+                    0,
+                )
+                self.assertEqual(recovery_commands.calls, [])
+                self.assertEqual(
+                    set(path.name for path in args.artifact_root.iterdir()),
+                    {"allocation.json"},
+                )
+                ledger = json.loads(args.ledger.read_text())
+                self.assertIsNone(ledger["active_attempt_id"])
+                self.assertEqual(len(ledger["attempts"]), 1)
+
+    def test_public_persisted_campaign_runs_exact_matrix(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            args.probe_manifest_root = root / "probe-manifests"
+            args.tenferro_manifest_root = root / "tenferro-manifests"
+            args.repository = root.resolve()
+            for role, relative in build.BUILD_MANIFEST_PATHS.items():
+                path = args.tenferro_manifest_root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(tenferro[role]) + "\n")
+            commands = FakeCommandRunner(candidate_count=6, candidate_bytes=63)
+            with mock.patch.object(runner.build, "validate_build_manifest"), mock.patch.object(
+                runner.build, "validate_allocation_probe_set", return_value=probes
+            ) as probe_validator:
+                self.assertEqual(runner.run_campaign(args, command_runner=commands), 0)
+            self.assertEqual(len(commands.calls), 168)
+            probe_validator.assert_called_once_with(
+                args.probe_manifest_root, tenferro, repository=args.repository
+            )
+
+    def test_cli_exit_and_stream_contract_is_exact(self) -> None:
+        runner = load_runner()
+        argv = [
+            "--comparison-kind",
+            "direct-current-main",
+            "--ledger",
+            "/ledger",
+            "--attempt-id",
+            "1",
+            "--artifact-root",
+            "/artifact",
+            "--working-directory",
+            "/work",
+            "--probe-manifest-root",
+            "/probes",
+            "--tenferro-manifest-root",
+            "/builds",
+            "--repository",
+            "/repository",
+        ]
+        for result in (0, 2, 3):
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with self.subTest(result=result), mock.patch.object(
+                runner, "run_campaign", return_value=result
+            ), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(runner.main(argv), result)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(stderr.getvalue(), "")
+        failure = protocol.ProtocolError("typed failure")
+        stderr = io.StringIO()
+        with mock.patch.object(
+            runner, "run_campaign", side_effect=failure
+        ), contextlib.redirect_stderr(stderr):
+            self.assertEqual(runner.main(argv), 2)
+        self.assertEqual(
+            stderr.getvalue(),
+            "phase2e allocation campaign error: typed failure\n",
+        )
 
     def test_control_exception_is_finalized_but_propagates_same_object(self) -> None:
         runner = load_runner()
