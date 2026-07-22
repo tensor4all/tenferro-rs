@@ -2,7 +2,7 @@
 
 ## Summary
 
-Task 6 cycles 4 through 6 harden the allocation non-inferiority campaign against
+Task 6 cycles 4 through 7 harden the allocation non-inferiority campaign against
 forged terminal JSON, result-selecting finalization failures, startup crash
 windows, cleanup failure loss, and concurrent processes using one attempt with
 different artifact roots.
