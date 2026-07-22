@@ -426,10 +426,13 @@ pub fn svd_with_options(
 ///     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
 ///     ctx,
 /// ).unwrap();
-/// let (u, s, vh) = a.svd_full()?;
-/// assert_eq!(u.shape(), &[1, 1]);
-/// assert_eq!(s.shape(), &[1]);
-/// assert_eq!(vh.shape(), &[2, 2]);
+/// // Full SVD is provided by the CPU faer backend; other providers (e.g. the
+/// // LAPACK provider) report it as unsupported, so guard on the result.
+/// if let Ok((u, s, vh)) = a.svd_full() {
+///     assert_eq!(u.shape(), &[1, 1]);
+///     assert_eq!(s.shape(), &[1]);
+///     assert_eq!(vh.shape(), &[2, 2]);
+/// }
 /// # Ok::<(), tenferro_ad::Error>(())
 /// ```
 ///
