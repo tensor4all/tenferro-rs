@@ -226,3 +226,20 @@ Default-feature-graph verification passed 515 CPU tests and 71 AD tests. The
 combined protocol/build/gate suite passed 147 tests; both uninstrumented
 characterization benchmarks compiled in the release benchmark profile; and
 default CPU/AD plus custom-cfg AD Clippy passed with warnings denied.
+
+A clean immutable Cycle 5 candidate at `ebb5fb6c` completed the owning CLI end
+to end: four fresh builds, both direct evidence executables, 47 composed
+correctness rows, and 45/45 real Criterion latency rows passed. All 45 measured
+rows retained independently hashed fixture-affinity artifacts, all nine AD E-N
+rows retained nonempty primary and fresh-recovery operation-worker evidence,
+and recursive terminal validation found exactly 193 files. Both dispatch build
+manifests bind exact `requested_features: ["cpu-faer"]`, exact Cargo argv, and
+the exact custom-cfg compiler configuration and `RUSTFLAGS`; both
+characterization build environments omit `RUSTFLAGS`. This host exposes one
+usable NUMA node, so cross-socket locality retained the typed
+`InsufficientNumaNodes { required: 2, available: 1 }` skip with no probes.
+Dispatch terminal SHA-256 was
+`b8f498f914ddb4ee101ad71d2a2459d8bc55919946523c5fbe05652a133af50f`;
+characterization terminal SHA-256 was
+`8b44a6e396bf7241a5f37ed71614f82cd04d828c770b47e5b95f4d385cac676c`.
+An independent post-run invocation of `validate_terminal_evidence` passed.
