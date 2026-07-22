@@ -3309,6 +3309,12 @@ class AllocationProbeBuildPlanTests(unittest.TestCase):
             )
             original_manifest = json.loads(candidate_manifest_path.read_text())
             mutations = {
+                "protocol-version-float": lambda value: value.__setitem__(
+                    "protocol_version", float(protocol.PROTOCOL_VERSION)
+                ),
+                "protocol-version-bool": lambda value: value.__setitem__(
+                    "protocol_version", True
+                ),
                 "target": lambda value: value.__setitem__(
                     "target", "aarch64-unknown-linux-gnu"
                 ),

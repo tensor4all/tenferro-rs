@@ -3201,7 +3201,8 @@ def _validate_allocation_probe_set_with_dependencies(
         )
         tenferro = tenferro_manifests.get(role)
         if (
-            decoded["protocol_version"] != protocol.PROTOCOL_VERSION
+            type(decoded["protocol_version"]) is not int
+            or decoded["protocol_version"] != protocol.PROTOCOL_VERSION
             or decoded["role"] != role
             or decoded["profile"] != "bench"
             or decoded["validity_state"] != "COMPLETE"

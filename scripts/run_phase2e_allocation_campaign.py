@@ -64,10 +64,18 @@ LEDGER_NAME = "evidence-ledger.json"
 
 
 class EvidenceLock:
-    """One-shot owner for the stable outer-root orchestrator lock."""
+    """One-shot owner for directory-first outer-root serialization."""
 
-    def __init__(self, descriptor: int, path: pathlib.Path) -> None:
+    def __init__(
+        self,
+        root_descriptor: int,
+        descriptor: int,
+        root_path: pathlib.Path,
+        path: pathlib.Path,
+    ) -> None:
+        self.root_descriptor: int | None = root_descriptor
         self.descriptor: int | None = descriptor
+        self.root_path = root_path
         self.path = path
 
     @classmethod
@@ -76,6 +84,8 @@ class EvidenceLock:
         try:
             canonical_ledger = ledger_path.resolve(strict=True)
             canonical_parent = ledger_path.parent.resolve(strict=True)
+            parent_metadata = ledger_path.parent.lstat()
+            ledger_metadata = ledger_path.lstat()
         except OSError as error:
             raise protocol.ProtocolError(
                 f"cannot resolve allocation ledger lock authority: {error}"
@@ -84,22 +94,58 @@ class EvidenceLock:
             ledger_path != canonical_ledger
             or ledger_path.name != LEDGER_NAME
             or ledger_path.parent != canonical_parent
+            or not stat.S_ISDIR(parent_metadata.st_mode)
+            or not stat.S_ISREG(ledger_metadata.st_mode)
         ):
             raise protocol.ProtocolError(
                 "allocation ledger must be canonical outer-root evidence-ledger.json"
             )
         lock_path = canonical_parent / ORCHESTRATOR_LOCK
-        try:
-            expected = lock_path.lstat()
-            descriptor = os.open(
-                lock_path, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW
-            )
-        except OSError as error:
-            raise protocol.ProtocolError(
-                f"cannot open canonical orchestrator lock: {error}"
-            ) from error
+        root_descriptor: int | None = None
+        descriptor: int | None = None
         failure: BaseException | None = None
         try:
+            root_descriptor = os.open(
+                canonical_parent,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            opened_parent = os.fstat(root_descriptor)
+            if (
+                not stat.S_ISDIR(opened_parent.st_mode)
+                or (opened_parent.st_dev, opened_parent.st_ino)
+                != (parent_metadata.st_dev, parent_metadata.st_ino)
+                or os.get_inheritable(root_descriptor)
+            ):
+                raise protocol.ProtocolError(
+                    "outer evidence root is not the exact canonical directory"
+                )
+            fcntl.flock(root_descriptor, fcntl.LOCK_EX)
+            current_parent = os.stat(canonical_parent, follow_symlinks=False)
+            ledger_metadata = ledger_path.lstat()
+            current_ledger = os.stat(
+                LEDGER_NAME, dir_fd=root_descriptor, follow_symlinks=False
+            )
+            if (
+                (current_parent.st_dev, current_parent.st_ino)
+                != (opened_parent.st_dev, opened_parent.st_ino)
+                or not stat.S_ISREG(ledger_metadata.st_mode)
+                or not stat.S_ISREG(current_ledger.st_mode)
+                or (current_ledger.st_dev, current_ledger.st_ino)
+                != (ledger_metadata.st_dev, ledger_metadata.st_ino)
+            ):
+                raise protocol.ProtocolError(
+                    "allocation ledger is not colocated in the pinned evidence root"
+                )
+            expected = os.stat(
+                ORCHESTRATOR_LOCK,
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+            descriptor = os.open(
+                ORCHESTRATOR_LOCK,
+                os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=root_descriptor,
+            )
             actual = os.fstat(descriptor)
             if (
                 not stat.S_ISREG(expected.st_mode)
@@ -116,12 +162,16 @@ class EvidenceLock:
         except BaseException as error:
             failure = error
         if failure is not None:
-            try:
-                os.close(descriptor)
-            except BaseException as close_error:
-                build._record_suppressed_failure(
-                    failure, "orchestrator lock close", close_error
-                )
+            for context, owned in (
+                ("orchestrator lock close", descriptor),
+                ("outer evidence root close", root_descriptor),
+            ):
+                if owned is None:
+                    continue
+                try:
+                    os.close(owned)
+                except BaseException as close_error:
+                    build._record_suppressed_failure(failure, context, close_error)
             if isinstance(failure, Exception) and not isinstance(
                 failure, protocol.ProtocolError
             ):
@@ -129,27 +179,58 @@ class EvidenceLock:
                     f"cannot acquire orchestrator lock: {failure}"
                 ) from failure
             raise failure
-        return cls(descriptor, lock_path)
+        assert root_descriptor is not None and descriptor is not None
+        return cls(root_descriptor, descriptor, canonical_parent, lock_path)
 
     def close(self) -> None:
         descriptor = self.descriptor
-        if descriptor is None:
+        root_descriptor = self.root_descriptor
+        if descriptor is None and root_descriptor is None:
             return
         self.descriptor = None
+        self.root_descriptor = None
         failure: BaseException | None = None
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-        except BaseException as error:
-            failure = error
-        try:
-            os.close(descriptor)
-        except BaseException as error:
-            if failure is None:
-                failure = error
-            else:
-                build._record_suppressed_failure(
-                    failure, "orchestrator lock descriptor close", error
+        steps = []
+        if descriptor is not None:
+            steps.extend(
+                (
+                    (
+                        "orchestrator lock unlock",
+                        fcntl.flock,
+                        descriptor,
+                        fcntl.LOCK_UN,
+                    ),
+                    ("orchestrator lock descriptor close", os.close, descriptor, None),
                 )
+            )
+        if root_descriptor is not None:
+            steps.extend(
+                (
+                    (
+                        "outer evidence root unlock",
+                        fcntl.flock,
+                        root_descriptor,
+                        fcntl.LOCK_UN,
+                    ),
+                    (
+                        "outer evidence root descriptor close",
+                        os.close,
+                        root_descriptor,
+                        None,
+                    ),
+                )
+            )
+        for context, operation, owned, argument in steps:
+            try:
+                if argument is None:
+                    operation(owned)
+                else:
+                    operation(owned, argument)
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+                else:
+                    build._record_suppressed_failure(failure, context, error)
         if failure is not None:
             raise failure
 
@@ -868,10 +949,6 @@ def _validate_running_allocation(
         or running.get("gate") is not None
         or running.get("invalid_reason") is not None
         or type(running.get("observations")) is not list
-        or any(
-            type(observation) is not dict or observation.get("record") is None
-            for observation in running.get("observations", [])
-        )
     ):
         raise protocol.ProtocolError("running allocation manifest state is invalid")
     candidate = _terminal_from_running(running, args)
@@ -1337,6 +1414,14 @@ def _run_comparison_in_root(
                             f"{type(error).__name__}: {error}"
                         )
                         campaign["observations"].append(observation_record)
+                        try:
+                            artifact_handle.atomic_json("allocation.json", campaign)
+                        except BaseException as checkpoint_error:
+                            build._record_suppressed_failure(
+                                error,
+                                "failed allocation observation checkpoint",
+                                checkpoint_error,
+                            )
                         raise
                     pair_records[role] = parsed
                     observation_record["record"] = parsed

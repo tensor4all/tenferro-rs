@@ -218,6 +218,48 @@ def run_campaign_process(
         result_queue.put(("exit", result))
 
 
+def wait_for_ready(path: pathlib.Path, timeout_seconds: float) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not path.exists():
+        raise AssertionError(f"child readiness marker was not published: {path}")
+
+
+def release_and_reap_processes(
+    processes: list[multiprocessing.Process],
+    release: pathlib.Path,
+    *,
+    join_timeout_seconds: float = 2.0,
+) -> None:
+    failure = None
+    try:
+        release.write_bytes(b"release")
+    except BaseException as error:
+        failure = error
+    for process in processes:
+        try:
+            process.join(join_timeout_seconds)
+            if process.is_alive():
+                process.terminate()
+                process.join(join_timeout_seconds)
+            if process.is_alive():
+                process.kill()
+                process.join(join_timeout_seconds)
+            if process.is_alive():
+                raise AssertionError(f"child process survived cleanup: {process.pid}")
+        except BaseException as error:
+            if failure is None:
+                failure = error
+    if failure is not None:
+        raise failure
+
+
+def wait_for_release_without_ready(release: pathlib.Path) -> None:
+    while not release.exists():
+        time.sleep(0.01)
+
+
 def fixture(root: pathlib.Path, lane: str = "direct-current-main"):
     tool_dir = root / "tools"
     tool_dir.mkdir()
@@ -837,6 +879,132 @@ class AllocationCampaignTests(unittest.TestCase):
                     ledger = json.loads(args.ledger.read_text())
                     self.assertIsNone(ledger["active_attempt_id"])
                     self.assertEqual(ledger["attempts"][-1]["validity_state"], "INCONCLUSIVE")
+
+    def test_public_recovery_preserves_durable_failed_probe_tail(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            args.probe_manifest_root = root / "probe-manifests"
+            args.tenferro_manifest_root = root / "tenferro-manifests"
+            args.repository = root.resolve()
+            for role, relative in build.BUILD_MANIFEST_PATHS.items():
+                path = args.tenferro_manifest_root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                protocol.atomic_write_json(path, tenferro[role])
+
+            commands = FakeCommandRunner(invalid_at=1)
+            original_atomic_write = runner.protocol.atomic_write_json_at
+            injected = False
+
+            def fail_stage_precommit(directory_fd, name, payload):
+                nonlocal injected
+                if name == runner.FINALIZATION_STAGE and not injected:
+                    injected = True
+                    raise OSError("injected failed-tail stage pre-commit failure")
+                return original_atomic_write(directory_fd, name, payload)
+
+            with mock.patch.object(
+                runner.build, "validate_build_manifest"
+            ), mock.patch.object(
+                runner.build, "validate_allocation_probe_set", return_value=probes
+            ), mock.patch.object(
+                runner.protocol,
+                "atomic_write_json_at",
+                side_effect=fail_stage_precommit,
+            ), self.assertRaises(protocol.ProtocolError):
+                runner.run_campaign(args, command_runner=commands)
+            self.assertTrue(injected)
+            self.assertEqual(len(commands.calls), 1)
+
+            running = json.loads(
+                (args.artifact_root / "allocation.json").read_text()
+            )
+            self.assertEqual(running["validity_state"], "RUNNING")
+            self.assertEqual(running["launch_count"], 1)
+            self.assertEqual(len(running["observations"]), 1)
+            failed_observation = running["observations"][0]
+            self.assertIsNone(failed_observation["record"])
+            self.assertEqual(failed_observation["launch_index"], 1)
+            self.assertTrue(failed_observation["invalid_reason"])
+
+            recovery = FakeCommandRunner()
+            with mock.patch.object(
+                runner.build, "validate_build_manifest"
+            ), mock.patch.object(
+                runner.build, "validate_allocation_probe_set", return_value=probes
+            ):
+                self.assertEqual(
+                    runner.run_campaign(args, command_runner=recovery),
+                    2,
+                )
+            self.assertEqual(recovery.calls, [])
+            terminal = json.loads(
+                (args.artifact_root / "allocation.json").read_text()
+            )
+            self.assertEqual(terminal["launch_count"], 1)
+            self.assertEqual(terminal["observations"], [failed_observation])
+            self.assertEqual(
+                terminal["invalid_reason"], failed_observation["invalid_reason"]
+            )
+
+    def test_failed_probe_checkpoint_failure_is_suppressed_behind_probe_error(self) -> None:
+        runner = load_runner()
+        for checkpoint_error in (
+            OSError("injected failed observation checkpoint failure"),
+            KeyboardInterrupt("interrupt failed observation checkpoint"),
+        ):
+            with self.subTest(
+                checkpoint_error=type(checkpoint_error).__name__
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, probes, tenferro = fixture(root)
+                original_atomic_write = runner.protocol.atomic_write_json_at
+                original_record = runner.build._record_suppressed_failure
+                recorded = []
+
+                def fail_failed_observation(directory_fd, name, payload):
+                    if (
+                        name == "allocation.json"
+                        and payload.get("validity_state") == "RUNNING"
+                        and payload.get("launch_count") == 1
+                        and payload.get("observations")
+                        and payload["observations"][-1].get("record") is None
+                    ):
+                        raise checkpoint_error
+                    return original_atomic_write(directory_fd, name, payload)
+
+                def record(primary, context, secondary):
+                    recorded.append((primary, context, secondary))
+                    original_record(primary, context, secondary)
+
+                with mock.patch.object(
+                    runner.protocol,
+                    "atomic_write_json_at",
+                    side_effect=fail_failed_observation,
+                ), mock.patch.object(
+                    runner.build,
+                    "_record_suppressed_failure",
+                    side_effect=record,
+                ):
+                    self.assertEqual(
+                        runner._run_comparison(
+                            args,
+                            probe_manifests=probes,
+                            tenferro_manifests=tenferro,
+                            command_runner=FakeCommandRunner(invalid_at=1),
+                        ),
+                        2,
+                    )
+                matching = [
+                    item
+                    for item in recorded
+                    if item[1] == "failed allocation observation checkpoint"
+                ]
+                self.assertEqual(len(matching), 1)
+                primary, _context, secondary = matching[0]
+                self.assertIsInstance(primary, protocol.ProtocolError)
+                self.assertIs(secondary, checkpoint_error)
 
     def test_running_manifest_exists_after_ledger_registration_before_launch(self) -> None:
         runner = load_runner()
@@ -1607,10 +1775,110 @@ class AllocationCampaignTests(unittest.TestCase):
 
             lock = runner.EvidenceLock.acquire(args.ledger)
             descriptor = lock.descriptor
+            root_descriptor = lock.root_descriptor
             lock.close()
             lock.close()
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
+            with self.assertRaises(OSError):
+                os.fstat(root_descriptor)
+
+    def test_orchestrator_lock_close_releases_both_descriptors_once(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, _probes, _tenferro = fixture(root)
+            lock = runner.EvidenceLock.acquire(args.ledger)
+            descriptor = lock.descriptor
+            root_descriptor = lock.root_descriptor
+            real_close = runner.os.close
+            closed = []
+
+            def fail_root_close(owned):
+                closed.append(owned)
+                real_close(owned)
+                if owned == root_descriptor:
+                    raise OSError("injected outer evidence root close failure")
+
+            with mock.patch.object(runner.os, "close", side_effect=fail_root_close):
+                with self.assertRaisesRegex(
+                    OSError, "outer evidence root close failure"
+                ):
+                    lock.close()
+                lock.close()
+            self.assertEqual(closed, [descriptor, root_descriptor])
+            for owned in (descriptor, root_descriptor):
+                with self.assertRaises(OSError):
+                    os.fstat(owned)
+
+    def test_orchestrator_lock_requires_canonical_colocated_ledger(self) -> None:
+        runner = load_runner()
+        for corruption in ("wrong-name", "ledger-symlink", "parent-symlink"):
+            with self.subTest(
+                corruption=corruption
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, _probes, _tenferro = fixture(root)
+                ledger = args.ledger
+                if corruption == "wrong-name":
+                    selected = ledger.with_name("foreign-ledger.json")
+                    selected.write_bytes(ledger.read_bytes())
+                elif corruption == "ledger-symlink":
+                    foreign = root / "foreign-ledger.json"
+                    foreign.write_bytes(ledger.read_bytes())
+                    ledger.unlink()
+                    ledger.symlink_to(foreign)
+                    selected = ledger
+                else:
+                    alias = root / "evidence-alias"
+                    alias.symlink_to(ledger.parent, target_is_directory=True)
+                    selected = alias / ledger.name
+                with self.assertRaises(protocol.ProtocolError):
+                    runner.EvidenceLock.acquire(selected)
+
+    def test_primary_error_suppresses_lock_release_failure(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            interruption = KeyboardInterrupt("primary campaign interruption")
+            close_error = OSError("secondary lock release failure")
+            original_close = runner.EvidenceLock.close
+            original_record = runner.build._record_suppressed_failure
+            recorded = []
+
+            def interrupt_locked(*_args, **_kwargs):
+                raise interruption
+
+            def fail_after_close(lock):
+                original_close(lock)
+                raise close_error
+
+            def record(primary, context, secondary):
+                recorded.append((primary, context, secondary))
+                original_record(primary, context, secondary)
+
+            caught = None
+            with mock.patch.object(
+                runner, "_run_comparison_locked", side_effect=interrupt_locked
+            ), mock.patch.object(
+                runner.EvidenceLock, "close", fail_after_close
+            ), mock.patch.object(
+                runner.build, "_record_suppressed_failure", side_effect=record
+            ):
+                try:
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                    )
+                except BaseException as error:
+                    caught = error
+            self.assertIs(caught, interruption)
+            self.assertEqual(
+                recorded,
+                [(interruption, "orchestrator lock release", close_error)],
+            )
 
     def test_two_processes_serialize_one_attempt_and_bind_one_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1632,20 +1900,26 @@ class AllocationCampaignTests(unittest.TestCase):
                 target=run_campaign_process,
                 args=(second_args, probes, tenferro, launch_log, results),
             )
+            started = []
             first.start()
-            deadline = time.monotonic() + 10
-            while not ready.exists() and time.monotonic() < deadline:
-                time.sleep(0.01)
-            self.assertTrue(ready.exists())
-            second.start()
+            started.append(first)
             try:
+                wait_for_ready(ready, 10)
+                lock_path = args.ledger.parent / "orchestrator.lock"
+                original_lock_identity = lock_path.stat().st_ino
+                replacement = args.ledger.parent / ".replacement-orchestrator.lock"
+                replacement.write_bytes(b"")
+                os.replace(replacement, lock_path)
+                self.assertNotEqual(lock_path.stat().st_ino, original_lock_identity)
+                second.start()
+                started.append(second)
                 time.sleep(0.2)
                 self.assertTrue(second.is_alive())
                 self.assertEqual(launch_log.read_text().splitlines(), ["launch"])
             finally:
-                release.write_bytes(b"release")
-                first.join(20)
-                second.join(20)
+                release_and_reap_processes(
+                    started, release, join_timeout_seconds=20
+                )
             self.assertEqual((first.exitcode, second.exitcode), (0, 0))
             outcomes = {results.get(timeout=2), results.get(timeout=2)}
             self.assertIn(("exit", 0), outcomes)
@@ -1663,6 +1937,29 @@ class AllocationCampaignTests(unittest.TestCase):
                 ledger["attempts"][0]["artifact_root"],
                 str(args.artifact_root.resolve()),
             )
+
+    def test_failed_ready_assertion_reaps_child_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            ready = root / "never-ready"
+            release = root / "release"
+            context = multiprocessing.get_context("fork")
+            process = context.Process(
+                target=wait_for_release_without_ready,
+                args=(release,),
+            )
+            process.start()
+            try:
+                with self.assertRaisesRegex(
+                    AssertionError, "readiness marker was not published"
+                ):
+                    wait_for_ready(ready, 0.05)
+            finally:
+                release_and_reap_processes(
+                    [process], release, join_timeout_seconds=0.2
+                )
+            self.assertFalse(process.is_alive())
+            self.assertIsNotNone(process.exitcode)
 
     def test_process_crash_releases_lock_and_bound_root_recovers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

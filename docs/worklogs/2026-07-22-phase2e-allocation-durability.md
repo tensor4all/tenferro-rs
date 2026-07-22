@@ -2,7 +2,7 @@
 
 ## Summary
 
-Task 6 cycles 4 and 5 harden the allocation non-inferiority campaign against
+Task 6 cycles 4 through 6 harden the allocation non-inferiority campaign against
 forged terminal JSON, result-selecting finalization failures, startup crash
 windows, cleanup failure loss, and concurrent processes using one attempt with
 different artifact roots.
@@ -20,7 +20,9 @@ different artifact roots.
 ## Decisions
 
 - Reuse the normative outer-root `orchestrator.lock`; no allocation-specific
-  lock file was added. The child acquires only this root lock, preserving the
+  lock file was added. The child first pins and locks the outer evidence
+  directory, then validates and locks `orchestrator.lock` relative to that
+  descriptor. This closes lockfile replacement bypass while preserving the
   future orchestrator's index-then-root order.
 - Extend every ledger attempt with one exact artifact ownership schema. Timing
   attempts use `None` identities and `NOT_APPLICABLE`; allocation attempts
@@ -41,11 +43,18 @@ different artifact roots.
 - Suppress cleanup failures only when a primary failure is already active.
   Normal outcomes never hide lock, pinned-resource, or recovery-root close
   failures.
+- Checkpoint a failed probe's canonical `record = null` RUNNING tail before
+  finalization, so recovery preserves the exact launch descriptor and reason.
+- Require persisted allocation probe `protocol_version` to have exact integer
+  type and exact value.
 
 ## Rejected alternatives
 
 - Locking `evidence-ledger.json` itself is invalid because atomic replacement
   changes its inode.
+- Locking only `orchestrator.lock` is insufficient because replacing that
+  pathname creates a new unlocked inode; the pinned directory lock is the
+  stable outer serialization layer.
 - A new sibling allocation lock or ownership sidecar would duplicate the
   accepted outer-root authority and ledger source of truth.
 - Reusing an existing empty artifact root cannot distinguish a crash remnant
@@ -96,6 +105,29 @@ future regression fails promptly instead of hanging the test runner.
 - `python3 -m py_compile` for all six Phase 2E Python implementation/test
   modules and `git diff --check` passed.
 - Repository-rules worktree review from `9c5aa7ed` passed with no findings.
+
+## Cycle 6 verification results
+
+- A public-stage precommit reproducer now proves that a failed first launch is
+  durably checkpointed as RUNNING and recovers to the same terminal descriptor
+  and reason with exactly one actual launch.
+- A real forked-process race atomically replaces `orchestrator.lock` after the
+  first process acquires it; the pinned outer-directory lock still serializes
+  the second process. Canonical path/ledger colocation and exact-once cleanup of
+  both descriptors have direct coverage.
+- Failed checkpoint and lock-release tests prove ordinary and control cleanup
+  failures remain secondary to the active probe/campaign failure.
+- Persisted probe manifests reject float and boolean `protocol_version` values
+  even when Python equality would match the supported integer.
+- Process readiness waits and assertions are inside `finally` cleanup; bounded
+  join escalates to terminate and kill. A missing-readiness regression proves
+  the child is reaped.
+- `python3 -m unittest scripts.test_phase2e_build scripts.test_run_phase2e_allocation_campaign`:
+  125 passed.
+- `python3 -m unittest scripts.test_phase2e_protocol scripts.test_run_phase1_eager_campaign -v`:
+  109 passed.
+- `python3 -m py_compile` for all six Phase 2E Python implementation/test
+  modules and `git diff --check` passed.
 
 ## Residual risks
 
