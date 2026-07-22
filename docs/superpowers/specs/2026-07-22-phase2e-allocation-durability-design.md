@@ -14,8 +14,11 @@ finalization contracts remain unchanged.
 runner opens it without following symlinks, proves it is the expected canonical
 regular file, acquires an exclusive `flock`, and holds that lock from before
 recovery or artifact-root reservation until terminal cleanup. It never locks
-the replaceable ledger inode. Cleanup errors are suppressed behind an active
-control exception, and every descriptor is closed exactly once.
+the replaceable ledger inode. A cleanup error is suppressed only behind an
+active primary failure, including a control exception. After any normal
+PASS/FAIL/INCONCLUSIVE outcome, an ordinary cleanup failure becomes a typed
+protocol error and a cleanup control exception is re-raised unchanged. Every
+descriptor is closed exactly once.
 
 Allocation ledger attempts gain exact artifact ownership fields: canonical
 root path, device, inode, and ownership state. Timing attempts carry the same
@@ -52,10 +55,33 @@ must retain an exact failure location and reason, and cannot select a result.
 Stage, marker, and published inode/digest checks occur only after this semantic
 validation.
 
+Terminal state is a function of the validated observation sequence, never a
+caller-selected label:
+
+- 168 successful and within-role-consistent records become `COMPLETE`, with
+  PASS/FAIL recomputed from every candidate/baseline pair.
+- A final observation with `record = null` becomes `INCONCLUSIVE`; its complete
+  canonical launch descriptor is the failure location and its nonempty
+  `invalid_reason` is repeated exactly at the terminal level. This includes a
+  failure in launch 168 and is distinct from 168 successful records.
+- A shorter all-success prefix becomes `INCONCLUSIVE` at the next canonical
+  launch index with the fixed classifier-generated interruption reason.
+- A full successful inventory with a within-role mismatch becomes
+  `INCONCLUSIVE` at the first canonical `(case, role)` mismatch with the fixed
+  classifier-generated inconsistency reason.
+
+The generator, validator, and recovery path share that classifier. Therefore a
+finalization write failure cannot downgrade a complete valid measurement to an
+arbitrary `INCONCLUSIVE` result. Recovery reclassifies the persisted `RUNNING`
+inventory and preserves a recomputed COMPLETE PASS/FAIL when all 168 records
+were successful.
+
 ## Verification
 
-Tests cover forged closed PASS evidence, the full adversarial mutation matrix,
-all durable initialization crash windows, pre/post-commit atomic-write states,
-control-exception identity, and a real two-process race using two different
-artifact roots for one attempt. Existing focused allocation/build tests and the
-shared protocol plus Phase 1 suites must remain green.
+Tests cover forged closed PASS evidence, forged full-success INCONCLUSIVE
+evidence, launch-168 failure, the full adversarial mutation matrix, all durable
+initialization crash windows, pre/post-commit atomic-write states, normal and
+exceptional cleanup precedence, control-exception identity, and a real
+two-process race using two different artifact roots for one attempt. Existing
+focused allocation/build tests and the shared protocol plus Phase 1 suites must
+remain green.

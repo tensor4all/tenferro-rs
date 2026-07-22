@@ -812,7 +812,7 @@ class AllocationCampaignTests(unittest.TestCase):
 
     def test_first_invalid_process_stops_whole_comparison_and_closes_retryable(self) -> None:
         runner = load_runner()
-        for invalid_at, malformed_at in ((5, None), (None, 9)):
+        for invalid_at, malformed_at in ((5, None), (168, None), (None, 9)):
             with self.subTest(invalid_at=invalid_at, malformed_at=malformed_at):
                 with tempfile.TemporaryDirectory() as temporary:
                     root = pathlib.Path(temporary)
@@ -914,7 +914,7 @@ class AllocationCampaignTests(unittest.TestCase):
                     )
                 return result
 
-        for mode, expected_launches in (("timeout", 4), ("inconsistent", 6)):
+        for mode, expected_launches in (("timeout", 4), ("inconsistent", 168)):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
                 root = pathlib.Path(temporary)
                 args, probes, tenferro = fixture(root)
@@ -929,6 +929,15 @@ class AllocationCampaignTests(unittest.TestCase):
                     2,
                 )
                 self.assertEqual(len(commands.calls), expected_launches)
+                if mode == "inconsistent":
+                    terminal = json.loads(
+                        (args.artifact_root / "allocation.json").read_text()
+                    )
+                    self.assertEqual(
+                        terminal["invalid_reason"],
+                        "allocation observations are inconsistent within candidate "
+                        f"for {next(iter(protocol.CANONICAL_CASES))}",
+                    )
 
     def test_logical_binary_replacement_after_pin_cannot_change_executed_bytes(self) -> None:
         runner = load_runner()
@@ -994,7 +1003,7 @@ class AllocationCampaignTests(unittest.TestCase):
             )
             self.assertEqual(len(commands.calls), 1)
 
-    def test_root_close_after_complete_cannot_change_pass_exit(self) -> None:
+    def test_root_close_after_complete_propagates_typed_failure(self) -> None:
         runner = load_runner()
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -1007,17 +1016,18 @@ class AllocationCampaignTests(unittest.TestCase):
                 original_close(handle)
                 raise OSError("injected root close failure")
 
-            with mock.patch.object(runner.PinnedDirectory, "close", failing_close):
-                self.assertEqual(
-                    runner._run_comparison(
-                        args,
-                        probe_manifests=probes,
-                        tenferro_manifests=tenferro,
-                        command_runner=FakeCommandRunner(
-                            candidate_count=6, candidate_bytes=63
-                        ),
+            with mock.patch.object(
+                runner.PinnedDirectory, "close", failing_close
+            ), self.assertRaisesRegex(
+                protocol.ProtocolError, "cannot close allocation pinned resource"
+            ):
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=FakeCommandRunner(
+                        candidate_count=6, candidate_bytes=63
                     ),
-                    0,
                 )
             self.assertEqual(calls, [args.artifact_root.resolve()])
 
@@ -1080,7 +1090,7 @@ class AllocationCampaignTests(unittest.TestCase):
     def test_stage_and_marker_atomic_write_failure_matrix_is_recoverable(self) -> None:
         runner = load_runner()
         for name, committed, first_exit in (
-            (runner.FINALIZATION_STAGE, False, 2),
+            (runner.FINALIZATION_STAGE, False, None),
             (runner.FINALIZATION_STAGE, True, None),
             (runner.FINALIZATION_MARKER, False, None),
             (runner.FINALIZATION_MARKER, True, None),
@@ -1130,7 +1140,7 @@ class AllocationCampaignTests(unittest.TestCase):
                 self.assertEqual(len(commands.calls), 168)
 
                 recovery = FakeCommandRunner()
-                expected_recovery = 2 if name == runner.FINALIZATION_STAGE and not committed else 0
+                expected_recovery = 0
                 self.assertEqual(
                     runner._run_comparison(
                         args,
@@ -1145,7 +1155,7 @@ class AllocationCampaignTests(unittest.TestCase):
                 self.assertEqual(terminal["launch_count"], 168)
                 self.assertEqual(
                     terminal["validity_state"],
-                    "INCONCLUSIVE" if expected_recovery == 2 else "COMPLETE",
+                    "COMPLETE",
                 )
                 ledger = json.loads(args.ledger.read_text())
                 self.assertIsNone(ledger["active_attempt_id"])
@@ -1207,6 +1217,60 @@ class AllocationCampaignTests(unittest.TestCase):
                     command_runner=commands,
                 )
             self.assertEqual(commands.calls, [])
+
+    def test_public_recovery_rejects_full_success_downgraded_to_inconclusive(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            commands = FakeCommandRunner(candidate_count=6, candidate_bytes=63)
+            self.assertEqual(
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=commands,
+                ),
+                0,
+            )
+            self.assertEqual(len(commands.calls), 168)
+
+            terminal_path = args.artifact_root / "allocation.json"
+            terminal = json.loads(terminal_path.read_text())
+            terminal["validity_state"] = "INCONCLUSIVE"
+            terminal["gate"] = None
+            terminal["invalid_reason"] = "forged full-success downgrade"
+            protocol.atomic_write_json(terminal_path, terminal)
+
+            ledger = json.loads(args.ledger.read_text())
+            attempt = ledger["attempts"][0]
+            attempt["state"] = "INCONCLUSIVE"
+            attempt["validity_state"] = "INCONCLUSIVE"
+            attempt["statistical_result"] = None
+            direct = ledger["stages"][0]["lanes"][0]
+            direct["state"] = "RETRYABLE"
+            direct["result"] = None
+            normalized = ledger["stages"][0]["lanes"][1]
+            normalized["state"] = "BLOCKED"
+            normalized["result"] = None
+            protocol.validate_ledger(ledger)
+            protocol.atomic_write_json(args.ledger, ledger)
+            forged_ledger = args.ledger.read_bytes()
+
+            args.probe_manifest_root = root / "probe-manifests"
+            args.tenferro_manifest_root = root / "tenferro-manifests"
+            args.repository = root.resolve()
+            for role, relative in build.BUILD_MANIFEST_PATHS.items():
+                path = args.tenferro_manifest_root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                protocol.atomic_write_json(path, tenferro[role])
+            recovery = FakeCommandRunner()
+            with mock.patch.object(runner.build, "validate_build_manifest"), mock.patch.object(
+                runner.build, "validate_allocation_probe_set", return_value=probes
+            ), self.assertRaises(protocol.ProtocolError):
+                runner.run_campaign(args, command_runner=recovery)
+            self.assertEqual(recovery.calls, [])
+            self.assertEqual(args.ledger.read_bytes(), forged_ledger)
 
     def test_reserved_initialization_crash_closes_without_touching_unproven_root(self) -> None:
         runner = load_runner()
@@ -1355,6 +1419,145 @@ class AllocationCampaignTests(unittest.TestCase):
                     ledger = json.loads(args.ledger.read_text())
                     self.assertIsNone(ledger["active_attempt_id"])
 
+    def test_initialization_persists_bound_before_running_manifest(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            events = []
+            original_path_write = protocol.atomic_write_json
+            original_root_write = runner.protocol.atomic_write_json_at
+
+            def record_path_write(path, payload):
+                if pathlib.Path(path) == args.ledger and payload.get(
+                    "active_attempt_id"
+                ) == args.attempt_id:
+                    artifact_state = payload["attempts"][-1]["artifact_state"]
+                    if artifact_state == "BOUND":
+                        self.assertTrue(args.artifact_root.is_dir())
+                        self.assertFalse(
+                            (args.artifact_root / "allocation.json").exists()
+                        )
+                    events.append(artifact_state)
+                return original_path_write(path, payload)
+
+            def record_root_write(directory_fd, name, payload):
+                if name == "allocation.json" and payload.get("validity_state") == "RUNNING":
+                    persisted = json.loads(args.ledger.read_text())
+                    self.assertEqual(
+                        persisted["attempts"][-1]["artifact_state"], "BOUND"
+                    )
+                    events.append("RUNNING")
+                return original_root_write(directory_fd, name, payload)
+
+            with mock.patch.object(
+                runner.protocol, "atomic_write_json_at", side_effect=record_root_write
+            ):
+                self.assertEqual(
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=FakeCommandRunner(invalid_at=1),
+                        atomic_writer=record_path_write,
+                    ),
+                    2,
+                )
+            self.assertEqual(events[:3], ["RESERVED", "BOUND", "RUNNING"])
+
+    def test_bound_before_running_control_crashes_recover_without_launch(self) -> None:
+        runner = load_runner()
+        for phase, committed in (
+            ("binding", True),
+            ("manifest", False),
+            ("manifest", True),
+        ):
+            with self.subTest(
+                phase=phase, committed=committed
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, probes, tenferro = fixture(root)
+                commands = FakeCommandRunner()
+                original_path_write = protocol.atomic_write_json
+                original_root_write = runner.protocol.atomic_write_json_at
+                interruption = KeyboardInterrupt(f"interrupt {phase}")
+                injected = False
+
+                def interrupt_path_write(path, payload):
+                    nonlocal injected
+                    attempt = payload.get("attempts", [{}])[-1]
+                    selected = (
+                        pathlib.Path(path) == args.ledger
+                        and payload.get("active_attempt_id") == args.attempt_id
+                        and attempt.get("artifact_state") == "BOUND"
+                    )
+                    if phase == "binding" and selected and not injected:
+                        injected = True
+                        original_path_write(path, payload)
+                        raise interruption
+                    return original_path_write(path, payload)
+
+                def interrupt_root_write(directory_fd, name, payload):
+                    nonlocal injected
+                    selected = (
+                        phase == "manifest"
+                        and name == "allocation.json"
+                        and payload.get("validity_state") == "RUNNING"
+                        and payload.get("launch_count") == 0
+                    )
+                    if selected and not injected:
+                        injected = True
+                        if committed:
+                            original_root_write(directory_fd, name, payload)
+                        raise interruption
+                    return original_root_write(directory_fd, name, payload)
+
+                with mock.patch.object(
+                    runner.protocol,
+                    "atomic_write_json_at",
+                    side_effect=interrupt_root_write,
+                ), self.assertRaises(KeyboardInterrupt) as caught:
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=commands,
+                        atomic_writer=interrupt_path_write,
+                    )
+                self.assertIs(caught.exception, interruption)
+                self.assertTrue(injected)
+                self.assertEqual(commands.calls, [])
+
+                recovery = FakeCommandRunner()
+                self.assertEqual(
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=recovery,
+                    ),
+                    2,
+                )
+                self.assertEqual(recovery.calls, [])
+                terminal = json.loads(
+                    (args.artifact_root / "allocation.json").read_text()
+                )
+                self.assertEqual(
+                    (
+                        terminal["validity_state"],
+                        terminal["gate"],
+                        terminal["invalid_reason"],
+                    ),
+                    (
+                        "INCONCLUSIVE",
+                        None,
+                        "allocation execution interrupted before launch 1",
+                    ),
+                )
+                ledger = json.loads(args.ledger.read_text())
+                self.assertIsNone(ledger["active_attempt_id"])
+                self.assertEqual(ledger["attempts"][-1]["state"], "INCONCLUSIVE")
+
     def test_missing_or_nonregular_orchestrator_lock_rejects_before_launch(self) -> None:
         runner = load_runner()
         for corruption in ("missing", "symlink", "directory"):
@@ -1492,6 +1695,10 @@ class AllocationCampaignTests(unittest.TestCase):
                 (args.artifact_root / "allocation.json").read_text()
             )
             self.assertEqual(terminal["validity_state"], "INCONCLUSIVE")
+            self.assertEqual(
+                terminal["invalid_reason"],
+                "allocation execution interrupted before launch 1",
+            )
             ledger = json.loads(args.ledger.read_text())
             self.assertIsNone(ledger["active_attempt_id"])
 
@@ -1704,10 +1911,125 @@ class AllocationCampaignTests(unittest.TestCase):
                 )
                 self.assertEqual(final_recovery.calls, [])
 
+    def test_normal_outcome_propagates_orchestrator_lock_close_failure(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            original_close = runner.EvidenceLock.close
+
+            def fail_after_close(lock):
+                original_close(lock)
+                raise OSError("injected orchestrator lock close failure")
+
+            with mock.patch.object(
+                runner.EvidenceLock, "close", fail_after_close
+            ), self.assertRaisesRegex(
+                protocol.ProtocolError, "cannot release orchestrator lock"
+            ):
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=FakeCommandRunner(
+                        candidate_count=6, candidate_bytes=63
+                    ),
+                )
+
+    def test_normal_outcome_propagates_pinned_resource_close_failure(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            original_close = runner.PinnedExecutable.close
+
+            def fail_after_close(executable):
+                original_close(executable)
+                raise OSError("injected pinned executable close failure")
+
+            with mock.patch.object(
+                runner.PinnedExecutable, "close", fail_after_close
+            ), self.assertRaisesRegex(
+                protocol.ProtocolError, "cannot close allocation pinned resource"
+            ):
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=FakeCommandRunner(
+                        candidate_count=6, candidate_bytes=63
+                    ),
+                )
+
+    def test_normal_recovery_propagates_root_close_failure(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            self.assertEqual(
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=FakeCommandRunner(
+                        candidate_count=6, candidate_bytes=63
+                    ),
+                ),
+                0,
+            )
+            original_close = runner.PinnedDirectory.close
+
+            def fail_after_close(handle):
+                original_close(handle)
+                raise OSError("injected recovery root close failure")
+
+            recovery = FakeCommandRunner()
+            with mock.patch.object(
+                runner.PinnedDirectory, "close", fail_after_close
+            ), self.assertRaisesRegex(
+                protocol.ProtocolError, "cannot close allocation recovery root"
+            ):
+                runner._run_comparison(
+                    args,
+                    probe_manifests=probes,
+                    tenferro_manifests=tenferro,
+                    command_runner=recovery,
+                )
+            self.assertEqual(recovery.calls, [])
+
+    def test_normal_outcome_preserves_lock_close_control_exception(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            args, probes, tenferro = fixture(root)
+            original_close = runner.EvidenceLock.close
+            interruption = KeyboardInterrupt("interrupt lock close")
+
+            def interrupt_after_close(lock):
+                original_close(lock)
+                raise interruption
+
+            caught = None
+            with mock.patch.object(
+                runner.EvidenceLock, "close", interrupt_after_close
+            ):
+                try:
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=FakeCommandRunner(
+                            candidate_count=6, candidate_bytes=63
+                        ),
+                    )
+                except BaseException as error:
+                    caught = error
+            self.assertIs(caught, interruption)
+
     def test_finalization_control_exception_identity_is_preserved_with_recovery(self) -> None:
         runner = load_runner()
         for name, expected_exit in (
-            (runner.FINALIZATION_STAGE, 2),
+            (runner.FINALIZATION_STAGE, 0),
             (runner.FINALIZATION_MARKER, 0),
         ):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
