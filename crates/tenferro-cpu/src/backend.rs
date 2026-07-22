@@ -2123,9 +2123,8 @@ impl CpuBackend {
                     let Some(domain_id) = registry.node_domain_ids.get(&node.id()).copied() else {
                         continue;
                     };
-                    let budget =
-                        std::num::NonZeroUsize::new(registry.thread_budget.min(node.cpus().len()))
-                            .expect("usable topology nodes have non-empty CPU sets");
+                    let budget = std::num::NonZeroUsize::new(registry.thread_budget)
+                        .expect("managed registries have a nonzero thread budget");
                     bundle.validate_for_domain(
                         domain_id,
                         budget,

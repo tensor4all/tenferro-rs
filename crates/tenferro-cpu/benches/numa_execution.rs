@@ -1,6 +1,6 @@
 use std::hint::black_box;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -18,11 +18,58 @@ use tenferro_tensor::{
 
 const MATRIX_SIZES: [usize; 3] = [64, 256, 512];
 
-fn matrix(size: usize) -> Tensor {
+fn matrix(size: usize, salt: usize) -> Tensor {
     let shape = [size, size];
     let len = shape.iter().product();
-    Tensor::from_vec_col_major(shape.to_vec(), vec![1.0_f64; len])
-        .expect("NUMA benchmark matrix should be valid")
+    Tensor::from_vec_col_major(
+        shape.to_vec(),
+        (0..len)
+            .map(|index| ((index * 29 + salt * 17) % 251) as f64 / 97.0 - 1.0)
+            .collect(),
+    )
+    .expect("NUMA benchmark matrix should be valid")
+}
+
+fn current_cpu() -> usize {
+    unsafe extern "C" {
+        fn sched_getcpu() -> std::ffi::c_int;
+    }
+    // SAFETY: sched_getcpu has no arguments or preconditions.
+    let cpu = unsafe { sched_getcpu() };
+    usize::try_from(cpu).expect("Phase 2E affinity audit requires sched_getcpu")
+}
+
+fn maybe_write_affinity(key: &str, backend: &CpuBackend, ownership: &str, budget: usize) {
+    if std::env::var("TENFERRO_PHASE2E_AFFINITY_ROW").as_deref() != Ok(key) {
+        return;
+    }
+    let path = std::env::var_os("TENFERRO_PHASE2E_AFFINITY_FILE")
+        .expect("Phase 2E selected row requires an affinity artifact path");
+    let barrier = Arc::new(Barrier::new(budget));
+    let observations = backend.install(Box::new(move || {
+        rayon::broadcast(|worker| {
+            barrier.wait();
+            [worker.index(), current_cpu()]
+        })
+    }));
+    let info = backend.execution_info();
+    let declared = info.domain_cpus().as_usize_vec();
+    if ownership != "external-advisory" {
+        assert!(observations.iter().all(|item| declared.contains(&item[1])));
+    }
+    let guarantee = if ownership == "external-advisory" {
+        "AdvisoryDeclared"
+    } else {
+        "ExactDeclared"
+    };
+    std::fs::write(
+        path,
+        format!(
+            "{{\"key\":{key:?},\"ownership\":{ownership:?},\"guarantee\":{guarantee:?},\"budget\":{budget},\"worker_count\":{},\"declared_cpus\":{declared:?},\"observations\":{observations:?}}}\n",
+            info.worker_count(),
+        ),
+    )
+    .unwrap();
 }
 
 fn run_session_workload(backend: &mut CpuBackend, input: &Tensor) -> Tensor {
@@ -65,7 +112,7 @@ fn bench_configuration(c: &mut Criterion, size: usize, threads: usize) {
     let all_allowed = coordinator
         .for_placement(CpuPlacement::AllAllowed)
         .expect("faer AllAllowed placement should resolve");
-    let input = matrix(size);
+    let input = matrix(size, 1);
     let case = format!("numa_execution/{size}x{size}/threads_{threads}");
     print_metadata(&format!("{case}/all_allowed"), &all_allowed, size);
 
@@ -174,14 +221,18 @@ fn bench_phase2e_rows(c: &mut Criterion) {
     for ownership in ["managed-exact", "external-exact", "external-advisory"] {
         for budget in [1, 2, 4] {
             let mut native = phase2e_backend(ownership, budget);
-            c.bench_function(&format!("phase2e/{ownership}/budget-{budget}/D-N"), |b| {
+            let native_key = format!("{ownership}/budget-{budget}/D-N");
+            maybe_write_affinity(&native_key, &native, ownership, budget);
+            c.bench_function(&format!("phase2e/{native_key}"), |b| {
                 b.iter(|| black_box(native.add(&native_lhs, &native_rhs).unwrap()))
             });
 
-            let dot_lhs = matrix(128);
-            let dot_rhs = matrix(128);
+            let dot_lhs = matrix(128, 2);
+            let dot_rhs = matrix(128, 3);
             let mut dot = phase2e_backend(ownership, budget);
-            c.bench_function(&format!("phase2e/{ownership}/budget-{budget}/D-D"), |b| {
+            let dot_key = format!("{ownership}/budget-{budget}/D-D");
+            maybe_write_affinity(&dot_key, &dot, ownership, budget);
+            c.bench_function(&format!("phase2e/{dot_key}"), |b| {
                 b.iter(|| black_box(dot.dot_general(&dot_lhs, &dot_rhs, &dot_config).unwrap()))
             });
 
@@ -189,12 +240,16 @@ fn bench_phase2e_rows(c: &mut Criterion) {
             let matrix_len = 64 * 64;
             let grouped_lhs = Tensor::from_vec_col_major(
                 vec![jobs_len * matrix_len],
-                vec![0.5_f64; jobs_len * matrix_len],
+                (0..jobs_len * matrix_len)
+                    .map(|index| ((index * 31 + 5) % 257) as f64 / 113.0 - 0.75)
+                    .collect(),
             )
             .unwrap();
             let grouped_rhs = Tensor::from_vec_col_major(
                 vec![jobs_len * matrix_len],
-                vec![0.25_f64; jobs_len * matrix_len],
+                (0..jobs_len * matrix_len)
+                    .map(|index| ((index * 37 + 11) % 263) as f64 / 127.0 - 0.5)
+                    .collect(),
             )
             .unwrap();
             let mut grouped_out = Tensor::from_vec_col_major(
@@ -216,8 +271,10 @@ fn bench_phase2e_rows(c: &mut Criterion) {
             };
             let config = GroupedGemmConfig::new(&jobs, accumulation);
             let mut grouped = phase2e_backend(ownership, budget);
+            let grouped_key = format!("{ownership}/budget-{budget}/G-O");
+            maybe_write_affinity(&grouped_key, &grouped, ownership, budget);
             let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
-            c.bench_function(&format!("phase2e/{ownership}/budget-{budget}/G-O"), |b| {
+            c.bench_function(&format!("phase2e/{grouped_key}"), |b| {
                 b.iter(|| {
                     BackendCachedDot::grouped_gemm_cached(
                         &mut grouped,

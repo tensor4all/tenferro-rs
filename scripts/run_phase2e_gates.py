@@ -48,6 +48,9 @@ SOURCE_HOT_ITEMS = (
     ("crates/tenferro-cpu/src/backend.rs", "fn acquire_execution_permit("),
     ("crates/tenferro-cpu/src/backend.rs", "fn run_backend_session_cached<R: Send>("),
     ("crates/tenferro-cpu/src/backend.rs", "fn with_backend_session<R: Send>("),
+    ("crates/tenferro-cpu/src/engine.rs", "pub(crate) fn new_managed("),
+    ("crates/tenferro-cpu/src/elementwise.rs", "pub(crate) fn typed_add_with_pool<T>("),
+    ("crates/tenferro-cpu/src/phase2e_observe.rs", "pub(crate) fn record_typed_add_worker()"),
     ("crates/tenferro-cpu/src/exec_session.rs", "fn run_native<R: Send>("),
     ("crates/tenferro-cpu/src/exec_session.rs", "fn run_native_fresh<R: FreshCpuOutput + Send>("),
     ("crates/tenferro-cpu/src/provider.rs", "pub(crate) fn enter<R: Send>("),
@@ -153,6 +156,26 @@ def validate_partition(artifact: Mapping[str, Any], owner: str) -> list[dict[str
                 != "CPU domain executor scheduling failed: CPU domain CpuDomainId(9) does not support Outer mode"
             ):
                 raise protocol.ProtocolError("U-O lacks its exact pre-submit scheduling source")
+            recovery = row.get("recovery")
+            if (
+                not isinstance(recovery, dict)
+                or recovery.get("fresh_reset") is not True
+                or recovery.get("numerical_passed") is not True
+                or recovery.get("subset_passed") is not True
+                or not isinstance(recovery.get("counts"), list)
+                or len(recovery["counts"]) != 6
+                or not all(type(value) is int for value in recovery["counts"])
+                or not isinstance(recovery.get("mode"), str)
+                or not isinstance(recovery.get("observed_cpus"), list)
+            ):
+                raise protocol.ProtocolError(f"CPU row {key} lacks its fresh recovery record")
+            if not key.endswith("/U-O") and (
+                recovery["counts"] != counts
+                or recovery["mode"] != row.get("mode")
+                or not recovery["observed_cpus"]
+                or not all(type(cpu) is int and cpu >= 0 for cpu in recovery["observed_cpus"])
+            ):
+                raise protocol.ProtocolError(f"CPU row {key} recovery rerun differs")
         else:
             if "counts" in row or "mode" in row:
                 raise protocol.ProtocolError("AD raw rows may not supply downstream counts or modes")
@@ -197,10 +220,62 @@ def validate_partition(artifact: Mapping[str, Any], owner: str) -> list[dict[str
                 raise protocol.ProtocolError(f"AD row {key} provider observation differs")
             if row.get("actual_install") not in (None, 1) or row.get("actual_submit") not in (None, 0):
                 raise protocol.ProtocolError(f"AD row {key} executor observation differs")
+            operation_workers = row.get("operation_workers")
+            if key.endswith("/E-N") and (
+                not isinstance(operation_workers, list)
+                or not operation_workers
+                or any(
+                    not isinstance(item, list)
+                    or len(item) != 2
+                    or not all(type(value) is int and value >= 0 for value in item)
+                    for item in operation_workers
+                )
+            ):
+                raise protocol.ProtocolError(
+                    f"AD row {key} lacks actual operation worker observations"
+                )
+            if (
+                key.endswith("/E-N")
+                and not key.startswith("external-advisory/")
+                and any(item[1] not in declared for item in operation_workers)
+            ):
+                raise protocol.ProtocolError(
+                    f"AD row {key} operation worker escaped its CPU set"
+                )
+            recovery = row.get("recovery")
+            recovery_workers = recovery.get("operation_workers") if isinstance(recovery, dict) else None
+            recovery_cpus = recovery.get("observed_cpus") if isinstance(recovery, dict) else None
+            if (
+                not isinstance(recovery, dict)
+                or recovery.get("fresh_reset") is not True
+                or recovery.get("session_entry") != 1
+                or recovery.get("actual_install") not in (None, 1)
+                or recovery.get("actual_submit") not in (None, 0)
+                or recovery.get("actual_provider") != expected_provider
+                or recovery.get("numerical_passed") is not True
+                or recovery.get("subset_passed") is not True
+                or not isinstance(recovery_cpus, list)
+                or not recovery_cpus
+                or not all(type(cpu) is int and cpu >= 0 for cpu in recovery_cpus)
+            ):
+                raise protocol.ProtocolError(f"AD row {key} lacks its fresh recovery record")
+            if key.endswith("/E-N") and (
+                not isinstance(recovery_workers, list)
+                or not recovery_workers
+                or any(
+                    not isinstance(item, list)
+                    or len(item) != 2
+                    or not all(type(value) is int and value >= 0 for value in item)
+                    for item in recovery_workers
+                )
+                or (
+                    not key.startswith("external-advisory/")
+                    and any(item[1] not in declared for item in recovery_workers)
+                )
+            ):
+                raise protocol.ProtocolError(f"AD row {key} recovery lacks operation workers")
         observed_cpus = row.get("observed_cpus")
-        allows_empty_observation = key.endswith("/U-O") or (
-            owner == "ad" and key.startswith("managed-exact/")
-        )
+        allows_empty_observation = key.endswith("/U-O")
         if (
             row.get("hardware_skip") is None and not allows_empty_observation
             and (
@@ -255,11 +330,56 @@ def compose_characterization(cpu: Mapping[str, Any], ad: Mapping[str, Any]) -> d
         composed["counts"] = counts
         composed["mode"] = downstream_row["mode"]
         composed["downstream_mode_source"] = downstream_row["key"]
+        recovery = dict(raw["recovery"])
+        recovery_counts = [recovery["session_entry"], *vector[1:]]
+        if recovery_counts != counts:
+            raise protocol.ProtocolError(f"AD row {raw['key']} recovery composed incorrectly")
+        recovery["counts"] = recovery_counts
+        recovery["mode"] = downstream_row["recovery"]["mode"]
+        recovery["downstream_mode_source"] = downstream_row["key"]
+        composed["recovery"] = recovery
         composed_ad.append(composed)
+    cross_socket = cpu.get("cross_socket_locality")
+    if not isinstance(cross_socket, dict):
+        raise protocol.ProtocolError("CPU artifact lacks cross-socket execution evidence")
+    _validate_hardware_skip(cross_socket)
+    usable_nodes = cross_socket.get("usable_numa_nodes")
+    probes = cross_socket.get("probes")
+    if type(usable_nodes) is not int or usable_nodes < 0 or not isinstance(probes, list):
+        raise protocol.ProtocolError("cross-socket evidence has invalid availability")
+    if cross_socket.get("hardware_skip") is None:
+        if (
+            usable_nodes < 2
+            or len(probes) != 2
+            or len({probe.get("node") for probe in probes if isinstance(probe, dict)}) != 2
+        ):
+            raise protocol.ProtocolError("cross-socket evidence did not execute two nodes")
+        for probe in probes:
+            if not isinstance(probe, dict):
+                raise protocol.ProtocolError("cross-socket probe is invalid")
+            declared = probe.get("declared_cpus")
+            observed = probe.get("observed_cpus")
+            if (
+                probe.get("numerical_passed") is not True
+                or probe.get("subset_passed") is not True
+                or not isinstance(declared, list)
+                or not declared
+                or not isinstance(observed, list)
+                or not observed
+                or any(cpu not in declared for cpu in observed)
+            ):
+                raise protocol.ProtocolError("cross-socket probe lacks executed locality work")
+    elif probes or cross_socket["hardware_skip"] != {
+        "kind": "InsufficientNumaNodes", "required": 2, "available": usable_nodes,
+    }:
+        raise protocol.ProtocolError("cross-socket skip is not tied to unavailable hardware")
     rows = [*cpu_rows, *composed_ad]
     if len({row["key"] for row in rows}) != 47:
         raise protocol.ProtocolError("composed characterization must contain 47 unique rows")
-    return {"validity_state": "PASS", "row_count": 47, "rows": rows}
+    return {
+        "validity_state": "PASS", "row_count": 47, "rows": rows,
+        "cross_socket_locality": dict(cross_socket),
+    }
 
 
 def attach_hardware_validity(
@@ -278,18 +398,12 @@ def attach_hardware_validity(
             if row["surface"] not in {"U-O", "U-I"} and available_cpus < budget
             else None
         )
-    characterization["cross_socket_locality"] = {
-        "usable_numa_nodes": usable_numa_nodes,
-        "hardware_skip": (
-            {
-                "kind": "InsufficientNumaNodes",
-                "required": 2,
-                "available": usable_numa_nodes,
-            }
-            if usable_numa_nodes < 2
-            else None
-        ),
-    }
+    cross_socket = characterization.get("cross_socket_locality")
+    if (
+        not isinstance(cross_socket, dict)
+        or cross_socket.get("usable_numa_nodes") != usable_numa_nodes
+    ):
+        raise protocol.ProtocolError("cross-socket evidence disagrees with gate hardware discovery")
 
 
 def _parse_cpu_list(value: str) -> set[int]:
@@ -429,13 +543,14 @@ def validate_test_build_manifest(
         raise protocol.ProtocolError("test build common lock digest mismatch")
     if tuple(manifest.get("argv", ())) != build.DISPATCH_TEST_COMMANDS[package]:
         raise protocol.ProtocolError("evidence rejects a non-contract Cargo test build")
-    if manifest.get("requested_features") != ["cpu-faer"] or manifest.get("no_default_features") is not True:
+    if manifest.get("requested_features") != list(build.DISPATCH_REQUESTED_FEATURES) or manifest.get("no_default_features") is not True:
         raise protocol.ProtocolError("test build used the wrong feature graph request")
     target = manifest.get("target")
     if not isinstance(target, str) or not target:
         raise protocol.ProtocolError("test build manifest lacks the host target")
     expected_query = build.feature_query_command(
-        target, package=package, requested_features=("cpu-faer",), no_default_features=True
+        target, package=package, requested_features=build.DISPATCH_REQUESTED_FEATURES,
+        no_default_features=True
     )
     if tuple(manifest.get("feature_query_argv", ())) != expected_query:
         raise protocol.ProtocolError("package feature query differs from the locked contract")
@@ -614,6 +729,10 @@ def run_bench_row(
         path=sealed["PATH"], home=sealed["HOME"],
         criterion_home=str(criterion_home.resolve()),
     )
+    runtime_environment["TENFERRO_PHASE2E_AFFINITY_ROW"] = row_key
+    runtime_environment["TENFERRO_PHASE2E_AFFINITY_FILE"] = str(
+        (criterion_home / "affinity.json").resolve()
+    )
     argv = (str(executable.resolve()), row_key, "--bench", "--noplot")
     result = run_bounded(
         argv, cwd=repository, environment=runtime_environment,
@@ -665,10 +784,41 @@ def capture_bench_row(
             f"row {row_key} produced {len(estimates)} Criterion estimate artifacts"
         )
     destination = evidence_root / "characterization" / "rows" / row_id
+    affinity_path = criterion_home / "affinity.json"
+    if not affinity_path.is_file():
+        raise protocol.ProtocolError(f"row {row_key} lacks its actual fixture affinity artifact")
+    affinity = json.loads(affinity_path.read_text(encoding="utf-8"))
+    budget = int(row_key.split("/budget-", 1)[1].split("/", 1)[0])
+    ownership = row_key.split("/", 1)[0]
+    observations = affinity.get("observations")
+    declared = affinity.get("declared_cpus")
+    if (
+        affinity.get("key") != row_key
+        or affinity.get("ownership") != ownership
+        or affinity.get("budget") != budget
+        or affinity.get("worker_count") != budget
+        or not isinstance(declared, list)
+        or not isinstance(observations, list)
+        or len(observations) != budget
+        or any(
+            not isinstance(item, list)
+            or len(item) != 2
+            or not all(type(value) is int and value >= 0 for value in item)
+            for item in observations
+        )
+        or {item[0] for item in observations} != set(range(budget))
+    ):
+        raise protocol.ProtocolError(f"row {row_key} has invalid fixture affinity evidence")
+    exact = ownership != "external-advisory"
+    if affinity.get("guarantee") != (
+        "ExactDeclared" if exact else "AdvisoryDeclared"
+    ) or (exact and (not declared or any(item[1] not in declared for item in observations))):
+        raise protocol.ProtocolError(f"row {row_key} fixture escaped exact placement")
     artifacts = {
         "stdout": (destination / "stdout.log", result.stdout.encode()),
         "stderr": (destination / "stderr.log", result.stderr.encode()),
         "criterion_estimates": (destination / "estimates.json", estimates[0].read_bytes()),
+        "fixture_affinity": (destination / "affinity.json", affinity_path.read_bytes()),
     }
     for path, payload in artifacts.values():
         _write_new_bytes(path, payload)
@@ -821,6 +971,7 @@ def validate_terminal_evidence(
         for name, filename in (
             ("stdout", "stdout.log"), ("stderr", "stderr.log"),
             ("criterion_estimates", "estimates.json"),
+            ("fixture_affinity", "affinity.json"),
         ):
             path = row_root / filename
             expected_files.add(path.resolve())

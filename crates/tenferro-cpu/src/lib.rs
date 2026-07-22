@@ -81,6 +81,8 @@ mod indexing;
 mod indexing_alloc;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
+#[cfg(feature = "phase2e-observe")]
+mod phase2e_observe;
 mod placement;
 pub mod provider;
 mod provider_capability;

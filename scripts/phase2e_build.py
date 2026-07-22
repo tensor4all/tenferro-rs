@@ -62,13 +62,19 @@ BENCH_COMMAND = (
     "cpu-faer",
 )
 REQUESTED_FEATURES = ("cpu-faer",)
+DISPATCH_REQUESTED_FEATURES = ("cpu-faer", "phase2e-observe")
 TASK7_SOURCE_PATHS = (
     "Cargo.toml",
+    "crates/tenferro-cpu/Cargo.toml",
+    "crates/tenferro-ad/Cargo.toml",
     "crates/tenferro-cpu/src/backend.rs",
+    "crates/tenferro-cpu/src/engine.rs",
+    "crates/tenferro-cpu/src/elementwise.rs",
     "crates/tenferro-cpu/src/domain_executor.rs",
     "crates/tenferro-cpu/src/provider.rs",
     "crates/tenferro-cpu/src/exec_session.rs",
     "crates/tenferro-cpu/src/dot_runtime.rs",
+    "crates/tenferro-cpu/src/phase2e_observe.rs",
     "crates/tenferro-cpu/src/tests/phase2e.rs",
     "crates/tenferro-cpu/benches/numa_execution.rs",
     "crates/tenferro-ad/src/eager.rs",
@@ -92,7 +98,7 @@ DISPATCH_TEST_COMMANDS = MappingProxyType(
             "--lib",
             "--no-default-features",
             "--features",
-            "cpu-faer",
+            ",".join(DISPATCH_REQUESTED_FEATURES),
             "--message-format=json",
         )
         for package in ("tenferro-cpu", "tenferro-ad")
@@ -205,11 +211,11 @@ def dispatch_build_provenance(
             feature_query_command(
                 target,
                 package=package,
-                requested_features=REQUESTED_FEATURES,
+                requested_features=DISPATCH_REQUESTED_FEATURES,
                 no_default_features=True,
             )
         ),
-        "requested_features": list(REQUESTED_FEATURES),
+        "requested_features": list(DISPATCH_REQUESTED_FEATURES),
         "no_default_features": True,
         "target": target,
         "toolchain": dict(toolchain),
@@ -305,8 +311,11 @@ def build_dispatch_and_characterization_artifacts(
             cargo_home=str(pathlib.Path(cargo_home).resolve(strict=True)),
             target_dir=str(target_dir),
         )
+        requested_features = (
+            DISPATCH_REQUESTED_FEATURES if kind == "dispatch" else REQUESTED_FEATURES
+        )
         feature_argv = feature_query_command(
-            target, package=package, requested_features=REQUESTED_FEATURES,
+            target, package=package, requested_features=requested_features,
             no_default_features=True,
         )
         feature_result = run_bounded_command(
@@ -339,7 +348,7 @@ def build_dispatch_and_characterization_artifacts(
             "lock_sha256": lock_sha256, "common_lock_sha256": lock_sha256,
             "feature_graph_sha256": sha256_bytes(feature_result.stdout.encode()),
             "feature_graph": feature_result.stdout,
-            "requested_features": list(REQUESTED_FEATURES), "no_default_features": True,
+            "requested_features": list(requested_features), "no_default_features": True,
             "feature_query_argv": list(feature_argv), "target": target,
             "toolchain": toolchain, "profile": "bench", "argv": list(command),
             "environment": environment, "executable": str(executable.resolve(strict=True)),

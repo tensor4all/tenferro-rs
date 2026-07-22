@@ -33,6 +33,14 @@ def row(key: str, owner: str) -> dict[str, object]:
         "typed_error_recovered": True,
         "unwind_recovered": True,
         "post_recovery_passed": True,
+        "recovery": {
+            "fresh_reset": True,
+            "counts": counts,
+            "mode": mode,
+            "observed_cpus": [] if key.endswith("/U-O") else [0],
+            "numerical_passed": True,
+            "subset_passed": True,
+        },
     }
     if owner == "ad":
         value.pop("counts")
@@ -46,7 +54,19 @@ def row(key: str, owner: str) -> dict[str, object]:
             "actual_install": 1,
             "actual_submit": 0,
             "actual_provider": 0 if key.endswith("/E-N") else 1,
+            "operation_workers": [[0, 0]] if key.endswith("/E-N") else [],
         })
+        value["recovery"] = {
+            "fresh_reset": True,
+            "session_entry": 1,
+            "actual_install": 1,
+            "actual_submit": 0,
+            "actual_provider": 0 if key.endswith("/E-N") else 1,
+            "operation_workers": [[0, 0]] if key.endswith("/E-N") else [],
+            "observed_cpus": [0],
+            "numerical_passed": True,
+            "subset_passed": True,
+        }
     elif key.endswith("/U-O"):
         value.update({
             "typed_error_kind": "Scheduling",
@@ -54,6 +74,18 @@ def row(key: str, owner: str) -> dict[str, object]:
             "observed_cpus": [],
         })
     return value
+
+
+class ActualOperationWorkerEvidenceTests(unittest.TestCase):
+    def test_managed_eager_native_rejects_missing_operation_worker_pairs(self) -> None:
+        cpu, ad = artifacts()
+        target = next(
+            item for item in ad["characterization"]
+            if item["key"] == "managed-exact/budget-4/E-N"
+        )
+        target["operation_workers"] = []
+        with self.assertRaisesRegex(protocol.ProtocolError, "operation worker"):
+            gates.compose_characterization(cpu, ad)
 
 
 def artifacts() -> tuple[dict[str, object], dict[str, object]]:
@@ -68,6 +100,13 @@ def artifacts() -> tuple[dict[str, object], dict[str, object]]:
             [1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 1],
         ],
         "characterization": [row(key, "cpu") for key in sorted(cpu_keys)],
+        "cross_socket_locality": {
+            "usable_numa_nodes": 1,
+            "hardware_skip": {
+                "kind": "InsufficientNumaNodes", "required": 2, "available": 1,
+            },
+            "probes": [],
+        },
     }
     ad = {
         "owner": "ad",
@@ -169,7 +208,7 @@ class ProvenanceTests(unittest.TestCase):
         self.assertNotIn("native.mul", task7)
         self.assertNotIn("run_session_workload(&mut dot", task7)
         grouped_setup, grouped_loop = task7.split(
-            'c.bench_function(&format!("phase2e/{ownership}/budget-{budget}/G-O")', 1
+            'c.bench_function(&format!("phase2e/{grouped_key}")', 1
         )
         self.assertIn("GroupedGemmConfig::new", grouped_setup)
         self.assertNotIn("GroupedGemmConfig::new", grouped_loop.split("});", 1)[0])
@@ -196,7 +235,10 @@ class ProvenanceTests(unittest.TestCase):
             command = build.DISPATCH_TEST_COMMANDS[package]
             self.assertEqual(command[:4], ("cargo", "test", "--locked", "--no-run"))
             self.assertIn("--no-default-features", command)
-            self.assertEqual(command[command.index("--features") + 1], "cpu-faer")
+            self.assertEqual(
+                command[command.index("--features") + 1],
+                ",".join(build.DISPATCH_REQUESTED_FEATURES),
+            )
             self.assertEqual(command[-1], "--message-format=json")
         self.assertEqual(gates.TEST_DEADLINE_SECONDS, 120)
         self.assertEqual(gates.BENCH_ROW_DEADLINE_SECONDS, 30)
@@ -244,11 +286,13 @@ class ProvenanceTests(unittest.TestCase):
                 "feature_graph_sha256": hashlib.sha256(graph.encode()).hexdigest(),
                 "argv": list(build.DISPATCH_TEST_COMMANDS["tenferro-cpu"]),
                 "environment": environment,
-                "requested_features": ["cpu-faer"], "no_default_features": True,
+                "requested_features": list(build.DISPATCH_REQUESTED_FEATURES),
+                "no_default_features": True,
                 "target": "x86_64-unknown-linux-gnu",
                 "feature_query_argv": list(build.feature_query_command(
                     "x86_64-unknown-linux-gnu", package="tenferro-cpu",
-                    requested_features=("cpu-faer",), no_default_features=True,
+                    requested_features=build.DISPATCH_REQUESTED_FEATURES,
+                    no_default_features=True,
                 )),
                 "toolchain": {
                     "git": tool_identity, "cargo": tool_identity,
@@ -315,10 +359,16 @@ class ProvenanceTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["deadline"], 30)
             self.assertEqual(
                 run.call_args.kwargs["environment"],
-                protocol.runtime_environment(
+                {
+                    **protocol.runtime_environment(
                     path="/controlled", home="/empty-home",
                     criterion_home=str((root / "criterion").resolve()),
-                ),
+                    ),
+                    "TENFERRO_PHASE2E_AFFINITY_ROW": "managed-exact/budget-2/D-N",
+                    "TENFERRO_PHASE2E_AFFINITY_FILE": str(
+                        (root / "criterion" / "affinity.json").resolve()
+                    ),
+                },
             )
 
     def test_runtime_helpers_reject_build_environment(self) -> None:
@@ -383,6 +433,15 @@ class ProvenanceTests(unittest.TestCase):
                     "point_estimate": 12.0,
                 }
             }))
+            (scratch / "affinity.json").write_text(json.dumps({
+                "key": "managed-exact/budget-2/D-N",
+                "ownership": "managed-exact",
+                "guarantee": "ExactDeclared",
+                "budget": 2,
+                "worker_count": 2,
+                "declared_cpus": [0, 1],
+                "observations": [[0, 0], [1, 1]],
+            }))
             completed = subprocess.CompletedProcess([], 0, "stdout\n", "stderr\n")
             with mock.patch.object(gates, "run_bench_row", return_value=completed):
                 record = gates.capture_bench_row(
@@ -394,7 +453,7 @@ class ProvenanceTests(unittest.TestCase):
                 "point_estimate": 12.0, "lower_bound": 10.0,
                 "upper_bound": 14.0, "confidence_level": 0.95,
             })
-            for name in ("stdout", "stderr", "criterion_estimates"):
+            for name in ("stdout", "stderr", "criterion_estimates", "fixture_affinity"):
                 artifact = pathlib.Path(record["artifacts"][name]["path"])
                 self.assertTrue(artifact.is_file())
                 self.assertEqual(

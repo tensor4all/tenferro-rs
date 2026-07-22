@@ -17,6 +17,9 @@ name = "tenferro_cpu"
 [features]
 default = ["cpu-faer"]
 cpu-faer = ["dep:faer", "dep:strided-einsum2", "strided-einsum2/faer", "strided-einsum2/parallel"]
+# Internal evidence-only instrumentation. This feature exports no Rust API and
+# is enabled only for the Phase 2E dispatch executable.
+phase2e-observe = []
 cpu-blas = ["dep:cblas-sys", "dep:lapack"]
 cpu-tblis = ["cpu-tblis-runtime"]
 cpu-tblis-provider = []

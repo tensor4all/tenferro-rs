@@ -104,6 +104,47 @@ Correctness executables have a 120-second deadline. Each Criterion row has a
 before forced kill. The two Criterion harnesses use fixed two-second warmup,
 five-second measurement, 100 samples, and 95% confidence.
 
+## Cycle 4 evidence hardening
+
+Managed exact construction now retains the requested nonzero worker budget
+even when the placement contains fewer logical CPUs. The owned pinned Rayon
+pool assigns workers cyclically over the exact nonempty CPU set; it is never
+replaced by an `ExternalManaged` fixture. A one-CPU, three-worker engine test
+binds Managed ownership, exact placement, thread budget, and worker count.
+
+AD E-N rows use the internal, non-default `phase2e-observe` build feature. It
+exports no Rust API. The actual closures passed to the strided elementwise
+kernel record their Rayon lane and `sched_getcpu` value to a row-specific
+temporary file, deduplicated by path/lane/CPU. The AD test reads and removes
+that file immediately. The gate requires nonempty operation-participating
+`[lane, cpu]` pairs and exact-subset membership independently of the separate
+all-worker placement audit and eager session-entry observation.
+
+Every correctness row now serializes a fresh-reset recovery subrecord. CPU
+recovery independently remeasures the complete six-counter vector, selected
+mode, operation CPUs, numerical result, and exact-subset result. AD recovery
+independently remeasures eager entry, optional external install/submit,
+provider count, operation lane/CPU pairs, operation CPUs, numerical result,
+and subset result; the gate composes its downstream recovery vector and mode
+from the matching CPU row.
+
+Every unskipped Criterion process receives a row-specific affinity artifact
+path. Before `b.iter`, the actual fixture performs a barrier-backed
+`rayon::broadcast` through its backend executor and writes ownership,
+guarantee, budget, worker count, declared CPUs, and all worker lane/CPU pairs.
+The measured loop contains no audit. The runner validates exact placement,
+copies `affinity.json` beside the Criterion estimates and logs, and binds its
+SHA-256 in the terminal inventory. G-O operands are deterministic nonuniform
+matrices rather than constant vectors.
+
+Cross-socket validity is now CPU-executable evidence instead of Python-side
+hardware inference. When two usable topology nodes exist, per-node managed
+backends first-touch independent inputs inside their executors, synchronize
+two scoped threads, execute elementwise work on both nodes, and record node,
+declared CPU set, observed operation CPUs, numerical success, and subset
+success. Only a host with fewer than two usable nodes may emit the typed
+`InsufficientNumaNodes` skip.
+
 ## Verification
 
 - CPU and AD focused evidence tests passed and their emitted JSON composed to
@@ -141,3 +182,11 @@ five-second measurement, 100 samples, and 95% confidence.
   The complete 19/19 gate-test suite, including the focused synthetic
   insufficient-CPU cases, also passed and proves that skipped latency rows
   launch no benchmark and contain neither estimates nor artifacts.
+- Cycle 4 pre-E2E verification passed 515 CPU tests, 71 AD tests, 143 combined
+  protocol/build/gate Python tests, both exact characterization release builds,
+  CPU and AD Clippy with warnings denied (including the observe-feature build),
+  rustfmt, and `git diff --check`. A directly executed managed-exact B=2 D-N
+  Criterion row emitted worker observations `[[0, 0], [1, 63]]` inside the
+  declared CPU set. This host exposes one usable NUMA node, so the executable
+  cross-socket probe emitted only the typed
+  `InsufficientNumaNodes { required: 2, available: 1 }` skip.

@@ -37,10 +37,9 @@ impl CpuEngine {
         thread_budget: usize,
         buffer_limit: usize,
     ) -> Result<Self, CpuContextError> {
-        let worker_count = thread_budget.min(placement.cpus().len());
         let thread_budget =
-            NonZeroUsize::new(worker_count).ok_or(CpuContextError::InvalidThreadCount)?;
-        let context = CpuContext::with_pinned_cpus(placement.cpus().clone(), worker_count)?;
+            NonZeroUsize::new(thread_budget).ok_or(CpuContextError::InvalidThreadCount)?;
+        let context = CpuContext::with_pinned_cpus(placement.cpus().clone(), thread_budget.get())?;
         Ok(Self::from_managed_context(
             id,
             placement,

@@ -267,11 +267,6 @@ fn fixture(ownership: &str, budget: usize) -> Fixture {
         .build()
         .unwrap();
     if ownership == "managed-exact" {
-        let allowed = process_cpu_affinity().expect("Phase 2E needs process affinity");
-        if allowed.len() < budget {
-            let executor = RecordingExecutor::new(budget, true);
-            return external_fixture(executor, provider, bundle, true);
-        }
         let coordinator = CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer)
             .unwrap()
             .with_provider_bundle(bundle)
@@ -398,7 +393,18 @@ struct Row {
     typed_error_source: String,
     unwind_recovered: bool,
     post_recovery_passed: bool,
+    recovery: RecoveryEvidence,
     hardware_skip: Option<&'static str>,
+}
+
+#[derive(Debug)]
+struct RecoveryEvidence {
+    fresh_reset: bool,
+    counts: Counts,
+    mode: &'static str,
+    observed_cpus: Vec<usize>,
+    numerical_passed: bool,
+    subset_passed: bool,
 }
 
 impl Row {
@@ -413,6 +419,100 @@ impl Row {
 struct Evidence {
     canonical_vectors: Vec<Counts>,
     characterization: Vec<Row>,
+    cross_socket_locality: CrossSocketEvidence,
+}
+
+#[derive(Debug)]
+struct CrossSocketProbe {
+    node: usize,
+    declared_cpus: Vec<usize>,
+    observed_cpus: Vec<usize>,
+    numerical_passed: bool,
+    subset_passed: bool,
+}
+
+#[derive(Debug)]
+struct CrossSocketEvidence {
+    usable_numa_nodes: usize,
+    probes: Vec<CrossSocketProbe>,
+}
+
+fn cross_socket_node_probe(
+    mut backend: CpuBackend,
+    node: usize,
+    declared_cpus: Vec<usize>,
+    barrier: Arc<Barrier>,
+    salt: usize,
+) -> CrossSocketProbe {
+    // First-touch both inputs on the node-owned executor before the concurrent
+    // operation. This makes the locality claim about executed work, not only
+    // about a topology declaration.
+    let lhs = backend.install(move || deterministic_vector(65_536, salt));
+    let rhs = backend.install(move || deterministic_vector(65_536, salt + 1));
+    barrier.wait();
+    let recorder = Arc::new(EventRecorder::default());
+    let output = with_recorder(&recorder, || backend.add(&lhs, &rhs)).unwrap();
+    let numerical_passed = output
+        .as_slice::<f64>()
+        .unwrap()
+        .iter()
+        .zip(lhs.as_slice::<f64>().unwrap())
+        .zip(rhs.as_slice::<f64>().unwrap())
+        .all(|((actual, left), right)| actual == &(left + right));
+    let observed_cpus = recorder.snapshot().observed_cpus;
+    let subset_passed =
+        !observed_cpus.is_empty() && observed_cpus.iter().all(|cpu| declared_cpus.contains(cpu));
+    CrossSocketProbe {
+        node,
+        declared_cpus,
+        observed_cpus,
+        numerical_passed,
+        subset_passed,
+    }
+}
+
+fn cross_socket_locality_evidence() -> CrossSocketEvidence {
+    let coordinator = CpuBackend::with_threads_and_kind(1, CpuBackendKind::Faer).unwrap();
+    let nodes: Vec<_> = coordinator
+        .topology()
+        .nodes()
+        .iter()
+        .map(|node| (node.id(), node.cpus().as_usize_vec()))
+        .collect();
+    if nodes.len() < 2 {
+        return CrossSocketEvidence {
+            usable_numa_nodes: nodes.len(),
+            probes: Vec::new(),
+        };
+    }
+    let first = coordinator
+        .for_placement(crate::CpuPlacement::NumaNode(nodes[0].0))
+        .unwrap();
+    let second = coordinator
+        .for_placement(crate::CpuPlacement::NumaNode(nodes[1].0))
+        .unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let probes = std::thread::scope(|scope| {
+        let first_barrier = Arc::clone(&barrier);
+        let first_cpus = nodes[0].1.clone();
+        let first_node = nodes[0].0.as_usize();
+        let first = scope.spawn(move || {
+            cross_socket_node_probe(first, first_node, first_cpus, first_barrier, 71)
+        });
+        let second_cpus = nodes[1].1.clone();
+        let second_node = nodes[1].0.as_usize();
+        let second = scope
+            .spawn(move || cross_socket_node_probe(second, second_node, second_cpus, barrier, 73));
+        vec![first.join().unwrap(), second.join().unwrap()]
+    });
+    assert_ne!(probes[0].node, probes[1].node);
+    assert!(probes
+        .iter()
+        .all(|probe| probe.numerical_passed && probe.subset_passed));
+    CrossSocketEvidence {
+        usable_numa_nodes: nodes.len(),
+        probes,
+    }
 }
 
 fn deterministic_vector(len: usize, offset: usize) -> Tensor {
@@ -643,7 +743,7 @@ fn row_recovery_proof(
     surface: &str,
     budget: usize,
     primary: Counts,
-) -> (bool, bool, bool) {
+) -> (bool, bool, RecoveryEvidence) {
     reset_fixture(fixture);
     let typed_error = typed_surface_error(fixture, surface, budget);
     reset_fixture(fixture);
@@ -660,8 +760,24 @@ fn row_recovery_proof(
     let numerical = with_recorder(&recovery_recorder, || run_surface(fixture, surface, budget));
     let recovery = recovery_recorder.snapshot();
     let counts_match = Counts::measured(&recovery) == primary;
+    let recovery_counts = Counts::measured(&recovery);
+    let recovery_mode = measured_mode(&recovery.modes);
+    let observed_cpus = recovery.observed_cpus;
+    let subset_passed = fixture.declared_cpus.is_empty()
+        || observed_cpus
+            .iter()
+            .all(|cpu| fixture.declared_cpus.contains(cpu));
+    let evidence = RecoveryEvidence {
+        fresh_reset: true,
+        counts: recovery_counts,
+        mode: recovery_mode,
+        observed_cpus,
+        numerical_passed: numerical,
+        subset_passed,
+    };
     reset_fixture(fixture);
-    (typed_error, unwind, numerical && counts_match)
+    assert!(counts_match, "recovery rerun count vector changed");
+    (typed_error, unwind, evidence)
 }
 
 fn run_dot_row(fixture: &mut Fixture) -> bool {
@@ -794,11 +910,15 @@ fn unsupported_outer_row() -> Row {
             .unwrap()
     }))
     .is_err();
-    let post_recovery_passed = context_fixture
-        .entry()
-        .enter(crate::ParallelMode::Sequential, |_| 7)
-        .unwrap()
-        == 7;
+    let recovery_recorder = Arc::new(EventRecorder::default());
+    let post_recovery_passed = with_recorder(&recovery_recorder, || {
+        context_fixture
+            .entry()
+            .enter(crate::ParallelMode::Sequential, |_| 7)
+            .unwrap()
+            == 7
+    });
+    let recovery_snapshot = recovery_recorder.snapshot();
     Row {
         key: "external-no-outer/budget-2/U-O".into(),
         owner: "cpu",
@@ -813,6 +933,14 @@ fn unsupported_outer_row() -> Row {
         typed_error_source: error.to_string(),
         unwind_recovered,
         post_recovery_passed,
+        recovery: RecoveryEvidence {
+            fresh_reset: true,
+            counts: Counts::measured(&recovery_snapshot),
+            mode: measured_mode(&recovery_snapshot.modes),
+            observed_cpus: recovery_snapshot.observed_cpus,
+            numerical_passed: post_recovery_passed,
+            subset_passed: true,
+        },
         hardware_skip: None,
     }
 }
@@ -835,8 +963,9 @@ fn unsupported_inner_row() -> Row {
     assert_eq!(fixture.provider.calls.load(Ordering::SeqCst), 1);
     let snapshot = recorder.snapshot();
     let counts = Counts::measured(&snapshot);
-    let (typed_error_recovered, unwind_recovered, post_recovery_passed) =
+    let (typed_error_recovered, unwind_recovered, recovery) =
         row_recovery_proof(&mut fixture, "U-I", 2, counts);
+    let post_recovery_passed = recovery.numerical_passed && recovery.subset_passed;
     Row {
         key: "external-no-inner/budget-2/U-I".into(),
         owner: "cpu",
@@ -851,6 +980,7 @@ fn unsupported_inner_row() -> Row {
         typed_error_source: "dot_general".into(),
         unwind_recovered,
         post_recovery_passed,
+        recovery,
         hardware_skip: None,
     }
 }
@@ -887,8 +1017,13 @@ fn run_cpu_owned_rows() -> Evidence {
                         .iter()
                         .all(|cpu| fixture.declared_cpus.contains(cpu)));
                 }
-                let (typed_error_recovered, unwind_recovered, post_recovery_passed) =
+                let (typed_error_recovered, unwind_recovered, recovery) =
                     row_recovery_proof(&mut fixture, surface, budget, counts);
+                let post_recovery_passed = recovery.numerical_passed
+                    && recovery.subset_passed
+                    && recovery.counts == counts
+                    && recovery.mode == measured_mode(&snapshot.modes)
+                    && !recovery.observed_cpus.is_empty();
                 rows.push(Row {
                     key: format!("{ownership}/budget-{budget}/{surface}"),
                     owner: "cpu",
@@ -903,6 +1038,7 @@ fn run_cpu_owned_rows() -> Evidence {
                     typed_error_source: surface.into(),
                     unwind_recovered,
                     post_recovery_passed,
+                    recovery,
                     hardware_skip: None,
                 });
             }
@@ -913,6 +1049,7 @@ fn run_cpu_owned_rows() -> Evidence {
     Evidence {
         canonical_vectors: prove_direct_and_borrowed_vectors(),
         characterization: rows,
+        cross_socket_locality: cross_socket_locality_evidence(),
     }
 }
 
@@ -940,15 +1077,44 @@ fn write_evidence(evidence: &Evidence) -> std::io::Result<()> {
         }
         write!(
             output,
-            "{{\"key\":{},\"owner\":{},\"surface\":{},\"budget\":{},\"mode\":{},\"counts\":{:?},\"observed_cpus\":{:?},\"numerical_passed\":{},\"typed_error_recovered\":{},\"typed_error_kind\":{},\"typed_error_source\":{},\"unwind_recovered\":{},\"post_recovery_passed\":{},\"hardware_skip\":{}}}",
+            "{{\"key\":{},\"owner\":{},\"surface\":{},\"budget\":{},\"mode\":{},\"counts\":{:?},\"observed_cpus\":{:?},\"numerical_passed\":{},\"typed_error_recovered\":{},\"typed_error_kind\":{},\"typed_error_source\":{},\"unwind_recovered\":{},\"post_recovery_passed\":{},\"recovery\":{{\"fresh_reset\":{},\"counts\":{:?},\"mode\":{},\"observed_cpus\":{:?},\"numerical_passed\":{},\"subset_passed\":{}}},\"hardware_skip\":{}}}",
             json_string(&row.key), json_string(row.owner), json_string(row.surface), row.budget,
             json_string(row.mode), row.counts.0, row.observed_cpus, row.numerical_passed,
             row.typed_error_recovered, json_string(row.typed_error_kind),
             json_string(&row.typed_error_source), row.unwind_recovered, row.post_recovery_passed,
+            row.recovery.fresh_reset, row.recovery.counts.0, json_string(row.recovery.mode), row.recovery.observed_cpus,
+            row.recovery.numerical_passed, row.recovery.subset_passed,
             row.hardware_skip.map(json_string).unwrap_or_else(|| "null".into())
         ).unwrap();
     }
-    output.push_str("]}\n");
+    output.push_str("],\"cross_socket_locality\":{");
+    write!(
+        output,
+        "\"usable_numa_nodes\":{},\"hardware_skip\":{},\"probes\":[",
+        evidence.cross_socket_locality.usable_numa_nodes,
+        if evidence.cross_socket_locality.probes.is_empty() {
+            format!(
+                "{{\"kind\":\"InsufficientNumaNodes\",\"required\":2,\"available\":{}}}",
+                evidence.cross_socket_locality.usable_numa_nodes
+            )
+        } else {
+            "null".into()
+        }
+    )
+    .unwrap();
+    for (index, probe) in evidence.cross_socket_locality.probes.iter().enumerate() {
+        if index != 0 {
+            output.push(',');
+        }
+        write!(
+            output,
+            "{{\"node\":{},\"declared_cpus\":{:?},\"observed_cpus\":{:?},\"numerical_passed\":{},\"subset_passed\":{}}}",
+            probe.node, probe.declared_cpus, probe.observed_cpus,
+            probe.numerical_passed, probe.subset_passed,
+        )
+        .unwrap();
+    }
+    output.push_str("]}}\n");
     let temporary = directory.join("cpu-evidence.json.partial");
     std::fs::write(&temporary, output)?;
     std::fs::rename(temporary, directory.join("cpu-evidence.json"))

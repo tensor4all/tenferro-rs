@@ -3174,7 +3174,11 @@ where
             &mut out.view_mut(),
             &typed_view("add", lhs)?,
             &typed_view("add", rhs)?,
-            |x, y| x + y,
+            |x, y| {
+                #[cfg(feature = "phase2e-observe")]
+                crate::phase2e_observe::record_typed_add_worker();
+                x + y
+            },
         )
         .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
@@ -3183,6 +3187,8 @@ where
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view("add", rhs)?, |x| {
+            #[cfg(feature = "phase2e-observe")]
+            crate::phase2e_observe::record_typed_add_worker();
             scalar + x
         })
         .map_err(|err| crate::Error::backend_source("add", err))?;
@@ -3192,6 +3198,8 @@ where
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view("add", lhs)?, |x| {
+            #[cfg(feature = "phase2e-observe")]
+            crate::phase2e_observe::record_typed_add_worker();
             x + scalar
         })
         .map_err(|err| crate::Error::backend_source("add", err))?;
@@ -3290,7 +3298,11 @@ where
             &mut out.view_mut(),
             &typed_view_from_view("add", lhs)?,
             &typed_view_from_view("add", rhs)?,
-            |x, y| x + y,
+            |x, y| {
+                #[cfg(feature = "phase2e-observe")]
+                crate::phase2e_observe::record_typed_add_worker();
+                x + y
+            },
         )
         .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
@@ -3301,7 +3313,11 @@ where
         map_into(
             &mut out.view_mut(),
             &typed_view_from_view("add", rhs)?,
-            |x| scalar + x,
+            |x| {
+                #[cfg(feature = "phase2e-observe")]
+                crate::phase2e_observe::record_typed_add_worker();
+                scalar + x
+            },
         )
         .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))
@@ -3312,7 +3328,11 @@ where
         map_into(
             &mut out.view_mut(),
             &typed_view_from_view("add", lhs)?,
-            |x| x + scalar,
+            |x| {
+                #[cfg(feature = "phase2e-observe")]
+                crate::phase2e_observe::record_typed_add_worker();
+                x + scalar
+            },
         )
         .map_err(|err| crate::Error::backend_source("add", err))?;
         Ok(tensor_from_array(out))

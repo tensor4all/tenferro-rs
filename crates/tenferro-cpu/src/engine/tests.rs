@@ -8,16 +8,19 @@ use crate::{
 
 #[cfg(target_os = "linux")]
 #[test]
-fn engine_caps_workers_to_its_cpu_domain_and_owns_resources() {
+fn engine_keeps_managed_worker_budget_on_a_single_cpu_and_owns_resources() {
     let allowed = process_cpu_affinity().unwrap();
-    let selected = CpuSet::new(allowed.as_slice().iter().take(2).copied()).unwrap();
+    let selected = CpuSet::singleton(allowed.as_slice()[0]);
     let placement = ResolvedCpuPlacement::AllAllowed {
         cpus: selected.clone(),
     };
-    let engine =
-        CpuEngine::new_managed(CpuDomainId::new(0), placement.clone(), usize::MAX, 0).unwrap();
+    let engine = CpuEngine::new_managed(CpuDomainId::new(0), placement.clone(), 3, 0).unwrap();
 
-    assert_eq!(engine.domain().thread_budget().get(), selected.len());
+    assert_eq!(engine.domain().thread_budget().get(), 3);
+    assert_eq!(
+        engine.domain().executor_capabilities().worker_count.get(),
+        3
+    );
     assert_eq!(engine.placement(), &placement);
     assert_eq!(engine.domain().id(), CpuDomainId::new(0));
     assert_eq!(engine.domain().ownership(), CpuDomainOwnership::Managed);

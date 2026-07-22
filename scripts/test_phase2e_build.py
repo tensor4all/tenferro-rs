@@ -191,7 +191,10 @@ class IdentityAndDeltaTests(unittest.TestCase):
             self.assertIn("--locked", command)
             self.assertIn("--no-run", command)
             self.assertIn("--no-default-features", command)
-            self.assertIn("cpu-faer", command)
+            self.assertEqual(
+                command[command.index("--features") + 1],
+                ",".join(build.DISPATCH_REQUESTED_FEATURES),
+            )
             self.assertEqual(command[-1], "--message-format=json")
 
     def test_select_cargo_executable_requires_one_owned_artifact(self) -> None:

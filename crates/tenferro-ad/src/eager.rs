@@ -291,8 +291,7 @@ pub(crate) mod phase2e_eager_events {
         recorder: &Arc<SessionRecorder>,
         operation: impl FnOnce() -> R,
     ) -> R {
-        let previous = ACTIVE
-            .with(|slot| std::mem::replace(&mut *slot.borrow_mut(), Some(Arc::clone(recorder))));
+        let previous = ACTIVE.with(|slot| slot.borrow_mut().replace(Arc::clone(recorder)));
         struct Restore(Option<Arc<SessionRecorder>>);
         impl Drop for Restore {
             fn drop(&mut self) {

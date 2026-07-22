@@ -277,15 +277,6 @@ fn cpu_fixture(ownership: &str, budget: usize) -> CpuFixture {
         .build()
         .unwrap();
     if ownership == "managed-exact" {
-        let allowed = process_cpu_affinity().unwrap();
-        if allowed.len() < budget {
-            return external_cpu_fixture(
-                RecordingExecutor::new(budget, true),
-                provider,
-                bundle,
-                true,
-            );
-        }
         let coordinator = CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer)
             .unwrap()
             .with_provider_bundle(bundle)
@@ -336,11 +327,60 @@ struct Row {
     actual_install: Option<usize>,
     actual_submit: Option<usize>,
     actual_provider: usize,
+    operation_workers: Vec<[usize; 2]>,
     observed_cpus: Vec<usize>,
     numerical_passed: bool,
     typed_error_recovered: bool,
     unwind_recovered: bool,
     post_recovery_passed: bool,
+    recovery: RecoveryEvidence,
+}
+
+#[derive(Debug)]
+struct RecoveryEvidence {
+    fresh_reset: bool,
+    session_entry: usize,
+    actual_install: Option<usize>,
+    actual_submit: Option<usize>,
+    actual_provider: usize,
+    operation_workers: Vec<[usize; 2]>,
+    observed_cpus: Vec<usize>,
+    numerical_passed: bool,
+    subset_passed: bool,
+}
+
+fn observe_actual_operation<R>(key: &str, operation: impl FnOnce() -> R) -> (R, Vec<[usize; 2]>) {
+    #[cfg(feature = "phase2e-observe")]
+    {
+        let root = std::env::var_os("TENFERRO_PHASE2E_EVIDENCE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let directory = root.join("dispatch-gates").join("operation-workers");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("{}.csv", key.replace('/', "__")));
+        let _ = std::fs::remove_file(&path);
+        // SAFETY: the Phase 2E evidence test is one serialized test process and
+        // restores the variable before proceeding to another row.
+        unsafe { std::env::set_var("TENFERRO_PHASE2E_OPERATION_OBSERVATION_FILE", &path) };
+        let result = operation();
+        // SAFETY: see the serialized scope above.
+        unsafe { std::env::remove_var("TENFERRO_PHASE2E_OPERATION_OBSERVATION_FILE") };
+        let observations = std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| {
+                let (lane, cpu) = line.split_once(',').expect("valid operation observation");
+                [lane.parse().unwrap(), cpu.parse().unwrap()]
+            })
+            .collect();
+        let _ = std::fs::remove_file(&path);
+        return (result, observations);
+    }
+    #[cfg(not(feature = "phase2e-observe"))]
+    {
+        let _ = key;
+        (operation(), Vec::new())
+    }
 }
 
 impl Row {
@@ -448,7 +488,12 @@ fn recovery_proof(
     dot_lhs: &Tensor,
     dot_rhs: &Tensor,
     dot_config: &DotGeneralConfig,
-) -> (bool, bool, bool) {
+    executor: Option<&Arc<RecordingExecutor>>,
+    provider: &RecordingGemm,
+    key: &str,
+    declared_cpus: &[usize],
+) -> (bool, bool, RecoveryEvidence) {
+    reset_counters(executor, provider);
     let typed_error = if surface == "E-N" {
         let wrong = tensor(vec![native_lhs.shape()[0] - 1], 21);
         matches!(
@@ -483,6 +528,7 @@ fn recovery_proof(
             })
         )
     };
+    reset_counters(executor, provider);
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _: crate::Result<()> = placed.with_eager_session(|session| {
             if surface == "E-N" {
@@ -494,22 +540,63 @@ fn recovery_proof(
         });
     }))
     .is_err();
+    reset_counters(executor, provider);
     let recorder = Arc::new(super::super::phase2e_eager_events::SessionRecorder::default());
-    let post_recovery = super::super::phase2e_eager_events::with_recorder(&recorder, || {
-        eager_surface(
-            placed, surface, native_lhs, native_rhs, dot_lhs, dot_rhs, dot_config,
-        )
-    })
-    .map(|output| {
-        if surface == "E-N" {
-            output.shape() == native_lhs.shape()
-        } else {
-            relative_dot_error(dot_lhs, dot_rhs, &output, 128) <= 1.0e-12
+    let recovery_key = format!("{key}__recovery");
+    let (post_recovery, operation_workers) = observe_actual_operation(&recovery_key, || {
+        super::super::phase2e_eager_events::with_recorder(&recorder, || {
+            eager_surface(
+                placed, surface, native_lhs, native_rhs, dot_lhs, dot_rhs, dot_config,
+            )
+        })
+    });
+    let numerical_passed = post_recovery
+        .map(|output| {
+            if surface == "E-N" {
+                output.shape() == native_lhs.shape()
+            } else {
+                relative_dot_error(dot_lhs, dot_rhs, &output, 128) <= 1.0e-12
+            }
+        })
+        .unwrap_or(false);
+    let (session_entry, _) = recorder.snapshot();
+    let actual_provider = provider.calls.load(Ordering::SeqCst);
+    let mut observed_cpus = provider.observed_cpus.lock().unwrap().clone();
+    let (actual_install, actual_submit) = executor
+        .map(|executor| {
+            let install = executor.installs.load(Ordering::SeqCst);
+            let submit = executor.submits.load(Ordering::SeqCst);
+            let cpus = executor.observed_cpus.lock().unwrap().clone();
+            for cpu in cpus {
+                if !observed_cpus.contains(&cpu) {
+                    observed_cpus.push(cpu);
+                }
+            }
+            (Some(install), Some(submit))
+        })
+        .unwrap_or((None, None));
+    for [_, cpu] in &operation_workers {
+        if !observed_cpus.contains(cpu) {
+            observed_cpus.push(*cpu);
         }
-    })
-    .unwrap_or(false)
-        && recorder.snapshot().0 == 1;
-    (typed_error, unwind, post_recovery)
+    }
+    let subset_passed =
+        declared_cpus.is_empty() || observed_cpus.iter().all(|cpu| declared_cpus.contains(cpu));
+    (
+        typed_error,
+        unwind,
+        RecoveryEvidence {
+            fresh_reset: true,
+            session_entry,
+            actual_install,
+            actual_submit,
+            actual_provider,
+            operation_workers,
+            observed_cpus,
+            numerical_passed,
+            subset_passed,
+        },
+    )
 }
 
 fn relative_dot_error(lhs: &Tensor, rhs: &Tensor, actual: &Tensor, size: usize) -> f64 {
@@ -568,10 +655,11 @@ fn run_ad_owned_rows() -> Evidence {
             let runtime = EagerRuntime::with_cpu_backend(fixture.backend);
             let mut placed = runtime.on_cpu(placement).unwrap();
             for surface in ["E-N", "E-D"] {
+                let key = format!("{ownership}/budget-{budget}/{surface}");
                 reset_counters(executor.as_ref(), &provider);
                 let session_recorder =
                     Arc::new(super::super::phase2e_eager_events::SessionRecorder::default());
-                let output =
+                let (output, operation_workers) = observe_actual_operation(&key, || {
                     super::super::phase2e_eager_events::with_recorder(&session_recorder, || {
                         eager_surface(
                             &mut placed,
@@ -583,8 +671,14 @@ fn run_ad_owned_rows() -> Evidence {
                             &dot_config,
                         )
                     })
-                    .unwrap();
+                    .unwrap()
+                });
                 let (session_entry, session_entry_cpus) = session_recorder.snapshot();
+                if ownership != "external-advisory" {
+                    assert!(operation_workers
+                        .iter()
+                        .all(|item| declared_cpus.contains(&item[1])));
+                }
                 let numerical_passed = if surface == "E-N" {
                     let expected: Vec<_> = native_lhs
                         .as_slice::<f64>()
@@ -612,18 +706,32 @@ fn run_ad_owned_rows() -> Evidence {
                 if ownership == "external-exact" {
                     assert!(observed_cpus.iter().all(|cpu| declared_cpus.contains(cpu)));
                 }
-                let (typed_error_recovered, unwind_recovered, post_recovery_passed) =
-                    recovery_proof(
-                        &mut placed,
-                        surface,
-                        &native_lhs,
-                        &native_rhs,
-                        &dot_lhs,
-                        &dot_rhs,
-                        &dot_config,
-                    );
+                let (typed_error_recovered, unwind_recovered, recovery) = recovery_proof(
+                    &mut placed,
+                    surface,
+                    &native_lhs,
+                    &native_rhs,
+                    &dot_lhs,
+                    &dot_rhs,
+                    &dot_config,
+                    executor.as_ref(),
+                    &provider,
+                    &key,
+                    &declared_cpus,
+                );
+                let expected_provider = usize::from(surface == "E-D");
+                let operation_evidence_passed = !cfg!(feature = "phase2e-observe")
+                    || (!recovery.observed_cpus.is_empty()
+                        && (surface != "E-N" || !recovery.operation_workers.is_empty()));
+                let post_recovery_passed = recovery.session_entry == 1
+                    && recovery.actual_provider == expected_provider
+                    && recovery.actual_install.is_none_or(|value| value == 1)
+                    && recovery.actual_submit.is_none_or(|value| value == 0)
+                    && recovery.numerical_passed
+                    && recovery.subset_passed
+                    && operation_evidence_passed;
                 rows.push(Row {
-                    key: format!("{ownership}/budget-{budget}/{surface}"),
+                    key,
                     surface,
                     budget,
                     session_entry,
@@ -638,9 +746,15 @@ fn run_ad_owned_rows() -> Evidence {
                     actual_install,
                     actual_submit,
                     actual_provider,
+                    operation_workers: operation_workers.clone(),
                     observed_cpus: {
                         let mut cpus = observed_cpus;
                         for cpu in provider_cpus {
+                            if !cpus.contains(&cpu) {
+                                cpus.push(cpu);
+                            }
+                        }
+                        for [_, cpu] in operation_workers {
                             if !cpus.contains(&cpu) {
                                 cpus.push(cpu);
                             }
@@ -651,6 +765,7 @@ fn run_ad_owned_rows() -> Evidence {
                     typed_error_recovered,
                     unwind_recovered,
                     post_recovery_passed,
+                    recovery,
                 });
             }
         }
@@ -681,15 +796,21 @@ fn write_evidence(evidence: &Evidence) -> std::io::Result<()> {
         }
         write!(
             output,
-            "{{\"key\":{},\"owner\":\"ad\",\"surface\":{},\"budget\":{},\"session_entry\":{},\"session_entry_cpus\":{:?},\"placement_audit\":{:?},\"declared_cpus\":{:?},\"downstream_vector\":{},\"actual_install\":{},\"actual_submit\":{},\"actual_provider\":{},\"numerical_passed\":{},\"typed_error_recovered\":{},\"unwind_recovered\":{},\"post_recovery_passed\":{},\"observed_cpus\":{:?},\"hardware_skip\":null}}",
+            "{{\"key\":{},\"owner\":\"ad\",\"surface\":{},\"budget\":{},\"session_entry\":{},\"session_entry_cpus\":{:?},\"placement_audit\":{:?},\"declared_cpus\":{:?},\"downstream_vector\":{},\"actual_install\":{},\"actual_submit\":{},\"actual_provider\":{},\"operation_workers\":{:?},\"numerical_passed\":{},\"typed_error_recovered\":{},\"unwind_recovered\":{},\"post_recovery_passed\":{},\"observed_cpus\":{:?},\"recovery\":{{\"fresh_reset\":{},\"session_entry\":{},\"actual_install\":{},\"actual_submit\":{},\"actual_provider\":{},\"operation_workers\":{:?},\"observed_cpus\":{:?},\"numerical_passed\":{},\"subset_passed\":{}}},\"hardware_skip\":null}}",
             quoted(&row.key), quoted(row.surface), row.budget, row.session_entry,
             row.session_entry_cpus, row.placement_audit, row.declared_cpus,
             quoted(row.downstream_vector),
             row.actual_install.map_or_else(|| "null".into(), |value| value.to_string()),
             row.actual_submit.map_or_else(|| "null".into(), |value| value.to_string()),
             row.actual_provider,
+            row.operation_workers,
             row.numerical_passed, row.typed_error_recovered, row.unwind_recovered,
             row.post_recovery_passed, row.observed_cpus,
+            row.recovery.fresh_reset, row.recovery.session_entry,
+            row.recovery.actual_install.map_or_else(|| "null".into(), |value| value.to_string()),
+            row.recovery.actual_submit.map_or_else(|| "null".into(), |value| value.to_string()),
+            row.recovery.actual_provider, row.recovery.operation_workers,
+            row.recovery.observed_cpus, row.recovery.numerical_passed, row.recovery.subset_passed,
         ).unwrap();
     }
     output.push_str("]}\n");

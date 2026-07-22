@@ -19,6 +19,7 @@ default = ["cpu-faer"]
 cpu-faer = [
     "tenferro-cpu/cpu-faer",
 ]
+phase2e-observe = ["tenferro-cpu/phase2e-observe"]
 cpu-blas = [
     "tenferro-cpu/cpu-blas",
 ]
