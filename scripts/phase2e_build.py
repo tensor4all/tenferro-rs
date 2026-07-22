@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import fcntl
 import hashlib
 import json
 import os
@@ -31,6 +32,15 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from scripts import phase2e_protocol as protocol
+
+
+_SEAL_NAMES = ("F_SEAL_WRITE", "F_SEAL_GROW", "F_SEAL_SHRINK", "F_SEAL_SEAL")
+INHERITED_EXECUTABLE_SEALS = (
+    None
+    if not hasattr(fcntl, "F_GET_SEALS")
+    or any(not hasattr(fcntl, name) for name in _SEAL_NAMES)
+    else sum(getattr(fcntl, name) for name in _SEAL_NAMES)
+)
 
 
 IMPLEMENTATION_BASELINE = "85855e272b1495611deb601a9ee06f3546772c3c"
@@ -220,6 +230,7 @@ class CommandResult:
     failure_reason: str | None
     terminated: bool
     killed: bool
+    inherited_descriptors: tuple[int, ...] = ()
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1374,6 +1385,7 @@ def _finish_timed_out_command(
     timeout: subprocess.TimeoutExpired,
     signal_process_group: Callable[[int, int], None],
     executable_identity: ResolvedTool | None,
+    inherited_descriptors: tuple[int, ...],
 ) -> CommandResult:
     """Bound and record normal timeout cleanup; cancellation is guarded outside."""
     stdout, stderr = _timeout_streams(timeout, "", "")
@@ -1446,6 +1458,7 @@ def _finish_timed_out_command(
         failure_reason=reason,
         terminated=terminated,
         killed=killed,
+        inherited_descriptors=inherited_descriptors,
     )
 
 
@@ -1458,12 +1471,53 @@ def run_bounded_command(
     process_factory: Callable[..., Any] = subprocess.Popen,
     signal_process_group: Callable[[int, int], None] = os.killpg,
     executable_identity: ResolvedTool | None = None,
+    inherited_descriptors: tuple[int, ...] = (),
 ) -> CommandResult:
     """Run one child group and convert timeout/nonzero outcomes to INCONCLUSIVE."""
     if not argv or any(not isinstance(part, str) or not part for part in argv):
         raise protocol.ProtocolError("command argv must contain nonempty strings")
     if type(deadline_seconds) is not int or deadline_seconds <= 0:
         raise protocol.ProtocolError("command deadline must be a positive integer")
+    if (
+        type(inherited_descriptors) is not tuple
+        or len(inherited_descriptors) > 1
+        or any(
+            type(descriptor) is not int or descriptor <= 2
+            for descriptor in inherited_descriptors
+        )
+        or len(set(inherited_descriptors)) != len(inherited_descriptors)
+    ):
+        raise protocol.ProtocolError("inherited descriptor contract is invalid")
+    proc_fd_prefix = "/proc/self/fd/"
+    names_proc_fd = argv[0].startswith(proc_fd_prefix)
+    if inherited_descriptors:
+        descriptor = inherited_descriptors[0]
+        if INHERITED_EXECUTABLE_SEALS is None:
+            raise protocol.ProtocolError(
+                "inherited executable descriptors require Linux file seals"
+            )
+        try:
+            metadata = os.fstat(descriptor)
+            inheritable = os.get_inheritable(descriptor)
+            seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"cannot inspect inherited descriptor {descriptor}: {error}"
+            ) from error
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_mode & 0o111 == 0
+            or inheritable
+            or seals != INHERITED_EXECUTABLE_SEALS
+            or argv[0] != f"{proc_fd_prefix}{descriptor}"
+        ):
+            raise protocol.ProtocolError(
+                "inherited descriptor is not the exact CLOEXEC launch snapshot"
+            )
+    elif names_proc_fd:
+        raise protocol.ProtocolError(
+            "proc-fd launch requires one explicit inherited descriptor"
+        )
     actual_environment = dict(sorted(environment.items()))
     if any(
         type(key) is not str or type(value) is not str
@@ -1478,14 +1532,19 @@ def run_bounded_command(
             )
 
     try:
+        process_arguments = {
+            "cwd": str(pathlib.Path(cwd)),
+            "env": actual_environment,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "start_new_session": True,
+        }
+        if inherited_descriptors:
+            process_arguments["pass_fds"] = inherited_descriptors
         process = process_factory(
             list(argv),
-            cwd=str(pathlib.Path(cwd)),
-            env=actual_environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
+            **process_arguments,
         )
     except OSError as error:
         raise protocol.ProtocolError(f"cannot launch command {argv!r}: {error}") from error
@@ -1503,6 +1562,7 @@ def run_bounded_command(
                 timeout=timeout,
                 signal_process_group=signal_process_group,
                 executable_identity=executable_identity,
+                inherited_descriptors=inherited_descriptors,
             )
         except BaseException:
             _force_kill_and_bounded_drain(process, signal_process_group)
@@ -1535,6 +1595,7 @@ def run_bounded_command(
         failure_reason=None if complete else "nonzero-exit",
         terminated=False,
         killed=False,
+        inherited_descriptors=inherited_descriptors,
     )
 
 

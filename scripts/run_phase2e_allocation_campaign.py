@@ -432,16 +432,51 @@ def _require_closed_allocation_attempt(
     ledger: Mapping[str, Any], args, terminal: Mapping[str, Any]
 ) -> None:
     attempt = _allocation_attempt(ledger, args)
+    expected_state = (
+        "COMPLETE"
+        if terminal["validity_state"] == "COMPLETE"
+        else "INCONCLUSIVE"
+    )
     if (
         ledger["active_attempt_id"] is not None
-        or attempt["state"] != "COMPLETE"
+        or attempt["state"] != expected_state
         or attempt["validity_state"] != terminal["validity_state"]
         or attempt["statistical_result"] != terminal["gate"]
     ):
         raise protocol.ProtocolError("terminal allocation ledger differs")
 
 
-def _finalize_allocation(
+def _root_json_commit_state(
+    root: PinnedDirectory, relative: str, expected: Mapping[str, Any]
+) -> str:
+    try:
+        content = root.read_regular(relative)
+    except FileNotFoundError:
+        return "ABSENT"
+    except BaseException:
+        return "UNKNOWN"
+    return (
+        "EXACT"
+        if content == protocol._canonical_json_bytes(expected)
+        else "MISMATCH"
+    )
+
+
+def _inconclusive_terminal(
+    terminal: Mapping[str, Any], reason: BaseException | str
+) -> dict[str, Any]:
+    fallback = copy.deepcopy(dict(terminal))
+    fallback["validity_state"] = "INCONCLUSIVE"
+    fallback["gate"] = None
+    fallback["invalid_reason"] = (
+        reason
+        if isinstance(reason, str)
+        else f"{type(reason).__name__}: {reason}"
+    )
+    return fallback
+
+
+def _finish_staged_allocation(
     root: PinnedDirectory,
     ledger_path: pathlib.Path,
     ledger: dict[str, Any],
@@ -449,9 +484,8 @@ def _finalize_allocation(
     terminal: dict[str, Any],
     exit_code: int,
     atomic_writer: Callable[[pathlib.Path, Any], None],
-) -> None:
+) -> int:
     marker = _finalization_marker(terminal, args, exit_code)
-    root.atomic_json(FINALIZATION_STAGE, terminal)
     root.atomic_json(FINALIZATION_MARKER, marker)
     _close_ledger(
         ledger_path,
@@ -463,6 +497,57 @@ def _finalize_allocation(
     )
     _publish_staged_allocation(root)
     _cleanup_finalization(root)
+    return exit_code
+
+
+def _finalize_allocation(
+    root: PinnedDirectory,
+    ledger_path: pathlib.Path,
+    ledger: dict[str, Any],
+    args,
+    terminal: dict[str, Any],
+    exit_code: int,
+    atomic_writer: Callable[[pathlib.Path, Any], None],
+) -> int:
+    try:
+        root.atomic_json(FINALIZATION_STAGE, terminal)
+    except BaseException as primary:
+        state = _root_json_commit_state(root, FINALIZATION_STAGE, terminal)
+        if state == "EXACT":
+            raise
+        if state != "ABSENT":
+            raise protocol.ProtocolError(
+                f"allocation stage commit state is {state.lower()}"
+            ) from primary
+        fallback = _inconclusive_terminal(terminal, primary)
+        try:
+            root.atomic_json(FINALIZATION_STAGE, fallback)
+            _finish_staged_allocation(
+                root,
+                ledger_path,
+                ledger,
+                args,
+                fallback,
+                2,
+                atomic_writer,
+            )
+        except BaseException as secondary:
+            build._record_suppressed_failure(
+                primary, "allocation fallback finalization", secondary
+            )
+            raise primary
+        if isinstance(primary, Exception):
+            return 2
+        raise primary
+    return _finish_staged_allocation(
+        root,
+        ledger_path,
+        ledger,
+        args,
+        terminal,
+        exit_code,
+        atomic_writer,
+    )
 
 
 def _recover_finalization(args, atomic_writer) -> int | None:
@@ -520,10 +605,34 @@ def _recover_finalization(args, atomic_writer) -> int | None:
             _cleanup_finalization(root)
             outcome = exit_code
             return outcome
-        if persisted.get("validity_state") != "RUNNING" or not marker_present or not stage_present:
-            raise protocol.ProtocolError("allocation RUNNING state is not recoverable")
-        marker = _read_root_json(root, FINALIZATION_MARKER)
-        terminal = _read_root_json(root, FINALIZATION_STAGE)
+        if persisted.get("validity_state") != "RUNNING":
+            raise protocol.ProtocolError("allocation finalization state is unreachable")
+        if marker_present and not stage_present:
+            raise protocol.ProtocolError("allocation marker exists without its stage")
+        if stage_present:
+            terminal = _read_root_json(root, FINALIZATION_STAGE)
+        else:
+            terminal = _inconclusive_terminal(
+                persisted, "allocation finalization stage was not committed"
+            )
+            root.atomic_json(FINALIZATION_STAGE, terminal)
+            stage_present = True
+        exit_code = _validate_terminal_allocation(terminal, ledger, args)
+        expected_marker = _finalization_marker(terminal, args, exit_code)
+        if marker_present:
+            marker = _read_root_json(root, FINALIZATION_MARKER)
+        else:
+            try:
+                root.atomic_json(FINALIZATION_MARKER, expected_marker)
+            except BaseException:
+                if (
+                    _root_json_commit_state(
+                        root, FINALIZATION_MARKER, expected_marker
+                    )
+                    != "EXACT"
+                ):
+                    raise
+            marker = expected_marker
         if (
             set(marker)
             != {
@@ -545,7 +654,8 @@ def _recover_finalization(args, atomic_writer) -> int | None:
             or marker.get("exit_code") not in (0, 2, 3)
         ):
             raise protocol.ProtocolError("allocation finalization marker differs")
-        exit_code = _validate_terminal_allocation(terminal, ledger, args)
+        if marker != expected_marker:
+            raise protocol.ProtocolError("allocation finalization marker content differs")
         if marker.get("exit_code") != exit_code:
             raise protocol.ProtocolError("allocation finalization exit differs")
         if active == args.attempt_id:
@@ -566,6 +676,13 @@ def _recover_finalization(args, atomic_writer) -> int | None:
         outcome = exit_code
         return outcome
     except BaseException as error:
+        if isinstance(error, Exception) and not isinstance(
+            error, protocol.ProtocolError
+        ):
+            primary = protocol.ProtocolError(
+                f"allocation recovery failed: {error}"
+            )
+            raise primary from error
         primary = error
         raise
     finally:
@@ -650,6 +767,7 @@ def _run_comparison_in_root(
                         cwd=pathlib.Path(args.working_directory),
                         environment=probe["environment"],
                         deadline_seconds=PROCESS_DEADLINE_SECONDS,
+                        inherited_descriptors=(pinned.descriptor,),
                     )
                     campaign["launch_count"] += 1
                     observation_record = {
@@ -672,6 +790,8 @@ def _run_comparison_in_root(
                             or result.environment
                             != dict(sorted(probe["environment"].items()))
                             or result.deadline_seconds != PROCESS_DEADLINE_SECONDS
+                            or result.inherited_descriptors
+                            != (pinned.descriptor,)
                             or result.validity_state != "COMPLETE"
                             or result.stderr
                         ):
@@ -725,13 +845,12 @@ def _run_comparison_in_root(
         campaign["validity_state"] = "INCONCLUSIVE"
         campaign["gate"] = None
         campaign["invalid_reason"] = invalid_reason
-        _finalize_allocation(
+        return _finalize_allocation(
             artifact_handle, ledger_path, ledger, args, campaign, 2, atomic_writer
         )
-        return 2
     campaign["validity_state"] = "COMPLETE"
     campaign["gate"] = gate
-    _finalize_allocation(
+    return _finalize_allocation(
         artifact_handle,
         ledger_path,
         ledger,
@@ -740,7 +859,6 @@ def _run_comparison_in_root(
         EXIT_BY_GATE[gate],
         atomic_writer,
     )
-    return EXIT_BY_GATE[gate]
 
 
 def _run_comparison(
@@ -781,6 +899,13 @@ def _run_comparison(
         )
         return outcome
     except BaseException as error:
+        if isinstance(error, Exception) and not isinstance(
+            error, protocol.ProtocolError
+        ):
+            primary = protocol.ProtocolError(
+                f"allocation campaign failed: {error}"
+            )
+            raise primary from error
         primary = error
         raise
     finally:

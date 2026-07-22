@@ -10,6 +10,8 @@ import io
 import json
 import os
 import pathlib
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -64,21 +66,40 @@ class FakeCommandRunner:
         self.malformed_at = malformed_at
         self.calls = []
         self.identities = []
+        self.inherited_descriptors = []
+        self.snapshot_inodes = []
 
-    def __call__(self, argv, *, cwd, environment, deadline_seconds, **_kwargs):
+    def __call__(
+        self,
+        argv,
+        *,
+        cwd,
+        environment,
+        deadline_seconds,
+        inherited_descriptors,
+        **_kwargs,
+    ):
+        self.test.assertEqual(len(inherited_descriptors), 1)
+        inherited = inherited_descriptors[0]
+        self.test.assertEqual(argv[0], f"/proc/self/fd/{inherited}")
         identity = pathlib.Path(argv[0]).name
         if identity.isdigit() and pathlib.Path(argv[0]).parent == pathlib.Path("/proc/self/fd"):
-            identity = pathlib.Path(os.readlink(argv[0])).name
             payload = pathlib.Path(argv[0]).read_bytes()
-            identity = "candidate-probe" if payload == b"candidate" else "baseline-probe"
+            identity = {
+                b"direct-baseline": "direct-current-main-baseline",
+                b"common-baseline": "common-lock-normalized-baseline",
+                b"candidate": "candidate",
+            }[payload]
         self.calls.append((tuple(argv), pathlib.Path(cwd), dict(environment), deadline_seconds))
         self.identities.append(identity)
+        self.inherited_descriptors.append(tuple(inherited_descriptors))
+        self.snapshot_inodes.append(os.fstat(inherited).st_ino)
         ordinal = len(self.calls)
         case = argv[1]
         if ordinal == self.malformed_at:
             stdout = "{}\n"
         else:
-            candidate = identity == "candidate-probe"
+            candidate = identity == "candidate"
             stdout = record(
                 case,
                 count=self.candidate_count if candidate else self.baseline_count,
@@ -96,6 +117,7 @@ class FakeCommandRunner:
             failure_reason=None,
             terminated=False,
             killed=False,
+            inherited_descriptors=tuple(inherited_descriptors),
         )
 
 
@@ -123,7 +145,13 @@ def fixture(root: pathlib.Path, lane: str = "direct-current-main"):
         }[role]
         binary = root / role / binary_name
         binary.parent.mkdir()
-        binary.write_bytes(b"candidate" if role == "candidate" else b"baseline")
+        binary.write_bytes(
+            {
+                "direct-current-main-baseline": b"direct-baseline",
+                "common-lock-normalized-baseline": b"common-baseline",
+                "candidate": b"candidate",
+            }[role]
+        )
         binary.chmod(0o755)
         lock_name = "direct-probe" if role == "direct-current-main-baseline" else "common-probe"
         probes[role] = {
@@ -258,6 +286,314 @@ class AllocationRecordTests(unittest.TestCase):
 
 
 class AllocationCampaignTests(unittest.TestCase):
+    def setUp(self) -> None:
+        FakeCommandRunner.test = self
+
+    def persisted_fixture(self, root: pathlib.Path):
+        runner = load_runner()
+        repository = SCRIPT.parent.parent.resolve()
+        tool_paths = []
+        for name in ("git", "cargo", "rustc"):
+            if name == "git":
+                executable = pathlib.Path(shutil.which("git") or "").resolve()
+            else:
+                located = subprocess.run(
+                    ["rustup", "which", name],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.strip()
+                executable = pathlib.Path(located).resolve()
+            if executable.parent not in tool_paths:
+                tool_paths.append(executable.parent)
+        tools = build.resolve_toolchain(os.pathsep.join(map(str, tool_paths)))
+        cargo_version = subprocess.run(
+            [tools.cargo.path, "--version", "--verbose"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        rustc_version = subprocess.run(
+            [tools.rustc.path, "--version", "--verbose"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        target = build._rustc_host(rustc_version, "persisted integration")
+        toolchain = build._toolchain_manifest(tools, cargo_version, rustc_version)
+        scratch = root / "scratch"
+        evidence = root / "evidence"
+        evidence.mkdir()
+        home = root / "home"
+        cargo_home = root / "cargo-home"
+        home.mkdir()
+        cargo_home.mkdir()
+        tracked_template = build._read_regular_bytes(
+            repository / build.ALLOCATION_PROBE_SOURCE_ROOT / build.ALLOCATION_PROBE_TEMPLATE
+        )
+        tracked_sources = {
+            relative: build._read_regular_bytes(
+                repository / build.ALLOCATION_PROBE_SOURCE_ROOT / relative
+            )
+            for relative in build.ALLOCATION_PROBE_SOURCES
+        }
+        tenferro = {}
+        probes = {}
+        role_locks = {}
+        for index, role in enumerate(build.BUILD_MANIFEST_PATHS, start=1):
+            worktree = scratch / role
+            for crate in ("tenferro-ad", "tenferro-cpu", "tenferro-tensor"):
+                crate_root = worktree / "crates" / crate
+                (crate_root / "src").mkdir(parents=True)
+                features = (
+                    "\n[features]\ncpu-faer = []\n"
+                    if crate != "tenferro-tensor"
+                    else ""
+                )
+                dependency_version = 1 if index == 1 else 2
+                (crate_root / "Cargo.toml").write_text(
+                    f'[package]\nname = "{crate}"\n'
+                    f'version = "0.0.{dependency_version}"\n'
+                    f'edition = "2021"\n{features}'
+                )
+                (crate_root / "src/lib.rs").write_text("")
+            timing_target = scratch / "targets" / role
+            timing_binary = timing_target / "release/deps/timing"
+            timing_binary.parent.mkdir(parents=True)
+            shutil.copyfile("/bin/true", timing_binary)
+            timing_binary.chmod(0o755)
+            build_environment = protocol.cargo_environment(
+                path=tools.path,
+                home=str(home.resolve()),
+                cargo_home=str(cargo_home.resolve()),
+                target_dir=str(timing_target.resolve()),
+            )
+            config_chain = []
+            head = ("abcdef"[index] * 40)
+            tenferro[role] = {
+                "protocol_version": protocol.PROTOCOL_VERSION,
+                "toolchain": toolchain,
+                "target": target,
+                "profile": "bench",
+                "requested_features": list(build.REQUESTED_FEATURES),
+                "provider": "Faer",
+                "benchmark_sha256": "1" * 64,
+                "benchmark_stanza_sha256": "2" * 64,
+                "command_template": list(build.BENCH_COMMAND),
+                "config_chain_sha256": protocol.sha256_json(config_chain),
+                "role": role,
+                "head": head,
+                "tracked_tree_sha256": "3" * 64,
+                "resolved_features_sha256": "4" * 64,
+                "lock_sha256": "5" * 64,
+                "worktree": str(worktree.resolve()),
+                "target_dir": str(timing_target.resolve()),
+                "executable": str(timing_binary.resolve()),
+                "executable_sha256": protocol.sha256_file(timing_binary),
+                "validity_state": "COMPLETE",
+                "source_delta": list(build._ROLE_SOURCE_DELTAS[role]),
+                "commands": [
+                    command.to_manifest()
+                    for command in build.build_command_plan(target, tools.cargo)
+                ],
+                "environment": build_environment,
+                "cargo_config_chain": config_chain,
+            }
+
+            generated = scratch / "allocation-probes" / role
+            (generated / "src").mkdir(parents=True)
+            (generated / "Cargo.toml").write_bytes(
+                build._render_allocation_probe_manifest(tracked_template, worktree.resolve())
+            )
+            for relative, payload in tracked_sources.items():
+                (generated / relative).write_bytes(payload)
+            probe_target = scratch / "allocation-probe-targets" / role
+            probe_binary = probe_target / "release" / build.ALLOCATION_PROBE_BINARY
+            probe_binary.parent.mkdir(parents=True)
+            count = 6 if role == "candidate" else 7
+            probe_binary.write_text(
+                "#!/bin/sh\n"
+                f'# role={role}\n'
+                "printf '{\"allocated_bytes\":64,\"allocation_count\":"
+                f"{count}"
+                ",\"allocation_failures\":0,\"case\":\"%s\","
+                "\"checksum\":1.25,\"counter_overflow\":false,"
+                "\"repetitions\":4096}\\n' \"$1\"\n"
+            )
+            probe_binary.chmod(0o755)
+            probe_environment = protocol.cargo_environment(
+                path=tools.path,
+                home=str(home.resolve()),
+                cargo_home=str(cargo_home.resolve()),
+                target_dir=str(probe_target.resolve()),
+            )
+            subprocess.run(
+                [
+                    tools.cargo.path,
+                    "generate-lockfile",
+                    "--manifest-path",
+                    generated / "Cargo.toml",
+                ],
+                cwd=generated,
+                env=probe_environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            feature_step = build.allocation_probe_build_only_command_plan(
+                generated / "Cargo.toml",
+                probe_binary,
+                str(tools.cargo.path),
+                target,
+            )[0]
+            feature_graph = subprocess.run(
+                feature_step.argv,
+                cwd=generated,
+                env=probe_environment,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+            lock_bytes = (generated / "Cargo.lock").read_bytes()
+            role_locks[role] = lock_bytes
+            source_sha256 = {
+                str(path): build.sha256_bytes(payload)
+                for path, payload in tracked_sources.items()
+            }
+            runtime_environment = protocol.runtime_environment(
+                path=tools.path, home=str(home.resolve())
+            )
+            probes[role] = {
+                "protocol_version": protocol.PROTOCOL_VERSION,
+                "role": role,
+                "head": head,
+                "target": target,
+                "profile": "bench",
+                "validity_state": "COMPLETE",
+                "generated_root": str(generated.resolve()),
+                "target_dir": str(probe_target.resolve()),
+                "executable": str(probe_binary.resolve()),
+                "executable_sha256": protocol.sha256_file(probe_binary),
+                "lock_name": "direct-probe" if index == 1 else "common-probe",
+                "lock_sha256": build.sha256_bytes(lock_bytes),
+                "cargo_config_chain": [],
+                "config_chain_sha256": protocol.sha256_json([]),
+                "resolved_features": feature_graph,
+                "resolved_features_sha256": build.sha256_bytes(feature_graph.encode()),
+                "template_sha256": build.sha256_bytes(tracked_template),
+                "source_sha256": source_sha256,
+                "generated_manifest_sha256": protocol.sha256_file(generated / "Cargo.toml"),
+                "generated_source_sha256": source_sha256,
+                "case_inventory": list(protocol.CANONICAL_CASES),
+                "repetitions": 4096,
+                "build_commands": [
+                    command.to_manifest()
+                    for command in build.allocation_probe_build_only_command_plan(
+                        generated / "Cargo.toml",
+                        probe_binary,
+                        str(tools.cargo.path),
+                        target,
+                    )
+                ],
+                "build_environment": probe_environment,
+                "environment": runtime_environment,
+                "toolchain_sha256": protocol.sha256_json(toolchain),
+                "tenferro_build_manifest_sha256": protocol.sha256_json(tenferro[role]),
+            }
+
+        direct_lock = role_locks["direct-current-main-baseline"]
+        common_lock = role_locks["candidate"]
+        for name, payload in (("direct-probe", direct_lock), ("common-probe", common_lock)):
+            lock_path = evidence / build.LOCK_PATHS[name]
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path.write_bytes(payload)
+        common_generated = pathlib.Path(
+            probes["common-lock-normalized-baseline"]["generated_root"]
+        ) / "Cargo.lock"
+        common_generated.write_bytes(common_lock)
+        probes["common-lock-normalized-baseline"]["lock_sha256"] = build.sha256_bytes(
+            common_lock
+        )
+        for role in build.BUILD_MANIFEST_PATHS:
+            probes[role]["tenferro_build_manifest_sha256"] = protocol.sha256_json(
+                tenferro[role]
+            )
+            for mapping, relative in (
+                (tenferro, build.BUILD_MANIFEST_PATHS[role]),
+                (probes, build.PROBE_BUILD_MANIFEST_PATHS[role]),
+            ):
+                path = evidence / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(mapping[role]) + "\n")
+        ledger = evidence / "ledger.json"
+        ledger.write_text(
+            json.dumps(protocol.new_ledger(tenferro["candidate"]["head"])) + "\n"
+        )
+        args = argparse.Namespace(
+            comparison_kind="direct-current-main",
+            ledger=ledger,
+            attempt_id=1,
+            artifact_root=root / "attempt",
+            working_directory=root.resolve(),
+            probe_manifest_root=evidence,
+            tenferro_manifest_root=evidence,
+            repository=repository,
+        )
+        return runner, args
+
+    def test_real_bounded_launch_inherits_only_sealed_snapshot_descriptor(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            logical = root / "probe"
+            shutil.copyfile("/bin/sh", logical)
+            logical.chmod(0o755)
+            digest = protocol.sha256_file(logical)
+            pinned = runner.PinnedExecutable.open(logical.resolve(), digest)
+            unrelated = os.open("/dev/null", os.O_RDONLY | os.O_CLOEXEC)
+            arbitrary_regular = os.open("/bin/true", os.O_RDONLY | os.O_CLOEXEC)
+            try:
+                shutil.copyfile("/bin/false", logical)
+                logical.chmod(0o755)
+                command = (
+                    str(pinned.launch_path),
+                    "-c",
+                    (
+                        f"test -e /proc/self/fd/{pinned.descriptor} && "
+                        f"test ! -e /proc/self/fd/{unrelated} && printf sealed"
+                    ),
+                )
+                result = build.run_bounded_command(
+                    command,
+                    cwd=root,
+                    environment={"PATH": "/usr/bin:/bin", "HOME": str(root)},
+                    deadline_seconds=5,
+                    inherited_descriptors=(pinned.descriptor,),
+                )
+                self.assertEqual(result.validity_state, "COMPLETE")
+                self.assertEqual(result.stdout, "sealed")
+                self.assertEqual(result.stderr, "")
+                with self.assertRaises(protocol.ProtocolError):
+                    build.run_bounded_command(
+                        command,
+                        cwd=root,
+                        environment={"PATH": "/usr/bin:/bin", "HOME": str(root)},
+                        deadline_seconds=5,
+                        inherited_descriptors=(unrelated,),
+                    )
+                with self.assertRaises(protocol.ProtocolError):
+                    build.run_bounded_command(
+                        (f"/proc/self/fd/{arbitrary_regular}",),
+                        cwd=root,
+                        environment={"PATH": "/usr/bin:/bin", "HOME": str(root)},
+                        deadline_seconds=5,
+                        inherited_descriptors=(arbitrary_regular,),
+                    )
+            finally:
+                os.close(unrelated)
+                os.close(arbitrary_regular)
+                pinned.close()
+
     def test_complete_campaign_launches_exact_fresh_fixed_matrix_and_passes(self) -> None:
         runner = load_runner()
         with tempfile.TemporaryDirectory() as temporary:
@@ -276,12 +612,12 @@ class AllocationCampaignTests(unittest.TestCase):
             for case in protocol.CANONICAL_CASES:
                 expected.extend(
                     [
-                        ("baseline-probe", case),
-                        ("candidate-probe", case),
-                        ("candidate-probe", case),
-                        ("baseline-probe", case),
-                        ("baseline-probe", case),
-                        ("candidate-probe", case),
+                        ("direct-current-main-baseline", case),
+                        ("candidate", case),
+                        ("candidate", case),
+                        ("direct-current-main-baseline", case),
+                        ("direct-current-main-baseline", case),
+                        ("candidate", case),
                     ]
                 )
             observed = [
@@ -295,7 +631,7 @@ class AllocationCampaignTests(unittest.TestCase):
             ):
                 role = (
                     "candidate"
-                    if identity == "candidate-probe"
+                    if identity == "candidate"
                     else "direct-current-main-baseline"
                 )
                 self.assertEqual(cwd, root.resolve())
@@ -306,6 +642,13 @@ class AllocationCampaignTests(unittest.TestCase):
             self.assertEqual(manifest["protocol_sha256"], runner.PROTOCOL_SHA256)
             self.assertEqual(len(manifest["observations"]), 168)
             self.assertEqual(len({item["launch_index"] for item in manifest["observations"]}), 168)
+            for identity, inode in zip(
+                commands.identities, commands.snapshot_inodes, strict=True
+            ):
+                self.assertEqual(
+                    inode,
+                    manifest["executable_identities"][identity]["snapshot_inode"],
+                )
 
     def test_both_count_and_bytes_must_be_nonregressing_for_every_observation(self) -> None:
         runner = load_runner()
@@ -345,6 +688,24 @@ class AllocationCampaignTests(unittest.TestCase):
             manifest = json.loads((args.artifact_root / "allocation.json").read_text())
             self.assertIn("common-lock-normalized-baseline", manifest["probe_builds"])
             self.assertNotIn("direct-current-main-baseline", manifest["probe_builds"])
+            self.assertEqual(commands.identities.count("candidate"), 84)
+            self.assertEqual(
+                commands.identities.count("common-lock-normalized-baseline"), 84
+            )
+            baseline_identity = manifest["executable_identities"][
+                "common-lock-normalized-baseline"
+            ]
+            direct_inode = pathlib.Path(
+                probes["direct-current-main-baseline"]["executable"]
+            ).stat().st_ino
+            self.assertNotEqual(baseline_identity["source_inode"], direct_inode)
+            for identity, inode in zip(
+                commands.identities, commands.snapshot_inodes, strict=True
+            ):
+                self.assertEqual(
+                    inode,
+                    manifest["executable_identities"][identity]["snapshot_inode"],
+                )
 
     def test_first_invalid_process_stops_whole_comparison_and_closes_retryable(self) -> None:
         runner = load_runner()
@@ -443,7 +804,7 @@ class AllocationCampaignTests(unittest.TestCase):
                 if (
                     self.mode == "inconsistent"
                     and len(self.calls) == 6
-                    and self.identities[-1] == "candidate-probe"
+                    and self.identities[-1] == "candidate"
                 ):
                     return build.CommandResult(
                         **{**result.__dict__, "stdout": record(argv[1], count=8)}
@@ -583,7 +944,7 @@ class AllocationCampaignTests(unittest.TestCase):
                 if failure_point == "publish":
                     runner._publish_staged_allocation = failing_publish
                 try:
-                    with self.assertRaises(OSError):
+                    with self.assertRaises(protocol.ProtocolError):
                         runner._run_comparison(
                             args,
                             probe_manifests=probes,
@@ -613,6 +974,184 @@ class AllocationCampaignTests(unittest.TestCase):
                 self.assertIsNone(ledger["active_attempt_id"])
                 self.assertEqual(len(ledger["attempts"]), 1)
 
+    def test_stage_and_marker_atomic_write_failure_matrix_is_recoverable(self) -> None:
+        runner = load_runner()
+        for name, committed, first_exit in (
+            (runner.FINALIZATION_STAGE, False, 2),
+            (runner.FINALIZATION_STAGE, True, None),
+            (runner.FINALIZATION_MARKER, False, None),
+            (runner.FINALIZATION_MARKER, True, None),
+        ):
+            with self.subTest(
+                name=name, committed=committed
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, probes, tenferro = fixture(root)
+                commands = FakeCommandRunner(candidate_count=6, candidate_bytes=63)
+                original = runner.protocol.atomic_write_json_at
+                injected = False
+
+                def fail_once(directory_fd, selected_name, payload):
+                    nonlocal injected
+                    if selected_name == name and not injected:
+                        injected = True
+                        if committed:
+                            original(directory_fd, selected_name, payload)
+                        raise OSError(
+                            f"injected {'post' if committed else 'pre'}-commit failure"
+                        )
+                    return original(directory_fd, selected_name, payload)
+
+                with mock.patch.object(
+                    runner.protocol, "atomic_write_json_at", side_effect=fail_once
+                ):
+                    if first_exit is None:
+                        with self.assertRaises(protocol.ProtocolError):
+                            runner._run_comparison(
+                                args,
+                                probe_manifests=probes,
+                                tenferro_manifests=tenferro,
+                                command_runner=commands,
+                            )
+                    else:
+                        self.assertEqual(
+                            runner._run_comparison(
+                                args,
+                                probe_manifests=probes,
+                                tenferro_manifests=tenferro,
+                                command_runner=commands,
+                            ),
+                            first_exit,
+                        )
+                self.assertTrue(injected)
+                self.assertEqual(len(commands.calls), 168)
+
+                recovery = FakeCommandRunner()
+                expected_recovery = 2 if name == runner.FINALIZATION_STAGE and not committed else 0
+                self.assertEqual(
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=recovery,
+                    ),
+                    expected_recovery,
+                )
+                self.assertEqual(recovery.calls, [])
+                terminal = json.loads((args.artifact_root / "allocation.json").read_text())
+                self.assertEqual(terminal["launch_count"], 168)
+                self.assertEqual(
+                    terminal["validity_state"],
+                    "INCONCLUSIVE" if expected_recovery == 2 else "COMPLETE",
+                )
+                ledger = json.loads(args.ledger.read_text())
+                self.assertIsNone(ledger["active_attempt_id"])
+                self.assertEqual(len(ledger["attempts"]), 1)
+
+    def test_cleanup_failure_during_recovery_is_idempotent(self) -> None:
+        runner = load_runner()
+        for committed in (False, True):
+            with self.subTest(
+                committed=committed
+            ), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, probes, tenferro = fixture(root)
+                commands = FakeCommandRunner(candidate_count=6, candidate_bytes=63)
+
+                def fail_close(path, payload):
+                    if (
+                        pathlib.Path(path) == args.ledger
+                        and payload.get("active_attempt_id") is None
+                    ):
+                        raise OSError("leave committed finalization partial")
+                    protocol.atomic_write_json(path, payload)
+
+                with self.assertRaises(protocol.ProtocolError):
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=commands,
+                        atomic_writer=fail_close,
+                    )
+                self.assertEqual(len(commands.calls), 168)
+
+                original_cleanup = runner._cleanup_finalization
+
+                def fail_cleanup(handle):
+                    if committed:
+                        original_cleanup(handle)
+                    raise OSError("injected recovery cleanup failure")
+
+                recovery = FakeCommandRunner()
+                with mock.patch.object(
+                    runner, "_cleanup_finalization", side_effect=fail_cleanup
+                ), self.assertRaises(protocol.ProtocolError):
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=recovery,
+                    )
+                self.assertEqual(recovery.calls, [])
+                final_recovery = FakeCommandRunner()
+                self.assertEqual(
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=final_recovery,
+                    ),
+                    0,
+                )
+                self.assertEqual(final_recovery.calls, [])
+
+    def test_finalization_control_exception_identity_is_preserved_with_recovery(self) -> None:
+        runner = load_runner()
+        for name, expected_exit in (
+            (runner.FINALIZATION_STAGE, 2),
+            (runner.FINALIZATION_MARKER, 0),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                args, probes, tenferro = fixture(root)
+                commands = FakeCommandRunner(candidate_count=6, candidate_bytes=63)
+                original = runner.protocol.atomic_write_json_at
+                interruption = KeyboardInterrupt(f"interrupt {name}")
+                injected = False
+
+                def interrupt_once(directory_fd, selected_name, payload):
+                    nonlocal injected
+                    if selected_name == name and not injected:
+                        injected = True
+                        raise interruption
+                    return original(directory_fd, selected_name, payload)
+
+                with mock.patch.object(
+                    runner.protocol,
+                    "atomic_write_json_at",
+                    side_effect=interrupt_once,
+                ), self.assertRaises(KeyboardInterrupt) as raised:
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=commands,
+                    )
+                self.assertIs(raised.exception, interruption)
+                self.assertEqual(len(commands.calls), 168)
+                recovery = FakeCommandRunner()
+                self.assertEqual(
+                    runner._run_comparison(
+                        args,
+                        probe_manifests=probes,
+                        tenferro_manifests=tenferro,
+                        command_runner=recovery,
+                    ),
+                    expected_exit,
+                )
+                self.assertEqual(recovery.calls, [])
+
     def test_public_persisted_campaign_runs_exact_matrix(self) -> None:
         runner = load_runner()
         with tempfile.TemporaryDirectory() as temporary:
@@ -634,6 +1173,46 @@ class AllocationCampaignTests(unittest.TestCase):
             probe_validator.assert_called_once_with(
                 args.probe_manifest_root, tenferro, repository=args.repository
             )
+
+    def test_public_persisted_validation_and_real_pinned_launch_are_unmocked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runner, args = self.persisted_fixture(pathlib.Path(temporary))
+            self.assertEqual(runner.run_campaign(args), 0)
+            terminal = json.loads((args.artifact_root / "allocation.json").read_text())
+            self.assertEqual(terminal["launch_count"], 168)
+            self.assertEqual((terminal["validity_state"], terminal["gate"]), ("COMPLETE", "PASS"))
+            self.assertEqual(
+                {
+                    observation["role"]
+                    for observation in terminal["observations"]
+                    if observation["role"] != "candidate"
+                },
+                {"direct-current-main-baseline"},
+            )
+            argv = [
+                "--comparison-kind",
+                args.comparison_kind,
+                "--ledger",
+                str(args.ledger),
+                "--attempt-id",
+                str(args.attempt_id),
+                "--artifact-root",
+                str(args.artifact_root),
+                "--working-directory",
+                str(args.working_directory),
+                "--probe-manifest-root",
+                str(args.probe_manifest_root),
+                "--tenferro-manifest-root",
+                str(args.tenferro_manifest_root),
+                "--repository",
+                str(args.repository),
+            ]
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(runner.main(argv), 0)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertEqual(stderr.getvalue(), "")
 
     def test_cli_exit_and_stream_contract_is_exact(self) -> None:
         runner = load_runner()
