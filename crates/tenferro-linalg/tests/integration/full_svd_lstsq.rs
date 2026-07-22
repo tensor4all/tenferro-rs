@@ -165,8 +165,9 @@ fn svd_full_1x2_recovers_one_dimensional_nullspace() {
 
     let vh = f64_data(&out[2]);
     // Kernel row is index 1: [Vh[1,0], Vh[1,1]] with a . [1,1] == 0.
-    let v0 = vh[1]; // t=1, j=0 -> 1 + 0*2
-    let v1 = vh[1 + 1 * 2]; // t=1, j=1 -> 3
+    // Column-major (2 x 2): Vh[t, j] at index t + j * n.
+    let v0 = vh[1]; // t=1, j=0 -> 1
+    let v1 = vh[3]; // t=1, j=1 -> 3
     assert!((v0 + v1).abs() < 1e-10, "nullspace dot {}", v0 + v1);
     // It is a genuine unit direction, not the zero vector.
     assert!((v0 * v0 + v1 * v1 - 1.0).abs() < 1e-10);
