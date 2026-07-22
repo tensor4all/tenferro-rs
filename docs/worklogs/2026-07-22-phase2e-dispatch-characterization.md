@@ -331,3 +331,25 @@ publication, failure after both publications during terminal validation,
 preexisting sidecar collision, exact existing-terminal digests, repeat behavior,
 unchanged PASS bytes/inventory, and preservation of the original exception
 object.
+
+## Final post-main-merge evidence
+
+Candidate `52c7debf1692c9868eb5f47a84affb6d04537c50` completed the owning CLI with
+exit 0 in the fresh authoritative root
+`/tmp/tenferro-task7-final.7jjWMN/evidence`. Independent
+`validate_terminal_evidence` validation passed. Dispatch is PASS with 47 rows
+and terminal SHA-256
+`37c807f1ca6c9556e3b0b6910221cf3c5cd854cf8a1e56fcf104823c189065e7`;
+characterization is PASS with 47 correctness rows, 45 latency rows, and terminal
+SHA-256
+`33bffb02d25e964926d138b65b903c2626294ee5533e68cb61289bce0a04a49d`.
+The evidence contains 45 Criterion estimates, 45 affinity artifacts, and
+exactly 193 recursively inventoried files. This host exposed one usable NUMA
+node, so cross-socket execution retained the typed
+`InsufficientNumaNodes { required: 2, available: 1 }` skip with no probes.
+
+The first fresh attempt at `/tmp/tenferro-task7-final.iA2Gz6` was INCONCLUSIVE
+before build because its empty controlled `CARGO_HOME` lacked the offline Git
+dependency cache. The authoritative rerun supplied only Git and registry cache
+symlinks, matching the prior protocol setup; no additional ambient Cargo
+configuration was introduced.
