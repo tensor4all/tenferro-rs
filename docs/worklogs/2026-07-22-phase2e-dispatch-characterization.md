@@ -284,3 +284,30 @@ and workspace all-target Clippy passed with warnings denied. Rustfmt and
 affinity artifacts: managed-exact B=1 D-N measured about 33.1 microseconds and
 managed-exact B=1 E-N about 29.1 microseconds on this host. No full owning E2E
 was run in this cycle; the preserved Cycle 5 evidence tree remains untouched.
+
+## Cycle 8 trusted-root identity
+
+Failure ownership no longer reparses and resolves an evidence-root argument
+after `_run_main` rejects it. The CLI records a root only after the unresolved
+path has passed preparation and a private directory has been opened with
+`O_DIRECTORY | O_NOFOLLOW`. Consequently, final and ancestor symlink aliases
+remain untrusted even when their targets contain the expected locked input;
+the original typed protocol error escapes without creating INCONCLUSIVE logs
+or manifests through the alias.
+
+Prepared roots are current-user-owned and mode 0700. A held descriptor binds
+their device/inode identity, and normative reads, writes, hashes, and recursive
+inventory revalidate both that identity and existing path components before
+operating. Final writes remain `O_EXCL | O_NOFOLLOW`. This detects root,
+ancestor, and nested-parent replacements between protocol operations. The
+documented residual boundary is a hostile same-UID process winning the narrow
+interval between component revalidation and one nested pathname syscall; fully
+eliminating that interval would require converting the entire build/evidence
+pipeline to descriptor-relative traversal.
+
+The exact alias regression covers both final and ancestor symlinks with an
+attacker-prepopulated `builds/locks/common.Cargo.lock` and asserts a byte-for-byte
+unchanged target inventory. Root/ancestor replacement and nested-parent swap
+tests also pass. The combined Python protocol/build/gate suite passed 159 tests.
+A real filesystem smoke created a 0700 held root, exclusively wrote and read one
+nested manifest, revalidated its device/inode, and inventoried exactly one file.

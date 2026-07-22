@@ -232,6 +232,55 @@ class InventoryTests(unittest.TestCase):
 
 
 class ProvenanceTests(unittest.TestCase):
+    def test_main_never_owns_failure_artifacts_through_rejected_root_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            scratch = root / "scratch"
+            scratch.mkdir()
+            arguments = [
+                "--repository", str(pathlib.Path.cwd()),
+                "--candidate", "a" * 40,
+                "--common-lock", str(pathlib.Path.cwd() / "Cargo.lock"),
+                "--scratch-root", str(scratch),
+                "--path", "/usr/bin",
+                "--home", str(root),
+                "--cargo-home", str(root),
+            ]
+            for kind in ("final", "ancestor"):
+                target = root / f"{kind}-target"
+                target.mkdir()
+                if kind == "final":
+                    evidence = root / "final-link"
+                    evidence.symlink_to(target, target_is_directory=True)
+                else:
+                    ancestor = root / "ancestor-link"
+                    ancestor.symlink_to(target, target_is_directory=True)
+                    evidence = ancestor / "evidence"
+                    evidence.mkdir()
+                    target = evidence.resolve()
+                locked = target / build.LOCK_PATHS["common"]
+                locked.parent.mkdir(parents=True)
+                locked.write_bytes(b"attacker-controlled lock\n")
+                before = {
+                    path.relative_to(target): path.read_bytes()
+                    for path in target.rglob("*") if path.is_file()
+                }
+                with (
+                    self.subTest(kind=kind),
+                    mock.patch.object(gates, "validate_candidate_worktree"),
+                    self.assertRaisesRegex(
+                        protocol.ProtocolError, "symbolic link"
+                    ),
+                ):
+                    gates.main([
+                        "--evidence-root", str(evidence), *arguments,
+                    ])
+                after = {
+                    path.relative_to(target): path.read_bytes()
+                    for path in target.rglob("*") if path.is_file()
+                }
+                self.assertEqual(after, before)
+
     def test_runner_rejects_symlink_evidence_root_before_build(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
@@ -283,6 +332,27 @@ class ProvenanceTests(unittest.TestCase):
             os.mkfifo(special)
             with self.assertRaises(protocol.ProtocolError):
                 gates.normative_regular_files(root)
+
+    def test_active_root_identity_rejects_swapped_normative_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            root = base / "evidence"
+            identity = protocol.prepare_empty_root_identity(root)
+            outside = base / "outside"
+            outside.mkdir()
+            nested = root / "nested"
+            nested.mkdir()
+            nested.rmdir()
+            nested.symlink_to(outside, target_is_directory=True)
+            previous = gates._ACTIVE_ROOT_IDENTITY
+            gates._ACTIVE_ROOT_IDENTITY = identity
+            try:
+                with self.assertRaisesRegex(protocol.ProtocolError, "symbolic link"):
+                    gates._write_new_bytes(nested / "manifest.json", b"{}\n")
+            finally:
+                gates._ACTIVE_ROOT_IDENTITY = previous
+                identity.close()
+            self.assertEqual(list(outside.iterdir()), [])
 
     def test_rust_evidence_writers_are_exclusive_and_non_following(self) -> None:
         paths = (

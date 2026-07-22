@@ -82,7 +82,34 @@ class EmptyRootTests(unittest.TestCase):
             missing = parent / "nested" / "evidence"
             self.assertEqual(protocol.prepare_empty_root(missing), missing)
             self.assertTrue(missing.is_dir())
+            self.assertEqual(missing.stat().st_mode & 0o777, 0o700)
             self.assertEqual(protocol.prepare_empty_root(missing), missing)
+
+    def test_prepared_root_identity_rejects_root_and_ancestor_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = pathlib.Path(temporary)
+            parent = base / "parent"
+            root = parent / "evidence"
+            identity = protocol.prepare_empty_root_identity(root)
+            try:
+                saved_parent = base / "saved-parent"
+                parent.rename(saved_parent)
+                parent.symlink_to(saved_parent, target_is_directory=True)
+                with self.assertRaisesRegex(protocol.ProtocolError, "symbolic link"):
+                    identity.revalidate()
+            finally:
+                identity.close()
+
+            second = base / "second"
+            identity = protocol.prepare_empty_root_identity(second)
+            try:
+                saved = base / "saved-second"
+                second.rename(saved)
+                second.mkdir(mode=0o700)
+                with self.assertRaisesRegex(protocol.ProtocolError, "identity changed"):
+                    identity.revalidate()
+            finally:
+                identity.close()
 
     def test_prepare_empty_root_rejects_every_prepopulated_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -110,7 +110,7 @@ def prepare_empty_root(root: pathlib.Path) -> pathlib.Path:
         metadata = root.lstat()
     except FileNotFoundError:
         try:
-            root.mkdir(parents=True)
+            root.mkdir(mode=0o700, parents=True)
         except OSError as error:
             raise ProtocolError(f"cannot create evidence root {root}: {error}") from error
         try:
@@ -119,19 +119,85 @@ def prepare_empty_root(root: pathlib.Path) -> pathlib.Path:
             raise ProtocolError(f"cannot inspect evidence root {root}: {error}") from error
         if not stat.S_ISDIR(metadata.st_mode):
             raise ProtocolError(f"evidence root is not a regular directory: {root}")
-        return root
     except OSError as error:
         raise ProtocolError(f"cannot inspect evidence root {root}: {error}") from error
 
     if not stat.S_ISDIR(metadata.st_mode):
         raise ProtocolError(f"evidence root is not a regular directory: {root}")
+    if hasattr(os, "geteuid") and metadata.st_uid != os.geteuid():
+        raise ProtocolError(f"evidence root is not owned by the current user: {root}")
     try:
         first_entry = next(root.iterdir(), None)
     except OSError as error:
         raise ProtocolError(f"cannot inspect evidence root {root}: {error}") from error
     if first_entry is not None:
         raise ProtocolError(f"evidence root is not empty: {root}")
+    if stat.S_IMODE(metadata.st_mode) != 0o700:
+        try:
+            root.chmod(0o700)
+            metadata = root.lstat()
+        except OSError as error:
+            raise ProtocolError(f"cannot make evidence root private: {root}: {error}") from error
+        if stat.S_IMODE(metadata.st_mode) != 0o700:
+            raise ProtocolError(f"evidence root is not private (mode must be 0700): {root}")
     return root
+
+
+class PreparedRootIdentity:
+    """Hold and revalidate one private evidence-root directory identity.
+
+    Revalidation detects path-component replacement between protocol operations.
+    The remaining threat boundary is a hostile same-UID process that wins the
+    narrow interval after revalidation and before a nested pathname syscall;
+    final normative file opens additionally use ``O_NOFOLLOW | O_EXCL``.
+    """
+
+    def __init__(self, path: pathlib.Path) -> None:
+        self.path = pathlib.Path(path)
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+        try:
+            self.descriptor = os.open(self.path, flags)
+            metadata = os.fstat(self.descriptor)
+        except OSError as error:
+            raise ProtocolError(f"cannot hold evidence root {self.path}: {error}") from error
+        self.device = metadata.st_dev
+        self.inode = metadata.st_ino
+        try:
+            self.revalidate()
+        except BaseException:
+            self.close()
+            raise
+
+    def revalidate(self) -> None:
+        current = pathlib.Path(self.path.anchor)
+        for component in self.path.parts[1:]:
+            current /= component
+            try:
+                metadata = current.lstat()
+            except OSError as error:
+                raise ProtocolError(
+                    f"evidence root identity disappeared: {self.path}: {error}"
+                ) from error
+            if stat.S_ISLNK(metadata.st_mode):
+                raise ProtocolError(f"evidence root traverses a symbolic link: {current}")
+        metadata = self.path.lstat()
+        held = os.fstat(self.descriptor)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or (metadata.st_dev, metadata.st_ino) != (self.device, self.inode)
+            or (held.st_dev, held.st_ino) != (self.device, self.inode)
+        ):
+            raise ProtocolError(f"evidence root identity changed: {self.path}")
+
+    def close(self) -> None:
+        descriptor, self.descriptor = self.descriptor, -1
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def prepare_empty_root_identity(root: pathlib.Path) -> PreparedRootIdentity:
+    """Prepare an empty private root and retain its device/inode identity."""
+    return PreparedRootIdentity(prepare_empty_root(root))
 
 
 def runtime_environment(

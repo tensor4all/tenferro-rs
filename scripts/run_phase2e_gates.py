@@ -13,7 +13,7 @@ import signal
 import shutil
 import stat
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from scripts import phase2e_build as build
@@ -25,6 +25,7 @@ TEST_DEADLINE_SECONDS = 120
 BENCH_ROW_DEADLINE_SECONDS = 30
 TERMINATION_GRACE_SECONDS = 5
 EVIDENCE_ENVIRONMENT_KEY = "TENFERRO_PHASE2E_EVIDENCE_DIR"
+_ACTIVE_ROOT_IDENTITY: protocol.PreparedRootIdentity | None = None
 
 
 class ExecutionFailure(protocol.ProtocolError):
@@ -67,7 +68,36 @@ BANNED_DISPATCH_PATTERNS = ("string_key", ".get(operation_name)", ".get(&format!
 
 
 def sha256_file(path: pathlib.Path) -> str:
+    _revalidate_normative_path(path)
     return protocol.sha256_file(path)
+
+
+def _revalidate_normative_path(path: pathlib.Path, *, allow_missing: bool = False) -> None:
+    identity = _ACTIVE_ROOT_IDENTITY
+    if identity is None:
+        return
+    identity.revalidate()
+    path = pathlib.Path(os.path.abspath(path))
+    try:
+        relative = path.relative_to(identity.path)
+    except ValueError:
+        return
+    current = identity.path
+    parts = relative.parts if not allow_missing else relative.parts[:-1]
+    for component in parts:
+        current /= component
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            if allow_missing:
+                return
+            raise protocol.ProtocolError(f"normative path disappeared: {current}")
+        except OSError as error:
+            raise protocol.ProtocolError(f"cannot inspect normative path {current}: {error}") from error
+        if stat.S_ISLNK(metadata.st_mode):
+            raise protocol.ProtocolError(f"normative path traverses a symbolic link: {current}")
+        if component != relative.parts[-1] and not stat.S_ISDIR(metadata.st_mode):
+            raise protocol.ProtocolError(f"normative path parent is not a directory: {current}")
 
 
 def canonical_keys() -> tuple[set[str], set[str]]:
@@ -811,7 +841,9 @@ def run_bench_row(
 
 
 def _write_new_bytes(path: pathlib.Path, payload: bytes) -> None:
+    _revalidate_normative_path(path, allow_missing=True)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _revalidate_normative_path(path, allow_missing=True)
     try:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
         descriptor = os.open(path, flags, 0o600)
@@ -939,6 +971,7 @@ def atomic_write_json(path: pathlib.Path, value: Mapping[str, Any]) -> None:
 
 
 def _read_regular_bytes(path: pathlib.Path) -> bytes:
+    _revalidate_normative_path(path)
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
     try:
         descriptor = os.open(path, flags)
@@ -962,6 +995,7 @@ def _read_json(path: pathlib.Path) -> dict[str, Any]:
 
 def normative_regular_files(root: pathlib.Path) -> set[pathlib.Path]:
     """Inventory regular artifacts without following links or accepting special files."""
+    _revalidate_normative_path(root)
     files: set[pathlib.Path] = set()
     pending = [pathlib.Path(root)]
     while pending:
@@ -1126,7 +1160,10 @@ def validate_terminal_evidence(
         raise protocol.ProtocolError("terminal evidence recursive file inventory mismatch")
 
 
-def _run_main(argv: Sequence[str] | None = None) -> int:
+def _run_main(
+    argv: Sequence[str] | None,
+    identity_sink: Callable[[protocol.PreparedRootIdentity], None] | None = None,
+) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True, type=pathlib.Path)
     parser.add_argument("--evidence-root", required=True, type=pathlib.Path)
@@ -1138,7 +1175,12 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cargo-home", required=True, type=pathlib.Path)
     args = parser.parse_args(argv)
     validate_candidate_worktree(args.repository, args.candidate)
-    evidence_root = protocol.prepare_empty_root(args.evidence_root)
+    identity = protocol.prepare_empty_root_identity(args.evidence_root)
+    if identity_sink is not None:
+        identity_sink(identity)
+    global _ACTIVE_ROOT_IDENTITY
+    _ACTIVE_ROOT_IDENTITY = identity
+    evidence_root = identity.path
     scratch_root = validate_external_scratch_root(
         args.repository, evidence_root, args.scratch_root
     )
@@ -1268,6 +1310,17 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+def _run_main_entry(argv: Sequence[str] | None = None) -> int:
+    identities: list[protocol.PreparedRootIdentity] = []
+    try:
+        return _run_main(argv, identities.append)
+    finally:
+        global _ACTIVE_ROOT_IDENTITY
+        _ACTIVE_ROOT_IDENTITY = None
+        for identity in identities:
+            identity.close()
+
+
 def _own_inconclusive(
     evidence_root: pathlib.Path, candidate: str, error: protocol.ProtocolError,
 ) -> None:
@@ -1296,18 +1349,30 @@ def _own_inconclusive(
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(argv if argv is not None else __import__("sys").argv[1:])
+    identities: list[protocol.PreparedRootIdentity] = []
     try:
-        return _run_main(arguments)
+        return _run_main(arguments, identities.append)
     except protocol.ProtocolError as error:
         probe = argparse.ArgumentParser(add_help=False)
         probe.add_argument("--evidence-root", type=pathlib.Path)
         probe.add_argument("--candidate", default="UNKNOWN")
         known, _unknown = probe.parse_known_args(arguments)
-        if known.evidence_root is not None:
-            root = known.evidence_root.resolve()
-            if (root / build.LOCK_PATHS["common"]).is_file():
-                _own_inconclusive(root, known.candidate, error)
+        if identities:
+            identity = identities[0]
+            identity.revalidate()
+            lock = identity.path / build.LOCK_PATHS["common"]
+            try:
+                _read_regular_bytes(lock)
+            except protocol.ProtocolError:
+                pass
+            else:
+                _own_inconclusive(identity.path, known.candidate, error)
         raise
+    finally:
+        global _ACTIVE_ROOT_IDENTITY
+        _ACTIVE_ROOT_IDENTITY = None
+        for identity in identities:
+            identity.close()
 
 
 if __name__ == "__main__":
