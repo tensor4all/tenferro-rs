@@ -599,6 +599,61 @@ def sha256_json(payload: Any) -> str:
     return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
 
 
+def regular_file_inventory(
+    root: pathlib.Path, *, excluded: frozenset[str] = frozenset()
+) -> dict[str, str]:
+    """Hash every regular file below *root* and reject ambiguous filesystem nodes."""
+    root = pathlib.Path(root)
+    try:
+        root_metadata = root.lstat()
+    except OSError as error:
+        raise ProtocolError(f"cannot inspect inventory root {root}: {error}") from error
+    if not stat.S_ISDIR(root_metadata.st_mode):
+        raise ProtocolError(f"inventory root is not a regular directory: {root}")
+    inventory: dict[str, str] = {}
+    try:
+        entries = sorted(root.rglob("*"), key=lambda path: path.as_posix())
+    except OSError as error:
+        raise ProtocolError(
+            f"cannot enumerate inventory root {root}: {error}"
+        ) from error
+    for path in entries:
+        relative = path.relative_to(root).as_posix()
+        try:
+            metadata = path.lstat()
+        except OSError as error:
+            raise ProtocolError(
+                f"cannot inspect inventory path {relative}: {error}"
+            ) from error
+        if stat.S_ISDIR(metadata.st_mode):
+            continue
+        if relative in excluded:
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ProtocolError(f"inventory path is not a regular file: {relative}")
+        inventory[relative] = sha256_file(path)
+    return inventory
+
+
+def validate_regular_file_inventory(
+    root: pathlib.Path,
+    expected: Mapping[str, str],
+    *,
+    excluded: frozenset[str] = frozenset(),
+) -> None:
+    """Require exact path/digest equality with a recursive regular-file inventory."""
+    if type(expected) is not dict or any(
+        type(path) is not str
+        or type(digest) is not str
+        or len(digest) != 64
+        for path, digest in expected.items()
+    ):
+        raise ProtocolError("regular-file inventory schema is invalid")
+    actual = regular_file_inventory(root, excluded=excluded)
+    if actual != expected:
+        raise ProtocolError("regular-file inventory differs")
+
+
 def validate_manifest_fields(
     manifest: Mapping[str, Any],
     required_fields: Mapping[str, type | tuple[type, ...]],

@@ -110,6 +110,7 @@ external/
 # Plan files
 plan
 docs/superpowers/plans/
+docs/worklogs/.phase2e-index.lock
 
 # .env
 .env
