@@ -202,6 +202,21 @@ class InventoryTests(unittest.TestCase):
 
 
 class ProvenanceTests(unittest.TestCase):
+    def test_operation_observer_is_custom_cfg_only_not_a_cargo_feature(self) -> None:
+        cpu_manifest = pathlib.Path("crates/tenferro-cpu/Cargo.toml").read_text()
+        ad_manifest = pathlib.Path("crates/tenferro-ad/Cargo.toml").read_text()
+        self.assertNotIn("phase2e-observe", cpu_manifest)
+        self.assertNotIn("phase2e-observe", ad_manifest)
+        for relative in (
+            "crates/tenferro-cpu/src/lib.rs",
+            "crates/tenferro-cpu/src/affinity.rs",
+            "crates/tenferro-cpu/src/elementwise.rs",
+            "crates/tenferro-ad/src/eager/tests/phase2e.rs",
+        ):
+            source = pathlib.Path(relative).read_text()
+            self.assertNotIn('feature = "phase2e-observe"', source)
+            self.assertIn("tenferro_phase2e_operation_observe", source)
+
     def test_characterization_benches_measure_exact_workloads_only(self) -> None:
         cpu = pathlib.Path("crates/tenferro-cpu/benches/numa_execution.rs").read_text()
         task7 = cpu.split("fn bench_phase2e_rows", 1)[1]
@@ -237,7 +252,7 @@ class ProvenanceTests(unittest.TestCase):
             self.assertIn("--no-default-features", command)
             self.assertEqual(
                 command[command.index("--features") + 1],
-                ",".join(build.DISPATCH_REQUESTED_FEATURES),
+                "cpu-faer",
             )
             self.assertEqual(command[-1], "--message-format=json")
         self.assertEqual(gates.TEST_DEADLINE_SECONDS, 120)
@@ -264,7 +279,7 @@ class ProvenanceTests(unittest.TestCase):
             tool_identity = {"path": str(tool), "sha256": gates.sha256_file(tool)}
             path = root / "bin"
             path.mkdir()
-            environment = protocol.cargo_environment(
+            environment = build.dispatch_cargo_environment(
                 path=str(path), home=str(root / "home"),
                 cargo_home=str(root / "cargo-home"), target_dir=str(root / "target"),
             )
@@ -286,12 +301,16 @@ class ProvenanceTests(unittest.TestCase):
                 "feature_graph_sha256": hashlib.sha256(graph.encode()).hexdigest(),
                 "argv": list(build.DISPATCH_TEST_COMMANDS["tenferro-cpu"]),
                 "environment": environment,
-                "requested_features": list(build.DISPATCH_REQUESTED_FEATURES),
+                "requested_features": ["cpu-faer"],
+                "compiler_configuration": {
+                    "observer_cfg": "tenferro_phase2e_operation_observe",
+                    "rustflags": build.DISPATCH_RUSTFLAGS,
+                },
                 "no_default_features": True,
                 "target": "x86_64-unknown-linux-gnu",
                 "feature_query_argv": list(build.feature_query_command(
                     "x86_64-unknown-linux-gnu", package="tenferro-cpu",
-                    requested_features=build.DISPATCH_REQUESTED_FEATURES,
+                    requested_features=("cpu-faer",),
                     no_default_features=True,
                 )),
                 "toolchain": {
@@ -307,6 +326,13 @@ class ProvenanceTests(unittest.TestCase):
                 ), executable.resolve()
             )
             manifest["argv"] = ["cargo", "test"]
+            with self.assertRaises(protocol.ProtocolError):
+                gates.validate_test_build_manifest(
+                    manifest, package="tenferro-cpu", candidate=candidate,
+                    repository=repository, common_lock=lock,
+                )
+            manifest["argv"] = list(build.DISPATCH_TEST_COMMANDS["tenferro-cpu"])
+            manifest["environment"]["RUSTFLAGS"] += " -Ctarget-cpu=native"
             with self.assertRaises(protocol.ProtocolError):
                 gates.validate_test_build_manifest(
                     manifest, package="tenferro-cpu", candidate=candidate,
@@ -344,11 +370,27 @@ class ProvenanceTests(unittest.TestCase):
             executable.write_bytes(b"binary")
             completed = __import__("subprocess").CompletedProcess([], 0, "", "")
             sealed = protocol.runtime_environment(path="/controlled", home="/empty-home")
-            with mock.patch.object(gates, "run_bounded", return_value=completed) as run:
+            original = dict(sealed)
+            with (
+                mock.patch.object(gates, "run_bounded", return_value=completed) as run,
+                mock.patch.object(
+                    protocol,
+                    "runtime_environment",
+                    wraps=protocol.runtime_environment,
+                ) as construct_environment,
+            ):
                 gates.run_bench_row(
                     executable, "managed-exact/budget-2/D-N", repository=root,
                     environment=sealed, criterion_home=root / "criterion",
                 )
+            construct_environment.assert_called_once_with(
+                path="/controlled",
+                home="/empty-home",
+                criterion_home=str((root / "criterion").resolve()),
+                affinity_row="managed-exact/budget-2/D-N",
+                affinity_file=str((root / "criterion" / "affinity.json").resolve()),
+            )
+            self.assertEqual(sealed, original)
             self.assertEqual(
                 run.call_args.args[0],
                 (
@@ -359,16 +401,14 @@ class ProvenanceTests(unittest.TestCase):
             self.assertEqual(run.call_args.kwargs["deadline"], 30)
             self.assertEqual(
                 run.call_args.kwargs["environment"],
-                {
-                    **protocol.runtime_environment(
+                protocol.runtime_environment(
                     path="/controlled", home="/empty-home",
                     criterion_home=str((root / "criterion").resolve()),
-                    ),
-                    "TENFERRO_PHASE2E_AFFINITY_ROW": "managed-exact/budget-2/D-N",
-                    "TENFERRO_PHASE2E_AFFINITY_FILE": str(
+                    affinity_row="managed-exact/budget-2/D-N",
+                    affinity_file=str(
                         (root / "criterion" / "affinity.json").resolve()
                     ),
-                },
+                ),
             )
 
     def test_runtime_helpers_reject_build_environment(self) -> None:

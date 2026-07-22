@@ -62,7 +62,11 @@ BENCH_COMMAND = (
     "cpu-faer",
 )
 REQUESTED_FEATURES = ("cpu-faer",)
-DISPATCH_REQUESTED_FEATURES = ("cpu-faer", "phase2e-observe")
+DISPATCH_OBSERVER_CFG = "tenferro_phase2e_operation_observe"
+DISPATCH_RUSTFLAGS = (
+    "--check-cfg=cfg(tenferro_phase2e_operation_observe) "
+    "--cfg=tenferro_phase2e_operation_observe"
+)
 TASK7_SOURCE_PATHS = (
     "Cargo.toml",
     "crates/tenferro-cpu/Cargo.toml",
@@ -98,12 +102,26 @@ DISPATCH_TEST_COMMANDS = MappingProxyType(
             "--lib",
             "--no-default-features",
             "--features",
-            ",".join(DISPATCH_REQUESTED_FEATURES),
+            ",".join(REQUESTED_FEATURES),
             "--message-format=json",
         )
         for package in ("tenferro-cpu", "tenferro-ad")
     }
 )
+
+
+def dispatch_cargo_environment(
+    *, path: str, home: str, cargo_home: str, target_dir: str
+) -> dict[str, str]:
+    """Construct the exact sealed Cargo environment for dispatch evidence."""
+    environment = protocol.cargo_environment(
+        path=path,
+        home=home,
+        cargo_home=cargo_home,
+        target_dir=target_dir,
+    )
+    environment["RUSTFLAGS"] = DISPATCH_RUSTFLAGS
+    return environment
 CHARACTERIZATION_BENCH_COMMANDS = MappingProxyType(
     {
         "cpu": (
@@ -185,7 +203,7 @@ def dispatch_build_provenance(
     expected = DISPATCH_TEST_COMMANDS.get(package)
     if expected is None or tuple(argv) != expected:
         raise protocol.ProtocolError("dispatch test build argv differs from the locked contract")
-    sealed = protocol.cargo_environment(
+    sealed = dispatch_cargo_environment(
         path=environment.get("PATH", ""),
         home=environment.get("HOME", ""),
         cargo_home=environment.get("CARGO_HOME", ""),
@@ -211,11 +229,15 @@ def dispatch_build_provenance(
             feature_query_command(
                 target,
                 package=package,
-                requested_features=DISPATCH_REQUESTED_FEATURES,
+                requested_features=REQUESTED_FEATURES,
                 no_default_features=True,
             )
         ),
-        "requested_features": list(DISPATCH_REQUESTED_FEATURES),
+        "requested_features": list(REQUESTED_FEATURES),
+        "compiler_configuration": {
+            "observer_cfg": DISPATCH_OBSERVER_CFG,
+            "rustflags": DISPATCH_RUSTFLAGS,
+        },
         "no_default_features": True,
         "target": target,
         "toolchain": dict(toolchain),
@@ -305,15 +327,18 @@ def build_dispatch_and_characterization_artifacts(
             target_dir.mkdir(mode=0o700)
         except FileExistsError as error:
             raise protocol.ProtocolError(f"Task 7 target is not fresh: {target_dir}") from error
-        environment = protocol.cargo_environment(
+        environment_constructor = (
+            dispatch_cargo_environment
+            if kind == "dispatch"
+            else protocol.cargo_environment
+        )
+        environment = environment_constructor(
             path=path,
             home=str(pathlib.Path(home).resolve(strict=True)),
             cargo_home=str(pathlib.Path(cargo_home).resolve(strict=True)),
             target_dir=str(target_dir),
         )
-        requested_features = (
-            DISPATCH_REQUESTED_FEATURES if kind == "dispatch" else REQUESTED_FEATURES
-        )
+        requested_features = REQUESTED_FEATURES
         feature_argv = feature_query_command(
             target, package=package, requested_features=requested_features,
             no_default_features=True,

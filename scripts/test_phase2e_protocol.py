@@ -139,6 +139,55 @@ class RuntimeEnvironmentTests(unittest.TestCase):
         self.assertEqual(with_criterion["CRITERION_HOME"], "/tmp/criterion")
         self.assertEqual(set(with_criterion), set(without_criterion) | {"CRITERION_HOME"})
 
+    def test_runtime_environment_adds_paired_affinity_parameters(self) -> None:
+        environment = protocol.runtime_environment(
+            path="/bin",
+            home="/tmp/h",
+            criterion_home="/tmp/criterion",
+            affinity_row="managed-exact/budget-2/D-N",
+            affinity_file="/tmp/criterion/affinity.json",
+        )
+        self.assertEqual(
+            environment["TENFERRO_PHASE2E_AFFINITY_ROW"],
+            "managed-exact/budget-2/D-N",
+        )
+        self.assertEqual(
+            environment["TENFERRO_PHASE2E_AFFINITY_FILE"],
+            "/tmp/criterion/affinity.json",
+        )
+
+    def test_runtime_environment_rejects_unpaired_or_invalid_affinity_parameters(self) -> None:
+        invalid = (
+            {"affinity_row": "managed-exact/budget-2/D-N"},
+            {"affinity_file": "/tmp/criterion/affinity.json"},
+            {
+                "affinity_row": "not-a-canonical-row",
+                "affinity_file": "/tmp/criterion/affinity.json",
+            },
+            {
+                "affinity_row": "managed-exact/budget-2/U-O",
+                "affinity_file": "/tmp/criterion/affinity.json",
+            },
+            {
+                "affinity_row": "managed-exact/budget-2/D-N",
+                "affinity_file": "relative/affinity.json",
+            },
+            {
+                "affinity_row": "managed-exact/budget-2/D-N",
+                "affinity_file": "/tmp/outside/affinity.json",
+            },
+        )
+        for parameters in invalid:
+            with self.subTest(parameters=parameters), self.assertRaises(
+                protocol.ProtocolError
+            ):
+                protocol.runtime_environment(
+                    path="/bin",
+                    home="/tmp/h",
+                    criterion_home="/tmp/criterion",
+                    **parameters,
+                )
+
 
 class AtomicJsonAndHashTests(unittest.TestCase):
     def test_atomic_json_at_remains_bound_to_held_directory(self) -> None:

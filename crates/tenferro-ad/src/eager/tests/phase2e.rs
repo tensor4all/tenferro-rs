@@ -350,7 +350,7 @@ struct RecoveryEvidence {
 }
 
 fn observe_actual_operation<R>(key: &str, operation: impl FnOnce() -> R) -> (R, Vec<[usize; 2]>) {
-    #[cfg(feature = "phase2e-observe")]
+    #[cfg(tenferro_phase2e_operation_observe)]
     {
         let root = std::env::var_os("TENFERRO_PHASE2E_EVIDENCE_DIR")
             .map(PathBuf::from)
@@ -374,9 +374,9 @@ fn observe_actual_operation<R>(key: &str, operation: impl FnOnce() -> R) -> (R, 
             })
             .collect();
         let _ = std::fs::remove_file(&path);
-        return (result, observations);
+        (result, observations)
     }
-    #[cfg(not(feature = "phase2e-observe"))]
+    #[cfg(not(tenferro_phase2e_operation_observe))]
     {
         let _ = key;
         (operation(), Vec::new())
@@ -720,7 +720,7 @@ fn run_ad_owned_rows() -> Evidence {
                     &declared_cpus,
                 );
                 let expected_provider = usize::from(surface == "E-D");
-                let operation_evidence_passed = !cfg!(feature = "phase2e-observe")
+                let operation_evidence_passed = !cfg!(tenferro_phase2e_operation_observe)
                     || (!recovery.observed_cpus.is_empty()
                         && (surface != "E-N" || !recovery.operation_workers.is_empty()));
                 let post_recovery_passed = recovery.session_entry == 1

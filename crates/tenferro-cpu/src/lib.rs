@@ -81,7 +81,7 @@ mod indexing;
 mod indexing_alloc;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
-#[cfg(feature = "phase2e-observe")]
+#[cfg(tenferro_phase2e_operation_observe)]
 mod phase2e_observe;
 mod placement;
 pub mod provider;

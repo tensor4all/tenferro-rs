@@ -187,13 +187,14 @@ class IdentityAndDeltaTests(unittest.TestCase):
             set(build.DISPATCH_BUILD_MANIFEST_PATHS), {"tenferro-cpu", "tenferro-ad"}
         )
         self.assertEqual(set(build.CHARACTERIZATION_BUILD_MANIFEST_PATHS), {"cpu", "ad"})
+        self.assertFalse(hasattr(build, "DISPATCH_REQUESTED_FEATURES"))
         for command in build.DISPATCH_TEST_COMMANDS.values():
             self.assertIn("--locked", command)
             self.assertIn("--no-run", command)
             self.assertIn("--no-default-features", command)
             self.assertEqual(
                 command[command.index("--features") + 1],
-                ",".join(build.DISPATCH_REQUESTED_FEATURES),
+                "cpu-faer",
             )
             self.assertEqual(command[-1], "--message-format=json")
 
@@ -247,7 +248,7 @@ class IdentityAndDeltaTests(unittest.TestCase):
             executable = root / "cpu-test"
             executable.write_bytes(b"candidate binary")
             executable.chmod(0o755)
-            environment = protocol.cargo_environment(
+            environment = build.dispatch_cargo_environment(
                 path=str(tool_path),
                 home=str(root / "home"),
                 cargo_home=str(root / "cargo-home"),
@@ -270,6 +271,13 @@ class IdentityAndDeltaTests(unittest.TestCase):
             )
             self.assertEqual(manifest["executable_sha256"], protocol.sha256_file(executable))
             self.assertEqual(manifest["candidate"], "a" * 40)
+            self.assertEqual(
+                manifest["compiler_configuration"],
+                {
+                    "observer_cfg": "tenferro_phase2e_operation_observe",
+                    "rustflags": build.DISPATCH_RUSTFLAGS,
+                },
+            )
             poisoned = dict(environment, RUSTFLAGS="-C target-cpu=native")
             with self.assertRaises(protocol.ProtocolError):
                 build.dispatch_build_provenance(
@@ -287,6 +295,19 @@ class IdentityAndDeltaTests(unittest.TestCase):
                     source_inventory={"source.rs": "f" * 64},
                     feature_graph="feature graph\n",
                 )
+
+    def test_dispatch_environment_seals_the_checked_observer_cfg(self) -> None:
+        environment = build.dispatch_cargo_environment(
+            path="/usr/bin",
+            home="/tmp/home",
+            cargo_home="/tmp/cargo",
+            target_dir="/tmp/target",
+        )
+        self.assertEqual(
+            environment["RUSTFLAGS"],
+            "--check-cfg=cfg(tenferro_phase2e_operation_observe) "
+            "--cfg=tenferro_phase2e_operation_observe",
+        )
 
     def test_task7_builder_has_no_runner_injection_and_uses_fresh_targets(self) -> None:
         parameters = inspect.signature(

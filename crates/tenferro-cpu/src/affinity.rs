@@ -75,7 +75,7 @@ impl ThreadAffinity for SystemThreadAffinity {
     }
 }
 
-#[cfg(all(any(test, feature = "phase2e-observe"), target_os = "linux"))]
+#[cfg(all(any(test, tenferro_phase2e_operation_observe), target_os = "linux"))]
 pub(crate) fn current_cpu() -> Result<CpuId, CpuAffinityError> {
     unsafe extern "C" {
         fn sched_getcpu() -> i32;

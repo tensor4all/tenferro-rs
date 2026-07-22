@@ -19,7 +19,6 @@ default = ["cpu-faer"]
 cpu-faer = [
     "tenferro-cpu/cpu-faer",
 ]
-phase2e-observe = ["tenferro-cpu/phase2e-observe"]
 cpu-blas = [
     "tenferro-cpu/cpu-blas",
 ]
@@ -58,6 +57,9 @@ tidu.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 rayon = "1"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tenferro_phase2e_operation_observe)'] }
 
 [[bench]]
 name = "eager_ad_transform_cache"

@@ -1,4 +1,4 @@
-//! Internal, feature-gated Phase 2E evidence sink.
+//! Internal, sealed-custom-cfg Phase 2E evidence sink.
 //!
 //! This module intentionally exports no Rust API. The gate runner supplies a
 //! row-specific path and the actual typed-add closure appends its Rayon lane

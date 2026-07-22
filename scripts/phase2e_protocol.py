@@ -60,6 +60,15 @@ _THREAD_ENV = {
 }
 THREAD_ENV = MappingProxyType(_THREAD_ENV)
 
+AFFINITY_ROWS = frozenset(
+    f"{ownership}/budget-{budget}/{surface}"
+    for ownership in ("managed-exact", "external-exact", "external-advisory")
+    for budget in (1, 2, 4)
+    for surface in ("D-N", "D-D", "G-O", "E-N", "E-D")
+) | frozenset(
+    ("external-no-outer/budget-2/U-O", "external-no-inner/budget-2/U-I")
+)
+
 
 def _canonical_cases() -> dict[str, str]:
     cases: dict[str, str] = {}
@@ -111,13 +120,40 @@ def prepare_empty_root(root: pathlib.Path) -> pathlib.Path:
 
 
 def runtime_environment(
-    *, path: str, home: str, criterion_home: str | None = None
+    *,
+    path: str,
+    home: str,
+    criterion_home: str | None = None,
+    affinity_row: str | None = None,
+    affinity_file: str | None = None,
 ) -> dict[str, str]:
     """Construct the runtime allowlist without inheriting ambient variables."""
     if not isinstance(path, str) or not isinstance(home, str):
         raise ProtocolError("PATH and HOME must be strings")
     if criterion_home is not None and not isinstance(criterion_home, str):
         raise ProtocolError("CRITERION_HOME must be a string when supplied")
+    if (affinity_row is None) != (affinity_file is None):
+        raise ProtocolError("affinity row and file must be supplied together")
+    if affinity_row is not None:
+        if type(affinity_row) is not str or type(affinity_file) is not str:
+            raise ProtocolError("affinity row and file must be strings")
+        if affinity_row not in AFFINITY_ROWS:
+            raise ProtocolError("affinity row key is not canonical")
+        if criterion_home is None:
+            raise ProtocolError("affinity parameters require CRITERION_HOME")
+        criterion_root = pathlib.Path(criterion_home)
+        destination = pathlib.Path(affinity_file)
+        if (
+            not criterion_root.is_absolute()
+            or criterion_root != pathlib.Path(os.path.abspath(criterion_root))
+            or not destination.is_absolute()
+            or destination != pathlib.Path(os.path.abspath(destination))
+            or destination == criterion_root
+            or criterion_root not in destination.parents
+        ):
+            raise ProtocolError(
+                "affinity file must be a canonical absolute path below CRITERION_HOME"
+            )
     result = {
         "PATH": path,
         "HOME": home,
@@ -127,6 +163,9 @@ def runtime_environment(
     }
     if criterion_home is not None:
         result["CRITERION_HOME"] = criterion_home
+    if affinity_row is not None:
+        result["TENFERRO_PHASE2E_AFFINITY_ROW"] = affinity_row
+        result["TENFERRO_PHASE2E_AFFINITY_FILE"] = affinity_file
     return result
 
 

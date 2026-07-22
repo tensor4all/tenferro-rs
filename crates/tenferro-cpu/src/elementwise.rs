@@ -3175,7 +3175,7 @@ where
             &typed_view("add", lhs)?,
             &typed_view("add", rhs)?,
             |x, y| {
-                #[cfg(feature = "phase2e-observe")]
+                #[cfg(tenferro_phase2e_operation_observe)]
                 crate::phase2e_observe::record_typed_add_worker();
                 x + y
             },
@@ -3187,7 +3187,7 @@ where
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, rhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view("add", rhs)?, |x| {
-            #[cfg(feature = "phase2e-observe")]
+            #[cfg(tenferro_phase2e_operation_observe)]
             crate::phase2e_observe::record_typed_add_worker();
             scalar + x
         })
@@ -3198,7 +3198,7 @@ where
         // SAFETY: map_into overwrites every output element.
         let mut out = unsafe { typed_array_uninit_from_pool(buffers, lhs.shape()) }?;
         map_into(&mut out.view_mut(), &typed_view("add", lhs)?, |x| {
-            #[cfg(feature = "phase2e-observe")]
+            #[cfg(tenferro_phase2e_operation_observe)]
             crate::phase2e_observe::record_typed_add_worker();
             x + scalar
         })
@@ -3299,7 +3299,7 @@ where
             &typed_view_from_view("add", lhs)?,
             &typed_view_from_view("add", rhs)?,
             |x, y| {
-                #[cfg(feature = "phase2e-observe")]
+                #[cfg(tenferro_phase2e_operation_observe)]
                 crate::phase2e_observe::record_typed_add_worker();
                 x + y
             },
@@ -3314,7 +3314,7 @@ where
             &mut out.view_mut(),
             &typed_view_from_view("add", rhs)?,
             |x| {
-                #[cfg(feature = "phase2e-observe")]
+                #[cfg(tenferro_phase2e_operation_observe)]
                 crate::phase2e_observe::record_typed_add_worker();
                 scalar + x
             },
@@ -3329,7 +3329,7 @@ where
             &mut out.view_mut(),
             &typed_view_from_view("add", lhs)?,
             |x| {
-                #[cfg(feature = "phase2e-observe")]
+                #[cfg(tenferro_phase2e_operation_observe)]
                 crate::phase2e_observe::record_typed_add_worker();
                 x + scalar
             },

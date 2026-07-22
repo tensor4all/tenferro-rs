@@ -112,13 +112,13 @@ pool assigns workers cyclically over the exact nonempty CPU set; it is never
 replaced by an `ExternalManaged` fixture. A one-CPU, three-worker engine test
 binds Managed ownership, exact placement, thread budget, and worker count.
 
-AD E-N rows use the internal, non-default `phase2e-observe` build feature. It
-exports no Rust API. The actual closures passed to the strided elementwise
-kernel record their Rayon lane and `sched_getcpu` value to a row-specific
-temporary file, deduplicated by path/lane/CPU. The AD test reads and removes
-that file immediately. The gate requires nonempty operation-participating
-`[lane, cpu]` pairs and exact-subset membership independently of the separate
-all-worker placement audit and eager session-entry observation.
+AD E-N rows use an internal observer that exports no Rust API. The actual
+closures passed to the strided elementwise kernel record their Rayon lane and
+`sched_getcpu` value to a row-specific temporary file, deduplicated by
+path/lane/CPU. The AD test reads and removes that file immediately. The gate
+requires nonempty operation-participating `[lane, cpu]` pairs and exact-subset
+membership independently of the separate all-worker placement audit and eager
+session-entry observation.
 
 Every correctness row now serializes a fresh-reset recovery subrecord. CPU
 recovery independently remeasures the complete six-counter vector, selected
@@ -200,3 +200,29 @@ success. Only a host with fewer than two usable nodes may emit the typed
   characterization terminal SHA-256 was
   `0b583b599cc1dfb7e74500da0f699ea51e3f5a8d9ed9db7fa48e2faa0a093421`.
   An independent post-run invocation of `validate_terminal_evidence` passed.
+
+## Cycle 5 authoritative build and environment schema
+
+Dispatch evidence retains the exact authoritative Cargo feature graph:
+`--no-default-features --features cpu-faer`. The observer is selected only by
+the sealed, namespaced `tenferro_phase2e_operation_observe` custom cfg; neither
+the CPU nor AD manifest declares an observer Cargo feature. Dispatch build
+environments contain exactly
+`--check-cfg=cfg(tenferro_phase2e_operation_observe) --cfg=tenferro_phase2e_operation_observe`
+in `RUSTFLAGS`. The manifest binds that complete string and cfg name in
+`compiler_configuration`, and validation rejects missing, different, or
+augmented flags. Characterization benchmark builds omit these flags.
+
+`phase2e_protocol.runtime_environment` owns the optional affinity-row contract.
+`affinity_row` and `affinity_file` are paired parameters; the row must have the
+canonical Phase 2E key shape and the file must be a canonical absolute path
+below `CRITERION_HOME`. The constructor emits the exact two environment keys.
+The row runner calls that constructor once and does not mutate either the
+caller environment or the returned environment.
+
+Focused custom-cfg execution of the real AD f64[65536] E-N workload produced
+nonempty primary and fresh-recovery operation worker pairs for all nine rows.
+Default-feature-graph verification passed 515 CPU tests and 71 AD tests. The
+combined protocol/build/gate suite passed 147 tests; both uninstrumented
+characterization benchmarks compiled in the release benchmark profile; and
+default CPU/AD plus custom-cfg AD Clippy passed with warnings denied.

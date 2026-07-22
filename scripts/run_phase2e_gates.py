@@ -501,13 +501,29 @@ def validate_external_scratch_root(
     return scratch_root
 
 
-def _validate_runtime_environment(environment: Mapping[str, str]) -> dict[str, str]:
+def _validate_runtime_environment(
+    environment: Mapping[str, str],
+    *,
+    criterion_home: str | None = None,
+    affinity_row: str | None = None,
+    affinity_file: str | None = None,
+) -> dict[str, str]:
     if not isinstance(environment, dict):
         raise protocol.ProtocolError("runtime environment must be an exact dictionary")
     expected = protocol.runtime_environment(
-        path=environment.get("PATH", ""), home=environment.get("HOME", "")
+        path=environment.get("PATH", ""),
+        home=environment.get("HOME", ""),
+        criterion_home=criterion_home,
+        affinity_row=affinity_row,
+        affinity_file=affinity_file,
     )
-    if environment != expected:
+    added = {
+        "CRITERION_HOME",
+        "TENFERRO_PHASE2E_AFFINITY_ROW",
+        "TENFERRO_PHASE2E_AFFINITY_FILE",
+    }
+    base = {name: value for name, value in expected.items() if name not in added}
+    if environment != base:
         raise protocol.ProtocolError("runtime environment differs from the sealed allowlist")
     return expected
 
@@ -543,13 +559,18 @@ def validate_test_build_manifest(
         raise protocol.ProtocolError("test build common lock digest mismatch")
     if tuple(manifest.get("argv", ())) != build.DISPATCH_TEST_COMMANDS[package]:
         raise protocol.ProtocolError("evidence rejects a non-contract Cargo test build")
-    if manifest.get("requested_features") != list(build.DISPATCH_REQUESTED_FEATURES) or manifest.get("no_default_features") is not True:
+    if manifest.get("requested_features") != ["cpu-faer"] or manifest.get("no_default_features") is not True:
         raise protocol.ProtocolError("test build used the wrong feature graph request")
+    if manifest.get("compiler_configuration") != {
+        "observer_cfg": build.DISPATCH_OBSERVER_CFG,
+        "rustflags": build.DISPATCH_RUSTFLAGS,
+    }:
+        raise protocol.ProtocolError("test build compiler configuration differs")
     target = manifest.get("target")
     if not isinstance(target, str) or not target:
         raise protocol.ProtocolError("test build manifest lacks the host target")
     expected_query = build.feature_query_command(
-        target, package=package, requested_features=build.DISPATCH_REQUESTED_FEATURES,
+        target, package=package, requested_features=("cpu-faer",),
         no_default_features=True
     )
     if tuple(manifest.get("feature_query_argv", ())) != expected_query:
@@ -563,7 +584,7 @@ def validate_test_build_manifest(
     if manifest.get("source_sha256") != expected_tree or manifest.get("lock_sha256") != expected_lock:
         raise protocol.ProtocolError("test build source/lock identity mismatch")
     environment = manifest.get("environment")
-    if not isinstance(environment, dict) or environment != protocol.cargo_environment(
+    if not isinstance(environment, dict) or environment != build.dispatch_cargo_environment(
         path=environment.get("PATH", ""), home=environment.get("HOME", ""),
         cargo_home=environment.get("CARGO_HOME", ""),
         target_dir=environment.get("CARGO_TARGET_DIR", ""),
@@ -724,14 +745,12 @@ def run_bench_row(
     executable: pathlib.Path, row_key: str, *, repository: pathlib.Path,
     environment: Mapping[str, str], criterion_home: pathlib.Path,
 ) -> subprocess.CompletedProcess[str]:
-    sealed = _validate_runtime_environment(environment)
-    runtime_environment = protocol.runtime_environment(
-        path=sealed["PATH"], home=sealed["HOME"],
+    affinity_file = str((criterion_home / "affinity.json").resolve())
+    runtime_environment = _validate_runtime_environment(
+        environment,
         criterion_home=str(criterion_home.resolve()),
-    )
-    runtime_environment["TENFERRO_PHASE2E_AFFINITY_ROW"] = row_key
-    runtime_environment["TENFERRO_PHASE2E_AFFINITY_FILE"] = str(
-        (criterion_home / "affinity.json").resolve()
+        affinity_row=row_key,
+        affinity_file=affinity_file,
     )
     argv = (str(executable.resolve()), row_key, "--bench", "--noplot")
     result = run_bounded(
