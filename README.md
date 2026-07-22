@@ -336,6 +336,21 @@ integrate with and contribute back to them.
 
 Thanks to these projects, communities, and their maintainers.
 
+A per-component table of which external projects each crate builds on, and
+the algorithm-origin references, is maintained in the
+[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md).
+
+## How to Cite
+
+If you use tenferro-rs in research, please read the
+[Provenance and Citation Policy](docs/PROVENANCE_AND_CITATION_POLICY.md)
+and cite the original papers of the algorithms your work relies on, and
+check the citation policies of the upstream projects the components you use
+build on, applying them recursively. This is the permanent citation style
+for this project: a future tenferro-rs software paper will add to, not
+replace, these upstream citations. Until then, reference tenferro-rs
+directly by repository URL and version or commit.
+
 ## Contributing
 
 Bug reports, minimal reproducers, proposed regression tests, feature
