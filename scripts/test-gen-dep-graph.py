@@ -46,8 +46,16 @@ def test_current_workspace_uses_documented_dependency_layers() -> None:
     assert "ranksep=0.45;" in dot
     assert "nodesep=0.20;" in dot
     assert dot.count("margin=8;") == len(expected_clusters)
+    assert dot.count('class="cluster-title"') == len(expected_clusters)
+    assert dot.count('shape=plain, style=""') == len(expected_clusters)
+    assert dot.count("{ rank=source;") == len(expected_clusters)
+    assert dot.count('label="";') == len(expected_clusters)
+    assert 'label="Standard operation extensions";' not in dot
+    assert 'label="Runnable docs examples";' not in dot
     assert "width=" not in dot
     assert "height=" not in dot
+    assert "pos=" not in dot
+    assert "pin=" not in dot
 
 
 def test_dependency_edges_point_from_dependency_to_consumer() -> None:

@@ -244,14 +244,24 @@ def generate_dot(
         if not crates:
             continue
         style = _CLASS_STYLES[cls]
+        title_node = f"cluster_title_{cls}"
         lines.append(f"    subgraph cluster_{cls} {{")
-        lines.append(f'        label="{style["label"]}";')
+        lines.append('        label="";')
         lines.append(f'        style="rounded,filled";')
         lines.append(f'        fillcolor="{style["cluster_bg"]}";')
         lines.append(f'        color="{style["cluster_border"]}";')
         lines.append(f'        fontname="IBM Plex Sans";')
         lines.append(f"        fontsize=14;")
         lines.append("        margin=8;")
+        lines.append("")
+        lines.append(
+            f'        {title_node} [label="{style["label"]}", '
+            'class="cluster-title", shape=plain, style="", fixedsize=false,'
+        )
+        lines.append(
+            '            fontname="IBM Plex Sans", fontsize=14];'
+        )
+        lines.append(f"        {{ rank=source; {title_node}; }}")
         lines.append("")
         for name in crates:
             url = f"index.html#{name}"

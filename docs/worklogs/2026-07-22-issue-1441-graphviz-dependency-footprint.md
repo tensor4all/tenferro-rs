@@ -73,8 +73,11 @@ workspace member into one `core` cluster.
 After visual review, the canonical DOT was tightened without introducing fixed
 geometry: nodes use `fixedsize=false` and compact label margins, clusters use
 local ranking and an explicit 8-point content margin, and graph/rank/node
-spacing was reduced. The regenerated image was inspected at 1800 pixels wide;
-labels, cluster headings, borders, and arrowheads remain unclipped and aligned.
+spacing was reduced. Cluster headings are plain, content-sized layout
+nodes because native cluster labels are not obstacles to Graphviz's edge
+router. The regenerated image was inspected at 1800 pixels wide; labels,
+cluster headings, borders, and arrowheads remain unclipped and aligned, and no
+dependency stroke crosses a heading.
 
 ## Verification Performed
 

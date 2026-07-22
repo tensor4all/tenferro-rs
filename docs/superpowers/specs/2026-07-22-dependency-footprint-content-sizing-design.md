@@ -32,6 +32,10 @@ attributes:
   value;
 - remove `newrank=true` so clusters receive local layout treatment instead of
   being stretched by a single global rank system;
+- represent each cluster heading as a plain, content-sized node at the
+  cluster's source rank. Native cluster labels are
+  not edge-routing obstacles, so dependency strokes can cross their text;
+  title nodes make the heading part of Graphviz's layout without coordinates;
 - set an explicit compact cluster margin;
 - reduce `nodesep` and `ranksep` to eliminate avoidable whitespace;
 - set graph margin to zero and retain only a small drawing pad around the outer
@@ -54,6 +58,7 @@ inspection. The image passes when:
 
 - no label touches or crosses its rounded box;
 - cluster headings and member nodes remain inside their cluster borders;
+- no dependency stroke crosses a cluster heading;
 - clusters no longer contain large areas created only by global rank
   alignment;
 - arrowheads still terminate on node borders;
