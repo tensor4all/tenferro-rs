@@ -179,6 +179,109 @@ class FakeProbeRunner:
 
 
 class IdentityAndDeltaTests(unittest.TestCase):
+    def test_dispatch_and_characterization_build_contracts_are_provenance_bound(self) -> None:
+        self.assertEqual(build.DISPATCH_TEST_DEADLINE_SECONDS, 120)
+        self.assertEqual(build.CHARACTERIZATION_ROW_DEADLINE_SECONDS, 30)
+        self.assertEqual(build.DISPATCH_TERMINATION_GRACE_SECONDS, 5)
+        self.assertEqual(
+            set(build.DISPATCH_BUILD_MANIFEST_PATHS), {"tenferro-cpu", "tenferro-ad"}
+        )
+        self.assertEqual(set(build.CHARACTERIZATION_BUILD_MANIFEST_PATHS), {"cpu", "ad"})
+        for command in build.DISPATCH_TEST_COMMANDS.values():
+            self.assertIn("--locked", command)
+            self.assertIn("--no-run", command)
+            self.assertIn("--no-default-features", command)
+            self.assertIn("cpu-faer", command)
+            self.assertEqual(command[-1], "--message-format=json")
+
+    def test_select_cargo_executable_requires_one_owned_artifact(self) -> None:
+        cpu = {
+            "reason": "compiler-artifact",
+            "package_id": "path+file:///repo/crates/tenferro-cpu#tenferro-cpu@0.2.0",
+            "target": {"kind": ["lib"], "name": "tenferro_cpu"},
+            "profile": {"test": True},
+            "executable": "/tmp/cpu-test",
+        }
+        foreign = dict(
+            cpu,
+            package_id="path+file:///repo/tenferro-cpu-workspace#foreign@1.0.0",
+        )
+        messages = "\n".join((json.dumps(foreign), json.dumps(cpu)))
+        self.assertEqual(
+            build.select_cargo_executable(messages, "tenferro-cpu"),
+            pathlib.Path("/tmp/cpu-test"),
+        )
+        with self.assertRaises(protocol.ProtocolError):
+            build.select_cargo_executable(
+                messages + "\n" + json.dumps(cpu), "tenferro-cpu"
+            )
+
+        bench = dict(
+            cpu,
+            target={"kind": ["bench"], "name": "numa_execution"},
+            executable="/tmp/cpu-bench",
+        )
+        self.assertEqual(
+            build.select_cargo_executable(
+                json.dumps(bench), "tenferro-cpu", bench="numa_execution"
+            ),
+            pathlib.Path("/tmp/cpu-bench"),
+        )
+
+    def test_dispatch_build_provenance_rejects_ambient_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            tool_path = root / "bin"
+            tool_path.mkdir()
+            executable = root / "cpu-test"
+            executable.write_bytes(b"candidate binary")
+            executable.chmod(0o755)
+            environment = protocol.cargo_environment(
+                path=str(tool_path),
+                home=str(root / "home"),
+                cargo_home=str(root / "cargo-home"),
+                target_dir=str(root / "target"),
+            )
+            manifest = build.dispatch_build_provenance(
+                package="tenferro-cpu",
+                candidate="a" * 40,
+                source_sha256="b" * 64,
+                lock_sha256="c" * 64,
+                feature_graph_sha256="d" * 64,
+                argv=build.DISPATCH_TEST_COMMANDS["tenferro-cpu"],
+                environment=environment,
+                executable=executable,
+                target="x86_64-unknown-linux-gnu",
+                toolchain={"cargo": "controlled"},
+            )
+            self.assertEqual(manifest["executable_sha256"], protocol.sha256_file(executable))
+            self.assertEqual(manifest["candidate"], "a" * 40)
+            poisoned = dict(environment, RUSTFLAGS="-C target-cpu=native")
+            with self.assertRaises(protocol.ProtocolError):
+                build.dispatch_build_provenance(
+                    package="tenferro-cpu",
+                    candidate="a" * 40,
+                    source_sha256="b" * 64,
+                    lock_sha256="c" * 64,
+                    feature_graph_sha256="d" * 64,
+                    argv=build.DISPATCH_TEST_COMMANDS["tenferro-cpu"],
+                    environment=poisoned,
+                    executable=executable,
+                    target="x86_64-unknown-linux-gnu",
+                    toolchain={"cargo": "controlled"},
+                )
+
+    def test_task7_builder_has_no_runner_injection_and_uses_fresh_targets(self) -> None:
+        parameters = inspect.signature(
+            build.build_dispatch_and_characterization_artifacts
+        ).parameters
+        self.assertNotIn("command_runner", parameters)
+        source = inspect.getsource(build.build_dispatch_and_characterization_artifacts)
+        self.assertIn('LOCK_PATHS["common"]', source)
+        self.assertIn("target_dir.mkdir(mode=0o700)", source)
+        self.assertIn("DISPATCH_TEST_COMMANDS.items()", source)
+        self.assertIn("CHARACTERIZATION_BENCH_COMMANDS.items()", source)
+
     def test_immutable_identities_commands_and_field_axes(self) -> None:
         self.assertEqual(
             build.IMPLEMENTATION_BASELINE,

@@ -65,6 +65,10 @@ harness = false
 name = "eager_dispatch_baseline"
 harness = false
 
+[[bench]]
+name = "phase2e_characterization"
+harness = false
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"

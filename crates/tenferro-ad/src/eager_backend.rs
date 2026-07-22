@@ -1,8 +1,3 @@
-#[cfg(test)]
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::CudaBackend;
@@ -26,6 +21,11 @@ pub enum EagerBackend {
     #[cfg(feature = "webgpu")]
     WebGpu(WebGpuBackend),
 }
+
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+use tests::RecordingBackend;
 
 impl std::fmt::Debug for EagerBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -56,14 +56,6 @@ impl EagerBackend {
             #[cfg(feature = "webgpu")]
             Self::WebGpu(_) => None,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn recording_cpu(materializations: Arc<AtomicUsize>) -> Self {
-        Self::Recording(RecordingBackend {
-            materializations,
-            inner: CpuBackend::new(),
-        })
     }
 
     #[cfg(feature = "cuda")]
@@ -102,143 +94,6 @@ macro_rules! dispatch {
         }
     };
 }
-
-#[cfg(test)]
-#[derive(Debug)]
-pub struct RecordingBackend {
-    materializations: Arc<AtomicUsize>,
-    inner: CpuBackend,
-}
-
-#[cfg(test)]
-macro_rules! delegate_recording_backend_methods {
-    ($(fn $method:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;)*) => {
-        $(
-            fn $method(&mut self, $($arg: $ty),*) -> $ret {
-                self.inner.$method($($arg),*)
-            }
-        )*
-    };
-}
-
-#[cfg(test)]
-impl BackendRuntimeCache for RecordingBackend {
-    type RuntimeCache = ();
-}
-
-#[cfg(test)]
-impl TensorElementwise for RecordingBackend {
-    delegate_recording_backend_methods! {
-        fn add(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn sub(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn mul(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn neg(input: &Tensor) -> TensorResult<Tensor>;
-        fn conj(input: &Tensor) -> TensorResult<Tensor>;
-        fn div(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn abs(input: &Tensor) -> TensorResult<Tensor>;
-        fn sign(input: &Tensor) -> TensorResult<Tensor>;
-        fn maximum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn minimum(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> TensorResult<Tensor>;
-        fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> TensorResult<Tensor>;
-        fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> TensorResult<Tensor>;
-    }
-}
-
-#[cfg(test)]
-impl TensorAnalytic for RecordingBackend {
-    delegate_recording_backend_methods! {
-        fn exp(input: &Tensor) -> TensorResult<Tensor>;
-        fn log(input: &Tensor) -> TensorResult<Tensor>;
-        fn sin(input: &Tensor) -> TensorResult<Tensor>;
-        fn cos(input: &Tensor) -> TensorResult<Tensor>;
-        fn tanh(input: &Tensor) -> TensorResult<Tensor>;
-        fn sqrt(input: &Tensor) -> TensorResult<Tensor>;
-        fn rsqrt(input: &Tensor) -> TensorResult<Tensor>;
-        fn pow(lhs: &Tensor, rhs: &Tensor) -> TensorResult<Tensor>;
-        fn expm1(input: &Tensor) -> TensorResult<Tensor>;
-        fn log1p(input: &Tensor) -> TensorResult<Tensor>;
-    }
-}
-
-#[cfg(test)]
-impl TensorStructural for RecordingBackend {
-    fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> TensorResult<Tensor> {
-        self.materializations.fetch_add(1, Ordering::Relaxed);
-        self.inner.to_contiguous_read(input)
-    }
-
-    fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> TensorResult<()> {
-        self.inner.copy_read_into(src, dst)
-    }
-
-    delegate_recording_backend_methods! {
-        fn transpose(input: &Tensor, perm: &[usize]) -> TensorResult<Tensor>;
-        fn reshape(input: &Tensor, shape: &[usize]) -> TensorResult<Tensor>;
-        fn broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) -> TensorResult<Tensor>;
-        fn cast(input: &Tensor, to: DType) -> TensorResult<Tensor>;
-        fn extract_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
-        fn embed_diagonal(input: &Tensor, axis_a: usize, axis_b: usize) -> TensorResult<Tensor>;
-        fn tril(input: &Tensor, k: i64) -> TensorResult<Tensor>;
-        fn triu(input: &Tensor, k: i64) -> TensorResult<Tensor>;
-    }
-}
-
-#[cfg(test)]
-impl TensorReduction for RecordingBackend {
-    delegate_recording_backend_methods! {
-        fn reduce_sum(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_prod(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_max(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-        fn reduce_min(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-    }
-}
-
-#[cfg(test)]
-impl TensorIndexing for RecordingBackend {
-    delegate_recording_backend_methods! {
-        fn gather(operand: &Tensor, start_indices: &Tensor, config: &GatherConfig) -> TensorResult<Tensor>;
-        fn scatter(operand: &Tensor, scatter_indices: &Tensor, updates: &Tensor, config: &ScatterConfig) -> TensorResult<Tensor>;
-        fn slice(input: &Tensor, config: &SliceConfig) -> TensorResult<Tensor>;
-        fn dynamic_slice(input: &Tensor, starts: &Tensor, slice_sizes: &[usize]) -> TensorResult<Tensor>;
-        fn dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) -> TensorResult<Tensor>;
-        fn pad(input: &Tensor, config: &PadConfig) -> TensorResult<Tensor>;
-        fn concatenate(inputs: &[&Tensor], axis: usize) -> TensorResult<Tensor>;
-        fn reverse(input: &Tensor, axes: &[usize]) -> TensorResult<Tensor>;
-    }
-}
-
-#[cfg(test)]
-impl TensorDot for RecordingBackend {
-    fn dot_general(
-        &mut self,
-        lhs: &Tensor,
-        rhs: &Tensor,
-        config: &DotGeneralConfig,
-    ) -> TensorResult<Tensor> {
-        self.inner.dot_general(lhs, rhs, config)
-    }
-}
-
-#[cfg(test)]
-impl TensorFusion for RecordingBackend {}
-#[cfg(test)]
-impl TensorBuffer for RecordingBackend {}
-#[cfg(test)]
-impl TensorDeviceTransfer for RecordingBackend {}
-#[cfg(test)]
-impl BackendCachedDot for RecordingBackend {}
-#[cfg(test)]
-impl BackendSessionHost for RecordingBackend {
-    fn with_backend_session<R: Send>(
-        &mut self,
-        f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
-    ) -> R {
-        f(self)
-    }
-}
-#[cfg(test)]
-impl TensorBackend for RecordingBackend {}
 
 macro_rules! delegate_tensor_backend_methods {
     ($(fn $method:ident($($arg:ident: $ty:ty),* $(,)?) -> $ret:ty;)*) => {

@@ -1,8 +1,18 @@
 use std::hint::black_box;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use tenferro_cpu::{available_parallelism, CpuBackend, CpuBackendKind, CpuPlacement};
-use tenferro_tensor::{BackendSessionHost, DotGeneralConfig, Tensor};
+use tenferro_cpu::{
+    available_parallelism, process_cpu_affinity, CpuBackend, CpuBackendKind, CpuContext,
+    CpuPlacement, CpuPlacementGuarantee, ExternalCpuDomain, ResolvedCpuPlacement,
+};
+use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
+use tenferro_tensor::{
+    BackendCachedDot, BackendRuntimeCache, BackendSessionHost, ContractionScalar, CpuDomainId,
+    DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorElementwise, TensorRead, TensorWrite,
+};
 
 const MATRIX_SIZES: [usize; 3] = [64, 256, 512];
 
@@ -138,5 +148,108 @@ fn bench_numa_execution(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_numa_execution);
+fn bench_phase2e_rows(c: &mut Criterion) {
+    let vector = Tensor::from_vec_col_major(
+        vec![65_536],
+        (0..65_536)
+            .map(|index| (index % 97) as f64 / 31.0)
+            .collect(),
+    )
+    .unwrap();
+    for ownership in ["managed-exact", "external-exact", "external-advisory"] {
+        for budget in [1, 2, 4] {
+            let mut native = phase2e_backend(ownership, budget);
+            c.bench_function(&format!("phase2e/{ownership}/budget-{budget}/D-N"), |b| {
+                b.iter(|| black_box(native.mul(&vector, &vector).unwrap()))
+            });
+
+            let matrix = matrix(128);
+            let mut dot = phase2e_backend(ownership, budget);
+            c.bench_function(&format!("phase2e/{ownership}/budget-{budget}/D-D"), |b| {
+                b.iter(|| black_box(run_session_workload(&mut dot, &matrix)))
+            });
+
+            let jobs_len = 2 * budget + 1;
+            let matrix_len = 64 * 64;
+            let grouped_lhs = Tensor::from_vec_col_major(
+                vec![jobs_len * matrix_len],
+                vec![0.5_f64; jobs_len * matrix_len],
+            )
+            .unwrap();
+            let grouped_rhs = Tensor::from_vec_col_major(
+                vec![jobs_len * matrix_len],
+                vec![0.25_f64; jobs_len * matrix_len],
+            )
+            .unwrap();
+            let mut grouped_out = Tensor::from_vec_col_major(
+                vec![jobs_len * matrix_len],
+                vec![0.0_f64; jobs_len * matrix_len],
+            )
+            .unwrap();
+            let jobs: Vec<_> = (0..jobs_len)
+                .map(|index| {
+                    let offset = index * matrix_len;
+                    GroupedGemmJob::new(offset, offset, offset, 64, 64, 64)
+                })
+                .collect();
+            let accumulation = DotGeneralAccumulation {
+                lhs_conj: false,
+                rhs_conj: false,
+                alpha: ContractionScalar::F64(1.0),
+                beta: ContractionScalar::F64(0.0),
+            };
+            let mut grouped = phase2e_backend(ownership, budget);
+            let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
+            c.bench_function(&format!("phase2e/{ownership}/budget-{budget}/G-O"), |b| {
+                b.iter(|| {
+                    let config = GroupedGemmConfig::new(&jobs, accumulation);
+                    BackendCachedDot::grouped_gemm_cached(
+                        &mut grouped,
+                        &mut cache,
+                        None,
+                        TensorRead::from_tensor(&grouped_lhs),
+                        TensorRead::from_tensor(&grouped_rhs),
+                        &config,
+                        TensorWrite::from_tensor(&mut grouped_out),
+                    )
+                    .unwrap();
+                    black_box(grouped_out.as_slice::<f64>().unwrap()[0])
+                });
+            });
+        }
+    }
+}
+
+fn phase2e_backend(ownership: &str, budget: usize) -> CpuBackend {
+    if ownership == "managed-exact" {
+        return CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer).unwrap();
+    }
+    let allowed = process_cpu_affinity().expect("Phase 2E benchmark needs process affinity");
+    let id = CpuDomainId::new(
+        0x2eb0 + budget as u64 + u64::from(u8::from(ownership == "external-exact")),
+    );
+    let domain = ExternalCpuDomain::new(
+        id,
+        ResolvedCpuPlacement::AllAllowed { cpus: allowed },
+        Arc::new(CpuContext::with_threads(budget).unwrap()),
+        NonZeroUsize::new(budget).unwrap(),
+        if ownership == "external-exact" {
+            CpuPlacementGuarantee::ExactDeclared
+        } else {
+            CpuPlacementGuarantee::AdvisoryDeclared
+        },
+    )
+    .unwrap();
+    CpuBackend::from_external_managed_domains(id, [domain]).unwrap()
+}
+
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_secs(2))
+        .measurement_time(Duration::from_secs(5))
+        .sample_size(100)
+        .confidence_level(0.95);
+    targets = bench_numa_execution, bench_phase2e_rows
+}
 criterion_main!(benches);

@@ -63,6 +63,248 @@ BENCH_COMMAND = (
 )
 REQUESTED_FEATURES = ("cpu-faer",)
 
+DISPATCH_TEST_COMMANDS = MappingProxyType(
+    {
+        package: (
+            "cargo",
+            "test",
+            "--locked",
+            "--no-run",
+            "-p",
+            package,
+            "--lib",
+            "--no-default-features",
+            "--features",
+            "cpu-faer",
+            "--message-format=json",
+        )
+        for package in ("tenferro-cpu", "tenferro-ad")
+    }
+)
+CHARACTERIZATION_BENCH_COMMANDS = MappingProxyType(
+    {
+        "cpu": (
+            "cargo", "bench", "--locked", "--no-run", "-p", "tenferro-cpu",
+            "--bench", "numa_execution", "--no-default-features", "--features",
+            "cpu-faer", "--message-format=json",
+        ),
+        "ad": (
+            "cargo", "bench", "--locked", "--no-run", "-p", "tenferro-ad",
+            "--bench", "phase2e_characterization", "--no-default-features", "--features",
+            "cpu-faer", "--message-format=json",
+        ),
+    }
+)
+DISPATCH_TEST_DEADLINE_SECONDS = 120
+CHARACTERIZATION_ROW_DEADLINE_SECONDS = 30
+DISPATCH_TERMINATION_GRACE_SECONDS = 5
+DISPATCH_BUILD_MANIFEST_PATHS = MappingProxyType(
+    {
+        "tenferro-cpu": pathlib.Path("dispatch-gates/cpu-test-build.json"),
+        "tenferro-ad": pathlib.Path("dispatch-gates/ad-test-build.json"),
+    }
+)
+CHARACTERIZATION_BUILD_MANIFEST_PATHS = MappingProxyType(
+    {
+        "cpu": pathlib.Path("characterization/cpu-bench-build.json"),
+        "ad": pathlib.Path("characterization/eager-bench-build.json"),
+    }
+)
+
+
+def select_cargo_executable(messages: str, package: str, *, bench: str | None = None) -> pathlib.Path:
+    """Select the sole package-owned executable from Cargo JSON messages."""
+    matches: list[pathlib.Path] = []
+    for line in messages.splitlines():
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if message.get("reason") != "compiler-artifact" or not message.get("executable"):
+            continue
+        target = message.get("target", {})
+        package_id = str(message.get("package_id", ""))
+        owns_artifact = package_id.startswith(f"{package} ") or re.search(
+            rf"#{re.escape(package)}(?:@|$)", package_id
+        ) is not None
+        if not owns_artifact:
+            continue
+        kinds = target.get("kind", [])
+        if bench is None:
+            if "lib" not in kinds or not message.get("profile", {}).get("test"):
+                continue
+        elif target.get("name") != bench or "bench" not in kinds:
+            continue
+        matches.append(pathlib.Path(message["executable"]))
+    if len(matches) != 1:
+        raise protocol.ProtocolError(
+            f"expected one Cargo executable for {package}, found {len(matches)}"
+        )
+    return matches[0]
+
+
+def dispatch_build_provenance(
+    *, package: str, candidate: str, source_sha256: str, lock_sha256: str,
+    feature_graph_sha256: str, argv: tuple[str, ...], environment: Mapping[str, str],
+    executable: pathlib.Path, target: str, toolchain: Mapping[str, str],
+) -> dict[str, Any]:
+    """Bind one dispatch executable to candidate source, lock, graph, and build inputs."""
+    expected = DISPATCH_TEST_COMMANDS.get(package)
+    if expected is None or tuple(argv) != expected:
+        raise protocol.ProtocolError("dispatch test build argv differs from the locked contract")
+    sealed = protocol.cargo_environment(
+        path=environment.get("PATH", ""),
+        home=environment.get("HOME", ""),
+        cargo_home=environment.get("CARGO_HOME", ""),
+        target_dir=environment.get("CARGO_TARGET_DIR", ""),
+    )
+    if dict(environment) != sealed:
+        raise protocol.ProtocolError("dispatch test build environment is not sealed")
+    executable = executable.resolve(strict=True)
+    return {
+        "validity_state": "COMPLETE",
+        "candidate": candidate,
+        "package": package,
+        "source_sha256": source_sha256,
+        "lock_sha256": lock_sha256,
+        "feature_graph_sha256": feature_graph_sha256,
+        "feature_query_argv": list(
+            feature_query_command(
+                target,
+                package=package,
+                requested_features=REQUESTED_FEATURES,
+                no_default_features=True,
+            )
+        ),
+        "requested_features": list(REQUESTED_FEATURES),
+        "no_default_features": True,
+        "target": target,
+        "toolchain": dict(toolchain),
+        "profile": "test",
+        "argv": list(argv),
+        "environment": dict(sorted(environment.items())),
+        "executable": str(executable),
+        "executable_sha256": protocol.sha256_file(executable),
+    }
+
+
+def build_dispatch_and_characterization_artifacts(
+    *, repository: pathlib.Path, evidence_root: pathlib.Path, scratch_root: pathlib.Path,
+    candidate: str, path: str, home: pathlib.Path, cargo_home: pathlib.Path,
+) -> dict[str, dict[str, Any]]:
+    """Build all four candidate-owned Task 7 executables in fresh external targets."""
+    repository = pathlib.Path(repository).resolve(strict=True)
+    evidence_root = pathlib.Path(evidence_root).resolve(strict=True)
+    scratch_root = pathlib.Path(scratch_root).resolve(strict=True)
+    _validate_commit(candidate, "dispatch candidate")
+    head = subprocess.run(
+        ("git", "rev-parse", "HEAD"), cwd=repository, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        ("git", "status", "--porcelain=v1", "--untracked-files=all"), cwd=repository,
+        check=True, capture_output=True, text=True,
+    ).stdout
+    if head != candidate or status:
+        raise protocol.ProtocolError("dispatch builds require the clean immutable candidate")
+    common_lock = evidence_root / LOCK_PATHS["common"]
+    lock_payload = _read_regular_bytes(common_lock)
+    installed_lock = repository / "Cargo.lock"
+    if installed_lock.exists() and _read_regular_bytes(installed_lock) != lock_payload:
+        raise protocol.ProtocolError("candidate Cargo.lock differs from the root-owned common lock")
+    if not installed_lock.exists():
+        _write_new_regular(installed_lock, lock_payload)
+    validate_controlled_cargo_home(cargo_home)
+    tools = resolve_toolchain(path)
+    validate_resolved_toolchain(tools)
+    probe_environment = protocol.runtime_environment(
+        path=path, home=str(pathlib.Path(home).resolve(strict=True))
+    )
+    cargo_probe = run_bounded_command(
+        (str(tools.cargo.path), "--version"), cwd=repository,
+        environment=probe_environment, deadline_seconds=QUERY_DEADLINE_SECONDS,
+        executable_identity=tools.cargo,
+    )
+    rustc_probe = run_bounded_command(
+        (str(tools.rustc.path), "-vV"), cwd=repository,
+        environment=probe_environment, deadline_seconds=QUERY_DEADLINE_SECONDS,
+        executable_identity=tools.rustc,
+    )
+    if cargo_probe.returncode != 0 or rustc_probe.returncode != 0:
+        raise protocol.ProtocolError("Task 7 toolchain probe failed")
+    target = _rustc_host(rustc_probe.stdout, "Task 7")
+    tree = subprocess.run(
+        ("git", "ls-tree", "-r", "-z", "--full-tree", "HEAD"), cwd=repository,
+        check=True, capture_output=True, text=True,
+    ).stdout
+    source_sha256 = sha256_bytes(tree.encode())
+    lock_sha256 = sha256_bytes(lock_payload)
+    toolchain = _toolchain_manifest(
+        tools, cargo_probe.stdout.strip(), rustc_probe.stdout.strip()
+    )
+    specs = [
+        ("dispatch", package, None, command, DISPATCH_BUILD_MANIFEST_PATHS[package])
+        for package, command in DISPATCH_TEST_COMMANDS.items()
+    ] + [
+        (
+            "characterization", "tenferro-cpu" if owner == "cpu" else "tenferro-ad",
+            "numa_execution" if owner == "cpu" else "phase2e_characterization",
+            command, CHARACTERIZATION_BUILD_MANIFEST_PATHS[owner],
+        )
+        for owner, command in CHARACTERIZATION_BENCH_COMMANDS.items()
+    ]
+    manifests: dict[str, dict[str, Any]] = {}
+    for index, (kind, package, bench, command, relative) in enumerate(specs):
+        target_dir = scratch_root / f"task7-target-{index}-{package}"
+        try:
+            target_dir.mkdir(mode=0o700)
+        except FileExistsError as error:
+            raise protocol.ProtocolError(f"Task 7 target is not fresh: {target_dir}") from error
+        environment = protocol.cargo_environment(
+            path=path,
+            home=str(pathlib.Path(home).resolve(strict=True)),
+            cargo_home=str(pathlib.Path(cargo_home).resolve(strict=True)),
+            target_dir=str(target_dir),
+        )
+        feature_argv = feature_query_command(
+            target, package=package, requested_features=REQUESTED_FEATURES,
+            no_default_features=True,
+        )
+        feature_result = run_bounded_command(
+            feature_argv, cwd=repository, environment=environment,
+            deadline_seconds=QUERY_DEADLINE_SECONDS,
+        )
+        if feature_result.returncode != 0:
+            raise protocol.ProtocolError(f"Task 7 feature query failed for {package}")
+        build_result = run_bounded_command(
+            command, cwd=repository, environment=environment,
+            deadline_seconds=BUILD_DEADLINE_SECONDS,
+        )
+        if build_result.returncode != 0:
+            raise protocol.ProtocolError(f"Task 7 executable build failed for {package}")
+        executable = select_cargo_executable(build_result.stdout, package, bench=bench)
+        manifest = dispatch_build_provenance(
+            package=package, candidate=candidate, source_sha256=source_sha256,
+            lock_sha256=lock_sha256,
+            feature_graph_sha256=sha256_bytes(feature_result.stdout.encode()),
+            argv=command, environment=environment, executable=executable,
+            target=target, toolchain=toolchain,
+        ) if kind == "dispatch" else {
+            "validity_state": "COMPLETE", "candidate": candidate, "package": package,
+            "bench": bench, "source_sha256": source_sha256, "lock_sha256": lock_sha256,
+            "feature_graph_sha256": sha256_bytes(feature_result.stdout.encode()),
+            "requested_features": list(REQUESTED_FEATURES), "no_default_features": True,
+            "feature_query_argv": list(feature_argv), "target": target,
+            "toolchain": toolchain, "profile": "bench", "argv": list(command),
+            "environment": environment, "executable": str(executable.resolve(strict=True)),
+            "executable_sha256": protocol.sha256_file(executable),
+        }
+        destination = evidence_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        protocol.atomic_write_json(destination, manifest)
+        manifests[str(relative)] = manifest
+    return manifests
+
 INVARIANT_FIELDS = frozenset(
     {
         "protocol_version",
