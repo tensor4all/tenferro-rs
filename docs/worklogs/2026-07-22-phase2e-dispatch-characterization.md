@@ -12,19 +12,23 @@ gate composes exactly 47 unique canonical keys and rejects duplicates,
 omissions, wrong ownership, count/mode mismatches, failed recovery fields, and
 untyped hardware skips.
 
-The row fixtures are executable rather than declarative. Module-local executor
-wrappers count real `install` and `submit` calls and record the CPUs observed by
-their jobs; an explicit pool-affinity audit samples the actual worker CPUs for
-every ownership/budget fixture, and module-local GEMM wrappers count calls
-while delegating to faer.
+The row fixtures are executable rather than declarative. Scoped `#[cfg(test)]`
+recorders measure permit, operation-scope, executor install/submit, provider,
+session-entry, selected-mode, and operation-local worker-CPU events at their
+real runtime boundaries. They compile out of production builds. AD owns only
+its raw eager session and backend observations; the gate composes each AD row
+with the matching CPU borrowed-session vector, so neither crate duplicates the
+other crate's facts or gains a dependency on it.
 External exact fixtures pin their caller-owned Rayon workers when enough CPUs
 are visible, while advisory fixtures retain observations without upgrading the
 placement claim. D-N uses nonuniform `f64[65536]` inputs with exact comparison,
 D-D/E-D use nonuniform `f64[128,128]` inputs with a `1e-12` relative Frobenius
 bound, and G-O executes `J = 2B + 1` real grouped requests. U-O executes the
 typed pre-submit rejection and U-I executes the no-inner sequential fallback.
-Every success row injects a typed operation error and unwind before a successful
-post-recovery operation.
+Every success row exercises a typed operation error and an unwind on the same
+public workload surface before a successful post-recovery rerun. U-O is the
+only validated path without a worker observation and binds the exact typed
+pre-submit scheduling source.
 
 The complete `RecordingBackend` fixture now lives in the module-local
 `eager_backend/tests.rs`. Production `eager_backend.rs` retains only the test
@@ -47,11 +51,22 @@ the corresponding GREEN runs.
 
 ## Provenance and deadlines
 
-`phase2e_build.py` now owns the exact locked CPU/AD library-test and Criterion
-build argv, manifest locations, executable selection, and executable/source/
-lock/feature-graph/environment digest fields. `run_phase2e_gates.py` executes
-the hashed test binaries directly with the evidence filters and `--nocapture`;
-it does not invoke Cargo during evidence collection.
+`run_phase2e_gates.py` is the single Task 7 owning CLI. It validates a clean
+immutable candidate, installs the root-owned common lock, invokes
+`phase2e_build.py` for four fresh external targets, executes the hashed test
+binaries directly with the evidence filters and `--nocapture`, composes the 47
+rows, and directly executes 45 filtered Criterion rows. Each Criterion process
+uses a fresh `CRITERION_HOME` and `--bench --noplot`; its exact stdout, stderr,
+and `new/estimates.json` bytes are copied to normative storage before scratch
+cleanup. The terminal manifest records their SHA-256 digests plus the absolute
+mean point estimate and 95% confidence interval.
+
+Build and terminal manifests bind the protocol, candidate commit/tree, exact
+Task 7 source inventory, common lock, feature graph, toolchain, sealed
+environment, argv, executable, evidence, and row artifacts. A final recursive
+validator recomputes the exact 148-file inventory and every digest/key. Timeout
+or nonzero execution writes owning `INCONCLUSIVE` terminals with captured
+stdout/stderr and TERM, five-second grace, KILL, and reap metadata.
 
 Correctness executables have a 120-second deadline. Each Criterion row has a
 30-second deadline. Process groups receive a five-second termination grace
@@ -62,16 +77,19 @@ five-second measurement, 100 samples, and 95% confidence.
 
 - CPU and AD focused evidence tests passed and their emitted JSON composed to
   exactly 47 rows.
-- All ten gate-wrapper contract tests passed.
-- All 83 `phase2e_build.py` contract tests passed (93 Python contract tests in
-  the combined invocation).
-- The full CPU suite passed 512 tests and the full AD suite passed 71 tests.
+- All 97 combined Python build/gate contract tests passed.
+- The full CPU suite passed 513 tests and the full AD suite passed 71 tests.
 - The focused provider filter passed 57 tests and the dot-runtime filter passed
   43 tests.
 - Both characterization Criterion binaries compiled with `cpu-faer` and no
   default features.
-- Clippy passed for both crates across library, tests, and benches with warnings
-  denied; rustfmt and `git diff --check` passed.
+- Clippy passed for both libraries with warnings denied; rustfmt and
+  `git diff --check` passed.
 - The repository-rules review passed with no findings.
-- Direct `--list` execution found all 27 CPU and 18 eager benchmark row ids;
-  benchmark setup successfully constructed every managed/exact/advisory fixture.
+- A clean temporary candidate completed the owning CLI end to end: all four
+  builds, two direct evidence runs, 47 composed rows, and 45/45 Criterion
+  estimates passed. Independent terminal validation found 148 exact files.
+  Dispatch terminal SHA-256 was
+  `df8d9c3a64d7e401ea60bb3508deae3a8d004b9c7e062c8605a9aabd7e3c45e9`;
+  characterization terminal SHA-256 was
+  `1e694a83fe96c740f5980240b12e990de5d70670feab618f75229dfbd5239f66`.

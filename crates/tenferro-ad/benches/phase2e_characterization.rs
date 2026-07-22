@@ -6,8 +6,8 @@ use std::time::Duration;
 use criterion::{criterion_group, criterion_main, Criterion};
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::{
-    process_cpu_affinity, CpuBackend, CpuContext, CpuPlacement, CpuPlacementGuarantee,
-    ExternalCpuDomain, ResolvedCpuPlacement,
+    process_cpu_affinity, CpuBackend, CpuContext, CpuPlacement, CpuPlacementGuarantee, CpuSet,
+    ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement,
 };
 use tenferro_tensor::{CpuDomainId, DotGeneralConfig, Tensor};
 
@@ -36,8 +36,10 @@ fn phase2e_characterization(c: &mut Criterion) {
 
     for ownership in ["managed-exact", "external-exact", "external-advisory"] {
         for budget in [1, 2, 4] {
-            let runtime = EagerRuntime::with_cpu_backend(phase2e_backend(ownership, budget));
-            let mut placed = runtime.on_cpu(CpuPlacement::AllAllowed).unwrap();
+            let backend = phase2e_backend(ownership, budget);
+            let placement = backend.placement();
+            let runtime = EagerRuntime::with_cpu_backend(backend);
+            let mut placed = runtime.on_cpu(placement).unwrap();
             c.bench_function(&format!("phase2e/{ownership}/budget-{budget}/E-N"), |b| {
                 b.iter(|| {
                     black_box(
@@ -70,18 +72,48 @@ fn phase2e_characterization(c: &mut Criterion) {
 
 fn phase2e_backend(ownership: &str, budget: usize) -> CpuBackend {
     if ownership == "managed-exact" {
-        return CpuBackend::with_threads(budget).unwrap();
+        let coordinator = CpuBackend::with_threads(budget).unwrap();
+        let node = coordinator
+            .topology()
+            .nodes()
+            .first()
+            .expect("managed-exact latency requires one usable NUMA node");
+        return coordinator
+            .for_placement(CpuPlacement::NumaNode(node.id()))
+            .unwrap();
     }
     let allowed = process_cpu_affinity().expect("Phase 2E benchmark needs process affinity");
     let id = CpuDomainId::new(
         0x2eba + budget as u64 + u64::from(u8::from(ownership == "external-exact")),
     );
+    let exact = ownership == "external-exact";
+    let selected = CpuSet::new(allowed.as_slice().iter().copied().take(budget)).unwrap();
+    assert_eq!(
+        selected.len(),
+        budget,
+        "real latency requires B allowed CPUs"
+    );
+    let placement = if exact {
+        ResolvedCpuPlacement::NumaNode {
+            id: NumaNodeId::new(0x2e),
+            cpus: selected.clone(),
+        }
+    } else {
+        ResolvedCpuPlacement::AllAllowed {
+            cpus: allowed.clone(),
+        }
+    };
+    let context = if exact {
+        CpuContext::with_pinned_cpus(selected, budget).unwrap()
+    } else {
+        CpuContext::with_threads(budget).unwrap()
+    };
     let domain = ExternalCpuDomain::new(
         id,
-        ResolvedCpuPlacement::AllAllowed { cpus: allowed },
-        Arc::new(CpuContext::with_threads(budget).unwrap()),
+        placement,
+        Arc::new(context),
         NonZeroUsize::new(budget).unwrap(),
-        if ownership == "external-exact" {
+        if exact {
             CpuPlacementGuarantee::ExactDeclared
         } else {
             CpuPlacementGuarantee::AdvisoryDeclared

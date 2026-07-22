@@ -503,7 +503,22 @@ where
     F: FnOnce() -> R + Send,
     R: Send,
 {
-    let mut job = scoped_job(operation);
+    #[cfg(test)]
+    let captured = crate::backend::phase2e_test_events::capture();
+    #[cfg(test)]
+    crate::backend::phase2e_test_events::record(
+        crate::backend::phase2e_test_events::Event::Install,
+    );
+    let mut job = scoped_job(move || {
+        #[cfg(test)]
+        return crate::backend::phase2e_test_events::with_captured(captured, || {
+            crate::backend::phase2e_test_events::record_worker_cpu();
+            crate::backend::phase2e_test_events::panic_if_armed();
+            operation()
+        });
+        #[cfg(not(test))]
+        operation()
+    });
     executor.install(&mut job)?;
     job.into_result()
 }

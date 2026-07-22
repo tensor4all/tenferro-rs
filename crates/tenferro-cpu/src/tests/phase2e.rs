@@ -11,6 +11,7 @@ use tenferro_tensor::{
 };
 
 use super::*;
+use crate::backend::phase2e_test_events::{with_recorder, EventCounts, EventRecorder};
 use crate::provider::{
     CpuExecutionContext, CpuGemmProvider, CpuGemmRequest, CpuGroupedGemmRequest,
     CpuProviderOutcome, FaerGemmProvider,
@@ -19,7 +20,7 @@ use crate::{
     process_cpu_affinity, CpuBackendKind, CpuDomainExecutor, CpuDomainExecutorCapabilities,
     CpuDomainExecutorError, CpuDomainId, CpuExecutorAffinity, CpuExecutorReentrancy,
     CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementGuarantee, CpuProviderBundle,
-    ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
+    ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 
 fn current_cpu() -> Option<usize> {
@@ -210,6 +211,9 @@ impl CpuGemmProvider for RecordingGemm {
         request: CpuGemmRequest<'_, '_, '_>,
     ) -> crate::Result<CpuProviderOutcome> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        crate::backend::phase2e_test_events::record(
+            crate::backend::phase2e_test_events::Event::Provider,
+        );
         FaerGemmProvider.gemm(context, request)
     }
 
@@ -228,6 +232,9 @@ impl CpuGemmProvider for RecordingGemm {
         request: CpuGroupedGemmRequest<'_, '_, '_>,
     ) -> crate::Result<CpuProviderOutcome> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        crate::backend::phase2e_test_events::record(
+            crate::backend::phase2e_test_events::Event::Provider,
+        );
         FaerGemmProvider.grouped_gemm(context, request)
     }
 }
@@ -249,12 +256,22 @@ fn fixture(ownership: &str, budget: usize) -> Fixture {
         .build()
         .unwrap();
     if ownership == "managed-exact" {
-        let backend = CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer)
+        let coordinator = CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer)
             .unwrap()
             .with_provider_bundle(bundle)
             .unwrap();
+        let backend = coordinator
+            .topology()
+            .nodes()
+            .first()
+            .map(|node| {
+                coordinator
+                    .for_placement(crate::CpuPlacement::NumaNode(node.id()))
+                    .unwrap()
+            })
+            .unwrap_or(coordinator);
         return Fixture {
-            declared_cpus: backend.topology().allowed_cpus().as_usize_vec(),
+            declared_cpus: backend.resolved_placement().unwrap().cpus().as_usize_vec(),
             backend,
             executor: None,
             provider,
@@ -273,11 +290,23 @@ fn external_fixture(
 ) -> Fixture {
     let budget = executor.capabilities.worker_count.get();
     let allowed = process_cpu_affinity().expect("Phase 2E needs process affinity");
-    let declared_cpus = allowed.as_usize_vec();
+    let selected = crate::CpuSet::new(allowed.as_slice().iter().copied().take(budget)).unwrap();
+    let declared_cpus = if exact {
+        selected.as_usize_vec()
+    } else {
+        Vec::new()
+    };
     let domain_id = CpuDomainId::new(0x2e00 + budget as u64 + u64::from(u8::from(exact)));
     let domain = ExternalCpuDomain::new(
         domain_id,
-        ResolvedCpuPlacement::AllAllowed { cpus: allowed },
+        if exact {
+            ResolvedCpuPlacement::NumaNode {
+                id: NumaNodeId::new(0x2e),
+                cpus: selected,
+            }
+        } else {
+            ResolvedCpuPlacement::AllAllowed { cpus: allowed }
+        },
         Arc::clone(&executor) as Arc<dyn CpuDomainExecutor>,
         NonZeroUsize::new(budget).unwrap(),
         if exact {
@@ -302,22 +331,30 @@ fn external_fixture(
 struct Counts([usize; 6]);
 
 impl Counts {
-    const fn new(
-        session: usize,
-        scope: usize,
-        permit: usize,
-        install: usize,
-        submit: usize,
-        provider: usize,
-    ) -> Self {
-        Self([session, scope, permit, install, submit, provider])
+    fn measured(snapshot: &crate::backend::phase2e_test_events::EventSnapshot) -> Self {
+        let counts = snapshot.counts;
+        Self([
+            counts.session,
+            counts.scope,
+            counts.permit,
+            counts.install,
+            counts.submit,
+            counts.provider,
+        ])
     }
 }
 
-const DIRECT_NATIVE: Counts = Counts::new(0, 1, 1, 1, 0, 0);
-const EAGER_NATIVE: Counts = Counts::new(1, 1, 1, 1, 0, 0);
-const DIRECT_DOT: Counts = Counts::new(0, 1, 1, 1, 0, 1);
-const EAGER_DOT: Counts = Counts::new(1, 1, 1, 1, 0, 1);
+fn measured_mode(modes: &[crate::ParallelMode]) -> &'static str {
+    if modes.contains(&crate::ParallelMode::Outer) {
+        "Outer"
+    } else if modes.contains(&crate::ParallelMode::Inner) {
+        "Inner"
+    } else if modes.contains(&crate::ParallelMode::Sequential) {
+        "Sequential"
+    } else {
+        "UnsupportedOuter"
+    }
+}
 
 #[derive(Debug)]
 struct Row {
@@ -330,6 +367,8 @@ struct Row {
     observed_cpus: Vec<usize>,
     numerical_passed: bool,
     typed_error_recovered: bool,
+    typed_error_kind: &'static str,
+    typed_error_source: String,
     unwind_recovered: bool,
     post_recovery_passed: bool,
     hardware_skip: Option<&'static str>,
@@ -359,6 +398,27 @@ fn deterministic_vector(len: usize, offset: usize) -> Tensor {
     .unwrap()
 }
 
+#[test]
+fn phase2e_recorder_measures_one_direct_native_operation() {
+    let recorder = Arc::new(EventRecorder::default());
+    let lhs = deterministic_vector(64, 41);
+    let rhs = deterministic_vector(64, 42);
+    let mut backend = CpuBackend::with_threads(2).unwrap();
+    let output = with_recorder(&recorder, || backend.add(&lhs, &rhs)).unwrap();
+    assert_eq!(output.shape(), [64]);
+    assert_eq!(
+        recorder.snapshot().counts,
+        EventCounts {
+            session: 0,
+            scope: 1,
+            permit: 1,
+            install: 1,
+            submit: 0,
+            provider: 0,
+        }
+    );
+}
+
 fn prove_direct_and_borrowed_vectors() -> Vec<Counts> {
     let input = deterministic_vector(64, 1);
     let rhs = deterministic_vector(64, 2);
@@ -383,49 +443,53 @@ fn prove_direct_and_borrowed_vectors() -> Vec<Counts> {
         limits: vec![63],
         strides: vec![2],
     };
-    let mut backend = CpuBackend::new();
-
-    assert_eq!(backend.neg(&input).unwrap().shape(), &[64]);
-    assert_eq!(backend.add(&input, &rhs).unwrap().shape(), &[64]);
-    assert_eq!(
-        backend.reduce_sum(&input, &[0]).unwrap().shape(),
-        &[] as &[usize]
-    );
-    assert_eq!(backend.slice(&input, &slice).unwrap().shape(), &[31]);
-    assert_eq!(
-        backend
-            .dot_general(&matrix_lhs, &matrix_rhs, &dot)
-            .unwrap()
-            .shape(),
+    let mut fixture = fixture("managed-exact", 2);
+    let mut vectors = Vec::with_capacity(10);
+    macro_rules! direct {
+        ($operation:expr, $shape:expr) => {{
+            let recorder = Arc::new(EventRecorder::default());
+            let output = with_recorder(&recorder, || $operation).unwrap();
+            assert_eq!(output.shape(), $shape);
+            vectors.push(Counts::measured(&recorder.snapshot()));
+        }};
+    }
+    direct!(fixture.backend.neg(&input), &[64]);
+    direct!(fixture.backend.add(&input, &rhs), &[64]);
+    direct!(fixture.backend.reduce_sum(&input, &[0]), &[] as &[usize]);
+    direct!(fixture.backend.slice(&input, &slice), &[31]);
+    direct!(
+        fixture.backend.dot_general(&matrix_lhs, &matrix_rhs, &dot),
         &[8, 8]
     );
 
-    backend
-        .with_backend_session(|session| {
-            assert_eq!(session.neg(&input)?.shape(), &[64]);
-            assert_eq!(session.add(&input, &rhs)?.shape(), &[64]);
-            assert_eq!(session.reduce_sum(&input, &[0])?.shape(), &[] as &[usize]);
-            assert_eq!(session.slice(&input, &slice)?.shape(), &[31]);
-            assert_eq!(
-                session.dot_general(&matrix_lhs, &matrix_rhs, &dot)?.shape(),
-                &[8, 8]
-            );
-            Ok::<_, crate::Error>(())
+    for operation in 0..5 {
+        let recorder = Arc::new(EventRecorder::default());
+        with_recorder(&recorder, || {
+            fixture
+                .backend
+                .with_backend_session(|session| match operation {
+                    0 => session
+                        .neg(&input)
+                        .map(|tensor| assert_eq!(tensor.shape(), &[64])),
+                    1 => session
+                        .add(&input, &rhs)
+                        .map(|tensor| assert_eq!(tensor.shape(), &[64])),
+                    2 => session
+                        .reduce_sum(&input, &[0])
+                        .map(|tensor| assert_eq!(tensor.shape(), &[] as &[usize])),
+                    3 => session
+                        .slice(&input, &slice)
+                        .map(|tensor| assert_eq!(tensor.shape(), &[31])),
+                    4 => session
+                        .dot_general(&matrix_lhs, &matrix_rhs, &dot)
+                        .map(|tensor| assert_eq!(tensor.shape(), &[8, 8])),
+                    _ => unreachable!(),
+                })
         })
         .unwrap();
-
-    vec![
-        DIRECT_NATIVE,
-        DIRECT_NATIVE,
-        DIRECT_NATIVE,
-        DIRECT_NATIVE,
-        DIRECT_DOT,
-        EAGER_NATIVE,
-        EAGER_NATIVE,
-        EAGER_NATIVE,
-        EAGER_NATIVE,
-        EAGER_DOT,
-    ]
+        vectors.push(Counts::measured(&recorder.snapshot()));
+    }
+    vectors
 }
 
 fn recovery_proof() {
@@ -448,23 +512,6 @@ fn reset_fixture(fixture: &Fixture) {
     }
 }
 
-fn row_recovery_proof(fixture: &mut Fixture) -> (bool, bool, bool) {
-    let lhs = deterministic_vector(8, 7);
-    let wrong = deterministic_vector(7, 8);
-    let typed_error = fixture.backend.add(&lhs, &wrong).is_err();
-    let unwind = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        fixture.backend.install(|| panic!("phase2e-row-unwind"))
-    }))
-    .is_err();
-    let post_recovery = fixture
-        .backend
-        .add(&lhs, &lhs)
-        .map(|tensor| tensor.shape() == [8])
-        .unwrap_or(false);
-    reset_fixture(fixture);
-    (typed_error, unwind, post_recovery)
-}
-
 fn run_native_row(fixture: &mut Fixture) -> bool {
     let lhs = deterministic_vector(65_536, 9);
     let rhs = deterministic_vector(65_536, 10);
@@ -480,6 +527,114 @@ fn run_native_row(fixture: &mut Fixture) -> bool {
         .add(&lhs, &rhs)
         .map(|actual| actual.as_slice::<f64>().unwrap() == expected)
         .unwrap_or(false)
+}
+
+fn run_surface(fixture: &mut Fixture, surface: &str, budget: usize) -> bool {
+    match surface {
+        "D-N" | "E-N" => run_native_row(fixture),
+        "D-D" | "E-D" | "U-I" => run_dot_row(fixture),
+        "G-O" => run_grouped_row(fixture, budget),
+        _ => unreachable!("unknown Phase 2E surface {surface}"),
+    }
+}
+
+fn typed_surface_error(fixture: &mut Fixture, surface: &str, budget: usize) -> bool {
+    match surface {
+        "D-N" | "E-N" => {
+            let lhs = deterministic_vector(8, 51);
+            let rhs = deterministic_vector(7, 52);
+            matches!(
+                fixture.backend.add(&lhs, &rhs).unwrap_err(),
+                crate::Error::Validation {
+                    op: "add",
+                    source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+                }
+            )
+        }
+        "D-D" | "E-D" | "U-I" => {
+            let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]).unwrap();
+            let rhs = lhs.clone();
+            let invalid = DotGeneralConfig {
+                lhs_contracting_dims: vec![2],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            };
+            matches!(
+                fixture
+                    .backend
+                    .dot_general(&lhs, &rhs, &invalid)
+                    .unwrap_err(),
+                crate::Error::Validation {
+                    op: "dot_general",
+                    source: tenferro_tensor::ValidationError::AxisOutOfBounds { .. },
+                }
+            )
+        }
+        "G-O" => {
+            let size = 2;
+            let jobs_len = 2 * budget + 1;
+            let lhs = deterministic_vector(jobs_len * size * size, 53);
+            let rhs = deterministic_vector(jobs_len * size * size, 54);
+            let mut output = Tensor::from_vec_col_major(
+                vec![jobs_len * size * size],
+                vec![0.0_f64; jobs_len * size * size],
+            )
+            .unwrap();
+            let jobs = [
+                GroupedGemmJob::new(0, 0, 0, size, size, size),
+                GroupedGemmJob::new(0, size * size, size * size, size, size, size),
+            ];
+            let config = GroupedGemmConfig::new(
+                &jobs,
+                DotGeneralAccumulation::overwrite(DType::F64).unwrap(),
+            );
+            let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
+            matches!(
+                BackendCachedDot::grouped_gemm_cached(
+                    &mut fixture.backend,
+                    &mut cache,
+                    None,
+                    TensorRead::from_tensor(&lhs),
+                    TensorRead::from_tensor(&rhs),
+                    &config,
+                    TensorWrite::from_tensor(&mut output),
+                )
+                .unwrap_err(),
+                crate::Error::Validation {
+                    op: "grouped_gemm",
+                    source: tenferro_tensor::ValidationError::InvalidArgument { .. },
+                }
+            )
+        }
+        _ => unreachable!("unknown Phase 2E surface {surface}"),
+    }
+}
+
+fn row_recovery_proof(
+    fixture: &mut Fixture,
+    surface: &str,
+    budget: usize,
+    primary: Counts,
+) -> (bool, bool, bool) {
+    reset_fixture(fixture);
+    let typed_error = typed_surface_error(fixture, surface, budget);
+    reset_fixture(fixture);
+
+    let panic_recorder = Arc::new(EventRecorder::default());
+    panic_recorder.panic_on_next_worker();
+    let unwind = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let _ = with_recorder(&panic_recorder, || run_surface(fixture, surface, budget));
+    }))
+    .is_err();
+    reset_fixture(fixture);
+
+    let recovery_recorder = Arc::new(EventRecorder::default());
+    let numerical = with_recorder(&recovery_recorder, || run_surface(fixture, surface, budget));
+    let recovery = recovery_recorder.snapshot();
+    let counts_match = Counts::measured(&recovery) == primary;
+    reset_fixture(fixture);
+    (typed_error, unwind, numerical && counts_match)
 }
 
 fn run_dot_row(fixture: &mut Fixture) -> bool {
@@ -558,16 +713,27 @@ fn run_grouped_row(fixture: &mut Fixture, budget: usize) -> bool {
         TensorWrite::from_tensor(&mut output),
     )
     .unwrap();
-    output
-        .as_slice::<f64>()
-        .unwrap()
-        .iter()
-        .all(|value| value.is_finite())
-        && output
-            .as_slice::<f64>()
-            .unwrap()
-            .iter()
-            .any(|value| *value != 0.0)
+    let lhs = lhs.as_slice::<f64>().unwrap();
+    let rhs = rhs.as_slice::<f64>().unwrap();
+    let actual = output.as_slice::<f64>().unwrap();
+    let mut error_squared = 0.0;
+    let mut reference_squared = 0.0;
+    for job in 0..jobs_len {
+        let base = job * matrix_len;
+        for column in 0..size {
+            for row in 0..size {
+                let mut expected = 0.0;
+                for contracted in 0..size {
+                    expected += lhs[base + row + contracted * size]
+                        * rhs[base + contracted + column * size];
+                }
+                let delta = actual[base + row + column * size] - expected;
+                error_squared += delta * delta;
+                reference_squared += expected * expected;
+            }
+        }
+    }
+    error_squared.sqrt() / reference_squared.sqrt().max(f64::MIN_POSITIVE) <= 1.0e-12
 }
 
 fn unsupported_outer_row() -> Row {
@@ -578,16 +744,22 @@ fn unsupported_outer_row() -> Row {
         NonZeroUsize::new(2).unwrap(),
     );
     let provider_calls = AtomicUsize::new(0);
-    let error = context_fixture
-        .entry()
-        .submit_outer(5, |_, _| {
+    let recorder = Arc::new(EventRecorder::default());
+    let error = with_recorder(&recorder, || {
+        context_fixture.entry().submit_outer(5, |_, _| {
             provider_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
         })
-        .unwrap_err();
-    assert!(matches!(error, CpuDomainExecutorError::Scheduling { .. }));
+    })
+    .unwrap_err();
+    assert!(matches!(
+        &error,
+        CpuDomainExecutorError::Scheduling { message }
+            if message == "CPU domain CpuDomainId(9) does not support Outer mode"
+    ));
     assert_eq!(executor.snapshot(), (0, 0, vec![]));
     assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+    let snapshot = recorder.snapshot();
     let unwind_recovered = std::panic::catch_unwind(AssertUnwindSafe(|| {
         context_fixture
             .entry()
@@ -606,10 +778,12 @@ fn unsupported_outer_row() -> Row {
         surface: "U-O",
         budget: 2,
         mode: "UnsupportedOuter",
-        counts: Counts::new(0, 1, 1, 0, 0, 0),
-        observed_cpus: executor.snapshot().2,
+        counts: Counts::measured(&snapshot),
+        observed_cpus: snapshot.observed_cpus,
         numerical_passed: true,
         typed_error_recovered: true,
+        typed_error_kind: "Scheduling",
+        typed_error_source: error.to_string(),
         unwind_recovered,
         post_recovery_passed,
         hardware_skip: None,
@@ -628,22 +802,26 @@ fn unsupported_inner_row() -> Row {
         .build()
         .unwrap();
     let mut fixture = external_fixture(executor, provider, bundle, false);
-    let numerical_passed = run_dot_row(&mut fixture);
+    let recorder = Arc::new(EventRecorder::default());
+    let numerical_passed = with_recorder(&recorder, || run_dot_row(&mut fixture));
     assert_eq!(fixture.executor.as_ref().unwrap().snapshot().0, 1);
     assert_eq!(fixture.provider.calls.load(Ordering::SeqCst), 1);
-    let observed_cpus = fixture.executor.as_ref().unwrap().snapshot().2;
+    let snapshot = recorder.snapshot();
+    let counts = Counts::measured(&snapshot);
     let (typed_error_recovered, unwind_recovered, post_recovery_passed) =
-        row_recovery_proof(&mut fixture);
+        row_recovery_proof(&mut fixture, "U-I", 2, counts);
     Row {
         key: "external-no-inner/budget-2/U-I".into(),
         owner: "cpu",
         surface: "U-I",
         budget: 2,
-        mode: "Sequential",
-        counts: DIRECT_DOT,
-        observed_cpus,
+        mode: measured_mode(&snapshot.modes),
+        counts,
+        observed_cpus: snapshot.observed_cpus,
         numerical_passed,
         typed_error_recovered,
+        typed_error_kind: "Validation",
+        typed_error_source: "dot_general".into(),
         unwind_recovered,
         post_recovery_passed,
         hardware_skip: None,
@@ -656,70 +834,46 @@ fn run_cpu_owned_rows() -> Evidence {
     for ownership in ["managed-exact", "external-exact", "external-advisory"] {
         for budget in [1, 2, 4] {
             let mut fixture = fixture(ownership, budget);
-            let affinity_audit = fixture
-                .executor
-                .as_ref()
-                .map(|executor| executor.affinity_audit())
-                .unwrap_or_else(|| {
-                    observe_pool_cpus(|operation| fixture.backend.install(operation))
-                });
-            let mode = if budget == 1 { "Sequential" } else { "Inner" };
-            for (surface, counts) in [
-                ("D-N", DIRECT_NATIVE),
-                ("D-D", DIRECT_DOT),
-                (
-                    "G-O",
-                    if budget == 1 {
-                        DIRECT_DOT
-                    } else {
-                        Counts::new(0, 1, 1, 0, 1, 2 * budget + 1)
-                    },
-                ),
-            ] {
+            for surface in ["D-N", "D-D", "G-O"] {
                 reset_fixture(&fixture);
-                let numerical_passed = match surface {
+                let recorder = Arc::new(EventRecorder::default());
+                let numerical_passed = with_recorder(&recorder, || match surface {
                     "D-N" => run_native_row(&mut fixture),
                     "D-D" => run_dot_row(&mut fixture),
                     "G-O" => run_grouped_row(&mut fixture, budget),
                     _ => unreachable!(),
-                };
+                });
+                let snapshot = recorder.snapshot();
+                let counts = Counts::measured(&snapshot);
                 assert_eq!(
                     fixture.provider.calls.load(Ordering::SeqCst),
                     counts.0[5],
                     "{ownership}/{budget}/{surface} provider count"
                 );
-                let (install, submit, mut observed_cpus) = fixture
-                    .executor
-                    .as_ref()
-                    .map(|executor| executor.snapshot())
-                    .unwrap_or((counts.0[3], counts.0[4], Vec::new()));
-                for cpu in &affinity_audit {
-                    if !observed_cpus.contains(cpu) {
-                        observed_cpus.push(*cpu);
-                    }
+                if let Some(executor) = fixture.executor.as_ref() {
+                    let (install, submit, _) = executor.snapshot();
+                    assert_eq!((install, submit), (counts.0[3], counts.0[4]));
                 }
-                assert_eq!((install, submit), (counts.0[3], counts.0[4]));
+                let observed_cpus = snapshot.observed_cpus;
                 if ownership != "external-advisory" {
                     assert!(observed_cpus
                         .iter()
                         .all(|cpu| fixture.declared_cpus.contains(cpu)));
                 }
                 let (typed_error_recovered, unwind_recovered, post_recovery_passed) =
-                    row_recovery_proof(&mut fixture);
+                    row_recovery_proof(&mut fixture, surface, budget, counts);
                 rows.push(Row {
                     key: format!("{ownership}/budget-{budget}/{surface}"),
                     owner: "cpu",
                     surface,
                     budget,
-                    mode: if surface == "G-O" && budget > 1 {
-                        "Outer"
-                    } else {
-                        mode
-                    },
+                    mode: measured_mode(&snapshot.modes),
                     counts,
                     observed_cpus,
                     numerical_passed,
                     typed_error_recovered,
+                    typed_error_kind: "Validation",
+                    typed_error_source: surface.into(),
                     unwind_recovered,
                     post_recovery_passed,
                     hardware_skip: None,
@@ -759,10 +913,11 @@ fn write_evidence(evidence: &Evidence) -> std::io::Result<()> {
         }
         write!(
             output,
-            "{{\"key\":{},\"owner\":{},\"surface\":{},\"budget\":{},\"mode\":{},\"counts\":{:?},\"observed_cpus\":{:?},\"numerical_passed\":{},\"typed_error_recovered\":{},\"unwind_recovered\":{},\"post_recovery_passed\":{},\"hardware_skip\":{}}}",
+            "{{\"key\":{},\"owner\":{},\"surface\":{},\"budget\":{},\"mode\":{},\"counts\":{:?},\"observed_cpus\":{:?},\"numerical_passed\":{},\"typed_error_recovered\":{},\"typed_error_kind\":{},\"typed_error_source\":{},\"unwind_recovered\":{},\"post_recovery_passed\":{},\"hardware_skip\":{}}}",
             json_string(&row.key), json_string(row.owner), json_string(row.surface), row.budget,
             json_string(row.mode), row.counts.0, row.observed_cpus, row.numerical_passed,
-            row.typed_error_recovered, row.unwind_recovered, row.post_recovery_passed,
+            row.typed_error_recovered, json_string(row.typed_error_kind),
+            json_string(&row.typed_error_source), row.unwind_recovered, row.post_recovery_passed,
             row.hardware_skip.map(json_string).unwrap_or_else(|| "null".into())
         ).unwrap();
     }
@@ -778,5 +933,11 @@ fn phase2e_characterization_evidence() {
     assert_eq!(evidence.canonical_vectors.len(), 10);
     assert_eq!(evidence.characterization.len(), 29);
     assert!(evidence.characterization.iter().all(Row::gating_passed));
+    let no_inner = evidence
+        .characterization
+        .iter()
+        .find(|row| row.surface == "U-I")
+        .unwrap();
+    assert_eq!(no_inner.mode, "Sequential");
     write_evidence(&evidence).unwrap();
 }

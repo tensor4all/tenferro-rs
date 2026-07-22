@@ -211,6 +211,14 @@ class IdentityAndDeltaTests(unittest.TestCase):
             build.select_cargo_executable(messages, "tenferro-cpu"),
             pathlib.Path("/tmp/cpu-test"),
         )
+        current_cargo = dict(
+            cpu,
+            package_id="path+file:///repo/crates/tenferro-cpu#0.2.0",
+        )
+        self.assertEqual(
+            build.select_cargo_executable(json.dumps(current_cargo), "tenferro-cpu"),
+            pathlib.Path("/tmp/cpu-test"),
+        )
         with self.assertRaises(protocol.ProtocolError):
             build.select_cargo_executable(
                 messages + "\n" + json.dumps(cpu), "tenferro-cpu"
@@ -253,6 +261,9 @@ class IdentityAndDeltaTests(unittest.TestCase):
                 executable=executable,
                 target="x86_64-unknown-linux-gnu",
                 toolchain={"cargo": "controlled"},
+                protocol_sha256="e" * 64,
+                source_inventory={"source.rs": "f" * 64},
+                feature_graph="feature graph\n",
             )
             self.assertEqual(manifest["executable_sha256"], protocol.sha256_file(executable))
             self.assertEqual(manifest["candidate"], "a" * 40)
@@ -269,6 +280,9 @@ class IdentityAndDeltaTests(unittest.TestCase):
                     executable=executable,
                     target="x86_64-unknown-linux-gnu",
                     toolchain={"cargo": "controlled"},
+                    protocol_sha256="e" * 64,
+                    source_inventory={"source.rs": "f" * 64},
+                    feature_graph="feature graph\n",
                 )
 
     def test_task7_builder_has_no_runner_injection_and_uses_fresh_targets(self) -> None:

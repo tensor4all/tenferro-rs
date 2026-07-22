@@ -6,12 +6,14 @@ use std::time::Duration;
 use criterion::{criterion_group, criterion_main, Criterion};
 use tenferro_cpu::{
     available_parallelism, process_cpu_affinity, CpuBackend, CpuBackendKind, CpuContext,
-    CpuPlacement, CpuPlacementGuarantee, ExternalCpuDomain, ResolvedCpuPlacement,
+    CpuPlacement, CpuPlacementGuarantee, CpuSet, ExternalCpuDomain, NumaNodeId,
+    ResolvedCpuPlacement,
 };
 use tenferro_tensor::backend::{GroupedGemmConfig, GroupedGemmJob};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, ContractionScalar, CpuDomainId,
-    DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorElementwise, TensorRead, TensorWrite,
+    DotGeneralAccumulation, DotGeneralConfig, Tensor, TensorDot, TensorElementwise, TensorRead,
+    TensorWrite,
 };
 
 const MATRIX_SIZES: [usize; 3] = [64, 256, 512];
@@ -149,24 +151,38 @@ fn bench_numa_execution(c: &mut Criterion) {
 }
 
 fn bench_phase2e_rows(c: &mut Criterion) {
-    let vector = Tensor::from_vec_col_major(
+    let native_lhs = Tensor::from_vec_col_major(
         vec![65_536],
         (0..65_536)
             .map(|index| (index % 97) as f64 / 31.0)
             .collect(),
     )
     .unwrap();
+    let native_rhs = Tensor::from_vec_col_major(
+        vec![65_536],
+        (0..65_536)
+            .map(|index| ((index * 19 + 7) % 101) as f64 / 37.0 - 1.0)
+            .collect(),
+    )
+    .unwrap();
+    let dot_config = DotGeneralConfig {
+        lhs_contracting_dims: vec![1],
+        rhs_contracting_dims: vec![0],
+        lhs_batch_dims: vec![],
+        rhs_batch_dims: vec![],
+    };
     for ownership in ["managed-exact", "external-exact", "external-advisory"] {
         for budget in [1, 2, 4] {
             let mut native = phase2e_backend(ownership, budget);
             c.bench_function(&format!("phase2e/{ownership}/budget-{budget}/D-N"), |b| {
-                b.iter(|| black_box(native.mul(&vector, &vector).unwrap()))
+                b.iter(|| black_box(native.add(&native_lhs, &native_rhs).unwrap()))
             });
 
-            let matrix = matrix(128);
+            let dot_lhs = matrix(128);
+            let dot_rhs = matrix(128);
             let mut dot = phase2e_backend(ownership, budget);
             c.bench_function(&format!("phase2e/{ownership}/budget-{budget}/D-D"), |b| {
-                b.iter(|| black_box(run_session_workload(&mut dot, &matrix)))
+                b.iter(|| black_box(dot.dot_general(&dot_lhs, &dot_rhs, &dot_config).unwrap()))
             });
 
             let jobs_len = 2 * budget + 1;
@@ -198,11 +214,11 @@ fn bench_phase2e_rows(c: &mut Criterion) {
                 alpha: ContractionScalar::F64(1.0),
                 beta: ContractionScalar::F64(0.0),
             };
+            let config = GroupedGemmConfig::new(&jobs, accumulation);
             let mut grouped = phase2e_backend(ownership, budget);
             let mut cache = <CpuBackend as BackendRuntimeCache>::RuntimeCache::default();
             c.bench_function(&format!("phase2e/{ownership}/budget-{budget}/G-O"), |b| {
                 b.iter(|| {
-                    let config = GroupedGemmConfig::new(&jobs, accumulation);
                     BackendCachedDot::grouped_gemm_cached(
                         &mut grouped,
                         &mut cache,
@@ -222,18 +238,48 @@ fn bench_phase2e_rows(c: &mut Criterion) {
 
 fn phase2e_backend(ownership: &str, budget: usize) -> CpuBackend {
     if ownership == "managed-exact" {
-        return CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer).unwrap();
+        let coordinator = CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer).unwrap();
+        let node = coordinator
+            .topology()
+            .nodes()
+            .first()
+            .expect("managed-exact latency requires one usable NUMA node");
+        return coordinator
+            .for_placement(CpuPlacement::NumaNode(node.id()))
+            .unwrap();
     }
     let allowed = process_cpu_affinity().expect("Phase 2E benchmark needs process affinity");
     let id = CpuDomainId::new(
         0x2eb0 + budget as u64 + u64::from(u8::from(ownership == "external-exact")),
     );
+    let exact = ownership == "external-exact";
+    let selected = CpuSet::new(allowed.as_slice().iter().copied().take(budget)).unwrap();
+    assert_eq!(
+        selected.len(),
+        budget,
+        "real latency requires B allowed CPUs"
+    );
+    let placement = if exact {
+        ResolvedCpuPlacement::NumaNode {
+            id: NumaNodeId::new(0x2e),
+            cpus: selected.clone(),
+        }
+    } else {
+        ResolvedCpuPlacement::AllAllowed {
+            cpus: allowed.clone(),
+        }
+    };
+    let context = if exact {
+        CpuContext::with_pinned_cpus(selected, budget).unwrap()
+    } else {
+        CpuContext::with_threads(budget).unwrap()
+    };
     let domain = ExternalCpuDomain::new(
         id,
-        ResolvedCpuPlacement::AllAllowed { cpus: allowed },
-        Arc::new(CpuContext::with_threads(budget).unwrap()),
+        placement,
+        Arc::new(context),
         NonZeroUsize::new(budget).unwrap(),
-        if ownership == "external-exact" {
+        if exact {
             CpuPlacementGuarantee::ExactDeclared
         } else {
             CpuPlacementGuarantee::AdvisoryDeclared

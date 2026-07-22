@@ -409,6 +409,15 @@ pub(crate) struct CpuOperationEntry<'a> {
 
 impl<'a> CpuOperationEntry<'a> {
     pub(crate) fn new(domain: &'a CpuResourceDomain, permit: &'a ResourcePermit) -> Self {
+        #[cfg(test)]
+        {
+            crate::backend::phase2e_test_events::record(
+                crate::backend::phase2e_test_events::Event::Scope,
+            );
+            crate::backend::phase2e_test_events::record_if_zero(
+                crate::backend::phase2e_test_events::Event::Permit,
+            );
+        }
         Self { domain, permit }
     }
 
@@ -427,6 +436,8 @@ impl<'a> CpuOperationEntry<'a> {
                     .to_owned(),
             });
         }
+        #[cfg(test)]
+        crate::backend::phase2e_test_events::record_mode(parallel_mode);
         let owner = self.permit.owner();
         with_execution_owner(owner, || {
             install_scoped(self.domain.executor().as_ref(), || {
@@ -451,9 +462,25 @@ impl<'a> CpuOperationEntry<'a> {
                 ),
             });
         }
+        #[cfg(test)]
+        {
+            crate::backend::phase2e_test_events::record(
+                crate::backend::phase2e_test_events::Event::Submit,
+            );
+            crate::backend::phase2e_test_events::record_mode(ParallelMode::Outer);
+        }
         let owner = self.permit.owner();
+        #[cfg(test)]
+        let captured = crate::backend::phase2e_test_events::capture();
         let lane_count = len.min(self.domain.thread_budget().get());
-        let jobs = indexed_jobs(lane_count, |lane| {
+        let jobs = indexed_jobs(lane_count, move |lane| {
+            #[cfg(test)]
+            let _captured_scope =
+                crate::backend::phase2e_test_events::CapturedScope::new(captured.clone());
+            #[cfg(test)]
+            crate::backend::phase2e_test_events::record_worker_cpu();
+            #[cfg(test)]
+            crate::backend::phase2e_test_events::panic_if_armed();
             // INVARIANT: valid lanes partition `0..len` by residue modulo the
             // nonzero `lane_count`, so every logical job runs exactly once
             // while the executor can schedule at most the domain budget.
@@ -505,7 +532,9 @@ impl<'a> CpuOperationEntry<'a> {
                 })
             };
         }
-        if accepts(ParallelMode::Inner) {
+        if self.domain.executor_capabilities().inner_parallelism == CpuInnerParallelism::Rayon
+            && accepts(ParallelMode::Inner)
+        {
             return Ok(ParallelMode::Inner);
         }
         if accepts(ParallelMode::Sequential) {

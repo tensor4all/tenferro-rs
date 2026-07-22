@@ -62,6 +62,23 @@ BENCH_COMMAND = (
     "cpu-faer",
 )
 REQUESTED_FEATURES = ("cpu-faer",)
+TASK7_SOURCE_PATHS = (
+    "Cargo.toml",
+    "crates/tenferro-cpu/src/backend.rs",
+    "crates/tenferro-cpu/src/domain_executor.rs",
+    "crates/tenferro-cpu/src/provider.rs",
+    "crates/tenferro-cpu/src/exec_session.rs",
+    "crates/tenferro-cpu/src/dot_runtime.rs",
+    "crates/tenferro-cpu/src/tests/phase2e.rs",
+    "crates/tenferro-cpu/benches/numa_execution.rs",
+    "crates/tenferro-ad/src/eager.rs",
+    "crates/tenferro-ad/src/eager_backend.rs",
+    "crates/tenferro-ad/src/eager/tests/phase2e.rs",
+    "crates/tenferro-ad/benches/phase2e_characterization.rs",
+    "scripts/phase2e_protocol.py",
+    "scripts/phase2e_build.py",
+    "scripts/run_phase2e_gates.py",
+)
 
 DISPATCH_TEST_COMMANDS = MappingProxyType(
     {
@@ -98,6 +115,15 @@ CHARACTERIZATION_BENCH_COMMANDS = MappingProxyType(
 DISPATCH_TEST_DEADLINE_SECONDS = 120
 CHARACTERIZATION_ROW_DEADLINE_SECONDS = 30
 DISPATCH_TERMINATION_GRACE_SECONDS = 5
+
+
+class Task7BuildFailure(protocol.ProtocolError):
+    def __init__(self, message: str, result: "CommandResult") -> None:
+        super().__init__(message)
+        self.kind = "NonzeroExit"
+        self.stdout = result.stdout
+        self.stderr = result.stderr
+        self.termination = {"reaped": True, "returncode": result.returncode}
 DISPATCH_BUILD_MANIFEST_PATHS = MappingProxyType(
     {
         "tenferro-cpu": pathlib.Path("dispatch-gates/cpu-test-build.json"),
@@ -125,7 +151,7 @@ def select_cargo_executable(messages: str, package: str, *, bench: str | None = 
         target = message.get("target", {})
         package_id = str(message.get("package_id", ""))
         owns_artifact = package_id.startswith(f"{package} ") or re.search(
-            rf"#{re.escape(package)}(?:@|$)", package_id
+            rf"(?:/|#){re.escape(package)}(?:#|@|$)", package_id
         ) is not None
         if not owns_artifact:
             continue
@@ -147,6 +173,7 @@ def dispatch_build_provenance(
     *, package: str, candidate: str, source_sha256: str, lock_sha256: str,
     feature_graph_sha256: str, argv: tuple[str, ...], environment: Mapping[str, str],
     executable: pathlib.Path, target: str, toolchain: Mapping[str, str],
+    protocol_sha256: str, source_inventory: Mapping[str, str], feature_graph: str,
 ) -> dict[str, Any]:
     """Bind one dispatch executable to candidate source, lock, graph, and build inputs."""
     expected = DISPATCH_TEST_COMMANDS.get(package)
@@ -164,10 +191,16 @@ def dispatch_build_provenance(
     return {
         "validity_state": "COMPLETE",
         "candidate": candidate,
+        "protocol_version": protocol.PROTOCOL_VERSION,
+        "protocol_sha256": protocol_sha256,
         "package": package,
         "source_sha256": source_sha256,
+        "candidate_tree_sha256": source_sha256,
+        "source_inventory": dict(sorted(source_inventory.items())),
         "lock_sha256": lock_sha256,
+        "common_lock_sha256": lock_sha256,
         "feature_graph_sha256": feature_graph_sha256,
+        "feature_graph": feature_graph,
         "feature_query_argv": list(
             feature_query_command(
                 target,
@@ -231,7 +264,8 @@ def build_dispatch_and_characterization_artifacts(
         executable_identity=tools.rustc,
     )
     if cargo_probe.returncode != 0 or rustc_probe.returncode != 0:
-        raise protocol.ProtocolError("Task 7 toolchain probe failed")
+        failed = cargo_probe if cargo_probe.returncode != 0 else rustc_probe
+        raise Task7BuildFailure("Task 7 toolchain probe failed", failed)
     target = _rustc_host(rustc_probe.stdout, "Task 7")
     tree = subprocess.run(
         ("git", "ls-tree", "-r", "-z", "--full-tree", "HEAD"), cwd=repository,
@@ -239,6 +273,11 @@ def build_dispatch_and_characterization_artifacts(
     ).stdout
     source_sha256 = sha256_bytes(tree.encode())
     lock_sha256 = sha256_bytes(lock_payload)
+    protocol_sha256 = protocol.sha256_file(repository / "scripts/phase2e_protocol.py")
+    source_inventory = {
+        relative: protocol.sha256_file(repository / relative)
+        for relative in TASK7_SOURCE_PATHS
+    }
     toolchain = _toolchain_manifest(
         tools, cargo_probe.stdout.strip(), rustc_probe.stdout.strip()
     )
@@ -275,24 +314,31 @@ def build_dispatch_and_characterization_artifacts(
             deadline_seconds=QUERY_DEADLINE_SECONDS,
         )
         if feature_result.returncode != 0:
-            raise protocol.ProtocolError(f"Task 7 feature query failed for {package}")
+            raise Task7BuildFailure(f"Task 7 feature query failed for {package}", feature_result)
         build_result = run_bounded_command(
             command, cwd=repository, environment=environment,
             deadline_seconds=BUILD_DEADLINE_SECONDS,
         )
         if build_result.returncode != 0:
-            raise protocol.ProtocolError(f"Task 7 executable build failed for {package}")
+            raise Task7BuildFailure(f"Task 7 executable build failed for {package}", build_result)
         executable = select_cargo_executable(build_result.stdout, package, bench=bench)
         manifest = dispatch_build_provenance(
             package=package, candidate=candidate, source_sha256=source_sha256,
             lock_sha256=lock_sha256,
             feature_graph_sha256=sha256_bytes(feature_result.stdout.encode()),
             argv=command, environment=environment, executable=executable,
-            target=target, toolchain=toolchain,
+            target=target, toolchain=toolchain, protocol_sha256=protocol_sha256,
+            source_inventory=source_inventory, feature_graph=feature_result.stdout,
         ) if kind == "dispatch" else {
             "validity_state": "COMPLETE", "candidate": candidate, "package": package,
-            "bench": bench, "source_sha256": source_sha256, "lock_sha256": lock_sha256,
+            "protocol_version": protocol.PROTOCOL_VERSION,
+            "protocol_sha256": protocol_sha256,
+            "bench": bench, "source_sha256": source_sha256,
+            "candidate_tree_sha256": source_sha256,
+            "source_inventory": dict(sorted(source_inventory.items())),
+            "lock_sha256": lock_sha256, "common_lock_sha256": lock_sha256,
             "feature_graph_sha256": sha256_bytes(feature_result.stdout.encode()),
+            "feature_graph": feature_result.stdout,
             "requested_features": list(REQUESTED_FEATURES), "no_default_features": True,
             "feature_query_argv": list(feature_argv), "target": target,
             "toolchain": toolchain, "profile": "bench", "argv": list(command),

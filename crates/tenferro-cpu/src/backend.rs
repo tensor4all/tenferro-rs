@@ -26,6 +26,196 @@ use crate::{
     CpuExecutorShutdown, CpuId, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee, CpuSet,
     CpuTopology, CpuTopologyError, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement,
 };
+
+#[cfg(test)]
+pub(crate) mod phase2e_test_events {
+    use std::cell::RefCell;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use crate::ParallelMode;
+
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) enum Event {
+        Session,
+        Scope,
+        Permit,
+        Install,
+        Submit,
+        Provider,
+    }
+
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+    pub(crate) struct EventCounts {
+        pub(crate) session: usize,
+        pub(crate) scope: usize,
+        pub(crate) permit: usize,
+        pub(crate) install: usize,
+        pub(crate) submit: usize,
+        pub(crate) provider: usize,
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub(crate) struct EventSnapshot {
+        pub(crate) counts: EventCounts,
+        pub(crate) modes: Vec<ParallelMode>,
+        pub(crate) observed_cpus: Vec<usize>,
+    }
+
+    #[derive(Debug, Default)]
+    pub(crate) struct EventRecorder {
+        session: AtomicUsize,
+        scope: AtomicUsize,
+        permit: AtomicUsize,
+        install: AtomicUsize,
+        submit: AtomicUsize,
+        provider: AtomicUsize,
+        modes: Mutex<Vec<ParallelMode>>,
+        observed_cpus: Mutex<Vec<usize>>,
+        panic_next_worker: AtomicBool,
+    }
+
+    thread_local! {
+        static ACTIVE: RefCell<Option<Arc<EventRecorder>>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) fn with_recorder<R>(
+        recorder: &Arc<EventRecorder>,
+        operation: impl FnOnce() -> R,
+    ) -> R {
+        with_captured(Some(Arc::clone(recorder)), operation)
+    }
+
+    pub(crate) fn capture() -> Option<Arc<EventRecorder>> {
+        ACTIVE.with(|slot| slot.borrow().clone())
+    }
+
+    pub(crate) fn with_captured<R>(
+        captured: Option<Arc<EventRecorder>>,
+        operation: impl FnOnce() -> R,
+    ) -> R {
+        let _scope = CapturedScope::new(captured);
+        operation()
+    }
+
+    pub(crate) struct CapturedScope(Option<Arc<EventRecorder>>);
+
+    impl CapturedScope {
+        pub(crate) fn new(captured: Option<Arc<EventRecorder>>) -> Self {
+            let previous = ACTIVE.with(|slot| std::mem::replace(&mut *slot.borrow_mut(), captured));
+            Self(previous)
+        }
+    }
+
+    impl Drop for CapturedScope {
+        fn drop(&mut self) {
+            ACTIVE.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+
+    pub(crate) fn record(event: Event) {
+        ACTIVE.with(|slot| {
+            let recorder = slot.borrow();
+            let Some(recorder) = recorder.as_ref() else {
+                return;
+            };
+            let counter = match event {
+                Event::Session => &recorder.session,
+                Event::Scope => &recorder.scope,
+                Event::Permit => &recorder.permit,
+                Event::Install => &recorder.install,
+                Event::Submit => &recorder.submit,
+                Event::Provider => &recorder.provider,
+            };
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+    }
+
+    pub(crate) fn record_if_zero(event: Event) {
+        ACTIVE.with(|slot| {
+            let recorder = slot.borrow();
+            let Some(recorder) = recorder.as_ref() else {
+                return;
+            };
+            let counter = match event {
+                Event::Session => &recorder.session,
+                Event::Scope => &recorder.scope,
+                Event::Permit => &recorder.permit,
+                Event::Install => &recorder.install,
+                Event::Submit => &recorder.submit,
+                Event::Provider => &recorder.provider,
+            };
+            let _ = counter.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+        });
+    }
+
+    pub(crate) fn record_mode(mode: ParallelMode) {
+        ACTIVE.with(|slot| {
+            if let Some(recorder) = slot.borrow().as_ref() {
+                recorder.modes.lock().unwrap().push(mode);
+            }
+        });
+    }
+
+    pub(crate) fn record_worker_cpu() {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        {
+            unsafe extern "C" {
+                fn sched_getcpu() -> std::ffi::c_int;
+            }
+            // SAFETY: `sched_getcpu` has no arguments or preconditions.
+            let cpu = unsafe { sched_getcpu() };
+            if cpu >= 0 {
+                ACTIVE.with(|slot| {
+                    if let Some(recorder) = slot.borrow().as_ref() {
+                        let mut cpus = recorder.observed_cpus.lock().unwrap();
+                        let cpu = cpu as usize;
+                        if !cpus.contains(&cpu) {
+                            cpus.push(cpu);
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    impl EventRecorder {
+        pub(crate) fn panic_on_next_worker(&self) {
+            self.panic_next_worker.store(true, Ordering::SeqCst);
+        }
+
+        pub(crate) fn take_worker_panic(&self) -> bool {
+            self.panic_next_worker.swap(false, Ordering::SeqCst)
+        }
+
+        pub(crate) fn snapshot(&self) -> EventSnapshot {
+            EventSnapshot {
+                counts: EventCounts {
+                    session: self.session.load(Ordering::SeqCst),
+                    scope: self.scope.load(Ordering::SeqCst),
+                    permit: self.permit.load(Ordering::SeqCst),
+                    install: self.install.load(Ordering::SeqCst),
+                    submit: self.submit.load(Ordering::SeqCst),
+                    provider: self.provider.load(Ordering::SeqCst),
+                },
+                modes: self.modes.lock().unwrap().clone(),
+                observed_cpus: self.observed_cpus.lock().unwrap().clone(),
+            }
+        }
+    }
+
+    pub(crate) fn panic_if_armed() {
+        ACTIVE.with(|slot| {
+            if slot
+                .borrow()
+                .as_ref()
+                .is_some_and(|recorder| recorder.take_worker_panic())
+            {
+                panic!("phase2e injected worker unwind");
+            }
+        });
+    }
+}
 use crate::{
     Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorValue, TensorWrite,
     TypedTensor, TypedTensorView, TypedTensorViewMut,
@@ -2326,7 +2516,7 @@ impl CpuBackend {
     }
 
     fn acquire_execution_permit(&self, owner: ResourceOwner) -> ResourcePermit {
-        match &self.resolved {
+        let permit = match &self.resolved {
             ResolvedCpuExecution::Managed(placement)
             | ResolvedCpuExecution::ExternalManaged(placement) => self
                 .shared
@@ -2340,7 +2530,12 @@ impl CpuBackend {
                 .shared
                 .arbiter
                 .acquire_provider_exclusive_recovering(owner),
+        };
+        #[cfg(test)]
+        {
+            phase2e_test_events::record(phase2e_test_events::Event::Permit);
         }
+        permit
     }
 
     #[cfg(test)]
@@ -3005,6 +3200,8 @@ impl BackendSessionHost for CpuBackend {
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
+        #[cfg(test)]
+        phase2e_test_events::record(phase2e_test_events::Event::Session);
         self.run_backend_session_cached(None, f)
     }
 

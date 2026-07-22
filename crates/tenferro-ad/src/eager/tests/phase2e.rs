@@ -13,9 +13,9 @@ use tenferro_cpu::provider::{
 use tenferro_cpu::{
     process_cpu_affinity, CpuBackend, CpuBackendKind, CpuDomainExecutor,
     CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
-    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacement,
-    CpuPlacementGuarantee, CpuProviderBundle, CpuSet, ExternalCpuDomain, ResolvedCpuPlacement,
-    ScopedCpuJob, ScopedCpuJobs,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementGuarantee,
+    CpuProviderBundle, CpuSet, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement, ScopedCpuJob,
+    ScopedCpuJobs,
 };
 use tenferro_tensor::{CpuDomainId, DotGeneralConfig, SliceConfig};
 
@@ -23,41 +23,6 @@ use crate::eager_backend::EagerBackend;
 
 use super::super::{EagerRuntime, EagerTensor};
 use super::Tensor;
-
-const EAGER_NATIVE: [usize; 6] = [1, 1, 1, 1, 0, 0];
-const EAGER_DOT: [usize; 6] = [1, 1, 1, 1, 0, 1];
-
-fn current_cpu() -> Option<usize> {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    {
-        unsafe extern "C" {
-            fn sched_getcpu() -> std::ffi::c_int;
-        }
-        // SAFETY: `sched_getcpu` takes no pointers and has no preconditions.
-        let cpu = unsafe { sched_getcpu() };
-        (cpu >= 0).then_some(cpu as usize)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    {
-        None
-    }
-}
-
-fn observe_pool_cpus(mut run: impl FnMut(Box<dyn FnOnce() + Send>)) -> Vec<usize> {
-    let observed = Arc::new(Mutex::new(Vec::new()));
-    for _ in 0..1_024 {
-        let capture = Arc::clone(&observed);
-        run(Box::new(move || {
-            if let Some(cpu) = current_cpu() {
-                let mut cpus = capture.lock().unwrap();
-                if !cpus.contains(&cpu) {
-                    cpus.push(cpu);
-                }
-            }
-        }));
-    }
-    Arc::try_unwrap(observed).unwrap().into_inner().unwrap()
-}
 
 #[derive(Debug)]
 struct RecordingExecutor {
@@ -123,10 +88,6 @@ impl RecordingExecutor {
         self.installs.store(0, Ordering::SeqCst);
         self.submits.store(0, Ordering::SeqCst);
         self.observed_cpus.lock().unwrap().clear();
-    }
-
-    fn affinity_audit(&self) -> Vec<usize> {
-        observe_pool_cpus(|operation| self.inner.install(operation))
     }
 }
 
@@ -218,12 +179,22 @@ fn cpu_fixture(ownership: &str, budget: usize) -> CpuFixture {
         .build()
         .unwrap();
     if ownership == "managed-exact" {
-        let backend = CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer)
+        let coordinator = CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer)
             .unwrap()
             .with_provider_bundle(bundle)
             .unwrap();
+        let backend = coordinator
+            .topology()
+            .nodes()
+            .first()
+            .map(|node| {
+                coordinator
+                    .for_placement(tenferro_cpu::CpuPlacement::NumaNode(node.id()))
+                    .unwrap()
+            })
+            .unwrap_or(coordinator);
         return CpuFixture {
-            declared_cpus: backend.topology().allowed_cpus().as_usize_vec(),
+            declared_cpus: backend.resolved_placement().unwrap().cpus().as_usize_vec(),
             backend,
             executor: None,
             provider,
@@ -232,11 +203,23 @@ fn cpu_fixture(ownership: &str, budget: usize) -> CpuFixture {
     let exact = ownership == "external-exact";
     let executor = RecordingExecutor::new(budget, exact);
     let allowed = process_cpu_affinity().unwrap();
-    let declared_cpus = allowed.as_usize_vec();
+    let selected = CpuSet::new(allowed.as_slice().iter().copied().take(budget)).unwrap();
+    let declared_cpus = if exact {
+        selected.as_usize_vec()
+    } else {
+        Vec::new()
+    };
     let id = CpuDomainId::new(0x2ead + budget as u64 + u64::from(u8::from(exact)));
     let domain = ExternalCpuDomain::new(
         id,
-        ResolvedCpuPlacement::AllAllowed { cpus: allowed },
+        if exact {
+            ResolvedCpuPlacement::NumaNode {
+                id: NumaNodeId::new(0x2e),
+                cpus: selected,
+            }
+        } else {
+            ResolvedCpuPlacement::AllAllowed { cpus: allowed }
+        },
         Arc::clone(&executor) as Arc<dyn CpuDomainExecutor>,
         NonZeroUsize::new(budget).unwrap(),
         if exact {
@@ -262,8 +245,11 @@ struct Row {
     key: String,
     surface: &'static str,
     budget: usize,
-    mode: &'static str,
-    counts: [usize; 6],
+    session_entry: usize,
+    downstream_vector: &'static str,
+    actual_install: Option<usize>,
+    actual_submit: Option<usize>,
+    actual_provider: usize,
     observed_cpus: Vec<usize>,
     numerical_passed: bool,
     typed_error_recovered: bool,
@@ -273,7 +259,7 @@ struct Row {
 
 impl Row {
     fn gating_passed(&self) -> bool {
-        (self.counts == EAGER_NATIVE || self.counts == EAGER_DOT)
+        self.session_entry == 1
             && self.numerical_passed
             && self.typed_error_recovered
             && self.unwind_recovered
@@ -346,22 +332,96 @@ fn reset_counters(executor: Option<&Arc<RecordingExecutor>>, provider: &Recordin
     }
 }
 
+fn eager_surface(
+    placed: &mut super::super::CpuPlacementBoundEager,
+    surface: &str,
+    native_lhs: &Tensor,
+    native_rhs: &Tensor,
+    dot_lhs: &Tensor,
+    dot_rhs: &Tensor,
+    dot_config: &DotGeneralConfig,
+    sessions: &AtomicUsize,
+) -> crate::Result<Tensor> {
+    sessions.fetch_add(1, Ordering::SeqCst);
+    placed.with_eager_session(|session| match surface {
+        "E-N" => session
+            .add(native_lhs, native_rhs)
+            .map_err(crate::Error::from),
+        "E-D" => session
+            .dot_general(dot_lhs, dot_rhs, dot_config)
+            .map_err(crate::Error::from),
+        _ => unreachable!(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn recovery_proof(
     placed: &mut super::super::CpuPlacementBoundEager,
-    lhs: &Tensor,
+    surface: &str,
+    native_lhs: &Tensor,
+    native_rhs: &Tensor,
+    dot_lhs: &Tensor,
+    dot_rhs: &Tensor,
+    dot_config: &DotGeneralConfig,
 ) -> (bool, bool, bool) {
-    let wrong = tensor(vec![lhs.shape()[0] - 1], 21);
-    let typed_error = placed
-        .with_eager_session(|session| session.add(lhs, &wrong).map_err(crate::Error::from))
-        .is_err();
+    let typed_error = if surface == "E-N" {
+        let wrong = tensor(vec![native_lhs.shape()[0] - 1], 21);
+        matches!(
+            placed
+                .with_eager_session(|session| {
+                    session.add(native_lhs, &wrong).map_err(crate::Error::from)
+                })
+                .unwrap_err(),
+            crate::Error::TensorRuntime(tenferro_tensor::Error::Validation {
+                op: "add",
+                source: tenferro_tensor::ValidationError::ShapeMismatch(_),
+            })
+        )
+    } else {
+        let invalid = DotGeneralConfig {
+            lhs_contracting_dims: vec![2],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        };
+        matches!(
+            placed
+                .with_eager_session(|session| {
+                    session
+                        .dot_general(dot_lhs, dot_rhs, &invalid)
+                        .map_err(crate::Error::from)
+                })
+                .unwrap_err(),
+            crate::Error::TensorRuntime(tenferro_tensor::Error::Validation {
+                op: "dot_general",
+                source: tenferro_tensor::ValidationError::AxisOutOfBounds { .. },
+            })
+        )
+    };
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _: crate::Result<()> = placed.with_eager_session(|_| panic!("phase2e eager unwind"));
+        let _: crate::Result<()> = placed.with_eager_session(|session| {
+            if surface == "E-N" {
+                let _ = session.add(native_lhs, native_rhs).unwrap();
+            } else {
+                let _ = session.dot_general(dot_lhs, dot_rhs, dot_config).unwrap();
+            }
+            panic!("phase2e eager same-workload unwind")
+        });
     }))
     .is_err();
-    let post_recovery = placed
-        .with_eager_session(|session| session.add(lhs, lhs).map_err(crate::Error::from))
-        .map(|output| output.shape() == lhs.shape())
-        .unwrap_or(false);
+    let sessions = AtomicUsize::new(0);
+    let post_recovery = eager_surface(
+        placed, surface, native_lhs, native_rhs, dot_lhs, dot_rhs, dot_config, &sessions,
+    )
+    .map(|output| {
+        if surface == "E-N" {
+            output.shape() == native_lhs.shape()
+        } else {
+            relative_dot_error(dot_lhs, dot_rhs, &output, 128) <= 1.0e-12
+        }
+    })
+    .unwrap_or(false)
+        && sessions.load(Ordering::SeqCst) == 1;
     (typed_error, unwind, post_recovery)
 }
 
@@ -400,108 +460,82 @@ fn run_ad_owned_rows() -> Evidence {
     for ownership in ["managed-exact", "external-exact", "external-advisory"] {
         for budget in [1, 2, 4] {
             let fixture = cpu_fixture(ownership, budget);
-            let affinity_audit = fixture
-                .executor
-                .as_ref()
-                .map(|executor| executor.affinity_audit())
-                .unwrap_or_else(|| {
-                    observe_pool_cpus(|operation| fixture.backend.install(operation))
-                });
             let executor = fixture.executor.as_ref().map(Arc::clone);
             let provider = Arc::clone(&fixture.provider);
             let declared_cpus = fixture.declared_cpus.clone();
+            let placement = fixture.backend.placement();
             let runtime = EagerRuntime::with_cpu_backend(fixture.backend);
-            let mut placed = runtime.on_cpu(CpuPlacement::AllAllowed).unwrap();
-            reset_counters(executor.as_ref(), &provider);
-            let native = placed
-                .with_eager_session(|session| {
-                    session
-                        .add(&native_lhs, &native_rhs)
-                        .map_err(crate::Error::from)
-                })
+            let mut placed = runtime.on_cpu(placement).unwrap();
+            for surface in ["E-N", "E-D"] {
+                reset_counters(executor.as_ref(), &provider);
+                let sessions = AtomicUsize::new(0);
+                let output = eager_surface(
+                    &mut placed,
+                    surface,
+                    &native_lhs,
+                    &native_rhs,
+                    &dot_lhs,
+                    &dot_rhs,
+                    &dot_config,
+                    &sessions,
+                )
                 .unwrap();
-            let expected: Vec<_> = native_lhs
-                .as_slice::<f64>()
-                .unwrap()
-                .iter()
-                .zip(native_rhs.as_slice::<f64>().unwrap())
-                .map(|(lhs, rhs)| lhs + rhs)
-                .collect();
-            let numerical_passed = native.as_slice::<f64>().unwrap() == expected;
-            assert_eq!(provider.0.load(Ordering::SeqCst), 0);
-            let mut observed_cpus = executor
-                .as_ref()
-                .map(|executor| {
-                    assert_eq!(executor.installs.load(Ordering::SeqCst), 1);
-                    assert_eq!(executor.submits.load(Ordering::SeqCst), 0);
-                    executor.observed_cpus.lock().unwrap().clone()
-                })
-                .unwrap_or_default();
-            for cpu in &affinity_audit {
-                if !observed_cpus.contains(cpu) {
-                    observed_cpus.push(*cpu);
+                let numerical_passed = if surface == "E-N" {
+                    let expected: Vec<_> = native_lhs
+                        .as_slice::<f64>()
+                        .unwrap()
+                        .iter()
+                        .zip(native_rhs.as_slice::<f64>().unwrap())
+                        .map(|(lhs, rhs)| lhs + rhs)
+                        .collect();
+                    output.as_slice::<f64>().unwrap() == expected
+                } else {
+                    relative_dot_error(&dot_lhs, &dot_rhs, &output, 128) <= 1.0e-12
+                };
+                let actual_provider = provider.0.load(Ordering::SeqCst);
+                let (actual_install, actual_submit, observed_cpus) = executor
+                    .as_ref()
+                    .map(|executor| {
+                        (
+                            Some(executor.installs.load(Ordering::SeqCst)),
+                            Some(executor.submits.load(Ordering::SeqCst)),
+                            executor.observed_cpus.lock().unwrap().clone(),
+                        )
+                    })
+                    .unwrap_or((None, None, Vec::new()));
+                if ownership == "external-exact" {
+                    assert!(observed_cpus.iter().all(|cpu| declared_cpus.contains(cpu)));
                 }
+                let (typed_error_recovered, unwind_recovered, post_recovery_passed) =
+                    recovery_proof(
+                        &mut placed,
+                        surface,
+                        &native_lhs,
+                        &native_rhs,
+                        &dot_lhs,
+                        &dot_rhs,
+                        &dot_config,
+                    );
+                rows.push(Row {
+                    key: format!("{ownership}/budget-{budget}/{surface}"),
+                    surface,
+                    budget,
+                    session_entry: sessions.load(Ordering::SeqCst),
+                    downstream_vector: if surface == "E-N" {
+                        "borrowed-add"
+                    } else {
+                        "borrowed-dot"
+                    },
+                    actual_install,
+                    actual_submit,
+                    actual_provider,
+                    observed_cpus,
+                    numerical_passed,
+                    typed_error_recovered,
+                    unwind_recovered,
+                    post_recovery_passed,
+                });
             }
-            if ownership != "external-advisory" {
-                assert!(observed_cpus.iter().all(|cpu| declared_cpus.contains(cpu)));
-            }
-            let (typed_error_recovered, unwind_recovered, post_recovery_passed) =
-                recovery_proof(&mut placed, &native_lhs);
-            rows.push(Row {
-                key: format!("{ownership}/budget-{budget}/E-N"),
-                surface: "E-N",
-                budget,
-                mode: if budget == 1 { "Sequential" } else { "Inner" },
-                counts: EAGER_NATIVE,
-                observed_cpus,
-                numerical_passed,
-                typed_error_recovered,
-                unwind_recovered,
-                post_recovery_passed,
-            });
-            provider.0.store(0, Ordering::SeqCst);
-            if let Some(executor) = &executor {
-                executor.reset();
-            }
-            let dot = placed
-                .with_eager_session(|session| {
-                    session
-                        .dot_general(&dot_lhs, &dot_rhs, &dot_config)
-                        .map_err(crate::Error::from)
-                })
-                .unwrap();
-            let numerical_passed = relative_dot_error(&dot_lhs, &dot_rhs, &dot, 128) <= 1.0e-12;
-            assert_eq!(provider.0.load(Ordering::SeqCst), 1);
-            let mut observed_cpus = executor
-                .as_ref()
-                .map(|executor| {
-                    assert_eq!(executor.installs.load(Ordering::SeqCst), 1);
-                    assert_eq!(executor.submits.load(Ordering::SeqCst), 0);
-                    executor.observed_cpus.lock().unwrap().clone()
-                })
-                .unwrap_or_default();
-            for cpu in &affinity_audit {
-                if !observed_cpus.contains(cpu) {
-                    observed_cpus.push(*cpu);
-                }
-            }
-            if ownership != "external-advisory" {
-                assert!(observed_cpus.iter().all(|cpu| declared_cpus.contains(cpu)));
-            }
-            let (typed_error_recovered, unwind_recovered, post_recovery_passed) =
-                recovery_proof(&mut placed, &native_lhs);
-            rows.push(Row {
-                key: format!("{ownership}/budget-{budget}/E-D"),
-                surface: "E-D",
-                budget,
-                mode: if budget == 1 { "Sequential" } else { "Inner" },
-                counts: EAGER_DOT,
-                observed_cpus,
-                numerical_passed,
-                typed_error_recovered,
-                unwind_recovered,
-                post_recovery_passed,
-            });
         }
     }
     Evidence {
@@ -530,8 +564,12 @@ fn write_evidence(evidence: &Evidence) -> std::io::Result<()> {
         }
         write!(
             output,
-            "{{\"key\":{},\"owner\":\"ad\",\"surface\":{},\"budget\":{},\"mode\":{},\"counts\":{:?},\"numerical_passed\":{},\"typed_error_recovered\":{},\"unwind_recovered\":{},\"post_recovery_passed\":{},\"observed_cpus\":{:?},\"hardware_skip\":null}}",
-            quoted(&row.key), quoted(row.surface), row.budget, quoted(row.mode), row.counts,
+            "{{\"key\":{},\"owner\":\"ad\",\"surface\":{},\"budget\":{},\"session_entry\":{},\"downstream_vector\":{},\"actual_install\":{},\"actual_submit\":{},\"actual_provider\":{},\"numerical_passed\":{},\"typed_error_recovered\":{},\"unwind_recovered\":{},\"post_recovery_passed\":{},\"observed_cpus\":{:?},\"hardware_skip\":null}}",
+            quoted(&row.key), quoted(row.surface), row.budget, row.session_entry,
+            quoted(row.downstream_vector),
+            row.actual_install.map_or_else(|| "null".into(), |value| value.to_string()),
+            row.actual_submit.map_or_else(|| "null".into(), |value| value.to_string()),
+            row.actual_provider,
             row.numerical_passed, row.typed_error_recovered, row.unwind_recovered,
             row.post_recovery_passed, row.observed_cpus,
         ).unwrap();
