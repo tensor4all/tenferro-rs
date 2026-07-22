@@ -193,10 +193,10 @@ pub trait TracedTensorLinalgExt {
     ///
     /// # Errors
     ///
-    /// Returns `Error::Validation` when `A` or `b` is not a batched matrix
-    /// (rank `>= 2`), when `A` has a symbolic shape, when `A` is wide
-    /// (`rows < cols`, underdetermined), or when the dtype is not
-    /// floating-point or complex.
+    /// Returns `Error::Validation` for an invalid rank (`A` or `b` not a
+    /// batched matrix, rank `< 2`), a symbolic shape, a wide/underdetermined
+    /// `A` (`rows < cols`), or an unsupported dtype (not floating-point or
+    /// complex).
     ///
     /// # Deferred errors
     ///
