@@ -317,6 +317,14 @@ impl LinalgBackend for CpuBackend {
         })
     }
 
+    fn svd_full(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        ensure_host_tensor("svd_full", input)?;
+        let provider = linalg_provider_kind(self.kind(), "svd_full")?;
+        self.with_linalg_pool_fresh(|context, buffers| {
+            svd_full_entered(provider, context, buffers, input)
+        })
+    }
+
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         ensure_host_tensor("svd_values", input)?;
         match linalg_provider_kind(self.kind(), "svd_values")? {
@@ -1385,6 +1393,46 @@ fn svd_entered(
                 Err(unsupported_provider("svd", CpuBackendKind::Blas))
             }
         }
+    }
+}
+
+fn svd_full_entered(
+    provider: CpuLinalgProvider,
+    context: &CpuExecutionContext<'_>,
+    buffers: &mut BufferPool,
+    input: &Tensor,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    match provider {
+        CpuLinalgProvider::Faer => {
+            #[cfg(feature = "cpu-faer")]
+            {
+                match input {
+                    Tensor::F32(t) => linalg::faer::svd_full(context, buffers, t)
+                        .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
+                    Tensor::F64(t) => linalg::faer::svd_full(context, buffers, t)
+                        .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
+                    Tensor::C32(t) => linalg::faer::svd_full(context, buffers, t)
+                        .and_then(svd_c32_outputs_to_public_tensors),
+                    Tensor::C64(t) => linalg::faer::svd_full(context, buffers, t)
+                        .and_then(svd_c64_outputs_to_public_tensors),
+                    _ => Err(unsupported_dtype("svd_full", input.dtype())),
+                }
+            }
+            #[cfg(not(feature = "cpu-faer"))]
+            {
+                let _ = (context, buffers, input);
+                Err(unsupported_provider("svd_full", CpuBackendKind::Faer))
+            }
+        }
+        // The LAPACK provider is intentionally not wired for full-matrices
+        // SVD in this slice; it returns a typed error instead of silently
+        // computing a thin decomposition. Full-SVD callers select the faer
+        // provider (the default) or download to host and use it explicitly.
+        CpuLinalgProvider::Blas => Err(tenferro_tensor::Error::unsupported(
+            "svd_full",
+            "CPU LAPACK provider does not implement full-matrices SVD; \
+             use the faer provider for full SVD",
+        )),
     }
 }
 

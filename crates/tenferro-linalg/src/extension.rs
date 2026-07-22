@@ -285,6 +285,10 @@ pub(crate) enum LinalgOp {
         derivative_eps: f64,
         gauge: SvdGauge,
     },
+    /// Full-matrices SVD: `U` is `m x m` and `Vh` is `n x n`, so the trailing
+    /// `Vh` rows span the input's right nullspace. Value-only: AD is
+    /// intentionally unsupported (see the linalg AD support manifest).
+    SvdFull,
     SvdVals {
         derivative_eps: f64,
     },
@@ -322,7 +326,7 @@ impl LinalgOp {
             | Self::LuSolvePrepared { .. }
             | Self::SvdVals { .. }
             | Self::TriangularSolve { .. } => 1,
-            Self::Svd { .. } => 3,
+            Self::Svd { .. } | Self::SvdFull => 3,
             Self::Qr { .. } | Self::Eigh { .. } | Self::Eig { .. } => 2,
             Self::LuFactor => 3,
             Self::Lu => 4,
@@ -354,6 +358,7 @@ impl LinalgOp {
             Self::SvdVals { .. } => 12,
             Self::EighVals { .. } => 13,
             Self::EigVals { .. } => 14,
+            Self::SvdFull => 15,
         }
     }
 }
@@ -504,7 +509,11 @@ impl ExtensionOp for LinalgExtensionOp {
                 hasher.write_u8(u8::from(transpose_a));
                 hasher.write_u8(u8::from(unit_diagonal));
             }
-            LinalgOp::Cholesky | LinalgOp::Lu | LinalgOp::LuFactor | LinalgOp::FullPivLu => {}
+            LinalgOp::Cholesky
+            | LinalgOp::Lu
+            | LinalgOp::LuFactor
+            | LinalgOp::FullPivLu
+            | LinalgOp::SvdFull => {}
         }
     }
 
@@ -583,6 +592,7 @@ impl ExtensionOp for LinalgExtensionOp {
             LinalgOp::LuFactor => lu_factor_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::FullPivLu => full_piv_lu_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::Svd { .. } => svd_meta(input_dtypes[0], input_shapes[0])?,
+            LinalgOp::SvdFull => svd_full_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::SvdVals { .. } => {
                 vec![svd_values_meta(input_dtypes[0], input_shapes[0])?]
             }
@@ -704,6 +714,7 @@ fn execute_linalg<B: LinalgBackend>(
                 gauge,
             },
         ),
+        LinalgOp::SvdFull => backend.svd_full(inputs[0]),
         LinalgOp::SvdVals { .. } => Ok(vec![backend.svd_values(inputs[0])?]),
         LinalgOp::Qr { gauge } => backend.qr_with_options(inputs[0], QrOptions { gauge }),
         LinalgOp::Eigh {
@@ -1129,6 +1140,19 @@ fn svd_meta(dtype: DType, shape: &[SymDim]) -> tenferro_tensor::Result<Vec<(DTyp
         (dtype, matrix_shape(m, k.clone(), batch)),
         (singular_values_dtype(dtype), vector_shape(k.clone(), batch)),
         (dtype, matrix_shape(k, n, batch)),
+    ])
+}
+
+fn svd_full_meta(
+    dtype: DType,
+    shape: &[SymDim],
+) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    let (m, n, batch) = matrix_meta_parts("tenferro-linalg.svd_full", shape)?;
+    let k = m.clone().min(n.clone());
+    Ok(vec![
+        (dtype, matrix_shape(m.clone(), m, batch)),
+        (singular_values_dtype(dtype), vector_shape(k, batch)),
+        (dtype, matrix_shape(n.clone(), n, batch)),
     ])
 }
 

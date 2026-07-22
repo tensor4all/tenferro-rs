@@ -15,6 +15,8 @@ mod eager_surface_parity;
 mod eager_tensor;
 #[path = "integration/full_piv_lu.rs"]
 mod full_piv_lu;
+#[path = "integration/full_svd_lstsq.rs"]
+mod full_svd_lstsq;
 #[path = "integration/gpu_linalg.rs"]
 mod gpu_linalg;
 #[path = "integration/gpu_linalg_source_contract.rs"]

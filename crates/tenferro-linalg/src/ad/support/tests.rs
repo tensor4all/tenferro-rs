@@ -35,6 +35,7 @@ fn manifest_internal_mapping_covers_linalg_op_variants() {
             },
             LinalgAdOpKind::SvdVals,
         ),
+        (LinalgOp::SvdFull, LinalgAdOpKind::SvdFull),
         (
             LinalgOp::Qr {
                 gauge: QrGauge::Raw,

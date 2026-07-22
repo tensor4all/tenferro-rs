@@ -42,6 +42,27 @@ pub trait TracedTensorLinalgExt {
         &self,
         options: SvdOptions,
     ) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
+
+    /// Build a traced full-matrices SVD operation returning square `U (m x m)`
+    /// and `Vh (n x n)`, whose trailing `n - rank` rows span the input's right
+    /// nullspace.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` when the input is not a batched matrix
+    /// (rank `>= 2`), or `Error::Extension` for graph registration failures.
+    ///
+    /// # Deferred errors
+    ///
+    /// The active backend returns `Error::Extension` with
+    /// `ErrorKind::Unsupported` at execution if it does not implement
+    /// full-matrices SVD (only the CPU faer provider does in this slice; the
+    /// LAPACK provider and GPU backends are unsupported). Automatic
+    /// differentiation is intentionally unsupported for the full variant (see
+    /// the linalg AD support manifest) and surfaces a typed AD error rather
+    /// than a silent thin-SVD fallback.
+    fn svd_full(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)>;
+
     /// Build a traced QR operation.
     ///
     /// # Errors
@@ -166,6 +187,24 @@ pub trait TracedTensorLinalgExt {
     /// Singular systems and concrete shape mismatches are reported as
     /// numerical or validation errors during compile or execution.
     fn solve(&self, b: &TracedTensor) -> Result<TracedTensor>;
+
+    /// Build a traced least-squares solve `argmin_x ||A x - b||_2` for a tall
+    /// or square, full-column-rank `A`, via the thin QR factorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for an invalid rank (`A` or `b` not a
+    /// batched matrix, rank `< 2`), a symbolic shape, a wide/underdetermined
+    /// `A` (`rows < cols`), or an unsupported dtype (not floating-point or
+    /// complex).
+    ///
+    /// # Deferred errors
+    ///
+    /// Backend QR and triangular-solve failures and concrete shape mismatches
+    /// are reported during compile or execution. Rank-deficient `A` is not
+    /// detected: `R` is singular and the result is ill-defined, so callers must
+    /// ensure full column rank.
+    fn lstsq(&self, b: &TracedTensor) -> Result<TracedTensor>;
 
     /// Build a traced complete-pivot LU solve operation.
     ///
@@ -315,6 +354,10 @@ impl TracedTensorLinalgExt for TracedTensor {
         svd_with_options(self, options)
     }
 
+    fn svd_full(&self) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
+        svd_full(self)
+    }
+
     fn qr(&self) -> Result<(TracedTensor, TracedTensor)> {
         qr(self)
     }
@@ -357,6 +400,10 @@ impl TracedTensorLinalgExt for TracedTensor {
 
     fn solve(&self, b: &TracedTensor) -> Result<TracedTensor> {
         solve(self, b)
+    }
+
+    fn lstsq(&self, b: &TracedTensor) -> Result<TracedTensor> {
+        lstsq(self, b)
     }
 
     fn full_piv_lu_solve(&self, b: &TracedTensor) -> Result<TracedTensor> {
@@ -482,6 +529,47 @@ pub fn svd_with_options(
             &[a],
         )?,
         "svd",
+    )
+}
+
+/// Build a traced full-matrices singular value decomposition op.
+///
+/// Unlike [`svd`], the returned factors are square: `U` is `m x m` and `Vh` is
+/// `n x n`, while `S` still holds `min(m, n)` singular values. The trailing
+/// `n - rank` rows of `Vh` span the right nullspace of the input, so this is
+/// the decomposition to use for kernel-basis extraction.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::TracedTensorLinalgExt;
+/// use tenferro_runtime::TracedTensor;
+///
+/// // A wide 1x2 system: the trailing row of the 2x2 Vh spans the nullspace.
+/// let a = TracedTensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap();
+/// let (u, s, vh) = a.svd_full().unwrap();
+/// assert_eq!(u.rank, 2);
+/// assert_eq!(s.rank, 1);
+/// assert_eq!(vh.rank, 2);
+/// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` when the input is not a batched matrix
+/// (rank `>= 2`), or `Error::RuntimeState` when extension registration is
+/// unavailable.
+///
+/// # Deferred errors
+///
+/// The active backend returns `Error::Extension` with `ErrorKind::Unsupported`
+/// during execution if it does not implement full-matrices SVD (only the CPU
+/// faer provider does in this slice). Automatic differentiation is
+/// intentionally unsupported for the full variant (see the linalg AD support
+/// manifest) and surfaces a typed AD error, not a silent thin-SVD fallback.
+pub fn svd_full(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor, TracedTensor)> {
+    three_outputs(
+        apply(Arc::new(LinalgExtensionOp::new(LinalgOp::SvdFull)), &[a])?,
+        "svd_full",
     )
 }
 
@@ -827,6 +915,69 @@ pub fn solve(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
         )?,
         "solve",
     )
+}
+
+/// Build a traced least-squares solve `argmin_x ||A x - b||_2` for a tall or
+/// square, full-column-rank `A`.
+///
+/// The solution is computed through the thin QR factorization `A = Q R`: since
+/// `R` is nonsingular for full column rank, `x = R^{-1} (Qᴴ b)`. This composes
+/// existing traced decomposition ops (`qr`, `dot_general`, `triangular_solve`),
+/// so, unlike the value-only [`svd_full`], it participates in autodiff through
+/// its component rules.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::TracedTensorLinalgExt;
+/// use tenferro_runtime::TracedTensor;
+///
+/// // Overdetermined 3x2 system.
+/// let a = TracedTensor::from_vec_col_major(
+///     vec![3, 2],
+///     vec![1.0_f64, 1.0, 1.0, 0.0, 1.0, 2.0],
+/// )
+/// .unwrap();
+/// let b = TracedTensor::from_vec_col_major(vec![3, 1], vec![1.0_f64, 2.0, 2.0]).unwrap();
+/// let x = a.lstsq(&b).unwrap();
+/// assert_eq!(x.rank, 2);
+/// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` when `A` or `b` is not a batched matrix
+/// (rank `>= 2`), when `A` has a symbolic shape, when `A` is wide
+/// (`rows < cols`, underdetermined), or when the dtype is not floating-point or
+/// complex. Rank-deficient `A` is not detected here: `R` is singular and the
+/// triangular solve yields a non-finite or ill-defined result, so callers must
+/// ensure full column rank.
+///
+/// # Deferred errors
+///
+/// Backend QR and triangular-solve failures and concrete shape mismatches are
+/// reported during compile or execution.
+pub fn lstsq(a: &TracedTensor, b: &TracedTensor) -> Result<TracedTensor> {
+    ensure_float_or_complex("lstsq", a.dtype)?;
+    ensure_min_rank("lstsq", a.rank, 2)?;
+    ensure_min_rank("lstsq", b.rank, 2)?;
+    let a_shape = require_concrete_shape("lstsq", a)?;
+    let (m, n) = (a_shape[0], a_shape[1]);
+    if m < n {
+        return Err(Error::TensorRuntime(
+            tenferro_tensor::Error::invalid_argument(
+                "lstsq",
+                "shape",
+                format!(
+                    "lstsq requires a tall or square matrix (rows {m} >= cols {n}); \
+                     underdetermined (wide) systems are not supported"
+                ),
+            ),
+        ));
+    }
+    let (q, r) = qr(a)?;
+    let qh = q.conj()?.transpose(&matrix_transpose_perm(q.rank))?;
+    let qh_b = matmul_preserve_trailing_batch(&qh, b)?;
+    triangular_solve(&r, &qh_b, true, false, false, false)
 }
 
 /// Build a traced full-pivot LU solve op.

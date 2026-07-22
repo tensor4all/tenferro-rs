@@ -57,6 +57,10 @@ impl LinalgBackend for EagerBackend {
         dispatch_linalg!(self, svd(input))
     }
 
+    fn svd_full(&mut self, input: &Tensor) -> tenferro_tensor::Result<Vec<Tensor>> {
+        dispatch_linalg!(self, svd_full(input))
+    }
+
     fn svd_values(&mut self, input: &Tensor) -> tenferro_tensor::Result<Tensor> {
         dispatch_linalg!(self, svd_values(input))
     }
