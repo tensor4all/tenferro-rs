@@ -68,6 +68,17 @@ validator recomputes the exact 148-file inventory and every digest/key. Timeout
 or nonzero execution writes owning `INCONCLUSIVE` terminals with captured
 stdout/stderr and TERM, five-second grace, KILL, and reap metadata.
 
+The Cycle 3 provenance hardening separates runtime execution from build
+environments. Direct test processes receive the exact
+`protocol.runtime_environment` allowlist plus only their evidence-directory
+variable, and Criterion rows receive only the allowlist plus
+`CRITERION_HOME`; build-only Cargo variables are rejected. The terminal source
+contract is a canonical list keyed by every `(path, signature)` pair and binds
+both whole-file and extracted-item SHA-256 values, so multiple hot functions in
+one source file cannot overwrite each other. The caller-supplied scratch root
+is resolved before evidence mutation and must be disjoint in both directions
+from both the repository and evidence trees.
+
 Correctness executables have a 120-second deadline. Each Criterion row has a
 30-second deadline. Process groups receive a five-second termination grace
 before forced kill. The two Criterion harnesses use fixed two-second warmup,
@@ -93,3 +104,5 @@ five-second measurement, 100 samples, and 95% confidence.
   `df8d9c3a64d7e401ea60bb3508deae3a8d004b9c7e062c8605a9aabd7e3c45e9`;
   characterization terminal SHA-256 was
   `1e694a83fe96c740f5980240b12e990de5d70670feab618f75229dfbd5239f66`.
+- Cycle 3 Python hardening passed 57 protocol/gate unit tests and Python bytecode
+  compilation; `git diff --check` also passed.

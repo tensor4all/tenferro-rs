@@ -121,6 +121,21 @@ class InventoryTests(unittest.TestCase):
         with self.assertRaises(protocol.ProtocolError):
             gates.source_item(source, "fn missing()")
 
+    def test_source_contract_binds_every_hot_item_independently(self) -> None:
+        inventory = gates.validate_source_contract(pathlib.Path.cwd())
+        self.assertEqual(len(inventory), len(gates.SOURCE_HOT_ITEMS))
+        self.assertEqual(
+            [(item["path"], item["signature"]) for item in inventory],
+            list(gates.SOURCE_HOT_ITEMS),
+        )
+        self.assertTrue(all(set(item) == {
+            "path", "signature", "source_sha256", "item_sha256"
+        } for item in inventory))
+        self.assertEqual(
+            len({(item["path"], item["signature"]) for item in inventory}),
+            len(gates.SOURCE_HOT_ITEMS),
+        )
+
 
 class ProvenanceTests(unittest.TestCase):
     def test_characterization_benches_measure_exact_workloads_only(self) -> None:
@@ -235,10 +250,11 @@ class ProvenanceTests(unittest.TestCase):
             executable = root / "test-bin"
             executable.write_bytes(b"binary")
             completed = __import__("subprocess").CompletedProcess([], 0, "", "")
+            sealed = protocol.runtime_environment(path="/controlled", home="/empty-home")
             with mock.patch.object(gates, "run_bounded", return_value=completed) as run:
                 gates.run_test_executable(
                     executable, gates.CPU_FILTER, repository=root,
-                    evidence_root=root / "evidence", environment={"PATH": "/controlled"},
+                    evidence_root=root / "evidence", environment=sealed,
                 )
             argv = run.call_args.args[0]
             self.assertEqual(argv, (str(executable.resolve()), gates.CPU_FILTER, "--nocapture"))
@@ -247,6 +263,10 @@ class ProvenanceTests(unittest.TestCase):
                 run.call_args.kwargs["environment"][gates.EVIDENCE_ENVIRONMENT_KEY],
                 str((root / "evidence").resolve()),
             )
+            expected = dict(sealed)
+            expected[gates.EVIDENCE_ENVIRONMENT_KEY] = str((root / "evidence").resolve())
+            self.assertEqual(run.call_args.kwargs["environment"], expected)
+            self.assertNotIn("CARGO_HOME", run.call_args.kwargs["environment"])
 
     def test_bench_row_uses_direct_binary_and_30_second_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -254,10 +274,11 @@ class ProvenanceTests(unittest.TestCase):
             executable = root / "bench-bin"
             executable.write_bytes(b"binary")
             completed = __import__("subprocess").CompletedProcess([], 0, "", "")
+            sealed = protocol.runtime_environment(path="/controlled", home="/empty-home")
             with mock.patch.object(gates, "run_bounded", return_value=completed) as run:
                 gates.run_bench_row(
                     executable, "managed-exact/budget-2/D-N", repository=root,
-                    environment={"PATH": "/controlled"}, criterion_home=root / "criterion",
+                    environment=sealed, criterion_home=root / "criterion",
                 )
             self.assertEqual(
                 run.call_args.args[0],
@@ -267,6 +288,57 @@ class ProvenanceTests(unittest.TestCase):
                 ),
             )
             self.assertEqual(run.call_args.kwargs["deadline"], 30)
+            self.assertEqual(
+                run.call_args.kwargs["environment"],
+                protocol.runtime_environment(
+                    path="/controlled", home="/empty-home",
+                    criterion_home=str((root / "criterion").resolve()),
+                ),
+            )
+
+    def test_runtime_helpers_reject_build_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            executable = root / "binary"
+            executable.write_bytes(b"binary")
+            controlled_bin = root / "bin"
+            controlled_bin.mkdir()
+            cargo_home = root / "cargo-home"
+            cargo_home.mkdir()
+            target = root / "target"
+            target.mkdir()
+            build_environment = protocol.cargo_environment(
+                path=str(controlled_bin), home=str(root / "empty-home"),
+                cargo_home=str(cargo_home), target_dir=str(target),
+            )
+            with self.assertRaises(protocol.ProtocolError):
+                gates.run_test_executable(
+                    executable, gates.CPU_FILTER, repository=root,
+                    evidence_root=root / "evidence", environment=build_environment,
+                )
+            with self.assertRaises(protocol.ProtocolError):
+                gates.run_bench_row(
+                    executable, "managed-exact/budget-2/D-N", repository=root,
+                    environment=build_environment, criterion_home=root / "criterion",
+                )
+
+    def test_scratch_root_must_be_external_and_disjoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            repository = root / "repository"
+            repository.mkdir()
+            evidence = root / "evidence"
+            external = root / "external-scratch"
+            external.mkdir()
+            gates.validate_external_scratch_root(repository, evidence, external)
+            for invalid in (
+                repository / "scratch", repository,
+                evidence / "scratch", evidence,
+                root,
+            ):
+                invalid.mkdir(parents=True, exist_ok=True)
+                with self.assertRaises(protocol.ProtocolError, msg=str(invalid)):
+                    gates.validate_external_scratch_root(repository, evidence, invalid)
 
     def test_normative_bench_row_copies_logs_estimate_and_ci(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

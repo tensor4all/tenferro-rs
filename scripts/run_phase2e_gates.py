@@ -253,8 +253,8 @@ def source_item(source: str, signature: str) -> str:
     raise protocol.ProtocolError(f"dispatch source item is unbalanced: {signature}")
 
 
-def validate_source_contract(repository: pathlib.Path) -> dict[str, str]:
-    digests: dict[str, str] = {}
+def validate_source_contract(repository: pathlib.Path) -> list[dict[str, str]]:
+    inventory: list[dict[str, str]] = []
     sources: dict[str, str] = {}
     for relative, signature in SOURCE_HOT_ITEMS:
         path = repository / relative
@@ -270,12 +270,47 @@ def validate_source_contract(repository: pathlib.Path) -> dict[str, str]:
                 raise protocol.ProtocolError(
                     f"banned string/format dispatch in {relative}: {signature}"
                 )
-        digests[relative] = sha256_file(path)
+        inventory.append({
+            "path": relative,
+            "signature": signature,
+            "source_sha256": sha256_file(path),
+            "item_sha256": hashlib.sha256(dispatch_item.encode("utf-8")).hexdigest(),
+        })
     production = (repository / "crates/tenferro-ad/src/eager_backend.rs").read_text()
     for fixture in ("struct RecordingBackend", "delegate_recording_backend_methods", "impl TensorElementwise for RecordingBackend"):
         if fixture in production:
             raise protocol.ProtocolError("RecordingBackend fixture leaked into production source")
-    return digests
+    return inventory
+
+
+def validate_external_scratch_root(
+    repository: pathlib.Path, evidence_root: pathlib.Path, scratch_root: pathlib.Path,
+) -> pathlib.Path:
+    """Require scratch storage to be external to repository and evidence trees."""
+    repository = pathlib.Path(repository).resolve(strict=True)
+    evidence_root = pathlib.Path(evidence_root).resolve(strict=False)
+    scratch_root = pathlib.Path(scratch_root).resolve(strict=True)
+    for name, protected in (("repository", repository), ("evidence_root", evidence_root)):
+        if (
+            scratch_root == protected
+            or scratch_root in protected.parents
+            or protected in scratch_root.parents
+        ):
+            raise protocol.ProtocolError(
+                f"scratch_root must be external and disjoint from {name}"
+            )
+    return scratch_root
+
+
+def _validate_runtime_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    if not isinstance(environment, dict):
+        raise protocol.ProtocolError("runtime environment must be an exact dictionary")
+    expected = protocol.runtime_environment(
+        path=environment.get("PATH", ""), home=environment.get("HOME", "")
+    )
+    if environment != expected:
+        raise protocol.ProtocolError("runtime environment differs from the sealed allowlist")
+    return expected
 
 
 def validate_test_build_manifest(
@@ -396,7 +431,7 @@ def run_test_executable(
     executable: pathlib.Path, filter_name: str, *, repository: pathlib.Path,
     evidence_root: pathlib.Path, environment: Mapping[str, str],
 ) -> subprocess.CompletedProcess[str]:
-    runtime_environment = dict(environment)
+    runtime_environment = _validate_runtime_environment(environment)
     runtime_environment[EVIDENCE_ENVIRONMENT_KEY] = str(evidence_root.resolve())
     argv = (str(executable.resolve()), filter_name, "--nocapture")
     result = run_bounded(
@@ -489,8 +524,11 @@ def run_bench_row(
     executable: pathlib.Path, row_key: str, *, repository: pathlib.Path,
     environment: Mapping[str, str], criterion_home: pathlib.Path,
 ) -> subprocess.CompletedProcess[str]:
-    runtime_environment = dict(environment)
-    runtime_environment["CRITERION_HOME"] = str(criterion_home.resolve())
+    sealed = _validate_runtime_environment(environment)
+    runtime_environment = protocol.runtime_environment(
+        path=sealed["PATH"], home=sealed["HOME"],
+        criterion_home=str(criterion_home.resolve()),
+    )
     argv = (str(executable.resolve()), row_key, "--bench", "--noplot")
     result = run_bounded(
         argv, cwd=repository, environment=runtime_environment,
@@ -594,7 +632,7 @@ def _read_json(path: pathlib.Path) -> dict[str, Any]:
 
 def validate_terminal_evidence(
     evidence_root: pathlib.Path, *, candidate: str, repository: pathlib.Path,
-    source_inventory: Mapping[str, str], common_lock: pathlib.Path,
+    source_inventory: Sequence[Mapping[str, str]], common_lock: pathlib.Path,
 ) -> None:
     dispatch_path = evidence_root / "dispatch-gates/manifest.json"
     characterization_path = evidence_root / "characterization/manifest.json"
@@ -606,7 +644,7 @@ def validate_terminal_evidence(
         check=True, capture_output=True, text=True,
     ).stdout
     tree_digest = hashlib.sha256(tree.encode()).hexdigest()
-    sources = dict(sorted(source_inventory.items()))
+    sources = [dict(item) for item in source_inventory]
     lock_digest = sha256_file(common_lock)
     for name, manifest in (("dispatch", dispatch), ("characterization", characterization)):
         expected = {
@@ -708,6 +746,9 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--cargo-home", required=True, type=pathlib.Path)
     args = parser.parse_args(argv)
     validate_candidate_worktree(args.repository, args.candidate)
+    scratch_root = validate_external_scratch_root(
+        args.repository, args.evidence_root, args.scratch_root
+    )
     source_inventory = validate_source_contract(args.repository)
     evidence_root = args.evidence_root.resolve()
     if evidence_root.exists():
@@ -723,13 +764,16 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
     build.build_dispatch_and_characterization_artifacts(
         repository=args.repository,
         evidence_root=evidence_root,
-        scratch_root=args.scratch_root,
+        scratch_root=scratch_root,
         candidate=args.candidate,
         path=args.path,
         home=args.home,
         cargo_home=args.cargo_home,
     )
     manifests = {}
+    runtime_environment = protocol.runtime_environment(
+        path=args.path, home=str(args.home.resolve(strict=True))
+    )
     for package, short, filter_name in (
         ("tenferro-cpu", "cpu", CPU_FILTER), ("tenferro-ad", "ad", AD_FILTER)
     ):
@@ -740,7 +784,7 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
         )
         result = run_test_executable(
             executable, filter_name, repository=args.repository,
-            evidence_root=evidence_root, environment=manifest["environment"],
+            evidence_root=evidence_root, environment=runtime_environment,
         )
         artifact = evidence_root / "dispatch-gates" / f"{short}-evidence.json"
         stdout_path = evidence_root / "dispatch-gates" / f"{short}-stdout.log"
@@ -764,7 +808,7 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
     bench_digests = {}
     bench_manifests = {}
     latency_rows = []
-    criterion_root = args.scratch_root / "task7-criterion"
+    criterion_root = scratch_root / "task7-criterion"
     criterion_root.mkdir(mode=0o700, exist_ok=False)
     try:
         for owner, surfaces in (("cpu", {"D-N", "D-D", "G-O"}), ("ad", {"E-N", "E-D"})):
@@ -782,7 +826,7 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
                     try:
                         latency_rows.append(capture_bench_row(
                             executable, row["key"], repository=args.repository,
-                            environment=manifest["environment"],
+                            environment=runtime_environment,
                             criterion_home=row_scratch, evidence_root=evidence_root,
                         ))
                     finally:
@@ -807,7 +851,7 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
     characterization["candidate_tree_sha256"] = _read_json(
         evidence_root / build.CHARACTERIZATION_BUILD_MANIFEST_PATHS["cpu"]
     )["candidate_tree_sha256"]
-    characterization["source_inventory"] = dict(sorted(source_inventory.items()))
+    characterization["source_inventory"] = source_inventory
     characterization["common_lock_sha256"] = sha256_file(common_destination)
     characterization["bench_build_manifests"] = bench_manifests
     atomic_write_json(
@@ -817,7 +861,7 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
             "protocol_version": protocol.PROTOCOL_VERSION,
             "protocol_sha256": sha256_file(args.repository / "scripts/phase2e_protocol.py"),
             "candidate_tree_sha256": characterization["candidate_tree_sha256"],
-            "source_inventory": dict(sorted(source_inventory.items())),
+            "source_inventory": source_inventory,
             "common_lock_sha256": sha256_file(common_destination),
             "row_count": characterization["row_count"], **manifests,
         },
