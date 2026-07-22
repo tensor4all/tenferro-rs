@@ -224,17 +224,17 @@ def generate_dot(
         "digraph workspace {",
         "    rankdir=TB;",
         "    compound=true;",
-        "    newrank=true;",
         "    splines=ortho;",
         "    outputorder=edgesfirst;",
         '    bgcolor="#ffffff";',
-        "    pad=0.25;",
-        "    ranksep=0.8;",
-        "    nodesep=0.35;",
+        "    margin=0;",
+        "    pad=0.08;",
+        "    ranksep=0.45;",
+        "    nodesep=0.20;",
         '    graph [fontname="IBM Plex Sans", fontsize=18,',
         '           label="tenferro-rs dependency footprint", labelloc=t];',
-        '    node [shape=box, style="filled,rounded",',
-        '          fontname="IBM Plex Sans", fontsize=12, margin="0.2,0.1"];',
+        '    node [shape=box, style="filled,rounded", fixedsize=false,',
+        '          fontname="IBM Plex Sans", fontsize=12, margin="0.11,0.055"];',
         '    edge [color="#546e7a", arrowsize=0.8];',
         "",
     ]
@@ -251,6 +251,7 @@ def generate_dot(
         lines.append(f'        color="{style["cluster_border"]}";')
         lines.append(f'        fontname="IBM Plex Sans";')
         lines.append(f"        fontsize=14;")
+        lines.append("        margin=8;")
         lines.append("")
         for name in crates:
             url = f"index.html#{name}"

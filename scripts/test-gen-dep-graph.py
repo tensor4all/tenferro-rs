@@ -38,6 +38,16 @@ def test_current_workspace_uses_documented_dependency_layers() -> None:
     assert "subgraph cluster_core" not in dot
     assert "style=invis" not in dot
     assert 'bgcolor="#ffffff"' in dot
+    assert "fixedsize=false" in dot
+    assert "newrank=true" not in dot
+    assert 'margin="0.11,0.055"' in dot
+    assert "margin=0;" in dot
+    assert "pad=0.08;" in dot
+    assert "ranksep=0.45;" in dot
+    assert "nodesep=0.20;" in dot
+    assert dot.count("margin=8;") == len(expected_clusters)
+    assert "width=" not in dot
+    assert "height=" not in dot
 
 
 def test_dependency_edges_point_from_dependency_to_consumer() -> None:
