@@ -79,6 +79,26 @@ one source file cannot overwrite each other. The caller-supplied scratch root
 is resolved before evidence mutation and must be disjoint in both directions
 from both the repository and evidence trees.
 
+Cycle 3 also makes low-CPU exact fixtures auditable instead of silently
+unpinned. `CpuContext::with_pinned_cpus` now permits more workers than CPUs and
+cycles worker assignments over the nonempty exact set. CPU and AD fixtures use
+a barrier-backed Rayon broadcast to record every worker index and current CPU;
+exact audits must cover `0..B` and remain inside the declared set. When a
+managed correctness fixture has fewer allowed CPUs than `B`, it uses the same
+topology-independent exact `B`-worker fixture rather than reducing the worker
+count. Correctness and recovery still run and never hardware-skip.
+
+Real-hardware validity is represented separately. Affinity and Criterion
+latency records receive typed `InsufficientAllowedCpus` skips when distinct
+resources are unavailable, skipped rows launch no benchmark and contain no
+synthetic estimates or artifacts, and cross-socket locality records typed
+`InsufficientNumaNodes`. AD records actual placement-bound session entry at a
+crate-local `#[cfg(test)]` boundary and independently owns its executor/provider
+CPU observations and all-worker placement audit. Session-entry CPU observations
+are named separately and are not presented as downstream worker placement.
+The gate composes only the matching CPU borrowed-session downstream count/mode
+contract; it no longer substitutes CPU observations into AD rows.
+
 Correctness executables have a 120-second deadline. Each Criterion row has a
 30-second deadline. Process groups receive a five-second termination grace
 before forced kill. The two Criterion harnesses use fixed two-second warmup,
@@ -106,3 +126,6 @@ five-second measurement, 100 samples, and 95% confidence.
   `1e694a83fe96c740f5980240b12e990de5d70670feab618f75229dfbd5239f66`.
 - Cycle 3 Python hardening passed 57 protocol/gate unit tests and Python bytecode
   compilation; `git diff --check` also passed.
+- Cycle 3 Rust hardening passed 515 CPU tests, 71 AD tests, 142 combined
+  protocol/gate/build Python tests, both exact `cpu-faer` characterization bench
+  builds, and CPU/AD Clippy with warnings denied.

@@ -81,7 +81,12 @@ fn placement_bridge_source_keeps_runtime_and_executor_entry_boundaries_single() 
     assert!(!on_cpu.contains("extension_executor"));
     assert!(!on_cpu.contains(".install("));
 
-    assert_eq!(with_session.matches("with_backend_session(f)").count(), 1);
+    assert_eq!(
+        with_session
+            .matches("self.backend.with_backend_session(")
+            .count(),
+        1
+    );
     for forbidden in [
         "lock_backend",
         ".lock(",

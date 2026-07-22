@@ -219,18 +219,11 @@ fn pin_failure_aborts_context_construction() {
 }
 
 #[test]
-fn pinned_context_rejects_invalid_worker_counts() {
+fn pinned_context_rejects_zero_workers() {
     let cpus = CpuSet::new([CpuId::new(0)]).unwrap();
     assert!(matches!(
-        CpuContext::with_pinned_cpus_using(cpus.clone(), 0, FailingAffinitySetter),
+        CpuContext::with_pinned_cpus_using(cpus, 0, FailingAffinitySetter),
         Err(CpuContextError::InvalidThreadCount)
-    ));
-    assert!(matches!(
-        CpuContext::with_pinned_cpus_using(cpus, 2, FailingAffinitySetter),
-        Err(CpuContextError::TooManyWorkers {
-            workers: 2,
-            cpus: 1
-        })
     ));
 }
 
@@ -243,6 +236,51 @@ fn worker_assignment_spreads_a_reduced_budget_across_the_domain() {
         vec![CpuId::new(0), CpuId::new(2), CpuId::new(4), CpuId::new(7)]
     );
     assert_eq!(select_worker_cpus(&cpus, 1), vec![CpuId::new(4)]);
+}
+
+#[test]
+fn worker_assignment_repeats_a_smaller_exact_cpu_set() {
+    let cpus = CpuSet::new([CpuId::new(2), CpuId::new(7)]).unwrap();
+
+    assert_eq!(
+        select_worker_cpus(&cpus, 5),
+        vec![
+            CpuId::new(2),
+            CpuId::new(7),
+            CpuId::new(2),
+            CpuId::new(7),
+            CpuId::new(2),
+        ]
+    );
+    let context = CpuContext::with_pinned_cpus_using(cpus, 5, ExactAffinitySetter).unwrap();
+    assert_eq!(context.num_threads(), 5);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn oversubscribed_pinned_context_audits_every_worker_at_a_barrier() {
+    use std::sync::{Arc, Barrier};
+
+    let allowed = process_cpu_affinity().unwrap();
+    let selected = CpuSet::new([allowed.as_slice()[0]]).unwrap();
+    let workers = 4;
+    let context = CpuContext::with_pinned_cpus(selected.clone(), workers).unwrap();
+    let barrier = Arc::new(Barrier::new(workers));
+    let observations = context.install(|| {
+        rayon::broadcast(|broadcast| {
+            barrier.wait();
+            (broadcast.index(), current_cpu().unwrap())
+        })
+    });
+
+    assert_eq!(
+        observations
+            .iter()
+            .map(|(worker, _)| *worker)
+            .collect::<BTreeSet<_>>(),
+        (0..workers).collect()
+    );
+    assert!(observations.iter().all(|(_, cpu)| selected.contains(*cpu)));
 }
 
 #[derive(Clone)]

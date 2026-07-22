@@ -262,6 +262,73 @@ pub struct CpuPlacementBoundEager {
     backend: CpuBackend,
 }
 
+#[cfg(test)]
+pub(crate) mod phase2e_eager_events {
+    use std::cell::RefCell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Debug, Default)]
+    pub(crate) struct SessionRecorder {
+        entries: AtomicUsize,
+        observed_cpus: Mutex<Vec<usize>>,
+    }
+
+    impl SessionRecorder {
+        pub(crate) fn snapshot(&self) -> (usize, Vec<usize>) {
+            (
+                self.entries.load(Ordering::SeqCst),
+                self.observed_cpus.lock().unwrap().clone(),
+            )
+        }
+    }
+
+    thread_local! {
+        static ACTIVE: RefCell<Option<Arc<SessionRecorder>>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) fn with_recorder<R>(
+        recorder: &Arc<SessionRecorder>,
+        operation: impl FnOnce() -> R,
+    ) -> R {
+        let previous = ACTIVE
+            .with(|slot| std::mem::replace(&mut *slot.borrow_mut(), Some(Arc::clone(recorder))));
+        struct Restore(Option<Arc<SessionRecorder>>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                ACTIVE.with(|slot| *slot.borrow_mut() = self.0.take());
+            }
+        }
+        let _restore = Restore(previous);
+        operation()
+    }
+
+    pub(crate) fn record_actual_entry() {
+        ACTIVE.with(|slot| {
+            let recorder = slot.borrow();
+            let Some(recorder) = recorder.as_ref() else {
+                return;
+            };
+            recorder.entries.fetch_add(1, Ordering::SeqCst);
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            {
+                unsafe extern "C" {
+                    fn sched_getcpu() -> std::ffi::c_int;
+                }
+                // SAFETY: `sched_getcpu` takes no pointers and has no preconditions.
+                let cpu = unsafe { sched_getcpu() };
+                if cpu >= 0 {
+                    let mut cpus = recorder.observed_cpus.lock().unwrap();
+                    let cpu = cpu as usize;
+                    if !cpus.contains(&cpu) {
+                        cpus.push(cpu);
+                    }
+                }
+            }
+        });
+    }
+}
+
 impl fmt::Debug for CpuPlacementBoundEager {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CpuPlacementBoundEager")
@@ -349,7 +416,11 @@ impl CpuPlacementBoundEager {
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> Result<R> + Send,
     ) -> Result<R> {
-        self.backend.with_backend_session(f)
+        self.backend.with_backend_session(|session| {
+            #[cfg(test)]
+            phase2e_eager_events::record_actual_entry();
+            f(session)
+        })
     }
 }
 

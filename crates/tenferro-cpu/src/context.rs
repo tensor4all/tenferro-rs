@@ -31,7 +31,10 @@ pub enum CpuContextError {
     /// A context must contain at least one worker.
     #[error("thread count must be at least 1")]
     InvalidThreadCount,
-    /// A pinned engine cannot create more workers than assigned CPUs.
+    /// A pinned engine rejected more workers than assigned CPUs.
+    ///
+    /// Retained for source compatibility. Current constructors oversubscribe by
+    /// assigning workers cyclically when the worker count exceeds the CPU set.
     #[error("requested {workers} workers for only {cpus} assigned CPUs")]
     TooManyWorkers {
         /// Requested Rayon worker count.
@@ -212,7 +215,8 @@ impl CpuContext {
     /// Create a Rayon context whose workers are pinned to assigned logical CPUs.
     ///
     /// A real Rayon pool is constructed even when `num_threads` is one. The
-    /// worker count cannot exceed the assigned CPU count.
+    /// When the worker count exceeds the assigned CPU count, workers are
+    /// assigned cyclically to the exact CPU set.
     ///
     /// # Examples
     ///
@@ -229,9 +233,8 @@ impl CpuContext {
     ///
     /// # Errors
     ///
-    /// Returns [`CpuContextError::InvalidThreadCount`] for zero workers,
-    /// [`CpuContextError::TooManyWorkers`] when the request exceeds the CPU
-    /// set, or an affinity error when workers cannot be pinned.
+    /// Returns [`CpuContextError::InvalidThreadCount`] for zero workers or an
+    /// affinity error when workers cannot be pinned.
     pub fn with_pinned_cpus(
         cpus: CpuSet,
         num_threads: usize,
@@ -247,13 +250,6 @@ impl CpuContext {
         if num_threads == 0 {
             return Err(CpuContextError::InvalidThreadCount);
         }
-        if num_threads > cpus.len() {
-            return Err(CpuContextError::TooManyWorkers {
-                workers: num_threads,
-                cpus: cpus.len(),
-            });
-        }
-
         let execution_scope = Arc::new(ExecutionScopeState::default());
         let assigned_cpus = Arc::new(select_worker_cpus(&cpus, num_threads));
         let (startup_tx, startup_rx) = std::sync::mpsc::channel();
@@ -430,6 +426,11 @@ impl CpuDomainExecutor for CpuContext {
 fn select_worker_cpus(cpus: &CpuSet, num_threads: usize) -> Vec<CpuId> {
     if num_threads == 1 {
         return vec![cpus.as_slice()[cpus.len() / 2]];
+    }
+    if num_threads > cpus.len() {
+        return (0..num_threads)
+            .map(|worker| cpus.as_slice()[worker % cpus.len()])
+            .collect();
     }
     (0..num_threads)
         .map(|worker| {

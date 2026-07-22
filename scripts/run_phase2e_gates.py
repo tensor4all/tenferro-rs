@@ -158,6 +158,37 @@ def validate_partition(artifact: Mapping[str, Any], owner: str) -> list[dict[str
                 raise protocol.ProtocolError("AD raw rows may not supply downstream counts or modes")
             if row.get("session_entry") != 1:
                 raise protocol.ProtocolError(f"AD row {key} did not measure one eager session")
+            session_entry_cpus = row.get("session_entry_cpus")
+            if (
+                not isinstance(session_entry_cpus, list)
+                or not session_entry_cpus
+                or not all(type(cpu) is int and cpu >= 0 for cpu in session_entry_cpus)
+            ):
+                raise protocol.ProtocolError(f"AD row {key} lacks its session-entry observation")
+            audit = row.get("placement_audit")
+            budget = row.get("budget")
+            if (
+                not isinstance(budget, int)
+                or not isinstance(audit, list)
+                or len(audit) != budget
+                or any(
+                    not isinstance(item, list)
+                    or len(item) != 2
+                    or not all(type(value) is int and value >= 0 for value in item)
+                    for item in audit
+                )
+                or {item[0] for item in audit} != set(range(budget))
+            ):
+                raise protocol.ProtocolError(f"AD row {key} lacks its all-worker placement audit")
+            declared = row.get("declared_cpus")
+            if not isinstance(declared, list) or not all(
+                type(cpu) is int and cpu >= 0 for cpu in declared
+            ):
+                raise protocol.ProtocolError(f"AD row {key} has invalid declared CPUs")
+            if not key.startswith("external-advisory/") and (
+                not declared or any(item[1] not in declared for item in audit)
+            ):
+                raise protocol.ProtocolError(f"AD row {key} placement audit escaped its CPU set")
             expected_vector = "borrowed-add" if key.endswith("/E-N") else "borrowed-dot"
             if row.get("downstream_vector") != expected_vector:
                 raise protocol.ProtocolError(f"AD row {key} names the wrong CPU downstream vector")
@@ -223,14 +254,68 @@ def compose_characterization(cpu: Mapping[str, Any], ad: Mapping[str, Any]) -> d
         composed = dict(raw)
         composed["counts"] = counts
         composed["mode"] = downstream_row["mode"]
-        if not composed["observed_cpus"]:
-            composed["observed_cpus"] = downstream_row["observed_cpus"]
-            composed["observed_cpu_source"] = downstream_row["key"]
+        composed["downstream_mode_source"] = downstream_row["key"]
         composed_ad.append(composed)
     rows = [*cpu_rows, *composed_ad]
     if len({row["key"] for row in rows}) != 47:
         raise protocol.ProtocolError("composed characterization must contain 47 unique rows")
     return {"validity_state": "PASS", "row_count": 47, "rows": rows}
+
+
+def attach_hardware_validity(
+    characterization: dict[str, Any], *, available_cpus: int, usable_numa_nodes: int,
+) -> None:
+    if available_cpus < 1 or usable_numa_nodes < 0:
+        raise protocol.ProtocolError("hardware availability counts are invalid")
+    for row in characterization["rows"]:
+        budget = row["budget"]
+        row["affinity_hardware_skip"] = (
+            {
+                "kind": "InsufficientAllowedCpus",
+                "required": budget,
+                "available": available_cpus,
+            }
+            if row["surface"] not in {"U-O", "U-I"} and available_cpus < budget
+            else None
+        )
+    characterization["cross_socket_locality"] = {
+        "usable_numa_nodes": usable_numa_nodes,
+        "hardware_skip": (
+            {
+                "kind": "InsufficientNumaNodes",
+                "required": 2,
+                "available": usable_numa_nodes,
+            }
+            if usable_numa_nodes < 2
+            else None
+        ),
+    }
+
+
+def _parse_cpu_list(value: str) -> set[int]:
+    cpus: set[int] = set()
+    for field in value.strip().split(","):
+        if not field:
+            continue
+        bounds = field.split("-", 1)
+        start = int(bounds[0])
+        stop = int(bounds[-1])
+        cpus.update(range(start, stop + 1))
+    return cpus
+
+
+def hardware_availability() -> tuple[int, int]:
+    allowed = set(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else set(
+        range(os.cpu_count() or 1)
+    )
+    usable_nodes = 0
+    for cpu_list in pathlib.Path("/sys/devices/system/node").glob("node[0-9]*/cpulist"):
+        try:
+            node_cpus = _parse_cpu_list(cpu_list.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        usable_nodes += bool(node_cpus & allowed)
+    return len(allowed), usable_nodes
 
 
 def source_item(source: str, signature: str) -> str:
@@ -557,9 +642,19 @@ def _write_new_bytes(path: pathlib.Path, payload: bytes) -> None:
 def capture_bench_row(
     executable: pathlib.Path, row_key: str, *, repository: pathlib.Path,
     environment: Mapping[str, str], criterion_home: pathlib.Path,
-    evidence_root: pathlib.Path,
+    evidence_root: pathlib.Path, hardware_skip: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one fresh Criterion row and preserve its normative output bytes."""
+    row_id = row_key.replace("/", "__")
+    if hardware_skip is not None:
+        _validate_hardware_skip({"hardware_skip": hardware_skip})
+        return {
+            "row_id": row_id,
+            "key": row_key,
+            "hardware_skip": dict(hardware_skip),
+            "latency_ns": None,
+            "artifacts": {},
+        }
     result = run_bench_row(
         executable, row_key, repository=repository, environment=environment,
         criterion_home=criterion_home,
@@ -569,7 +664,6 @@ def capture_bench_row(
         raise protocol.ProtocolError(
             f"row {row_key} produced {len(estimates)} Criterion estimate artifacts"
         )
-    row_id = row_key.replace("/", "__")
     destination = evidence_root / "characterization" / "rows" / row_id
     artifacts = {
         "stdout": (destination / "stdout.log", result.stdout.encode()),
@@ -600,6 +694,7 @@ def capture_bench_row(
     return {
         "row_id": row_id,
         "key": row_key,
+        "hardware_skip": None,
         "latency_ns": latency,
         "artifacts": {
             name: {"path": str(path.resolve()), "sha256": sha256_file(path)}
@@ -659,6 +754,18 @@ def validate_terminal_evidence(
                 raise protocol.ProtocolError(f"terminal {name} manifest differs at {field}")
     if dispatch.get("row_count") != 47 or characterization.get("row_count") != 47:
         raise protocol.ProtocolError("terminal manifests must bind 47 composed rows")
+    rows = characterization.get("rows")
+    if not isinstance(rows, list) or len(rows) != 47:
+        raise protocol.ProtocolError("terminal characterization row inventory is invalid")
+    rows_by_key = {row.get("key"): row for row in rows if isinstance(row, dict)}
+    for row in rows:
+        if not isinstance(row, dict) or row.get("hardware_skip") is not None:
+            raise protocol.ProtocolError("correctness rows must never hardware-skip")
+        _validate_hardware_skip({"hardware_skip": row.get("affinity_hardware_skip")})
+    cross_socket = characterization.get("cross_socket_locality")
+    if not isinstance(cross_socket, dict):
+        raise protocol.ProtocolError("cross-socket hardware validity is missing")
+    _validate_hardware_skip(cross_socket)
     expected_files = {
         common_lock.resolve(), dispatch_path.resolve(), characterization_path.resolve()
     }
@@ -701,6 +808,15 @@ def validate_terminal_evidence(
         artifact_records = record.get("artifacts")
         if not isinstance(artifact_records, dict):
             raise protocol.ProtocolError(f"latency artifacts missing: {key}")
+        hardware_skip = record.get("hardware_skip")
+        _validate_hardware_skip(record)
+        expected_skip = rows_by_key[key].get("affinity_hardware_skip")
+        if hardware_skip != expected_skip:
+            raise protocol.ProtocolError(f"latency {key} hardware skip mismatch")
+        if hardware_skip is not None:
+            if record.get("latency_ns") is not None or artifact_records:
+                raise protocol.ProtocolError(f"skipped latency {key} fabricated measurement data")
+            continue
         row_root = evidence_root / "characterization" / "rows" / row_id
         for name, filename in (
             ("stdout", "stdout.log"), ("stderr", "stderr.log"),
@@ -805,6 +921,12 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
     cpu = _read_json(pathlib.Path(manifests["cpu"]["artifact"]))
     ad = _read_json(pathlib.Path(manifests["ad"]["artifact"]))
     characterization = compose_characterization(cpu, ad)
+    available_cpus, usable_numa_nodes = hardware_availability()
+    attach_hardware_validity(
+        characterization,
+        available_cpus=available_cpus,
+        usable_numa_nodes=usable_numa_nodes,
+    )
     bench_digests = {}
     bench_manifests = {}
     latency_rows = []
@@ -828,6 +950,7 @@ def _run_main(argv: Sequence[str] | None = None) -> int:
                             executable, row["key"], repository=args.repository,
                             environment=runtime_environment,
                             criterion_home=row_scratch, evidence_root=evidence_root,
+                            hardware_skip=row["affinity_hardware_skip"],
                         ))
                     finally:
                         shutil.rmtree(row_scratch, ignore_errors=True)

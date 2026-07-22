@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
+    Arc, Barrier, Mutex,
 };
 
 use tenferro_cpu::provider::{
@@ -24,6 +24,35 @@ use crate::eager_backend::EagerBackend;
 use super::super::{EagerRuntime, EagerTensor};
 use super::Tensor;
 
+fn current_cpu() -> Option<usize> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        unsafe extern "C" {
+            fn sched_getcpu() -> std::ffi::c_int;
+        }
+        // SAFETY: `sched_getcpu` takes no pointers and has no preconditions.
+        let cpu = unsafe { sched_getcpu() };
+        (cpu >= 0).then_some(cpu as usize)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        None
+    }
+}
+
+fn audit_context(context: &tenferro_cpu::CpuContext, budget: usize) -> Vec<[usize; 2]> {
+    let barrier = Arc::new(Barrier::new(budget));
+    context.install(|| {
+        rayon::broadcast(|worker| {
+            barrier.wait();
+            [
+                worker.index(),
+                current_cpu().expect("Phase 2E requires current-CPU observation"),
+            ]
+        })
+    })
+}
+
 #[derive(Debug)]
 struct RecordingExecutor {
     inner: tenferro_cpu::CpuContext,
@@ -37,12 +66,9 @@ impl RecordingExecutor {
     fn new(budget: usize, exact: bool) -> Arc<Self> {
         let allowed = process_cpu_affinity().expect("Phase 2E needs process affinity");
         let selected = CpuSet::new(allowed.as_slice().iter().copied().take(budget)).unwrap();
-        let inner = if selected.len() == budget {
-            tenferro_cpu::CpuContext::with_pinned_cpus(selected, budget).unwrap()
-        } else {
-            tenferro_cpu::CpuContext::with_threads(budget).unwrap()
-        };
-        Arc::new(Self {
+        let declared = selected.as_usize_vec();
+        let inner = tenferro_cpu::CpuContext::with_pinned_cpus(selected, budget).unwrap();
+        let executor = Arc::new(Self {
             inner,
             capabilities: CpuDomainExecutorCapabilities {
                 worker_count: NonZeroUsize::new(budget).unwrap(),
@@ -63,20 +89,27 @@ impl RecordingExecutor {
             installs: AtomicUsize::new(0),
             submits: AtomicUsize::new(0),
             observed_cpus: Mutex::new(Vec::new()),
-        })
+        });
+        if exact {
+            let audit = audit_context(&executor.inner, budget);
+            assert_eq!(audit.len(), budget);
+            assert_eq!(
+                audit
+                    .iter()
+                    .map(|item| item[0])
+                    .collect::<std::collections::BTreeSet<_>>(),
+                (0..budget).collect()
+            );
+            assert!(audit.iter().all(|item| declared.contains(&item[1])));
+        }
+        executor
     }
 
     fn observe_cpu(&self) {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
-            unsafe extern "C" {
-                fn sched_getcpu() -> std::ffi::c_int;
-            }
-            // SAFETY: `sched_getcpu` takes no pointers and has no preconditions.
-            let cpu = unsafe { sched_getcpu() };
-            if cpu >= 0 {
+            if let Some(cpu) = current_cpu() {
                 let mut observed = self.observed_cpus.lock().unwrap();
-                let cpu = cpu as usize;
                 if !observed.contains(&cpu) {
                     observed.push(cpu);
                 }
@@ -129,8 +162,22 @@ impl CpuDomainExecutor for RecordingExecutor {
     }
 }
 
-#[derive(Debug)]
-struct RecordingGemm(AtomicUsize);
+#[derive(Debug, Default)]
+struct RecordingGemm {
+    calls: AtomicUsize,
+    observed_cpus: Mutex<Vec<usize>>,
+}
+
+impl RecordingGemm {
+    fn observe_cpu(&self) {
+        if let Some(cpu) = current_cpu() {
+            let mut observed = self.observed_cpus.lock().unwrap();
+            if !observed.contains(&cpu) {
+                observed.push(cpu);
+            }
+        }
+    }
+}
 
 impl CpuGemmProvider for RecordingGemm {
     fn execution_capabilities(&self) -> tenferro_cpu::CpuProviderExecutionCapabilities {
@@ -142,7 +189,8 @@ impl CpuGemmProvider for RecordingGemm {
         context: &CpuExecutionContext<'_>,
         request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        self.0.fetch_add(1, Ordering::SeqCst);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.observe_cpu();
         FaerGemmProvider.gemm(context, request)
     }
 
@@ -151,7 +199,8 @@ impl CpuGemmProvider for RecordingGemm {
         context: &CpuExecutionContext<'_>,
         request: CpuGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        self.0.fetch_add(1, Ordering::SeqCst);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.observe_cpu();
         FaerGemmProvider.strided_batched_gemm(context, request)
     }
 
@@ -160,7 +209,8 @@ impl CpuGemmProvider for RecordingGemm {
         context: &CpuExecutionContext<'_>,
         request: CpuGroupedGemmRequest<'_, '_, '_>,
     ) -> tenferro_tensor::Result<CpuProviderOutcome> {
-        self.0.fetch_add(1, Ordering::SeqCst);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.observe_cpu();
         FaerGemmProvider.grouped_gemm(context, request)
     }
 }
@@ -170,38 +220,16 @@ struct CpuFixture {
     executor: Option<Arc<RecordingExecutor>>,
     provider: Arc<RecordingGemm>,
     declared_cpus: Vec<usize>,
+    placement_audit: Vec<[usize; 2]>,
 }
 
-fn cpu_fixture(ownership: &str, budget: usize) -> CpuFixture {
-    let provider = Arc::new(RecordingGemm(AtomicUsize::new(0)));
-    let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer)
-        .gemm_provider(Arc::clone(&provider) as Arc<dyn CpuGemmProvider>)
-        .build()
-        .unwrap();
-    if ownership == "managed-exact" {
-        let coordinator = CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer)
-            .unwrap()
-            .with_provider_bundle(bundle)
-            .unwrap();
-        let backend = coordinator
-            .topology()
-            .nodes()
-            .first()
-            .map(|node| {
-                coordinator
-                    .for_placement(tenferro_cpu::CpuPlacement::NumaNode(node.id()))
-                    .unwrap()
-            })
-            .unwrap_or(coordinator);
-        return CpuFixture {
-            declared_cpus: backend.resolved_placement().unwrap().cpus().as_usize_vec(),
-            backend,
-            executor: None,
-            provider,
-        };
-    }
-    let exact = ownership == "external-exact";
-    let executor = RecordingExecutor::new(budget, exact);
+fn external_cpu_fixture(
+    executor: Arc<RecordingExecutor>,
+    provider: Arc<RecordingGemm>,
+    bundle: CpuProviderBundle,
+    exact: bool,
+) -> CpuFixture {
+    let budget = executor.capabilities.worker_count.get();
     let allowed = process_cpu_affinity().unwrap();
     let selected = CpuSet::new(allowed.as_slice().iter().copied().take(budget)).unwrap();
     let declared_cpus = if exact {
@@ -209,6 +237,7 @@ fn cpu_fixture(ownership: &str, budget: usize) -> CpuFixture {
     } else {
         Vec::new()
     };
+    let placement_audit = audit_context(&executor.inner, budget);
     let id = CpuDomainId::new(0x2ead + budget as u64 + u64::from(u8::from(exact)));
     let domain = ExternalCpuDomain::new(
         id,
@@ -237,7 +266,61 @@ fn cpu_fixture(ownership: &str, budget: usize) -> CpuFixture {
         executor: Some(executor),
         provider,
         declared_cpus,
+        placement_audit,
     }
+}
+
+fn cpu_fixture(ownership: &str, budget: usize) -> CpuFixture {
+    let provider = Arc::new(RecordingGemm::default());
+    let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer)
+        .gemm_provider(Arc::clone(&provider) as Arc<dyn CpuGemmProvider>)
+        .build()
+        .unwrap();
+    if ownership == "managed-exact" {
+        let allowed = process_cpu_affinity().unwrap();
+        if allowed.len() < budget {
+            return external_cpu_fixture(
+                RecordingExecutor::new(budget, true),
+                provider,
+                bundle,
+                true,
+            );
+        }
+        let coordinator = CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer)
+            .unwrap()
+            .with_provider_bundle(bundle)
+            .unwrap();
+        let backend = coordinator
+            .topology()
+            .nodes()
+            .first()
+            .map(|node| {
+                coordinator
+                    .for_placement(tenferro_cpu::CpuPlacement::NumaNode(node.id()))
+                    .unwrap()
+            })
+            .unwrap_or(coordinator);
+        let barrier = Arc::new(Barrier::new(budget));
+        let placement_audit = backend.install(|| {
+            rayon::broadcast(|worker| {
+                barrier.wait();
+                [
+                    worker.index(),
+                    current_cpu().expect("Phase 2E requires current CPU"),
+                ]
+            })
+        });
+        return CpuFixture {
+            declared_cpus: backend.resolved_placement().unwrap().cpus().as_usize_vec(),
+            backend,
+            executor: None,
+            provider,
+            placement_audit,
+        };
+    }
+    let exact = ownership == "external-exact";
+    let executor = RecordingExecutor::new(budget, exact);
+    external_cpu_fixture(executor, provider, bundle, exact)
 }
 
 #[derive(Debug)]
@@ -246,6 +329,9 @@ struct Row {
     surface: &'static str,
     budget: usize,
     session_entry: usize,
+    session_entry_cpus: Vec<usize>,
+    placement_audit: Vec<[usize; 2]>,
+    declared_cpus: Vec<usize>,
     downstream_vector: &'static str,
     actual_install: Option<usize>,
     actual_submit: Option<usize>,
@@ -326,7 +412,8 @@ fn prove_session_entries() -> Vec<usize> {
 }
 
 fn reset_counters(executor: Option<&Arc<RecordingExecutor>>, provider: &RecordingGemm) {
-    provider.0.store(0, Ordering::SeqCst);
+    provider.calls.store(0, Ordering::SeqCst);
+    provider.observed_cpus.lock().unwrap().clear();
     if let Some(executor) = executor {
         executor.reset();
     }
@@ -340,9 +427,7 @@ fn eager_surface(
     dot_lhs: &Tensor,
     dot_rhs: &Tensor,
     dot_config: &DotGeneralConfig,
-    sessions: &AtomicUsize,
 ) -> crate::Result<Tensor> {
-    sessions.fetch_add(1, Ordering::SeqCst);
     placed.with_eager_session(|session| match surface {
         "E-N" => session
             .add(native_lhs, native_rhs)
@@ -409,10 +494,12 @@ fn recovery_proof(
         });
     }))
     .is_err();
-    let sessions = AtomicUsize::new(0);
-    let post_recovery = eager_surface(
-        placed, surface, native_lhs, native_rhs, dot_lhs, dot_rhs, dot_config, &sessions,
-    )
+    let recorder = Arc::new(super::super::phase2e_eager_events::SessionRecorder::default());
+    let post_recovery = super::super::phase2e_eager_events::with_recorder(&recorder, || {
+        eager_surface(
+            placed, surface, native_lhs, native_rhs, dot_lhs, dot_rhs, dot_config,
+        )
+    })
     .map(|output| {
         if surface == "E-N" {
             output.shape() == native_lhs.shape()
@@ -421,7 +508,7 @@ fn recovery_proof(
         }
     })
     .unwrap_or(false)
-        && sessions.load(Ordering::SeqCst) == 1;
+        && recorder.snapshot().0 == 1;
     (typed_error, unwind, post_recovery)
 }
 
@@ -463,23 +550,41 @@ fn run_ad_owned_rows() -> Evidence {
             let executor = fixture.executor.as_ref().map(Arc::clone);
             let provider = Arc::clone(&fixture.provider);
             let declared_cpus = fixture.declared_cpus.clone();
+            let placement_audit = fixture.placement_audit.clone();
+            assert_eq!(placement_audit.len(), budget);
+            assert_eq!(
+                placement_audit
+                    .iter()
+                    .map(|item| item[0])
+                    .collect::<std::collections::BTreeSet<_>>(),
+                (0..budget).collect()
+            );
+            if ownership != "external-advisory" {
+                assert!(placement_audit
+                    .iter()
+                    .all(|item| declared_cpus.contains(&item[1])));
+            }
             let placement = fixture.backend.placement();
             let runtime = EagerRuntime::with_cpu_backend(fixture.backend);
             let mut placed = runtime.on_cpu(placement).unwrap();
             for surface in ["E-N", "E-D"] {
                 reset_counters(executor.as_ref(), &provider);
-                let sessions = AtomicUsize::new(0);
-                let output = eager_surface(
-                    &mut placed,
-                    surface,
-                    &native_lhs,
-                    &native_rhs,
-                    &dot_lhs,
-                    &dot_rhs,
-                    &dot_config,
-                    &sessions,
-                )
-                .unwrap();
+                let session_recorder =
+                    Arc::new(super::super::phase2e_eager_events::SessionRecorder::default());
+                let output =
+                    super::super::phase2e_eager_events::with_recorder(&session_recorder, || {
+                        eager_surface(
+                            &mut placed,
+                            surface,
+                            &native_lhs,
+                            &native_rhs,
+                            &dot_lhs,
+                            &dot_rhs,
+                            &dot_config,
+                        )
+                    })
+                    .unwrap();
+                let (session_entry, session_entry_cpus) = session_recorder.snapshot();
                 let numerical_passed = if surface == "E-N" {
                     let expected: Vec<_> = native_lhs
                         .as_slice::<f64>()
@@ -492,7 +597,8 @@ fn run_ad_owned_rows() -> Evidence {
                 } else {
                     relative_dot_error(&dot_lhs, &dot_rhs, &output, 128) <= 1.0e-12
                 };
-                let actual_provider = provider.0.load(Ordering::SeqCst);
+                let actual_provider = provider.calls.load(Ordering::SeqCst);
+                let provider_cpus = provider.observed_cpus.lock().unwrap().clone();
                 let (actual_install, actual_submit, observed_cpus) = executor
                     .as_ref()
                     .map(|executor| {
@@ -520,7 +626,10 @@ fn run_ad_owned_rows() -> Evidence {
                     key: format!("{ownership}/budget-{budget}/{surface}"),
                     surface,
                     budget,
-                    session_entry: sessions.load(Ordering::SeqCst),
+                    session_entry,
+                    session_entry_cpus,
+                    placement_audit: placement_audit.clone(),
+                    declared_cpus: declared_cpus.clone(),
                     downstream_vector: if surface == "E-N" {
                         "borrowed-add"
                     } else {
@@ -529,7 +638,15 @@ fn run_ad_owned_rows() -> Evidence {
                     actual_install,
                     actual_submit,
                     actual_provider,
-                    observed_cpus,
+                    observed_cpus: {
+                        let mut cpus = observed_cpus;
+                        for cpu in provider_cpus {
+                            if !cpus.contains(&cpu) {
+                                cpus.push(cpu);
+                            }
+                        }
+                        cpus
+                    },
                     numerical_passed,
                     typed_error_recovered,
                     unwind_recovered,
@@ -564,8 +681,9 @@ fn write_evidence(evidence: &Evidence) -> std::io::Result<()> {
         }
         write!(
             output,
-            "{{\"key\":{},\"owner\":\"ad\",\"surface\":{},\"budget\":{},\"session_entry\":{},\"downstream_vector\":{},\"actual_install\":{},\"actual_submit\":{},\"actual_provider\":{},\"numerical_passed\":{},\"typed_error_recovered\":{},\"unwind_recovered\":{},\"post_recovery_passed\":{},\"observed_cpus\":{:?},\"hardware_skip\":null}}",
+            "{{\"key\":{},\"owner\":\"ad\",\"surface\":{},\"budget\":{},\"session_entry\":{},\"session_entry_cpus\":{:?},\"placement_audit\":{:?},\"declared_cpus\":{:?},\"downstream_vector\":{},\"actual_install\":{},\"actual_submit\":{},\"actual_provider\":{},\"numerical_passed\":{},\"typed_error_recovered\":{},\"unwind_recovered\":{},\"post_recovery_passed\":{},\"observed_cpus\":{:?},\"hardware_skip\":null}}",
             quoted(&row.key), quoted(row.surface), row.budget, row.session_entry,
+            row.session_entry_cpus, row.placement_audit, row.declared_cpus,
             quoted(row.downstream_vector),
             row.actual_install.map_or_else(|| "null".into(), |value| value.to_string()),
             row.actual_submit.map_or_else(|| "null".into(), |value| value.to_string()),

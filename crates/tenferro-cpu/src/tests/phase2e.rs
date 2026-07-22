@@ -2,9 +2,8 @@ use std::fmt::Write as _;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 
-use rayon::prelude::*;
 use tenferro_tensor::{
     BackendSessionHost, DotGeneralConfig, SliceConfig, TensorDot, TensorElementwise,
     TensorReduction,
@@ -39,20 +38,20 @@ fn current_cpu() -> Option<usize> {
     }
 }
 
-fn observe_pool_cpus(run: impl FnOnce(Box<dyn FnOnce() + Send>) + Send) -> Vec<usize> {
-    let observed = Arc::new(Mutex::new(Vec::new()));
-    let capture = Arc::clone(&observed);
+fn audit_pool_workers(
+    budget: usize,
+    run: impl FnOnce(Box<dyn FnOnce() -> Vec<(usize, usize)> + Send>) -> Vec<(usize, usize)>,
+) -> Vec<(usize, usize)> {
+    let barrier = Arc::new(Barrier::new(budget));
     run(Box::new(move || {
-        (0..65_536_usize).into_par_iter().for_each(|_| {
-            if let Some(cpu) = current_cpu() {
-                let mut cpus = capture.lock().unwrap();
-                if !cpus.contains(&cpu) {
-                    cpus.push(cpu);
-                }
-            }
-        });
-    }));
-    Arc::try_unwrap(observed).unwrap().into_inner().unwrap()
+        rayon::broadcast(|worker| {
+            barrier.wait();
+            (
+                worker.index(),
+                current_cpu().expect("Phase 2E requires current-CPU observation"),
+            )
+        })
+    }))
 }
 
 #[derive(Debug)]
@@ -86,12 +85,9 @@ impl RecordingExecutor {
     ) -> Arc<Self> {
         let allowed = process_cpu_affinity().expect("Phase 2E needs a process CPU set");
         let selected = crate::CpuSet::new(allowed.as_slice().iter().copied().take(budget)).unwrap();
-        let inner = if selected.len() == budget {
-            CpuContext::with_pinned_cpus(selected, budget).unwrap()
-        } else {
-            CpuContext::with_threads(budget).unwrap()
-        };
-        Arc::new(Self {
+        let declared = selected.as_usize_vec();
+        let inner = CpuContext::with_pinned_cpus(selected, budget).unwrap();
+        let executor = Arc::new(Self {
             inner,
             capabilities: CpuDomainExecutorCapabilities {
                 worker_count: NonZeroUsize::new(budget).unwrap(),
@@ -108,7 +104,20 @@ impl RecordingExecutor {
             installs: AtomicUsize::new(0),
             submits: AtomicUsize::new(0),
             observed_cpus: Mutex::new(Vec::new()),
-        })
+        });
+        if exact {
+            let audit = executor.affinity_audit();
+            assert_eq!(audit.len(), budget);
+            assert_eq!(
+                audit
+                    .iter()
+                    .map(|(worker, _)| *worker)
+                    .collect::<std::collections::BTreeSet<_>>(),
+                (0..budget).collect()
+            );
+            assert!(audit.iter().all(|(_, cpu)| declared.contains(cpu)));
+        }
+        executor
     }
 
     fn observe_cpu(&self) {
@@ -120,8 +129,10 @@ impl RecordingExecutor {
         }
     }
 
-    fn affinity_audit(&self) -> Vec<usize> {
-        observe_pool_cpus(|operation| self.inner.install(operation))
+    fn affinity_audit(&self) -> Vec<(usize, usize)> {
+        audit_pool_workers(self.capabilities.worker_count.get(), |operation| {
+            self.inner.install(operation)
+        })
     }
 
     fn snapshot(&self) -> (usize, usize, Vec<usize>) {
@@ -256,6 +267,11 @@ fn fixture(ownership: &str, budget: usize) -> Fixture {
         .build()
         .unwrap();
     if ownership == "managed-exact" {
+        let allowed = process_cpu_affinity().expect("Phase 2E needs process affinity");
+        if allowed.len() < budget {
+            let executor = RecordingExecutor::new(budget, true);
+            return external_fixture(executor, provider, bundle, true);
+        }
         let coordinator = CpuBackend::with_threads_and_kind(budget, CpuBackendKind::Faer)
             .unwrap()
             .with_provider_bundle(bundle)
@@ -270,8 +286,19 @@ fn fixture(ownership: &str, budget: usize) -> Fixture {
                     .unwrap()
             })
             .unwrap_or(coordinator);
+        let declared_cpus = backend.resolved_placement().unwrap().cpus().as_usize_vec();
+        let audit = audit_pool_workers(budget, |operation| backend.install(operation));
+        assert_eq!(audit.len(), budget);
+        assert_eq!(
+            audit
+                .iter()
+                .map(|(worker, _)| *worker)
+                .collect::<std::collections::BTreeSet<_>>(),
+            (0..budget).collect()
+        );
+        assert!(audit.iter().all(|(_, cpu)| declared_cpus.contains(cpu)));
         return Fixture {
-            declared_cpus: backend.resolved_placement().unwrap().cpus().as_usize_vec(),
+            declared_cpus,
             backend,
             executor: None,
             provider,

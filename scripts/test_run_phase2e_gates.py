@@ -19,11 +19,12 @@ from scripts import run_phase2e_gates as gates
 
 def row(key: str, owner: str) -> dict[str, object]:
     counts, mode = gates.expected_row_contract(key)
+    budget = int(key.split("/budget-", 1)[1].split("/", 1)[0])
     value = {
         "key": key,
         "owner": owner,
         "surface": key.rsplit("/", 1)[-1],
-        "budget": 2,
+        "budget": budget,
         "mode": mode,
         "counts": counts,
         "observed_cpus": [0],
@@ -38,6 +39,9 @@ def row(key: str, owner: str) -> dict[str, object]:
         value.pop("mode")
         value.update({
             "session_entry": 1,
+            "session_entry_cpus": [0],
+            "placement_audit": [[worker, 0] for worker in range(budget)],
+            "declared_cpus": [] if key.startswith("external-advisory/") else [0],
             "downstream_vector": "borrowed-add" if key.endswith("/E-N") else "borrowed-dot",
             "actual_install": 1,
             "actual_submit": 0,
@@ -74,11 +78,32 @@ def artifacts() -> tuple[dict[str, object], dict[str, object]]:
 
 
 class InventoryTests(unittest.TestCase):
+    def test_real_hardware_skips_are_typed_but_correctness_never_skips(self) -> None:
+        cpu, ad = artifacts()
+        composed = gates.compose_characterization(cpu, ad)
+        gates.attach_hardware_validity(composed, available_cpus=1, usable_numa_nodes=1)
+        for item in composed["rows"]:
+            self.assertIsNone(item["hardware_skip"])
+            if item["surface"] in {"U-O", "U-I"} or item["budget"] == 1:
+                self.assertIsNone(item["affinity_hardware_skip"])
+            else:
+                self.assertEqual(item["affinity_hardware_skip"], {
+                    "kind": "InsufficientAllowedCpus",
+                    "required": item["budget"],
+                    "available": 1,
+                })
+        self.assertEqual(composed["cross_socket_locality"]["hardware_skip"], {
+            "kind": "InsufficientNumaNodes", "required": 2, "available": 1,
+        })
+
     def test_exact_owner_partitions_compose_to_47(self) -> None:
         cpu, ad = artifacts()
         composed = gates.compose_characterization(cpu, ad)
         self.assertEqual(composed["row_count"], 47)
         self.assertEqual(len(composed["rows"]), 47)
+        ad_rows = [item for item in composed["rows"] if item["owner"] == "ad"]
+        self.assertTrue(all("observed_cpu_source" not in item for item in ad_rows))
+        self.assertTrue(all(item["downstream_mode_source"].endswith(("/D-N", "/D-D")) for item in ad_rows))
 
     def test_duplicate_missing_and_wrong_owner_are_rejected(self) -> None:
         for mutation in ("duplicate", "missing", "owner"):
@@ -375,6 +400,30 @@ class ProvenanceTests(unittest.TestCase):
                 self.assertEqual(
                     record["artifacts"][name]["sha256"], gates.sha256_file(artifact)
                 )
+
+    def test_latency_hardware_skip_does_not_launch_or_create_fake_estimates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            executable = root / "bench-bin"
+            executable.write_bytes(b"binary")
+            skip = {
+                "kind": "InsufficientAllowedCpus", "required": 4, "available": 2,
+            }
+            with mock.patch.object(gates, "run_bench_row") as run:
+                record = gates.capture_bench_row(
+                    executable, "managed-exact/budget-4/D-N", repository=root,
+                    environment=protocol.runtime_environment(path="/bin", home="/tmp/home"),
+                    criterion_home=root / "criterion", evidence_root=root / "evidence",
+                    hardware_skip=skip,
+                )
+            run.assert_not_called()
+            self.assertEqual(record, {
+                "row_id": "managed-exact__budget-4__D-N",
+                "key": "managed-exact/budget-4/D-N",
+                "hardware_skip": skip,
+                "latency_ns": None,
+                "artifacts": {},
+            })
 
     def test_atomic_json_and_digest_are_stable(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
