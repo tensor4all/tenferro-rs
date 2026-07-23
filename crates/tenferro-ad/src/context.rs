@@ -3,9 +3,13 @@
 use std::sync::Arc;
 
 use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
+use tenferro_runtime::program::FrozenProgram;
 use tenferro_runtime::{CacheStats, Result, TracedTensor};
 
 use crate::semantic_extension::{SemanticExtensionRegistryError, SemanticExtensionRuleSet};
+use crate::semantic_transform::{
+    semantic_jvp, semantic_vjp, SemanticAdProgram, SemanticAdTransformError,
+};
 use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits};
 
 /// Stats for caches owned by an [`AdContext`].
@@ -90,6 +94,46 @@ impl AdContext {
     /// ```
     pub fn semantic_extension_rules(&self) -> &SemanticExtensionRuleSet {
         &self.semantic_extension_rules
+    }
+
+    /// Transform a frozen semantic program into its forward-mode derivative.
+    ///
+    /// `active_inputs` follows source-program input order. Active tangent
+    /// seeds are appended after all primal inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns typed mask, source-query, semantic-rule, build, or finish
+    /// failures.
+    pub fn jvp_program(
+        &self,
+        input: &FrozenProgram,
+        active_inputs: &[bool],
+    ) -> std::result::Result<SemanticAdProgram, SemanticAdTransformError> {
+        semantic_jvp(input, active_inputs, &self.semantic_extension_rules)
+    }
+
+    /// Transform a frozen semantic program into its reverse-mode derivative.
+    ///
+    /// `active_inputs` selects requested primal-input cotangents and
+    /// `active_outputs` selects primal outputs that receive appended seeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns typed mask, source-query, semantic-rule, build, or finish
+    /// failures.
+    pub fn vjp_program(
+        &self,
+        input: &FrozenProgram,
+        active_inputs: &[bool],
+        active_outputs: &[bool],
+    ) -> std::result::Result<SemanticAdProgram, SemanticAdTransformError> {
+        semantic_vjp(
+            input,
+            active_inputs,
+            active_outputs,
+            &self.semantic_extension_rules,
+        )
     }
 
     pub(crate) fn extension_rule_set(&self) -> ExtensionRuleSet {
