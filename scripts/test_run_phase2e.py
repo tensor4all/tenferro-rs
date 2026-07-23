@@ -685,182 +685,290 @@ with (
             self.assertEqual(result.stdout, "PASS\n")
 
     def test_public_subprocess_happy_lifecycle_is_cwd_independent(self):
-        artifacts = self.REPOSITORY / "docs" / "worklogs" / "artifacts"
-        with tempfile.TemporaryDirectory(dir=artifacts) as directory:
-            parent = pathlib.Path(directory).resolve()
-            root = parent / "root"
-            with tempfile.TemporaryDirectory() as runtime_directory:
-                runtime = pathlib.Path(runtime_directory).resolve()
-                for name in ("scratch", "home", "cargo-home"):
-                    (runtime / name).mkdir()
-                harness = r"""
-import contextlib
-import pathlib
-import sys
-from unittest import mock
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            repository = self.init_git_repository(base)
+            scripts = repository / "scripts"
+            scripts.mkdir()
+            support = base / "support"
+            support.mkdir()
+            actual_scripts = self.REPOSITORY / "scripts"
+            (scripts / "__init__.py").write_text(
+                f"__path__.append({str(actual_scripts)!r})\n",
+                encoding="utf-8",
+            )
+            source = (actual_scripts / "run_phase2e.py").read_text(encoding="utf-8")
+            injection = r'''
 
-from scripts import phase2e_protocol as protocol
-from scripts import run_phase2e as orchestrator
+# Test-copy-only adapters. This block is injected into an isolated temporary
+# repository and is never part of the production orchestrator.
+def _phase2e_fixture_journal(root):
+    protocol.atomic_write_json(
+        root / PROCESS_JOURNAL,
+        {
+            "version": 1,
+            "entries": [
+                {
+                    "ordinal": 1,
+                    "stage": STAGE_ORDER[0],
+                    "argv": ["fixture-stage"],
+                    "pid": 999999,
+                    "pgid": 999999,
+                    "start_ticks": 1,
+                    "state": "EXITED",
+                    "exit_code": 0,
+                    "signals": [],
+                    "reaped": True,
+                }
+            ],
+        },
+    )
 
-repository = pathlib.Path(sys.argv[1])
-root = pathlib.Path(sys.argv[2])
-scratch = pathlib.Path(sys.argv[3])
-home = pathlib.Path(sys.argv[4])
-cargo_home = pathlib.Path(sys.argv[5])
-candidate = "1" * 40
-context_sha256 = "2" * 64
-context = {
-    "version": 1,
-    "repository": str(repository),
-    "evidence_root": str(root),
-    "scratch_parent": str(scratch),
-    "candidate_sha": candidate,
-    "candidate_tree_sha256": "3" * 64,
-    "reservation_id": "reservation-1",
-    "experiment_identity_digest": "4" * 64,
-    "command_contract_digest": "5" * 64,
-    "path": "/usr/bin",
-    "home": str(home),
-    "cargo_home": str(cargo_home),
-    "index": str(repository / orchestrator.INDEX_PATH),
-    "index_lock": str(repository / orchestrator.INDEX_LOCK_PATH),
-}
-active = {
-    "event": "ACTIVE",
-    "candidate_sha": candidate,
-    "candidate_tree_sha256": "3" * 64,
-    "reservation_id": "reservation-1",
-    "experiment_identity_digest": "4" * 64,
-    "command_contract_digest": "5" * 64,
-    "context_sha256": context_sha256,
-    "root": str(root),
-}
 
-@contextlib.contextmanager
-def active_lock(*_args, **_kwargs):
-    yield active, mock.Mock()
+def _phase2e_install_fixture_evidence(root, context_path):
+    import shutil as _fixture_shutil
+    from unittest import mock as _fixture_mock
+    from scripts import run_phase2e_gates as _fixture_gates
+    from scripts import test_run_phase2e as _fixture_tests
 
-def initialize(**kwargs):
-    kwargs["root"].mkdir()
-    kwargs["initializer"](kwargs["root"])
-    return 0
+    context = load_stage_context(
+        context_path,
+        hashlib.sha256(context_path.read_bytes()).hexdigest(),
+        require_fresh_scratch=False,
+    )
+    staging = root.parent / "fixture-evidence-source"
+    staging.mkdir()
+    case = _fixture_tests.OuterOrchestratorTests()
+    case.REPOSITORY = pathlib.Path(context["repository"])
+    case.CANDIDATE = context["candidate_sha"]
+    with _fixture_mock.patch.object(
+        _fixture_gates, "validate_source_contract", return_value={}
+    ), _fixture_mock.patch.object(
+        _fixture_gates, "validate_terminal_evidence", return_value=None
+    ):
+        case.make_complete_root(staging)
+    excluded = {
+        AGGREGATE_MANIFEST,
+        PROGRESS_MANIFEST,
+        STAGE_CONTEXT,
+        PROCESS_JOURNAL,
+        ".orchestrator.lock",
+        "children",
+    }
+    for child in staging.iterdir():
+        if child.name in excluded:
+            continue
+        target = root / child.name
+        if child.is_dir():
+            _fixture_shutil.copytree(child, target, dirs_exist_ok=True)
+        else:
+            _fixture_shutil.copy2(child, target)
+    ledger_path = root / "evidence-ledger.json"
+    ledger_path.write_bytes(
+        ledger_path.read_bytes().replace(
+            str(staging).encode(), b"/phase2e-fixture-missing"
+        )
+    )
+    _fixture_shutil.rmtree(root / "attempts" / "allocation")
 
-def run(command):
-    code = orchestrator.main(command)
-    if code != 0:
-        raise AssertionError((command, code))
 
-with (
-    mock.patch.object(
-        orchestrator,
-        "_prepare_start_context",
-        return_value=(context, context_sha256, "6" * 64),
-    ),
-    mock.patch.object(
-        orchestrator,
-        "_prepare_execution_homes",
-        return_value=(home, cargo_home),
-    ),
-    mock.patch.object(orchestrator, "_preflight_offline_feature_queries"),
-    mock.patch.object(orchestrator, "initialize_campaign", side_effect=initialize),
-    mock.patch.object(orchestrator, "load_stage_context", return_value=dict(context)),
-    mock.patch.object(orchestrator, "active_campaign_lock", side_effect=active_lock),
-    mock.patch.object(orchestrator, "run_fixed_stages", return_value=0),
-    mock.patch.object(
-        orchestrator,
-        "_active_for_root",
-        return_value=({"events": [active]}, active),
-    ),
-    mock.patch.object(
-        orchestrator,
-        "_load_bound_context",
-        return_value=(root / orchestrator.STAGE_CONTEXT, dict(context), context_sha256),
-    ),
-    mock.patch.object(orchestrator, "validate_progress", return_value={}),
-    mock.patch.object(orchestrator, "validate_resume_identity"),
-    mock.patch.object(orchestrator, "rerun_invalid_stage", return_value=0),
-    mock.patch.object(orchestrator, "continue_after_retry", return_value=0),
-    mock.patch.object(orchestrator, "validate_root", return_value="PASS"),
-    mock.patch.object(orchestrator, "record_index_root", return_value="pending"),
-    mock.patch.object(orchestrator, "record_preserved", return_value="preserved"),
-    mock.patch.object(
-        orchestrator,
-        "index_state",
-        side_effect=lambda value: {
-            "pending": "PENDING_PRESERVATION",
-            "preserved": "PRESERVED",
-        }.get(value, "ACTIVE"),
-    ),
+def _phase2e_fixture_subprocess_stage_runner(
+    context_path, context_sha256, repository, *, root, root_identity
 ):
-    run(
-        [
-            "start",
-            "--repository",
-            str(repository),
-            "--candidate",
-            candidate,
-            "--evidence-root",
-            str(root),
-            "--index",
-            str(orchestrator.INDEX_PATH),
-            "--scratch-parent",
-            str(scratch),
-        ]
-    )
-    run(["rerun-invalid-lane", "--evidence-root", str(root)])
-    run(["continue", "--evidence-root", str(root)])
-    run(["validate", "--evidence-root", str(root)])
-    run(["validate", "--evidence-root", str(root), "--print-status"])
-    run(
-        [
-            "record-index",
-            "--evidence-root",
-            str(root),
-            "--index",
-            str(orchestrator.INDEX_PATH),
-        ]
-    )
-    run(
-        [
-            "record-preserved",
-            "--evidence-root",
-            str(root),
-            "--index",
-            str(orchestrator.INDEX_PATH),
-            "--preservation-commit",
-            "7" * 40,
-            "--issue-comment-url",
-            (
-                "https://github.com/tensor4all/tenferro-rs/issues/1436"
-                "#issuecomment-1"
-            ),
-        ]
-    )
-"""
-                environment = dict(os.environ)
-                environment["PYTHONPATH"] = str(self.REPOSITORY)
-                result = subprocess.run(
-                    (
-                        sys.executable,
-                        "-c",
-                        harness,
-                        str(self.REPOSITORY),
-                        str(root),
-                        str(runtime / "scratch"),
-                        str(runtime / "home"),
-                        str(runtime / "cargo-home"),
-                    ),
+    mode = os.environ["PHASE2E_FIXTURE_MODE"]
+
+    def run(stage, _environment):
+        _phase2e_fixture_journal(pathlib.Path(root))
+        if mode == "start":
+            return 2
+        if stage == "aggregate-validation":
+            _phase2e_install_fixture_evidence(
+                pathlib.Path(root), pathlib.Path(context_path)
+            )
+        return 0
+
+    return run
+
+
+def _phase2e_fixture_comment(issue_url):
+    commit = os.environ["PHASE2E_FIXTURE_PRESERVATION_COMMIT"]
+    return {
+        "id": 1,
+        "html_url": issue_url,
+        "issue_url": (
+            "https://api.github.com/repos/tensor4all/tenferro-rs/issues/1436"
+        ),
+        "body": (
+            f"preservation_commit: {commit}\n"
+            f"evidence_root: {os.environ['PHASE2E_FIXTURE_ROOT']}\n"
+            f"candidate: {os.environ['PHASE2E_FIXTURE_CANDIDATE']}\n"
+            "terminal_status: PASS\n"
+        ),
+    }
+
+
+_preflight_offline_feature_queries = lambda _context: None
+require_remote_index = lambda *_args, **_kwargs: None
+_subprocess_stage_runner = _phase2e_fixture_subprocess_stage_runner
+record_preserved.__kwdefaults__["remote_validator"] = (
+    lambda _repository, _commit: None
+)
+record_preserved.__kwdefaults__["comment_fetcher"] = _phase2e_fixture_comment
+'''
+            source = source.replace(
+                '\nif __name__ == "__main__":\n',
+                injection + '\nif __name__ == "__main__":\n',
+            )
+            (scripts / "run_phase2e.py").write_text(source, encoding="utf-8")
+            shutil.copy2(
+                actual_scripts / "phase2e_protocol.py",
+                scripts / "phase2e_protocol.py",
+            )
+            (support / "sitecustomize.py").write_text(
+                f"""
+from scripts import phase2e_build as build
+from scripts import run_phase1_eager_campaign as timing
+from scripts import run_phase2e_allocation_campaign as allocation
+from scripts import run_phase2e_gates as gates
+
+build.validate_build_manifest = lambda _manifest: None
+build.validate_allocation_probe_set = lambda *_args, **_kwargs: {{
+    role: {{}} for role in build.PROBE_BUILD_MANIFEST_PATHS
+}}
+allocation.validate_completed_attempt = lambda *_args, **_kwargs: 0
+timing.validate_retained_attempt = lambda *_args, **_kwargs: 0
+gates.validate_source_contract = lambda _repository: {{}}
+gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
+""",
+                encoding="utf-8",
+            )
+            (repository / ".gitignore").write_text(
+                "__pycache__/\n*.pyc\n", encoding="utf-8"
+            )
+            (repository / "docs" / "worklogs" / "artifacts").mkdir(parents=True)
+            subprocess.run(("git", "add", "."), cwd=repository, check=True)
+            subprocess.run(
+                ("git", "commit", "-qm", "fixture candidate"),
+                cwd=repository,
+                check=True,
+            )
+            candidate = subprocess.run(
+                ("git", "rev-parse", "HEAD"),
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            root = repository / "docs" / "worklogs" / "artifacts" / "root"
+            scratch = base / "scratch"
+            scratch.mkdir()
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = os.pathsep.join(
+                (str(support), str(repository), str(self.REPOSITORY))
+            )
+            environment["PHASE2E_FIXTURE_ROOT"] = str(root)
+            environment["PHASE2E_FIXTURE_CANDIDATE"] = candidate
+
+            def run(
+                *arguments: str, mode: str = "continue"
+            ) -> subprocess.CompletedProcess:
+                command_environment = dict(environment)
+                command_environment["PHASE2E_FIXTURE_MODE"] = mode
+                return subprocess.run(
+                    (sys.executable, "-m", "scripts.run_phase2e", *arguments),
                     cwd="/tmp",
-                    env=environment,
+                    env=command_environment,
                     capture_output=True,
                     text=True,
                     check=False,
                 )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(
-                    result.stdout,
-                    "PASS\nPENDING_PRESERVATION\nPRESERVED\n",
-                )
+
+            start = run(
+                "start",
+                "--repository",
+                str(repository),
+                "--candidate",
+                candidate,
+                "--evidence-root",
+                str(root),
+                "--index",
+                str(orchestrator.INDEX_PATH),
+                "--scratch-parent",
+                str(scratch),
+                mode="start",
+            )
+            self.assertEqual(start.returncode, 2, start.stderr)
+            self.assertEqual(start.stdout, "")
+            rerun = run("rerun-invalid-lane", "--evidence-root", str(root))
+            self.assertEqual(rerun.returncode, 0, rerun.stderr)
+            continued = run("continue", "--evidence-root", str(root))
+            self.assertEqual(continued.returncode, 0, continued.stderr)
+            silent = run("validate", "--evidence-root", str(root))
+            self.assertEqual(silent.returncode, 0, silent.stderr)
+            self.assertEqual(silent.stdout, "")
+            printed = run(
+                "validate", "--evidence-root", str(root), "--print-status"
+            )
+            self.assertEqual(printed.returncode, 0, printed.stderr)
+            self.assertEqual(printed.stdout, "PASS\n")
+            indexed = run(
+                "record-index",
+                "--evidence-root",
+                str(root),
+                "--index",
+                str(orchestrator.INDEX_PATH),
+            )
+            self.assertEqual(indexed.returncode, 0, indexed.stderr)
+            self.assertEqual(indexed.stdout, "PENDING_PRESERVATION\n")
+            worklog = repository / orchestrator.WORKLOG_PATH
+            worklog.write_text("fixture evidence\n", encoding="utf-8")
+            subprocess.run(
+                (
+                    "git",
+                    "add",
+                    "-f",
+                    str(root),
+                    str(repository / orchestrator.INDEX_PATH),
+                    str(worklog),
+                ),
+                cwd=repository,
+                check=True,
+            )
+            subprocess.run(
+                ("git", "commit", "-qm", "preserve fixture evidence"),
+                cwd=repository,
+                check=True,
+            )
+            preservation_commit = subprocess.run(
+                ("git", "rev-parse", "HEAD"),
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            environment["PHASE2E_FIXTURE_PRESERVATION_COMMIT"] = (
+                preservation_commit
+            )
+            preserved = run(
+                "record-preserved",
+                "--evidence-root",
+                str(root),
+                "--index",
+                str(orchestrator.INDEX_PATH),
+                "--preservation-commit",
+                preservation_commit,
+                "--issue-comment-url",
+                (
+                    "https://github.com/tensor4all/tenferro-rs/issues/1436"
+                    "#issuecomment-1"
+                ),
+            )
+            self.assertEqual(preserved.returncode, 0, preserved.stderr)
+            self.assertEqual(preserved.stdout, "PRESERVED\n")
+            index = json.loads(
+                (repository / orchestrator.INDEX_PATH).read_text(encoding="utf-8")
+            )
+            self.assertEqual(index["events"][-1]["event"], "PRESERVED")
 
     def test_root_only_public_command_rejects_foreign_and_symlink_roots(self):
         direct = str(self.REPOSITORY / "scripts" / "run_phase2e.py")
@@ -2372,6 +2480,20 @@ with (
                 held.close()
             self.assertEqual(list(root.iterdir()), [])
             self.assertFalse((root / orchestrator.PROGRESS_MANIFEST).exists())
+
+    def test_descriptor_bound_inventory_does_not_reopen_proc_fd_as_a_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            owned = root / "owned.json"
+            protocol.atomic_write_json(owned, {"value": 1})
+            identity = protocol.PreparedRootIdentity(root)
+            try:
+                self.assertEqual(
+                    orchestrator._root_inventory(root, identity),
+                    {"owned.json": protocol.sha256_file(owned)},
+                )
+            finally:
+                identity.close()
 
     def test_stage_worker_context_rejects_root_replacement_before_write(self):
         with tempfile.TemporaryDirectory() as directory:

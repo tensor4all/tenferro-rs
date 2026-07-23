@@ -140,14 +140,24 @@ the measured scratch root. The latter links only canonical Cargo `git` and
 creating `ACTIVE`, the wrapper runs both Task 7 `cpu-faer` feature queries with
 `CARGO_NET_OFFLINE=true`. A real local preflight on 2026-07-23 passed for
 `tenferro-cpu` and `tenferro-ad`; the focused outer-orchestrator suite passed
-86 tests after independent specification review. The exact seven-module Phase
+87 tests after independent specification review. The exact seven-module Phase
 2E verification matrix passed 444 tests in 214.3 seconds.
 
 An independent specification review then added subprocess regressions for
 private-worker help isolation, execution from `/tmp` with an absolute evidence
-root, foreign/symlink root rejection, and one deterministic public
-start/rerun/continue/validate/record lifecycle with fake stages. These tests do
-not launch measurements or mutate remote state.
+root, foreign/symlink root rejection, and one deterministic public lifecycle in
+an isolated temporary Git repository. Separate exact
+`python3 -m scripts.run_phase2e` subprocesses exercise
+start/rerun-invalid-lane/continue, silent and printed validation, record-index,
+commit-object reconstruction, and record-preserved. The real lifecycle owns
+the fixed index and ACTIVE event, canonical context, locks, retry progress,
+aggregate seal, and terminal/PRESERVED transitions. Temporary-copy adapters
+replace only preflight, the expensive measurement runner and its semantic
+validators, and external remote/comment verification; the production module
+has no test-only switch. This regression exposed pathname inventory traversal
+through `/proc/self/fd/N`; descriptor-bound orchestration now inventories
+through the held directory descriptor and has a focused regression. The tests
+do not launch measurements or mutate remote state.
 
 ## Remaining work
 

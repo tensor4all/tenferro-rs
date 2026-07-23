@@ -1690,8 +1690,7 @@ def run_fixed_stages(
     for stage in STAGE_ORDER[len(children):]:
         if root_identity is not None:
             root_identity.revalidate()
-        inventory_root = _root_io_path(root, root_identity)
-        before = protocol.regular_file_inventory(inventory_root)
+        before = _root_inventory(root, root_identity)
         code = runner(stage, dict(environment))
         if root_identity is not None:
             root_identity.revalidate()
@@ -1746,6 +1745,22 @@ def _root_io_path(
     return pathlib.Path(f"/proc/self/fd/{identity.descriptor}")
 
 
+def _root_inventory(
+    root: pathlib.Path,
+    identity: protocol.PreparedRootIdentity | None,
+    *,
+    excluded: frozenset[str] = frozenset(),
+) -> dict[str, str]:
+    if identity is None:
+        return protocol.regular_file_inventory(root, excluded=excluded)
+    identity.revalidate()
+    inventory = protocol.regular_file_inventory_at(
+        identity.descriptor, excluded=excluded
+    )
+    identity.revalidate()
+    return inventory
+
+
 def _atomic_write_root_json(
     root: pathlib.Path,
     relative: pathlib.PurePosixPath,
@@ -1793,7 +1808,7 @@ def _write_child_record(
     relative = pathlib.PurePosixPath(
         "children", f"{ordinal:02d}-{child['stage'].replace('/', '__')}.json"
     )
-    after = protocol.regular_file_inventory(_root_io_path(root, root_identity))
+    after = _root_inventory(root, root_identity)
     changed = {
         relative: digest
         for relative, digest in after.items()
@@ -1881,8 +1896,10 @@ def _write_progress(
             "index_lock": bound.get("index_lock", "/tmp/index.lock"),
             "context_path": bound.get("context_path", "/context.json"),
             "ledger_sha256": ledger_sha256,
-            "inventory": protocol.regular_file_inventory(
-                io_root, excluded=frozenset({PROGRESS_MANIFEST, AGGREGATE_MANIFEST})
+            "inventory": _root_inventory(
+                root,
+                root_identity,
+                excluded=frozenset({PROGRESS_MANIFEST, AGGREGATE_MANIFEST}),
             ),
         },
         root_identity,
@@ -1924,7 +1941,7 @@ def rerun_invalid_stage(
     stage = children[-1].get("stage")
     if root_identity is not None:
         root_identity.revalidate()
-    before = protocol.regular_file_inventory(_root_io_path(root, root_identity))
+    before = _root_inventory(root, root_identity)
     code = runner(stage, dict(environment))
     if root_identity is not None:
         root_identity.revalidate()
@@ -1982,7 +1999,7 @@ def continue_after_retry(
     for stage in STAGE_ORDER[start:]:
         if root_identity is not None:
             root_identity.revalidate()
-        before = protocol.regular_file_inventory(_root_io_path(root, root_identity))
+        before = _root_inventory(root, root_identity)
         code = runner(stage, dict(environment))
         if root_identity is not None:
             root_identity.revalidate()
@@ -2357,7 +2374,11 @@ def seal_root(
     )
     required = _canonical_root_paths(root, ledger)
     if set(inventory) != required:
-        raise protocol.ProtocolError("root inventory is not the canonical Task 8A set")
+        raise protocol.ProtocolError(
+            "root inventory is not the canonical Task 8A set: "
+            f"missing={sorted(required - set(inventory))}, "
+            f"extra={sorted(set(inventory) - required)}"
+        )
     progress = _read_json(root / PROGRESS_MANIFEST, "aggregate progress")
     if progress["context_sha256"] != inventory[STAGE_CONTEXT]:
         raise protocol.ProtocolError(
