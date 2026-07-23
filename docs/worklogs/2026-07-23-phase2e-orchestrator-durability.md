@@ -111,7 +111,9 @@ the complete ACTIVE/TERMINAL identity, support only exact idempotent replay,
 and serialize against both parallel preservation and later starts under the
 index-then-root lock order.
 
-The exact Step 4 suite from the implementation plan passed 430 tests. Focused
+The final exact Step 4 suite from the implementation plan passed 433 tests.
+It includes strict four-line preservation-comment parsing, durable index URL
+validation, and staged/commit rejection of the force-added index lock. Focused
 Git tests use temporary local repositories and fake remote/comment adapters.
 No push, fetch from a real remote, or GitHub comment was performed.
 

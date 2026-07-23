@@ -67,6 +67,17 @@ class OuterOrchestratorTests(unittest.TestCase):
         )
         return repository
 
+    @staticmethod
+    def preservation_body(
+        commit: str, root: str, candidate: str, status: str
+    ) -> str:
+        return (
+            f"preservation_commit: {commit}\n"
+            f"evidence_root: {root}\n"
+            f"candidate: {candidate}\n"
+            f"terminal_status: {status}\n"
+        )
+
     def test_global_index_paths_are_fixed_repository_constants(self):
         with tempfile.TemporaryDirectory() as directory:
             repository = pathlib.Path(directory).resolve()
@@ -2194,6 +2205,55 @@ class OuterOrchestratorTests(unittest.TestCase):
                         "ledger_sha256": "0" * 64,
                     },
                 )
+            lock_path = repository / orchestrator.INDEX_LOCK_PATH
+            lock_path.touch(mode=0o600)
+            subprocess.run(
+                (
+                    "git",
+                    "add",
+                    "-f",
+                    "--",
+                    worklog.relative_to(repository),
+                    lock_path.relative_to(repository),
+                ),
+                cwd=repository,
+                check=True,
+            )
+            terminal = {
+                "status": "ABANDONED",
+                "root_digest": protocol.sha256_json(seal),
+                "ledger_sha256": "0" * 64,
+            }
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_preservation_objects(
+                    repository,
+                    selector=":",
+                    root=root,
+                    index_path=index_path,
+                    worklog=worklog,
+                    terminal_event=terminal,
+                )
+            subprocess.run(
+                ("git", "commit", "-q", "-m", "force add forbidden lock"),
+                cwd=repository,
+                check=True,
+            )
+            commit = subprocess.run(
+                ("git", "rev-parse", "HEAD"),
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_preservation_objects(
+                    repository,
+                    selector=commit,
+                    root=root,
+                    index_path=index_path,
+                    worklog=worklog,
+                    terminal_event=terminal,
+                )
 
     def test_comment_proof_rejects_cross_issue_or_fabricated_metadata(self):
         url = (
@@ -2206,15 +2266,18 @@ class OuterOrchestratorTests(unittest.TestCase):
             "issue_url": (
                 "https://api.github.com/repos/tensor4all/tenferro-rs/issues/1436"
             ),
-            "body": " ".join(
-                ["1" * 40, "docs/worklogs/root", self.CANDIDATE, "PASS"]
+            "body": self.preservation_body(
+                "1" * 40,
+                "/canonical/docs/worklogs/root",
+                self.CANDIDATE,
+                "PASS",
             ),
         }
         orchestrator.validate_preservation_comment_proof(
             url,
             proof,
             preservation_commit="1" * 40,
-            root="docs/worklogs/root",
+            root="/canonical/docs/worklogs/root",
             candidate_sha=self.CANDIDATE,
             status="PASS",
         )
@@ -2223,7 +2286,7 @@ class OuterOrchestratorTests(unittest.TestCase):
                 url,
                 {**proof, "issue_url": proof["issue_url"].replace("1436", "1435")},
                 preservation_commit="1" * 40,
-                root="docs/worklogs/root",
+                root="/canonical/docs/worklogs/root",
                 candidate_sha=self.CANDIDATE,
                 status="PASS",
             )
@@ -2308,8 +2371,8 @@ class OuterOrchestratorTests(unittest.TestCase):
                 "issue_url": (
                     "https://api.github.com/repos/tensor4all/tenferro-rs/issues/1436"
                 ),
-                "body": " ".join(
-                    [commit, str(root), self.CANDIDATE, "ABANDONED"]
+                "body": self.preservation_body(
+                    commit, str(root), self.CANDIDATE, "ABANDONED"
                 ),
             }
             remote_calls = []
@@ -2455,15 +2518,83 @@ class OuterOrchestratorTests(unittest.TestCase):
                 issue_url=url,
             )
 
+    def test_index_rejects_noncanonical_preserved_comment_url(self):
+        active = orchestrator.record_active(
+            orchestrator.new_campaign_index(),
+            reservation_id="r1",
+            candidate_sha=self.CANDIDATE,
+            candidate_tree_sha256="c" * 64,
+            root="docs/worklogs/root",
+            experiment_identity_digest="d" * 64,
+            campaign_identity_digest="e" * 64,
+        )
+        pending = orchestrator.record_terminal(
+            active, reservation_id="r1", status="PASS", root_digest="f" * 64
+        )
+        preserved = orchestrator.record_preserved_event(
+            pending,
+            reservation_id="r1",
+            preservation_commit="1" * 40,
+            issue_url=(
+                "https://github.com/tensor4all/tenferro-rs/issues/1436"
+                "#issuecomment-9"
+            ),
+        )
+        preserved["events"][-1]["issue_url"] += "-suffix"
+        with self.assertRaises(protocol.ProtocolError):
+            orchestrator.index_state(preserved)
+
+    def test_start_rejects_byte_equal_remote_index_with_invalid_preserved_url(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            (repository / "docs" / "worklogs").mkdir(parents=True)
+            active = orchestrator.record_active(
+                orchestrator.new_campaign_index(),
+                reservation_id="r1",
+                candidate_sha=self.CANDIDATE,
+                candidate_tree_sha256="c" * 64,
+                root=str(repository / "docs" / "worklogs" / "root-1"),
+                experiment_identity_digest="d" * 64,
+                campaign_identity_digest="e" * 64,
+            )
+            pending = orchestrator.record_terminal(
+                active, reservation_id="r1", status="PASS", root_digest="f" * 64
+            )
+            preserved = orchestrator.record_preserved_event(
+                pending,
+                reservation_id="r1",
+                preservation_commit="1" * 40,
+                issue_url=(
+                    "https://github.com/tensor4all/tenferro-rs/issues/1436"
+                    "#issuecomment-9"
+                ),
+            )
+            preserved["events"][-1]["issue_url"] += "-suffix"
+            protocol.atomic_write_json(repository / orchestrator.INDEX_PATH, preserved)
+            next_root = repository / "docs" / "worklogs" / "root-2"
+            with mock.patch.object(orchestrator, "require_remote_index"):
+                with self.assertRaises(protocol.ProtocolError):
+                    orchestrator.initialize_campaign(
+                        repository=repository,
+                        root=next_root,
+                        reservation_id="r2",
+                        candidate_sha=self.CANDIDATE,
+                        candidate_tree_sha256="c" * 64,
+                        experiment_identity_digest="d" * 64,
+                        campaign_identity_digest="e" * 64,
+                    )
+            self.assertFalse(next_root.exists())
+
     def test_preservation_comment_binds_commit_root_candidate_and_status(self):
-        text = " ".join(
-            ["1" * 40, "docs/worklogs/root-1", self.CANDIDATE, "PASS"]
+        root = "/canonical/docs/worklogs/root-1"
+        text = self.preservation_body(
+            "1" * 40, root, self.CANDIDATE, "PASS"
         )
         orchestrator.validate_preservation_comment(
             "https://github.com/tensor4all/tenferro-rs/issues/1436#issuecomment-9",
             text,
             preservation_commit="1" * 40,
-            root="docs/worklogs/root-1",
+            root=root,
             candidate_sha=self.CANDIDATE,
             status="PASS",
         )
@@ -2472,10 +2603,41 @@ class OuterOrchestratorTests(unittest.TestCase):
                 "https://github.com/tensor4all/tenferro-rs/issues/1435#issuecomment-9",
                 text,
                 preservation_commit="1" * 40,
-                root="docs/worklogs/root-1",
+                root=root,
                 candidate_sha=self.CANDIDATE,
                 status="PASS",
             )
+
+    def test_preservation_comment_rejects_ambiguous_or_modified_fields(self):
+        commit = "1" * 40
+        root = "/canonical/docs/worklogs/root"
+        candidate = self.CANDIDATE
+        status = "PASS"
+        url = (
+            "https://github.com/tensor4all/tenferro-rs/issues/1436"
+            "#issuecomment-9"
+        )
+        valid = self.preservation_body(commit, root, candidate, status)
+        fields = {
+            "preservation_commit": commit,
+            "evidence_root": root,
+            "candidate": candidate,
+            "terminal_status": status,
+        }
+        for name, value in fields.items():
+            with self.subTest(name=name):
+                ambiguous = valid.replace(
+                    f"{name}: {value}\n", f"{name}: {value}x\n"
+                )
+                with self.assertRaises(protocol.ProtocolError):
+                    orchestrator.validate_preservation_comment(
+                        url,
+                        ambiguous,
+                        preservation_commit=commit,
+                        root=root,
+                        candidate_sha=candidate,
+                        status=status,
+                    )
 
 
 if __name__ == "__main__":

@@ -39,6 +39,18 @@ PRESERVATION_BRANCH = "origin/codex/execution-engine-through-phase9"
 ISSUE_NUMBER = 1436
 
 
+def _is_canonical_issue_comment_url(url: Any) -> bool:
+    return (
+        type(url) is str
+        and re.fullmatch(
+            rf"https://github\.com/tensor4all/tenferro-rs/issues/{ISSUE_NUMBER}"
+            r"#issuecomment-[1-9][0-9]*",
+            url,
+        )
+        is not None
+    )
+
+
 def campaign_index_paths(repository: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     """Return the only repository-owned Phase 2E index and lock paths."""
     repository = pathlib.Path(repository)
@@ -710,8 +722,8 @@ def _validate_index(index: Mapping[str, Any]) -> None:
                 sha256=False,
                 context="preservation commit",
             )
-            if type(event.get("issue_url")) is not str:
-                raise protocol.ProtocolError("PRESERVED event lacks issue URL")
+            if not _is_canonical_issue_comment_url(event.get("issue_url")):
+                raise protocol.ProtocolError("PRESERVED event issue URL is invalid")
             if any(
                 event[name] != records[reservation][name]
                 for name in (
@@ -892,11 +904,7 @@ def record_preserved_event(
         or index["events"][-1]["reservation_id"] != reservation_id
     ):
         raise protocol.ProtocolError("reservation is not pending preservation")
-    if re.fullmatch(
-        rf"https://github\.com/tensor4all/tenferro-rs/issues/{ISSUE_NUMBER}"
-        r"#issuecomment-[0-9]+",
-        issue_url,
-    ) is None:
+    if not _is_canonical_issue_comment_url(issue_url):
         raise protocol.ProtocolError("preservation report is not on issue #1436")
     updated = copy.deepcopy(index)
     active = next(
@@ -2127,18 +2135,34 @@ def validate_preservation_comment(
     candidate_sha: str,
     status: str,
 ) -> None:
-    """Bind one permanent #1436 report to the exact preserved campaign."""
-    if (
-        type(issue_url) is not str
-        or f"/issues/{ISSUE_NUMBER}#issuecomment-" not in issue_url
-        or type(body) is not str
-    ):
+    """Parse one frozen four-line #1436 preservation report."""
+    if not _is_canonical_issue_comment_url(issue_url) or type(body) is not str:
         raise protocol.ProtocolError(
             "preservation comment is not permanent issue #1436"
         )
-    for value in (preservation_commit, root, candidate_sha, status):
-        if type(value) is not str or value not in body:
-            raise protocol.ProtocolError("preservation comment omits campaign identity")
+    _require_sha(
+        preservation_commit, sha256=False, context="preservation commit"
+    )
+    _require_sha(candidate_sha, sha256=False, context="candidate SHA")
+    if status not in TERMINAL_STATUSES:
+        raise protocol.ProtocolError("preservation comment status is invalid")
+    if type(root) is not str:
+        raise protocol.ProtocolError("preservation comment root is not canonical")
+    root_path = pathlib.PurePosixPath(root)
+    if (
+        not root_path.is_absolute()
+        or root_path.as_posix() != root
+        or ".." in root_path.parts
+    ):
+        raise protocol.ProtocolError("preservation comment root is not canonical")
+    expected = (
+        f"preservation_commit: {preservation_commit}\n"
+        f"evidence_root: {root}\n"
+        f"candidate: {candidate_sha}\n"
+        f"terminal_status: {status}\n"
+    )
+    if body != expected:
+        raise protocol.ProtocolError("preservation comment format or identity differs")
 
 
 def validate_preservation_comment_proof(
@@ -2151,10 +2175,14 @@ def validate_preservation_comment_proof(
     status: str,
 ) -> None:
     """Validate canonical GitHub API metadata, not only caller-supplied text."""
-    match = re.fullmatch(
-        rf"https://github\.com/tensor4all/tenferro-rs/issues/{ISSUE_NUMBER}"
-        r"#issuecomment-([0-9]+)",
-        issue_url,
+    match = (
+        re.fullmatch(
+            rf"https://github\.com/tensor4all/tenferro-rs/issues/{ISSUE_NUMBER}"
+            r"#issuecomment-([1-9][0-9]*)",
+            issue_url,
+        )
+        if type(issue_url) is str
+        else None
     )
     if match is None or type(proof) is not dict or set(proof) != {
         "id",
@@ -2342,6 +2370,25 @@ def _git_exact_blob(
     return GitBlob(mode, object_id, blob.stdout)
 
 
+def _require_git_path_absent(
+    repository: pathlib.Path, selector: str, relative: str
+) -> None:
+    if selector != ":" and re.fullmatch(r"[0-9a-f]{40}", selector) is None:
+        raise protocol.ProtocolError("Git selector must be index or exact commit")
+    command = (
+        ("git", "ls-files", "-z", "--stage", "--", relative)
+        if selector == ":"
+        else ("git", "ls-tree", "-z", selector, "--", relative)
+    )
+    listing = subprocess.run(
+        command, cwd=repository, capture_output=True, check=False
+    )
+    if listing.returncode:
+        raise protocol.ProtocolError(f"cannot inspect forbidden Git path: {relative}")
+    if listing.stdout:
+        raise protocol.ProtocolError(f"forbidden Git path is present: {relative}")
+
+
 def validate_preservation_objects(
     repository: pathlib.Path,
     *,
@@ -2357,6 +2404,9 @@ def validate_preservation_objects(
     root = pathlib.Path(root).resolve(strict=True)
     index_path = pathlib.Path(index_path).resolve(strict=True)
     worklog = pathlib.Path(worklog).resolve(strict=True)
+    _require_git_path_absent(
+        repository, selector, pathlib.Path(INDEX_LOCK_PATH).as_posix()
+    )
     for path, context in ((index_path, "index"), (worklog, "worklog")):
         try:
             relative = path.relative_to(repository).as_posix()
