@@ -100,7 +100,7 @@ pub use subscripts::{parse_einsum_subscripts, EinsumSubscripts};
 pub use syntax::nested::NestedEinsum;
 pub use syntax::subscripts::Subscripts;
 pub use tensordot::TensorDotAxes;
-pub use traced::{GraphCompilerEinsumExt, TracedTensorEinsumExt};
+pub use traced::{GraphCompilerEinsumExt, TraceContextEinsumExt, TracedTensorEinsumExt};
 
 #[cfg(test)]
 mod concrete_tests;

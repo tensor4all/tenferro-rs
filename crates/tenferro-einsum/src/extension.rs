@@ -140,7 +140,6 @@ impl EinsumExtensionOp {
 
     /// Attach a precomputed contraction tree as an execution hint.
     #[must_use]
-    #[cfg(any(test, feature = "autodiff"))]
     pub(crate) fn with_static_tree_hint(mut self, tree: Arc<ContractionTree>) -> Self {
         self.static_tree = Some(tree);
         self
