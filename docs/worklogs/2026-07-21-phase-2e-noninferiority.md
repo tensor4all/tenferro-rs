@@ -1,4 +1,101 @@
-# Phase 2E candidate `cd30b008`: abandoned run 0001
+# Phase 2E non-inferiority evidence history
+
+## Candidate `eba500ed`: abandoned run 0002
+
+### Outcome
+
+The protocol-v2 outer root for candidate
+`eba500ed3297072b82e7d43869c6e54523aaee4d` is sealed as
+`ABANDONED`. No allocation or timing measurement attempt started, so this
+root is not performance evidence and does not classify the candidate.
+
+The private `timing-builds` worker completed the direct-current-main release
+build, then returned exit code 2 while checking the
+common-lock-normalized baseline. The retained
+`timing-build-failure.json` records the exact failing command:
+
+```text
+cargo metadata --locked --format-version 1
+```
+
+It ran in the isolated common-lock-normalized baseline and returned 101
+because Cargo would have needed to update `Cargo.lock`. A separate diagnostic
+copy resolved the lock offline and showed the sole required change: remove the
+candidate-only `rayon` dev-dependency from the `tenferro-ad` package entry.
+The common lock was generated from the candidate, while baseline
+materialization still copied `crates/tenferro-ad/Cargo.toml` from the older
+Phase 1 harness commit. The Phase 2E characterization harness had subsequently
+added `rayon`, a benchmark stanza, and compiler-check configuration to that
+manifest. A byte-identical common lock therefore could not be valid for both
+source trees. This is a frozen harness-input defect, not a candidate
+performance result.
+
+### Immutable identities
+
+- Candidate: `eba500ed3297072b82e7d43869c6e54523aaee4d`
+- Candidate tree SHA-256:
+  `decaea388115c2d4e81e594e090ac534c27c842ac1a6f590d935d500ba3f494a`
+- Experiment identity:
+  `f1929124e5f49d1ddb52c85be4e6a272a46ff711a1ede14a52c473c65cea929d`
+- Campaign identity:
+  `456caeadda20ad6177dca0c297017ad3f1e2462bd94d31ace6300187084a06ee`
+- Reservation:
+  `60fc0332d20768ce595dfc1cc796795b428014a85d7c7d2a4c832f8b72bacea7`
+- Command contract:
+  `d311e6a43f9ad8ce1a81b70b56975bcb3f7fc467aff53ef231862efc8b6a2d05`
+- Context SHA-256:
+  `f08cd859f9674d7889cfec0b0bbdeded9af721810d316fbeb2feddd91b772448`
+- Root digest:
+  `26b9daf48a12a5aa1a8ae54420cbd05935462edd95ac11685da1635e5695258c`
+- Ledger digest:
+  `1d7e737f0bae943d5b1f7553b376af97157c36d97939cd3605d57cb5807376a9`
+- Failure artifact digest:
+  `9e8d3bff0f4c1495091dc85d4696fe78395a3921b2c91701c46ebdf7eb254d0a`
+
+The canonical root is
+`docs/worklogs/artifacts/2026-07-21-phase-2e-eba500ed3297-run-0002`.
+Its `abandoned-inventory.json` is the normative ownership inventory. The
+index has `ACTIVE` followed by terminal `ABANDONED`; it deliberately has no
+`current_evidence_root`.
+
+### Host and command
+
+The run began on 2026-07-23 in the Asia/Tokyo timezone with:
+
+- 64 process-allowed CPUs;
+- one-minute load 3.23 immediately before launch, normalized to 0.0505;
+- no overlapping real `cargo` or `rustc` process; and
+- 396 GiB free on the filesystem before launch.
+
+The exact public command was:
+
+```text
+python3 scripts/run_phase2e.py start \
+  --repository <candidate-worktree> \
+  --candidate eba500ed3297072b82e7d43869c6e54523aaee4d \
+  --evidence-root docs/worklogs/artifacts/2026-07-21-phase-2e-eba500ed3297-run-0002 \
+  --index docs/worklogs/2026-07-21-phase-2e-index.json \
+  --scratch-parent /tmp/phase2e-scratch.UicwpK
+```
+
+The ledger contains no attempt IDs; all measurement lanes remain `READY` or
+`BLOCKED`. After verifying that no orchestrator, stage worker, benchmark
+build, or compiler process remained, the root was sealed with
+`record-index --abandoned --confirm-no-live-processes`, which returned
+`PENDING_PRESERVATION`.
+
+### Follow-up
+
+1. Preserve this negative root without modifying its sealed inventory.
+2. Add a regression test that uses real baseline/candidate manifest
+   dependency differences and observes the common-lock validation failure.
+3. Freeze the complete Phase 2E harness manifest snapshot instead of the
+   older Phase 1 harness snapshot.
+4. Because the harness and experiment identity change, freeze a new candidate
+   and run the complete campaign in a fresh root only after this root reaches
+   `PRESERVED`.
+
+## Candidate `cd30b008`: abandoned run 0001
 
 ## Outcome
 

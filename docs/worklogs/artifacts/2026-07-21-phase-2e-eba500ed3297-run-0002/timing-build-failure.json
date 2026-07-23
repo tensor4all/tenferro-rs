@@ -1,0 +1,43 @@
+{
+  "command": {
+    "argv": [
+      "/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+      "metadata",
+      "--locked",
+      "--format-version",
+      "1"
+    ],
+    "cwd": "/tmp/phase2e-scratch.UicwpK/common-lock-normalized-baseline",
+    "deadline_seconds": 300,
+    "environment": {
+      "CARGO_HOME": "/tmp/.phase2e-scratch.UicwpK-phase2e-cargo-home",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_NET_OFFLINE": "true",
+      "CARGO_TARGET_DIR": "/tmp/phase2e-scratch.UicwpK/targets/common-lock-normalized-baseline",
+      "HOME": "/tmp/.phase2e-scratch.UicwpK-phase2e-home",
+      "LC_ALL": "C",
+      "MKL_DYNAMIC": "FALSE",
+      "MKL_NUM_THREADS": "1",
+      "OMP_DYNAMIC": "FALSE",
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "PATH": "/usr/bin:/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin",
+      "RAYON_NUM_THREADS": "1",
+      "TZ": "UTC",
+      "VECLIB_MAXIMUM_THREADS": "1"
+    },
+    "inherited_descriptors": [],
+    "returncode": 101,
+    "stderr": "error: cannot update the lock file /tmp/phase2e-scratch.UicwpK/common-lock-normalized-baseline/Cargo.lock because --locked was passed to prevent this\nhelp: to generate the lock file without accessing the network, remove the --locked flag and use --offline instead.\n",
+    "stdout": "",
+    "termination": {
+      "killed": false,
+      "terminated": false
+    }
+  },
+  "failure_reason": "nonzero-exit",
+  "protocol_version": 2,
+  "stage": "timing-builds",
+  "validity_state": "INCONCLUSIVE",
+  "version": 1
+}

@@ -1,0 +1,46 @@
+{
+  "after_inventory_sha256": "83cdb5fc29f177a4a378b420575bc1eb077d8585589d451d4a5177ffaf996fc9",
+  "argv": [
+    "/sharehome/tools/opt/Python-3.12.11/bin/python3.12",
+    "-m",
+    "scripts.run_phase2e",
+    "_stage-worker",
+    "--stage",
+    "timing-builds",
+    "--context",
+    "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-21-phase-2e-eba500ed3297-run-0002/.phase2e-stage-context.json",
+    "--context-sha256",
+    "f08cd859f9674d7889cfec0b0bbdeded9af721810d316fbeb2feddd91b772448"
+  ],
+  "attempt": 1,
+  "before_inventory_sha256": "72729e5a716fbf82c8ddf0da0984dac43f0b27061582aac796d81ded9718989b",
+  "candidate_sha": "eba500ed3297072b82e7d43869c6e54523aaee4d",
+  "changed": {
+    ".phase2e-process-journal.json": "6451d894ea36aa18b2f7684f6e5967b3399791df78aeaf20903caf91723ccaa8",
+    "builds/locks/common.Cargo.lock": "c03736ecf2e82ca565f13b46a7ec97bf8dd3294005d241740f8f3038fd979bd5",
+    "builds/locks/direct-current-main.Cargo.lock": "8a96c44467a13b724b6974ead500d7c096a545be100ccee04109a739f58d677a",
+    "timing-build-failure.json": "9e8d3bff0f4c1495091dc85d4696fe78395a3921b2c91701c46ebdf7eb254d0a"
+  },
+  "command_contract_digest": "d311e6a43f9ad8ce1a81b70b56975bcb3f7fc467aff53ef231862efc8b6a2d05",
+  "context_sha256": "f08cd859f9674d7889cfec0b0bbdeded9af721810d316fbeb2feddd91b772448",
+  "environment": {
+    "HOME": "/tmp/.phase2e-scratch.UicwpK-phase2e-home",
+    "LC_ALL": "C",
+    "MKL_DYNAMIC": "FALSE",
+    "MKL_NUM_THREADS": "1",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "PATH": "/usr/bin:/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin",
+    "RAYON_NUM_THREADS": "1",
+    "TZ": "UTC",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "exit_code": 2,
+  "experiment_identity_digest": "f1929124e5f49d1ddb52c85be4e6a272a46ff711a1ede14a52c473c65cea929d",
+  "ordinal": 1,
+  "removed": [],
+  "reservation_id": "60fc0332d20768ce595dfc1cc796795b428014a85d7c7d2a4c832f8b72bacea7",
+  "stage": "timing-builds",
+  "version": 1
+}
