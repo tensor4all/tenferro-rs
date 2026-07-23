@@ -179,6 +179,21 @@ error path. Stage-context opens are nonblocking, no-follow, close-on-exec,
 regular-file checked, and descriptor leak tested for FIFO, directory, and
 character-device inputs.
 
+The final re-review rejects every relative stage-context path before resolution
+or open; direct private-worker tests cover both a missing relative path and a
+relative symlink to a FIFO without blocking, reading the target, or emitting a
+traceback. Pre-ACTIVE execution-home ownership now retains the canonical parent
+descriptor and one descriptor plus device/inode identity for each created
+leaf. Revalidation and rollback compare both held and pathname identities;
+identity changes leave the replacement untouched, while matching leaves are
+removed with the symlink-attack-resistant descriptor-relative `rmtree`
+implementation, whose availability is required before creating either home.
+Every success and error path attempts to close every retained descriptor even
+if an earlier close reports failure. If a leaf descriptor cannot be acquired,
+cleanup explicitly leaves the unowned path rather than guessing its identity
+and annotates the typed primary failure. The focused outer-orchestrator suite
+passes 109 tests.
+
 The temporary public-lifecycle adapter moved from the main test class to
 `scripts/phase2e_public_lifecycle_fixture.py`. Its helper asserts one exact
 entrypoint marker, records the canonical source path and SHA-256, and embeds

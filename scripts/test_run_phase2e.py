@@ -524,6 +524,70 @@ raise SystemExit(1)
             self.assertFalse(timed_out, "FIFO context open blocked")
             self.assertEqual(process.returncode, 0, stderr)
 
+    def test_stage_worker_rejects_missing_relative_context_without_traceback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                (
+                    sys.executable,
+                    "-m",
+                    "scripts.run_phase2e",
+                    "_stage-worker",
+                    "--stage",
+                    "timing-builds",
+                    "--context",
+                    "missing-context.json",
+                    "--context-sha256",
+                    "a" * 64,
+                ),
+                cwd=directory,
+                env={**os.environ, "PYTHONPATH": str(self.REPOSITORY)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 3)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("stage context path must be absolute", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_stage_worker_rejects_relative_symlink_without_reading_fifo_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            target = base / "target.fifo"
+            os.mkfifo(target)
+            (base / "context-link").symlink_to(target.name)
+            process = subprocess.Popen(
+                (
+                    sys.executable,
+                    "-m",
+                    "scripts.run_phase2e",
+                    "_stage-worker",
+                    "--stage",
+                    "timing-builds",
+                    "--context",
+                    "context-link",
+                    "--context-sha256",
+                    "a" * 64,
+                ),
+                cwd=base,
+                env={**os.environ, "PYTHONPATH": str(self.REPOSITORY)},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            timed_out = False
+            try:
+                stdout, stderr = process.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                process.kill()
+                stdout, stderr = process.communicate()
+            self.assertFalse(timed_out, "relative context symlink target was opened")
+            self.assertEqual(process.returncode, 3)
+            self.assertEqual(stdout, "")
+            self.assertIn("stage context path must be absolute", stderr)
+            self.assertNotIn("Traceback", stderr)
+
     def test_non_regular_stage_context_rejection_does_not_leak_descriptors(self):
         with tempfile.TemporaryDirectory() as directory:
             context_directory = pathlib.Path(directory) / "context-directory"
@@ -1145,35 +1209,39 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             (source / "git" / "checkouts").mkdir(parents=True)
             (source / "registry" / "index").mkdir(parents=True)
 
-            home, cargo_home = orchestrator._prepare_execution_homes(
+            prepared = orchestrator._prepare_execution_homes(
                 scratch, source_cargo_home=source
             )
+            home, cargo_home = prepared
 
-            self.assertEqual(home.parent, scratch.parent)
-            self.assertEqual(cargo_home.parent, scratch.parent)
-            self.assertNotEqual(home, cargo_home)
-            self.assertEqual(list(home.iterdir()), [])
-            self.assertEqual(
-                {path.name for path in cargo_home.iterdir()},
-                {"git", "registry"},
-            )
-            self.assertEqual(
-                (cargo_home / "git").resolve(strict=True),
-                (source / "git").resolve(strict=True),
-            )
-            self.assertEqual(
-                (cargo_home / "registry").resolve(strict=True),
-                (source / "registry").resolve(strict=True),
-            )
-            for forbidden in (
-                "config",
-                "config.toml",
-                "credentials",
-                "credentials.toml",
-            ):
-                self.assertFalse((cargo_home / forbidden).exists())
-                self.assertFalse((cargo_home / forbidden).is_symlink())
-            orchestrator.build.validate_controlled_cargo_home(cargo_home)
+            try:
+                self.assertEqual(home.parent, scratch.parent)
+                self.assertEqual(cargo_home.parent, scratch.parent)
+                self.assertNotEqual(home, cargo_home)
+                self.assertEqual(list(home.iterdir()), [])
+                self.assertEqual(
+                    {path.name for path in cargo_home.iterdir()},
+                    {"git", "registry"},
+                )
+                self.assertEqual(
+                    (cargo_home / "git").resolve(strict=True),
+                    (source / "git").resolve(strict=True),
+                )
+                self.assertEqual(
+                    (cargo_home / "registry").resolve(strict=True),
+                    (source / "registry").resolve(strict=True),
+                )
+                for forbidden in (
+                    "config",
+                    "config.toml",
+                    "credentials",
+                    "credentials.toml",
+                ):
+                    self.assertFalse((cargo_home / forbidden).exists())
+                    self.assertFalse((cargo_home / forbidden).is_symlink())
+                orchestrator.build.validate_controlled_cargo_home(cargo_home)
+            finally:
+                prepared.close()
 
     def test_execution_homes_roll_back_when_second_mkdir_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1183,15 +1251,16 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             scratch.mkdir()
             source.mkdir()
             home, cargo_home = orchestrator._execution_home_paths(scratch)
-            real_mkdir = pathlib.Path.mkdir
+            descriptor_count = len(os.listdir("/proc/self/fd"))
+            real_mkdir = os.mkdir
 
             def fail_second(path, *args, **kwargs):
-                if path == cargo_home:
+                if path == cargo_home.name:
                     raise PermissionError("second mkdir failed")
                 return real_mkdir(path, *args, **kwargs)
 
             caught = None
-            with mock.patch.object(pathlib.Path, "mkdir", new=fail_second):
+            with mock.patch.object(orchestrator.os, "mkdir", new=fail_second):
                 try:
                     orchestrator._prepare_execution_homes(
                         scratch, source_cargo_home=source
@@ -1202,6 +1271,160 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             self.assertIn("cannot create controlled execution home", str(caught))
             self.assertFalse(home.exists())
             self.assertFalse(cargo_home.exists())
+            self.assertEqual(len(os.listdir("/proc/self/fd")), descriptor_count)
+
+    def test_execution_homes_require_symlink_safe_rmtree_before_creation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            source.mkdir()
+            home, cargo_home = orchestrator._execution_home_paths(scratch)
+            descriptor_count = len(os.listdir("/proc/self/fd"))
+            with mock.patch.object(
+                orchestrator.shutil.rmtree,
+                "avoids_symlink_attacks",
+                False,
+            ):
+                with self.assertRaisesRegex(
+                    protocol.ProtocolError,
+                    "symlink-attack-resistant rmtree",
+                ):
+                    orchestrator._prepare_execution_homes(
+                        scratch, source_cargo_home=source
+                    )
+            self.assertFalse(home.exists())
+            self.assertFalse(cargo_home.exists())
+            self.assertEqual(len(os.listdir("/proc/self/fd")), descriptor_count)
+
+    def test_execution_home_close_attempts_every_descriptor_after_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            source.mkdir()
+            descriptor_count = len(os.listdir("/proc/self/fd"))
+            prepared = orchestrator._prepare_execution_homes(
+                scratch, source_cargo_home=source
+            )
+            descriptors = [
+                *(home.descriptor for home in reversed(prepared.owned)),
+                prepared.parent_descriptor,
+            ]
+            attempts = []
+            real_close = os.close
+
+            def fail_first(descriptor):
+                attempts.append(descriptor)
+                real_close(descriptor)
+                if descriptor == descriptors[0]:
+                    raise OSError("reported close failure")
+
+            with mock.patch.object(orchestrator.os, "close", new=fail_first):
+                with self.assertRaisesRegex(
+                    protocol.ProtocolError,
+                    "cannot close execution-home descriptor",
+                ):
+                    prepared.close()
+            self.assertEqual(attempts, descriptors)
+            self.assertEqual(len(os.listdir("/proc/self/fd")), descriptor_count)
+
+    def test_parent_identity_failure_closes_descriptor_and_is_typed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            source.mkdir()
+            descriptor_count = len(os.listdir("/proc/self/fd"))
+            real_fstat = os.fstat
+            calls = 0
+
+            def fail_first(descriptor):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise OSError("parent fstat failure")
+                return real_fstat(descriptor)
+
+            with mock.patch.object(orchestrator.os, "fstat", new=fail_first):
+                with self.assertRaisesRegex(
+                    protocol.ProtocolError,
+                    "cannot hold execution-home parent identity",
+                ):
+                    orchestrator._prepare_execution_homes(
+                        scratch, source_cargo_home=source
+                    )
+            self.assertEqual(len(os.listdir("/proc/self/fd")), descriptor_count)
+
+    def test_leaf_descriptor_failure_does_not_guess_ownership_or_leak(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            source.mkdir()
+            home, cargo_home = orchestrator._execution_home_paths(scratch)
+            descriptor_count = len(os.listdir("/proc/self/fd"))
+            real_open = os.open
+
+            def fail_leaf(path, flags, *args, **kwargs):
+                if path == home.name and kwargs.get("dir_fd") is not None:
+                    raise PermissionError("leaf descriptor failed")
+                return real_open(path, flags, *args, **kwargs)
+
+            caught = None
+            with mock.patch.object(orchestrator.os, "open", new=fail_leaf):
+                try:
+                    orchestrator._prepare_execution_homes(
+                        scratch, source_cargo_home=source
+                    )
+                except BaseException as error:
+                    caught = error
+            self.assertIsInstance(caught, protocol.ProtocolError)
+            self.assertTrue(home.is_dir())
+            self.assertFalse(cargo_home.exists())
+            self.assertTrue(
+                any(
+                    "ownership identity was not retained" in note
+                    for note in getattr(caught, "__notes__", ())
+                )
+            )
+            self.assertEqual(len(os.listdir("/proc/self/fd")), descriptor_count)
+
+    def test_leaf_identity_failure_closes_descriptor_without_guessing_ownership(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            source.mkdir()
+            home, cargo_home = orchestrator._execution_home_paths(scratch)
+            descriptor_count = len(os.listdir("/proc/self/fd"))
+            real_fstat = os.fstat
+            calls = 0
+
+            def fail_second(descriptor):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    raise OSError("leaf fstat failure")
+                return real_fstat(descriptor)
+
+            caught = None
+            with mock.patch.object(orchestrator.os, "fstat", new=fail_second):
+                try:
+                    orchestrator._prepare_execution_homes(
+                        scratch, source_cargo_home=source
+                    )
+                except BaseException as error:
+                    caught = error
+            self.assertIsInstance(caught, protocol.ProtocolError)
+            self.assertTrue(home.is_dir())
+            self.assertFalse(cargo_home.exists())
+            self.assertEqual(len(os.listdir("/proc/self/fd")), descriptor_count)
 
     def test_execution_home_path_resolution_io_error_is_typed(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1224,8 +1447,8 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             home, cargo_home = orchestrator._execution_home_paths(scratch)
             caught = None
             with mock.patch.object(
-                pathlib.Path,
-                "symlink_to",
+                orchestrator.os,
+                "symlink",
                 side_effect=PermissionError("cache link failed"),
             ):
                 try:
@@ -1246,10 +1469,11 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             source = base / "source-cargo"
             scratch.mkdir()
             (source / "git").mkdir(parents=True)
+            descriptor_count = len(os.listdir("/proc/self/fd"))
             caught = None
             with mock.patch.object(
-                pathlib.Path,
-                "symlink_to",
+                orchestrator.os,
+                "symlink",
                 side_effect=PermissionError("primary cache link failure"),
             ), mock.patch.object(
                 orchestrator.shutil,
@@ -1270,6 +1494,38 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
                     for note in getattr(caught, "__notes__", ())
                 )
             )
+            self.assertEqual(len(os.listdir("/proc/self/fd")), descriptor_count)
+
+    def test_execution_home_rollback_rejects_foreign_leaf_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            source.mkdir()
+            descriptor_count = len(os.listdir("/proc/self/fd"))
+            prepared = orchestrator._prepare_execution_homes(
+                scratch, source_cargo_home=source
+            )
+            home, cargo_home = prepared
+            moved = base / "moved-owned-home"
+            home.rename(moved)
+            home.mkdir()
+            marker = home / "foreign-marker"
+            marker.write_text("untouched", encoding="utf-8")
+            primary = protocol.ProtocolError("primary pre-ACTIVE failure")
+            prepared.rollback(primary)
+            self.assertTrue(marker.is_file())
+            self.assertEqual(marker.read_text(encoding="utf-8"), "untouched")
+            self.assertTrue(moved.is_dir())
+            self.assertFalse(cargo_home.exists())
+            self.assertTrue(
+                any(
+                    "cleanup identity failure" in note
+                    for note in getattr(primary, "__notes__", ())
+                )
+            )
+            self.assertEqual(len(os.listdir("/proc/self/fd")), descriptor_count)
 
     def test_pre_active_preflight_failure_rolls_back_and_exact_start_retries(self):
         with tempfile.TemporaryDirectory() as directory:

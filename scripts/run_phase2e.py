@@ -272,7 +272,9 @@ def load_stage_context(
     """Load the exact immutable worker context before reserving ACTIVE."""
     path = pathlib.Path(path)
     if not path.is_absolute():
-        path = path.resolve(strict=True)
+        raise protocol.ProtocolError("stage context path must be absolute")
+    if pathlib.Path(os.path.normpath(path)) != path:
+        raise protocol.ProtocolError("stage context path must be canonical")
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -333,11 +335,16 @@ def load_stage_context(
         value = context[name]
         if type(value) is not str or not pathlib.Path(value).is_absolute():
             raise protocol.ProtocolError(f"stage context {name} is not absolute")
-    repository = pathlib.Path(context["repository"]).resolve(strict=True)
-    scratch = pathlib.Path(context["scratch_parent"]).resolve(strict=True)
-    home = pathlib.Path(context["home"]).resolve(strict=True)
-    cargo_home = pathlib.Path(context["cargo_home"]).resolve(strict=True)
-    evidence = pathlib.Path(context["evidence_root"]).resolve(strict=False)
+    try:
+        repository = pathlib.Path(context["repository"]).resolve(strict=True)
+        scratch = pathlib.Path(context["scratch_parent"]).resolve(strict=True)
+        home = pathlib.Path(context["home"]).resolve(strict=True)
+        cargo_home = pathlib.Path(context["cargo_home"]).resolve(strict=True)
+        evidence = pathlib.Path(context["evidence_root"]).resolve(strict=False)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot resolve stage context filesystem root: {error}"
+        ) from error
     roots = (scratch, home, cargo_home)
     if any(
         left == right or left in right.parents or right in left.parents
@@ -823,32 +830,234 @@ def _execution_home_paths(
     )
 
 
-def _rollback_execution_homes(
-    owned: Sequence[pathlib.Path], primary: BaseException
-) -> None:
-    """Remove only homes created by this start attempt, preserving its error."""
-    for destination in reversed(tuple(owned)):
+def _is_directory_identity(
+    metadata: os.stat_result, device: int, inode: int
+) -> bool:
+    return stat.S_ISDIR(metadata.st_mode) and (
+        metadata.st_dev,
+        metadata.st_ino,
+    ) == (device, inode)
+
+
+@dataclass
+class _OwnedExecutionHome:
+    path: pathlib.Path
+    descriptor: int
+    device: int
+    inode: int
+
+    def close(self, primary: BaseException | None = None) -> None:
+        descriptor, self.descriptor = self.descriptor, -1
+        if descriptor < 0:
+            return
         try:
-            shutil.rmtree(destination)
-        except FileNotFoundError:
-            continue
-        except BaseException as cleanup_error:
-            try:
-                primary.add_note(
-                    "suppressed execution-home cleanup failure for "
-                    f"{destination}: {type(cleanup_error).__name__}: "
-                    f"{cleanup_error}"
+            os.close(descriptor)
+        except OSError as error:
+            if primary is not None:
+                _add_cleanup_note(
+                    primary,
+                    f"suppressed execution-home descriptor close failure for "
+                    f"{self.path}: {error}",
                 )
-            except BaseException:
-                pass
+            else:
+                raise protocol.ProtocolError(
+                    f"cannot close execution-home descriptor for "
+                    f"{self.path}: {error}"
+                ) from error
+
+
+def _add_cleanup_note(primary: BaseException, text: str) -> None:
+    try:
+        primary.add_note(text)
+    except BaseException:
+        pass
+
+
+class _PreparedExecutionHomes:
+    """Retain parent and leaf identities until ACTIVE or safe rollback."""
+
+    def __init__(self, parent: pathlib.Path, descriptor: int) -> None:
+        self.parent = pathlib.Path(parent)
+        self.parent_descriptor = descriptor
+        try:
+            metadata = os.fstat(descriptor)
+        except OSError as error:
+            failure = protocol.ProtocolError(
+                f"cannot hold execution-home parent identity: {error}"
+            )
+            try:
+                os.close(descriptor)
+            except OSError as close_error:
+                _add_cleanup_note(
+                    failure,
+                    "suppressed execution-home parent descriptor close "
+                    f"failure for {self.parent}: {close_error}",
+                )
+            self.parent_descriptor = -1
+            raise failure from error
+        self.parent_device = metadata.st_dev
+        self.parent_inode = metadata.st_ino
+        self.owned: list[_OwnedExecutionHome] = []
+
+    def __iter__(self):
+        return iter(home.path for home in self.owned)
+
+    def revalidate(self) -> None:
+        try:
+            held_parent = os.fstat(self.parent_descriptor)
+            current_parent = self.parent.lstat()
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"execution-home parent identity disappeared: {error}"
+            ) from error
+        if not (
+            _is_directory_identity(
+                held_parent, self.parent_device, self.parent_inode
+            )
+            and _is_directory_identity(
+                current_parent, self.parent_device, self.parent_inode
+            )
+        ):
+            raise protocol.ProtocolError(
+                "execution-home parent identity changed"
+            )
+        for home in self.owned:
+            try:
+                held = os.fstat(home.descriptor)
+                current = os.stat(
+                    home.path.name,
+                    dir_fd=self.parent_descriptor,
+                    follow_symlinks=False,
+                )
+            except OSError as error:
+                raise protocol.ProtocolError(
+                    f"execution-home identity disappeared: {home.path}: {error}"
+                ) from error
+            if not (
+                _is_directory_identity(held, home.device, home.inode)
+                and _is_directory_identity(current, home.device, home.inode)
+            ):
+                raise protocol.ProtocolError(
+                    f"execution-home identity changed: {home.path}"
+                )
+
+    def close(self, primary: BaseException | None = None) -> None:
+        failure = primary
+        for home in reversed(self.owned):
+            try:
+                home.close(failure)
+            except protocol.ProtocolError as error:
+                failure = error
+        descriptor, self.parent_descriptor = self.parent_descriptor, -1
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                if failure is None:
+                    failure = protocol.ProtocolError(
+                        "cannot close execution-home parent descriptor: "
+                        f"{error}"
+                    )
+                else:
+                    _add_cleanup_note(
+                        failure,
+                        "suppressed execution-home parent descriptor close "
+                        f"failure for {self.parent}: {error}",
+                    )
+        if primary is None and failure is not None:
+            raise failure
+
+    def rollback(self, primary: BaseException) -> None:
+        """Delete only leaves still bound to their retained identities."""
+        try:
+            try:
+                held_parent = os.fstat(self.parent_descriptor)
+                current_parent = self.parent.lstat()
+            except OSError as error:
+                _add_cleanup_note(
+                    primary,
+                    f"execution-home cleanup identity failure for parent "
+                    f"{self.parent}: {error}",
+                )
+                return
+            if not (
+                _is_directory_identity(
+                    held_parent, self.parent_device, self.parent_inode
+                )
+                and _is_directory_identity(
+                    current_parent, self.parent_device, self.parent_inode
+                )
+            ):
+                _add_cleanup_note(
+                    primary,
+                    "execution-home cleanup identity failure: parent changed",
+                )
+                return
+            for home in reversed(self.owned):
+                try:
+                    current = os.stat(
+                        home.path.name,
+                        dir_fd=self.parent_descriptor,
+                        follow_symlinks=False,
+                    )
+                    held = os.fstat(home.descriptor)
+                except OSError as error:
+                    _add_cleanup_note(
+                        primary,
+                        f"execution-home cleanup identity failure for "
+                        f"{home.path}: {error}",
+                    )
+                    continue
+                if not (
+                    _is_directory_identity(held, home.device, home.inode)
+                    and _is_directory_identity(
+                        current, home.device, home.inode
+                    )
+                ):
+                    _add_cleanup_note(
+                        primary,
+                        f"execution-home cleanup identity failure for "
+                        f"{home.path}: leaf changed",
+                    )
+                    continue
+                if not shutil.rmtree.avoids_symlink_attacks:
+                    _add_cleanup_note(
+                        primary,
+                        "execution-home cleanup identity failure: Python "
+                        "rmtree lacks symlink-attack resistance",
+                    )
+                    continue
+                try:
+                    # rmtree's fd-based implementation performs its own
+                    # lstat/open/fstat identity check at the leaf. A hostile
+                    # same-UID process can still force a safe cleanup failure,
+                    # but cannot redirect deletion to a substituted inode.
+                    shutil.rmtree(
+                        home.path.name,
+                        dir_fd=self.parent_descriptor,
+                    )
+                    os.fsync(self.parent_descriptor)
+                except BaseException as cleanup_error:
+                    _add_cleanup_note(
+                        primary,
+                        "suppressed execution-home cleanup failure for "
+                        f"{home.path}: {type(cleanup_error).__name__}: "
+                        f"{cleanup_error}",
+                    )
+        finally:
+            self.close(primary)
 
 
 def _prepare_execution_homes(
     scratch_parent: pathlib.Path,
     *,
     source_cargo_home: pathlib.Path | None = None,
-) -> tuple[pathlib.Path, pathlib.Path]:
+) -> _PreparedExecutionHomes:
     """Create isolated homes exposing only Cargo's reusable source caches."""
+    if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        raise protocol.ProtocolError(
+            "controlled execution homes require symlink-attack-resistant rmtree"
+        )
     try:
         scratch = pathlib.Path(scratch_parent).resolve(strict=True)
     except OSError as error:
@@ -856,8 +1065,19 @@ def _prepare_execution_homes(
             f"cannot resolve scratch parent for execution homes: {error}"
         ) from error
     home, cargo_home = _execution_home_paths(scratch)
-    owned: list[pathlib.Path] = []
+    parent = home.parent
+    parent_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        parent_flags |= os.O_NOFOLLOW
     try:
+        parent_descriptor = os.open(parent, parent_flags)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot hold execution-home parent identity: {error}"
+        ) from error
+    prepared = _PreparedExecutionHomes(parent, parent_descriptor)
+    try:
+        prepared.revalidate()
         try:
             source = pathlib.Path(
                 source_cargo_home
@@ -870,7 +1090,11 @@ def _prepare_execution_homes(
             ) from error
         for destination in (home, cargo_home):
             try:
-                destination.mkdir(mode=0o700)
+                os.mkdir(
+                    destination.name,
+                    mode=0o700,
+                    dir_fd=prepared.parent_descriptor,
+                )
             except FileExistsError as error:
                 raise protocol.ProtocolError(
                     f"controlled execution home is not fresh: {destination}"
@@ -880,7 +1104,53 @@ def _prepare_execution_homes(
                     f"cannot create controlled execution home {destination}: "
                     f"{error}"
                 ) from error
-            owned.append(destination)
+            try:
+                descriptor = os.open(
+                    destination.name,
+                    parent_flags,
+                    dir_fd=prepared.parent_descriptor,
+                )
+            except OSError as error:
+                failure = protocol.ProtocolError(
+                    f"cannot hold controlled execution home {destination}: "
+                    f"{error}"
+                )
+                _add_cleanup_note(
+                    failure,
+                    "execution-home cleanup skipped because ownership "
+                    f"identity was not retained: {destination}",
+                )
+                raise failure from error
+            try:
+                metadata = os.fstat(descriptor)
+            except OSError as error:
+                failure = protocol.ProtocolError(
+                    f"cannot hold controlled execution home {destination}: "
+                    f"{error}"
+                )
+                try:
+                    os.close(descriptor)
+                except OSError as close_error:
+                    _add_cleanup_note(
+                        failure,
+                        "suppressed execution-home descriptor close failure "
+                        f"for {destination}: {close_error}",
+                    )
+                _add_cleanup_note(
+                    failure,
+                    "execution-home cleanup skipped because ownership "
+                    f"identity was not retained: {destination}",
+                )
+                raise failure from error
+            prepared.owned.append(
+                _OwnedExecutionHome(
+                    destination,
+                    descriptor,
+                    metadata.st_dev,
+                    metadata.st_ino,
+                )
+            )
+            prepared.revalidate()
         for name in ("git", "registry"):
             cache = source / name
             if not cache.exists():
@@ -896,22 +1166,32 @@ def _prepare_execution_homes(
                     f"source Cargo {name} cache is not a directory"
                 )
             try:
-                (cargo_home / name).symlink_to(
-                    target, target_is_directory=True
+                os.symlink(
+                    target,
+                    name,
+                    target_is_directory=True,
+                    dir_fd=prepared.owned[1].descriptor,
                 )
             except OSError as error:
                 raise protocol.ProtocolError(
                     f"cannot link controlled Cargo cache {name}: {error}"
                 ) from error
+            prepared.revalidate()
         build.validate_controlled_cargo_home(cargo_home)
+        prepared.revalidate()
         try:
-            return home.resolve(strict=True), cargo_home.resolve(strict=True)
+            resolved = home.resolve(strict=True), cargo_home.resolve(strict=True)
         except OSError as error:
             raise protocol.ProtocolError(
                 f"cannot resolve controlled execution home: {error}"
             ) from error
+        if resolved != (home, cargo_home):
+            raise protocol.ProtocolError(
+                "controlled execution home path is not canonical"
+            )
+        return prepared
     except BaseException as primary:
-        _rollback_execution_homes(owned, primary)
+        prepared.rollback(primary)
         raise
 
 
@@ -4009,12 +4289,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 scratch_parent=args.scratch_parent,
                 candidate=args.candidate,
             )
-            execution_homes: tuple[pathlib.Path, pathlib.Path] | None = None
+            execution_homes: _PreparedExecutionHomes | None = None
             try:
-                home, cargo_home = _prepare_execution_homes(
+                execution_homes = _prepare_execution_homes(
                     pathlib.Path(stage_context["scratch_parent"])
                 )
-                execution_homes = (home, cargo_home)
+                home, cargo_home = execution_homes
                 if (
                     home != pathlib.Path(stage_context["home"])
                     or cargo_home != pathlib.Path(stage_context["cargo_home"])
@@ -4056,8 +4336,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             except BaseException as primary:
                 if execution_homes is not None:
-                    _rollback_execution_homes(execution_homes, primary)
+                    execution_homes.rollback(primary)
                 raise
+            execution_homes.close()
             if code == 5:
                 print("ABANDONED_INITIALIZATION")
                 return 5
