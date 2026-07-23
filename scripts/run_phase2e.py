@@ -82,6 +82,256 @@ def command_contract_digest() -> str:
         }
     )
 
+
+def stage_context_contract_digest(context: Mapping[str, Any]) -> str:
+    """Bind the executable template to every immutable worker input byte."""
+    payload = dict(context)
+    payload.pop("command_contract_digest", None)
+    return protocol.sha256_json(
+        {"template_digest": command_contract_digest(), "context": payload}
+    )
+
+
+STAGE_CONTEXT_FIELDS = frozenset(
+    {
+        "version",
+        "repository",
+        "evidence_root",
+        "scratch_parent",
+        "candidate_sha",
+        "candidate_tree_sha256",
+        "reservation_id",
+        "experiment_identity_digest",
+        "command_contract_digest",
+        "path",
+        "home",
+        "cargo_home",
+    }
+)
+
+
+def load_stage_context(
+    path: pathlib.Path, *, require_fresh_scratch: bool = True
+) -> dict[str, Any]:
+    """Load the exact immutable worker context before reserving ACTIVE."""
+    path = pathlib.Path(path)
+    if not path.is_absolute():
+        path = path.resolve(strict=True)
+    context = _read_json(path, "stage context")
+    if set(context) != STAGE_CONTEXT_FIELDS or context["version"] != 1:
+        raise protocol.ProtocolError("stage context schema differs")
+    for name in ("repository", "evidence_root", "scratch_parent", "home", "cargo_home"):
+        value = context[name]
+        if type(value) is not str or not pathlib.Path(value).is_absolute():
+            raise protocol.ProtocolError(f"stage context {name} is not absolute")
+    repository = pathlib.Path(context["repository"]).resolve(strict=True)
+    scratch = pathlib.Path(context["scratch_parent"]).resolve(strict=True)
+    evidence = pathlib.Path(context["evidence_root"]).resolve(strict=False)
+    if not repository.is_dir() or not scratch.is_dir():
+        raise protocol.ProtocolError("stage repository/scratch is not a directory")
+    for protected in (repository, evidence):
+        if scratch == protected or scratch in protected.parents or protected in scratch.parents:
+            raise protocol.ProtocolError("stage scratch is not external and disjoint")
+    if require_fresh_scratch and next(scratch.iterdir(), None) is not None:
+        raise protocol.ProtocolError("stage scratch parent is not fresh")
+    _require_sha(context["candidate_sha"], sha256=False, context="context candidate")
+    for name in (
+        "candidate_tree_sha256",
+        "experiment_identity_digest",
+        "command_contract_digest",
+    ):
+        _require_sha(context[name], sha256=True, context=name)
+    if context["command_contract_digest"] != stage_context_contract_digest(context):
+        raise protocol.ProtocolError("stage context command contract differs")
+    return context
+
+
+def _context_path(context: Mapping[str, Any], name: str) -> pathlib.Path:
+    return pathlib.Path(context[name])
+
+
+def _build_config(context: Mapping[str, Any]) -> build.BuildConfig:
+    return build.BuildConfig(
+        repository=_context_path(context, "repository"),
+        evidence_root=_context_path(context, "evidence_root"),
+        scratch_root=_context_path(context, "scratch_parent"),
+        candidate_commit=context["candidate_sha"],
+        path=context["path"],
+        home=_context_path(context, "home"),
+        cargo_home=_context_path(context, "cargo_home"),
+    )
+
+
+def _next_attempt(context: Mapping[str, Any], stage: str, lane: str) -> int:
+    ledger = _read_json(
+        _context_path(context, "evidence_root") / "evidence-ledger.json",
+        "stage worker ledger",
+    )
+    protocol.validate_ledger(ledger)
+    for stage_record in ledger["stages"]:
+        if stage_record["name"] == stage:
+            for lane_record in stage_record["lanes"]:
+                if lane_record["name"] == lane:
+                    return len(lane_record["attempt_ids"]) + 1
+    raise protocol.ProtocolError("stage worker lane is absent from ledger")
+
+
+def _timing_builds(context: Mapping[str, Any]) -> int:
+    result = build.build_all(_build_config(context))
+    return 0 if result.validity_state == "COMPLETE" else 2
+
+
+def _probe_builds(context: Mapping[str, Any]) -> int:
+    build.build_allocation_probe_set(_build_config(context))
+    return 0
+
+
+def _allocation(context: Mapping[str, Any], lane: str) -> int:
+    from scripts import run_phase2e_allocation_campaign as allocation
+
+    root = _context_path(context, "evidence_root")
+    attempt = _next_attempt(context, "allocation", lane)
+    return allocation.main(
+        [
+            "--comparison-kind", lane,
+            "--ledger", str(root / "evidence-ledger.json"),
+            "--attempt-id", str(attempt),
+            "--artifact-root", str(root / "attempts" / "allocation" / lane / str(attempt)),
+            "--working-directory", context["repository"],
+            "--probe-manifest-root", str(root),
+            "--tenferro-manifest-root", str(root),
+            "--repository", context["repository"],
+        ]
+    )
+
+
+def _gate_root(context: Mapping[str, Any]) -> pathlib.Path:
+    return _context_path(context, "evidence_root") / "gate-collector"
+
+
+def _dispatch_builds(context: Mapping[str, Any]) -> int:
+    """Run the indivisible dispatch/characterization collector once."""
+    from scripts import run_phase2e_gates as gates
+
+    root = _context_path(context, "evidence_root")
+    gate_scratch = _context_path(context, "scratch_parent") / "gates"
+    gate_scratch.mkdir(mode=0o700, exist_ok=False)
+    return gates.main(
+        [
+            "--repository", context["repository"],
+            "--evidence-root", str(_gate_root(context)),
+            "--candidate", context["candidate_sha"],
+            "--common-lock", str(root / build.LOCK_PATHS["common"]),
+            "--scratch-root", str(gate_scratch),
+            "--path", context["path"],
+            "--home", context["home"],
+            "--cargo-home", context["cargo_home"],
+        ]
+    )
+
+
+def _validate_gate_component(context: Mapping[str, Any], component: str) -> int:
+    manifest = _read_json(_gate_root(context) / component / "manifest.json", component)
+    if manifest.get("candidate") != context["candidate_sha"]:
+        raise protocol.ProtocolError(f"{component} candidate differs")
+    state = manifest.get("gating_result", manifest.get("validity_state"))
+    return 0 if state == "PASS" else 2
+
+
+def _characterization_builds(context: Mapping[str, Any]) -> int:
+    from scripts import run_phase2e_gates as gates
+
+    gate_root = _gate_root(context)
+    common_lock = gate_root / build.LOCK_PATHS["common"]
+    for owner, relative in build.CHARACTERIZATION_BUILD_MANIFEST_PATHS.items():
+        gates.validate_bench_build_manifest(
+            _read_json(gate_root / relative, str(relative)),
+            owner=owner,
+            candidate=context["candidate_sha"],
+            repository=_context_path(context, "repository"),
+            common_lock=common_lock,
+        )
+    return 0
+
+
+def _characterization(context: Mapping[str, Any]) -> int:
+    from scripts import run_phase2e_gates as gates
+
+    gate_root = _gate_root(context)
+    gates.validate_terminal_evidence(
+        gate_root,
+        candidate=context["candidate_sha"],
+        repository=_context_path(context, "repository"),
+        source_inventory=gates.validate_source_contract(_context_path(context, "repository")),
+        common_lock=gate_root / build.LOCK_PATHS["common"],
+    )
+    return 0
+
+
+def _timing(context: Mapping[str, Any], lane: str) -> int:
+    from scripts import run_phase1_eager_campaign as timing
+
+    root = _context_path(context, "evidence_root")
+    attempt = _next_attempt(context, "timing", lane)
+    baseline_role = "direct_current_main" if lane == "direct-current-main" else "common"
+    return timing.main(
+        [
+            "--comparison-kind", lane,
+            "--baseline-build-manifest", str(root / build.BUILD_MANIFEST_PATHS[baseline_role]),
+            "--candidate-build-manifest", str(root / build.BUILD_MANIFEST_PATHS["candidate"]),
+            "--repository", context["repository"],
+            "--build-evidence-root", str(root),
+            "--build-scratch-root", context["scratch_parent"],
+            "--candidate-commit", context["candidate_sha"],
+            "--controlled-path", context["path"],
+            "--controlled-home", context["home"],
+            "--controlled-cargo-home", context["cargo_home"],
+            "--ledger", str(root / "evidence-ledger.json"),
+            "--attempt-id", str(attempt),
+            "--artifact-root", str(root / "attempts" / "timing" / lane / str(attempt)),
+            "--criterion-root", str(_context_path(context, "scratch_parent") / f"timing-{lane}-{attempt}"),
+            "--working-directory", context["repository"],
+        ]
+    )
+
+
+def _aggregate_validation(context: Mapping[str, Any]) -> int:
+    # Sealing is performed by the parent after it has durably recorded this
+    # worker's own child record.  This worker proves the ledger itself is closed.
+    _terminal_ledger_status(
+        _read_json(
+            _context_path(context, "evidence_root") / "evidence-ledger.json",
+            "aggregate ledger",
+        )
+    )
+    return 0
+
+
+STAGE_HANDLERS: dict[str, Callable[[Mapping[str, Any]], int]] = {
+    "timing-builds": _timing_builds,
+    "probe-builds": _probe_builds,
+    "allocation/direct-current-main": lambda context: _allocation(context, "direct-current-main"),
+    "allocation/common-lock-normalized": lambda context: _allocation(context, "common-lock-normalized"),
+    "dispatch-builds": _dispatch_builds,
+    "dispatch-gates": lambda context: _validate_gate_component(context, "dispatch-gates"),
+    "characterization-builds": _characterization_builds,
+    "characterization": _characterization,
+    "timing/direct-current-main": lambda context: _timing(context, "direct-current-main"),
+    "timing/common-lock-normalized": lambda context: _timing(context, "common-lock-normalized"),
+    "aggregate-validation": _aggregate_validation,
+}
+
+
+def execute_stage_worker(stage: str, context_path: pathlib.Path) -> int:
+    """Dispatch one exact private worker stage through its registered owner."""
+    if stage not in STAGE_ORDER or stage not in STAGE_HANDLERS:
+        raise protocol.ProtocolError("stage worker has no registered owner")
+    context = load_stage_context(context_path, require_fresh_scratch=False)
+    result = STAGE_HANDLERS[stage](context)
+    if type(result) is not int or result not in {0, 2, 3, 4}:
+        raise protocol.ProtocolError("stage worker returned an invalid status")
+    return result
+
 TERMINAL_STATUSES = frozenset(
     {"PASS", "FAIL", "STATISTICAL_INCONCLUSIVE", "VALIDITY_INCONCLUSIVE", "ABANDONED"}
 )
@@ -221,6 +471,7 @@ def _validate_index(index: Mapping[str, Any]) -> None:
                 "protocol_version",
                 "experiment_identity_digest",
                 "campaign_identity_digest",
+                "command_contract_digest",
             }:
                 raise protocol.ProtocolError("ACTIVE event schema is invalid")
             if reservation in states or active_global is not None:
@@ -232,6 +483,7 @@ def _validate_index(index: Mapping[str, Any]) -> None:
                 "candidate_tree_sha256",
                 "experiment_identity_digest",
                 "campaign_identity_digest",
+                "command_contract_digest",
                 "root",
             ):
                 if type(event.get(name)) is not str or not event[name]:
@@ -241,6 +493,7 @@ def _validate_index(index: Mapping[str, Any]) -> None:
                 "candidate_tree_sha256",
                 "experiment_identity_digest",
                 "campaign_identity_digest",
+                "command_contract_digest",
             ):
                 _require_sha(event[name], sha256=True, context=name)
             states[reservation] = "ACTIVE"
@@ -346,6 +599,7 @@ def record_active(
     root: str,
     experiment_identity_digest: str,
     campaign_identity_digest: str,
+    command_digest: str | None = None,
 ) -> dict[str, Any]:
     """Reserve one globally unique evidence root before initialization."""
     _validate_index(index)
@@ -375,6 +629,8 @@ def record_active(
             raise protocol.ProtocolError(
                 "canonical experiment identity is permanently closed"
             )
+    command_digest = command_digest or command_contract_digest()
+    _require_sha(command_digest, sha256=True, context="command contract digest")
     return _append(
         index,
         {
@@ -386,6 +642,7 @@ def record_active(
             "protocol_version": protocol.PROTOCOL_VERSION,
             "experiment_identity_digest": experiment_identity_digest,
             "campaign_identity_digest": campaign_identity_digest,
+            "command_contract_digest": command_digest,
         },
     )
 
@@ -514,6 +771,7 @@ def run_fixed_stages(
     runner: Callable[[str, Mapping[str, str]], int],
     *,
     completed: Sequence[str] = (),
+    identity: Mapping[str, str] | None = None,
     _locked: bool = False,
 ) -> int:
     """Run remaining children in fixed order and durably hash every checkpoint."""
@@ -521,7 +779,12 @@ def run_fixed_stages(
     if not _locked:
         with exclusive_lock(root / ".orchestrator.lock"):
             return run_fixed_stages(
-                root, environment, runner, completed=completed, _locked=True
+                root,
+                environment,
+                runner,
+                completed=completed,
+                identity=identity,
+                _locked=True,
             )
     expected_environment = protocol.runtime_environment(
         path=environment.get("PATH", ""), home=environment.get("HOME", "")
@@ -534,23 +797,108 @@ def run_fixed_stages(
             raise protocol.ProtocolError("completed child order is not a prefix")
         children.append({"stage": stage, "exit_code": 0})
     for stage in STAGE_ORDER[len(children):]:
+        before = protocol.regular_file_inventory(root)
         code = runner(stage, dict(environment))
         if type(code) is not int or code not in {0, 2, 3, 4}:
             raise protocol.ProtocolError("child returned an unsupported exit code")
         children.append({"stage": stage, "exit_code": code})
-        _write_progress(root, children)
+        _write_child_record(root, children, before, identity=identity)
+        _write_progress(root, children, identity=identity)
         if code:
             return code
+    if identity is not None:
+        seal_root(
+            root,
+            candidate_sha=identity["candidate_sha"],
+            reservation_id=identity["reservation_id"],
+            experiment_identity_digest=identity["experiment_identity_digest"],
+        )
     return 0
 
 
-def _write_progress(root: pathlib.Path, children: Sequence[Mapping[str, Any]]) -> None:
+def _child_record_path(root: pathlib.Path, ordinal: int, stage: str) -> pathlib.Path:
+    return root / "children" / f"{ordinal:02d}-{stage.replace('/', '__')}.json"
+
+
+def _write_child_record(
+    root: pathlib.Path,
+    children: Sequence[Mapping[str, Any]],
+    before: Mapping[str, str],
+    *,
+    identity: Mapping[str, str] | None = None,
+) -> None:
+    child = children[-1]
+    ordinal = len(children)
+    path = _child_record_path(root, ordinal, child["stage"])
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    after = protocol.regular_file_inventory(root)
+    changed = {
+        relative: digest
+        for relative, digest in after.items()
+        if before.get(relative) != digest
+    }
+    removed = sorted(set(before) - set(after))
+    protocol.atomic_write_json(
+        path,
+        {
+            "version": 1,
+            "ordinal": ordinal,
+            "stage": child["stage"],
+            "attempt": sum(
+                previous["stage"] == child["stage"] for previous in children
+            ),
+            "exit_code": child["exit_code"],
+            "command_contract_digest": (identity or {}).get(
+                "command_contract_digest", command_contract_digest()
+            ),
+            "before_inventory_sha256": protocol.sha256_json(dict(before)),
+            "after_inventory_sha256": protocol.sha256_json(after),
+            "changed": changed,
+            "removed": removed,
+        },
+    )
+
+
+def _write_progress(
+    root: pathlib.Path,
+    children: Sequence[Mapping[str, Any]],
+    *,
+    identity: Mapping[str, str] | None = None,
+) -> None:
+    bound = dict(identity or {})
+    ledger_path = root / "evidence-ledger.json"
+    if ledger_path.exists():
+        ledger = _read_json(ledger_path, "progress ledger")
+        candidate_sha = ledger["candidate_sha"]
+        ledger_sha256 = protocol.sha256_file(ledger_path)
+    else:
+        # Unit-level scheduler tests deliberately exercise checkpoint ordering
+        # without constructing the campaign protocol fixture.
+        candidate_sha = bound.get("candidate_sha", "a" * 40)
+        ledger_sha256 = "0" * 64
     protocol.atomic_write_json(
         root / PROGRESS_MANIFEST,
         {
             "version": 1,
             "stage_order": list(STAGE_ORDER),
             "children": list(children),
+            "protocol_version": protocol.PROTOCOL_VERSION,
+            "candidate_sha": candidate_sha,
+            "candidate_tree_sha256": bound.get("candidate_tree_sha256", "c" * 64),
+            "reservation_id": bound.get("reservation_id", "reservation-1"),
+            "experiment_identity_digest": bound.get(
+                "experiment_identity_digest", "b" * 64
+            ),
+            "command_contract_digest": bound.get(
+                "command_contract_digest", command_contract_digest()
+            ),
+            "repository": bound.get("repository", str(root.resolve())),
+            "evidence_root": bound.get("evidence_root", str(root.resolve())),
+            "scratch_parent": bound.get("scratch_parent", "/tmp"),
+            "path": bound.get("path", "/bin"),
+            "home": bound.get("home", "/tmp"),
+            "cargo_home": bound.get("cargo_home", "/tmp"),
+            "ledger_sha256": ledger_sha256,
             "inventory": protocol.regular_file_inventory(
                 root, excluded=frozenset({PROGRESS_MANIFEST})
             ),
@@ -563,6 +911,7 @@ def rerun_invalid_stage(
     environment: Mapping[str, str],
     runner: Callable[[str, Mapping[str, str]], int],
     *,
+    identity: Mapping[str, str] | None = None,
     _locked: bool = False,
 ) -> int:
     """Append one fresh whole-stage attempt after retryable validity failure."""
@@ -570,7 +919,7 @@ def rerun_invalid_stage(
     if not _locked:
         with exclusive_lock(root / ".orchestrator.lock"):
             return rerun_invalid_stage(
-                root, environment, runner, _locked=True
+                root, environment, runner, identity=identity, _locked=True
             )
     expected = protocol.runtime_environment(
         path=environment.get("PATH", ""), home=environment.get("HOME", "")
@@ -584,11 +933,13 @@ def rerun_invalid_stage(
             "latest stage is not retryable validity INCONCLUSIVE"
         )
     stage = children[-1].get("stage")
+    before = protocol.regular_file_inventory(root)
     code = runner(stage, dict(environment))
     if type(code) is not int or code not in {0, 2, 3, 4}:
         raise protocol.ProtocolError("child returned an unsupported exit code")
     children.append({"stage": stage, "exit_code": code})
-    _write_progress(root, children)
+    _write_child_record(root, children, before, identity=identity)
+    _write_progress(root, children, identity=identity)
     return code
 
 
@@ -597,13 +948,16 @@ def continue_after_retry(
     environment: Mapping[str, str],
     runner: Callable[[str, Mapping[str, str]], int],
     *,
+    identity: Mapping[str, str] | None = None,
     _locked: bool = False,
 ) -> int:
     """Continue only after a retained replacement attempt passed."""
     root = pathlib.Path(root)
     if not _locked:
         with exclusive_lock(root / ".orchestrator.lock"):
-            return continue_after_retry(root, environment, runner, _locked=True)
+            return continue_after_retry(
+                root, environment, runner, identity=identity, _locked=True
+            )
     expected = protocol.runtime_environment(
         path=environment.get("PATH", ""), home=environment.get("HOME", "")
     )
@@ -620,13 +974,22 @@ def continue_after_retry(
         raise protocol.ProtocolError("replacement attempt has not passed")
     start = STAGE_ORDER.index(children[-1]["stage"]) + 1
     for stage in STAGE_ORDER[start:]:
+        before = protocol.regular_file_inventory(root)
         code = runner(stage, dict(environment))
         if type(code) is not int or code not in {0, 2, 3, 4}:
             raise protocol.ProtocolError("child returned an unsupported exit code")
         children.append({"stage": stage, "exit_code": code})
-        _write_progress(root, children)
+        _write_child_record(root, children, before, identity=identity)
+        _write_progress(root, children, identity=identity)
         if code:
             return code
+    if identity is not None:
+        seal_root(
+            root,
+            candidate_sha=identity["candidate_sha"],
+            reservation_id=identity["reservation_id"],
+            experiment_identity_digest=identity["experiment_identity_digest"],
+        )
     return 0
 
 
@@ -640,6 +1003,7 @@ def initialize_campaign(
     candidate_tree_sha256: str,
     experiment_identity_digest: str,
     campaign_identity_digest: str,
+    command_digest: str | None = None,
     initializer: Callable[[pathlib.Path], None] | None = None,
 ) -> int:
     """Reserve globally, initialize locally, or self-seal atomically on failure."""
@@ -654,6 +1018,7 @@ def initialize_campaign(
             root=str(root),
             experiment_identity_digest=experiment_identity_digest,
             campaign_identity_digest=campaign_identity_digest,
+            command_digest=command_digest,
         )
         protocol.prepare_empty_root(root)
         root_lock = root / ".orchestrator.lock"
@@ -745,6 +1110,61 @@ def required_root_paths(ledger: Mapping[str, Any]) -> frozenset[str]:
     return frozenset(required)
 
 
+def _canonical_root_paths(root: pathlib.Path, ledger: Mapping[str, Any]) -> frozenset[str]:
+    """Resolve the legacy fixture or the real combined-gate ownership tree."""
+    gate_root = root / "gate-collector"
+    if not gate_root.exists():
+        return required_root_paths(ledger)
+    required = set(required_root_paths(ledger))
+    required.difference_update(
+        path for path in tuple(required) if path.startswith("attempts/")
+    )
+    for relative in (
+        "dispatch-gates/manifest.json",
+        "characterization/manifest.json",
+        *(path.as_posix() for path in build.DISPATCH_BUILD_MANIFEST_PATHS.values()),
+        *(path.as_posix() for path in build.CHARACTERIZATION_BUILD_MANIFEST_PATHS.values()),
+    ):
+        required.discard(relative)
+    required.update(
+        f"gate-collector/{relative}"
+        for relative in protocol.regular_file_inventory(gate_root)
+    )
+    progress_path = root / PROGRESS_MANIFEST
+    if progress_path.exists():
+        progress = _read_json(progress_path, "canonical progress")
+        required.difference_update(
+            path for path in tuple(required) if path.startswith("children/")
+        )
+        required.update(
+            _child_record_path(root, ordinal, child["stage"])
+            .relative_to(root)
+            .as_posix()
+            for ordinal, child in enumerate(progress["children"], start=1)
+        )
+    for attempt in ledger["attempts"]:
+        artifact = (
+            pathlib.Path(attempt["artifact_root"])
+            if attempt["artifact_root"] is not None
+            else root
+            / "attempts"
+            / attempt["stage"]
+            / attempt["lane"]
+            / str(attempt["attempt_id"])
+        )
+        if artifact.is_dir():
+            resolved = artifact.resolve(strict=True)
+            root_resolved = root.resolve(strict=True)
+            if root_resolved not in resolved.parents:
+                raise protocol.ProtocolError("attempt artifact escapes aggregate root")
+            required.update(
+                path.relative_to(root).as_posix()
+                for path in resolved.rglob("*")
+                if path.is_file() and not path.is_symlink()
+            )
+    return frozenset(required)
+
+
 def seal_root(
     root: pathlib.Path,
     *,
@@ -762,26 +1182,33 @@ def seal_root(
             "ledger candidate differs from aggregate candidate"
         )
     status = _terminal_ledger_status(ledger)
+    gate_prefix = "gate-collector/" if (root / "gate-collector").exists() else ""
     for relative in ("dispatch-gates/manifest.json", "characterization/manifest.json"):
+        relative = gate_prefix + relative
         child = _read_json(root / relative, relative)
         if (
             child.get("candidate") != candidate_sha
-            or child.get("gating_result") != "PASS"
+            or child.get("gating_result", child.get("validity_state")) != "PASS"
         ):
             raise protocol.ProtocolError(f"{relative} does not pass every gate")
     inventory = protocol.regular_file_inventory(
         root, excluded=frozenset({AGGREGATE_MANIFEST})
     )
-    required = required_root_paths(ledger)
+    required = _canonical_root_paths(root, ledger)
     if set(inventory) != required:
         raise protocol.ProtocolError("root inventory is not the canonical Task 8A set")
+    progress = _read_json(root / PROGRESS_MANIFEST, "aggregate progress")
+    bound_command_digest = progress.get(
+        "command_contract_digest", command_contract_digest()
+    )
+    _require_sha(bound_command_digest, sha256=True, context="aggregate command contract")
     manifest = {
         "version": 1,
         "protocol_version": protocol.PROTOCOL_VERSION,
         "candidate_sha": candidate_sha,
         "reservation_id": reservation_id,
         "experiment_identity_digest": experiment_identity_digest,
-        "command_contract_digest": command_contract_digest(),
+        "command_contract_digest": bound_command_digest,
         "status": status,
         "stage_order": list(STAGE_ORDER),
         "ledger_sha256": inventory["evidence-ledger.json"],
@@ -832,20 +1259,25 @@ def validate_root(root: pathlib.Path) -> str:
         raise protocol.ProtocolError(
             "ledger candidate differs from aggregate candidate"
         )
-    if manifest["command_contract_digest"] != command_contract_digest():
+    progress = _read_json(root / PROGRESS_MANIFEST, "aggregate progress")
+    if manifest["command_contract_digest"] != progress.get(
+        "command_contract_digest", command_contract_digest()
+    ):
         raise protocol.ProtocolError("aggregate command contract differs")
-    if set(manifest["inventory"]) != required_root_paths(ledger):
+    if set(manifest["inventory"]) != _canonical_root_paths(root, ledger):
         raise protocol.ProtocolError("aggregate inventory contract differs")
     status = _terminal_ledger_status(ledger)
     if status != manifest["status"]:
         raise protocol.ProtocolError("aggregate status differs from ledger")
     if manifest["ledger_sha256"] != protocol.sha256_file(root / "evidence-ledger.json"):
         raise protocol.ProtocolError("aggregate ledger digest differs")
+    gate_prefix = "gate-collector/" if (root / "gate-collector").exists() else ""
     for relative in ("dispatch-gates/manifest.json", "characterization/manifest.json"):
+        relative = gate_prefix + relative
         child = _read_json(root / relative, relative)
         if (
             child.get("candidate") != manifest["candidate_sha"]
-            or child.get("gating_result") != "PASS"
+            or child.get("gating_result", child.get("validity_state")) != "PASS"
         ):
             raise protocol.ProtocolError(f"{relative} does not pass every gate")
     return status
@@ -981,15 +1413,115 @@ def validate_progress(root: pathlib.Path) -> dict[str, Any]:
     """Re-hash the complete root before any retry/continuation mutation."""
     progress = _read_json(root / PROGRESS_MANIFEST, "Phase 2E progress")
     if (
-        set(progress) != {"version", "stage_order", "children", "inventory"}
+        set(progress)
+        != {
+            "version",
+            "stage_order",
+            "children",
+            "inventory",
+            "protocol_version",
+            "candidate_sha",
+            "candidate_tree_sha256",
+            "reservation_id",
+            "experiment_identity_digest",
+            "command_contract_digest",
+            "repository",
+            "evidence_root",
+            "scratch_parent",
+            "path",
+            "home",
+            "cargo_home",
+            "ledger_sha256",
+        }
         or progress["version"] != 1
+        or progress["protocol_version"] != protocol.PROTOCOL_VERSION
         or progress["stage_order"] != list(STAGE_ORDER)
         or type(progress["children"]) is not list
     ):
         raise protocol.ProtocolError("Phase 2E progress schema is invalid")
+    _require_sha(
+        progress["command_contract_digest"],
+        sha256=True,
+        context="progress command contract",
+    )
     protocol.validate_regular_file_inventory(
         root, progress["inventory"], excluded=frozenset({PROGRESS_MANIFEST})
     )
+    cursor = 0
+    previous: Mapping[str, Any] | None = None
+    child_schema = {
+        "version", "ordinal", "stage", "attempt", "exit_code",
+        "command_contract_digest", "before_inventory_sha256",
+        "after_inventory_sha256", "changed", "removed",
+    }
+    attempts: dict[str, int] = {}
+    for ordinal, child in enumerate(progress["children"], start=1):
+        if (
+            type(child) is not dict
+            or set(child) != {"stage", "exit_code"}
+            or type(child["exit_code"]) is not int
+            or child["exit_code"] not in {0, 2, 3, 4}
+        ):
+            raise protocol.ProtocolError("progress child schema is invalid")
+        retry = previous is not None and previous["exit_code"] == 2
+        if not retry and cursor >= len(STAGE_ORDER):
+            raise protocol.ProtocolError("progress contains children after completion")
+        expected_stage = previous["stage"] if retry else STAGE_ORDER[cursor]
+        if child["stage"] != expected_stage:
+            raise protocol.ProtocolError("progress child order differs")
+        attempts[child["stage"]] = attempts.get(child["stage"], 0) + 1
+        record = _read_json(
+            _child_record_path(root, ordinal, child["stage"]),
+            f"child record {ordinal}",
+        )
+        if (
+            set(record) != child_schema
+            or record["version"] != 1
+            or record["ordinal"] != ordinal
+            or record["stage"] != child["stage"]
+            or record["attempt"] != attempts[child["stage"]]
+            or record["exit_code"] != child["exit_code"]
+            or record["command_contract_digest"] != progress["command_contract_digest"]
+        ):
+            raise protocol.ProtocolError("child record identity differs")
+        for name in ("before_inventory_sha256", "after_inventory_sha256"):
+            _require_sha(record[name], sha256=True, context=name)
+        if type(record["changed"]) is not dict or type(record["removed"]) is not list:
+            raise protocol.ProtocolError("child record inventory delta is invalid")
+        if child["exit_code"] == 0:
+            cursor += 1
+        elif ordinal != len(progress["children"]):
+            if child["exit_code"] != 2:
+                raise protocol.ProtocolError("terminal child is not last")
+        previous = child
+    ledger_path = root / "evidence-ledger.json"
+    if ledger_path.exists():
+        ledger = _read_json(ledger_path, "progress ledger")
+        protocol.validate_ledger(ledger)
+        if ledger["active_attempt_id"] is not None:
+            raise protocol.ProtocolError("progress retains a RUNNING attempt")
+        if (
+            progress["candidate_sha"] != ledger["candidate_sha"]
+            or progress["ledger_sha256"] != protocol.sha256_file(ledger_path)
+        ):
+            raise protocol.ProtocolError("progress identity differs from ledger")
+        measured = {
+            f"{stage['name']}/{lane['name']}": lane
+            for stage in ledger["stages"]
+            for lane in stage["lanes"]
+        }
+        for stage_name, lane in measured.items():
+            matching = [
+                child for child in progress["children"] if child["stage"] == stage_name
+            ]
+            if len(lane["attempt_ids"]) != len(matching):
+                raise protocol.ProtocolError("progress attempt count differs from ledger")
+            if matching:
+                expected_state = "COMPLETE" if matching[-1]["exit_code"] in {0, 3, 4} else "RETRYABLE"
+                if lane["state"] != expected_state:
+                    raise protocol.ProtocolError("progress current lane differs from ledger")
+    elif progress["ledger_sha256"] != "0" * 64:
+        raise protocol.ProtocolError("progress ledger is absent but not marked synthetic")
     return progress
 
 
@@ -1247,6 +1779,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = build_parser().parse_args(argv)
+        if args.command == "_stage-worker":
+            return execute_stage_worker(args.stage, args.context)
         if args.command == "validate":
             status = validate_root(args.root)
             if args.git_index:
@@ -1262,6 +1796,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(left)
             return 0 if left == right else 1
         if args.command == "start":
+            stage_context = load_stage_context(args.context)
+            expected_context = {
+                "repository": str(args.repository.resolve(strict=True)),
+                "evidence_root": str(args.root.resolve(strict=False)),
+                "candidate_sha": args.candidate,
+                "candidate_tree_sha256": args.candidate_tree_sha256,
+                "reservation_id": args.reservation_id,
+                "experiment_identity_digest": args.experiment_identity_digest,
+                "command_contract_digest": stage_context["command_contract_digest"],
+                "path": args.path,
+                "home": args.home,
+            }
+            for name, value in expected_context.items():
+                if stage_context[name] != value:
+                    raise protocol.ProtocolError(
+                        f"stage context differs from start at {name}"
+                    )
             contract = _read_json(args.contract, "experiment contract")
             validate_candidate_provenance(
                 args.repository,
@@ -1283,6 +1834,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 candidate_tree_sha256=args.candidate_tree_sha256,
                 experiment_identity_digest=args.experiment_identity_digest,
                 campaign_identity_digest=args.campaign_identity_digest,
+                command_digest=stage_context["command_contract_digest"],
             )
             if code == 5:
                 print("ABANDONED_INITIALIZATION")
@@ -1292,8 +1844,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.root,
                 environment,
                 _subprocess_stage_runner(args.context, args.repository),
+                identity=stage_context,
             )
         if args.command in {"rerun-invalid-lane", "continue"}:
+            stage_context = load_stage_context(
+                args.context, require_fresh_scratch=False
+            )
             environment = protocol.runtime_environment(path=args.path, home=args.home)
             runner = _subprocess_stage_runner(args.context, args.repository)
             with exclusive_lock(args.index_lock):
@@ -1304,12 +1860,43 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if pathlib.Path(active["root"]) != args.root:
                     raise protocol.ProtocolError("active reservation root differs")
                 with exclusive_lock(args.root / ".orchestrator.lock"):
+                    progress = validate_progress(args.root)
+                    for name in (
+                        "candidate_sha",
+                        "candidate_tree_sha256",
+                        "reservation_id",
+                        "experiment_identity_digest",
+                        "command_contract_digest",
+                        "repository",
+                        "evidence_root",
+                        "scratch_parent",
+                        "path",
+                        "home",
+                        "cargo_home",
+                    ):
+                        expected = (
+                            active[name]
+                            if name in active
+                            else stage_context[name]
+                        )
+                        if progress[name] != expected:
+                            raise protocol.ProtocolError(
+                                f"retry progress differs at {name}"
+                            )
                     if args.command == "rerun-invalid-lane":
                         return rerun_invalid_stage(
-                            args.root, environment, runner, _locked=True
+                            args.root,
+                            environment,
+                            runner,
+                            identity=stage_context,
+                            _locked=True,
                         )
                     return continue_after_retry(
-                        args.root, environment, runner, _locked=True
+                        args.root,
+                        environment,
+                        runner,
+                        identity=stage_context,
+                        _locked=True,
                     )
         if args.command == "record-index":
             updated = record_index_root(

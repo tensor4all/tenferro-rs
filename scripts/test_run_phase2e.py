@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 
 from scripts import phase2e_protocol as protocol
@@ -19,6 +20,126 @@ from scripts import run_phase2e as orchestrator
 
 class OuterOrchestratorTests(unittest.TestCase):
     CANDIDATE = "a" * 40
+
+    def make_stage_context(self, base: pathlib.Path) -> tuple[pathlib.Path, dict]:
+        repository = base / "repository"
+        evidence = repository / "docs" / "worklogs" / "evidence"
+        scratch = base / "scratch"
+        repository.mkdir()
+        evidence.parent.mkdir(parents=True)
+        scratch.mkdir()
+        context = {
+            "version": 1,
+            "repository": str(repository.resolve()),
+            "evidence_root": str(evidence.resolve()),
+            "scratch_parent": str(scratch.resolve()),
+            "candidate_sha": self.CANDIDATE,
+            "candidate_tree_sha256": "c" * 64,
+            "reservation_id": "reservation-1",
+            "experiment_identity_digest": "b" * 64,
+            "command_contract_digest": "0" * 64,
+            "path": "/bin",
+            "home": str((base / "home").resolve()),
+            "cargo_home": str((base / "cargo-home").resolve()),
+        }
+        context["command_contract_digest"] = orchestrator.stage_context_contract_digest(
+            context
+        )
+        path = base / "context.json"
+        protocol.atomic_write_json(path, context)
+        return path, context
+
+    def test_stage_context_rejects_digest_tamper_and_reused_scratch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            path, context = self.make_stage_context(base)
+            orchestrator.load_stage_context(path)
+            context["command_contract_digest"] = "d" * 64
+            protocol.atomic_write_json(path, context)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.load_stage_context(path)
+            context["command_contract_digest"] = orchestrator.stage_context_contract_digest(
+                context
+            )
+            pathlib.Path(context["scratch_parent"], "foreign").write_text("x")
+            protocol.atomic_write_json(path, context)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.load_stage_context(path)
+
+    def test_candidate_provenance_rejects_stale_worktree_head(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(
+                orchestrator, "_git", side_effect=("f" * 40, "")
+            ):
+                with self.assertRaises(protocol.ProtocolError):
+                    orchestrator.validate_candidate_provenance(
+                        pathlib.Path(directory),
+                        self.CANDIDATE,
+                        "c" * 64,
+                        "b" * 64,
+                        {},
+                    )
+
+    def test_stage_context_digest_binds_runtime_and_root_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path, context = self.make_stage_context(pathlib.Path(directory))
+            original = context["command_contract_digest"]
+            context["path"] = "/usr/bin"
+            self.assertNotEqual(
+                orchestrator.stage_context_contract_digest(context), original
+            )
+            protocol.atomic_write_json(path, context)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.load_stage_context(path)
+    def test_private_stage_worker_dispatches_exact_registered_handler(self):
+        self.assertEqual(set(orchestrator.STAGE_HANDLERS), set(orchestrator.STAGE_ORDER))
+        with tempfile.TemporaryDirectory() as directory:
+            path, _context = self.make_stage_context(pathlib.Path(directory))
+            called = []
+            handlers = {
+                stage: (lambda _context, stage=stage: called.append(stage) or 0)
+                for stage in orchestrator.STAGE_ORDER
+            }
+            with mock.patch.object(orchestrator, "STAGE_HANDLERS", handlers):
+                code = orchestrator.main(
+                    [
+                        "_stage-worker",
+                        "--stage",
+                        orchestrator.STAGE_ORDER[0],
+                        "--context",
+                        str(path.resolve()),
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(called, [orchestrator.STAGE_ORDER[0]])
+
+    def test_private_stage_worker_invokes_real_registered_validator(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            path, context = self.make_stage_context(base)
+            manifest = (
+                pathlib.Path(context["evidence_root"])
+                / "gate-collector"
+                / "dispatch-gates"
+                / "manifest.json"
+            )
+            manifest.parent.mkdir(parents=True)
+            protocol.atomic_write_json(
+                manifest,
+                {"candidate": self.CANDIDATE, "gating_result": "PASS"},
+            )
+            self.assertEqual(
+                orchestrator.main(
+                    [
+                        "_stage-worker",
+                        "--stage",
+                        "dispatch-gates",
+                        "--context",
+                        str(path.resolve()),
+                    ]
+                ),
+                0,
+            )
 
     def test_stage_contract_rejects_shell_and_foreign_executable(self):
         for argv in (("/bin/sh", "-c", "true"), ("/usr/bin/true",)):
@@ -141,16 +262,20 @@ class OuterOrchestratorTests(unittest.TestCase):
             environment = protocol.runtime_environment(path="/bin", home="/tmp")
             self.assertEqual(
                 orchestrator.run_fixed_stages(
-                    root, environment, lambda _stage, _environment: 0
+                    root,
+                    environment,
+                    lambda _stage, _environment: 0,
+                    identity={
+                        "candidate_sha": self.CANDIDATE,
+                        "candidate_tree_sha256": "c" * 64,
+                        "reservation_id": "reservation-1",
+                        "experiment_identity_digest": "b" * 64,
+                        "command_contract_digest": orchestrator.command_contract_digest(),
+                    },
                 ),
                 0,
             )
-            orchestrator.seal_root(
-                root,
-                candidate_sha=self.CANDIDATE,
-                reservation_id="reservation-1",
-                experiment_identity_digest="b" * 64,
-            )
+            self.assertTrue((root / orchestrator.AGGREGATE_MANIFEST).is_file())
             self.assertEqual(orchestrator.validate_root(root), "PASS")
 
     def test_stage_order_is_frozen(self):
@@ -437,6 +562,22 @@ class OuterOrchestratorTests(unittest.TestCase):
                 [child["stage"] for child in progress["children"]],
                 [orchestrator.STAGE_ORDER[0], failure, failure],
             )
+
+    def test_rerun_rejects_mutated_durable_child_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            environment = protocol.runtime_environment(path="/bin", home="/tmp")
+            orchestrator.run_fixed_stages(
+                root, environment, lambda _stage, _environment: 2
+            )
+            record_path = root / "children" / "01-timing-builds.json"
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            record["exit_code"] = 0
+            protocol.atomic_write_json(record_path, record)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.rerun_invalid_stage(
+                    root, environment, lambda _stage, _environment: 0
+                )
 
     def test_initialization_failure_self_seals_and_records_pending(self):
         with tempfile.TemporaryDirectory() as directory:
