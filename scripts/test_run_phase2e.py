@@ -31,6 +31,26 @@ class OuterOrchestratorTests(unittest.TestCase):
         check=True, capture_output=True, text=True,
     ).stdout.strip()
 
+    @staticmethod
+    def write_process_journal(root: pathlib.Path, *, extra: dict | None = None) -> None:
+        entry = {
+            "ordinal": 1,
+            "stage": orchestrator.STAGE_ORDER[0],
+            "argv": ["worker"],
+            "pid": 999999,
+            "pgid": 999999,
+            "start_ticks": 1,
+            "state": "EXITED",
+            "exit_code": 0,
+            "signals": [],
+            "reaped": True,
+        }
+        entry.update(extra or {})
+        protocol.atomic_write_json(
+            root / orchestrator.PROCESS_JOURNAL,
+            {"version": 1, "entries": [entry]},
+        )
+
     def test_global_index_paths_are_fixed_repository_constants(self):
         with tempfile.TemporaryDirectory() as directory:
             repository = pathlib.Path(directory).resolve()
@@ -994,7 +1014,6 @@ class OuterOrchestratorTests(unittest.TestCase):
                     root=foreign_root,
                     reservation_id="r1",
                     abandoned=True,
-                    confirm_no_live_processes=True,
                 )
             self.assertFalse((foreign_root / orchestrator.ABANDONMENT_SEAL).exists())
             self.assertEqual(
@@ -1011,6 +1030,7 @@ class OuterOrchestratorTests(unittest.TestCase):
             worklogs.mkdir(parents=True)
             root = worklogs / "active"
             root.mkdir(mode=0o700)
+            self.write_process_journal(root)
             index = orchestrator.record_active(
                 orchestrator.new_campaign_index(),
                 reservation_id="r1",
@@ -1021,20 +1041,23 @@ class OuterOrchestratorTests(unittest.TestCase):
                 campaign_identity_digest="e" * 64,
             )
             protocol.atomic_write_json(repository / orchestrator.INDEX_PATH, index)
-            first = orchestrator.record_index_root(
-                repository=repository,
-                root=root,
-                reservation_id="r1",
-                abandoned=True,
-                confirm_no_live_processes=True,
+            with mock.patch.object(orchestrator.os, "killpg", side_effect=ProcessLookupError):
+                first = orchestrator.record_index_root(
+                    repository=repository,
+                    root=root,
+                    reservation_id="r1",
+                    abandoned=True,
+                )
+                second = orchestrator.record_index_root(
+                    repository=repository,
+                    root=root,
+                    reservation_id="r1",
+                    abandoned=True,
+                )
+            seal = json.loads(
+                (root / orchestrator.ABANDONMENT_SEAL).read_text(encoding="utf-8")
             )
-            second = orchestrator.record_index_root(
-                repository=repository,
-                root=root,
-                reservation_id="r1",
-                abandoned=True,
-                confirm_no_live_processes=True,
-            )
+            self.assertEqual(seal["abandonment_kind"], "UNCAUGHT_INTERRUPTION")
             self.assertEqual(second, first)
             with self.assertRaises(protocol.ProtocolError):
                 orchestrator.record_index_root(
@@ -1042,7 +1065,37 @@ class OuterOrchestratorTests(unittest.TestCase):
                     root=root,
                     reservation_id="changed",
                     abandoned=True,
-                    confirm_no_live_processes=True,
+                )
+
+    def test_abandonment_requires_complete_process_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            root = repository / "docs" / "worklogs" / "root"
+            root.mkdir(parents=True, mode=0o700)
+            index = orchestrator.record_active(
+                orchestrator.new_campaign_index(),
+                reservation_id="r1",
+                candidate_sha=self.CANDIDATE,
+                candidate_tree_sha256="c" * 64,
+                root=str(root),
+                experiment_identity_digest="d" * 64,
+                campaign_identity_digest="e" * 64,
+            )
+            protocol.atomic_write_json(repository / orchestrator.INDEX_PATH, index)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.record_index_root(
+                    repository=repository,
+                    root=root,
+                    reservation_id="r1",
+                    abandoned=True,
+                )
+            self.write_process_journal(root, extra={"foreign": True})
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.record_index_root(
+                    repository=repository,
+                    root=root,
+                    reservation_id="r1",
+                    abandoned=True,
                 )
 
     def test_record_index_rejects_self_consistent_root_for_foreign_active(self):
@@ -1226,6 +1279,137 @@ class OuterOrchestratorTests(unittest.TestCase):
             self.assertEqual(len(progress["children"]), 4)
             self.assertTrue(all(environment == calls[0][1] for _, environment in calls))
 
+    def test_subprocess_is_journaled_before_wait(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+
+            class Process:
+                pid = 4242
+                returncode = 0
+
+                def wait(self, timeout=None):
+                    journal = json.loads(
+                        (root / orchestrator.PROCESS_JOURNAL).read_text(encoding="utf-8")
+                    )
+                    self.assert_running = journal["entries"][-1]["state"]
+                    return 0
+
+            process = Process()
+            runner = orchestrator._subprocess_stage_runner(
+                pathlib.Path("/context.json"),
+                "e" * 64,
+                self.REPOSITORY,
+                root=root,
+                process_factory=lambda *args, **kwargs: process,
+                process_identity=lambda pid: {"pid": pid, "start_ticks": 99},
+                process_group=lambda pid: pid,
+            )
+            self.assertEqual(
+                runner(orchestrator.STAGE_ORDER[0], {"PATH": "/bin"}), 0
+            )
+            self.assertEqual(process.assert_running, "RUNNING")
+            journal = orchestrator.validate_process_journal(root, require_entries=True)
+            self.assertEqual(journal["entries"][-1]["state"], "EXITED")
+            self.assertTrue(journal["entries"][-1]["reaped"])
+
+    def test_subprocess_timeout_terminates_kills_reaps_and_journals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            signals = []
+
+            class Process:
+                pid = 4242
+                returncode = None
+                waits = 0
+
+                def wait(self, timeout=None):
+                    self.waits += 1
+                    if self.waits < 3:
+                        raise subprocess.TimeoutExpired(("worker",), timeout)
+                    self.returncode = -9
+                    return self.returncode
+
+            runner = orchestrator._subprocess_stage_runner(
+                pathlib.Path("/context.json"),
+                "e" * 64,
+                self.REPOSITORY,
+                root=root,
+                process_factory=lambda *args, **kwargs: Process(),
+                process_identity=lambda pid: {"pid": pid, "start_ticks": 99},
+                process_group=lambda pid: pid,
+                kill_process_group=lambda pgid, signal: signals.append((pgid, signal)),
+                deadline_seconds=0.01,
+                termination_grace_seconds=0.01,
+            )
+            with self.assertRaises(protocol.ProtocolError):
+                runner(orchestrator.STAGE_ORDER[0], {"PATH": "/bin"})
+            self.assertEqual(
+                signals,
+                [(4242, orchestrator.signal.SIGTERM), (4242, orchestrator.signal.SIGKILL)],
+            )
+            journal = orchestrator.validate_process_journal(root, require_entries=True)
+            entry = journal["entries"][-1]
+            self.assertEqual(entry["state"], "TERMINATED")
+            self.assertEqual(entry["signals"], ["TERM", "KILL"])
+            self.assertTrue(entry["reaped"])
+
+    def test_keyboard_interrupt_terminates_reaps_and_is_re_raised(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+
+            class Process:
+                pid = 4242
+                calls = 0
+
+                def wait(self, timeout=None):
+                    self.calls += 1
+                    if self.calls == 1:
+                        raise KeyboardInterrupt()
+                    return -15
+
+            runner = orchestrator._subprocess_stage_runner(
+                pathlib.Path("/context.json"),
+                "e" * 64,
+                self.REPOSITORY,
+                root=root,
+                process_factory=lambda *args, **kwargs: Process(),
+                process_identity=lambda pid: {"pid": pid, "start_ticks": 99},
+                process_group=lambda pid: pid,
+                kill_process_group=lambda _pgid, _signal: None,
+            )
+            with self.assertRaises(KeyboardInterrupt):
+                runner(orchestrator.STAGE_ORDER[0], {"PATH": "/bin"})
+            entry = orchestrator.validate_process_journal(
+                root, require_entries=True
+            )["entries"][-1]
+            self.assertEqual(entry["state"], "TERMINATED")
+            self.assertTrue(entry["reaped"])
+
+    def test_abandonment_cli_has_no_boolean_or_process_group_bypass(self):
+        parser = orchestrator.build_parser()
+        options = {
+            option
+            for action in parser._subparsers._group_actions[0]
+            .choices["record-index"]
+            ._actions
+            for option in action.option_strings
+        }
+        self.assertNotIn("--confirm-no-live-processes", options)
+        self.assertNotIn("--process-group", options)
+
+    def test_spawn_journal_becomes_normative_root_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_complete_root(root)
+            self.write_process_journal(root)
+            ledger = json.loads(
+                (root / "evidence-ledger.json").read_text(encoding="utf-8")
+            )
+            self.assertIn(
+                orchestrator.PROCESS_JOURNAL,
+                orchestrator._canonical_root_paths(root, ledger),
+            )
+
     def test_rerun_retains_invalid_attempt_and_runs_only_failed_stage(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -1313,6 +1497,10 @@ class OuterOrchestratorTests(unittest.TestCase):
                 )
             self.assertEqual(code, 5)
             self.assertTrue((root / orchestrator.ABANDONMENT_SEAL).is_file())
+            seal = json.loads(
+                (root / orchestrator.ABANDONMENT_SEAL).read_text(encoding="utf-8")
+            )
+            self.assertEqual(seal["abandonment_kind"], "INITIALIZATION_FAILURE")
             self.assertEqual(
                 orchestrator.index_state(orchestrator._read_index(index_path)),
                 "PENDING_PRESERVATION",

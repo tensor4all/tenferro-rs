@@ -11,6 +11,7 @@ import json
 import os
 import pathlib
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -29,6 +30,7 @@ from scripts import phase2e_protocol as protocol
 AGGREGATE_MANIFEST = "phase2e-evidence.json"
 PROGRESS_MANIFEST = ".phase2e-progress.json"
 ABANDONMENT_SEAL = "abandoned-inventory.json"
+PROCESS_JOURNAL = ".phase2e-process-journal.json"
 INDEX_PATH = pathlib.Path("docs/worklogs/phase2e-index.json")
 INDEX_LOCK_PATH = pathlib.Path("docs/worklogs/.phase2e-index.lock")
 PRESERVATION_BRANCH = "origin/codex/execution-engine-through-phase9"
@@ -1371,7 +1373,11 @@ def initialize_campaign(
                     else:
                         initializer(root)
                 except BaseException:
-                    seal = seal_abandoned_root(root, identity=root_identity)
+                    seal = seal_abandoned_root(
+                        root,
+                        identity=root_identity,
+                        abandonment_kind="INITIALIZATION_FAILURE",
+                    )
                     terminal = record_terminal(
                         updated,
                         reservation_id=reservation_id,
@@ -1459,6 +1465,8 @@ def _canonical_root_paths(root: pathlib.Path, ledger: Mapping[str, Any]) -> froz
     if not gate_root.is_dir():
         raise protocol.ProtocolError("Task 8A gate-collector root is missing")
     required = set(required_root_paths(ledger))
+    if (root / PROCESS_JOURNAL).exists():
+        required.add(PROCESS_JOURNAL)
     required.difference_update(
         path for path in tuple(required) if path.startswith("attempts/")
     )
@@ -1513,6 +1521,8 @@ def validate_semantic_root(root: pathlib.Path) -> None:
     root = pathlib.Path(root).resolve(strict=True)
     ledger = _read_json(root / "evidence-ledger.json", "semantic ledger")
     protocol.validate_ledger(ledger)
+    if (root / PROCESS_JOURNAL).exists():
+        validate_process_journal(root, require_entries=True)
     candidate = ledger["candidate_sha"]
     for relative in build.LOCK_PATHS.values():
         try:
@@ -1649,10 +1659,18 @@ def validate_root(root: pathlib.Path) -> str:
     abandonment_path = root / ABANDONMENT_SEAL
     if abandonment_path.exists():
         seal = _read_json(abandonment_path, "abandonment seal")
-        if set(seal) != {"version", "protocol_version", "status", "inventory"} or (
+        if set(seal) != {
+            "version",
+            "protocol_version",
+            "status",
+            "abandonment_kind",
+            "inventory",
+        } or (
             seal["version"] != 1
             or seal["protocol_version"] != protocol.PROTOCOL_VERSION
             or seal["status"] != "ABANDONED"
+            or seal["abandonment_kind"]
+            not in {"INITIALIZATION_FAILURE", "UNCAUGHT_INTERRUPTION"}
         ):
             raise protocol.ProtocolError("abandonment seal schema is invalid")
         protocol.validate_regular_file_inventory(
@@ -1711,9 +1729,17 @@ def validate_root(root: pathlib.Path) -> str:
 
 
 def seal_abandoned_root(
-    root: pathlib.Path, *, identity: protocol.PreparedRootIdentity | None = None
+    root: pathlib.Path,
+    *,
+    identity: protocol.PreparedRootIdentity | None = None,
+    abandonment_kind: str = "UNCAUGHT_INTERRUPTION",
 ) -> dict[str, Any]:
     """Own every preexisting regular byte after an unresumable interruption."""
+    if abandonment_kind not in {
+        "INITIALIZATION_FAILURE",
+        "UNCAUGHT_INTERRUPTION",
+    }:
+        raise protocol.ProtocolError("abandonment kind differs")
     root = pathlib.Path(root)
     owned_identity = identity is None
     identity = identity or protocol.PreparedRootIdentity(root)
@@ -1724,6 +1750,7 @@ def seal_abandoned_root(
         "version": 1,
         "protocol_version": protocol.PROTOCOL_VERSION,
         "status": "ABANDONED",
+        "abandonment_kind": abandonment_kind,
         "inventory": inventory,
     }
     try:
@@ -2000,20 +2027,201 @@ def validate_progress(root: pathlib.Path) -> dict[str, Any]:
     return progress
 
 
+def _linux_process_identity(pid: int) -> dict[str, int]:
+    try:
+        content = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        fields = content[content.rindex(")") + 2 :].split()
+        start_ticks = int(fields[19])
+    except (OSError, ValueError, IndexError) as error:
+        raise protocol.ProtocolError(
+            f"cannot read spawned process identity: {error}"
+        ) from error
+    return {"pid": pid, "start_ticks": start_ticks}
+
+
+def validate_process_journal(
+    root: pathlib.Path, *, require_entries: bool = False
+) -> dict[str, Any]:
+    payload = protocol.decode_canonical_json_bytes(
+        _read_regular_path(pathlib.Path(root) / PROCESS_JOURNAL, "process journal"),
+        "process journal",
+    )
+    if (
+        type(payload) is not dict
+        or set(payload) != {"version", "entries"}
+        or payload["version"] != 1
+        or type(payload["entries"]) is not list
+        or require_entries and not payload["entries"]
+    ):
+        raise protocol.ProtocolError("process journal schema differs")
+    identities = set()
+    for ordinal, entry in enumerate(payload["entries"], start=1):
+        protocol.validate_manifest_fields(
+            entry,
+            {
+                "ordinal": int,
+                "stage": str,
+                "argv": list,
+                "pid": int,
+                "pgid": int,
+                "start_ticks": int,
+                "state": str,
+                "exit_code": (int, type(None)),
+                "signals": list,
+                "reaped": bool,
+            },
+            context="process journal entry",
+        )
+        identity = (entry["pid"], entry["start_ticks"])
+        if (
+            entry["ordinal"] != ordinal
+            or entry["stage"] not in STAGE_ORDER
+            or type(entry["argv"]) is not list
+            or any(type(value) is not str for value in entry["argv"])
+            or entry["pid"] <= 0
+            or entry["pgid"] <= 0
+            or entry["start_ticks"] < 0
+            or identity in identities
+            or entry["state"] not in {"RUNNING", "EXITED", "TERMINATED"}
+            or any(value not in {"TERM", "KILL"} for value in entry["signals"])
+            or (entry["state"] == "RUNNING" and (entry["reaped"] or entry["exit_code"] is not None))
+            or (entry["state"] != "RUNNING" and not entry["reaped"])
+        ):
+            raise protocol.ProtocolError("process journal entry differs")
+        identities.add(identity)
+    return payload
+
+
+def _write_process_journal(root: pathlib.Path, journal: Mapping[str, Any]) -> None:
+    identity = protocol.PreparedRootIdentity(pathlib.Path(root))
+    try:
+        protocol.atomic_write_json_at(identity.descriptor, PROCESS_JOURNAL, journal)
+        identity.revalidate()
+    finally:
+        identity.close()
+
+
+def _start_process_journal_entry(
+    root: pathlib.Path,
+    *,
+    stage: str,
+    argv: Sequence[str],
+    pid: int,
+    pgid: int,
+    identity: Mapping[str, int],
+) -> int:
+    journal_path = pathlib.Path(root) / PROCESS_JOURNAL
+    if _regular_path_exists(journal_path, "process journal"):
+        journal = validate_process_journal(root)
+    else:
+        journal = {"version": 1, "entries": []}
+    entry = {
+        "ordinal": len(journal["entries"]) + 1,
+        "stage": stage,
+        "argv": list(argv),
+        "pid": pid,
+        "pgid": pgid,
+        "start_ticks": identity["start_ticks"],
+        "state": "RUNNING",
+        "exit_code": None,
+        "signals": [],
+        "reaped": False,
+    }
+    journal["entries"].append(entry)
+    _write_process_journal(root, journal)
+    return entry["ordinal"]
+
+
+def _finish_process_journal_entry(
+    root: pathlib.Path,
+    ordinal: int,
+    *,
+    state: str,
+    exit_code: int,
+    signals: Sequence[str],
+) -> None:
+    journal = validate_process_journal(root, require_entries=True)
+    entry = journal["entries"][ordinal - 1]
+    if entry["ordinal"] != ordinal or entry["state"] != "RUNNING":
+        raise protocol.ProtocolError("process journal completion differs")
+    entry.update(
+        state=state,
+        exit_code=exit_code,
+        signals=list(signals),
+        reaped=True,
+    )
+    _write_process_journal(root, journal)
+
+
 def _subprocess_stage_runner(
-    context: pathlib.Path, context_sha256: str, repository: pathlib.Path
+    context: pathlib.Path,
+    context_sha256: str,
+    repository: pathlib.Path,
+    *,
+    root: pathlib.Path | None = None,
+    process_factory=subprocess.Popen,
+    process_identity: Callable[[int], Mapping[str, int]] = _linux_process_identity,
+    process_group: Callable[[int], int] = os.getpgid,
+    kill_process_group: Callable[[int, int], None] = os.killpg,
+    deadline_seconds: float = 1800.0,
+    termination_grace_seconds: float = 5.0,
 ) -> Callable[[str, Mapping[str, str]], int]:
+    root = pathlib.Path(root) if root is not None else None
+
     def run(stage: str, environment: Mapping[str, str]) -> int:
         argv = stage_argv(stage, context, context_sha256)
         validate_stage_argv(stage, argv, context, context_sha256)
-        result = subprocess.run(
+        process = process_factory(
             argv,
             cwd=repository,
             env=dict(environment),
-            check=False,
             start_new_session=True,
         )
-        return result.returncode
+        if root is None:
+            raise protocol.ProtocolError("stage subprocess runner lacks evidence root")
+        identity = process_identity(process.pid)
+        if identity.get("pid") != process.pid:
+            raise protocol.ProtocolError("spawned process identity differs")
+        pgid = process_group(process.pid)
+        ordinal = _start_process_journal_entry(
+            root,
+            stage=stage,
+            argv=argv,
+            pid=process.pid,
+            pgid=pgid,
+            identity=identity,
+        )
+        try:
+            code = process.wait(timeout=deadline_seconds)
+        except BaseException as primary:
+            signals = []
+            try:
+                kill_process_group(pgid, signal.SIGTERM)
+                signals.append("TERM")
+                try:
+                    code = process.wait(timeout=termination_grace_seconds)
+                except subprocess.TimeoutExpired:
+                    kill_process_group(pgid, signal.SIGKILL)
+                    signals.append("KILL")
+                    code = process.wait()
+                _finish_process_journal_entry(
+                    root,
+                    ordinal,
+                    state="TERMINATED",
+                    exit_code=code,
+                    signals=signals,
+                )
+            except BaseException as cleanup_error:
+                raise protocol.ProtocolError(
+                    f"cannot terminate and reap stage process: {cleanup_error}"
+                ) from cleanup_error
+            if isinstance(primary, subprocess.TimeoutExpired):
+                raise protocol.ProtocolError("stage process deadline exceeded") from primary
+            raise
+        _finish_process_journal_entry(
+            root, ordinal, state="EXITED", exit_code=code, signals=[]
+        )
+        return code
 
     return run
 
@@ -2083,8 +2291,6 @@ def record_index_root(
     root: pathlib.Path,
     reservation_id: str,
     abandoned: bool = False,
-    confirm_no_live_processes: bool = False,
-    process_groups: Sequence[int] = (),
 ) -> dict[str, Any]:
     """Validate and transition one ACTIVE reservation to pending preservation."""
     index_path, index_lock = campaign_index_paths(repository)
@@ -2122,6 +2328,10 @@ def record_index_root(
                         ledger_digest = seal["inventory"].get(
                             "evidence-ledger.json", "0" * 64
                         )
+                        if seal["abandonment_kind"] != "UNCAUGHT_INTERRUPTION":
+                            raise protocol.ProtocolError(
+                                "initialization abandonment cannot be replayed by record-index"
+                            )
                     else:
                         digest = protocol.sha256_file(root / AGGREGATE_MANIFEST)
                         ledger_digest = protocol.sha256_file(
@@ -2138,11 +2348,10 @@ def record_index_root(
                     identity.revalidate()
                     return index
                 if abandoned:
-                    if not confirm_no_live_processes:
-                        raise protocol.ProtocolError(
-                            "abandonment requires no-live-process confirmation"
-                        )
-                    for process_group in process_groups:
+                    journal = validate_process_journal(root, require_entries=True)
+                    for process_group in sorted(
+                        {entry["pgid"] for entry in journal["entries"]}
+                    ):
                         try:
                             os.killpg(process_group, 0)
                         except ProcessLookupError:
@@ -2154,7 +2363,11 @@ def record_index_root(
                         raise protocol.ProtocolError(
                             "a recorded process group is still live"
                         )
-                    seal = seal_abandoned_root(root, identity=identity)
+                    seal = seal_abandoned_root(
+                        root,
+                        identity=identity,
+                        abandonment_kind="UNCAUGHT_INTERRUPTION",
+                    )
                     status = "ABANDONED"
                     digest = protocol.sha256_json(seal)
                     ledger_digest = seal["inventory"].get(
@@ -2359,8 +2572,6 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--root", required=True, type=pathlib.Path)
     record.add_argument("--reservation-id", required=True)
     record.add_argument("--abandoned", action="store_true")
-    record.add_argument("--confirm-no-live-processes", action="store_true")
-    record.add_argument("--process-group", action="append", type=int, default=[])
     preserved = subparsers.add_parser("record-preserved", exit_on_error=False)
     preserved.add_argument("--repository", required=True, type=pathlib.Path)
     preserved.add_argument("--root", required=True, type=pathlib.Path)
@@ -2440,7 +2651,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.root,
                 environment,
                 _subprocess_stage_runner(
-                    args.context, args.context_sha256, args.repository
+                    args.context,
+                    args.context_sha256,
+                    args.repository,
+                    root=args.root,
                 ),
                 identity={
                     **stage_context,
@@ -2457,7 +2671,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             stage_context["context_path"] = str(args.context.resolve(strict=True))
             environment = protocol.runtime_environment(path=args.path, home=args.home)
             runner = _subprocess_stage_runner(
-                args.context, args.context_sha256, args.repository
+                args.context,
+                args.context_sha256,
+                args.repository,
+                root=args.root,
             )
             index_path, index_lock = campaign_index_paths(args.repository)
             with exclusive_lock(index_lock):
@@ -2501,8 +2718,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 root=args.root,
                 reservation_id=args.reservation_id,
                 abandoned=args.abandoned,
-                confirm_no_live_processes=args.confirm_no_live_processes,
-                process_groups=args.process_group,
             )
             print(index_state(updated))
             return 0
