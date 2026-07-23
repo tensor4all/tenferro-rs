@@ -155,6 +155,17 @@ fn repeated_input_program() -> tenferro_runtime::program::FrozenProgram {
     builder.finish(&[output]).unwrap()
 }
 
+fn core_square_program() -> tenferro_runtime::program::FrozenProgram {
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let output = builder
+        .add_op(CoreSemanticOp::Mul, &[input, input])
+        .unwrap()[0];
+    builder.finish(&[output]).unwrap()
+}
+
 fn rules() -> SemanticExtensionRuleSet {
     let mut rules = SemanticExtensionRuleSet::new();
     rules.register_linearize(Arc::new(AddInputsRule)).unwrap();
@@ -264,5 +275,41 @@ fn semantic_activity_is_ordered_typed_and_preserves_inactive_values() {
             actual: 0,
             ..
         })
+    ));
+}
+
+#[test]
+fn semantic_core_jvp_linearizes_product_rule_and_accumulates_terms() {
+    let transformed = ad_context()
+        .jvp_program(&core_square_program(), &[true])
+        .unwrap();
+
+    assert_eq!(transformed.derivative_input_indices(), &[Some(1)]);
+    assert_eq!(transformed.derivative_output_indices(), &[Some(0)]);
+    let operations: Vec<_> = transformed.frozen().program.operations().collect();
+    assert_eq!(operations.len(), 4);
+    assert!(matches!(
+        operations.last().unwrap().op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Add)
+    ));
+}
+
+#[test]
+fn semantic_core_vjp_applies_hermitian_product_rule_and_accumulates_aliases() {
+    let transformed = ad_context()
+        .vjp_program(&core_square_program(), &[true], &[true])
+        .unwrap();
+
+    assert_eq!(transformed.derivative_input_indices(), &[Some(1)]);
+    assert_eq!(transformed.derivative_output_indices(), &[Some(0)]);
+    assert!(matches!(
+        transformed
+            .frozen()
+            .program
+            .operations()
+            .last()
+            .unwrap()
+            .op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Add)
     ));
 }

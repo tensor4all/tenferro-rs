@@ -6,6 +6,7 @@ use tenferro_runtime::program::{
     CoreSemanticOp, FrozenProgram, ProgramBuildError, ProgramFinishError, ProgramImport,
     ProgramInputSpec, ProgramQueryError, ProgramValue, SemanticOpRef, SemanticProgramBuilder,
 };
+use tenferro_runtime::DType;
 
 use crate::semantic_extension::{AdValue, SemanticAdError, SemanticExtensionRuleSet};
 
@@ -46,6 +47,14 @@ pub enum SemanticAdTransformError {
     UnsupportedOperationVariant {
         /// Transform role.
         role: SemanticTransformRole,
+    },
+    /// Active derivative metadata is outside the admitted exact-shape subset.
+    #[error("semantic {role:?} does not support derivative metadata: {message}")]
+    UnsupportedMetadata {
+        /// Transform role.
+        role: SemanticTransformRole,
+        /// Bounded metadata diagnostic.
+        message: String,
     },
     /// Source-program metadata could not be queried.
     #[error("semantic AD source-program query failed: {0}")]
@@ -163,9 +172,12 @@ pub fn semantic_jvp(
                     )?
                     .tangent_outputs()
                     .into(),
-                SemanticOpRef::Core(op) => {
-                    return Err(unsupported_core(SemanticTransformRole::Jvp, op));
-                }
+                SemanticOpRef::Core(op) => linearize_core(
+                    op,
+                    &mapped_values(operation.inputs(), &values),
+                    &tangent_inputs,
+                    &mut builder,
+                )?,
                 _ => {
                     return Err(SemanticAdTransformError::UnsupportedOperationVariant {
                         role: SemanticTransformRole::Jvp,
@@ -293,9 +305,13 @@ pub fn semantic_vjp(
                     )?
                 }
             }
-            SemanticOpRef::Core(op) => {
-                return Err(unsupported_core(SemanticTransformRole::Vjp, op));
-            }
+            SemanticOpRef::Core(op) => vjp_core(
+                op,
+                &mapped_values(operation.inputs(), &values),
+                &cotangent_outputs,
+                &active_operation_inputs,
+                &mut builder,
+            )?,
             _ => {
                 return Err(SemanticAdTransformError::UnsupportedOperationVariant {
                     role: SemanticTransformRole::Vjp,
@@ -409,6 +425,242 @@ fn accumulate_cotangent(
     };
     cotangents.insert(source, combined);
     Ok(())
+}
+
+fn linearize_core(
+    op: &CoreSemanticOp,
+    primal_inputs: &[ProgramValue],
+    tangent_inputs: &[AdValue],
+    builder: &mut SemanticProgramBuilder,
+) -> Result<Box<[AdValue]>, SemanticAdTransformError> {
+    let output = match op {
+        CoreSemanticOp::Add => add_ad_values(builder, tangent_inputs[0], tangent_inputs[1])?,
+        CoreSemanticOp::Sub => sub_ad_values(builder, tangent_inputs[0], tangent_inputs[1])?,
+        CoreSemanticOp::Mul => {
+            let lhs = multiply_ad_value(builder, tangent_inputs[0], primal_inputs[1])?;
+            let rhs = multiply_ad_value(builder, tangent_inputs[1], primal_inputs[0])?;
+            add_ad_values(builder, lhs, rhs)?
+        }
+        CoreSemanticOp::Neg | CoreSemanticOp::Conj => {
+            unary_ad_value(builder, op.clone(), tangent_inputs[0])?
+        }
+        _ => return Err(unsupported_core(SemanticTransformRole::Jvp, op)),
+    };
+    Ok([output].into())
+}
+
+fn vjp_core(
+    op: &CoreSemanticOp,
+    primal_inputs: &[ProgramValue],
+    cotangent_outputs: &[AdValue],
+    active_inputs: &[bool],
+    builder: &mut SemanticProgramBuilder,
+) -> Result<Box<[AdValue]>, SemanticAdTransformError> {
+    let cotangent = cotangent_outputs[0];
+    let inputs = match op {
+        CoreSemanticOp::Add => vec![
+            active_cotangent(builder, cotangent, active_inputs[0], primal_inputs[0])?,
+            active_cotangent(builder, cotangent, active_inputs[1], primal_inputs[1])?,
+        ],
+        CoreSemanticOp::Sub => {
+            let negated = unary_ad_value(builder, CoreSemanticOp::Neg, cotangent)?;
+            vec![
+                active_cotangent(builder, cotangent, active_inputs[0], primal_inputs[0])?,
+                normalize_ad_value(builder, negated, active_inputs[1], primal_inputs[1])?,
+            ]
+        }
+        CoreSemanticOp::Mul => {
+            let rhs_coefficient = conjugate_if_complex(builder, primal_inputs[1])?;
+            let lhs_coefficient = conjugate_if_complex(builder, primal_inputs[0])?;
+            let lhs = multiply_ad_value(builder, cotangent, rhs_coefficient)?;
+            let rhs = multiply_ad_value(builder, cotangent, lhs_coefficient)?;
+            vec![
+                normalize_ad_value(builder, lhs, active_inputs[0], primal_inputs[0])?,
+                normalize_ad_value(builder, rhs, active_inputs[1], primal_inputs[1])?,
+            ]
+        }
+        CoreSemanticOp::Neg => {
+            let negated = unary_ad_value(builder, CoreSemanticOp::Neg, cotangent)?;
+            vec![normalize_ad_value(
+                builder,
+                negated,
+                active_inputs[0],
+                primal_inputs[0],
+            )?]
+        }
+        CoreSemanticOp::Conj => {
+            let conjugated = unary_ad_value(builder, CoreSemanticOp::Conj, cotangent)?;
+            vec![normalize_ad_value(
+                builder,
+                conjugated,
+                active_inputs[0],
+                primal_inputs[0],
+            )?]
+        }
+        _ => return Err(unsupported_core(SemanticTransformRole::Vjp, op)),
+    };
+    Ok(inputs.into_boxed_slice())
+}
+
+fn add_ad_values(
+    builder: &mut SemanticProgramBuilder,
+    lhs: AdValue,
+    rhs: AdValue,
+) -> Result<AdValue, ProgramBuildError> {
+    match (lhs, rhs) {
+        (AdValue::Absent, value) | (value, AdValue::Absent) => Ok(value),
+        (AdValue::Value(lhs), AdValue::Value(rhs)) => Ok(AdValue::Value(
+            builder.add_op(CoreSemanticOp::Add, &[lhs, rhs])?[0],
+        )),
+    }
+}
+
+fn sub_ad_values(
+    builder: &mut SemanticProgramBuilder,
+    lhs: AdValue,
+    rhs: AdValue,
+) -> Result<AdValue, ProgramBuildError> {
+    match (lhs, rhs) {
+        (AdValue::Absent, AdValue::Absent) => Ok(AdValue::Absent),
+        (value, AdValue::Absent) => Ok(value),
+        (AdValue::Absent, AdValue::Value(rhs)) => Ok(AdValue::Value(
+            builder.add_op(CoreSemanticOp::Neg, &[rhs])?[0],
+        )),
+        (AdValue::Value(lhs), AdValue::Value(rhs)) => Ok(AdValue::Value(
+            builder.add_op(CoreSemanticOp::Sub, &[lhs, rhs])?[0],
+        )),
+    }
+}
+
+fn unary_ad_value(
+    builder: &mut SemanticProgramBuilder,
+    op: CoreSemanticOp,
+    value: AdValue,
+) -> Result<AdValue, ProgramBuildError> {
+    match value {
+        AdValue::Absent => Ok(AdValue::Absent),
+        AdValue::Value(value) => Ok(AdValue::Value(builder.add_op(op, &[value])?[0])),
+    }
+}
+
+fn multiply_ad_value(
+    builder: &mut SemanticProgramBuilder,
+    value: AdValue,
+    coefficient: ProgramValue,
+) -> Result<AdValue, ProgramBuildError> {
+    match value {
+        AdValue::Absent => Ok(AdValue::Absent),
+        AdValue::Value(value) => Ok(AdValue::Value(
+            builder.add_op(CoreSemanticOp::Mul, &[value, coefficient])?[0],
+        )),
+    }
+}
+
+fn active_cotangent(
+    builder: &mut SemanticProgramBuilder,
+    cotangent: AdValue,
+    active: bool,
+    primal_input: ProgramValue,
+) -> Result<AdValue, SemanticAdTransformError> {
+    normalize_ad_value(builder, cotangent, active, primal_input)
+}
+
+fn normalize_ad_value(
+    builder: &mut SemanticProgramBuilder,
+    value: AdValue,
+    active: bool,
+    primal_input: ProgramValue,
+) -> Result<AdValue, SemanticAdTransformError> {
+    if !active {
+        return Ok(AdValue::Absent);
+    }
+    let AdValue::Value(mut value) = value else {
+        return Ok(AdValue::Absent);
+    };
+    let target_metadata = builder.value_metadata(primal_input)?.clone();
+    let value_metadata = builder.value_metadata(value)?.clone();
+    let target_shape = exact_shape(
+        target_metadata.shape(),
+        SemanticTransformRole::Vjp,
+        "primal input",
+    )?;
+    let value_shape = exact_shape(
+        value_metadata.shape(),
+        SemanticTransformRole::Vjp,
+        "cotangent",
+    )?;
+    if value_shape.len() < target_shape.len() {
+        return Err(SemanticAdTransformError::UnsupportedMetadata {
+            role: SemanticTransformRole::Vjp,
+            message: "cotangent rank is smaller than its primal-input rank".into(),
+        });
+    }
+    let leading = value_shape.len() - target_shape.len();
+    let mut axes: Vec<_> = (0..leading).collect();
+    axes.extend(
+        target_shape
+            .iter()
+            .zip(value_shape.iter().skip(leading))
+            .enumerate()
+            .filter_map(|(axis, (target, actual))| {
+                (matches!(target, tenferro_ops::dim_expr::DimExpr::Const(1)) && target != actual)
+                    .then_some(axis + leading)
+            }),
+    );
+    if !axes.is_empty() {
+        value = builder.add_op(CoreSemanticOp::ReduceSum { axes }, &[value])?[0];
+    }
+    if builder.value_metadata(value)?.shape() != target_metadata.shape() {
+        value = builder.add_op(
+            CoreSemanticOp::Reshape {
+                to_shape: target_shape,
+            },
+            &[value],
+        )?[0];
+    }
+    let value_dtype = builder.value_metadata(value)?.dtype();
+    if value_dtype != target_metadata.dtype() {
+        value = builder.add_op(
+            CoreSemanticOp::Convert {
+                from: value_dtype,
+                to: target_metadata.dtype(),
+            },
+            &[value],
+        )?[0];
+    }
+    Ok(AdValue::Value(value))
+}
+
+fn exact_shape(
+    shape: &[tenferro_ops::ShapeExtent<tenferro_ops::dim_expr::DimExpr>],
+    role: SemanticTransformRole,
+    field: &'static str,
+) -> Result<Vec<tenferro_ops::dim_expr::DimExpr>, SemanticAdTransformError> {
+    shape
+        .iter()
+        .map(|extent| {
+            extent.as_exact().cloned().ok_or_else(|| {
+                SemanticAdTransformError::UnsupportedMetadata {
+                    role,
+                    message: format!("{field} has a bounded or unknown extent"),
+                }
+            })
+        })
+        .collect()
+}
+
+fn conjugate_if_complex(
+    builder: &mut SemanticProgramBuilder,
+    value: ProgramValue,
+) -> Result<ProgramValue, ProgramBuildError> {
+    if matches!(
+        builder.value_metadata(value)?.dtype(),
+        DType::C32 | DType::C64
+    ) {
+        Ok(builder.add_op(CoreSemanticOp::Conj, &[value])?[0])
+    } else {
+        Ok(value)
+    }
 }
 
 fn finish_derivative(
