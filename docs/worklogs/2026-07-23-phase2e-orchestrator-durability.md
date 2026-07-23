@@ -187,17 +187,22 @@ descriptor and one descriptor plus device/inode identity for each created
 leaf. Rollback empties contents only through that retained leaf descriptor,
 accepting only the platform's exact final-root `EINVAL` from the
 symlink-attack-resistant descriptor-relative `rmtree`. It then renames the
-current parent entry to a cryptographically random quarantine name and removes
-it with non-recursive `rmdir` only when its device/inode matches the retained
-leaf. A concurrently substituted entry is retained in quarantine with a
-diagnostic; its data is never recursively deleted. Every success and error path
-attempts to close every retained descriptor even if an earlier close reports
-failure. If a leaf descriptor cannot be acquired, cleanup explicitly leaves
-the unowned path rather than guessing its identity and annotates the typed
-primary failure. Once initialization has committed ACTIVE or ABANDONED,
-descriptor-close errors are diagnostics: code 0 still launches the fixed stage
-runner, while code 5 still prints `ABANDONED_INITIALIZATION` and returns 5.
-The focused outer-orchestrator suite passes 113 tests.
+current parent entry to a cryptographically random quarantine name and never
+removes that parent pathname. Exact device/inode matches are verified empty and
+retained as tombstones; mismatches are also retained with a distinct
+diagnostic, so concurrently substituted data is never recursively deleted.
+Cleanup records every tombstone path in the primary error notes. A failed
+attempt leaves at most one tombstone per home it created, while freeing the
+fixed HOME/CARGO_HOME names for an exact retry. Normal tombstones are tiny empty
+directories outside the measured scratch/evidence build artifacts and remain
+deliberately for identity safety. Every success and error path attempts to close
+every retained descriptor even if an earlier close reports failure. If a leaf
+descriptor cannot be acquired, cleanup explicitly leaves the unowned path
+rather than guessing its identity and annotates the typed primary failure.
+Once initialization has committed ACTIVE or ABANDONED, descriptor-close errors
+are diagnostics: code 0 still launches the fixed stage runner, while code 5
+still prints `ABANDONED_INITIALIZATION` and returns 5. The focused
+outer-orchestrator suite passes 114 tests.
 
 The temporary public-lifecycle adapter moved from the main test class to
 `scripts/phase2e_public_lifecycle_fixture.py`. Its helper asserts one exact
@@ -213,6 +218,6 @@ paths.
 
 ## Remaining work
 
-No Task 8 implementation scope remains. Operational preservation (committing,
-pushing, and posting the real #1436 proof) remains an explicit later external
-action and was not authorized in this implementation pass.
+The final reviewer recheck remains pending. Operational preservation
+(committing, pushing, and posting the real #1436 proof) remains an explicit
+later external action and was not authorized in this implementation pass.

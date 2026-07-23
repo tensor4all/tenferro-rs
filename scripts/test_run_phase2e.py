@@ -1617,10 +1617,17 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             quarantines = tuple(
                 scratch.parent.glob(".phase2e-cleanup-*")
             )
-            self.assertEqual(len(quarantines), 1)
-            quarantined_marker = quarantines[0] / marker.name
+            self.assertEqual(len(quarantines), 2)
+            quarantined_marker = next(
+                path / marker.name
+                for path in quarantines
+                if (path / marker.name).is_file()
+            )
             self.assertEqual(
                 quarantined_marker.read_text(encoding="utf-8"), "untouched"
+            )
+            self.assertEqual(
+                sum(not tuple(path.iterdir()) for path in quarantines), 1
             )
             self.assertTrue(moved.is_dir())
             self.assertEqual(list(moved.iterdir()), [])
@@ -1696,10 +1703,18 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             quarantines = tuple(
                 scratch.parent.glob(".phase2e-cleanup-*")
             )
-            self.assertEqual(len(quarantines), 1)
+            self.assertEqual(len(quarantines), 2)
+            quarantined_marker = next(
+                path / marker_name
+                for path in quarantines
+                if (path / marker_name).is_file()
+            )
             self.assertEqual(
-                (quarantines[0] / marker_name).read_text(encoding="utf-8"),
+                quarantined_marker.read_text(encoding="utf-8"),
                 "untouched",
+            )
+            self.assertEqual(
+                sum(not tuple(path.iterdir()) for path in quarantines), 1
             )
             self.assertTrue(moved.is_dir())
             self.assertEqual(list(moved.iterdir()), [])
@@ -1711,6 +1726,60 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
                     for note in getattr(primary, "__notes__", ())
                 )
             )
+            self.assertEqual(len(os.listdir("/proc/self/fd")), descriptor_count)
+
+    def test_execution_home_rollback_never_rmdirs_quarantine_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            source.mkdir()
+            descriptor_count = len(os.listdir("/proc/self/fd"))
+            prepared = orchestrator._prepare_execution_homes(
+                scratch, source_cargo_home=source
+            )
+            home, cargo_home = prepared
+            rmdir_calls = []
+            real_rmdir = os.rmdir
+
+            def swap_at_rmdir(path, *args, **kwargs):
+                if path == ".":
+                    return real_rmdir(path, *args, **kwargs)
+                rmdir_calls.append(path)
+                parent_fd = kwargs["dir_fd"]
+                moved = f".moved-owned-{len(rmdir_calls)}"
+                os.rename(
+                    path,
+                    moved,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                os.mkdir(path, dir_fd=parent_fd)
+                real_rmdir(path, *args, **kwargs)
+
+            primary = protocol.ProtocolError("primary pre-ACTIVE failure")
+            with mock.patch.object(
+                orchestrator.os, "rmdir", new=swap_at_rmdir
+            ):
+                prepared.rollback(primary)
+            self.assertEqual(rmdir_calls, [])
+            self.assertFalse(home.exists())
+            self.assertFalse(cargo_home.exists())
+            tombstones = tuple(
+                scratch.parent.glob(".phase2e-cleanup-*")
+            )
+            self.assertEqual(len(tombstones), len(prepared.owned))
+            self.assertLessEqual(len(tombstones), 2)
+            notes = "\n".join(getattr(primary, "__notes__", ()))
+            for tombstone in tombstones:
+                suffix = tombstone.name.removeprefix(
+                    ".phase2e-cleanup-"
+                )
+                self.assertEqual(len(suffix), 32)
+                int(suffix, 16)
+                self.assertEqual(list(tombstone.iterdir()), [])
+                self.assertIn(str(tombstone), notes)
             self.assertEqual(len(os.listdir("/proc/self/fd")), descriptor_count)
 
     def test_pre_active_preflight_failure_rolls_back_and_exact_start_retries(self):
@@ -1779,6 +1848,10 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
                 self.assertIn("preflight failed", first_stderr.getvalue())
                 self.assertFalse(home.exists())
                 self.assertFalse(cargo_home.exists())
+                self.assertEqual(
+                    len(tuple(scratch.parent.glob(".phase2e-cleanup-*"))),
+                    2,
+                )
                 second_stdout = StringIO()
                 with redirect_stdout(second_stdout):
                     second = orchestrator.main(argv)

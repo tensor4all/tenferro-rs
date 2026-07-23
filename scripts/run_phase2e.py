@@ -1079,18 +1079,21 @@ class _PreparedExecutionHomes:
                     )
                     continue
                 try:
-                    os.rmdir(
-                        quarantine,
-                        dir_fd=self.parent_descriptor,
-                    )
-                    os.fsync(self.parent_descriptor)
-                except BaseException as cleanup_error:
+                    remaining = os.listdir(home.descriptor)
+                except OSError as cleanup_error:
                     _add_cleanup_note(
                         primary,
-                        "suppressed execution-home cleanup failure for "
-                        f"{home.path}: {type(cleanup_error).__name__}: "
-                        f"{cleanup_error}",
+                        "execution-home tombstone verification failure for "
+                        f"{home.path}: {cleanup_error}; retained as "
+                        f"{self.parent / quarantine}",
                     )
+                    continue
+                state = "empty" if not remaining else "nonempty"
+                _add_cleanup_note(
+                    primary,
+                    f"execution-home cleanup retained {state} owned tombstone "
+                    f"for {home.path}: {self.parent / quarantine}",
+                )
         finally:
             self.close(primary)
 
