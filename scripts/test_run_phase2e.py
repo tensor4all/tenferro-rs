@@ -1538,6 +1538,40 @@ class OuterOrchestratorTests(unittest.TestCase):
             self.assertEqual(signals, [(4242, orchestrator.signal.SIGTERM)])
             self.assertEqual(process.waits, 1)
 
+    def test_post_popen_identity_failure_reaps_when_term_loses_process_race(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
+
+            class Process:
+                pid = 4242
+                waits = 0
+
+                def wait(self, timeout=None):
+                    self.waits += 1
+                    return -15
+
+            process = Process()
+            runner = orchestrator._subprocess_stage_runner(
+                pathlib.Path("/context.json"),
+                "e" * 64,
+                self.REPOSITORY,
+                root=root,
+                process_factory=lambda *args, **kwargs: process,
+                process_identity=lambda _pid: (_ for _ in ()).throw(
+                    protocol.ProtocolError("identity failed")
+                ),
+                kill_process_group=lambda _pgid, _sig: (_ for _ in ()).throw(
+                    ProcessLookupError("already exited")
+                ),
+            )
+            with self.assertRaisesRegex(protocol.ProtocolError, "identity failed"):
+                runner(orchestrator.STAGE_ORDER[0], {"PATH": "/bin"})
+            self.assertEqual(process.waits, 1)
+
     def test_post_popen_getpgid_failure_terminates_and_reaps(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory).resolve()

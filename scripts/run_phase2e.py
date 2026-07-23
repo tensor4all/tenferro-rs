@@ -2462,6 +2462,38 @@ def _finish_process_journal_entry(
     _write_process_journal(root, journal, identity=root_identity)
 
 
+def _terminate_and_reap_process(
+    process,
+    pgid: int,
+    *,
+    kill_process_group: Callable[[int, int], None],
+    termination_grace_seconds: float,
+) -> tuple[int, list[str], list[BaseException]]:
+    """Best-effort signal one group while independently guaranteeing a reap."""
+    signals = []
+    signal_errors: list[BaseException] = []
+
+    def send(sig: int, name: str) -> None:
+        try:
+            kill_process_group(pgid, sig)
+        except ProcessLookupError:
+            # The child/group may exit between Popen and cleanup.  wait still
+            # owns the authoritative reap below.
+            return
+        except BaseException as error:
+            signal_errors.append(error)
+        else:
+            signals.append(name)
+
+    send(signal.SIGTERM, "TERM")
+    try:
+        code = process.wait(timeout=termination_grace_seconds)
+    except subprocess.TimeoutExpired:
+        send(signal.SIGKILL, "KILL")
+        code = process.wait()
+    return code, signals, signal_errors
+
+
 def _subprocess_stage_runner(
     context: pathlib.Path,
     context_sha256: str,
@@ -2513,17 +2545,16 @@ def _subprocess_stage_runner(
             code = process.wait(timeout=deadline_seconds)
             reaped = True
         except BaseException as primary:
-            signals = []
             try:
+                signal_errors = []
+                signals = []
                 if not reaped:
-                    kill_process_group(pgid, signal.SIGTERM)
-                    signals.append("TERM")
-                    try:
-                        code = process.wait(timeout=termination_grace_seconds)
-                    except subprocess.TimeoutExpired:
-                        kill_process_group(pgid, signal.SIGKILL)
-                        signals.append("KILL")
-                        code = process.wait()
+                    code, signals, signal_errors = _terminate_and_reap_process(
+                        process,
+                        pgid,
+                        kill_process_group=kill_process_group,
+                        termination_grace_seconds=termination_grace_seconds,
+                    )
                     reaped = True
                 if ordinal is not None:
                     _finish_process_journal_entry(
@@ -2534,6 +2565,11 @@ def _subprocess_stage_runner(
                         signals=signals,
                         root_identity=root_identity,
                     )
+                if signal_errors:
+                    details = "; ".join(str(error) for error in signal_errors)
+                    raise protocol.ProtocolError(
+                        f"stage cleanup signal failed after reap: {details}"
+                    ) from signal_errors[0]
             except BaseException as cleanup_error:
                 raise protocol.ProtocolError(
                     f"cannot terminate and reap stage process: {cleanup_error}"
