@@ -107,28 +107,40 @@ class OuterOrchestratorTests(unittest.TestCase):
                         events.append("root-lock-exit")
                         root_lock_held = False
 
-            def compare(_repository, index_path, *, allow_absent):
+            def compare(_repository, index_path, *, allow_absent, transaction):
                 self.assertTrue(lock_held)
                 self.assertEqual(index_path, repository / orchestrator.INDEX_PATH)
                 self.assertTrue(allow_absent)
+                self.assertIsInstance(
+                    transaction, orchestrator.CampaignIndexTransaction
+                )
                 events.append("remote-compare")
 
             @contextmanager
             def observed_root_lock(_descriptor, name):
-                nonlocal root_lock_held
-                self.assertEqual(name, ".orchestrator.lock")
-                self.assertTrue(lock_held)
-                root_lock_held = True
-                events.append("root-lock-enter")
-                try:
-                    yield 2
-                finally:
-                    events.append("root-lock-exit")
-                    root_lock_held = False
+                nonlocal lock_held, root_lock_held
+                if name == pathlib.Path(orchestrator.INDEX_LOCK_PATH).name:
+                    self.assertFalse(lock_held)
+                    lock_held = True
+                    events.append("index-lock-enter")
+                    try:
+                        yield 1
+                    finally:
+                        self.assertFalse(root_lock_held)
+                        events.append("index-lock-exit")
+                        lock_held = False
+                else:
+                    self.assertEqual(name, ".orchestrator.lock")
+                    self.assertTrue(lock_held)
+                    root_lock_held = True
+                    events.append("root-lock-enter")
+                    try:
+                        yield 2
+                    finally:
+                        events.append("root-lock-exit")
+                        root_lock_held = False
 
             with mock.patch.object(
-                orchestrator, "exclusive_lock", side_effect=observed_lock
-            ), mock.patch.object(
                 orchestrator, "exclusive_lock_at", side_effect=observed_root_lock
             ), mock.patch.object(
                 orchestrator, "require_remote_index", side_effect=compare
@@ -157,6 +169,34 @@ class OuterOrchestratorTests(unittest.TestCase):
             )
             index = orchestrator._read_index(repository / orchestrator.INDEX_PATH)
             self.assertEqual(orchestrator.index_state(index), "ACTIVE")
+
+    def test_index_transaction_rejects_worklog_parent_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            worklogs = repository / "docs" / "worklogs"
+            worklogs.mkdir(parents=True)
+            displaced = repository / "docs" / "displaced-worklogs"
+            replacement = repository / "docs" / "worklogs"
+
+            def replace_parent(*_args, **_kwargs):
+                worklogs.rename(displaced)
+                replacement.mkdir()
+
+            with mock.patch.object(
+                orchestrator, "require_remote_index", side_effect=replace_parent
+            ):
+                with self.assertRaises(protocol.ProtocolError):
+                    orchestrator.initialize_campaign(
+                        repository=repository,
+                        root=worklogs / "root",
+                        reservation_id="r1",
+                        candidate_sha=self.CANDIDATE,
+                        candidate_tree_sha256="c" * 64,
+                        experiment_identity_digest="d" * 64,
+                        campaign_identity_digest="e" * 64,
+                    )
+            self.assertFalse((replacement / "phase2e-index.json").exists())
+            self.assertFalse((replacement / "root").exists())
 
     def test_lock_rejects_symlink_ancestor_leaf_and_special_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -322,7 +362,8 @@ class OuterOrchestratorTests(unittest.TestCase):
     def test_private_stage_worker_dispatches_exact_registered_handler(self):
         self.assertEqual(set(orchestrator.STAGE_HANDLERS), set(orchestrator.STAGE_ORDER))
         with tempfile.TemporaryDirectory() as directory:
-            path, _context = self.make_stage_context(pathlib.Path(directory))
+            path, context = self.make_stage_context(pathlib.Path(directory))
+            pathlib.Path(context["evidence_root"]).mkdir(mode=0o700)
             called = []
             handlers = {
                 stage: (lambda _context, stage=stage: called.append(stage) or 0)
@@ -349,6 +390,7 @@ class OuterOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = pathlib.Path(directory)
             path, context = self.make_stage_context(base)
+            pathlib.Path(context["evidence_root"]).mkdir(mode=0o700)
             with mock.patch(
                 "scripts.run_phase2e_gates.run_dispatch_gate_stage"
             ) as stage, mock.patch.object(orchestrator, "validate_worker_binding"):
@@ -1428,6 +1470,10 @@ class OuterOrchestratorTests(unittest.TestCase):
     def test_subprocess_is_journaled_before_wait(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
 
             class Process:
                 pid = 4242
@@ -1458,9 +1504,220 @@ class OuterOrchestratorTests(unittest.TestCase):
             self.assertEqual(journal["entries"][-1]["state"], "EXITED")
             self.assertTrue(journal["entries"][-1]["reaped"])
 
+    def test_post_popen_identity_failure_terminates_and_reaps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
+            signals = []
+
+            class Process:
+                pid = 4242
+                waits = 0
+
+                def wait(self, timeout=None):
+                    self.waits += 1
+                    return -15
+
+            process = Process()
+            runner = orchestrator._subprocess_stage_runner(
+                pathlib.Path("/context.json"),
+                "e" * 64,
+                self.REPOSITORY,
+                root=root,
+                process_factory=lambda *args, **kwargs: process,
+                process_identity=lambda _pid: (_ for _ in ()).throw(
+                    protocol.ProtocolError("identity failed")
+                ),
+                kill_process_group=lambda pgid, sig: signals.append((pgid, sig)),
+            )
+            with self.assertRaises(protocol.ProtocolError):
+                runner(orchestrator.STAGE_ORDER[0], {"PATH": "/bin"})
+            self.assertEqual(signals, [(4242, orchestrator.signal.SIGTERM)])
+            self.assertEqual(process.waits, 1)
+
+    def test_post_popen_getpgid_failure_terminates_and_reaps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
+            signals = []
+
+            class Process:
+                pid = 4242
+                waits = 0
+
+                def wait(self, timeout=None):
+                    self.waits += 1
+                    return -15
+
+            process = Process()
+            runner = orchestrator._subprocess_stage_runner(
+                pathlib.Path("/context.json"),
+                "e" * 64,
+                self.REPOSITORY,
+                root=root,
+                process_factory=lambda *args, **kwargs: process,
+                process_identity=lambda pid: {"pid": pid, "start_ticks": 99},
+                process_group=lambda _pid: (_ for _ in ()).throw(OSError("getpgid")),
+                kill_process_group=lambda pgid, sig: signals.append((pgid, sig)),
+            )
+            with self.assertRaises(OSError):
+                runner(orchestrator.STAGE_ORDER[0], {"PATH": "/bin"})
+            self.assertEqual(signals, [(4242, orchestrator.signal.SIGTERM)])
+            self.assertEqual(process.waits, 1)
+
+    def test_post_popen_journal_failure_terminates_and_reaps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
+            signals = []
+
+            class Process:
+                pid = 4242
+                waits = 0
+
+                def wait(self, timeout=None):
+                    self.waits += 1
+                    return -15
+
+            process = Process()
+            runner = orchestrator._subprocess_stage_runner(
+                pathlib.Path("/context.json"),
+                "e" * 64,
+                self.REPOSITORY,
+                root=root,
+                process_factory=lambda *args, **kwargs: process,
+                process_identity=lambda pid: {"pid": pid, "start_ticks": 99},
+                process_group=lambda pid: pid,
+                kill_process_group=lambda pgid, sig: signals.append((pgid, sig)),
+            )
+            with mock.patch.object(
+                orchestrator,
+                "_start_process_journal_entry",
+                side_effect=protocol.ProtocolError("journal failed"),
+            ):
+                with self.assertRaises(protocol.ProtocolError):
+                    runner(orchestrator.STAGE_ORDER[0], {"PATH": "/bin"})
+            self.assertEqual(signals, [(4242, orchestrator.signal.SIGTERM)])
+            self.assertEqual(process.waits, 1)
+
+    def test_runner_root_replacement_writes_nothing_to_replacement_and_reaps(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            root = base / "root"
+            root.mkdir(mode=0o700)
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
+            held = protocol.PreparedRootIdentity(root)
+            displaced = base / "displaced"
+            signals = []
+
+            class Process:
+                pid = 4242
+                waits = 0
+
+                def wait(self, timeout=None):
+                    self.waits += 1
+                    return -15
+
+            process = Process()
+
+            def replace(_pid):
+                root.rename(displaced)
+                root.mkdir(mode=0o700)
+                return {"pid": 4242, "start_ticks": 99}
+
+            try:
+                runner = orchestrator._subprocess_stage_runner(
+                    pathlib.Path("/context.json"),
+                    "e" * 64,
+                    self.REPOSITORY,
+                    root=root,
+                    root_identity=held,
+                    process_factory=lambda *args, **kwargs: process,
+                    process_identity=replace,
+                    process_group=lambda pid: pid,
+                    kill_process_group=lambda pgid, sig: signals.append((pgid, sig)),
+                )
+                with self.assertRaises(protocol.ProtocolError):
+                    runner(orchestrator.STAGE_ORDER[0], {"PATH": "/bin"})
+            finally:
+                held.close()
+            self.assertEqual(list(root.iterdir()), [])
+            self.assertEqual(signals, [(4242, orchestrator.signal.SIGTERM)])
+            self.assertEqual(process.waits, 1)
+
+    def test_parent_checkpoint_rejects_root_replacement_without_writing_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            root = base / "root"
+            root.mkdir(mode=0o700)
+            displaced = base / "displaced"
+            held = protocol.PreparedRootIdentity(root)
+
+            def replace(_stage, _environment):
+                root.rename(displaced)
+                root.mkdir(mode=0o700)
+                return 0
+
+            try:
+                with self.assertRaises(protocol.ProtocolError):
+                    orchestrator.run_fixed_stages(
+                        root,
+                        protocol.runtime_environment(path="/bin", home="/tmp"),
+                        replace,
+                        root_identity=held,
+                        _locked=True,
+                    )
+            finally:
+                held.close()
+            self.assertEqual(list(root.iterdir()), [])
+            self.assertFalse((root / orchestrator.PROGRESS_MANIFEST).exists())
+
+    def test_stage_worker_context_rejects_root_replacement_before_write(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            context_path, context = self.make_stage_context(base)
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(mode=0o700)
+            displaced = root.with_name("displaced")
+            stage = orchestrator.STAGE_ORDER[0]
+
+            def replace_then_write(guarded_context):
+                root.rename(displaced)
+                root.mkdir(mode=0o700)
+                destination = pathlib.Path(guarded_context["evidence_root"])
+                destination.joinpath("injected").write_text("bad", encoding="utf-8")
+                return 0
+
+            with mock.patch.object(
+                orchestrator, "validate_worker_binding"
+            ), mock.patch.dict(
+                orchestrator.STAGE_HANDLERS, {stage: replace_then_write}
+            ):
+                with self.assertRaises(protocol.ProtocolError):
+                    orchestrator.execute_stage_worker(
+                        stage, context_path, protocol.sha256_file(context_path)
+                    )
+            self.assertEqual(list(root.iterdir()), [])
+
     def test_subprocess_timeout_terminates_kills_reaps_and_journals(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
             signals = []
 
             class Process:
@@ -1502,6 +1759,10 @@ class OuterOrchestratorTests(unittest.TestCase):
     def test_keyboard_interrupt_terminates_reaps_and_is_re_raised(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
 
             class Process:
                 pid = 4242
@@ -1652,15 +1913,65 @@ class OuterOrchestratorTests(unittest.TestCase):
                 "PENDING_PRESERVATION",
             )
 
+    def test_initialization_durably_creates_empty_process_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            (repository / "docs" / "worklogs").mkdir(parents=True)
+            root = repository / "docs" / "worklogs" / "root"
+            with mock.patch.object(orchestrator, "require_remote_index"):
+                self.assertEqual(
+                    orchestrator.initialize_campaign(
+                        repository=repository,
+                        root=root,
+                        reservation_id="r1",
+                        candidate_sha=self.CANDIDATE,
+                        candidate_tree_sha256="c" * 64,
+                        experiment_identity_digest="d" * 64,
+                        campaign_identity_digest="e" * 64,
+                    ),
+                    0,
+                )
+            self.assertEqual(
+                orchestrator.validate_process_journal(root),
+                {"version": 1, "entries": []},
+            )
+
+    def test_manual_abandonment_accepts_durable_empty_process_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            root = repository / "docs" / "worklogs" / "root"
+            root.mkdir(parents=True, mode=0o700)
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
+            active = orchestrator.record_active(
+                orchestrator.new_campaign_index(),
+                reservation_id="r1",
+                candidate_sha=self.CANDIDATE,
+                candidate_tree_sha256="c" * 64,
+                root=str(root),
+                experiment_identity_digest="d" * 64,
+                campaign_identity_digest="e" * 64,
+            )
+            protocol.atomic_write_json(repository / orchestrator.INDEX_PATH, active)
+            updated = orchestrator.record_index_root(
+                repository=repository,
+                root=root,
+                reservation_id="r1",
+                abandoned=True,
+            )
+            self.assertEqual(orchestrator.index_state(updated), "PENDING_PRESERVATION")
+
     def test_committed_active_write_failure_self_seals_initialization(self):
         with tempfile.TemporaryDirectory() as directory:
             repository = pathlib.Path(directory).resolve()
             (repository / "docs" / "worklogs").mkdir(parents=True)
             root = repository / "docs" / "worklogs" / "root"
-            real_write = orchestrator._atomic_write_path
+            real_write = orchestrator.CampaignIndexTransaction.write
 
-            def fail_after_active(path, payload):
-                real_write(path, payload)
+            def fail_after_active(transaction, payload):
+                real_write(transaction, payload)
                 events = payload.get("events", [])
                 if events and events[-1].get("event") == "ACTIVE":
                     raise protocol.AtomicWriteDurabilityError(
@@ -1668,7 +1979,10 @@ class OuterOrchestratorTests(unittest.TestCase):
                     )
 
             with mock.patch.object(orchestrator, "require_remote_index"), mock.patch.object(
-                orchestrator, "_atomic_write_path", side_effect=fail_after_active
+                orchestrator.CampaignIndexTransaction,
+                "write",
+                autospec=True,
+                side_effect=fail_after_active,
             ):
                 code = orchestrator.initialize_campaign(
                     repository=repository,

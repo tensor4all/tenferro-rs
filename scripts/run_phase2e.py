@@ -395,6 +395,20 @@ STAGE_HANDLERS: dict[str, Callable[[Mapping[str, Any]], int]] = {
 }
 
 
+class GuardedRootPath(os.PathLike[str]):
+    """Revalidate a held root whenever stage code materializes its pathname."""
+
+    def __init__(self, identity: protocol.PreparedRootIdentity) -> None:
+        self.identity = identity
+
+    def __fspath__(self) -> str:
+        self.identity.revalidate()
+        return str(self.identity.path)
+
+    def __str__(self) -> str:
+        return self.__fspath__()
+
+
 def execute_stage_worker(
     stage: str, context_path: pathlib.Path, context_sha256: str
 ) -> int:
@@ -405,10 +419,20 @@ def execute_stage_worker(
         context_path, context_sha256, require_fresh_scratch=False
     )
     validate_worker_binding(context, context_sha256)
-    result = STAGE_HANDLERS[stage](context)
-    if type(result) is not int or result not in {0, 2, 3, 4}:
-        raise protocol.ProtocolError("stage worker returned an invalid status")
-    return result
+    root_identity = protocol.PreparedRootIdentity(
+        pathlib.Path(context["evidence_root"])
+    )
+    try:
+        guarded_context = dict(context)
+        guarded_context["evidence_root"] = GuardedRootPath(root_identity)
+        root_identity.revalidate()
+        result = STAGE_HANDLERS[stage](guarded_context)
+        root_identity.revalidate()
+        if type(result) is not int or result not in {0, 2, 3, 4}:
+            raise protocol.ProtocolError("stage worker returned an invalid status")
+        return result
+    finally:
+        root_identity.close()
 
 
 def validate_worker_binding(
@@ -1006,6 +1030,131 @@ def _read_regular_path(path: pathlib.Path, context: str) -> bytes:
         os.close(parent)
 
 
+def _read_regular_at(directory_descriptor: int, name: str, context: str) -> bytes:
+    """Read one stable regular file without reopening its parent pathname."""
+    descriptor = None
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=directory_descriptor,
+        )
+        before = os.fstat(descriptor)
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        identity = lambda item: (
+            item.st_dev,
+            item.st_ino,
+            item.st_size,
+            item.st_mtime_ns,
+        )
+        if not stat.S_ISREG(before.st_mode) or identity(before) != identity(after):
+            raise protocol.ProtocolError(f"{context} is not a stable regular file")
+        return b"".join(chunks)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot securely read {context}: {error}") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+class CampaignIndexTransaction:
+    """Descriptor-bound I/O for one locked repository campaign index."""
+
+    def __init__(
+        self,
+        repository: pathlib.Path,
+        directory: pathlib.Path,
+        descriptor: int,
+        identity: tuple[int, int],
+    ) -> None:
+        self.repository = repository
+        self.directory = directory
+        self.descriptor = descriptor
+        self.identity = identity
+
+    def revalidate(self) -> None:
+        try:
+            current = os.stat(self.directory, follow_symlinks=False)
+            held = os.fstat(self.descriptor)
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"campaign index directory identity disappeared: {error}"
+            ) from error
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino) != self.identity
+            or (held.st_dev, held.st_ino) != self.identity
+        ):
+            raise protocol.ProtocolError("campaign index directory identity changed")
+
+    def exists(self) -> bool:
+        self.revalidate()
+        try:
+            metadata = os.stat(
+                pathlib.Path(INDEX_PATH).name,
+                dir_fd=self.descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return False
+        if not stat.S_ISREG(metadata.st_mode):
+            raise protocol.ProtocolError("Phase 2E index is not a regular file")
+        return True
+
+    def read_bytes(self) -> bytes:
+        self.revalidate()
+        return _read_regular_at(
+            self.descriptor, pathlib.Path(INDEX_PATH).name, "Phase 2E index"
+        )
+
+    def read(self) -> dict[str, Any]:
+        decoded = protocol.decode_canonical_json_bytes(
+            self.read_bytes(), "Phase 2E index"
+        )
+        _validate_index(decoded)
+        return decoded
+
+    def write(self, payload: Mapping[str, Any]) -> None:
+        self.revalidate()
+        name = pathlib.Path(INDEX_PATH).name
+        try:
+            current = os.stat(name, dir_fd=self.descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            current = None
+        if current is not None and not stat.S_ISREG(current.st_mode):
+            raise protocol.ProtocolError("Phase 2E index write target is not regular")
+        protocol.atomic_write_json_at(self.descriptor, name, payload)
+        self.revalidate()
+
+
+@contextmanager
+def campaign_index_transaction(repository: pathlib.Path):
+    """Retain the exact worklog directory for lock and all index I/O."""
+    index_path, lock_path = campaign_index_paths(repository)
+    directory = index_path.parent
+    descriptor = _open_directory_descriptor(directory)
+    metadata = os.fstat(descriptor)
+    transaction = CampaignIndexTransaction(
+        pathlib.Path(repository),
+        directory,
+        descriptor,
+        (metadata.st_dev, metadata.st_ino),
+    )
+    try:
+        with exclusive_lock_at(descriptor, lock_path.name):
+            transaction.revalidate()
+            yield transaction
+            transaction.revalidate()
+    finally:
+        os.close(descriptor)
+
+
 def _regular_path_exists(path: pathlib.Path, context: str) -> bool:
     path = pathlib.Path(path)
     parent = _open_directory_descriptor(path.parent)
@@ -1048,13 +1197,12 @@ def mutate_index(
     mutation: Callable[[dict[str, Any]], dict[str, Any]],
 ) -> dict[str, Any]:
     """Serialize one atomic read-modify-write operation on the campaign index."""
-    index_path, lock_path = campaign_index_paths(repository)
-    with exclusive_lock(lock_path):
-        current = _read_index(index_path)
+    with campaign_index_transaction(repository) as transaction:
+        current = transaction.read()
         updated = mutation(copy.deepcopy(current))
         if type(updated) is not dict:
             raise protocol.ProtocolError("index mutation returned a non-object")
-        _atomic_write_path(index_path, updated)
+        transaction.write(updated)
         return updated
 
 
@@ -1065,6 +1213,7 @@ def run_fixed_stages(
     *,
     completed: Sequence[str] = (),
     identity: Mapping[str, str] | None = None,
+    root_identity: protocol.PreparedRootIdentity | None = None,
     _locked: bool = False,
 ) -> int:
     """Run remaining children in fixed order and durably hash every checkpoint."""
@@ -1077,6 +1226,7 @@ def run_fixed_stages(
                 runner,
                 completed=completed,
                 identity=identity,
+                root_identity=root_identity,
                 _locked=True,
             )
     expected_environment = protocol.runtime_environment(
@@ -1090,16 +1240,30 @@ def run_fixed_stages(
             raise protocol.ProtocolError("completed child order is not a prefix")
         children.append({"stage": stage, "exit_code": 0})
     for stage in STAGE_ORDER[len(children):]:
-        before = protocol.regular_file_inventory(root)
+        if root_identity is not None:
+            root_identity.revalidate()
+        inventory_root = _root_io_path(root, root_identity)
+        before = protocol.regular_file_inventory(inventory_root)
         code = runner(stage, dict(environment))
+        if root_identity is not None:
+            root_identity.revalidate()
         if type(code) is not int or code not in {0, 2, 3, 4}:
             raise protocol.ProtocolError("child returned an unsupported exit code")
         children.append({"stage": stage, "exit_code": code})
         _write_child_record(
-            root, children, before, environment=environment, identity=identity
+            root,
+            children,
+            before,
+            environment=environment,
+            identity=identity,
+            root_identity=root_identity,
         )
-        _write_progress(root, children, identity=identity)
+        _write_progress(
+            root, children, identity=identity, root_identity=root_identity
+        )
         if stage == "aggregate-validation" and identity is not None:
+            if root_identity is not None:
+                root_identity.revalidate()
             seal_root(
                 root,
                 candidate_sha=identity["candidate_sha"],
@@ -1110,6 +1274,8 @@ def run_fixed_stages(
         if code:
             return code
     if identity is not None:
+        if root_identity is not None:
+            root_identity.revalidate()
         seal_root(
             root,
             candidate_sha=identity["candidate_sha"],
@@ -1123,6 +1289,48 @@ def _child_record_path(root: pathlib.Path, ordinal: int, stage: str) -> pathlib.
     return root / "children" / f"{ordinal:02d}-{stage.replace('/', '__')}.json"
 
 
+def _root_io_path(
+    root: pathlib.Path, identity: protocol.PreparedRootIdentity | None
+) -> pathlib.Path:
+    if identity is None:
+        return pathlib.Path(root)
+    identity.revalidate()
+    return pathlib.Path(f"/proc/self/fd/{identity.descriptor}")
+
+
+def _atomic_write_root_json(
+    root: pathlib.Path,
+    relative: pathlib.PurePosixPath,
+    payload: Mapping[str, Any],
+    identity: protocol.PreparedRootIdentity | None,
+) -> None:
+    if identity is None:
+        path = pathlib.Path(root) / pathlib.Path(relative)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        protocol.atomic_write_json(path, payload)
+        return
+    identity.revalidate()
+    descriptor = os.dup(identity.descriptor)
+    try:
+        for component in relative.parts[:-1]:
+            try:
+                os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                os.fsync(descriptor)
+            except FileExistsError:
+                pass
+            child = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=descriptor,
+            )
+            os.close(descriptor)
+            descriptor = child
+        protocol.atomic_write_json_at(descriptor, relative.name, payload)
+        identity.revalidate()
+    finally:
+        os.close(descriptor)
+
+
 def _write_child_record(
     root: pathlib.Path,
     children: Sequence[Mapping[str, Any]],
@@ -1130,12 +1338,14 @@ def _write_child_record(
     *,
     environment: Mapping[str, str],
     identity: Mapping[str, str] | None = None,
+    root_identity: protocol.PreparedRootIdentity | None = None,
 ) -> None:
     child = children[-1]
     ordinal = len(children)
-    path = _child_record_path(root, ordinal, child["stage"])
-    path.parent.mkdir(mode=0o700, exist_ok=True)
-    after = protocol.regular_file_inventory(root)
+    relative = pathlib.PurePosixPath(
+        "children", f"{ordinal:02d}-{child['stage'].replace('/', '__')}.json"
+    )
+    after = protocol.regular_file_inventory(_root_io_path(root, root_identity))
     changed = {
         relative: digest
         for relative, digest in after.items()
@@ -1145,8 +1355,9 @@ def _write_child_record(
     bound = dict(identity or {})
     context_path = pathlib.Path(bound.get("context_path", "/context.json"))
     context_sha256 = bound.get("context_sha256", "0" * 64)
-    protocol.atomic_write_json(
-        path,
+    _atomic_write_root_json(
+        root,
+        relative,
         {
             "version": 1,
             "ordinal": ordinal,
@@ -1171,6 +1382,7 @@ def _write_child_record(
             "changed": changed,
             "removed": removed,
         },
+        root_identity,
     )
 
 
@@ -1179,9 +1391,11 @@ def _write_progress(
     children: Sequence[Mapping[str, Any]],
     *,
     identity: Mapping[str, str] | None = None,
+    root_identity: protocol.PreparedRootIdentity | None = None,
 ) -> None:
     bound = dict(identity or {})
-    ledger_path = root / "evidence-ledger.json"
+    io_root = _root_io_path(root, root_identity)
+    ledger_path = io_root / "evidence-ledger.json"
     if ledger_path.exists():
         ledger = _read_json(ledger_path, "progress ledger")
         candidate_sha = ledger["candidate_sha"]
@@ -1191,8 +1405,9 @@ def _write_progress(
         # without constructing the campaign protocol fixture.
         candidate_sha = bound.get("candidate_sha", "a" * 40)
         ledger_sha256 = "0" * 64
-    protocol.atomic_write_json(
-        root / PROGRESS_MANIFEST,
+    _atomic_write_root_json(
+        root,
+        pathlib.PurePosixPath(PROGRESS_MANIFEST),
         {
             "version": 1,
             "stage_order": list(STAGE_ORDER),
@@ -1219,9 +1434,10 @@ def _write_progress(
             "context_path": bound.get("context_path", "/context.json"),
             "ledger_sha256": ledger_sha256,
             "inventory": protocol.regular_file_inventory(
-                root, excluded=frozenset({PROGRESS_MANIFEST, AGGREGATE_MANIFEST})
+                io_root, excluded=frozenset({PROGRESS_MANIFEST, AGGREGATE_MANIFEST})
             ),
         },
+        root_identity,
     )
 
 
@@ -1231,6 +1447,7 @@ def rerun_invalid_stage(
     runner: Callable[[str, Mapping[str, str]], int],
     *,
     identity: Mapping[str, str] | None = None,
+    root_identity: protocol.PreparedRootIdentity | None = None,
     _locked: bool = False,
 ) -> int:
     """Append one fresh whole-stage attempt after retryable validity failure."""
@@ -1238,7 +1455,12 @@ def rerun_invalid_stage(
     if not _locked:
         with exclusive_lock(root / ".orchestrator.lock"):
             return rerun_invalid_stage(
-                root, environment, runner, identity=identity, _locked=True
+                root,
+                environment,
+                runner,
+                identity=identity,
+                root_identity=root_identity,
+                _locked=True,
             )
     expected = protocol.runtime_environment(
         path=environment.get("PATH", ""), home=environment.get("HOME", "")
@@ -1252,15 +1474,24 @@ def rerun_invalid_stage(
             "latest stage is not retryable validity INCONCLUSIVE"
         )
     stage = children[-1].get("stage")
-    before = protocol.regular_file_inventory(root)
+    if root_identity is not None:
+        root_identity.revalidate()
+    before = protocol.regular_file_inventory(_root_io_path(root, root_identity))
     code = runner(stage, dict(environment))
+    if root_identity is not None:
+        root_identity.revalidate()
     if type(code) is not int or code not in {0, 2, 3, 4}:
         raise protocol.ProtocolError("child returned an unsupported exit code")
     children.append({"stage": stage, "exit_code": code})
     _write_child_record(
-        root, children, before, environment=environment, identity=identity
+        root,
+        children,
+        before,
+        environment=environment,
+        identity=identity,
+        root_identity=root_identity,
     )
-    _write_progress(root, children, identity=identity)
+    _write_progress(root, children, identity=identity, root_identity=root_identity)
     return code
 
 
@@ -1270,6 +1501,7 @@ def continue_after_retry(
     runner: Callable[[str, Mapping[str, str]], int],
     *,
     identity: Mapping[str, str] | None = None,
+    root_identity: protocol.PreparedRootIdentity | None = None,
     _locked: bool = False,
 ) -> int:
     """Continue only after a retained replacement attempt passed."""
@@ -1277,7 +1509,12 @@ def continue_after_retry(
     if not _locked:
         with exclusive_lock(root / ".orchestrator.lock"):
             return continue_after_retry(
-                root, environment, runner, identity=identity, _locked=True
+                root,
+                environment,
+                runner,
+                identity=identity,
+                root_identity=root_identity,
+                _locked=True,
             )
     expected = protocol.runtime_environment(
         path=environment.get("PATH", ""), home=environment.get("HOME", "")
@@ -1295,16 +1532,27 @@ def continue_after_retry(
         raise protocol.ProtocolError("replacement attempt has not passed")
     start = STAGE_ORDER.index(children[-1]["stage"]) + 1
     for stage in STAGE_ORDER[start:]:
-        before = protocol.regular_file_inventory(root)
+        if root_identity is not None:
+            root_identity.revalidate()
+        before = protocol.regular_file_inventory(_root_io_path(root, root_identity))
         code = runner(stage, dict(environment))
+        if root_identity is not None:
+            root_identity.revalidate()
         if type(code) is not int or code not in {0, 2, 3, 4}:
             raise protocol.ProtocolError("child returned an unsupported exit code")
         children.append({"stage": stage, "exit_code": code})
         _write_child_record(
-            root, children, before, environment=environment, identity=identity
+            root,
+            children,
+            before,
+            environment=environment,
+            identity=identity,
+            root_identity=root_identity,
         )
-        _write_progress(root, children, identity=identity)
+        _write_progress(root, children, identity=identity, root_identity=root_identity)
         if stage == "aggregate-validation" and identity is not None:
+            if root_identity is not None:
+                root_identity.revalidate()
             seal_root(
                 root,
                 candidate_sha=identity["candidate_sha"],
@@ -1315,6 +1563,8 @@ def continue_after_retry(
         if code:
             return code
     if identity is not None:
+        if root_identity is not None:
+            root_identity.revalidate()
         seal_root(
             root,
             candidate_sha=identity["candidate_sha"],
@@ -1339,14 +1589,19 @@ def initialize_campaign(
 ) -> int:
     """Reserve globally, initialize locally, or self-seal atomically on failure."""
     root = pathlib.Path(root)
-    index_path, index_lock = campaign_index_paths(repository)
-    with exclusive_lock(index_lock):
-        require_remote_index(repository, index_path, allow_absent=True)
-        if _regular_path_exists(index_path, "Phase 2E index"):
-            current = _read_index(index_path)
+    index_path, _index_lock = campaign_index_paths(repository)
+    with campaign_index_transaction(repository) as index_transaction:
+        require_remote_index(
+            repository,
+            index_path,
+            allow_absent=True,
+            transaction=index_transaction,
+        )
+        if index_transaction.exists():
+            current = index_transaction.read()
         else:
             current = new_campaign_index()
-            _atomic_write_path(index_path, current)
+            index_transaction.write(current)
         updated = record_active(
             current,
             reservation_id=reservation_id,
@@ -1365,7 +1620,7 @@ def initialize_campaign(
                 active_committed = False
                 try:
                     try:
-                        _atomic_write_path(index_path, updated)
+                        index_transaction.write(updated)
                     except protocol.AtomicWriteError as error:
                         active_committed = error.committed
                         if not active_committed:
@@ -1373,6 +1628,12 @@ def initialize_campaign(
                         raise
                     else:
                         active_committed = True
+                    protocol.atomic_write_json_at(
+                        root_identity.descriptor,
+                        PROCESS_JOURNAL,
+                        {"version": 1, "entries": []},
+                    )
+                    root_identity.revalidate()
                     if initializer is None:
                         protocol.atomic_write_json_at(
                             root_identity.descriptor,
@@ -1381,10 +1642,11 @@ def initialize_campaign(
                         )
                     else:
                         initializer(root)
+                    root_identity.revalidate()
                 except BaseException:
                     if not active_committed:
                         try:
-                            active_committed = _read_index(index_path) == updated
+                            active_committed = index_transaction.read() == updated
                         except BaseException:
                             active_committed = False
                     if not active_committed:
@@ -1403,7 +1665,7 @@ def initialize_campaign(
                             "evidence-ledger.json", "0" * 64
                         ),
                     )
-                    _atomic_write_path(index_path, terminal)
+                    index_transaction.write(terminal)
                     return 5
         finally:
             root_identity.close()
@@ -2062,6 +2324,23 @@ def validate_process_journal(
         _read_regular_path(pathlib.Path(root) / PROCESS_JOURNAL, "process journal"),
         "process journal",
     )
+    return _validate_process_journal_payload(payload, require_entries=require_entries)
+
+
+def _read_process_journal_at(
+    identity: protocol.PreparedRootIdentity, *, require_entries: bool = False
+) -> dict[str, Any]:
+    identity.revalidate()
+    payload = protocol.decode_canonical_json_bytes(
+        _read_regular_at(identity.descriptor, PROCESS_JOURNAL, "process journal"),
+        "process journal",
+    )
+    return _validate_process_journal_payload(payload, require_entries=require_entries)
+
+
+def _validate_process_journal_payload(
+    payload: Any, *, require_entries: bool = False
+) -> dict[str, Any]:
     if (
         type(payload) is not dict
         or set(payload) != {"version", "entries"}
@@ -2088,7 +2367,7 @@ def validate_process_journal(
             },
             context="process journal entry",
         )
-        identity = (entry["pid"], entry["start_ticks"])
+        process_identity = (entry["pid"], entry["start_ticks"])
         if (
             entry["ordinal"] != ordinal
             or entry["stage"] not in STAGE_ORDER
@@ -2097,24 +2376,32 @@ def validate_process_journal(
             or entry["pid"] <= 0
             or entry["pgid"] <= 0
             or entry["start_ticks"] < 0
-            or identity in identities
+            or process_identity in identities
             or entry["state"] not in {"RUNNING", "EXITED", "TERMINATED"}
             or any(value not in {"TERM", "KILL"} for value in entry["signals"])
             or (entry["state"] == "RUNNING" and (entry["reaped"] or entry["exit_code"] is not None))
             or (entry["state"] != "RUNNING" and not entry["reaped"])
         ):
             raise protocol.ProtocolError("process journal entry differs")
-        identities.add(identity)
+        identities.add(process_identity)
     return payload
 
 
-def _write_process_journal(root: pathlib.Path, journal: Mapping[str, Any]) -> None:
-    identity = protocol.PreparedRootIdentity(pathlib.Path(root))
+def _write_process_journal(
+    root: pathlib.Path,
+    journal: Mapping[str, Any],
+    *,
+    identity: protocol.PreparedRootIdentity | None = None,
+) -> None:
+    owned = identity is None
+    identity = identity or protocol.PreparedRootIdentity(pathlib.Path(root))
     try:
+        identity.revalidate()
         protocol.atomic_write_json_at(identity.descriptor, PROCESS_JOURNAL, journal)
         identity.revalidate()
     finally:
-        identity.close()
+        if owned:
+            identity.close()
 
 
 def _start_process_journal_entry(
@@ -2125,12 +2412,13 @@ def _start_process_journal_entry(
     pid: int,
     pgid: int,
     identity: Mapping[str, int],
+    root_identity: protocol.PreparedRootIdentity | None = None,
 ) -> int:
-    journal_path = pathlib.Path(root) / PROCESS_JOURNAL
-    if _regular_path_exists(journal_path, "process journal"):
-        journal = validate_process_journal(root)
-    else:
-        journal = {"version": 1, "entries": []}
+    journal = (
+        _read_process_journal_at(root_identity)
+        if root_identity is not None
+        else validate_process_journal(root)
+    )
     entry = {
         "ordinal": len(journal["entries"]) + 1,
         "stage": stage,
@@ -2144,7 +2432,7 @@ def _start_process_journal_entry(
         "reaped": False,
     }
     journal["entries"].append(entry)
-    _write_process_journal(root, journal)
+    _write_process_journal(root, journal, identity=root_identity)
     return entry["ordinal"]
 
 
@@ -2155,8 +2443,13 @@ def _finish_process_journal_entry(
     state: str,
     exit_code: int,
     signals: Sequence[str],
+    root_identity: protocol.PreparedRootIdentity | None = None,
 ) -> None:
-    journal = validate_process_journal(root, require_entries=True)
+    journal = (
+        _read_process_journal_at(root_identity, require_entries=True)
+        if root_identity is not None
+        else validate_process_journal(root, require_entries=True)
+    )
     entry = journal["entries"][ordinal - 1]
     if entry["ordinal"] != ordinal or entry["state"] != "RUNNING":
         raise protocol.ProtocolError("process journal completion differs")
@@ -2166,7 +2459,7 @@ def _finish_process_journal_entry(
         signals=list(signals),
         reaped=True,
     )
-    _write_process_journal(root, journal)
+    _write_process_journal(root, journal, identity=root_identity)
 
 
 def _subprocess_stage_runner(
@@ -2175,6 +2468,7 @@ def _subprocess_stage_runner(
     repository: pathlib.Path,
     *,
     root: pathlib.Path | None = None,
+    root_identity: protocol.PreparedRootIdentity | None = None,
     process_factory=subprocess.Popen,
     process_identity: Callable[[int], Mapping[str, int]] = _linux_process_identity,
     process_group: Callable[[int], int] = os.getpgid,
@@ -2193,40 +2487,53 @@ def _subprocess_stage_runner(
             env=dict(environment),
             start_new_session=True,
         )
-        if root is None:
-            raise protocol.ProtocolError("stage subprocess runner lacks evidence root")
-        identity = process_identity(process.pid)
-        if identity.get("pid") != process.pid:
-            raise protocol.ProtocolError("spawned process identity differs")
-        pgid = process_group(process.pid)
-        ordinal = _start_process_journal_entry(
-            root,
-            stage=stage,
-            argv=argv,
-            pid=process.pid,
-            pgid=pgid,
-            identity=identity,
-        )
+        pgid = process.pid
+        ordinal = None
+        reaped = False
         try:
+            if root is None:
+                raise protocol.ProtocolError("stage subprocess runner lacks evidence root")
+            if root_identity is not None:
+                root_identity.revalidate()
+            identity = process_identity(process.pid)
+            if identity.get("pid") != process.pid:
+                raise protocol.ProtocolError("spawned process identity differs")
+            pgid = process_group(process.pid)
+            if root_identity is not None:
+                root_identity.revalidate()
+            ordinal = _start_process_journal_entry(
+                root,
+                stage=stage,
+                argv=argv,
+                pid=process.pid,
+                pgid=pgid,
+                identity=identity,
+                root_identity=root_identity,
+            )
             code = process.wait(timeout=deadline_seconds)
+            reaped = True
         except BaseException as primary:
             signals = []
             try:
-                kill_process_group(pgid, signal.SIGTERM)
-                signals.append("TERM")
-                try:
-                    code = process.wait(timeout=termination_grace_seconds)
-                except subprocess.TimeoutExpired:
-                    kill_process_group(pgid, signal.SIGKILL)
-                    signals.append("KILL")
-                    code = process.wait()
-                _finish_process_journal_entry(
-                    root,
-                    ordinal,
-                    state="TERMINATED",
-                    exit_code=code,
-                    signals=signals,
-                )
+                if not reaped:
+                    kill_process_group(pgid, signal.SIGTERM)
+                    signals.append("TERM")
+                    try:
+                        code = process.wait(timeout=termination_grace_seconds)
+                    except subprocess.TimeoutExpired:
+                        kill_process_group(pgid, signal.SIGKILL)
+                        signals.append("KILL")
+                        code = process.wait()
+                    reaped = True
+                if ordinal is not None:
+                    _finish_process_journal_entry(
+                        root,
+                        ordinal,
+                        state="TERMINATED",
+                        exit_code=code,
+                        signals=signals,
+                        root_identity=root_identity,
+                    )
             except BaseException as cleanup_error:
                 raise protocol.ProtocolError(
                     f"cannot terminate and reap stage process: {cleanup_error}"
@@ -2235,7 +2542,12 @@ def _subprocess_stage_runner(
                 raise protocol.ProtocolError("stage process deadline exceeded") from primary
             raise
         _finish_process_journal_entry(
-            root, ordinal, state="EXITED", exit_code=code, signals=[]
+            root,
+            ordinal,
+            state="EXITED",
+            exit_code=code,
+            signals=[],
+            root_identity=root_identity,
         )
         return code
 
@@ -2309,9 +2621,8 @@ def active_campaign_lock(
     reservation_id: str,
 ):
     """Hold the fixed index then the ACTIVE root lock for one operation."""
-    index_path, index_lock = campaign_index_paths(repository)
-    with exclusive_lock(index_lock):
-        index = _read_index(index_path)
+    with campaign_index_transaction(repository) as index_transaction:
+        index = index_transaction.read()
         if index_state(index) != "ACTIVE":
             raise protocol.ProtocolError("campaign reservation is finalized")
         active = index["events"][-1]
@@ -2325,7 +2636,7 @@ def active_campaign_lock(
         try:
             with exclusive_lock_at(identity.descriptor, ".orchestrator.lock"):
                 identity.revalidate()
-                yield active
+                yield active, identity
                 identity.revalidate()
         finally:
             identity.close()
@@ -2339,9 +2650,8 @@ def record_index_root(
     abandoned: bool = False,
 ) -> dict[str, Any]:
     """Validate and transition one ACTIVE reservation to pending preservation."""
-    index_path, index_lock = campaign_index_paths(repository)
-    with exclusive_lock(index_lock):
-        index = _read_index(index_path)
+    with campaign_index_transaction(repository) as index_transaction:
+        index = index_transaction.read()
         root = _canonical_existing_root(root)
         state = index_state(index)
         if state == "ACTIVE":
@@ -2394,7 +2704,7 @@ def record_index_root(
                     identity.revalidate()
                     return index
                 if abandoned:
-                    journal = validate_process_journal(root, require_entries=True)
+                    journal = _read_process_journal_at(identity)
                     for process_group in sorted(
                         {entry["pgid"] for entry in journal["entries"]}
                     ):
@@ -2438,7 +2748,7 @@ def record_index_root(
                     root_digest=digest,
                     ledger_sha256=ledger_digest,
                 )
-                _atomic_write_path(index_path, updated)
+                index_transaction.write(updated)
                 return updated
         finally:
             identity.close()
@@ -2489,24 +2799,48 @@ def _git(repository: pathlib.Path, *argv: str, text: bool = False):
 
 
 def require_remote_index(
-    repository: pathlib.Path, index_path: pathlib.Path, *, allow_absent: bool
+    repository: pathlib.Path,
+    index_path: pathlib.Path,
+    *,
+    allow_absent: bool,
+    transaction: CampaignIndexTransaction | None = None,
 ) -> None:
     """Require the local durable index to equal the fetched branch blob."""
+    if transaction is not None:
+        transaction.revalidate()
     _git(repository, "fetch", "origin", "codex/execution-engine-through-phase9")
-    relative = index_path.resolve().relative_to(repository.resolve()).as_posix()
+    if transaction is not None:
+        transaction.revalidate()
+    relative = pathlib.Path(INDEX_PATH).as_posix()
     result = subprocess.run(
         ("git", "show", f"{PRESERVATION_BRANCH}:{relative}"),
         cwd=repository,
         capture_output=True,
         check=False,
     )
+    if transaction is not None:
+        transaction.revalidate()
     if result.returncode:
-        if allow_absent and not _regular_path_exists(index_path, "Phase 2E index"):
+        exists = (
+            transaction.exists()
+            if transaction is not None
+            else _regular_path_exists(index_path, "Phase 2E index")
+        )
+        if allow_absent and not exists:
             return
         raise protocol.ProtocolError("remote branch lacks the durable Phase 2E index")
     if (
-        not _regular_path_exists(index_path, "Phase 2E index")
-        or result.stdout != _read_regular_path(index_path, "Phase 2E index")
+        not (
+            transaction.exists()
+            if transaction is not None
+            else _regular_path_exists(index_path, "Phase 2E index")
+        )
+        or result.stdout
+        != (
+            transaction.read_bytes()
+            if transaction is not None
+            else _read_regular_path(index_path, "Phase 2E index")
+        )
     ):
         raise protocol.ProtocolError("local Phase 2E index is not pushed byte-for-byte")
 
@@ -2521,12 +2855,13 @@ def record_preserved(
     comment_fetcher: Callable[[str], str] = fetch_comment,
 ) -> dict[str, Any]:
     """Verify remote Git/root/index/comment preservation, then append PRESERVED."""
-    index_path, index_lock = campaign_index_paths(repository)
-    with exclusive_lock(index_lock):
-        index = _read_index(index_path)
+    _index_path, _index_lock = campaign_index_paths(repository)
+    with campaign_index_transaction(repository) as index_transaction:
+        index = index_transaction.read()
         if index_state(index) != "PENDING_PRESERVATION":
             raise protocol.ProtocolError("no campaign is pending preservation")
         _git(repository, "fetch", "origin", "codex/execution-engine-through-phase9")
+        index_transaction.revalidate()
         _git(
             repository,
             "merge-base",
@@ -2534,13 +2869,12 @@ def record_preserved(
             preservation_commit,
             PRESERVATION_BRANCH,
         )
-        relative_index = (
-            index_path.resolve().relative_to(repository.resolve()).as_posix()
-        )
+        index_transaction.revalidate()
+        relative_index = pathlib.Path(INDEX_PATH).as_posix()
         committed_index = _git(
             repository, "show", f"{preservation_commit}:{relative_index}"
         )
-        if committed_index != _read_regular_path(index_path, "Phase 2E index"):
+        if committed_index != index_transaction.read_bytes():
             raise protocol.ProtocolError(
                 "preservation commit has the wrong pending index"
             )
@@ -2565,7 +2899,7 @@ def record_preserved(
             preservation_commit=preservation_commit,
             issue_url=issue_url,
         )
-        _atomic_write_path(index_path, updated)
+        index_transaction.write(updated)
         return updated
 
 
@@ -2695,7 +3029,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             environment = protocol.runtime_environment(path=args.path, home=args.home)
             with active_campaign_lock(
                 args.repository, args.root, reservation_id=args.reservation_id
-            ):
+            ) as (_active, root_identity):
                 return run_fixed_stages(
                     args.root,
                     environment,
@@ -2704,12 +3038,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         args.context_sha256,
                         args.repository,
                         root=args.root,
+                        root_identity=root_identity,
                     ),
                     identity={
                         **stage_context,
                         "context_sha256": args.context_sha256,
                         "context_path": str(args.context.resolve(strict=True)),
                     },
+                    root_identity=root_identity,
                     _locked=True,
                 )
         if args.command in {"rerun-invalid-lane", "continue"}:
@@ -2720,17 +3056,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             stage_context["context_path"] = str(args.context.resolve(strict=True))
             environment = protocol.runtime_environment(path=args.path, home=args.home)
-            runner = _subprocess_stage_runner(
-                args.context,
-                args.context_sha256,
-                args.repository,
-                root=args.root,
-            )
             with active_campaign_lock(
                 args.repository,
                 args.root,
                 reservation_id=stage_context["reservation_id"],
-            ) as active:
+            ) as (active, root_identity):
+                runner = _subprocess_stage_runner(
+                    args.context,
+                    args.context_sha256,
+                    args.repository,
+                    root=args.root,
+                    root_identity=root_identity,
+                )
+                root_identity.revalidate()
                 progress = validate_progress(args.root)
                 validate_resume_identity(
                     active, stage_context, args.context_sha256, progress
@@ -2745,6 +3083,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "context_sha256": args.context_sha256,
                             "context_path": str(args.context.resolve(strict=True)),
                         },
+                        root_identity=root_identity,
                         _locked=True,
                     )
                 return continue_after_retry(
@@ -2756,6 +3095,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "context_sha256": args.context_sha256,
                         "context_path": str(args.context.resolve(strict=True)),
                     },
+                    root_identity=root_identity,
                     _locked=True,
                 )
         if args.command == "record-index":

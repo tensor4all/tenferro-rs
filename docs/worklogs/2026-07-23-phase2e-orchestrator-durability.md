@@ -74,6 +74,23 @@ reuse, and identical results for exact concurrent replay.
   test module.
 - `git diff --check` passed.
 
+## Task 8B re-review hardening
+
+The follow-up review identified four remaining pathname and lifecycle gaps. The
+index transaction now retains the exact `docs/worklogs` descriptor for its lock,
+remote comparison, reads, atomic replacement, rename, and directory fsync, and
+rejects a renamed/replaced parent before touching the replacement. ACTIVE work
+now carries the held root identity into the parent runner and subprocess journal;
+parent checkpoints are descriptor-relative, and stage-worker root path use is
+guarded by the retained identity. The subprocess cleanup guard begins
+immediately after `Popen`, so identity, `getpgid`, and journal failures terminate
+and reap the new process. Initialization creates a durable empty process journal
+before any initializer can launch a child, allowing manual abandonment to
+distinguish “no child launched” from missing or tampered evidence.
+
+The focused replacement/cleanup tests and the complete affected matrix pass:
+228 tests across the outer orchestrator, protocol, build, and gate suites.
+
 ## Remaining work
 
 Only Task C remains: remote branch preservation and GitHub preservation/report
