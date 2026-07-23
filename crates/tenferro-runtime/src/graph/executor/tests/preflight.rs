@@ -25,6 +25,17 @@ struct GraphGeneralProviderSpy {
 }
 
 impl tenferro_cpu::provider::CpuGeneralContractionProvider for GraphGeneralProviderSpy {
+    fn execution_capabilities(&self) -> tenferro_cpu::CpuProviderExecutionCapabilities {
+        tenferro_cpu::CpuProviderExecutionCapabilities {
+            thread_count: tenferro_cpu::CpuThreadCountControl::PerCallUpperBound,
+            placement: tenferro_cpu::CpuPlacementControl::EngineWorkers,
+            worker_local_sequential: true,
+            accepts_sequential: true,
+            accepts_outer: true,
+            accepts_inner: true,
+        }
+    }
+
     fn dot_general(
         &self,
         _context: &tenferro_cpu::provider::CpuExecutionContext<'_>,
