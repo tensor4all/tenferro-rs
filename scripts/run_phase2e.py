@@ -21,11 +21,12 @@ from typing import Any
 if __package__ in (None, ""):
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+from scripts import phase2e_build as build
 from scripts import phase2e_protocol as protocol
 
 
 AGGREGATE_MANIFEST = "phase2e-evidence.json"
-PROGRESS_MANIFEST = AGGREGATE_MANIFEST
+PROGRESS_MANIFEST = ".phase2e-progress.json"
 ABANDONMENT_SEAL = "abandoned-inventory.json"
 INDEX_PATH = pathlib.Path("docs/worklogs/phase2e-index.json")
 INDEX_LOCK_PATH = pathlib.Path("docs/worklogs/.phase2e-index.lock")
@@ -45,6 +46,41 @@ STAGE_ORDER = (
     "timing/common-lock-normalized",
     "aggregate-validation",
 )
+
+STAGE_WORKER_PREFIX = (
+    str(pathlib.Path(sys.executable).resolve(strict=True)),
+    "-m",
+    "scripts.run_phase2e",
+    "_stage-worker",
+)
+
+
+def stage_argv(stage: str, context: pathlib.Path) -> tuple[str, ...]:
+    """Construct the only executable shape accepted for a fixed child stage."""
+    context = pathlib.Path(context)
+    if stage not in STAGE_ORDER or not context.is_absolute():
+        raise protocol.ProtocolError("stage worker identity is invalid")
+    return (*STAGE_WORKER_PREFIX, "--stage", stage, "--context", str(context))
+
+
+def validate_stage_argv(
+    stage: str, argv: Sequence[str], context: pathlib.Path
+) -> None:
+    """Reject every caller-selected executable, shell, and argument surface."""
+    if tuple(argv) != stage_argv(stage, context):
+        raise protocol.ProtocolError("stage argv differs from the internal contract")
+
+
+def command_contract_digest() -> str:
+    """Digest stage order and argv templates without run-local context paths."""
+    return protocol.sha256_json(
+        {
+            "version": 1,
+            "stages": list(STAGE_ORDER),
+            "worker_prefix": list(STAGE_WORKER_PREFIX),
+            "protocol_version": protocol.PROTOCOL_VERSION,
+        }
+    )
 
 TERMINAL_STATUSES = frozenset(
     {"PASS", "FAIL", "STATISTICAL_INCONCLUSIVE", "VALIDITY_INCONCLUSIVE", "ABANDONED"}
@@ -680,6 +716,35 @@ def _read_json(path: pathlib.Path, context: str) -> dict[str, Any]:
     return decoded
 
 
+def required_root_paths(ledger: Mapping[str, Any]) -> frozenset[str]:
+    """Derive the closed canonical Task 8A inventory from contracts and attempts."""
+    required = {
+        "evidence-ledger.json",
+        PROGRESS_MANIFEST,
+        ".orchestrator.lock",
+        "dispatch-gates/manifest.json",
+        "characterization/manifest.json",
+        *(path.as_posix() for path in build.LOCK_PATHS.values()),
+        *(path.as_posix() for path in build.BUILD_MANIFEST_PATHS.values()),
+        *(path.as_posix() for path in build.PROBE_BUILD_MANIFEST_PATHS.values()),
+        *(path.as_posix() for path in build.DISPATCH_BUILD_MANIFEST_PATHS.values()),
+        *(
+            path.as_posix()
+            for path in build.CHARACTERIZATION_BUILD_MANIFEST_PATHS.values()
+        ),
+        *(
+            f"attempts/{attempt['stage']}/{attempt['lane']}/"
+            f"{attempt['attempt_id']}/manifest.json"
+            for attempt in ledger["attempts"]
+        ),
+        *(
+            f"children/{index:02d}-{stage.replace('/', '__')}.json"
+            for index, stage in enumerate(STAGE_ORDER, start=1)
+        ),
+    }
+    return frozenset(required)
+
+
 def seal_root(
     root: pathlib.Path,
     *,
@@ -692,6 +757,10 @@ def seal_root(
     _require_sha(experiment_identity_digest, sha256=True, context="experiment identity")
     root = pathlib.Path(root)
     ledger = _read_json(root / "evidence-ledger.json", "evidence ledger")
+    if ledger.get("candidate_sha") != candidate_sha:
+        raise protocol.ProtocolError(
+            "ledger candidate differs from aggregate candidate"
+        )
     status = _terminal_ledger_status(ledger)
     for relative in ("dispatch-gates/manifest.json", "characterization/manifest.json"):
         child = _read_json(root / relative, relative)
@@ -703,12 +772,16 @@ def seal_root(
     inventory = protocol.regular_file_inventory(
         root, excluded=frozenset({AGGREGATE_MANIFEST})
     )
+    required = required_root_paths(ledger)
+    if set(inventory) != required:
+        raise protocol.ProtocolError("root inventory is not the canonical Task 8A set")
     manifest = {
         "version": 1,
         "protocol_version": protocol.PROTOCOL_VERSION,
         "candidate_sha": candidate_sha,
         "reservation_id": reservation_id,
         "experiment_identity_digest": experiment_identity_digest,
+        "command_contract_digest": command_contract_digest(),
         "status": status,
         "stage_order": list(STAGE_ORDER),
         "ledger_sha256": inventory["evidence-ledger.json"],
@@ -741,6 +814,7 @@ def validate_root(root: pathlib.Path) -> str:
         "candidate_sha",
         "reservation_id",
         "experiment_identity_digest",
+        "command_contract_digest",
         "status",
         "stage_order",
         "ledger_sha256",
@@ -754,6 +828,14 @@ def validate_root(root: pathlib.Path) -> str:
         excluded=frozenset({AGGREGATE_MANIFEST}),
     )
     ledger = _read_json(root / "evidence-ledger.json", "evidence ledger")
+    if ledger.get("candidate_sha") != manifest["candidate_sha"]:
+        raise protocol.ProtocolError(
+            "ledger candidate differs from aggregate candidate"
+        )
+    if manifest["command_contract_digest"] != command_contract_digest():
+        raise protocol.ProtocolError("aggregate command contract differs")
+    if set(manifest["inventory"]) != required_root_paths(ledger):
+        raise protocol.ProtocolError("aggregate inventory contract differs")
     status = _terminal_ledger_status(ledger)
     if status != manifest["status"]:
         raise protocol.ProtocolError("aggregate status differs from ledger")
@@ -911,30 +993,14 @@ def validate_progress(root: pathlib.Path) -> dict[str, Any]:
     return progress
 
 
-def _load_command_plan(path: pathlib.Path) -> dict[str, tuple[str, ...]]:
-    plan = _read_json(path, "stage command plan")
-    if set(plan) != set(STAGE_ORDER):
-        raise protocol.ProtocolError("stage command plan inventory differs")
-    result = {}
-    for stage in STAGE_ORDER:
-        argv = plan[stage]
-        if (
-            type(argv) is not list
-            or not argv
-            or any(type(argument) is not str or not argument for argument in argv)
-            or not pathlib.Path(argv[0]).is_absolute()
-        ):
-            raise protocol.ProtocolError(f"stage command is invalid: {stage}")
-        result[stage] = tuple(argv)
-    return result
-
-
 def _subprocess_stage_runner(
-    plan: Mapping[str, tuple[str, ...]], repository: pathlib.Path
+    context: pathlib.Path, repository: pathlib.Path
 ) -> Callable[[str, Mapping[str, str]], int]:
     def run(stage: str, environment: Mapping[str, str]) -> int:
+        argv = stage_argv(stage, context)
+        validate_stage_argv(stage, argv, context)
         result = subprocess.run(
-            plan[stage],
+            argv,
             cwd=repository,
             env=dict(environment),
             check=False,
@@ -1140,13 +1206,16 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--left", required=True)
     compare.add_argument("--right", required=True)
     compare.add_argument("--contract", required=True, type=pathlib.Path)
+    worker = subparsers.add_parser("_stage-worker", help=argparse.SUPPRESS)
+    worker.add_argument("--stage", required=True, choices=STAGE_ORDER)
+    worker.add_argument("--context", required=True, type=pathlib.Path)
     for name in ("start", "rerun-invalid-lane", "continue"):
         command = subparsers.add_parser(name, exit_on_error=False)
         command.add_argument("--repository", required=True, type=pathlib.Path)
         command.add_argument("--root", required=True, type=pathlib.Path)
         command.add_argument("--index", required=True, type=pathlib.Path)
         command.add_argument("--index-lock", required=True, type=pathlib.Path)
-        command.add_argument("--commands", required=True, type=pathlib.Path)
+        command.add_argument("--context", required=True, type=pathlib.Path)
         command.add_argument("--path", required=True)
         command.add_argument("--home", required=True)
         if name == "start":
@@ -1218,17 +1287,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             if code == 5:
                 print("ABANDONED_INITIALIZATION")
                 return 5
-            plan = _load_command_plan(args.commands)
             environment = protocol.runtime_environment(path=args.path, home=args.home)
             return run_fixed_stages(
                 args.root,
                 environment,
-                _subprocess_stage_runner(plan, args.repository),
+                _subprocess_stage_runner(args.context, args.repository),
             )
         if args.command in {"rerun-invalid-lane", "continue"}:
-            plan = _load_command_plan(args.commands)
             environment = protocol.runtime_environment(path=args.path, home=args.home)
-            runner = _subprocess_stage_runner(plan, args.repository)
+            runner = _subprocess_stage_runner(args.context, args.repository)
             with exclusive_lock(args.index_lock):
                 index = _read_index(args.index)
                 if index_state(index) != "ACTIVE":

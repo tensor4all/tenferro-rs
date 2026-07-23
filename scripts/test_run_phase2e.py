@@ -20,6 +20,44 @@ from scripts import run_phase2e as orchestrator
 class OuterOrchestratorTests(unittest.TestCase):
     CANDIDATE = "a" * 40
 
+    def test_stage_contract_rejects_shell_and_foreign_executable(self):
+        for argv in (("/bin/sh", "-c", "true"), ("/usr/bin/true",)):
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_stage_argv(
+                    orchestrator.STAGE_ORDER[0],
+                    argv,
+                    pathlib.Path("/repo/context.json"),
+                )
+
+    def test_progress_journal_never_aliases_terminal_aggregate(self):
+        self.assertNotEqual(
+            orchestrator.PROGRESS_MANIFEST, orchestrator.AGGREGATE_MANIFEST
+        )
+
+    def test_minimal_synthetic_pass_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_complete_root(root)
+            (root / "builds" / "locks" / "common.Cargo.lock").unlink(missing_ok=True)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_root(root)
+
+    def test_seal_rejects_ledger_candidate_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_complete_root(root)
+            ledger_path = root / "evidence-ledger.json"
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            ledger["candidate_sha"] = "f" * 40
+            protocol.atomic_write_json(ledger_path, ledger)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.seal_root(
+                    root,
+                    candidate_sha=self.CANDIDATE,
+                    reservation_id="reservation-1",
+                    experiment_identity_digest="b" * 64,
+                )
+
     def test_direct_and_module_entrypoints_expose_every_help_surface(self):
         repository = pathlib.Path(__file__).resolve().parent.parent
         direct = str(repository / "scripts" / "run_phase2e.py")
@@ -49,7 +87,7 @@ class OuterOrchestratorTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, (argv, result.stderr))
                 self.assertIn("usage:", result.stdout)
 
-    def make_complete_root(self, root: pathlib.Path) -> None:
+    def make_complete_root(self, root: pathlib.Path, *, seal: bool = True) -> None:
         ledger = protocol.new_ledger(self.CANDIDATE)
         for stage in protocol.STAGE_NAMES:
             for lane in protocol.LANE_NAMES:
@@ -82,12 +120,38 @@ class OuterOrchestratorTests(unittest.TestCase):
                 root / directory / "manifest.json",
                 {"candidate": self.CANDIDATE, "gating_result": "PASS"},
             )
-        orchestrator.seal_root(
-            root,
-            candidate_sha=self.CANDIDATE,
-            reservation_id="reservation-1",
-            experiment_identity_digest="b" * 64,
-        )
+        for relative in orchestrator.required_root_paths(ledger):
+            path = root / relative
+            if path.exists():
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            protocol.atomic_write_json(path, {})
+        if seal:
+            orchestrator.seal_root(
+                root,
+                candidate_sha=self.CANDIDATE,
+                reservation_id="reservation-1",
+                experiment_identity_digest="b" * 64,
+            )
+
+    def test_full_fake_stage_sequence_seals_and_validates_pass(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_complete_root(root, seal=False)
+            environment = protocol.runtime_environment(path="/bin", home="/tmp")
+            self.assertEqual(
+                orchestrator.run_fixed_stages(
+                    root, environment, lambda _stage, _environment: 0
+                ),
+                0,
+            )
+            orchestrator.seal_root(
+                root,
+                candidate_sha=self.CANDIDATE,
+                reservation_id="reservation-1",
+                experiment_identity_digest="b" * 64,
+            )
+            self.assertEqual(orchestrator.validate_root(root), "PASS")
 
     def test_stage_order_is_frozen(self):
         self.assertEqual(
