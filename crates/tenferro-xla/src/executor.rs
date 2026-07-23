@@ -1,6 +1,6 @@
 use std::fmt;
 
-use tenferro_runtime::GraphProgram;
+use tenferro_runtime::program::SemanticProgram;
 use tenferro_tensor::Tensor;
 
 use crate::Error;
@@ -40,7 +40,9 @@ impl fmt::Debug for XlaExecutorOptions {
 /// let mut compiler = GraphCompiler::new();
 /// let y = x.neg().unwrap();
 /// let program = compiler.compile(&y).unwrap();
-/// let module = XlaExecutor::default().lower_to_stablehlo(&program).unwrap();
+/// let module = XlaExecutor::default()
+///     .lower_to_stablehlo(program.semantic_program())
+///     .unwrap();
 /// assert!(module.as_str().contains("stablehlo.negate"));
 /// ```
 pub struct XlaExecutor {
@@ -190,7 +192,7 @@ impl XlaExecutor {
     /// let mut compiler = GraphCompiler::new();
     /// let y = x.neg().unwrap();
     /// let program = compiler.compile(&y).unwrap();
-    /// let module = XlaExecutor::default().lower_to_stablehlo(&program).unwrap();
+    /// let module = XlaExecutor::default().lower_to_stablehlo(program.semantic_program()).unwrap();
     /// assert!(module.as_str().contains("stablehlo.negate"));
     /// ```
     ///
@@ -199,13 +201,13 @@ impl XlaExecutor {
     /// Returns `Error::UnsupportedDType`, `Error::UnsupportedOp`, or
     /// `Error::NonStaticShape` for unsupported graph content, and
     /// `Error::InvalidProgram` for inconsistent graph metadata.
-    pub fn lower_to_stablehlo(&self, program: &GraphProgram) -> Result<StableHloModule> {
+    pub fn lower_to_stablehlo(&self, program: &SemanticProgram) -> Result<StableHloModule> {
         lower_to_stablehlo(program)
     }
 
     /// Execute a graph program through a loaded PJRT plugin and return all outputs.
     ///
-    /// Inputs must match [`GraphProgram::input_specs`] exactly. This
+    /// Inputs must match the ordered semantic-program input metadata exactly. This
     /// experimental execution path supports the same exact-static-shape,
     /// `F32`/`F64` subset as StableHLO lowering.
     ///
@@ -222,7 +224,7 @@ impl XlaExecutor {
     /// let program = compiler.compile(&y).unwrap();
     /// let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let err = XlaExecutor::default()
-    ///     .run_many_with_inputs(&program, &[&input])
+    ///     .run_many_with_inputs(program.semantic_program(), &[&input])
     ///     .unwrap_err();
     /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
     /// ```
@@ -235,7 +237,7 @@ impl XlaExecutor {
     /// failures.
     pub fn run_many_with_inputs(
         &self,
-        program: &GraphProgram,
+        program: &SemanticProgram,
         inputs: &[&Tensor],
     ) -> Result<Vec<Tensor>> {
         #[cfg(feature = "pjrt")]
@@ -266,7 +268,7 @@ impl XlaExecutor {
     /// let y = x.neg().unwrap();
     /// let program = compiler.compile(&y).unwrap();
     /// let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    /// let err = XlaExecutor::default().run_with_inputs(&program, &[&input]).unwrap_err();
+    /// let err = XlaExecutor::default().run_with_inputs(program.semantic_program(), &[&input]).unwrap_err();
     /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
     /// ```
     ///
@@ -275,7 +277,7 @@ impl XlaExecutor {
     /// Propagates the `run_many_with_inputs` errors and returns
     /// `Error::InvalidProgram` if the program does not have exactly one
     /// output.
-    pub fn run_with_inputs(&self, program: &GraphProgram, inputs: &[&Tensor]) -> Result<Tensor> {
+    pub fn run_with_inputs(&self, program: &SemanticProgram, inputs: &[&Tensor]) -> Result<Tensor> {
         single_output_tensor(self.run_many_with_inputs(program, inputs)?)
     }
 }
@@ -324,14 +326,14 @@ mod tests {
         let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 
         let err = XlaExecutor::default()
-            .run_many_with_inputs(&program, &[&input])
+            .run_many_with_inputs(program.semantic_program(), &[&input])
             .unwrap_err();
         assert!(matches!(
             err,
             Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded
         ));
         let err = XlaExecutor::default()
-            .run_with_inputs(&program, &[&input])
+            .run_with_inputs(program.semantic_program(), &[&input])
             .unwrap_err();
         assert!(matches!(
             err,

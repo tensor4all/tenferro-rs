@@ -21,21 +21,6 @@ fn helper_errors_preserve_diagnostic_context() {
         Error::InvalidProgram { ref message }
             if message == "stablehlo.test expected 1 inputs, got 0"
     ));
-
-    let empty_slots: Vec<Option<Value>> = Vec::new();
-    let err = slot_value(&empty_slots, 0).unwrap_err();
-    assert!(matches!(
-        err,
-        Error::InvalidProgram { ref message }
-            if message == "slot 0 is outside slot table length 0"
-    ));
-
-    let missing_slots: Vec<Option<Value>> = vec![None];
-    let err = slot_value(&missing_slots, 0).unwrap_err();
-    assert!(matches!(
-        err,
-        Error::InvalidProgram { ref message } if message == "slot 0 has no value"
-    ));
 }
 
 #[test]

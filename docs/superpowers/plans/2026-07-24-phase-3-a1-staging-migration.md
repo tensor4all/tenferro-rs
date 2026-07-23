@@ -41,18 +41,22 @@ public semantic views directly and never calls the private adapter.
 
 ## Task 3: Migrate XLA to public semantic views
 
-- [ ] Add failing XLA tests/source contracts forbidding `GraphProgram`,
+- [x] Add failing XLA tests/source contracts forbidding `GraphProgram`,
   `GraphProgramLoweringView`, `GraphInstructionView`, and public
   `ExecProgram` dependencies.
-- [ ] Change StableHLO lowering and PJRT execution APIs to accept the frozen
+- [x] Change StableHLO lowering and PJRT execution APIs to accept the frozen
   semantic artifact and ordered runtime inputs.
-- [ ] Lower core/extension operations from `SemanticOperationView`,
+- [x] Lower core/extension operations from `SemanticOperationView`,
   `SemanticOpRef`, and allocation-free metadata access. Reject bounded/unknown
   extents with typed `NonStaticShape`.
-- [ ] Remove XLA use of runtime execution-staging compilation for extension
+- [x] Remove XLA use of runtime execution-staging compilation for extension
   subgraphs by constructing/lowering a temporary semantic subprogram.
-- [ ] Run XLA unit/integration/doctests with default and PJRT feature gates;
+- [x] Run XLA unit/integration/doctests with default and PJRT feature gates;
   commit the caller migration.
+
+The symbolic einsum/XLA integration case remains explicitly ignored until
+Task 5 gives the einsum extension its semantic effect/alias declarations; all
+other XLA tests, all-feature tests, doctests, and clippy gates pass.
 
 ## Task 4: Remove sibling-crate public ExecProgram construction
 

@@ -1,7 +1,7 @@
 //! Experimental StableHLO lowering and runtime PJRT plugin loading for tenferro.
 //!
 //! This crate is an optional peer executor over `tenferro-runtime`
-//! [`GraphProgram`](tenferro_runtime::GraphProgram) values. It does not
+//! [`SemanticProgram`](tenferro_runtime::program::SemanticProgram) values. It does not
 //! implement `TensorBackend` and it does not change native CPU, CUDA, or
 //! WebGPU execution.
 //!
@@ -15,7 +15,7 @@
 //! let y = (&x + &x).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let module = lower_to_stablehlo(&program).unwrap();
+//! let module = lower_to_stablehlo(program.semantic_program()).unwrap();
 //! assert!(module.as_str().contains("stablehlo.add"));
 //! ```
 
@@ -68,7 +68,7 @@ pub const TENFERRO_PJRT_GPU_PLUGIN_ENV: &str = "TENFERRO_PJRT_GPU_PLUGIN";
 /// let mut compiler = GraphCompiler::new();
 /// let y = x.neg().unwrap();
 /// let program = compiler.compile(&y).unwrap();
-/// let module = lower_to_stablehlo(&program).unwrap();
+/// let module = lower_to_stablehlo(program.semantic_program()).unwrap();
 /// assert!(module.as_str().contains("stablehlo.negate"));
 /// ```
 ///
@@ -77,6 +77,8 @@ pub const TENFERRO_PJRT_GPU_PLUGIN_ENV: &str = "TENFERRO_PJRT_GPU_PLUGIN";
 /// Returns `Error::UnsupportedDType`, `Error::UnsupportedOp`, or
 /// `Error::NonStaticShape` for unsupported graph content, and
 /// `Error::InvalidProgram` for inconsistent graph metadata.
-pub fn lower_to_stablehlo(program: &tenferro_runtime::GraphProgram) -> Result<StableHloModule> {
+pub fn lower_to_stablehlo(
+    program: &tenferro_runtime::program::SemanticProgram,
+) -> Result<StableHloModule> {
     lowering::lower_to_stablehlo(program)
 }
