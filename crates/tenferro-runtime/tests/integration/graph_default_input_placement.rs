@@ -118,7 +118,7 @@ impl BackendCachedDot for UploadRejectingBackend {}
 impl BackendSessionHost for UploadRejectingBackend {}
 impl TensorBackend for UploadRejectingBackend {}
 
-fn scalar_default_program() -> tenferro_runtime::GraphProgram {
+fn scalar_default_program() -> tenferro_runtime::CompiledGraph {
     let scalar = TracedTensor::from_tensor_concrete_shape(
         Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap(),
     )

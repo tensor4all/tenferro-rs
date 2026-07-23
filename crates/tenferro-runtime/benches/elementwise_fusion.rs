@@ -9,7 +9,7 @@ fn input_tensor(n: usize, scale: f64) -> Tensor {
     Tensor::from_vec_col_major(vec![n], data).expect("benchmark tensor")
 }
 
-fn compile_add_mul(n: usize) -> (TracedTensor, TracedTensor, tenferro_runtime::GraphProgram) {
+fn compile_add_mul(n: usize) -> (TracedTensor, TracedTensor, tenferro_runtime::CompiledGraph) {
     let a = TracedTensor::input_concrete_shape(DType::F64, &[n]).expect("a placeholder");
     let b = TracedTensor::input_concrete_shape(DType::F64, &[n]).expect("b placeholder");
     let sum = (&a + &b).expect("sum graph");
@@ -24,7 +24,7 @@ fn compile_add_mul(n: usize) -> (TracedTensor, TracedTensor, tenferro_runtime::G
 fn compile_broadcast_mul(
     rows: usize,
     cols: usize,
-) -> (TracedTensor, TracedTensor, tenferro_runtime::GraphProgram) {
+) -> (TracedTensor, TracedTensor, tenferro_runtime::CompiledGraph) {
     let a = TracedTensor::input_concrete_shape(DType::F64, &[rows]).expect("a placeholder");
     let b = TracedTensor::input_concrete_shape(DType::F64, &[cols]).expect("b placeholder");
     let a_bc = a
@@ -47,7 +47,7 @@ fn compile_broadcast_mul(
 fn compile_broadcast_mul_add(
     rows: usize,
     cols: usize,
-) -> (TracedTensor, TracedTensor, tenferro_runtime::GraphProgram) {
+) -> (TracedTensor, TracedTensor, tenferro_runtime::CompiledGraph) {
     let a = TracedTensor::input_concrete_shape(DType::F64, &[rows]).expect("a placeholder");
     let b = TracedTensor::input_concrete_shape(DType::F64, &[cols]).expect("b placeholder");
     let a_bc = a

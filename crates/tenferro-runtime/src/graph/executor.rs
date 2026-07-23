@@ -8,7 +8,7 @@ use tenferro_tensor::{
 };
 
 use super::cache::GraphExecutorCacheStats;
-use super::program::{GraphProgram, GraphProgramInput};
+use super::program::{CompiledGraph, GraphProgramInput};
 use crate::error::{Error, Result};
 use crate::exec::{ExecProgram, ExecSlot};
 use crate::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError};
@@ -263,7 +263,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// Returns [`Error::UnboundPlaceholder`] for a missing default input,
     /// [`Error::TensorRuntime`] for typed backend/validation failures, or
     /// [`Error::Internal`] when the program produces zero or multiple outputs.
-    pub fn run(&mut self, program: &GraphProgram) -> Result<Tensor> {
+    pub fn run(&mut self, program: &CompiledGraph) -> Result<Tensor> {
         let mut outputs = self.run_many(program)?;
         expect_single_output(&mut outputs)
     }
@@ -300,7 +300,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// Returns [`Error::UnboundPlaceholder`] for a missing default input,
     /// [`Error::TensorRuntime`] for typed backend/validation failures, or
     /// [`Error::Internal`] when the program produces zero or multiple outputs.
-    pub fn run_value(&mut self, program: &GraphProgram) -> Result<TensorValue> {
+    pub fn run_value(&mut self, program: &CompiledGraph) -> Result<TensorValue> {
         let mut outputs = self.run_many_values(program)?;
         expect_single_value(&mut outputs)
     }
@@ -328,7 +328,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// default tensor, [`Error::ShapeConstraintViolation`] or
     /// [`Error::ShapeConstraintEvaluation`] for failed symbolic guards, and
     /// [`Error::TensorRuntime`] for typed backend execution failures.
-    pub fn run_many(&mut self, program: &GraphProgram) -> Result<Vec<Tensor>> {
+    pub fn run_many(&mut self, program: &CompiledGraph) -> Result<Vec<Tensor>> {
         self.run_many_with_inputs(program, &[])
     }
 
@@ -358,7 +358,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// default tensor, [`Error::ShapeConstraintViolation`] or
     /// [`Error::ShapeConstraintEvaluation`] for failed symbolic guards, and
     /// [`Error::TensorRuntime`] for typed backend execution failures.
-    pub fn run_many_values(&mut self, program: &GraphProgram) -> Result<Vec<TensorValue>> {
+    pub fn run_many_values(&mut self, program: &CompiledGraph) -> Result<Vec<TensorValue>> {
         self.run_many_values_with_inputs(program, &[])
     }
 
@@ -398,7 +398,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_with_inputs(
         &mut self,
-        program: &GraphProgram,
+        program: &CompiledGraph,
         bindings: &[(&TracedTensor, &Tensor)],
     ) -> Result<Tensor> {
         let mut outputs = self.run_many_with_inputs(program, bindings)?;
@@ -440,7 +440,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_value_with_inputs(
         &mut self,
-        program: &GraphProgram,
+        program: &CompiledGraph,
         bindings: &[(&TracedTensor, &Tensor)],
     ) -> Result<TensorValue> {
         let mut outputs = self.run_many_values_with_inputs(program, bindings)?;
@@ -489,7 +489,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_with_input_reads<'a>(
         &mut self,
-        program: &'a GraphProgram,
+        program: &'a CompiledGraph,
         bindings: &[(&TracedTensor, TensorRead<'a>)],
     ) -> Result<Tensor> {
         let mut outputs = self.run_many_with_input_reads(program, bindings)?;
@@ -538,7 +538,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_value_with_input_reads<'a>(
         &mut self,
-        program: &'a GraphProgram,
+        program: &'a CompiledGraph,
         bindings: &[(&TracedTensor, TensorRead<'a>)],
     ) -> Result<TensorValue> {
         let mut outputs = self.run_many_values_with_input_reads(program, bindings)?;
@@ -579,11 +579,11 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_many_with_inputs(
         &mut self,
-        program: &GraphProgram,
+        program: &CompiledGraph,
         bindings: &[(&TracedTensor, &Tensor)],
     ) -> Result<Vec<Tensor>> {
         let input_tensors = resolve_inputs(program, bindings, &mut self.backend)?;
-        self.eval_exec_ir(&program.exec, input_tensors)
+        self.eval_exec_ir(&program.staging, input_tensors)
     }
 
     /// Run a program with explicit bindings and preserve lazy output views.
@@ -623,11 +623,11 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_many_values_with_inputs(
         &mut self,
-        program: &GraphProgram,
+        program: &CompiledGraph,
         bindings: &[(&TracedTensor, &Tensor)],
     ) -> Result<Vec<TensorValue>> {
         let input_tensors = resolve_inputs(program, bindings, &mut self.backend)?;
-        self.eval_exec_ir_values(&program.exec, input_tensors)
+        self.eval_exec_ir_values(&program.staging, input_tensors)
     }
 
     /// Run a program with explicit borrowed runtime placeholder bindings.
@@ -672,11 +672,11 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_many_with_input_reads<'a>(
         &mut self,
-        program: &'a GraphProgram,
+        program: &'a CompiledGraph,
         bindings: &[(&TracedTensor, TensorRead<'a>)],
     ) -> Result<Vec<Tensor>> {
         let inputs = resolve_input_reads(program, bindings, &mut self.backend)?;
-        self.eval_exec_ir_slots(&program.exec, inputs)
+        self.eval_exec_ir_slots(&program.staging, inputs)
     }
 
     /// Run a program with borrowed bindings and preserve lazy output views.
@@ -721,11 +721,11 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_many_values_with_input_reads<'a>(
         &mut self,
-        program: &'a GraphProgram,
+        program: &'a CompiledGraph,
         bindings: &[(&TracedTensor, TensorRead<'a>)],
     ) -> Result<Vec<TensorValue>> {
         let inputs = resolve_input_reads(program, bindings, &mut self.backend)?;
-        self.eval_exec_ir_slot_values(&program.exec, inputs)
+        self.eval_exec_ir_slot_values(&program.staging, inputs)
     }
 
     /// Evaluate an execution program through this executor's backend state.
@@ -1047,7 +1047,7 @@ fn expect_single_value(outputs: &mut Vec<TensorValue>) -> Result<TensorValue> {
 }
 
 fn resolve_inputs(
-    program: &GraphProgram,
+    program: &CompiledGraph,
     bindings: &[(&TracedTensor, &Tensor)],
     backend: &mut impl TensorBackend,
 ) -> Result<Vec<Tensor>> {
@@ -1092,11 +1092,11 @@ fn resolve_inputs(
     }
 
     let selected = select_inputs(program, &binding_map, &default_map)?;
-    materialize_inputs(&program.exec, selected, backend, zeros_tensor)
+    materialize_inputs(&program.staging, selected, backend, zeros_tensor)
 }
 
 fn resolve_input_reads<'a>(
-    program: &'a GraphProgram,
+    program: &'a CompiledGraph,
     bindings: &[(&TracedTensor, TensorRead<'a>)],
     backend: &mut impl TensorBackend,
 ) -> Result<Vec<ExecSlot<'a>>> {
@@ -1141,7 +1141,7 @@ fn resolve_input_reads<'a>(
     }
 
     let selected = select_inputs(program, &binding_map, &default_map)?;
-    materialize_input_reads(&program.exec, selected, backend, zeros_tensor)
+    materialize_input_reads(&program.staging, selected, backend, zeros_tensor)
 }
 
 fn tangent_root_specs(inputs: &[GraphProgramInput]) -> HashMap<TensorInputKey, &GraphProgramInput> {
@@ -1206,7 +1206,7 @@ impl<T: InputMetadata> SelectedInput<'_, '_, T> {
 }
 
 fn select_inputs<'program, 'binding, T: InputMetadata>(
-    program: &'program GraphProgram,
+    program: &'program CompiledGraph,
     bindings: &'binding HashMap<TensorInputKey, T>,
     defaults: &HashMap<TensorInputKey, &'program Tensor>,
 ) -> Result<Vec<SelectedInput<'program, 'binding, T>>> {

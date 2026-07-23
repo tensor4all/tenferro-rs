@@ -499,21 +499,21 @@ fn constant_guard(lhs: usize, rhs: usize, family_id: &'static str) -> ShapeGuard
     }
 }
 
-fn scalar_default_program(guard: ShapeGuard) -> crate::GraphProgram {
+fn scalar_default_program(guard: ShapeGuard) -> crate::CompiledGraph {
     let input = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     let output = input.neg().unwrap();
     let mut program = GraphCompiler::new().compile(&output).unwrap();
-    program.exec.shape_guards = vec![guard];
+    program.staging.shape_guards = vec![guard];
     program
 }
 
-fn explicit_input_program(guard: ShapeGuard) -> (TracedTensor, crate::GraphProgram) {
+fn explicit_input_program(guard: ShapeGuard) -> (TracedTensor, crate::CompiledGraph) {
     let input = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let output = input.neg().unwrap();
     let mut program = GraphCompiler::new()
         .compile_with_input_specs(&output, &[(&input, DType::F64, &[2])])
         .unwrap();
-    program.exec.shape_guards = vec![guard];
+    program.staging.shape_guards = vec![guard];
     (input, program)
 }
 

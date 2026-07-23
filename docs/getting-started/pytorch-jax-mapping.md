@@ -90,7 +90,7 @@ concrete sizes during execution. See
 PyTorch users usually expect every operation to execute immediately. JAX users
 often switch between eager execution and `jit`. tenferro's traced API stays
 lazy until you lower a `TracedTensor` graph with `GraphCompiler` and run the
-resulting `GraphProgram` with `GraphExecutor`.
+resulting `CompiledGraph` with `GraphExecutor`.
 
 ### Autodiff split
 

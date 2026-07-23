@@ -6,12 +6,12 @@ Related issue: https://github.com/tensor4all/tenferro-rs/issues/984
 
 ## Summary
 
-The XLA path is a peer executor over `GraphProgram` lowering views. It is
+The XLA path is a peer executor over `CompiledGraph` lowering views. It is
 implemented in `tenferro-xla`, not in `tenferro-runtime`, and it does not
 implement `TensorBackend`.
 
 ```text
-GraphProgram lowering view
+CompiledGraph lowering view
   |
   v
 tenferro_xla::lower_to_stablehlo()
@@ -26,7 +26,7 @@ OpenXLA execution check or runtime-loaded PJRT plugin
 The native path remains:
 
 ```text
-GraphProgram -> GraphExecutor<B: TensorBackend>
+CompiledGraph -> GraphExecutor<B: TensorBackend>
 ```
 
 ## Runtime Dependency Boundary

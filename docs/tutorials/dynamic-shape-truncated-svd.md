@@ -15,7 +15,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_linalg::{SvdOptions, TracedTensorLinalgExt};
 use tenferro_runtime::{
-    CompareDir, DType, GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor,
+    CompareDir, DType, GraphCompiler, GraphExecutor, CompiledGraph, Tensor, TracedTensor,
 };
 
 fn assert_close(actual: &[f64], expected: &[f64], tolerance: f64) {
@@ -51,8 +51,8 @@ fn truncated_expected(diagonal: &[f64], threshold: f64) -> Vec<f64> {
 
 fn run_case(
     executor: &mut GraphExecutor<CpuBackend>,
-    reconstructed_program: &GraphProgram,
-    singular_values_program: &GraphProgram,
+    reconstructed_program: &CompiledGraph,
+    singular_values_program: &CompiledGraph,
     x: &TracedTensor,
     input: &Tensor,
     expected_rank: usize,

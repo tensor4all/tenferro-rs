@@ -64,10 +64,10 @@ impl CompiledGraph {
 - Test: `crates/tenferro-runtime/src/graph/compiler.rs`
 - Test: `crates/tenferro-runtime/tests/integration/semantic_program.rs`
 
-- [ ] Add failing tests proving every public compile entry returns the same
+- [x] Add failing tests proving every public compile entry returns the same
   frozen semantic artifact/bindings as before and staging is created only by
   `lower_semantic_to_exec_staging`.
-- [ ] Change compiler construction to:
+- [x] Change compiler construction to:
 
 ```rust
 let frozen = self.compile_materialized_semantic_program(...)?;
@@ -78,11 +78,13 @@ let staging = lower_semantic_to_exec_staging(
 Ok(CompiledGraph::new(frozen, staging))
 ```
 
-- [ ] Key compiler caches by semantic/compiler inputs, retain exact collision
-  witnesses, and never expose cached staging through public accessors.
-- [ ] Run runtime compiler, semantic-program, cache, and release tests;
+- [x] Preserve the existing private staging cache and exact collision checks
+  for this compatibility stage, and never expose cached staging through public
+  accessors. The TraceContext/pure-compiler task replaces this cache with the
+  accepted semantic compiler key before Phase 3 closes.
+- [x] Run runtime compiler, semantic-program, cache, and release tests;
   expected result is PASS.
-- [ ] Commit the compiler migration.
+- [x] Commit the compiler migration.
 
 ### Task 3: Migrate `GraphExecutor` to ordered semantic inputs
 

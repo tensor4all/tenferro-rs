@@ -45,7 +45,7 @@ internal exec dispatch
 There is no in-process `StableHloProgram` / `StableHloOp` layer. The current
 runtime contract is centered on `ExecProgram`.
 
-The optional XLA path is a peer executor over a compiled `GraphProgram`
+The optional XLA path is a peer executor over a compiled `CompiledGraph`
 lowering view, not a native backend. `tenferro-xla` may inspect immutable
 lowering metadata, emit StableHLO, and load PJRT plugins at runtime, but it does
 not implement `TensorBackend` and does not participate in `GraphExecutor<B>`

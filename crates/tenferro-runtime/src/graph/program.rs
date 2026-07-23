@@ -13,14 +13,24 @@ use crate::program::{FrozenProgram, ProgramBindings, SemanticProgram};
 /// Public consumers inspect only the immutable semantic program and its
 /// process-local tensor bindings. Native execution staging remains owned by
 /// `tenferro-runtime` and is removed in Phase 5.
+#[derive(Clone)]
 pub struct CompiledGraph {
     pub(crate) staging: ExecProgram,
     pub(crate) frozen: FrozenProgram,
+    pub(crate) inputs: Vec<GraphProgramInput>,
 }
 
 impl CompiledGraph {
-    pub(crate) fn new(frozen: FrozenProgram, staging: ExecProgram) -> Self {
-        Self { staging, frozen }
+    pub(crate) fn new(
+        frozen: FrozenProgram,
+        staging: ExecProgram,
+        inputs: Vec<GraphProgramInput>,
+    ) -> Self {
+        Self {
+            staging,
+            frozen,
+            inputs,
+        }
     }
 
     /// Borrow the immutable backend-neutral semantic program.
@@ -42,6 +52,26 @@ impl CompiledGraph {
     pub fn output_count(&self) -> usize {
         self.frozen.program.outputs().len()
     }
+
+    /// Transitional alias for [`Self::program`], removed with legacy callers.
+    pub fn semantic_program(&self) -> &SemanticProgram {
+        self.program()
+    }
+
+    /// Transitional alias for [`Self::bindings`], removed with legacy callers.
+    pub fn program_bindings(&self) -> &ProgramBindings {
+        self.bindings()
+    }
+
+    /// Transitional concrete input descriptors for legacy executor callers.
+    pub fn input_specs(&self) -> &[GraphProgramInput] {
+        &self.inputs
+    }
+
+    /// Transitional runtime-owned lowering view, removed after caller migration.
+    pub fn lowering_view(&self) -> GraphProgramLoweringView<'_> {
+        GraphProgramLoweringView::new(&self.staging)
+    }
 }
 
 impl std::fmt::Debug for CompiledGraph {
@@ -59,132 +89,7 @@ impl std::fmt::Debug for CompiledGraph {
     }
 }
 
-/// A compiled traced graph, independent of any execution backend.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_runtime::{GraphCompiler, TracedTensor};
-///
-/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-/// let y = (&x + &x).unwrap();
-/// let mut compiler = GraphCompiler::new();
-/// let program = compiler.compile(&y).unwrap();
-/// assert_eq!(program.input_count(), 1);
-/// ```
-#[derive(Clone, Debug)]
-pub struct GraphProgram {
-    pub(crate) exec: ExecProgram,
-    pub(crate) inputs: Vec<GraphProgramInput>,
-    pub(crate) semantic: FrozenProgram,
-}
-
-impl GraphProgram {
-    pub(crate) fn new(
-        exec: ExecProgram,
-        inputs: Vec<GraphProgramInput>,
-        semantic: FrozenProgram,
-    ) -> Self {
-        Self {
-            exec,
-            inputs,
-            semantic,
-        }
-    }
-
-    /// Borrow the backend-neutral semantic artifact compiled from this trace.
-    ///
-    /// This accessor is the peer-lowering migration boundary. The surrounding
-    /// `GraphProgram` compatibility container is removed in Phase 3 A3.
-    pub fn semantic_program(&self) -> &SemanticProgram {
-        &self.semantic.program
-    }
-
-    /// Borrow tensor defaults and large constants stored outside semantic
-    /// structure.
-    pub fn program_bindings(&self) -> &ProgramBindings {
-        &self.semantic.bindings
-    }
-
-    /// Return the number of graph inputs expected by this program.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
-    ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
-    /// let mut compiler = GraphCompiler::new();
-    /// let y = x.neg().unwrap();
-    /// let program = compiler.compile(&y).unwrap();
-    /// assert_eq!(program.input_count(), 1);
-    /// ```
-    #[inline(never)]
-    pub fn input_count(&self) -> usize {
-        self.inputs.len()
-    }
-
-    /// Return the number of graph outputs produced by this program.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
-    ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
-    /// let mut compiler = GraphCompiler::new();
-    /// let y = x.neg().unwrap();
-    /// let program = compiler.compile(&y).unwrap();
-    /// assert_eq!(program.output_count(), 1);
-    /// ```
-    #[inline(never)]
-    pub fn output_count(&self) -> usize {
-        self.exec.output_slots.len()
-    }
-
-    /// Return the ordered input specs expected by this program.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
-    ///
-    /// let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    /// let mut compiler = GraphCompiler::new();
-    /// let y = x.neg().unwrap();
-    /// let program = compiler
-    ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[4])])
-    ///     .unwrap();
-    /// assert_eq!(program.input_specs()[0].shape(), &[4]);
-    /// ```
-    #[inline(never)]
-    pub fn input_specs(&self) -> &[GraphProgramInput] {
-        &self.inputs
-    }
-
-    /// Return a read-only lowering view for peer executor integrations.
-    ///
-    /// The view exposes only immutable, lowering-oriented program metadata.
-    /// Native execution and mutation remain owned by [`GraphExecutor`](super::GraphExecutor).
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
-    ///
-    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    /// let mut compiler = GraphCompiler::new();
-    /// let y = x.neg().unwrap();
-    /// let program = compiler.compile(&y).unwrap();
-    /// assert_eq!(program.lowering_view().output_slots().len(), 1);
-    /// ```
-    #[inline(never)]
-    pub fn lowering_view(&self) -> GraphProgramLoweringView<'_> {
-        GraphProgramLoweringView::new(&self.exec)
-    }
-}
-
-/// A single ordered input required by a [`GraphProgram`].
+/// A transitional concrete descriptor for one ordered compiled input.
 ///
 /// # Examples
 ///

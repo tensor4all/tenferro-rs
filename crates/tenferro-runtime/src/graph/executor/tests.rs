@@ -454,10 +454,10 @@ fn borrowed_input_execution_retains_executor_slot_workspace_capacity() {
     assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
     assert_eq!(input.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     assert!(
-        executor.borrowed_slot_workspace_capacity >= program.exec.n_slots,
+        executor.borrowed_slot_workspace_capacity >= program.staging.n_slots,
         "borrowed execution should retain reusable slot capacity; capacity={}, n_slots={}",
         executor.borrowed_slot_workspace_capacity,
-        program.exec.n_slots
+        program.staging.n_slots
     );
 }
 
@@ -480,10 +480,10 @@ fn borrowed_input_value_execution_retains_workspace_and_lazy_output() {
     assert!(matches!(outputs[0], TensorValue::View(_)));
     assert_eq!(input.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     assert!(
-        executor.borrowed_slot_workspace_capacity >= program.exec.n_slots,
+        executor.borrowed_slot_workspace_capacity >= program.staging.n_slots,
         "borrowed value execution should retain reusable slot capacity; capacity={}, n_slots={}",
         executor.borrowed_slot_workspace_capacity,
-        program.exec.n_slots
+        program.staging.n_slots
     );
 }
 

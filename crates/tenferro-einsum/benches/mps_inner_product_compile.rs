@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro_einsum::GraphCompilerEinsumExt;
-use tenferro_runtime::{DType, GraphCompiler, GraphProgram, TracedTensor};
+use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, TracedTensor};
 
 const PHYS_DIM: usize = 2;
 const CHI: usize = 32;
@@ -62,7 +62,7 @@ fn build_compile_case(sites: usize, chi: usize) -> CompileCase {
     }
 }
 
-fn compile_case(case: &CompileCase) -> GraphProgram {
+fn compile_case(case: &CompileCase) -> CompiledGraph {
     let mut specs = Vec::with_capacity(case.shapes.len() * 2);
     for site in 0..case.shapes.len() {
         let shape = case.shapes[site].as_slice();

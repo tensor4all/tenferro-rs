@@ -10,7 +10,7 @@ use tenferro_einsum::{
     parse_einsum_subscripts, ContractionOptimizerOptions, ContractionTree, EinsumOptimize,
 };
 use tenferro_runtime::extension::ExtensionCacheLimits;
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor};
+use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
 fn register_runtime(executor: &mut GraphExecutor<CpuBackend>) {
     executor
@@ -37,7 +37,7 @@ struct RuntimePlannedMatmul {
     b: TracedTensor,
     a_value: Tensor,
     b_value: Tensor,
-    program: GraphProgram,
+    program: CompiledGraph,
 }
 
 fn runtime_matmul_values(rows: usize, cols: usize, mid: usize) -> (Tensor, Tensor) {

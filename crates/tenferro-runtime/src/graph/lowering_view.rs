@@ -9,7 +9,7 @@ use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
 /// Read-only lowering view over a compiled graph program.
 ///
 /// This view is for peer executor crates that need to translate a
-/// [`GraphProgram`](super::GraphProgram) without mutating the runtime-owned
+/// [`CompiledGraph`](super::CompiledGraph) without mutating the runtime-owned
 /// execution program.
 ///
 /// # Examples

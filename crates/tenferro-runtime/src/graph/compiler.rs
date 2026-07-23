@@ -18,7 +18,7 @@ use super::cache::{
     compile_cache_stats, compute_cache_key, CacheKey, GraphCompilerCacheStats,
     DEFAULT_COMPILE_CACHE_CAPACITY,
 };
-use super::program::{GraphProgram, GraphProgramInput};
+use super::program::{CompiledGraph, GraphProgramInput};
 use crate::compiler::{
     lower_scoped_dim_expr, semantic_staging::lower_semantic_to_exec_staging, CompilerOptions,
 };
@@ -43,7 +43,7 @@ struct InputDescriptor {
 /// Compiler for traced tensor graphs.
 ///
 /// A graph compiler lowers one or more [`TracedTensor`] outputs to a reusable
-/// [`GraphProgram`] without requiring a backend.
+/// [`CompiledGraph`] without requiring a backend.
 ///
 /// # Examples
 ///
@@ -142,7 +142,7 @@ impl GraphCompiler {
     /// metadata or cache state, and [`Error::Internal`] when the graph
     /// violates a compiler invariant. Extension lowering failures retain
     /// their typed [`Error::Extension`] source.
-    pub fn compile(&mut self, output: &TracedTensor) -> Result<GraphProgram> {
+    pub fn compile(&mut self, output: &TracedTensor) -> Result<CompiledGraph> {
         self.compile_many(&[output])
     }
 
@@ -168,7 +168,7 @@ impl GraphCompiler {
     /// metadata or cache state, and [`Error::Internal`] when the graph
     /// violates a compiler invariant. Extension lowering failures retain
     /// their typed [`Error::Extension`] source.
-    pub fn compile_many(&mut self, outputs: &[&TracedTensor]) -> Result<GraphProgram> {
+    pub fn compile_many(&mut self, outputs: &[&TracedTensor]) -> Result<CompiledGraph> {
         let mut all_inputs = HashMap::new();
         for output in outputs {
             for (key, tensor) in output.inputs_map.iter() {
@@ -216,7 +216,7 @@ impl GraphCompiler {
         &mut self,
         output: &TracedTensor,
         bindings: &[(&TracedTensor, DType, &[usize])],
-    ) -> Result<GraphProgram> {
+    ) -> Result<CompiledGraph> {
         let mut binding_specs = HashMap::new();
         for (index, (placeholder, dtype, shape)) in bindings.iter().enumerate() {
             validate_placeholder_spec(index, placeholder, *dtype, shape)?;
@@ -427,7 +427,7 @@ impl GraphCompiler {
         outputs: &[&TracedTensor],
         binding_specs: &HashMap<TensorInputKey, InputDescriptor>,
         default_inputs: &HashMap<TensorInputKey, Arc<Tensor>>,
-    ) -> Result<GraphProgram> {
+    ) -> Result<CompiledGraph> {
         let mut constraint_scopes = Vec::new();
         let mut seen_constraint_scopes = std::collections::HashSet::new();
         for output in outputs {
@@ -523,7 +523,7 @@ impl GraphCompiler {
             compile_materialized_semantic_program(&compiled, &descriptors, &scoped_constraints)?;
         let exec = lower_semantic_to_exec_staging(&semantic.program, self.compiler_options)?;
         let exec = self.get_or_compile(exec);
-        Ok(GraphProgram::new(exec, descriptors, semantic))
+        Ok(CompiledGraph::new(semantic, exec, descriptors))
     }
 
     fn get_or_compile(&mut self, exec: ExecProgram) -> ExecProgram {

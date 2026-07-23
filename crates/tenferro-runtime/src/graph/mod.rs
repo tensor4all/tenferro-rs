@@ -24,4 +24,4 @@ pub use executor::GraphExecutor;
 pub use lowering_view::{
     GraphInstructionView, GraphOpView, GraphProgramLoweringShapeError, GraphProgramLoweringView,
 };
-pub use program::{CompiledGraph, GraphProgram, GraphProgramInput};
+pub use program::{CompiledGraph, GraphProgramInput};

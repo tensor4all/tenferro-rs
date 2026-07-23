@@ -3,7 +3,7 @@ use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_runtime::{
-    GraphCompiler, GraphExecutor, GraphProgram, Tensor, TracedTensor, TypedTensor,
+    CompiledGraph, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
 };
 
 const L: usize = 32;
@@ -73,7 +73,7 @@ fn build_inner_product_graph(
         .expect("final MPS inner-product scalar reshape should preserve element count")
 }
 
-fn compile_mps_inner_product(fixture: &MpsFixture) -> GraphProgram {
+fn compile_mps_inner_product(fixture: &MpsFixture) -> CompiledGraph {
     let bra_placeholders: Vec<_> = fixture
         .bra_tensors
         .iter()
