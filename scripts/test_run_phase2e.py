@@ -14,7 +14,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from contextlib import contextmanager, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from io import StringIO
 from unittest import mock
 
@@ -361,7 +361,8 @@ class OuterOrchestratorTests(unittest.TestCase):
             marker = target / "marker"
             marker.write_text("untouched", encoding="utf-8")
 
-            def replace(path):
+            def replace(identity):
+                path = identity.path
                 path.rename(moved)
                 path.symlink_to(target, target_is_directory=True)
                 raise OSError("replacement")
@@ -381,6 +382,67 @@ class OuterOrchestratorTests(unittest.TestCase):
             self.assertTrue((moved / orchestrator.ABANDONMENT_SEAL).is_file())
             self.assertEqual(marker.read_text(encoding="utf-8"), "untouched")
             self.assertFalse((target / orchestrator.ABANDONMENT_SEAL).exists())
+
+    def test_initialization_writes_stay_on_held_inode_after_root_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            worklogs = repository / "docs" / "worklogs"
+            worklogs.mkdir(parents=True)
+            root = worklogs / "root"
+            moved = worklogs / "moved-root"
+            replacement = repository / "replacement"
+            replacement.mkdir(mode=0o700)
+
+            def replace_then_initialize(root_or_identity):
+                identity = (
+                    root_or_identity
+                    if isinstance(root_or_identity, protocol.PreparedRootIdentity)
+                    else None
+                )
+                initializing_root = (
+                    identity.path if identity is not None else root_or_identity
+                )
+                initializing_root.rename(moved)
+                initializing_root.symlink_to(
+                    replacement, target_is_directory=True
+                )
+                if identity is None:
+                    protocol.atomic_write_json(
+                        initializing_root / orchestrator.STAGE_CONTEXT,
+                        {"held": True},
+                    )
+                    protocol.atomic_write_json(
+                        initializing_root / "evidence-ledger.json",
+                        {"held": True},
+                    )
+                else:
+                    protocol.atomic_write_json_at(
+                        identity.descriptor,
+                        orchestrator.STAGE_CONTEXT,
+                        {"held": True},
+                    )
+                    protocol.atomic_write_json_at(
+                        identity.descriptor,
+                        "evidence-ledger.json",
+                        {"held": True},
+                    )
+
+            with mock.patch.object(orchestrator, "require_remote_index"):
+                code = orchestrator.initialize_campaign(
+                    repository=repository,
+                    root=root,
+                    reservation_id="r1",
+                    candidate_sha=self.CANDIDATE,
+                    candidate_tree_sha256="c" * 64,
+                    experiment_identity_digest="d" * 64,
+                    campaign_identity_digest="e" * 64,
+                    initializer=replace_then_initialize,
+                )
+            self.assertEqual(code, 5)
+            self.assertTrue((moved / orchestrator.ABANDONMENT_SEAL).is_file())
+            self.assertTrue((moved / orchestrator.STAGE_CONTEXT).is_file())
+            self.assertTrue((moved / "evidence-ledger.json").is_file())
+            self.assertEqual(list(replacement.iterdir()), [])
 
     def make_stage_context(self, base: pathlib.Path) -> tuple[pathlib.Path, dict]:
         repository = base / "repository"
@@ -430,6 +492,55 @@ class OuterOrchestratorTests(unittest.TestCase):
             protocol.atomic_write_json(path, context)
             with self.assertRaises(protocol.ProtocolError):
                 orchestrator.load_stage_context(path)
+
+    def test_stage_context_fifo_is_rejected_without_blocking(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fifo = pathlib.Path(directory) / "context.fifo"
+            os.mkfifo(fifo)
+            program = """
+import pathlib
+from scripts import phase2e_protocol as protocol
+from scripts import run_phase2e as orchestrator
+try:
+    orchestrator.load_stage_context(pathlib.Path(__import__("sys").argv[1]))
+except protocol.ProtocolError:
+    raise SystemExit(0)
+raise SystemExit(1)
+"""
+            process = subprocess.Popen(
+                (sys.executable, "-c", program, str(fifo)),
+                cwd=self.REPOSITORY,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            timed_out = False
+            try:
+                _stdout, stderr = process.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                process.kill()
+                _stdout, stderr = process.communicate()
+            self.assertFalse(timed_out, "FIFO context open blocked")
+            self.assertEqual(process.returncode, 0, stderr)
+
+    def test_non_regular_stage_context_rejection_does_not_leak_descriptors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            context_directory = pathlib.Path(directory) / "context-directory"
+            context_directory.mkdir()
+            context_fifo = pathlib.Path(directory) / "context.fifo"
+            os.mkfifo(context_fifo)
+            baseline = len(os.listdir("/proc/self/fd"))
+            for context in (
+                context_fifo,
+                context_directory,
+                pathlib.Path("/dev/null"),
+            ):
+                with self.subTest(context=context):
+                    for _ in range(16):
+                        with self.assertRaises(protocol.ProtocolError):
+                            orchestrator.load_stage_context(context)
+            self.assertEqual(len(os.listdir("/proc/self/fd")), baseline)
 
     def test_candidate_provenance_rejects_stale_worktree_head(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -697,166 +808,17 @@ with (
                 f"__path__.append({str(actual_scripts)!r})\n",
                 encoding="utf-8",
             )
-            source = (actual_scripts / "run_phase2e.py").read_text(encoding="utf-8")
-            injection = r'''
+            from scripts import phase2e_public_lifecycle_fixture as fixture
 
-# Test-copy-only adapters. This block is injected into an isolated temporary
-# repository and is never part of the production orchestrator.
-def _phase2e_fixture_journal(root):
-    protocol.atomic_write_json(
-        root / PROCESS_JOURNAL,
-        {
-            "version": 1,
-            "entries": [
-                {
-                    "ordinal": 1,
-                    "stage": STAGE_ORDER[0],
-                    "argv": ["fixture-stage"],
-                    "pid": 999999,
-                    "pgid": 999999,
-                    "start_ticks": 1,
-                    "state": "EXITED",
-                    "exit_code": 0,
-                    "signals": [],
-                    "reaped": True,
-                }
-            ],
-        },
-    )
-
-
-def _phase2e_install_fixture_evidence(root, context_path):
-    import shutil as _fixture_shutil
-    from unittest import mock as _fixture_mock
-    from scripts import run_phase2e_gates as _fixture_gates
-    from scripts import test_run_phase2e as _fixture_tests
-
-    context = load_stage_context(
-        context_path,
-        hashlib.sha256(context_path.read_bytes()).hexdigest(),
-        require_fresh_scratch=False,
-    )
-    staging = root.parent / "fixture-evidence-source"
-    staging.mkdir()
-    case = _fixture_tests.OuterOrchestratorTests()
-    case.REPOSITORY = pathlib.Path(context["repository"])
-    case.CANDIDATE = context["candidate_sha"]
-    with _fixture_mock.patch.object(
-        _fixture_gates, "validate_source_contract", return_value={}
-    ), _fixture_mock.patch.object(
-        _fixture_gates, "validate_terminal_evidence", return_value=None
-    ):
-        case.make_complete_root(staging)
-    excluded = {
-        AGGREGATE_MANIFEST,
-        PROGRESS_MANIFEST,
-        STAGE_CONTEXT,
-        PROCESS_JOURNAL,
-        "evidence-ledger.json",
-        ".orchestrator.lock",
-        "children",
-    }
-    for child in staging.iterdir():
-        if child.name in excluded:
-            continue
-        target = root / child.name
-        if child.is_dir():
-            _fixture_shutil.copytree(child, target, dirs_exist_ok=True)
-        else:
-            _fixture_shutil.copy2(child, target)
-    _fixture_shutil.rmtree(root / "attempts" / "allocation")
-
-
-def _phase2e_fixture_run_lane(root, stage, validity_state):
-    stage_name, lane = stage.split("/", 1)
-    ledger_path = root / "evidence-ledger.json"
-    ledger = _read_json(ledger_path, "fixture ledger")
-    attempt = _next_attempt({"evidence_root": str(root)}, stage_name, lane)
-    artifact_root = (
-        f"/phase2e-fixture-missing/{stage_name}/{lane}/{attempt}"
-        if stage_name == "allocation"
-        else None
-    )
-    ledger = protocol.open_attempt(
-        ledger,
-        stage_name,
-        lane,
-        attempt,
-        artifact_root=artifact_root,
-    )
-    if stage_name == "allocation":
-        ledger = protocol.bind_attempt_artifact(
-            ledger,
-            stage_name,
-            lane,
-            attempt,
-            artifact_root=artifact_root,
-            artifact_device=1,
-            artifact_inode=1,
-        )
-    ledger = protocol.close_attempt(
-        ledger,
-        stage_name,
-        lane,
-        attempt,
-        None if validity_state == "INCONCLUSIVE" else "PASS",
-        validity_state=validity_state,
-    )
-    protocol.atomic_write_json(ledger_path, ledger)
-
-
-def _phase2e_fixture_subprocess_stage_runner(
-    context_path, context_sha256, repository, *, root, root_identity
-):
-    mode = os.environ["PHASE2E_FIXTURE_MODE"]
-
-    def run(stage, _environment):
-        fixture_root = pathlib.Path(root)
-        _phase2e_fixture_journal(fixture_root)
-        if mode == "start" and stage == "allocation/direct-current-main":
-            _phase2e_fixture_run_lane(fixture_root, stage, "INCONCLUSIVE")
-            return 2
-        if stage.startswith(("allocation/", "timing/")):
-            _phase2e_fixture_run_lane(fixture_root, stage, "COMPLETE")
-        if stage == "aggregate-validation":
-            _phase2e_install_fixture_evidence(
-                fixture_root, pathlib.Path(context_path)
+            provenance = fixture.instrument_orchestrator_copy(
+                actual_scripts / "run_phase2e.py",
+                scripts / "run_phase2e.py",
             )
-        return 0
-
-    return run
-
-
-def _phase2e_fixture_comment(issue_url):
-    commit = os.environ["PHASE2E_FIXTURE_PRESERVATION_COMMIT"]
-    return {
-        "id": 1,
-        "html_url": issue_url,
-        "issue_url": (
-            "https://api.github.com/repos/tensor4all/tenferro-rs/issues/1436"
-        ),
-        "body": (
-            f"preservation_commit: {commit}\n"
-            f"evidence_root: {os.environ['PHASE2E_FIXTURE_ROOT']}\n"
-            f"candidate: {os.environ['PHASE2E_FIXTURE_CANDIDATE']}\n"
-            "terminal_status: PASS\n"
-        ),
-    }
-
-
-_preflight_offline_feature_queries = lambda _context: None
-require_remote_index = lambda *_args, **_kwargs: None
-_subprocess_stage_runner = _phase2e_fixture_subprocess_stage_runner
-record_preserved.__kwdefaults__["remote_validator"] = (
-    lambda _repository, _commit: None
-)
-record_preserved.__kwdefaults__["comment_fetcher"] = _phase2e_fixture_comment
-'''
-            source = source.replace(
-                '\nif __name__ == "__main__":\n',
-                injection + '\nif __name__ == "__main__":\n',
+            self.assertEqual(
+                provenance["source_sha256"],
+                protocol.sha256_file(actual_scripts / "run_phase2e.py"),
             )
-            (scripts / "run_phase2e.py").write_text(source, encoding="utf-8")
+            self.assertEqual(provenance["entrypoint_marker_count"], 1)
             shutil.copy2(
                 actual_scripts / "phase2e_protocol.py",
                 scripts / "phase2e_protocol.py",
@@ -1006,6 +968,30 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
                 (repository / orchestrator.INDEX_PATH).read_text(encoding="utf-8")
             )
             self.assertEqual(index["events"][-1]["event"], "PRESERVED")
+
+    def test_lifecycle_fixture_injection_is_single_point_and_source_bound(self):
+        try:
+            from scripts import phase2e_public_lifecycle_fixture as fixture
+        except ImportError:
+            self.fail("dedicated lifecycle fixture module is missing")
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.REPOSITORY / "scripts" / "run_phase2e.py"
+            destination = pathlib.Path(directory) / "run_phase2e.py"
+            provenance = fixture.instrument_orchestrator_copy(
+                source, destination
+            )
+            instrumented = destination.read_text(encoding="utf-8")
+            self.assertEqual(
+                provenance["source_sha256"], protocol.sha256_file(source)
+            )
+            self.assertEqual(
+                provenance["source_path"], str(source.resolve(strict=True))
+            )
+            self.assertEqual(provenance["entrypoint_marker_count"], 1)
+            self.assertEqual(
+                instrumented.count(fixture.ADAPTER_MARKER), 1
+            )
+            self.assertIn(provenance["source_sha256"], instrumented)
 
     def test_root_only_public_command_rejects_foreign_and_symlink_roots(self):
         direct = str(self.REPOSITORY / "scripts" / "run_phase2e.py")
@@ -1188,6 +1174,239 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
                 self.assertFalse((cargo_home / forbidden).exists())
                 self.assertFalse((cargo_home / forbidden).is_symlink())
             orchestrator.build.validate_controlled_cargo_home(cargo_home)
+
+    def test_execution_homes_roll_back_when_second_mkdir_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            source.mkdir()
+            home, cargo_home = orchestrator._execution_home_paths(scratch)
+            real_mkdir = pathlib.Path.mkdir
+
+            def fail_second(path, *args, **kwargs):
+                if path == cargo_home:
+                    raise PermissionError("second mkdir failed")
+                return real_mkdir(path, *args, **kwargs)
+
+            caught = None
+            with mock.patch.object(pathlib.Path, "mkdir", new=fail_second):
+                try:
+                    orchestrator._prepare_execution_homes(
+                        scratch, source_cargo_home=source
+                    )
+                except BaseException as error:
+                    caught = error
+            self.assertIsInstance(caught, protocol.ProtocolError)
+            self.assertIn("cannot create controlled execution home", str(caught))
+            self.assertFalse(home.exists())
+            self.assertFalse(cargo_home.exists())
+
+    def test_execution_home_path_resolution_io_error_is_typed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = pathlib.Path(directory) / "missing-scratch"
+            caught = None
+            try:
+                orchestrator._prepare_execution_homes(missing)
+            except BaseException as error:
+                caught = error
+            self.assertIsInstance(caught, protocol.ProtocolError)
+            self.assertIn("cannot resolve scratch parent", str(caught))
+
+    def test_execution_homes_roll_back_when_cache_link_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            (source / "git").mkdir(parents=True)
+            home, cargo_home = orchestrator._execution_home_paths(scratch)
+            caught = None
+            with mock.patch.object(
+                pathlib.Path,
+                "symlink_to",
+                side_effect=PermissionError("cache link failed"),
+            ):
+                try:
+                    orchestrator._prepare_execution_homes(
+                        scratch, source_cargo_home=source
+                    )
+                except BaseException as error:
+                    caught = error
+            self.assertIsInstance(caught, protocol.ProtocolError)
+            self.assertIn("cannot link controlled Cargo cache", str(caught))
+            self.assertFalse(home.exists())
+            self.assertFalse(cargo_home.exists())
+
+    def test_execution_home_cleanup_failure_preserves_primary_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            (source / "git").mkdir(parents=True)
+            caught = None
+            with mock.patch.object(
+                pathlib.Path,
+                "symlink_to",
+                side_effect=PermissionError("primary cache link failure"),
+            ), mock.patch.object(
+                orchestrator.shutil,
+                "rmtree",
+                side_effect=PermissionError("suppressed cleanup failure"),
+            ):
+                try:
+                    orchestrator._prepare_execution_homes(
+                        scratch, source_cargo_home=source
+                    )
+                except BaseException as error:
+                    caught = error
+            self.assertIsInstance(caught, protocol.ProtocolError)
+            self.assertIn("primary cache link failure", str(caught))
+            self.assertTrue(
+                any(
+                    "suppressed execution-home cleanup failure" in note
+                    for note in getattr(caught, "__notes__", ())
+                )
+            )
+
+    def test_pre_active_preflight_failure_rolls_back_and_exact_start_retries(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            repository = self.init_git_repository(base).resolve()
+            artifacts = repository / "docs" / "worklogs" / "artifacts"
+            artifacts.mkdir(parents=True)
+            root = artifacts / "root"
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            source.mkdir()
+            home, cargo_home = orchestrator._execution_home_paths(scratch)
+            context = {
+                "version": 1,
+                "repository": str(repository),
+                "evidence_root": str(root),
+                "scratch_parent": str(scratch),
+                "candidate_sha": self.CANDIDATE,
+                "candidate_tree_sha256": "c" * 64,
+                "reservation_id": "reservation-1",
+                "experiment_identity_digest": "d" * 64,
+                "command_contract_digest": "e" * 64,
+                "path": "/bin",
+                "home": str(home),
+                "cargo_home": str(cargo_home),
+                "index": str(repository / orchestrator.INDEX_PATH),
+                "index_lock": str(repository / orchestrator.INDEX_LOCK_PATH),
+            }
+            argv = [
+                "start",
+                "--repository",
+                str(repository),
+                "--candidate",
+                self.CANDIDATE,
+                "--evidence-root",
+                str(root),
+                "--index",
+                str(orchestrator.INDEX_PATH),
+                "--scratch-parent",
+                str(scratch),
+            ]
+            with mock.patch.object(
+                orchestrator,
+                "_prepare_start_context",
+                return_value=(context, "f" * 64, "a" * 64),
+            ), mock.patch.object(
+                orchestrator,
+                "_canonical_cargo_home",
+                return_value=source,
+            ), mock.patch.object(
+                orchestrator,
+                "_preflight_offline_feature_queries",
+                side_effect=[
+                    protocol.ProtocolError("preflight failed"),
+                    None,
+                ],
+            ), mock.patch.object(
+                orchestrator, "initialize_campaign", return_value=5
+            ):
+                first_stderr = StringIO()
+                with redirect_stderr(first_stderr):
+                    first = orchestrator.main(argv)
+                self.assertEqual(first, 3)
+                self.assertIn("preflight failed", first_stderr.getvalue())
+                self.assertFalse(home.exists())
+                self.assertFalse(cargo_home.exists())
+                second_stdout = StringIO()
+                with redirect_stdout(second_stdout):
+                    second = orchestrator.main(argv)
+            self.assertEqual(second, 5)
+            self.assertEqual(second_stdout.getvalue(), "ABANDONED_INITIALIZATION\n")
+            self.assertTrue(home.is_dir())
+            self.assertTrue(cargo_home.is_dir())
+
+    def test_pre_active_remote_index_failure_rolls_back_execution_homes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            repository = self.init_git_repository(base).resolve()
+            artifacts = repository / "docs" / "worklogs" / "artifacts"
+            artifacts.mkdir(parents=True)
+            root = artifacts / "root"
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            source.mkdir()
+            home, cargo_home = orchestrator._execution_home_paths(scratch)
+            context = {
+                "repository": str(repository),
+                "evidence_root": str(root),
+                "scratch_parent": str(scratch),
+                "candidate_sha": self.CANDIDATE,
+                "candidate_tree_sha256": "c" * 64,
+                "reservation_id": "reservation-1",
+                "experiment_identity_digest": "d" * 64,
+                "command_contract_digest": "e" * 64,
+                "path": "/bin",
+                "home": str(home),
+                "cargo_home": str(cargo_home),
+                "index": str(repository / orchestrator.INDEX_PATH),
+                "index_lock": str(repository / orchestrator.INDEX_LOCK_PATH),
+            }
+            argv = [
+                "start",
+                "--repository",
+                str(repository),
+                "--candidate",
+                self.CANDIDATE,
+                "--evidence-root",
+                str(root),
+                "--index",
+                str(orchestrator.INDEX_PATH),
+                "--scratch-parent",
+                str(scratch),
+            ]
+            with mock.patch.object(
+                orchestrator,
+                "_prepare_start_context",
+                return_value=(context, "f" * 64, "a" * 64),
+            ), mock.patch.object(
+                orchestrator,
+                "_canonical_cargo_home",
+                return_value=source,
+            ), mock.patch.object(
+                orchestrator, "_preflight_offline_feature_queries"
+            ), mock.patch.object(
+                orchestrator,
+                "initialize_campaign",
+                side_effect=protocol.ProtocolError("remote index failed"),
+            ):
+                stderr = StringIO()
+                with redirect_stderr(stderr):
+                    code = orchestrator.main(argv)
+            self.assertEqual(code, 3)
+            self.assertIn("remote index failed", stderr.getvalue())
+            self.assertFalse(home.exists())
+            self.assertFalse(cargo_home.exists())
 
     def test_offline_preflight_runs_task7_feature_queries_before_campaign(self):
         with tempfile.TemporaryDirectory() as directory:

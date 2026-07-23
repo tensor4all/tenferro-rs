@@ -273,18 +273,50 @@ def load_stage_context(
     path = pathlib.Path(path)
     if not path.is_absolute():
         path = path.resolve(strict=True)
-    flags = os.O_RDONLY | os.O_CLOEXEC
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
         descriptor = os.open(path, flags)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot securely open stage context: {error}"
+        ) from error
+    primary: BaseException | None = None
+    try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             raise protocol.ProtocolError("stage context is not a regular file")
-        with os.fdopen(descriptor, "rb") as stream:
+        stream = os.fdopen(descriptor, "rb")
+        descriptor = -1
+        with stream:
             payload = stream.read()
     except OSError as error:
-        raise protocol.ProtocolError(f"cannot securely open stage context: {error}") from error
+        wrapped = protocol.ProtocolError(
+            f"cannot securely open stage context: {error}"
+        )
+        primary = wrapped
+        raise wrapped from error
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError as close_error:
+                if primary is not None:
+                    try:
+                        primary.add_note(
+                            "suppressed stage context close failure: "
+                            f"{close_error}"
+                        )
+                    except BaseException:
+                        pass
+                else:
+                    raise protocol.ProtocolError(
+                        f"cannot close stage context: {close_error}"
+                    ) from close_error
     if expected_sha256 is not None:
         _require_sha(expected_sha256, sha256=True, context="bound context digest")
         if hashlib.sha256(payload).hexdigest() != expected_sha256:
@@ -791,41 +823,96 @@ def _execution_home_paths(
     )
 
 
+def _rollback_execution_homes(
+    owned: Sequence[pathlib.Path], primary: BaseException
+) -> None:
+    """Remove only homes created by this start attempt, preserving its error."""
+    for destination in reversed(tuple(owned)):
+        try:
+            shutil.rmtree(destination)
+        except FileNotFoundError:
+            continue
+        except BaseException as cleanup_error:
+            try:
+                primary.add_note(
+                    "suppressed execution-home cleanup failure for "
+                    f"{destination}: {type(cleanup_error).__name__}: "
+                    f"{cleanup_error}"
+                )
+            except BaseException:
+                pass
+
+
 def _prepare_execution_homes(
     scratch_parent: pathlib.Path,
     *,
     source_cargo_home: pathlib.Path | None = None,
 ) -> tuple[pathlib.Path, pathlib.Path]:
     """Create isolated homes exposing only Cargo's reusable source caches."""
-    scratch = pathlib.Path(scratch_parent).resolve(strict=True)
+    try:
+        scratch = pathlib.Path(scratch_parent).resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot resolve scratch parent for execution homes: {error}"
+        ) from error
     home, cargo_home = _execution_home_paths(scratch)
-    source = pathlib.Path(
-        source_cargo_home if source_cargo_home is not None else _canonical_cargo_home()
-    ).resolve(strict=True)
-    for destination in (home, cargo_home):
+    owned: list[pathlib.Path] = []
+    try:
         try:
-            destination.mkdir(mode=0o700)
-        except FileExistsError as error:
-            raise protocol.ProtocolError(
-                f"controlled execution home is not fresh: {destination}"
-            ) from error
-    for name in ("git", "registry"):
-        cache = source / name
-        if not cache.exists():
-            continue
-        try:
-            target = cache.resolve(strict=True)
+            source = pathlib.Path(
+                source_cargo_home
+                if source_cargo_home is not None
+                else _canonical_cargo_home()
+            ).resolve(strict=True)
         except OSError as error:
             raise protocol.ProtocolError(
-                f"cannot resolve source Cargo {name} cache: {error}"
+                f"cannot resolve source CARGO_HOME: {error}"
             ) from error
-        if not target.is_dir():
+        for destination in (home, cargo_home):
+            try:
+                destination.mkdir(mode=0o700)
+            except FileExistsError as error:
+                raise protocol.ProtocolError(
+                    f"controlled execution home is not fresh: {destination}"
+                ) from error
+            except OSError as error:
+                raise protocol.ProtocolError(
+                    f"cannot create controlled execution home {destination}: "
+                    f"{error}"
+                ) from error
+            owned.append(destination)
+        for name in ("git", "registry"):
+            cache = source / name
+            if not cache.exists():
+                continue
+            try:
+                target = cache.resolve(strict=True)
+            except OSError as error:
+                raise protocol.ProtocolError(
+                    f"cannot resolve source Cargo {name} cache: {error}"
+                ) from error
+            if not target.is_dir():
+                raise protocol.ProtocolError(
+                    f"source Cargo {name} cache is not a directory"
+                )
+            try:
+                (cargo_home / name).symlink_to(
+                    target, target_is_directory=True
+                )
+            except OSError as error:
+                raise protocol.ProtocolError(
+                    f"cannot link controlled Cargo cache {name}: {error}"
+                ) from error
+        build.validate_controlled_cargo_home(cargo_home)
+        try:
+            return home.resolve(strict=True), cargo_home.resolve(strict=True)
+        except OSError as error:
             raise protocol.ProtocolError(
-                f"source Cargo {name} cache is not a directory"
-            )
-        (cargo_home / name).symlink_to(target, target_is_directory=True)
-    build.validate_controlled_cargo_home(cargo_home)
-    return home.resolve(strict=True), cargo_home.resolve(strict=True)
+                f"cannot resolve controlled execution home: {error}"
+            ) from error
+    except BaseException as primary:
+        _rollback_execution_homes(owned, primary)
+        raise
 
 
 def _preflight_offline_feature_queries(context: Mapping[str, Any]) -> None:
@@ -2059,7 +2146,7 @@ def initialize_campaign(
     campaign_identity_digest: str,
     command_digest: str | None = None,
     context_sha256: str | None = None,
-    initializer: Callable[[pathlib.Path], None] | None = None,
+    initializer: Callable[[protocol.PreparedRootIdentity], None] | None = None,
 ) -> int:
     """Reserve globally, initialize locally, or self-seal atomically on failure."""
     root = pathlib.Path(root)
@@ -2115,7 +2202,9 @@ def initialize_campaign(
                             protocol.new_ledger(candidate_sha),
                         )
                     else:
-                        initializer(root)
+                        root_identity.revalidate()
+                        initializer(root_identity)
+                        root_identity.revalidate()
                     root_identity.revalidate()
                 except BaseException:
                     if not active_committed:
@@ -3920,42 +4009,55 @@ def main(argv: Sequence[str] | None = None) -> int:
                 scratch_parent=args.scratch_parent,
                 candidate=args.candidate,
             )
-            home, cargo_home = _prepare_execution_homes(
-                pathlib.Path(stage_context["scratch_parent"])
-            )
-            if (
-                home != pathlib.Path(stage_context["home"])
-                or cargo_home != pathlib.Path(stage_context["cargo_home"])
-            ):
-                raise protocol.ProtocolError(
-                    "derived execution home paths changed during start"
+            execution_homes: tuple[pathlib.Path, pathlib.Path] | None = None
+            try:
+                home, cargo_home = _prepare_execution_homes(
+                    pathlib.Path(stage_context["scratch_parent"])
                 )
-            _preflight_offline_feature_queries(stage_context)
-            context_path = root / STAGE_CONTEXT
+                execution_homes = (home, cargo_home)
+                if (
+                    home != pathlib.Path(stage_context["home"])
+                    or cargo_home != pathlib.Path(stage_context["cargo_home"])
+                ):
+                    raise protocol.ProtocolError(
+                        "derived execution home paths changed during start"
+                    )
+                _preflight_offline_feature_queries(stage_context)
+                context_path = root / STAGE_CONTEXT
 
-            def initialize_root(initializing_root: pathlib.Path) -> None:
-                protocol.atomic_write_json(
-                    initializing_root / STAGE_CONTEXT, stage_context
-                )
-                protocol.atomic_write_json(
-                    initializing_root / "evidence-ledger.json",
-                    protocol.new_ledger(args.candidate),
-                )
+                def initialize_root(
+                    root_identity: protocol.PreparedRootIdentity,
+                ) -> None:
+                    root_identity.revalidate()
+                    protocol.atomic_write_json_at(
+                        root_identity.descriptor, STAGE_CONTEXT, stage_context
+                    )
+                    root_identity.revalidate()
+                    protocol.atomic_write_json_at(
+                        root_identity.descriptor,
+                        "evidence-ledger.json",
+                        protocol.new_ledger(args.candidate),
+                    )
+                    root_identity.revalidate()
 
-            code = initialize_campaign(
-                repository=repository,
-                root=root,
-                reservation_id=stage_context["reservation_id"],
-                candidate_sha=args.candidate,
-                candidate_tree_sha256=stage_context["candidate_tree_sha256"],
-                experiment_identity_digest=stage_context[
-                    "experiment_identity_digest"
-                ],
-                campaign_identity_digest=campaign_identity,
-                command_digest=stage_context["command_contract_digest"],
-                context_sha256=context_sha256,
-                initializer=initialize_root,
-            )
+                code = initialize_campaign(
+                    repository=repository,
+                    root=root,
+                    reservation_id=stage_context["reservation_id"],
+                    candidate_sha=args.candidate,
+                    candidate_tree_sha256=stage_context["candidate_tree_sha256"],
+                    experiment_identity_digest=stage_context[
+                        "experiment_identity_digest"
+                    ],
+                    campaign_identity_digest=campaign_identity,
+                    command_digest=stage_context["command_contract_digest"],
+                    context_sha256=context_sha256,
+                    initializer=initialize_root,
+                )
+            except BaseException as primary:
+                if execution_homes is not None:
+                    _rollback_execution_homes(execution_homes, primary)
+                raise
             if code == 5:
                 print("ABANDONED_INITIALIZATION")
                 return 5

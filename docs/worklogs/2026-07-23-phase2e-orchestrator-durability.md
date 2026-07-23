@@ -140,8 +140,9 @@ the measured scratch root. The latter links only canonical Cargo `git` and
 creating `ACTIVE`, the wrapper runs both Task 7 `cpu-faer` feature queries with
 `CARGO_NET_OFFLINE=true`. A real local preflight on 2026-07-23 passed for
 `tenferro-cpu` and `tenferro-ad`; the focused outer-orchestrator suite passed
-91 tests after independent specification review. The exact seven-module Phase
-2E verification matrix passed 444 tests in 214.3 seconds.
+101 tests after independent specification review. At an earlier checkpoint,
+the exact seven-module Phase 2E verification matrix passed 444 tests in 214.3
+seconds; it awaits rerun after the current review cycle is accepted.
 
 An independent specification review then added subprocess regressions for
 private-worker help isolation, execution from `/tmp` with an absolute evidence
@@ -164,6 +165,31 @@ pathname inventory traversal through `/proc/self/fd/N`; descriptor-bound
 orchestration now inventories through the held directory descriptor and has a
 focused regression. The tests do not launch measurements or mutate remote
 state.
+
+A later quality pass closed four durability gaps. ACTIVE initialization now
+passes the retained evidence-root identity into its initializer and writes the
+context and ledger relative to that descriptor; a deterministic
+rename-to-symlink race proves the original inode is sealed and the replacement
+receives no bytes. Controlled HOME/CARGO_HOME creation tracks only directories
+owned by the current start attempt, rolls them back after mkdir, cache-link,
+validation, preflight, and pre-ACTIVE index/reservation failures, preserves the
+primary exception when cleanup also fails, and leaves the exact start command
+retryable. Non-`FileExistsError` setup I/O is translated to the public typed
+error path. Stage-context opens are nonblocking, no-follow, close-on-exec,
+regular-file checked, and descriptor leak tested for FIFO, directory, and
+character-device inputs.
+
+The temporary public-lifecycle adapter moved from the main test class to
+`scripts/phase2e_public_lifecycle_fixture.py`. Its helper asserts one exact
+entrypoint marker, records the canonical source path and SHA-256, and embeds
+that digest in the temporary copy before installing adapters; production has
+no fixture import or switch. The helper still reuses the comprehensive
+`make_complete_root` semantic artifact producer because independently
+duplicating the large Task 8A build/gate schemas would increase
+producer/validator drift. It explicitly excludes lifecycle-owned context,
+ledger, journal, children, progress, locks, aggregate, index, and preservation
+state, all of which the subprocess test continues to create through production
+paths.
 
 ## Remaining work
 
