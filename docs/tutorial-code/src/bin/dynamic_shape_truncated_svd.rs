@@ -40,13 +40,12 @@ fn run_case(
     executor: &mut GraphExecutor<CpuBackend>,
     reconstructed_program: &CompiledGraph,
     singular_values_program: &CompiledGraph,
-    x: &TracedTensor,
     input: &Tensor,
     expected_rank: usize,
     expected_values: &[f64],
 ) -> Result<(), tenferro_runtime::Error> {
-    let reconstructed = executor.run_with_inputs(reconstructed_program, &[(x, input)])?;
-    let singular_values = executor.run_with_inputs(singular_values_program, &[(x, input)])?;
+    let reconstructed = executor.run_with_inputs(reconstructed_program, &[input])?;
+    let singular_values = executor.run_with_inputs(singular_values_program, &[input])?;
 
     assert_eq!(singular_values.shape(), &[expected_rank]);
     assert_eq!(reconstructed.shape(), &[4, 4]);
@@ -91,7 +90,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut executor,
         &reconstructed_program,
         &singular_values_program,
-        &x,
         &rank2,
         2,
         &truncated_expected(&[4.0, 3.0, 0.1, 0.01], 0.5),
@@ -102,7 +100,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut executor,
         &reconstructed_program,
         &singular_values_program,
-        &x,
         &rank3,
         3,
         &truncated_expected(&[4.0, 3.0, 2.0, 0.01], 0.5),

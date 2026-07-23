@@ -45,7 +45,7 @@ fn run_symbolic_chain_grad(
         .register_extension(tenferro_einsum::register_runtime)
         .unwrap();
     executor
-        .run_with_inputs(&program, &[(a, a_value), (b, b_value), (c, c_value)])
+        .run_with_bindings(&program, &[(a, a_value), (b, b_value), (c, c_value)])
         .unwrap()
 }
 

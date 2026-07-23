@@ -45,6 +45,10 @@ impl ProgramBindings {
     }
 
     pub(crate) fn tensor_for_input(&self, input: ProgramValue) -> Option<Arc<Tensor>> {
+        self.tensor_ref_for_input(input).map(Arc::clone)
+    }
+
+    pub(crate) fn tensor_ref_for_input(&self, input: ProgramValue) -> Option<&Arc<Tensor>> {
         if input.owner != self.owner {
             return None;
         }
@@ -52,7 +56,7 @@ impl ProgramBindings {
             .binary_search_by_key(&input.slot, |entry| entry.key.slot)
             .ok()
             .and_then(|index| self.entries.get(index))
-            .map(|entry| Arc::clone(&entry.tensor))
+            .map(|entry| &entry.tensor)
     }
 
     pub(crate) fn bound_inputs(&self) -> impl ExactSizeIterator<Item = ProgramValue> + '_ {

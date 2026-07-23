@@ -103,12 +103,12 @@ fn graph_executor_validates_runtime_bindings() {
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let ok = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
-    let out = executor.run_with_inputs(&program, &[(&x, &ok)]).unwrap();
+    let out = executor.run_with_bindings(&program, &[(&x, &ok)]).unwrap();
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
     let wrong_shape = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let err = executor
-        .run_with_inputs(&program, &[(&x, &wrong_shape)])
+        .run_with_bindings(&program, &[(&x, &wrong_shape)])
         .unwrap_err();
     assert!(format!("{err}").contains("shape"));
 }
@@ -126,13 +126,13 @@ fn graph_executor_rejects_invalid_runtime_bindings() {
 
     let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let err = executor
-        .run_with_inputs(&program, &[(&x, &bound), (&x, &bound)])
+        .run_with_bindings(&program, &[(&x, &bound), (&x, &bound)])
         .unwrap_err();
     assert!(matches!(err, Error::DuplicateBinding { .. }), "got {err:?}");
 
     let data_leaf = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let err = executor
-        .run_with_inputs(&program, &[(&data_leaf, &bound)])
+        .run_with_bindings(&program, &[(&data_leaf, &bound)])
         .unwrap_err();
     assert!(
         matches!(err, Error::UnexpectedBinding { binding_index: 0 }),
@@ -141,7 +141,7 @@ fn graph_executor_rejects_invalid_runtime_bindings() {
 
     let other = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let err = executor
-        .run_with_inputs(&program, &[(&other, &bound)])
+        .run_with_bindings(&program, &[(&other, &bound)])
         .unwrap_err();
     assert!(
         matches!(err, Error::UnexpectedBinding { binding_index: 0 }),
@@ -150,7 +150,7 @@ fn graph_executor_rejects_invalid_runtime_bindings() {
 
     let wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let err = executor
-        .run_with_inputs(&program, &[(&x, &wrong_dtype)])
+        .run_with_bindings(&program, &[(&x, &wrong_dtype)])
         .unwrap_err();
     assert!(
         matches!(
@@ -213,7 +213,9 @@ fn graph_executor_synthesizes_deferred_zero_tangents_from_primal_binding() {
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let bound = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
-    let out = executor.run_with_inputs(&program, &[(&x, &bound)]).unwrap();
+    let out = executor
+        .run_with_bindings(&program, &[(&x, &bound)])
+        .unwrap();
 
     assert_eq!(out.shape(), &[4]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
@@ -233,7 +235,7 @@ fn graph_executor_synthesizes_deferred_zero_tangents_from_borrowed_primal_bindin
 
     let bound = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let out = executor
-        .run_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&bound))])
+        .run_with_read_bindings(&program, &[(&x, TensorRead::from_tensor(&bound))])
         .unwrap();
 
     assert_eq!(out.shape(), &[4]);

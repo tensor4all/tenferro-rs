@@ -167,7 +167,7 @@ fn registered_runtime_reports_gpu_input_as_unsupported() {
         .unwrap();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        executor.run_with_inputs(&program, &[(&x, &gpu_input)])
+        executor.run_with_inputs(&program, &[&gpu_input])
     }));
     assert!(
         result.is_ok(),

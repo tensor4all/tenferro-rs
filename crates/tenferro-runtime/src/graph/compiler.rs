@@ -183,7 +183,7 @@ impl GraphCompiler {
                 all_inputs.insert(key.clone(), tensor.clone());
             }
         }
-        self.compile_many_with_descriptors(outputs, &HashMap::new(), &all_inputs)
+        self.compile_many_with_descriptors(outputs, &HashMap::new(), &all_inputs, None)
     }
 
     /// Compile one traced output with concrete placeholder specs.
@@ -218,6 +218,7 @@ impl GraphCompiler {
         bindings: &[(&TracedTensor, DType, &[usize])],
     ) -> Result<CompiledGraph> {
         let mut binding_specs = HashMap::new();
+        let mut input_order = Vec::with_capacity(bindings.len());
         for (index, (placeholder, dtype, shape)) in bindings.iter().enumerate() {
             validate_placeholder_spec(index, placeholder, *dtype, shape)?;
             let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
@@ -239,9 +240,15 @@ impl GraphCompiler {
                     input_key: format!("{:?}", key),
                 });
             }
+            input_order.push(key);
         }
 
-        self.compile_many_with_descriptors(&[output], &binding_specs, output.inputs_map.as_ref())
+        self.compile_many_with_descriptors(
+            &[output],
+            &binding_specs,
+            output.inputs_map.as_ref(),
+            Some(&input_order),
+        )
     }
 
     /// Number of compiled programs currently retained.
@@ -427,6 +434,7 @@ impl GraphCompiler {
         outputs: &[&TracedTensor],
         binding_specs: &HashMap<TensorInputKey, InputDescriptor>,
         default_inputs: &HashMap<TensorInputKey, Arc<Tensor>>,
+        explicit_input_order: Option<&[TensorInputKey]>,
     ) -> Result<CompiledGraph> {
         let mut constraint_scopes = Vec::new();
         let mut seen_constraint_scopes = std::collections::HashSet::new();
@@ -517,6 +525,38 @@ impl GraphCompiler {
                 DimExpr::from_concrete(&descriptor.shape),
                 descriptor.default_tensor,
             ));
+        }
+        if let Some(explicit_input_order) = explicit_input_order {
+            let input_position_by_key: HashMap<_, _> = graph
+                .inputs
+                .iter()
+                .enumerate()
+                .filter_map(|(position, key)| match key {
+                    ValueKey::Input(key) => Some((key.clone(), position)),
+                    _ => None,
+                })
+                .collect();
+            let mut ordered_positions = Vec::with_capacity(graph.inputs.len());
+            let mut selected_positions = vec![false; graph.inputs.len()];
+            for key in explicit_input_order {
+                if let Some(&position) = input_position_by_key.get(key) {
+                    ordered_positions.push(position);
+                    selected_positions[position] = true;
+                }
+            }
+            for (position, selected) in selected_positions.iter().enumerate() {
+                if !selected {
+                    ordered_positions.push(position);
+                }
+            }
+            compiled.input_slots = ordered_positions
+                .iter()
+                .map(|&position| compiled.input_slots[position])
+                .collect();
+            descriptors = ordered_positions
+                .into_iter()
+                .map(|position| descriptors[position].clone())
+                .collect();
         }
 
         let semantic =

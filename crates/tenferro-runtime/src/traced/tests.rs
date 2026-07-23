@@ -280,7 +280,7 @@ fn broadcast_in_dim_sym_defers_cross_tensor_symbolic_extent_validation() {
     let matching_shape_ref = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
     let mut executor = GraphExecutor::new(CpuBackend::new());
     let result = executor
-        .run_with_inputs(&program, &[(&shape_ref, &matching_shape_ref)])
+        .run_with_inputs(&program, &[&matching_shape_ref])
         .unwrap();
     assert_eq!(result.shape(), &[2]);
     assert_eq!(result.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
@@ -290,7 +290,7 @@ fn broadcast_in_dim_sym_defers_cross_tensor_symbolic_extent_validation() {
         .unwrap();
     let mismatched_shape_ref = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
     let err = executor
-        .run_with_inputs(&mismatch_program, &[(&shape_ref, &mismatched_shape_ref)])
+        .run_with_inputs(&mismatch_program, &[&mismatched_shape_ref])
         .unwrap_err();
     assert!(matches!(
         &err,

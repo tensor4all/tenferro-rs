@@ -557,11 +557,7 @@ fn einsum_symbolic_explicit_path_matches_static_execution() {
     symbolic_engine
         .register_extension(tenferro_einsum::register_runtime)
         .unwrap();
-    let run_inputs = [
-        (&a_symbolic, &a_value),
-        (&b_symbolic, &b_value),
-        (&c_symbolic, &c_value),
-    ];
+    let run_inputs = [&a_value, &b_value, &c_value];
     let actual = symbolic_engine
         .run_with_inputs(&program, &run_inputs)
         .unwrap();

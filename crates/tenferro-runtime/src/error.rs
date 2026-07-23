@@ -231,6 +231,10 @@ pub enum Error {
     #[error("placeholder {input_key} has no runtime input binding")]
     UnboundPlaceholder { input_key: String },
 
+    /// The number of ordered tensors supplied to a compiled graph is invalid.
+    #[error("compiled graph expects {expected} ordered inputs, got {actual}")]
+    GraphInputCountMismatch { expected: usize, actual: usize },
+
     /// The same placeholder was bound more than once in the `bindings` slice.
     #[error("placeholder {input_key} was bound more than once")]
     DuplicateBinding { input_key: String },
@@ -614,6 +618,9 @@ impl Error {
             | Self::DuplicateBinding { .. }
             | Self::ContextMismatch { .. } => ErrorKind::RuntimeState,
             Self::NonScalarGrad { .. } => ErrorKind::Validation(ValidationKind::InvalidArgument),
+            Self::GraphInputCountMismatch { .. } => {
+                ErrorKind::Validation(ValidationKind::InvalidArgument)
+            }
             Self::Unsupported { .. } | Self::UnsupportedAdRule { .. } => ErrorKind::Unsupported,
             Self::AdRuleSource { .. } => ErrorKind::Validation(ValidationKind::InvalidArgument),
             Self::TensorRuntime(error) => error.kind(),
@@ -672,6 +679,7 @@ impl Error {
             Self::PlaceholderDtypeMismatch { .. }
             | Self::PlaceholderShapeMismatch { .. }
             | Self::PlaceholderRankMismatch { .. }
+            | Self::GraphInputCountMismatch { .. }
             | Self::UnexpectedBinding { .. }
             | Self::UnboundPlaceholder { .. }
             | Self::DuplicateBinding { .. } => Some(ErrorPhase::Execution),

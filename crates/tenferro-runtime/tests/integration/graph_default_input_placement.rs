@@ -155,12 +155,12 @@ fn explicit_scalar_binding_is_not_auto_uploaded() {
     let bound = Tensor::from_vec_col_major(vec![], vec![7.0_f64]).unwrap();
 
     let owned = GraphExecutor::new(UploadRejectingBackend)
-        .run_many_with_inputs(&program, &[(&scalar, &bound)])
+        .run_many_with_inputs(&program, &[&bound])
         .unwrap();
     assert_eq!(owned[0].as_slice::<f64>().unwrap(), &[7.0]);
 
     let borrowed = GraphExecutor::new(UploadRejectingBackend)
-        .run_many_with_input_reads(&program, &[(&scalar, TensorRead::from_tensor(&bound))])
+        .run_many_with_input_reads(&program, &[TensorRead::from_tensor(&bound)])
         .unwrap();
     assert_eq!(borrowed[0].as_slice::<f64>().unwrap(), &[7.0]);
 }

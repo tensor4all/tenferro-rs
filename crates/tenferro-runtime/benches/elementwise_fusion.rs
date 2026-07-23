@@ -71,7 +71,7 @@ fn compile_broadcast_mul_add(
 fn bench_runtime_add_mul(c: &mut Criterion) {
     let mut group = c.benchmark_group("runtime_elementwise_chain/f64/add_mul");
     for &n in &[4_096_usize, 65_536, 1_048_576] {
-        let (a_symbol, b_symbol, program) = compile_add_mul(n);
+        let (_a_symbol, _b_symbol, program) = compile_add_mul(n);
         let a = input_tensor(n, 0.5);
         let b = input_tensor(n, 1.25);
         group.throughput(criterion::Throughput::Elements(n as u64));
@@ -82,8 +82,8 @@ fn bench_runtime_add_mul(c: &mut Criterion) {
                     .run_with_input_reads(
                         black_box(&program),
                         &[
-                            (&a_symbol, TensorRead::from_tensor(black_box(&a))),
-                            (&b_symbol, TensorRead::from_tensor(black_box(&b))),
+                            TensorRead::from_tensor(black_box(&a)),
+                            TensorRead::from_tensor(black_box(&b)),
                         ],
                     )
                     .expect("graph run");
@@ -97,7 +97,7 @@ fn bench_runtime_add_mul(c: &mut Criterion) {
 fn bench_runtime_broadcast_mul(c: &mut Criterion) {
     let mut group = c.benchmark_group("runtime_elementwise_chain/f64/broadcast_mul");
     for &(rows, cols) in &[(256_usize, 256_usize), (1024, 1024)] {
-        let (a_symbol, b_symbol, program) = compile_broadcast_mul(rows, cols);
+        let (_a_symbol, _b_symbol, program) = compile_broadcast_mul(rows, cols);
         let a = input_tensor(rows, 0.5);
         let b = input_tensor(cols, 1.25);
         let elements = rows * cols;
@@ -111,8 +111,8 @@ fn bench_runtime_broadcast_mul(c: &mut Criterion) {
                         .run_with_input_reads(
                             black_box(&program),
                             &[
-                                (&a_symbol, TensorRead::from_tensor(black_box(&a))),
-                                (&b_symbol, TensorRead::from_tensor(black_box(&b))),
+                                TensorRead::from_tensor(black_box(&a)),
+                                TensorRead::from_tensor(black_box(&b)),
                             ],
                         )
                         .expect("graph run");
@@ -127,7 +127,7 @@ fn bench_runtime_broadcast_mul(c: &mut Criterion) {
 fn bench_runtime_broadcast_mul_add(c: &mut Criterion) {
     let mut group = c.benchmark_group("runtime_elementwise_chain/f64/broadcast_mul_add");
     for &(rows, cols) in &[(256_usize, 256_usize), (1024, 1024)] {
-        let (a_symbol, b_symbol, program) = compile_broadcast_mul_add(rows, cols);
+        let (_a_symbol, _b_symbol, program) = compile_broadcast_mul_add(rows, cols);
         let a = input_tensor(rows, 0.5);
         let b = input_tensor(cols, 1.25);
         let elements = rows * cols;
@@ -141,8 +141,8 @@ fn bench_runtime_broadcast_mul_add(c: &mut Criterion) {
                         .run_with_input_reads(
                             black_box(&program),
                             &[
-                                (&a_symbol, TensorRead::from_tensor(black_box(&a))),
-                                (&b_symbol, TensorRead::from_tensor(black_box(&b))),
+                                TensorRead::from_tensor(black_box(&a)),
+                                TensorRead::from_tensor(black_box(&b)),
                             ],
                         )
                         .expect("graph run");

@@ -448,7 +448,7 @@ fn borrowed_input_execution_retains_executor_slot_workspace_capacity() {
     assert_eq!(executor.borrowed_slot_workspace_capacity, 0);
 
     let outputs = executor
-        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .run_many_with_input_reads(&program, &[TensorRead::from_tensor(&input)])
         .unwrap();
 
     assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
@@ -474,7 +474,7 @@ fn borrowed_input_value_execution_retains_workspace_and_lazy_output() {
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let outputs = executor
-        .run_many_values_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .run_many_values_with_input_reads(&program, &[TensorRead::from_tensor(&input)])
         .unwrap();
 
     assert!(matches!(outputs[0], TensorValue::View(_)));
@@ -511,14 +511,12 @@ fn single_value_wrappers_preserve_lazy_outputs_and_debug_state() {
     let bound =
         Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 2], vec![1.0, 2.0, 3.0, 4.0]).unwrap());
 
-    let value = executor
-        .run_value_with_inputs(&program, &[(&placeholder, &bound)])
-        .unwrap();
+    let value = executor.run_value_with_inputs(&program, &[&bound]).unwrap();
     assert!(matches!(value, TensorValue::View(_)));
     assert_eq!(value.shape(), &[2, 2]);
 
     let value = executor
-        .run_value_with_input_reads(&program, &[(&placeholder, TensorRead::from_tensor(&bound))])
+        .run_value_with_input_reads(&program, &[TensorRead::from_tensor(&bound)])
         .unwrap();
     assert!(matches!(value, TensorValue::View(_)));
     assert_eq!(value.shape(), &[2, 2]);

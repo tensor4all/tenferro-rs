@@ -272,8 +272,8 @@ fn compiled_graph_dot_uses_the_installed_cpu_provider_slot_once() {
         .run_many_with_input_reads(
             &program,
             &[
-                (&lhs, TensorRead::from_tensor(&lhs_data)),
-                (&rhs, TensorRead::from_tensor(&rhs_data)),
+                TensorRead::from_tensor(&lhs_data),
+                TensorRead::from_tensor(&rhs_data),
             ],
         )
         .unwrap();
@@ -627,7 +627,7 @@ fn graph_run_preflight_uses_explicit_input_shape() {
         input_idx: 0,
         axis: 0,
     };
-    let (input, bad) = explicit_input_program(ShapeGuard {
+    let (_input, bad) = explicit_input_program(ShapeGuard {
         source: ConstraintSource {
             family_id: "runtime.graph-explicit-preflight.v1",
             instruction_index: Some(0),
@@ -636,7 +636,7 @@ fn graph_run_preflight_uses_explicit_input_shape() {
         lhs: axis.clone(),
         rhs: DimExpr::Const(3),
     });
-    let (good_input, good) = explicit_input_program(ShapeGuard {
+    let (_good_input, good) = explicit_input_program(ShapeGuard {
         source: ConstraintSource {
             family_id: "runtime.graph-explicit-preflight.v1",
             instruction_index: Some(0),
@@ -649,7 +649,7 @@ fn graph_run_preflight_uses_explicit_input_shape() {
 
     let (backend, uploads, dispatches, sessions) = counting_backend();
     let error = GraphExecutor::new(backend)
-        .run_many_with_inputs(&bad, &[(&input, &bound)])
+        .run_many_with_inputs(&bad, &[&bound])
         .unwrap_err();
     assert!(matches!(
         error,
@@ -664,7 +664,7 @@ fn graph_run_preflight_uses_explicit_input_shape() {
 
     let (backend, uploads, dispatches, sessions) = counting_backend();
     GraphExecutor::new(backend)
-        .run_many_with_inputs(&good, &[(&good_input, &bound)])
+        .run_many_with_inputs(&good, &[&bound])
         .unwrap();
     assert_counts(&uploads, &dispatches, &sessions, 0, 1, 1);
 }
@@ -787,13 +787,12 @@ fn borrowed_deferred_zero_factory_runs_only_after_guard_validation() {
 
 #[test]
 fn deferred_zero_factory_errors_follow_metadata_and_guard_validation() {
-    let (input, mut invalid_metadata) =
+    let (_input, invalid_metadata) =
         explicit_input_program(constant_guard(1, 2, "runtime.deferred-zero-error-order.v1"));
-    invalid_metadata.inputs[0].shape = vec![3];
-    let bound = Tensor::from_vec_col_major(vec![2], vec![4.0_f64, 5.0]).unwrap();
+    let bound = Tensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
     let (backend, uploads, dispatches, sessions) = counting_backend();
     let error = GraphExecutor::new(backend)
-        .run_with_inputs(&invalid_metadata, &[(&input, &bound)])
+        .run_with_inputs(&invalid_metadata, &[&bound])
         .unwrap_err();
     assert!(matches!(error, Error::PlaceholderShapeMismatch { .. }));
     assert_counts(&uploads, &dispatches, &sessions, 0, 0, 0);

@@ -94,10 +94,10 @@ Ok(CompiledGraph::new(frozen, staging))
 - Modify: `crates/tenferro-runtime/src/graph/executor/tests/preflight.rs`
 - Test: `crates/tenferro-runtime/tests/integration/graph_default_input_placement.rs`
 
-- [ ] Add failing tests for ordered input count/dtype/shape validation, default
+- [x] Add failing tests for ordered input count/dtype/shape validation, default
   binding lookup, borrowed reads, multi-output order, deferred-zero synthesis,
   shape guards, and lazy-output preservation using `CompiledGraph`.
-- [ ] Replace traced-tensor keyed public bindings with ordered inputs:
+- [x] Replace traced-tensor keyed public bindings with ordered inputs:
 
 ```rust
 pub fn run_with_inputs(
@@ -116,7 +116,7 @@ pub fn run_many_with_inputs(
   Apply the same ordered contract to `TensorRead` and `TensorValue` variants.
   Empty explicit input slices mean “use frozen defaults”; non-empty slices
   must cover every semantic input in order.
-- [ ] Resolve metadata through `SemanticProgram::inputs()` and
+- [x] Resolve metadata through `SemanticProgram::inputs()` and
   `value_metadata`; resolve defaults through the frozen binding map. Perform
   all validation before entering a backend session.
 - [ ] Keep raw staging evaluation methods crate-private and covered only by

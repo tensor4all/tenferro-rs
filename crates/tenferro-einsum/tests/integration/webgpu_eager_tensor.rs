@@ -181,7 +181,7 @@ fn traced_einsum_runs_rank2_f32_matmul_on_webgpu_when_adapter_available() {
     let mut executor = GraphExecutor::new(WebGpuBackend::from_runtime(runtime.clone()));
 
     let out = executor
-        .run_with_inputs(&program, &[(&lhs, &lhs_gpu), (&rhs, &rhs_gpu)])
+        .run_with_inputs(&program, &[&lhs_gpu, &rhs_gpu])
         .unwrap();
     executor.backend().synchronize().unwrap();
     let host = download_webgpu_tensor(executor.backend().runtime(), &out).unwrap();
@@ -233,7 +233,7 @@ fn traced_einsum_runs_batched_f32_matmul_on_webgpu_when_adapter_available() {
     let mut executor = GraphExecutor::new(WebGpuBackend::from_runtime(runtime.clone()));
 
     let out = executor
-        .run_with_inputs(&program, &[(&lhs, &lhs_gpu), (&rhs, &rhs_gpu)])
+        .run_with_inputs(&program, &[&lhs_gpu, &rhs_gpu])
         .unwrap();
     executor.backend().synchronize().unwrap();
     let host = download_webgpu_tensor(executor.backend().runtime(), &out).unwrap();

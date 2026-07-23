@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
+use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::{
     DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor,
 };
@@ -362,10 +364,10 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         self.run_many_values_with_inputs(program, &[])
     }
 
-    /// Run a one-output program with explicit runtime placeholder bindings.
+    /// Run a one-output program with ordered runtime inputs.
     ///
-    /// Explicit bindings override program defaults and are validated against
-    /// the ordered input specs captured in the compiled program.
+    /// A non-empty slice supplies every semantic input in order. An empty
+    /// slice uses the graph's frozen default bindings.
     ///
     /// # Examples
     ///
@@ -381,17 +383,16 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///     .unwrap();
     /// let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
-    /// let out = executor.run_with_inputs(&program, &[(&x, &bound)]).unwrap();
+    /// let out = executor.run_with_inputs(&program, &[&bound]).unwrap();
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
-    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// Returns [`Error::GraphInputCountMismatch`] for a non-empty slice with
+    /// the wrong number of inputs,
     /// [`Error::PlaceholderDtypeMismatch`],
     /// [`Error::PlaceholderShapeMismatch`], or
-    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
     /// [`Error::UnboundPlaceholder`] for a missing input, and
     /// [`Error::ShapeConstraintViolation`],
     /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
@@ -399,13 +400,13 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     pub fn run_with_inputs(
         &mut self,
         program: &CompiledGraph,
-        bindings: &[(&TracedTensor, &Tensor)],
+        inputs: &[&Tensor],
     ) -> Result<Tensor> {
-        let mut outputs = self.run_many_with_inputs(program, bindings)?;
+        let mut outputs = self.run_many_with_inputs(program, inputs)?;
         expect_single_output(&mut outputs)
     }
 
-    /// Run a one-output program with explicit bindings and preserve lazy output views.
+    /// Run a one-output program with ordered inputs and preserve lazy output views.
     ///
     /// # Examples
     ///
@@ -422,18 +423,17 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let bound = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     ///
-    /// let value = executor.run_value_with_inputs(&program, &[(&x, &bound)]).unwrap();
+    /// let value = executor.run_value_with_inputs(&program, &[&bound]).unwrap();
     /// assert!(matches!(&value, TensorValue::View(_)));
     /// assert_eq!(executor.materialize_value(&value).unwrap().as_slice::<f64>().unwrap(), &[1.0, 3.0, 2.0, 4.0]);
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
-    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// Returns [`Error::GraphInputCountMismatch`] for a non-empty slice with
+    /// the wrong number of inputs,
     /// [`Error::PlaceholderDtypeMismatch`],
     /// [`Error::PlaceholderShapeMismatch`], or
-    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
     /// [`Error::UnboundPlaceholder`] for a missing input, and
     /// [`Error::ShapeConstraintViolation`],
     /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
@@ -441,13 +441,13 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     pub fn run_value_with_inputs(
         &mut self,
         program: &CompiledGraph,
-        bindings: &[(&TracedTensor, &Tensor)],
+        inputs: &[&Tensor],
     ) -> Result<TensorValue> {
-        let mut outputs = self.run_many_values_with_inputs(program, bindings)?;
+        let mut outputs = self.run_many_values_with_inputs(program, inputs)?;
         expect_single_value(&mut outputs)
     }
 
-    /// Run a one-output program with explicit borrowed runtime placeholder bindings.
+    /// Run a one-output program with ordered borrowed runtime inputs.
     ///
     /// Unlike [`run_with_inputs`](Self::run_with_inputs), caller-owned input
     /// tensors are read through [`TensorRead`] and are not cloned into executor
@@ -472,17 +472,16 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let read = TensorRead::from_view(TensorView::F64(view));
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     ///
-    /// let out = executor.run_with_input_reads(&program, &[(&x, read)]).unwrap();
+    /// let out = executor.run_with_input_reads(&program, &[read]).unwrap();
     /// assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
-    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// Returns [`Error::GraphInputCountMismatch`] for a non-empty slice with
+    /// the wrong number of inputs,
     /// [`Error::PlaceholderDtypeMismatch`],
     /// [`Error::PlaceholderShapeMismatch`], or
-    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
     /// [`Error::UnboundPlaceholder`] for a missing input, and
     /// [`Error::ShapeConstraintViolation`],
     /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
@@ -490,9 +489,9 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     pub fn run_with_input_reads<'a>(
         &mut self,
         program: &'a CompiledGraph,
-        bindings: &[(&TracedTensor, TensorRead<'a>)],
+        inputs: &[TensorRead<'a>],
     ) -> Result<Tensor> {
-        let mut outputs = self.run_many_with_input_reads(program, bindings)?;
+        let mut outputs = self.run_many_with_input_reads(program, inputs)?;
         expect_single_output(&mut outputs)
     }
 
@@ -519,7 +518,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     ///
     /// let value = executor
-    ///     .run_value_with_input_reads(&program, &[(&x, read)])
+    ///     .run_value_with_input_reads(&program, &[read])
     ///     .unwrap();
     /// assert!(matches!(&value, TensorValue::View(_)));
     /// assert_eq!(value.shape(), &[2, 2]);
@@ -527,11 +526,10 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
-    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// Returns [`Error::GraphInputCountMismatch`] for a non-empty slice with
+    /// the wrong number of inputs,
     /// [`Error::PlaceholderDtypeMismatch`],
     /// [`Error::PlaceholderShapeMismatch`], or
-    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
     /// [`Error::UnboundPlaceholder`] for a missing input, and
     /// [`Error::ShapeConstraintViolation`],
     /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
@@ -539,13 +537,13 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     pub fn run_value_with_input_reads<'a>(
         &mut self,
         program: &'a CompiledGraph,
-        bindings: &[(&TracedTensor, TensorRead<'a>)],
+        inputs: &[TensorRead<'a>],
     ) -> Result<TensorValue> {
-        let mut outputs = self.run_many_values_with_input_reads(program, bindings)?;
+        let mut outputs = self.run_many_values_with_input_reads(program, inputs)?;
         expect_single_value(&mut outputs)
     }
 
-    /// Run a program with explicit runtime placeholder bindings.
+    /// Run a program with ordered runtime inputs.
     ///
     /// # Examples
     ///
@@ -561,18 +559,17 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///     .unwrap();
     /// let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
-    /// let outputs = executor.run_many_with_inputs(&program, &[(&x, &bound)]).unwrap();
+    /// let outputs = executor.run_many_with_inputs(&program, &[&bound]).unwrap();
     /// assert_eq!(outputs.len(), 1);
     /// assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
-    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// Returns [`Error::GraphInputCountMismatch`] for a non-empty slice with
+    /// the wrong number of inputs,
     /// [`Error::PlaceholderDtypeMismatch`],
     /// [`Error::PlaceholderShapeMismatch`], or
-    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
     /// [`Error::UnboundPlaceholder`] for a missing input, and
     /// [`Error::ShapeConstraintViolation`],
     /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
@@ -580,13 +577,13 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     pub fn run_many_with_inputs(
         &mut self,
         program: &CompiledGraph,
-        bindings: &[(&TracedTensor, &Tensor)],
+        inputs: &[&Tensor],
     ) -> Result<Vec<Tensor>> {
-        let input_tensors = resolve_inputs(program, bindings, &mut self.backend)?;
+        let input_tensors = resolve_ordered_inputs(program, inputs, &mut self.backend)?;
         self.eval_exec_ir(&program.staging, input_tensors)
     }
 
-    /// Run a program with explicit bindings and preserve lazy output views.
+    /// Run a program with ordered inputs and preserve lazy output views.
     ///
     /// # Examples
     ///
@@ -604,7 +601,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     ///
     /// let outputs = executor
-    ///     .run_many_values_with_inputs(&program, &[(&x, &bound)])
+    ///     .run_many_values_with_inputs(&program, &[&bound])
     ///     .unwrap();
     /// assert_eq!(outputs.len(), 1);
     /// assert!(matches!(&outputs[0], TensorValue::View(_)));
@@ -612,11 +609,10 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
-    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// Returns [`Error::GraphInputCountMismatch`] for a non-empty slice with
+    /// the wrong number of inputs,
     /// [`Error::PlaceholderDtypeMismatch`],
     /// [`Error::PlaceholderShapeMismatch`], or
-    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
     /// [`Error::UnboundPlaceholder`] for a missing input, and
     /// [`Error::ShapeConstraintViolation`],
     /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
@@ -624,17 +620,16 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     pub fn run_many_values_with_inputs(
         &mut self,
         program: &CompiledGraph,
-        bindings: &[(&TracedTensor, &Tensor)],
+        inputs: &[&Tensor],
     ) -> Result<Vec<TensorValue>> {
-        let input_tensors = resolve_inputs(program, bindings, &mut self.backend)?;
+        let input_tensors = resolve_ordered_inputs(program, inputs, &mut self.backend)?;
         self.eval_exec_ir_values(&program.staging, input_tensors)
     }
 
-    /// Run a program with explicit borrowed runtime placeholder bindings.
+    /// Run a program with ordered borrowed runtime inputs.
     ///
-    /// Bindings override program defaults and are validated against the input
-    /// specs captured in the compiled program. Bound tensors are borrowed by
-    /// the executor for this call instead of cloned into input slots.
+    /// A non-empty slice supplies every semantic input in order. Input tensors
+    /// are borrowed by the executor for this call instead of cloned into slots.
     ///
     /// # Examples
     ///
@@ -655,17 +650,16 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let read = TensorRead::from_view(TensorView::F64(view));
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     ///
-    /// let outputs = executor.run_many_with_input_reads(&program, &[(&x, read)]).unwrap();
+    /// let outputs = executor.run_many_with_input_reads(&program, &[read]).unwrap();
     /// assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[2.0, 4.0]);
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
-    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// Returns [`Error::GraphInputCountMismatch`] for a non-empty slice with
+    /// the wrong number of inputs,
     /// [`Error::PlaceholderDtypeMismatch`],
     /// [`Error::PlaceholderShapeMismatch`], or
-    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
     /// [`Error::UnboundPlaceholder`] for a missing input, and
     /// [`Error::ShapeConstraintViolation`],
     /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
@@ -673,9 +667,9 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     pub fn run_many_with_input_reads<'a>(
         &mut self,
         program: &'a CompiledGraph,
-        bindings: &[(&TracedTensor, TensorRead<'a>)],
+        inputs: &[TensorRead<'a>],
     ) -> Result<Vec<Tensor>> {
-        let inputs = resolve_input_reads(program, bindings, &mut self.backend)?;
+        let inputs = resolve_ordered_input_reads(program, inputs, &mut self.backend)?;
         self.eval_exec_ir_slots(&program.staging, inputs)
     }
 
@@ -702,7 +696,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// let mut executor = GraphExecutor::new(CpuBackend::new());
     ///
     /// let outputs = executor
-    ///     .run_many_values_with_input_reads(&program, &[(&x, read)])
+    ///     .run_many_values_with_input_reads(&program, &[read])
     ///     .unwrap();
     /// assert_eq!(outputs.len(), 1);
     /// assert!(matches!(&outputs[0], TensorValue::View(_)));
@@ -710,16 +704,95 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnexpectedBinding`] for a non-placeholder or foreign
-    /// binding, [`Error::DuplicateBinding`] for a repeated placeholder,
+    /// Returns [`Error::GraphInputCountMismatch`] for a non-empty slice with
+    /// the wrong number of inputs,
     /// [`Error::PlaceholderDtypeMismatch`],
     /// [`Error::PlaceholderShapeMismatch`], or
-    /// [`Error::PlaceholderRankMismatch`] for an incompatible tensor,
     /// [`Error::UnboundPlaceholder`] for a missing input, and
     /// [`Error::ShapeConstraintViolation`],
     /// [`Error::ShapeConstraintEvaluation`], or [`Error::TensorRuntime`] when
     /// execution discovers a symbolic-guard or typed backend failure.
     pub fn run_many_values_with_input_reads<'a>(
+        &mut self,
+        program: &'a CompiledGraph,
+        inputs: &[TensorRead<'a>],
+    ) -> Result<Vec<TensorValue>> {
+        let inputs = resolve_ordered_input_reads(program, inputs, &mut self.backend)?;
+        self.eval_exec_ir_slot_values(&program.staging, inputs)
+    }
+
+    #[doc(hidden)]
+    pub fn run_with_bindings(
+        &mut self,
+        program: &CompiledGraph,
+        bindings: &[(&TracedTensor, &Tensor)],
+    ) -> Result<Tensor> {
+        let mut outputs = self.run_many_with_bindings(program, bindings)?;
+        expect_single_output(&mut outputs)
+    }
+
+    #[doc(hidden)]
+    pub fn run_value_with_bindings(
+        &mut self,
+        program: &CompiledGraph,
+        bindings: &[(&TracedTensor, &Tensor)],
+    ) -> Result<TensorValue> {
+        let mut outputs = self.run_many_values_with_bindings(program, bindings)?;
+        expect_single_value(&mut outputs)
+    }
+
+    #[doc(hidden)]
+    pub fn run_many_with_bindings(
+        &mut self,
+        program: &CompiledGraph,
+        bindings: &[(&TracedTensor, &Tensor)],
+    ) -> Result<Vec<Tensor>> {
+        let inputs = resolve_inputs(program, bindings, &mut self.backend)?;
+        self.eval_exec_ir(&program.staging, inputs)
+    }
+
+    #[doc(hidden)]
+    pub fn run_many_values_with_bindings(
+        &mut self,
+        program: &CompiledGraph,
+        bindings: &[(&TracedTensor, &Tensor)],
+    ) -> Result<Vec<TensorValue>> {
+        let inputs = resolve_inputs(program, bindings, &mut self.backend)?;
+        self.eval_exec_ir_values(&program.staging, inputs)
+    }
+
+    #[doc(hidden)]
+    pub fn run_with_read_bindings<'a>(
+        &mut self,
+        program: &'a CompiledGraph,
+        bindings: &[(&TracedTensor, TensorRead<'a>)],
+    ) -> Result<Tensor> {
+        let mut outputs = self.run_many_with_read_bindings(program, bindings)?;
+        expect_single_output(&mut outputs)
+    }
+
+    #[doc(hidden)]
+    pub fn run_value_with_read_bindings<'a>(
+        &mut self,
+        program: &'a CompiledGraph,
+        bindings: &[(&TracedTensor, TensorRead<'a>)],
+    ) -> Result<TensorValue> {
+        let mut outputs = self.run_many_values_with_read_bindings(program, bindings)?;
+        expect_single_value(&mut outputs)
+    }
+
+    #[doc(hidden)]
+    pub fn run_many_with_read_bindings<'a>(
+        &mut self,
+        program: &'a CompiledGraph,
+        bindings: &[(&TracedTensor, TensorRead<'a>)],
+    ) -> Result<Vec<Tensor>> {
+        let inputs = resolve_input_reads(program, bindings, &mut self.backend)?;
+        self.eval_exec_ir_slots(&program.staging, inputs)
+    }
+
+    #[doc(hidden)]
+    pub fn run_many_values_with_read_bindings<'a>(
         &mut self,
         program: &'a CompiledGraph,
         bindings: &[(&TracedTensor, TensorRead<'a>)],
@@ -1046,6 +1119,89 @@ fn expect_single_value(outputs: &mut Vec<TensorValue>) -> Result<TensorValue> {
         .ok_or_else(|| Error::Internal("missing graph output".to_string()))
 }
 
+fn resolve_ordered_inputs(
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+    backend: &mut impl TensorBackend,
+) -> Result<Vec<Tensor>> {
+    if inputs.is_empty() {
+        return resolve_inputs(program, &[], backend);
+    }
+    validate_ordered_input_metadata(program, inputs)?;
+    let input_shapes: Vec<_> = inputs.iter().map(|tensor| tensor.shape()).collect();
+    crate::exec::validate_shape_guards(&program.staging, &input_shapes)?;
+    Ok(inputs.iter().map(|tensor| (*tensor).clone()).collect())
+}
+
+fn resolve_ordered_input_reads<'a>(
+    program: &'a CompiledGraph,
+    inputs: &[TensorRead<'a>],
+    backend: &mut impl TensorBackend,
+) -> Result<Vec<ExecSlot<'a>>> {
+    if inputs.is_empty() {
+        return resolve_input_reads(program, &[], backend);
+    }
+    validate_ordered_input_metadata(program, inputs)?;
+    let input_shapes: Vec<_> = inputs.iter().map(TensorRead::shape).collect();
+    crate::exec::validate_shape_guards(&program.staging, &input_shapes)?;
+    Ok(inputs
+        .iter()
+        .cloned()
+        .map(ExecSlot::Read)
+        .collect::<Vec<_>>())
+}
+
+fn validate_ordered_input_metadata<T: InputMetadata>(
+    program: &CompiledGraph,
+    inputs: &[T],
+) -> Result<()> {
+    let expected = program.input_count();
+    if inputs.len() != expected {
+        return Err(Error::GraphInputCountMismatch {
+            expected,
+            actual: inputs.len(),
+        });
+    }
+    for (input_value, actual) in program.program().inputs().iter().zip(inputs) {
+        let metadata = program
+            .program()
+            .value_metadata(*input_value)
+            .map_err(|source| Error::RuntimeState {
+                op: "GraphExecutor::validate_ordered_input_metadata",
+                phase: crate::error::ErrorPhase::Execution,
+                message: source.to_string(),
+            })?;
+        if metadata.dtype() != actual.dtype() {
+            return Err(Error::PlaceholderDtypeMismatch {
+                expected: metadata.dtype(),
+                actual: actual.dtype(),
+            });
+        }
+        let expected_shape = exact_semantic_input_shape(metadata.shape())?;
+        if expected_shape.as_slice() != actual.shape() {
+            return Err(Error::PlaceholderShapeMismatch {
+                expected: expected_shape,
+                actual: actual.shape().to_vec(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn exact_semantic_input_shape(shape: &[ShapeExtent<DimExpr>]) -> Result<Vec<usize>> {
+    shape
+        .iter()
+        .map(|extent| match extent {
+            ShapeExtent::Exact(DimExpr::Const(size)) => Ok(*size),
+            _ => Err(Error::RuntimeState {
+                op: "GraphExecutor::validate_ordered_input_metadata",
+                phase: crate::error::ErrorPhase::Execution,
+                message: "compiled graph input metadata is not an exact concrete shape".to_string(),
+            }),
+        })
+        .collect()
+}
+
 fn resolve_inputs(
     program: &CompiledGraph,
     bindings: &[(&TracedTensor, &Tensor)],
@@ -1057,16 +1213,7 @@ fn resolve_inputs(
         .map(|input| input.key.clone())
         .collect();
     let tangent_root_specs = tangent_root_specs(&program.inputs);
-    let default_map: HashMap<_, _> = program
-        .inputs
-        .iter()
-        .filter_map(|input| {
-            input
-                .default_tensor
-                .as_ref()
-                .map(|tensor| (input.key.clone(), tensor.as_ref()))
-        })
-        .collect();
+    let default_map = semantic_default_map(program)?;
     let mut binding_map = HashMap::new();
     for (index, (placeholder, tensor)) in bindings.iter().enumerate() {
         if placeholder.data.is_some() {
@@ -1106,16 +1253,7 @@ fn resolve_input_reads<'a>(
         .map(|input| input.key.clone())
         .collect();
     let tangent_root_specs = tangent_root_specs(&program.inputs);
-    let default_map: HashMap<_, _> = program
-        .inputs
-        .iter()
-        .filter_map(|input| {
-            input
-                .default_tensor
-                .as_ref()
-                .map(|tensor| (input.key.clone(), tensor.as_ref()))
-        })
-        .collect();
+    let default_map = semantic_default_map(program)?;
     let mut binding_map = HashMap::new();
     for (index, (placeholder, read)) in bindings.iter().enumerate() {
         if placeholder.data.is_some() {
@@ -1154,6 +1292,28 @@ fn tangent_root_specs(inputs: &[GraphProgramInput]) -> HashMap<TensorInputKey, &
         }
     }
     specs
+}
+
+fn semantic_default_map(program: &CompiledGraph) -> Result<HashMap<TensorInputKey, &Tensor>> {
+    if program.inputs.len() != program.input_count() {
+        return Err(Error::RuntimeState {
+            op: "GraphExecutor::semantic_default_map",
+            phase: crate::error::ErrorPhase::Execution,
+            message: "compiled graph input descriptors do not match semantic input order"
+                .to_string(),
+        });
+    }
+    Ok(program
+        .inputs
+        .iter()
+        .zip(program.program().inputs())
+        .filter_map(|(input, value)| {
+            program
+                .bindings()
+                .tensor_ref_for_input(*value)
+                .map(|tensor| (input.key.clone(), tensor.as_ref()))
+        })
+        .collect())
 }
 
 trait InputMetadata {
@@ -1205,6 +1365,16 @@ impl<T: InputMetadata> SelectedInput<'_, '_, T> {
     }
 }
 
+impl<T: InputMetadata> InputMetadata for SelectedInput<'_, '_, T> {
+    fn dtype(&self) -> DType {
+        SelectedInput::dtype(self)
+    }
+
+    fn shape(&self) -> &[usize] {
+        SelectedInput::shape(self)
+    }
+}
+
 fn select_inputs<'program, 'binding, T: InputMetadata>(
     program: &'program CompiledGraph,
     bindings: &'binding HashMap<TensorInputKey, T>,
@@ -1214,8 +1384,8 @@ fn select_inputs<'program, 'binding, T: InputMetadata>(
     for input in &program.inputs {
         let value = if let Some(bound) = bindings.get(&input.key) {
             SelectedInput::Bound(bound)
-        } else if let Some(default) = &input.default_tensor {
-            SelectedInput::Default(default.as_ref())
+        } else if let Some(default) = defaults.get(&input.key) {
+            SelectedInput::Default(default)
         } else if let Some((dtype, shape)) = deferred_zero_metadata(&input.key, bindings, defaults)
         {
             SelectedInput::DeferredZero { dtype, shape }
@@ -1224,9 +1394,9 @@ fn select_inputs<'program, 'binding, T: InputMetadata>(
                 input_key: format!("{:?}", input.key),
             });
         };
-        validate_input_metadata(input, value.dtype(), value.shape())?;
         selected.push(value);
     }
+    validate_ordered_input_metadata(program, &selected)?;
     Ok(selected)
 }
 
@@ -1372,26 +1542,6 @@ fn validate_binding_placeholder_read(
                 });
             }
         }
-    }
-    Ok(())
-}
-
-fn validate_input_metadata(
-    input: &GraphProgramInput,
-    actual_dtype: DType,
-    actual_shape: &[usize],
-) -> Result<()> {
-    if input.dtype != actual_dtype {
-        return Err(Error::PlaceholderDtypeMismatch {
-            expected: input.dtype,
-            actual: actual_dtype,
-        });
-    }
-    if input.shape.as_slice() != actual_shape {
-        return Err(Error::PlaceholderShapeMismatch {
-            expected: input.shape.clone(),
-            actual: actual_shape.to_vec(),
-        });
     }
     Ok(())
 }

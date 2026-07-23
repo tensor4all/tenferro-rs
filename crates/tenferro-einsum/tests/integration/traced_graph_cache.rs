@@ -33,8 +33,6 @@ fn run_static_matmul(compiler: &mut GraphCompiler, rows: usize, cols: usize, mid
 }
 
 struct RuntimePlannedMatmul {
-    a: TracedTensor,
-    b: TracedTensor,
     a_value: Tensor,
     b_value: Tensor,
     program: CompiledGraph,
@@ -70,8 +68,6 @@ fn compile_runtime_planned_matmul(rows: usize, cols: usize, mid: usize) -> Runti
         .expect("compile");
     let (a_value, b_value) = runtime_matmul_values(rows, cols, mid);
     RuntimePlannedMatmul {
-        a,
-        b,
         a_value,
         b_value,
         program,
@@ -83,10 +79,7 @@ fn run_runtime_planned_matmul(
     case: &RuntimePlannedMatmul,
 ) -> Tensor {
     executor
-        .run_with_inputs(
-            &case.program,
-            &[(&case.a, &case.a_value), (&case.b, &case.b_value)],
-        )
+        .run_with_inputs(&case.program, &[&case.a_value, &case.b_value])
         .expect("run")
 }
 
@@ -278,13 +271,13 @@ fn traced_static_tree_einsum_expands_without_runtime_exec_program_cache() {
     let c_value = Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
 
     let first = executor
-        .run_with_inputs(&program, &[(&a, &a_value), (&b, &b_value), (&c, &c_value)])
+        .run_with_inputs(&program, &[&a_value, &b_value, &c_value])
         .unwrap();
     assert_eq!(first.as_slice::<f64>().unwrap(), &[12.0; 4]);
     let after_first = runtime_cache_entries(&executor);
 
     let _ = executor
-        .run_with_inputs(&program, &[(&a, &a_value), (&b, &b_value), (&c, &c_value)])
+        .run_with_inputs(&program, &[&a_value, &b_value, &c_value])
         .unwrap();
     let after_second = runtime_cache_entries(&executor);
 
@@ -344,17 +337,11 @@ fn runtime_planned_einsum_cache_distinguishes_plan_spec() {
     let c_value = Tensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]).unwrap();
 
     let _ = executor
-        .run_with_inputs(
-            &left_program,
-            &[(&a, &a_value), (&b, &b_value), (&c, &c_value)],
-        )
+        .run_with_inputs(&left_program, &[&a_value, &b_value, &c_value])
         .unwrap();
     let after_left = executor.cache_stats().extensions.entries;
     let _ = executor
-        .run_with_inputs(
-            &path_program,
-            &[(&a, &a_value), (&b, &b_value), (&c, &c_value)],
-        )
+        .run_with_inputs(&path_program, &[&a_value, &b_value, &c_value])
         .unwrap();
     let after_path = executor.cache_stats().extensions.entries;
 
@@ -409,16 +396,10 @@ fn runtime_planned_einsum_honors_explicit_path_execution_order() {
     let c_value = Tensor::from_vec_col_major(vec![1, 1], vec![1.0e-308_f64]).unwrap();
 
     let left_result = executor
-        .run_with_inputs(
-            &left_program,
-            &[(&a, &a_value), (&b, &b_value), (&c, &c_value)],
-        )
+        .run_with_inputs(&left_program, &[&a_value, &b_value, &c_value])
         .unwrap();
     let path_result = executor
-        .run_with_inputs(
-            &path_program,
-            &[(&a, &a_value), (&b, &b_value), (&c, &c_value)],
-        )
+        .run_with_inputs(&path_program, &[&a_value, &b_value, &c_value])
         .unwrap();
 
     let left_value = left_result.as_slice::<f64>().unwrap()[0];

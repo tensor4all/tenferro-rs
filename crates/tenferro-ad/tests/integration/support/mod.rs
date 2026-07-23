@@ -56,7 +56,7 @@ impl RunTraced for TracedTensor {
 
         let mut compiler = GraphCompiler::new();
         let program = compiler.compile_with_input_specs(self, &specs)?;
-        executor.run_with_inputs(&program, bindings)
+        executor.run_with_bindings(&program, bindings)
     }
 }
 

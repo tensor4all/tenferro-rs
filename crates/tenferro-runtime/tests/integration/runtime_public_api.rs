@@ -293,7 +293,7 @@ fn graph_executor_runs_elementwise_and_reduction_with_borrowed_inputs() {
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let out = executor
-        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .run_many_with_input_reads(&program, &[TensorRead::from_tensor(&input)])
         .unwrap();
 
     assert_eq!(out.len(), 1);
@@ -304,7 +304,8 @@ fn graph_executor_runs_elementwise_and_reduction_with_borrowed_inputs() {
 #[test]
 fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y_data = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = TracedTensor::from_tensor_concrete_shape(y_data.clone()).unwrap();
 
     let z = (&x + &y).unwrap();
 
@@ -314,7 +315,13 @@ fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
     let out = GraphExecutor::new(CpuBackend::new())
-        .run_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .run_with_input_reads(
+            &program,
+            &[
+                TensorRead::from_tensor(&input),
+                TensorRead::from_tensor(&y_data),
+            ],
+        )
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
@@ -361,8 +368,8 @@ fn graph_executor_runs_dot_general_with_borrowed_inputs() {
         .run_many_with_input_reads(
             &program,
             &[
-                (&lhs, TensorRead::from_tensor(&lhs_data)),
-                (&rhs, TensorRead::from_tensor(&rhs_data)),
+                TensorRead::from_tensor(&lhs_data),
+                TensorRead::from_tensor(&rhs_data),
             ],
         )
         .unwrap();
@@ -385,7 +392,7 @@ fn graph_executor_can_return_final_transpose_as_lazy_value() {
     let mut executor = GraphExecutor::new(CpuBackend::new());
 
     let compact = executor
-        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .run_many_with_input_reads(&program, &[TensorRead::from_tensor(&input)])
         .unwrap();
     assert_eq!(
         compact[0].as_slice::<f64>().unwrap(),
@@ -393,7 +400,7 @@ fn graph_executor_can_return_final_transpose_as_lazy_value() {
     );
 
     let values = executor
-        .run_many_values_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .run_many_values_with_input_reads(&program, &[TensorRead::from_tensor(&input)])
         .unwrap();
 
     assert_eq!(values.len(), 1);
@@ -416,7 +423,7 @@ fn graph_executor_can_return_final_transpose_as_lazy_value() {
 }
 
 #[test]
-fn graph_executor_public_helpers_and_borrowed_input_errors_are_covered() {
+fn graph_executor_public_helpers_and_ordered_input_errors_are_covered() {
     let mut executor = GraphExecutor::<CpuBackend>::default();
     executor.extension_executor_mut().clear_caches();
     assert_eq!(executor.cache_stats().extensions.entries, 0);
@@ -433,7 +440,7 @@ fn graph_executor_public_helpers_and_borrowed_input_errors_are_covered() {
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 
     let out = executor
-        .run_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+        .run_with_input_reads(&program, &[TensorRead::from_tensor(&input)])
         .unwrap();
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 
@@ -442,41 +449,36 @@ fn graph_executor_public_helpers_and_borrowed_input_errors_are_covered() {
         .unwrap_err();
     assert!(matches!(unbound, Error::UnboundPlaceholder { .. }));
 
-    let concrete = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let unexpected = executor
-        .run_many_with_input_reads(&program, &[(&concrete, TensorRead::from_tensor(&input))])
-        .unwrap_err();
-    assert!(matches!(unexpected, Error::UnexpectedBinding { .. }));
-
-    let duplicate = executor
+    let extra = executor
         .run_many_with_input_reads(
             &program,
             &[
-                (&x, TensorRead::from_tensor(&input)),
-                (&x, TensorRead::from_tensor(&input)),
+                TensorRead::from_tensor(&input),
+                TensorRead::from_tensor(&input),
             ],
         )
         .unwrap_err();
-    assert!(matches!(duplicate, Error::DuplicateBinding { .. }));
+    assert!(matches!(extra, Error::GraphInputCountMismatch { .. }));
 
     let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
     let dtype = executor
-        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&f32_input))])
+        .run_many_with_input_reads(&program, &[TensorRead::from_tensor(&f32_input)])
         .unwrap_err();
     assert!(matches!(dtype, Error::PlaceholderDtypeMismatch { .. }));
 
     let rank_input = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 2.0]).unwrap();
     let rank = executor
-        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&rank_input))])
+        .run_many_with_input_reads(&program, &[TensorRead::from_tensor(&rank_input)])
         .unwrap_err();
-    assert!(matches!(rank, Error::PlaceholderRankMismatch { .. }));
+    assert!(matches!(rank, Error::PlaceholderShapeMismatch { .. }));
 
     let shape_input = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let shape = executor
-        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&shape_input))])
+        .run_many_with_input_reads(&program, &[TensorRead::from_tensor(&shape_input)])
         .unwrap_err();
     assert!(matches!(shape, Error::PlaceholderShapeMismatch { .. }));
 
+    let concrete = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let multi = compiler
         .compile_many(&[&concrete, &concrete.neg().unwrap()])
         .unwrap();

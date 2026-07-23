@@ -124,7 +124,7 @@ fn traced_symbolic_binary_tree_col_major_matmul_uses_direct_dot_general_without_
     let b_value = Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
     let mut executor = GraphExecutor::new(CpuBackend::new());
     let out = executor
-        .run_with_inputs(&program, &[(&a, &a_value), (&b, &b_value)])
+        .run_with_inputs(&program, &[&a_value, &b_value])
         .unwrap();
 
     assert_eq!(out.shape(), &[4, 3]);
@@ -167,7 +167,7 @@ fn runtime_einsum_caches_are_extension_owned() {
     let x_value = Tensor::from_vec_col_major(vec![2, 2, 3], vec![1.0_f64; 12]).unwrap();
     let y_value = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
     let out = executor
-        .run_with_inputs(&program, &[(&x, &x_value), (&y, &y_value)])
+        .run_with_inputs(&program, &[&x_value, &y_value])
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[3.0_f64; 4]);

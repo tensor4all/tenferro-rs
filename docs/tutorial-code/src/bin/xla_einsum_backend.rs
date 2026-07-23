@@ -58,8 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
     executor.register_extension(tenferro_einsum::register_runtime)?;
-    let cpu_value =
-        executor.run_with_inputs(&program, &[(&a, &a_value), (&b, &b_value), (&c, &c_value)])?;
+    let cpu_value = executor.run_with_inputs(&program, &[&a_value, &b_value, &c_value])?;
     assert_eq!(cpu_value.shape(), &[2, 2]);
     assert_close(
         cpu_value.as_slice::<f64>().unwrap(),

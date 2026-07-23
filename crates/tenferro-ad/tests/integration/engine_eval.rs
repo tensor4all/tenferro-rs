@@ -18,7 +18,7 @@ fn graph_execution_with_borrowed_inputs_preserves_caller_tensors() {
 
     let mut engine = GraphExecutor::new(CpuBackend::with_threads(1).unwrap());
     let output = engine
-        .run_with_inputs(&program, &[(&lhs_value, &lhs), (&rhs_value, &rhs)])
+        .run_with_inputs(&program, &[&lhs, &rhs])
         .expect("borrowed graph execution should succeed");
 
     assert_eq!(output.as_slice::<f64>().unwrap(), &[5.0]);
