@@ -84,6 +84,20 @@ build, or compiler process remained, the root was sealed with
 `record-index --abandoned --confirm-no-live-processes`, which returned
 `PENDING_PRESERVATION`.
 
+### Remote preservation
+
+The sealed root and pending index were pushed in commit
+`8537b9d710d453555e3963898aaab6f735f10d1a`. The permanent explanatory
+report is
+<https://github.com/tensor4all/tenferro-rs/issues/1436#issuecomment-5056505728>.
+The exact machine-validated preservation proof is
+<https://github.com/tensor4all/tenferro-rs/issues/1436#issuecomment-5056508586>.
+
+`record-preserved` fetched the branch, reconstructed and validated the
+committed root, index, and worklog blobs, fetched the exact proof comment, and
+returned `PRESERVED`. Run 0002 remains negative evidence and does not become
+`current_evidence_root`.
+
 ### Follow-up
 
 1. Preserve this negative root without modifying its sealed inventory.
