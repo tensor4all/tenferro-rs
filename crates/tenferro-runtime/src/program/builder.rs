@@ -429,6 +429,12 @@ impl ImportTransaction {
             .iter()
             .map(|root| root.slot as usize)
             .collect();
+        pending.extend(
+            request
+                .bindings
+                .bound_inputs()
+                .map(|input| input.slot as usize),
+        );
         for (operation_index, operation) in source.operations.iter().enumerate() {
             if !operation.effects.is_empty() {
                 needed_operations[operation_index] = true;

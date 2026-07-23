@@ -55,6 +55,44 @@ impl ProgramBindings {
             .map(|entry| Arc::clone(&entry.tensor))
     }
 
+    pub(crate) fn bound_inputs(&self) -> impl ExactSizeIterator<Item = ProgramValue> + '_ {
+        self.entries
+            .iter()
+            .map(|entry| ProgramValue::new(entry.key.slot, self.owner))
+    }
+
+    #[allow(dead_code, reason = "wired into GraphCompiler in Phase 3 A3")]
+    pub(crate) fn preserves_all(&self, source: &Self) -> bool {
+        if self.entries.len() < source.entries.len() {
+            return false;
+        }
+        let mut matched = vec![false; self.entries.len()];
+        source.entries.iter().all(|source_entry| {
+            self.entries
+                .iter()
+                .enumerate()
+                .find(|(index, entry)| {
+                    !matched[*index] && Arc::ptr_eq(&entry.tensor, &source_entry.tensor)
+                })
+                .map(|(index, _)| {
+                    matched[index] = true;
+                })
+                .is_some()
+        })
+    }
+
+    #[allow(dead_code, reason = "wired into GraphCompiler in Phase 3 A3")]
+    pub(crate) fn cache_exact_eq(&self, other: &Self) -> bool {
+        self.entries.len() == other.entries.len()
+            && self
+                .entries
+                .iter()
+                .zip(other.entries.iter())
+                .all(|(left, right)| {
+                    left.key.slot == right.key.slot && Arc::ptr_eq(&left.tensor, &right.tensor)
+                })
+    }
+
     /// Return the number of tensor bindings.
     pub fn len(&self) -> usize {
         self.entries.len()

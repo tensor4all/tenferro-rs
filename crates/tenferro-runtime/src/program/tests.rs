@@ -16,7 +16,8 @@ use super::{
     Alias, CoreSemanticOp, Effect, EffectAccess, EffectResource, ProgramBuildError,
     ProgramFinishError, ProgramImport, ProgramInputSpec, ProgramShapeRelation,
     ProgramValueMetadata, SemanticPlacementConstraint, SemanticProgramBuilder,
-    SemanticProvenanceKind, ShapeGuard,
+    SemanticProvenanceKind, SemanticTransform, SemanticTransformContext, SemanticTransformError,
+    ShapeGuard, TransformIdentity,
 };
 
 #[derive(Clone, Debug)]
@@ -671,4 +672,195 @@ fn semantic_identity_covers_guards_effects_aliases_and_constants() {
         one.program.semantic_fingerprint()
     );
     assert!(!zero.program.semantic_eq(one.program.as_ref()));
+}
+
+struct IdentityTransform {
+    identity: TransformIdentity,
+}
+
+impl SemanticTransform for IdentityTransform {
+    fn identity(&self) -> TransformIdentity {
+        self.identity
+    }
+
+    fn apply(
+        &self,
+        context: &mut SemanticTransformContext<'_>,
+        input: &super::FrozenProgram,
+    ) -> Result<Box<[super::ProgramValue]>, SemanticTransformError> {
+        Ok(context
+            .import_program(input, input.program.outputs())?
+            .roots()
+            .into())
+    }
+}
+
+struct AppendTransform {
+    identity: TransformIdentity,
+    op: CoreSemanticOp,
+}
+
+impl SemanticTransform for AppendTransform {
+    fn identity(&self) -> TransformIdentity {
+        self.identity
+    }
+
+    fn apply(
+        &self,
+        context: &mut SemanticTransformContext<'_>,
+        input: &super::FrozenProgram,
+    ) -> Result<Box<[super::ProgramValue]>, SemanticTransformError> {
+        let roots: Box<[_]> = context
+            .import_program(input, input.program.outputs())?
+            .roots()
+            .into();
+        let output = context.builder().add_op(self.op.clone(), &[roots[0]])?[0];
+        Ok(Box::new([output]))
+    }
+}
+
+struct ForeignOutputTransform {
+    identity: TransformIdentity,
+}
+
+struct DroppingBindingTransform {
+    identity: TransformIdentity,
+}
+
+impl SemanticTransform for DroppingBindingTransform {
+    fn identity(&self) -> TransformIdentity {
+        self.identity
+    }
+
+    fn apply(
+        &self,
+        context: &mut SemanticTransformContext<'_>,
+        _input: &super::FrozenProgram,
+    ) -> Result<Box<[super::ProgramValue]>, SemanticTransformError> {
+        let replacement = context
+            .builder()
+            .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))?;
+        Ok(Box::new([replacement]))
+    }
+}
+
+impl SemanticTransform for ForeignOutputTransform {
+    fn identity(&self) -> TransformIdentity {
+        self.identity
+    }
+
+    fn apply(
+        &self,
+        _context: &mut SemanticTransformContext<'_>,
+        input: &super::FrozenProgram,
+    ) -> Result<Box<[super::ProgramValue]>, SemanticTransformError> {
+        Ok(input.program.outputs().into())
+    }
+}
+
+#[test]
+fn semantic_transform_is_object_safe_and_identity_preserves_unused_bindings() {
+    fn assert_object_safe(_: Arc<dyn SemanticTransform>) {}
+    let transform = Arc::new(IdentityTransform {
+        identity: TransformIdentity::from_bytes([1; 16]),
+    });
+    assert_object_safe(transform.clone());
+
+    let mut builder = SemanticProgramBuilder::new();
+    let used = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let unused_bound = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let tensor = Arc::new(Tensor::F64(
+        TypedTensor::from_vec_col_major(vec![2], vec![7.0, 8.0]).unwrap(),
+    ));
+    builder
+        .bind_input(unused_bound, Arc::clone(&tensor))
+        .unwrap();
+    let output = builder.add_op(CoreSemanticOp::Neg, &[used]).unwrap()[0];
+    let input = builder.finish(&[output]).unwrap();
+
+    let transformed =
+        super::transform::apply_semantic_transform(&input, transform.as_ref()).unwrap();
+    assert!(input.program.semantic_eq(transformed.program.as_ref()));
+    assert_eq!(transformed.bindings.len(), 1);
+    assert!(std::ptr::eq(
+        transformed.bindings.iter().next().unwrap().1,
+        tensor.as_ref()
+    ));
+
+    let dropping = DroppingBindingTransform {
+        identity: TransformIdentity::from_bytes([9; 16]),
+    };
+    assert!(matches!(
+        super::transform::apply_semantic_transform(&input, &dropping),
+        Err(SemanticTransformError::DroppedBindings)
+    ));
+}
+
+#[test]
+fn semantic_transform_pipeline_is_ordered_and_rejects_foreign_results() {
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let input = builder.finish(&[input]).unwrap();
+    let neg = AppendTransform {
+        identity: TransformIdentity::from_bytes([2; 16]),
+        op: CoreSemanticOp::Neg,
+    };
+    let abs = AppendTransform {
+        identity: TransformIdentity::from_bytes([3; 16]),
+        op: CoreSemanticOp::Abs,
+    };
+    let forward = super::transform::apply_semantic_transforms(&input, &[&neg, &abs]).unwrap();
+    let reverse = super::transform::apply_semantic_transforms(&input, &[&abs, &neg]).unwrap();
+    assert!(!forward.program.semantic_eq(reverse.program.as_ref()));
+
+    let foreign = ForeignOutputTransform {
+        identity: TransformIdentity::from_bytes([4; 16]),
+    };
+    assert!(matches!(
+        super::transform::apply_semantic_transform(&input, &foreign),
+        Err(SemanticTransformError::ForeignReturnedValue)
+    ));
+}
+
+#[test]
+fn transform_cache_checks_exact_input_on_collision_and_stays_unchanged_on_failure() {
+    let mut left = SemanticProgramBuilder::new();
+    let left_input = left
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let left_output = left.add_op(CoreSemanticOp::Neg, &[left_input]).unwrap()[0];
+    let left = left.finish(&[left_output]).unwrap();
+
+    let mut right = SemanticProgramBuilder::new();
+    let right_input = right
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let right_output = right.add_op(CoreSemanticOp::Abs, &[right_input]).unwrap()[0];
+    let mut right = right.finish(&[right_output]).unwrap();
+    Arc::get_mut(&mut right.program)
+        .unwrap()
+        .set_fingerprint_for_test(left.program.semantic_fingerprint());
+
+    let identity = IdentityTransform {
+        identity: TransformIdentity::from_bytes([5; 16]),
+    };
+    let mut cache = super::transform::SemanticTransformCache::new();
+    let cached_left = cache.apply(&left, &[&identity]).unwrap();
+    let cached_right = cache.apply(&right, &[&identity]).unwrap();
+    assert!(!cached_left
+        .program
+        .semantic_eq(cached_right.program.as_ref()));
+    assert_eq!(cache.len(), 2);
+
+    let foreign = ForeignOutputTransform {
+        identity: TransformIdentity::from_bytes([6; 16]),
+    };
+    assert!(cache.apply(&left, &[&foreign]).is_err());
+    assert_eq!(cache.len(), 2);
 }

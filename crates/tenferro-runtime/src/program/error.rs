@@ -169,6 +169,27 @@ pub enum ProgramFinishError {
     },
 }
 
+/// Failures produced by a validated semantic transform transaction.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum SemanticTransformError {
+    /// Program construction or import failed inside the transform.
+    #[error(transparent)]
+    Build(#[from] ProgramBuildError),
+    /// Atomic freeze failed after the transform returned roots.
+    #[error(transparent)]
+    Finish(#[from] ProgramFinishError),
+    /// The transform returned a value not owned by its destination builder.
+    #[error("semantic transform returned a foreign destination value")]
+    ForeignReturnedValue,
+    /// The transform did not carry every input tensor binding forward.
+    #[error("semantic transform discarded one or more tensor bindings")]
+    DroppedBindings,
+    /// The transform deliberately rejected this input.
+    #[error("semantic transform rejected the input")]
+    Rejected,
+}
+
 /// Invalid typed effect-resource identity.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum EffectResourceError {
