@@ -44,9 +44,7 @@ fn xla_executor_options_debug_and_lowering_are_stable() {
     let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&x.neg().unwrap()).unwrap();
-    let module = executor
-        .lower_to_stablehlo(program.semantic_program())
-        .unwrap();
+    let module = executor.lower_to_stablehlo(program.program()).unwrap();
     assert!(module.as_str().contains("stablehlo.negate"));
 }
 
@@ -58,7 +56,7 @@ fn xla_executor_run_with_inputs_requires_pjrt_plugin_boundary() {
     let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 
     let err = XlaExecutor::default()
-        .run_with_inputs(program.semantic_program(), &[&input])
+        .run_with_inputs(program.program(), &[&input])
         .unwrap_err();
 
     assert!(matches!(

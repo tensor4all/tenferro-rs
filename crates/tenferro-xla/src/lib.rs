@@ -15,7 +15,7 @@
 //! let y = (&x + &x).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let module = lower_to_stablehlo(program.semantic_program()).unwrap();
+//! let module = lower_to_stablehlo(program.program()).unwrap();
 //! assert!(module.as_str().contains("stablehlo.add"));
 //! ```
 
@@ -68,7 +68,7 @@ pub const TENFERRO_PJRT_GPU_PLUGIN_ENV: &str = "TENFERRO_PJRT_GPU_PLUGIN";
 /// let mut compiler = GraphCompiler::new();
 /// let y = x.neg().unwrap();
 /// let program = compiler.compile(&y).unwrap();
-/// let module = lower_to_stablehlo(program.semantic_program()).unwrap();
+/// let module = lower_to_stablehlo(program.program()).unwrap();
 /// assert!(module.as_str().contains("stablehlo.negate"));
 /// ```
 ///

@@ -41,7 +41,7 @@ impl fmt::Debug for XlaExecutorOptions {
 /// let y = x.neg().unwrap();
 /// let program = compiler.compile(&y).unwrap();
 /// let module = XlaExecutor::default()
-///     .lower_to_stablehlo(program.semantic_program())
+///     .lower_to_stablehlo(program.program())
 ///     .unwrap();
 /// assert!(module.as_str().contains("stablehlo.negate"));
 /// ```
@@ -192,7 +192,7 @@ impl XlaExecutor {
     /// let mut compiler = GraphCompiler::new();
     /// let y = x.neg().unwrap();
     /// let program = compiler.compile(&y).unwrap();
-    /// let module = XlaExecutor::default().lower_to_stablehlo(program.semantic_program()).unwrap();
+    /// let module = XlaExecutor::default().lower_to_stablehlo(program.program()).unwrap();
     /// assert!(module.as_str().contains("stablehlo.negate"));
     /// ```
     ///
@@ -224,7 +224,7 @@ impl XlaExecutor {
     /// let program = compiler.compile(&y).unwrap();
     /// let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     /// let err = XlaExecutor::default()
-    ///     .run_many_with_inputs(program.semantic_program(), &[&input])
+    ///     .run_many_with_inputs(program.program(), &[&input])
     ///     .unwrap_err();
     /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
     /// ```
@@ -268,7 +268,7 @@ impl XlaExecutor {
     /// let y = x.neg().unwrap();
     /// let program = compiler.compile(&y).unwrap();
     /// let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
-    /// let err = XlaExecutor::default().run_with_inputs(program.semantic_program(), &[&input]).unwrap_err();
+    /// let err = XlaExecutor::default().run_with_inputs(program.program(), &[&input]).unwrap_err();
     /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
     /// ```
     ///
@@ -326,14 +326,14 @@ mod tests {
         let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 
         let err = XlaExecutor::default()
-            .run_many_with_inputs(program.semantic_program(), &[&input])
+            .run_many_with_inputs(program.program(), &[&input])
             .unwrap_err();
         assert!(matches!(
             err,
             Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded
         ));
         let err = XlaExecutor::default()
-            .run_with_inputs(program.semantic_program(), &[&input])
+            .run_with_inputs(program.program(), &[&input])
             .unwrap_err();
         assert!(matches!(
             err,

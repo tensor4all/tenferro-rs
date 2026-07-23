@@ -127,7 +127,7 @@ fn stablehlo_dot_add_reduce_module() -> tenferro_xla::StableHloModule {
             &[(&lhs, DType::F32, &[2, 3]), (&rhs, DType::F32, &[3, 4])],
         )
         .unwrap();
-    lower_to_stablehlo(program.semantic_program()).unwrap()
+    lower_to_stablehlo(program.program()).unwrap()
 }
 
 fn stablehlo_nary_einsum_module() -> tenferro_xla::StableHloModule {
@@ -148,7 +148,7 @@ fn stablehlo_nary_einsum_module() -> tenferro_xla::StableHloModule {
             ],
         )
         .unwrap();
-    lower_to_stablehlo(program.semantic_program()).unwrap()
+    lower_to_stablehlo(program.program()).unwrap()
 }
 
 fn stablehlo_phase_one_elementwise_module() -> tenferro_xla::StableHloModule {
@@ -173,7 +173,7 @@ fn stablehlo_phase_one_elementwise_module() -> tenferro_xla::StableHloModule {
     let program = compiler
         .compile_with_input_specs(&powered, &[(&x, DType::F32, &[4])])
         .unwrap();
-    lower_to_stablehlo(program.semantic_program()).unwrap()
+    lower_to_stablehlo(program.program()).unwrap()
 }
 
 fn write_temp_stablehlo(prefix: &str, text: &str) -> PathBuf {

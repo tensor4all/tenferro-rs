@@ -983,14 +983,14 @@ mod tests {
 
         let program = GraphCompiler::new().compile(&output).unwrap();
 
-        assert_eq!(program.semantic_program().inputs().len(), 1);
-        assert_eq!(program.semantic_program().outputs().len(), 1);
-        assert_eq!(program.semantic_program().operations().count(), 1);
-        assert_eq!(program.program_bindings().len(), 1);
+        assert_eq!(program.program().inputs().len(), 1);
+        assert_eq!(program.program().outputs().len(), 1);
+        assert_eq!(program.program().operations().count(), 1);
+        assert_eq!(program.bindings().len(), 1);
         assert_eq!(
             program
-                .semantic_program()
-                .value_metadata(program.semantic_program().outputs()[0])
+                .program()
+                .value_metadata(program.program().outputs()[0])
                 .unwrap()
                 .dtype(),
             DType::F64

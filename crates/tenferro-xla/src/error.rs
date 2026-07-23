@@ -20,7 +20,7 @@ pub type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 /// let program = compiler
 ///     .compile_with_input_specs(&y, &[(&x, DType::I64, &[2])])
 ///     .unwrap();
-/// let err = lower_to_stablehlo(program.semantic_program()).unwrap_err();
+/// let err = lower_to_stablehlo(program.program()).unwrap_err();
 /// assert!(matches!(err, Error::UnsupportedDType { .. }));
 /// ```
 #[derive(Debug, thiserror::Error)]

@@ -51,16 +51,6 @@ impl CompiledGraph {
     pub fn output_count(&self) -> usize {
         self.frozen.program.outputs().len()
     }
-
-    /// Transitional alias for [`Self::program`], removed with legacy callers.
-    pub fn semantic_program(&self) -> &SemanticProgram {
-        self.program()
-    }
-
-    /// Transitional alias for [`Self::bindings`], removed with legacy callers.
-    pub fn program_bindings(&self) -> &ProgramBindings {
-        self.bindings()
-    }
 }
 
 impl std::fmt::Debug for CompiledGraph {
