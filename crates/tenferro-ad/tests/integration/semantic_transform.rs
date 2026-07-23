@@ -166,6 +166,18 @@ fn core_square_program() -> tenferro_runtime::program::FrozenProgram {
     builder.finish(&[output]).unwrap()
 }
 
+fn unary_core_program(
+    input_shape: impl IntoIterator<Item = DimExpr>,
+    op: CoreSemanticOp,
+) -> tenferro_runtime::program::FrozenProgram {
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, input_shape))
+        .unwrap();
+    let output = builder.add_op(op, &[input]).unwrap()[0];
+    builder.finish(&[output]).unwrap()
+}
+
 fn rules() -> SemanticExtensionRuleSet {
     let mut rules = SemanticExtensionRuleSet::new();
     rules.register_linearize(Arc::new(AddInputsRule)).unwrap();
@@ -312,4 +324,123 @@ fn semantic_core_vjp_applies_hermitian_product_rule_and_accumulates_aliases() {
             .op(),
         tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Add)
     ));
+}
+
+#[test]
+fn semantic_core_transpose_jvp_and_vjp_use_forward_and_inverse_permutations() {
+    let source = unary_core_program(
+        [DimExpr::Const(2), DimExpr::Const(3), DimExpr::Const(4)],
+        CoreSemanticOp::Transpose {
+            perm: vec![2, 0, 1],
+        },
+    );
+    let ad = ad_context();
+
+    let jvp = ad.jvp_program(&source, &[true]).unwrap();
+    assert!(matches!(
+        jvp.frozen().program.operations().last().unwrap().op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Transpose { perm })
+            if perm.as_slice() == [2, 0, 1]
+    ));
+
+    let vjp = ad.vjp_program(&source, &[true], &[true]).unwrap();
+    assert!(matches!(
+        vjp.frozen().program.operations().last().unwrap().op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Transpose { perm })
+            if perm.as_slice() == [1, 2, 0]
+    ));
+}
+
+#[test]
+fn semantic_core_reshape_and_reduce_sum_transpose_restore_input_shapes() {
+    let reshape = unary_core_program(
+        [DimExpr::Const(2), DimExpr::Const(3)],
+        CoreSemanticOp::Reshape {
+            to_shape: vec![DimExpr::Const(6)],
+        },
+    );
+    let ad = ad_context();
+    let reshape_vjp = ad.vjp_program(&reshape, &[true], &[true]).unwrap();
+    assert!(matches!(
+        reshape_vjp
+            .frozen()
+            .program
+            .operations()
+            .last()
+            .unwrap()
+            .op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Reshape { to_shape })
+            if to_shape.as_slice() == [DimExpr::Const(2), DimExpr::Const(3)]
+    ));
+
+    let reduce = unary_core_program(
+        [DimExpr::Const(2), DimExpr::Const(3), DimExpr::Const(4)],
+        CoreSemanticOp::ReduceSum { axes: vec![0, 2] },
+    );
+    let reduce_vjp = ad.vjp_program(&reduce, &[true], &[true]).unwrap();
+    assert!(matches!(
+        reduce_vjp
+            .frozen()
+            .program
+            .operations()
+            .last()
+            .unwrap()
+            .op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::BroadcastInDim {
+            shape,
+            dims
+        }) if shape.as_slice()
+            == [
+                DimExpr::Const(2),
+                DimExpr::Const(3),
+                DimExpr::Const(4)
+            ] && dims.as_slice() == [1]
+    ));
+}
+
+#[test]
+fn semantic_core_broadcast_vjp_reduces_inserted_and_singleton_axes() {
+    let source = unary_core_program(
+        [DimExpr::Const(2), DimExpr::Const(1)],
+        CoreSemanticOp::BroadcastInDim {
+            shape: vec![DimExpr::Const(3), DimExpr::Const(2), DimExpr::Const(4)],
+            dims: vec![1, 2],
+        },
+    );
+
+    let transformed = ad_context().vjp_program(&source, &[true], &[true]).unwrap();
+    let operations: Vec<_> = transformed.frozen().program.operations().collect();
+    assert!(matches!(
+        operations[operations.len() - 2].op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::ReduceSum { axes })
+            if axes.as_slice() == [0, 2]
+    ));
+    assert!(matches!(
+        operations.last().unwrap().op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Reshape { to_shape })
+            if to_shape.as_slice() == [DimExpr::Const(2), DimExpr::Const(1)]
+    ));
+}
+
+#[test]
+fn semantic_core_self_adjoint_structural_ops_reapply_their_payloads() {
+    let cases = [
+        CoreSemanticOp::ExtractDiag {
+            axis_a: 0,
+            axis_b: 1,
+        },
+        CoreSemanticOp::Tril { k: -1 },
+        CoreSemanticOp::Triu { k: 2 },
+        CoreSemanticOp::Reverse { axes: vec![0, 1] },
+    ];
+
+    for op in cases {
+        let source = unary_core_program([DimExpr::Const(3), DimExpr::Const(3)], op.clone());
+        let ad = ad_context();
+        assert!(ad.jvp_program(&source, &[true]).is_ok(), "JVP for {op:?}");
+        assert!(
+            ad.vjp_program(&source, &[true], &[true]).is_ok(),
+            "VJP for {op:?}"
+        );
+    }
 }
