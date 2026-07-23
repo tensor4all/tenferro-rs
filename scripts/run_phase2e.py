@@ -165,19 +165,23 @@ def _infer_repository_for_root(root: pathlib.Path) -> tuple[pathlib.Path, pathli
         repository, canonical, must_exist=True
     )
 
+ALLOCATION_LANE_STAGES = tuple(
+    f"allocation/{lane}" for lane in protocol.LANE_NAMES
+)
+TIMING_LANE_STAGES = tuple(f"timing/{lane}" for lane in protocol.LANE_NAMES)
+
 STAGE_ORDER = (
     "timing-builds",
     "probe-builds",
-    "allocation/direct-current-main",
-    "allocation/common-lock-normalized",
+    *ALLOCATION_LANE_STAGES,
     "dispatch-builds",
     "dispatch-gates",
     "characterization-builds",
     "characterization",
-    "timing/direct-current-main",
-    "timing/common-lock-normalized",
+    *TIMING_LANE_STAGES,
     "aggregate-validation",
 )
+RETRYABLE_STAGES = frozenset((*ALLOCATION_LANE_STAGES, *TIMING_LANE_STAGES))
 
 STAGE_WORKER_PREFIX = (
     str(pathlib.Path(sys.executable).resolve(strict=True)),
@@ -1939,6 +1943,10 @@ def rerun_invalid_stage(
             "latest stage is not retryable validity INCONCLUSIVE"
         )
     stage = children[-1].get("stage")
+    if stage not in RETRYABLE_STAGES:
+        raise protocol.ProtocolError(
+            "latest stage is not a canonical retryable allocation or timing lane"
+        )
     if root_identity is not None:
         root_identity.revalidate()
     before = _root_inventory(root, root_identity)
@@ -1993,6 +2001,7 @@ def continue_after_retry(
         or children[-1].get("exit_code") != 0
         or children[-2].get("exit_code") != 2
         or children[-1].get("stage") != children[-2].get("stage")
+        or children[-1].get("stage") not in RETRYABLE_STAGES
     ):
         raise protocol.ProtocolError("replacement attempt has not passed")
     start = STAGE_ORDER.index(children[-1]["stage"]) + 1
@@ -2922,6 +2931,10 @@ def validate_progress(root: pathlib.Path) -> dict[str, Any]:
         ):
             raise protocol.ProtocolError("progress child schema is invalid")
         retry = previous is not None and previous["exit_code"] == 2
+        if retry and previous["stage"] not in RETRYABLE_STAGES:
+            raise protocol.ProtocolError(
+                "progress retries a non-retryable stage"
+            )
         if not retry and cursor >= len(STAGE_ORDER):
             raise protocol.ProtocolError("progress contains children after completion")
         expected_stage = previous["stage"] if retry else STAGE_ORDER[cursor]

@@ -752,6 +752,7 @@ def _phase2e_install_fixture_evidence(root, context_path):
         PROGRESS_MANIFEST,
         STAGE_CONTEXT,
         PROCESS_JOURNAL,
+        "evidence-ledger.json",
         ".orchestrator.lock",
         "children",
     }
@@ -763,13 +764,45 @@ def _phase2e_install_fixture_evidence(root, context_path):
             _fixture_shutil.copytree(child, target, dirs_exist_ok=True)
         else:
             _fixture_shutil.copy2(child, target)
-    ledger_path = root / "evidence-ledger.json"
-    ledger_path.write_bytes(
-        ledger_path.read_bytes().replace(
-            str(staging).encode(), b"/phase2e-fixture-missing"
-        )
-    )
     _fixture_shutil.rmtree(root / "attempts" / "allocation")
+
+
+def _phase2e_fixture_run_lane(root, stage, validity_state):
+    stage_name, lane = stage.split("/", 1)
+    ledger_path = root / "evidence-ledger.json"
+    ledger = _read_json(ledger_path, "fixture ledger")
+    attempt = _next_attempt({"evidence_root": str(root)}, stage_name, lane)
+    artifact_root = (
+        f"/phase2e-fixture-missing/{stage_name}/{lane}/{attempt}"
+        if stage_name == "allocation"
+        else None
+    )
+    ledger = protocol.open_attempt(
+        ledger,
+        stage_name,
+        lane,
+        attempt,
+        artifact_root=artifact_root,
+    )
+    if stage_name == "allocation":
+        ledger = protocol.bind_attempt_artifact(
+            ledger,
+            stage_name,
+            lane,
+            attempt,
+            artifact_root=artifact_root,
+            artifact_device=1,
+            artifact_inode=1,
+        )
+    ledger = protocol.close_attempt(
+        ledger,
+        stage_name,
+        lane,
+        attempt,
+        None if validity_state == "INCONCLUSIVE" else "PASS",
+        validity_state=validity_state,
+    )
+    protocol.atomic_write_json(ledger_path, ledger)
 
 
 def _phase2e_fixture_subprocess_stage_runner(
@@ -778,12 +811,16 @@ def _phase2e_fixture_subprocess_stage_runner(
     mode = os.environ["PHASE2E_FIXTURE_MODE"]
 
     def run(stage, _environment):
-        _phase2e_fixture_journal(pathlib.Path(root))
-        if mode == "start":
+        fixture_root = pathlib.Path(root)
+        _phase2e_fixture_journal(fixture_root)
+        if mode == "start" and stage == "allocation/direct-current-main":
+            _phase2e_fixture_run_lane(fixture_root, stage, "INCONCLUSIVE")
             return 2
+        if stage.startswith(("allocation/", "timing/")):
+            _phase2e_fixture_run_lane(fixture_root, stage, "COMPLETE")
         if stage == "aggregate-validation":
             _phase2e_install_fixture_evidence(
-                pathlib.Path(root), pathlib.Path(context_path)
+                fixture_root, pathlib.Path(context_path)
             )
         return 0
 
@@ -2629,28 +2666,155 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             )
 
     def test_rerun_retains_invalid_attempt_and_runs_only_failed_stage(self):
+        retryable = (
+            "allocation/direct-current-main",
+            "allocation/common-lock-normalized",
+            "timing/direct-current-main",
+            "timing/common-lock-normalized",
+        )
+        environment = protocol.runtime_environment(path="/bin", home="/tmp")
+        for failure in retryable:
+            with (
+                self.subTest(stage=failure),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = pathlib.Path(directory)
+                orchestrator.run_fixed_stages(
+                    root,
+                    environment,
+                    lambda stage, _environment: 2 if stage == failure else 0,
+                )
+                calls = []
+                code = orchestrator.rerun_invalid_stage(
+                    root,
+                    environment,
+                    lambda stage, _environment: calls.append(stage) or 0,
+                )
+                self.assertEqual(code, 0)
+                self.assertEqual(calls, [failure])
+                progress = orchestrator.validate_progress(root)
+                stage_index = orchestrator.STAGE_ORDER.index(failure)
+                self.assertEqual(
+                    [child["stage"] for child in progress["children"]],
+                    [*orchestrator.STAGE_ORDER[: stage_index + 1], failure],
+                )
+
+    def test_rerun_rejects_every_non_lane_validity_failure_before_mutation(self):
+        prohibited = {
+            "build": (
+                "timing-builds",
+                "probe-builds",
+                "dispatch-builds",
+                "characterization-builds",
+            ),
+            "dispatch": ("dispatch-gates",),
+            "characterization": ("characterization",),
+            "aggregate": ("aggregate-validation",),
+        }
+        environment = protocol.runtime_environment(path="/bin", home="/tmp")
+        for category, stages in prohibited.items():
+            for failure in stages:
+                with (
+                    self.subTest(category=category, stage=failure),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    root = pathlib.Path(directory)
+                    orchestrator.run_fixed_stages(
+                        root,
+                        environment,
+                        lambda stage, _environment: 2 if stage == failure else 0,
+                    )
+                    before = protocol.regular_file_inventory(root)
+                    calls = []
+                    with self.assertRaisesRegex(
+                        protocol.ProtocolError,
+                        "not a canonical retryable allocation or timing lane",
+                    ):
+                        orchestrator.rerun_invalid_stage(
+                            root,
+                            environment,
+                            lambda stage, _environment: calls.append(stage) or 0,
+                        )
+                    self.assertEqual(calls, [])
+                    self.assertEqual(protocol.regular_file_inventory(root), before)
+
+    def test_rerun_rejects_prefix_lookalike_stage_before_calling_runner(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             environment = protocol.runtime_environment(path="/bin", home="/tmp")
-            failure = orchestrator.STAGE_ORDER[1]
+            calls = []
+            forged = {
+                "children": [
+                    {
+                        "stage": "allocation/direct-current-main-renamed",
+                        "exit_code": 2,
+                    }
+                ]
+            }
+            with mock.patch.object(
+                orchestrator, "validate_progress", return_value=forged
+            ), self.assertRaisesRegex(
+                protocol.ProtocolError,
+                "not a canonical retryable allocation or timing lane",
+            ):
+                orchestrator.rerun_invalid_stage(
+                    root,
+                    environment,
+                    lambda stage, _environment: calls.append(stage) or 0,
+                    _locked=True,
+                )
+            self.assertEqual(calls, [])
+
+    def test_progress_rejects_retained_retry_of_non_retryable_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            environment = protocol.runtime_environment(path="/bin", home="/tmp")
+            stage = "timing-builds"
             orchestrator.run_fixed_stages(
                 root,
                 environment,
-                lambda stage, _environment: 2 if stage == failure else 0,
+                lambda current, _environment: 2 if current == stage else 0,
             )
-            calls = []
-            code = orchestrator.rerun_invalid_stage(
-                root,
-                environment,
-                lambda stage, _environment: calls.append(stage) or 0,
-            )
-            self.assertEqual(code, 0)
-            self.assertEqual(calls, [failure])
             progress = orchestrator.validate_progress(root)
-            self.assertEqual(
-                [child["stage"] for child in progress["children"]],
-                [orchestrator.STAGE_ORDER[0], failure, failure],
+            children = [*progress["children"], {"stage": stage, "exit_code": 0}]
+            before = protocol.regular_file_inventory(root)
+            orchestrator._write_child_record(
+                root,
+                children,
+                before,
+                environment=environment,
             )
+            orchestrator._write_progress(root, children)
+            with self.assertRaisesRegex(
+                protocol.ProtocolError,
+                "progress retries a non-retryable stage",
+            ):
+                orchestrator.validate_progress(root)
+
+    def test_continue_rejects_non_retryable_replacement_before_calling_runner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            environment = protocol.runtime_environment(path="/bin", home="/tmp")
+            calls = []
+            forged = {
+                "children": [
+                    {"stage": "timing-builds", "exit_code": 2},
+                    {"stage": "timing-builds", "exit_code": 0},
+                ]
+            }
+            with mock.patch.object(
+                orchestrator, "validate_progress", return_value=forged
+            ), self.assertRaisesRegex(
+                protocol.ProtocolError,
+                "replacement attempt has not passed",
+            ):
+                orchestrator.continue_after_retry(
+                    root,
+                    environment,
+                    lambda stage, _environment: calls.append(stage) or 0,
+                    _locked=True,
+                )
+            self.assertEqual(calls, [])
 
     def test_rerun_rejects_mutated_durable_child_record(self):
         with tempfile.TemporaryDirectory() as directory:
