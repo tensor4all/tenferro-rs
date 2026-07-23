@@ -2565,17 +2565,22 @@ def _subprocess_stage_runner(
                         signals=signals,
                         root_identity=root_identity,
                     )
-                if signal_errors:
-                    details = "; ".join(str(error) for error in signal_errors)
-                    raise protocol.ProtocolError(
-                        f"stage cleanup signal failed after reap: {details}"
-                    ) from signal_errors[0]
             except BaseException as cleanup_error:
                 raise protocol.ProtocolError(
                     f"cannot terminate and reap stage process: {cleanup_error}"
                 ) from cleanup_error
+            cleanup_note = None
+            if signal_errors:
+                details = "; ".join(str(error) for error in signal_errors)
+                cleanup_note = f"stage cleanup signal failed after reap: {details}"
+                primary.add_note(cleanup_note)
             if isinstance(primary, subprocess.TimeoutExpired):
-                raise protocol.ProtocolError("stage process deadline exceeded") from primary
+                timeout_error = protocol.ProtocolError(
+                    "stage process deadline exceeded"
+                )
+                if cleanup_note is not None:
+                    timeout_error.add_note(cleanup_note)
+                raise timeout_error from primary
             raise
         _finish_process_journal_entry(
             root,

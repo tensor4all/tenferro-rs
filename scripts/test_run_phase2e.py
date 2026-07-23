@@ -1572,6 +1572,47 @@ class OuterOrchestratorTests(unittest.TestCase):
                 runner(orchestrator.STAGE_ORDER[0], {"PATH": "/bin"})
             self.assertEqual(process.waits, 1)
 
+    def test_post_popen_signal_error_preserves_exact_primary_after_reap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
+            primary = protocol.ProtocolError("exact identity failure")
+
+            class Process:
+                pid = 4242
+                waits = 0
+
+                def wait(self, timeout=None):
+                    self.waits += 1
+                    return -15
+
+            process = Process()
+            runner = orchestrator._subprocess_stage_runner(
+                pathlib.Path("/context.json"),
+                "e" * 64,
+                self.REPOSITORY,
+                root=root,
+                process_factory=lambda *args, **kwargs: process,
+                process_identity=lambda _pid: (_ for _ in ()).throw(primary),
+                kill_process_group=lambda _pgid, _sig: (_ for _ in ()).throw(
+                    PermissionError("TERM denied")
+                ),
+            )
+            with self.assertRaises(protocol.ProtocolError) as caught:
+                runner(orchestrator.STAGE_ORDER[0], {"PATH": "/bin"})
+            self.assertIs(caught.exception, primary)
+            self.assertEqual(str(caught.exception), "exact identity failure")
+            self.assertEqual(process.waits, 1)
+            self.assertTrue(
+                any(
+                    "TERM denied" in note
+                    for note in getattr(caught.exception, "__notes__", [])
+                )
+            )
+
     def test_post_popen_getpgid_failure_terminates_and_reaps(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory).resolve()
