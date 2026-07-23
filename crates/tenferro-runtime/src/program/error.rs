@@ -5,6 +5,12 @@ pub enum ProgramBuildError {
     /// A value token was issued by another builder.
     #[error("value does not belong to this semantic-program builder")]
     ForeignValue,
+    /// A binding target is a computed value rather than an external input.
+    #[error("tensor bindings may target only semantic-program inputs")]
+    BindingTargetNotInput,
+    /// An external input already has a tensor binding.
+    #[error("semantic-program input already has a tensor binding")]
+    DuplicateBinding,
     /// The builder cannot represent another value slot.
     #[error("semantic-program value count exceeds the supported u32 range")]
     TooManyValues,
@@ -73,6 +79,81 @@ pub enum ProgramBuildError {
         expected: usize,
         /// Number of distinct valid output declarations.
         actual: usize,
+    },
+}
+
+/// Errors reported while querying an immutable semantic program.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ProgramQueryError {
+    /// A value token belongs to another program or names no frozen value.
+    #[error("value does not belong to this semantic program")]
+    ForeignValue,
+}
+
+/// Internal structural validation failures detected during atomic freeze.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ProgramStructuralError {
+    /// An operation references a value outside the frozen value table.
+    #[error("semantic operation references a value outside the program")]
+    InvalidValueReference,
+    /// An operation output is not strictly after all prior values.
+    #[error("semantic operation outputs violate SSA ordering")]
+    InvalidSsaOrder,
+}
+
+/// Tensor-binding validation failures detected during atomic freeze.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum ProgramBindingError {
+    /// A pending binding no longer names an external input.
+    #[error("tensor binding target is not a semantic-program input")]
+    InvalidTarget,
+    /// Tensor dtype differs from the input declaration.
+    #[error("tensor binding dtype mismatch: expected {expected:?}, got {actual:?}")]
+    DTypeMismatch {
+        expected: tenferro_tensor::DType,
+        actual: tenferro_tensor::DType,
+    },
+    /// Tensor rank differs from the input declaration.
+    #[error("tensor binding rank mismatch: expected {expected}, got {actual}")]
+    RankMismatch { expected: usize, actual: usize },
+    /// A statically exact dimension differs from the input declaration.
+    #[error("tensor binding extent mismatch at axis {axis}: expected {expected}, got {actual}")]
+    ExactExtentMismatch {
+        axis: usize,
+        expected: usize,
+        actual: usize,
+    },
+    /// A bounded dimension exceeds the declared upper bound.
+    #[error(
+        "tensor binding extent exceeds upper bound at axis {axis}: bound {bound}, got {actual}"
+    )]
+    UpperBoundExceeded {
+        axis: usize,
+        bound: usize,
+        actual: usize,
+    },
+}
+
+/// Errors reported while atomically freezing semantic structure and bindings.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ProgramFinishError {
+    /// One requested output belongs to another builder or names no value.
+    #[error("program output does not belong to this semantic-program builder")]
+    ForeignOutput,
+    /// Frozen structure failed an invariant check.
+    #[error("semantic-program structural validation failed: {source}")]
+    StructuralValidation {
+        #[source]
+        source: ProgramStructuralError,
+    },
+    /// A tensor default or large constant does not match its input declaration.
+    #[error("semantic-program binding finalization failed: {source}")]
+    BindingFinalization {
+        #[source]
+        source: ProgramBindingError,
     },
 }
 

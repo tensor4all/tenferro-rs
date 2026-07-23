@@ -4,6 +4,69 @@ use tenferro_tensor::DType;
 
 use super::EffectResourceError;
 
+/// Diagnostic origin class of one semantic operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SemanticProvenanceKind {
+    /// Operation was added directly through a semantic-program builder.
+    Builder,
+    /// Operation was preserved by importing another semantic program.
+    Imported,
+    /// Operation was produced by an internal semantic derivation.
+    Derived,
+}
+
+#[derive(Clone)]
+pub(crate) struct SemanticProvenance {
+    kind: SemanticProvenanceKind,
+    label: Option<std::sync::Arc<str>>,
+}
+
+impl SemanticProvenance {
+    pub(crate) fn builder(label: Option<&str>) -> Self {
+        Self {
+            kind: SemanticProvenanceKind::Builder,
+            label: label.map(std::sync::Arc::from),
+        }
+    }
+
+    pub(crate) fn view(&self) -> SemanticProvenanceView<'_> {
+        SemanticProvenanceView {
+            kind: self.kind,
+            label: self.label.as_deref(),
+        }
+    }
+}
+
+/// Bounded, allocation-free diagnostic provenance view.
+#[derive(Clone, Copy)]
+pub struct SemanticProvenanceView<'a> {
+    kind: SemanticProvenanceKind,
+    label: Option<&'a str>,
+}
+
+impl<'a> SemanticProvenanceView<'a> {
+    /// Return the origin class without exposing source value or operation IDs.
+    pub const fn kind(self) -> SemanticProvenanceKind {
+        self.kind
+    }
+
+    /// Return an optional operation-family or transform label.
+    pub const fn label(self) -> Option<&'a str> {
+        self.label
+    }
+}
+
+impl std::fmt::Debug for SemanticProvenanceView<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SemanticProvenanceView")
+            .field("kind", &self.kind)
+            .field("has_label", &self.label.is_some())
+            .finish()
+    }
+}
+
 /// Dtype and ordered symbolic extents of one semantic SSA value.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ProgramValueMetadata {

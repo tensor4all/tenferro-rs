@@ -35,3 +35,22 @@ impl fmt::Debug for ProgramValue {
         formatter.write_str("ProgramValue(<opaque>)")
     }
 }
+
+/// Opaque lookup key for one frozen tensor binding.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BindingKey {
+    pub(crate) slot: u32,
+    pub(crate) owner: ProgramBuilderNonce,
+}
+
+impl BindingKey {
+    pub(crate) const fn new(slot: u32, owner: ProgramBuilderNonce) -> Self {
+        Self { slot, owner }
+    }
+}
+
+impl fmt::Debug for BindingKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BindingKey(<opaque>)")
+    }
+}

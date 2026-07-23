@@ -8,7 +8,10 @@ use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
 };
 
-use super::{Alias, Effect, ProgramValue, SemanticPlacementConstraint, ShapeGuard};
+use super::metadata::SemanticProvenance;
+use super::{
+    Alias, Effect, ProgramValue, SemanticPlacementConstraint, SemanticProvenanceView, ShapeGuard,
+};
 
 /// Closed backend-neutral vocabulary of core semantic tensor operations.
 #[derive(Clone, Debug, PartialEq)]
@@ -236,6 +239,7 @@ pub(crate) struct SemanticOperation {
     pub(crate) aliases: Box<[Alias]>,
     pub(crate) shape_guards: Box<[ShapeGuard]>,
     pub(crate) placement: SemanticPlacementConstraint,
+    pub(crate) provenance: SemanticProvenance,
 }
 
 /// Borrowed semantic operation payload.
@@ -255,7 +259,6 @@ pub struct SemanticOperationView<'a> {
 }
 
 impl<'a> SemanticOperationView<'a> {
-    #[cfg(test)]
     pub(crate) const fn new(operation: &'a SemanticOperation) -> Self {
         Self { operation }
     }
@@ -291,6 +294,11 @@ impl<'a> SemanticOperationView<'a> {
     /// Borrow operation-local symbolic guards.
     pub fn shape_guards(self) -> &'a [ShapeGuard] {
         &self.operation.shape_guards
+    }
+
+    /// Return bounded diagnostic provenance without source identities.
+    pub fn provenance(self) -> SemanticProvenanceView<'a> {
+        self.operation.provenance.view()
     }
 
     /// Return the unresolved placement constraint.
