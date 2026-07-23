@@ -1,5 +1,6 @@
 //! Whole-program automatic differentiation over semantic SSA programs.
 
+mod core_dynamic;
 mod core_indexing;
 mod core_reductions;
 mod core_structural;
@@ -13,6 +14,7 @@ use tenferro_runtime::program::{
 use tenferro_runtime::{CompareDir, DType, DotGeneralConfig};
 
 use crate::semantic_extension::{AdValue, SemanticAdError, SemanticExtensionRuleSet};
+use core_dynamic::{dynamic_shape_vjp, linearize_dynamic_shape};
 use core_indexing::{indexing_vjp, linearize_indexing};
 use core_reductions::{linearize_nonlinear_reduction, nonlinear_reduction_vjp};
 use core_structural::{concatenate_vjp, linearize_concatenate, pad_vjp, slice_vjp};
@@ -542,6 +544,9 @@ fn linearize_core(
         | CoreSemanticOp::DynamicUpdateSlice => {
             linearize_indexing(builder, op, primal_inputs, tangent_inputs)?
         }
+        CoreSemanticOp::DynamicTruncate { .. } | CoreSemanticOp::PadToMatch { .. } => {
+            linearize_dynamic_shape(builder, op, primal_inputs, tangent_inputs[0])?
+        }
         CoreSemanticOp::Convert { from, to } => {
             if is_differentiable_dtype(*from) && is_differentiable_dtype(*to) {
                 linearize_unary_core(builder, op.clone(), primal_inputs, tangent_inputs[0])?
@@ -852,6 +857,9 @@ fn vjp_core(
         | CoreSemanticOp::DynamicSlice { .. }
         | CoreSemanticOp::DynamicUpdateSlice => {
             indexing_vjp(builder, op, primal_inputs, cotangent, active_inputs)?
+        }
+        CoreSemanticOp::DynamicTruncate { .. } | CoreSemanticOp::PadToMatch { .. } => {
+            dynamic_shape_vjp(builder, op, primal_inputs, cotangent, active_inputs)?
         }
         CoreSemanticOp::ReduceProd { .. }
         | CoreSemanticOp::ReduceMax { .. }

@@ -1420,3 +1420,80 @@ fn semantic_core_dynamic_slice_and_update_jvp_vjp_execute_numerically() {
     );
     assert_eq!(result[1].as_slice::<f64>().unwrap(), &[3.0, 4.0]);
 }
+
+#[test]
+fn semantic_core_dynamic_truncate_and_pad_to_match_execute_jvp_vjp() {
+    let ad = ad_context();
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(5)]))
+        .unwrap();
+    let size = builder
+        .input(ProgramInputSpec::new(DType::F64, []))
+        .unwrap();
+    let truncated = builder
+        .add_op(CoreSemanticOp::DynamicTruncate { axis: 0 }, &[input, size])
+        .unwrap()[0];
+    let truncate = builder.finish(&[truncated]).unwrap();
+    let input_value =
+        Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap();
+    let size_value = Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
+    let tangent =
+        Tensor::from_vec_col_major(vec![5], vec![10.0_f64, 20.0, 30.0, 40.0, 50.0]).unwrap();
+
+    let jvp = ad.jvp_program(&truncate, &[true, false]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(jvp.frozen())
+        .unwrap();
+    let result = GraphExecutor::new(CpuBackend::new())
+        .run_with_inputs(&compiled, &[&input_value, &size_value, &tangent])
+        .unwrap();
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[10.0, 20.0, 30.0]);
+
+    let vjp = ad.vjp_program(&truncate, &[true, false], &[true]).unwrap();
+    assert_eq!(vjp.derivative_output_indices(), &[Some(0), None]);
+    assert!(vjp.frozen().program.operations().any(|operation| matches!(
+        operation.op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::PadToMatch { axis: 0 })
+    )));
+
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(3)]))
+        .unwrap();
+    let reference = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(5)]))
+        .unwrap();
+    let padded = builder
+        .add_op(CoreSemanticOp::PadToMatch { axis: 0 }, &[input, reference])
+        .unwrap()[0];
+    let pad_to_match = builder.finish(&[padded]).unwrap();
+    let short_input = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let reference_value = Tensor::from_vec_col_major(vec![5], vec![0.0_f64; 5]).unwrap();
+    let short_tangent = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap();
+
+    let jvp = ad.jvp_program(&pad_to_match, &[true, false]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(jvp.frozen())
+        .unwrap();
+    let result = GraphExecutor::new(CpuBackend::new())
+        .run_with_inputs(&compiled, &[&short_input, &reference_value, &short_tangent])
+        .unwrap();
+    assert_eq!(
+        result.as_slice::<f64>().unwrap(),
+        &[10.0, 20.0, 30.0, 0.0, 0.0]
+    );
+
+    let pad_cotangent =
+        Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap();
+    let vjp = ad
+        .vjp_program(&pad_to_match, &[true, false], &[true])
+        .unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(vjp.frozen())
+        .unwrap();
+    let result = GraphExecutor::new(CpuBackend::new())
+        .run_with_inputs(&compiled, &[&short_input, &reference_value, &pad_cotangent])
+        .unwrap();
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0]);
+}
