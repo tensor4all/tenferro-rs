@@ -102,7 +102,6 @@ class OuterOrchestratorTests(unittest.TestCase):
                 "record-index",
                 "record-preserved",
                 "compare-experiment-identity",
-                "_stage-worker",
             },
         )
         expected_options = {
@@ -616,6 +615,284 @@ class OuterOrchestratorTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, (argv, result.stderr))
                 self.assertIn("usage:", result.stdout)
+                self.assertNotIn("_stage-worker", result.stdout)
+                self.assertNotIn("==SUPPRESS==", result.stdout)
+            worker = subprocess.run(
+                (*prefix, "_stage-worker", "--help"),
+                cwd=repository,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(worker.returncode, 0, worker.stderr)
+            self.assertIn("--context-sha256", worker.stdout)
+
+    def test_absolute_evidence_root_is_cwd_independent_for_public_validate(self):
+        artifacts = self.REPOSITORY / "docs" / "worklogs" / "artifacts"
+        with tempfile.TemporaryDirectory(dir=artifacts) as directory:
+            root = pathlib.Path(directory).resolve()
+            self.make_complete_root(root)
+            harness = """
+import sys
+from unittest import mock
+from scripts import run_phase2e as orchestrator
+
+with (
+    mock.patch.object(
+        orchestrator.build,
+        "validate_allocation_probe_set",
+        return_value={
+            role: {}
+            for role in orchestrator.build.PROBE_BUILD_MANIFEST_PATHS
+        },
+    ),
+    mock.patch(
+        "scripts.run_phase2e_allocation_campaign.validate_completed_attempt",
+        return_value=0,
+    ),
+    mock.patch(
+        "scripts.run_phase1_eager_campaign.validate_retained_attempt",
+        return_value=0,
+    ),
+):
+    raise SystemExit(
+        orchestrator.main(
+            [
+                "validate",
+                "--evidence-root",
+                sys.argv[1],
+                "--print-status",
+            ]
+        )
+    )
+"""
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = str(self.REPOSITORY)
+            result = subprocess.run(
+                (
+                    sys.executable,
+                    "-c",
+                    harness,
+                    str(root),
+                ),
+                cwd="/tmp",
+                env=environment,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "PASS\n")
+
+    def test_public_subprocess_happy_lifecycle_is_cwd_independent(self):
+        artifacts = self.REPOSITORY / "docs" / "worklogs" / "artifacts"
+        with tempfile.TemporaryDirectory(dir=artifacts) as directory:
+            parent = pathlib.Path(directory).resolve()
+            root = parent / "root"
+            with tempfile.TemporaryDirectory() as runtime_directory:
+                runtime = pathlib.Path(runtime_directory).resolve()
+                for name in ("scratch", "home", "cargo-home"):
+                    (runtime / name).mkdir()
+                harness = r"""
+import contextlib
+import pathlib
+import sys
+from unittest import mock
+
+from scripts import phase2e_protocol as protocol
+from scripts import run_phase2e as orchestrator
+
+repository = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[2])
+scratch = pathlib.Path(sys.argv[3])
+home = pathlib.Path(sys.argv[4])
+cargo_home = pathlib.Path(sys.argv[5])
+candidate = "1" * 40
+context_sha256 = "2" * 64
+context = {
+    "version": 1,
+    "repository": str(repository),
+    "evidence_root": str(root),
+    "scratch_parent": str(scratch),
+    "candidate_sha": candidate,
+    "candidate_tree_sha256": "3" * 64,
+    "reservation_id": "reservation-1",
+    "experiment_identity_digest": "4" * 64,
+    "command_contract_digest": "5" * 64,
+    "path": "/usr/bin",
+    "home": str(home),
+    "cargo_home": str(cargo_home),
+    "index": str(repository / orchestrator.INDEX_PATH),
+    "index_lock": str(repository / orchestrator.INDEX_LOCK_PATH),
+}
+active = {
+    "event": "ACTIVE",
+    "candidate_sha": candidate,
+    "candidate_tree_sha256": "3" * 64,
+    "reservation_id": "reservation-1",
+    "experiment_identity_digest": "4" * 64,
+    "command_contract_digest": "5" * 64,
+    "context_sha256": context_sha256,
+    "root": str(root),
+}
+
+@contextlib.contextmanager
+def active_lock(*_args, **_kwargs):
+    yield active, mock.Mock()
+
+def initialize(**kwargs):
+    kwargs["root"].mkdir()
+    kwargs["initializer"](kwargs["root"])
+    return 0
+
+def run(command):
+    code = orchestrator.main(command)
+    if code != 0:
+        raise AssertionError((command, code))
+
+with (
+    mock.patch.object(
+        orchestrator,
+        "_prepare_start_context",
+        return_value=(context, context_sha256, "6" * 64),
+    ),
+    mock.patch.object(
+        orchestrator,
+        "_prepare_execution_homes",
+        return_value=(home, cargo_home),
+    ),
+    mock.patch.object(orchestrator, "_preflight_offline_feature_queries"),
+    mock.patch.object(orchestrator, "initialize_campaign", side_effect=initialize),
+    mock.patch.object(orchestrator, "load_stage_context", return_value=dict(context)),
+    mock.patch.object(orchestrator, "active_campaign_lock", side_effect=active_lock),
+    mock.patch.object(orchestrator, "run_fixed_stages", return_value=0),
+    mock.patch.object(
+        orchestrator,
+        "_active_for_root",
+        return_value=({"events": [active]}, active),
+    ),
+    mock.patch.object(
+        orchestrator,
+        "_load_bound_context",
+        return_value=(root / orchestrator.STAGE_CONTEXT, dict(context), context_sha256),
+    ),
+    mock.patch.object(orchestrator, "validate_progress", return_value={}),
+    mock.patch.object(orchestrator, "validate_resume_identity"),
+    mock.patch.object(orchestrator, "rerun_invalid_stage", return_value=0),
+    mock.patch.object(orchestrator, "continue_after_retry", return_value=0),
+    mock.patch.object(orchestrator, "validate_root", return_value="PASS"),
+    mock.patch.object(orchestrator, "record_index_root", return_value="pending"),
+    mock.patch.object(orchestrator, "record_preserved", return_value="preserved"),
+    mock.patch.object(
+        orchestrator,
+        "index_state",
+        side_effect=lambda value: {
+            "pending": "PENDING_PRESERVATION",
+            "preserved": "PRESERVED",
+        }.get(value, "ACTIVE"),
+    ),
+):
+    run(
+        [
+            "start",
+            "--repository",
+            str(repository),
+            "--candidate",
+            candidate,
+            "--evidence-root",
+            str(root),
+            "--index",
+            str(orchestrator.INDEX_PATH),
+            "--scratch-parent",
+            str(scratch),
+        ]
+    )
+    run(["rerun-invalid-lane", "--evidence-root", str(root)])
+    run(["continue", "--evidence-root", str(root)])
+    run(["validate", "--evidence-root", str(root)])
+    run(["validate", "--evidence-root", str(root), "--print-status"])
+    run(
+        [
+            "record-index",
+            "--evidence-root",
+            str(root),
+            "--index",
+            str(orchestrator.INDEX_PATH),
+        ]
+    )
+    run(
+        [
+            "record-preserved",
+            "--evidence-root",
+            str(root),
+            "--index",
+            str(orchestrator.INDEX_PATH),
+            "--preservation-commit",
+            "7" * 40,
+            "--issue-comment-url",
+            (
+                "https://github.com/tensor4all/tenferro-rs/issues/1436"
+                "#issuecomment-1"
+            ),
+        ]
+    )
+"""
+                environment = dict(os.environ)
+                environment["PYTHONPATH"] = str(self.REPOSITORY)
+                result = subprocess.run(
+                    (
+                        sys.executable,
+                        "-c",
+                        harness,
+                        str(self.REPOSITORY),
+                        str(root),
+                        str(runtime / "scratch"),
+                        str(runtime / "home"),
+                        str(runtime / "cargo-home"),
+                    ),
+                    cwd="/tmp",
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    result.stdout,
+                    "PASS\nPENDING_PRESERVATION\nPRESERVED\n",
+                )
+
+    def test_root_only_public_command_rejects_foreign_and_symlink_roots(self):
+        direct = str(self.REPOSITORY / "scripts" / "run_phase2e.py")
+        artifacts = self.REPOSITORY / "docs" / "worklogs" / "artifacts"
+        with tempfile.TemporaryDirectory() as foreign_directory, (
+            tempfile.TemporaryDirectory(dir=artifacts)
+        ) as owned_directory:
+            foreign = pathlib.Path(foreign_directory).resolve()
+            link = pathlib.Path(owned_directory).with_name(
+                pathlib.Path(owned_directory).name + "-link"
+            )
+            link.symlink_to(foreign, target_is_directory=True)
+            self.addCleanup(link.unlink)
+            for root in (foreign, link):
+                with self.subTest(root=root):
+                    result = subprocess.run(
+                        (
+                            sys.executable,
+                            direct,
+                            "validate",
+                            "--evidence-root",
+                            str(root),
+                        ),
+                        cwd="/tmp",
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 3)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("phase2e orchestrator error:", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
 
     def test_exact_public_start_command_reports_typed_error_without_traceback(self):
         repository = pathlib.Path(__file__).resolve().parent.parent

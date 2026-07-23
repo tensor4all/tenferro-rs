@@ -137,8 +137,33 @@ def _require_fixed_index_argument(
 
 
 def _infer_repository_for_root(root: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
-    repository = _canonical_repository()
-    return repository, _canonical_evidence_root(repository, root, must_exist=True)
+    requested = pathlib.Path(root)
+    if not requested.is_absolute():
+        requested = pathlib.Path.cwd() / requested
+    try:
+        canonical = requested.resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot resolve evidence root: {error}") from error
+    if canonical != requested or not canonical.is_dir():
+        raise protocol.ProtocolError(
+            "evidence root must be an absolute canonical directory"
+        )
+    repositories = []
+    for ancestor in canonical.parents:
+        if (
+            ancestor.name == "artifacts"
+            and ancestor.parent.name == "worklogs"
+            and ancestor.parent.parent.name == "docs"
+        ):
+            repositories.append(ancestor.parent.parent.parent)
+    if len(repositories) != 1:
+        raise protocol.ProtocolError(
+            "evidence root does not identify one canonical repository"
+        )
+    repository = _canonical_repository(repositories[0])
+    return repository, _canonical_evidence_root(
+        repository, canonical, must_exist=True
+    )
 
 STAGE_ORDER = (
     "timing-builds",
@@ -3707,10 +3732,6 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--left", required=True)
     compare.add_argument("--right", required=True)
     compare.add_argument("--contract", required=True, type=pathlib.Path)
-    worker = subparsers.add_parser("_stage-worker", help=argparse.SUPPRESS)
-    worker.add_argument("--stage", required=True, choices=STAGE_ORDER)
-    worker.add_argument("--context", required=True, type=pathlib.Path)
-    worker.add_argument("--context-sha256", required=True)
     start = subparsers.add_parser("start", exit_on_error=False)
     start.add_argument("--repository", required=True, type=pathlib.Path)
     start.add_argument("--candidate", required=True)
@@ -3730,6 +3751,16 @@ def build_parser() -> argparse.ArgumentParser:
     preserved.add_argument("--index", required=True, type=pathlib.Path)
     preserved.add_argument("--preservation-commit", required=True)
     preserved.add_argument("--issue-comment-url", required=True)
+    return parser
+
+
+def _build_stage_worker_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="run_phase2e.py _stage-worker", exit_on_error=False
+    )
+    parser.add_argument("--stage", required=True, choices=STAGE_ORDER)
+    parser.add_argument("--context", required=True, type=pathlib.Path)
+    parser.add_argument("--context-sha256", required=True)
     return parser
 
 
@@ -3800,11 +3831,13 @@ def _load_bound_context(
 
 def main(argv: Sequence[str] | None = None) -> int:
     try:
-        args = build_parser().parse_args(argv)
-        if args.command == "_stage-worker":
+        raw_argv = tuple(sys.argv[1:] if argv is None else argv)
+        if raw_argv[:1] == ("_stage-worker",):
+            args = _build_stage_worker_parser().parse_args(raw_argv[1:])
             return execute_stage_worker(
                 args.stage, args.context, args.context_sha256
             )
+        args = build_parser().parse_args(raw_argv)
         if args.command == "validate":
             repository, root = _infer_repository_for_root(args.evidence_root)
             status = validate_root(root)

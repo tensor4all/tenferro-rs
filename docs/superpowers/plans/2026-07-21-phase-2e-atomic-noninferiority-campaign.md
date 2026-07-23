@@ -1087,8 +1087,14 @@ The only accepted index argument is
 experiment, campaign, command-contract, context, toolchain, and process
 identities are never caller-provided operational flags. `start` derives and
 binds them before `ACTIVE`; later commands recover them from the fixed index
-and the canonical context stored under the evidence root. The private
-`_stage-worker` interface is not an operator surface.
+and the canonical context stored under the evidence root. An absolute evidence
+root recovers its repository through the exact
+`docs/worklogs/artifacts/<root>` ownership path and verified Git top level, so
+later commands are independent of the caller's current directory. A foreign,
+aliased, or noncanonical root is rejected before index or context data is
+trusted. The private `_stage-worker` interface is not an operator surface and
+does not appear in public top-level help, although the parent orchestrator can
+still invoke it directly.
 
 Before reserving `ACTIVE`, `start` creates fresh mutually disjoint execution
 homes next to the external scratch parent. `HOME` is empty. `CARGO_HOME`

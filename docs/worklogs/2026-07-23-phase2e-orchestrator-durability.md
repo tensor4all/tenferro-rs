@@ -128,6 +128,11 @@ as a digest-bound canonical context under the evidence root, and recovered
 from the fixed index/root pair for continuation and preservation commands.
 The dated index path is fixed; alternate indexes, foreign roots, reused
 scratch, stale candidates, and the former internal identity flags are rejected.
+The private stage worker uses a separate parser and is absent from public help.
+Root-only commands derive the repository from an absolute canonical
+`docs/worklogs/artifacts` root and verify its Git top level, rather than using
+the caller's current directory; the fixed index and ACTIVE binding remain the
+authority for mutable lifecycle operations.
 
 `start` now creates a private empty `HOME` and a private `CARGO_HOME` outside
 the measured scratch root. The latter links only canonical Cargo `git` and
@@ -135,8 +140,14 @@ the measured scratch root. The latter links only canonical Cargo `git` and
 creating `ACTIVE`, the wrapper runs both Task 7 `cpu-faer` feature queries with
 `CARGO_NET_OFFLINE=true`. A real local preflight on 2026-07-23 passed for
 `tenferro-cpu` and `tenferro-ad`; the focused outer-orchestrator suite passed
-83 tests after final context-integrity review. The exact seven-module Phase 2E
-verification matrix passed 441 tests in 213.9 seconds.
+86 tests after independent specification review. The exact seven-module Phase
+2E verification matrix passed 444 tests in 214.3 seconds.
+
+An independent specification review then added subprocess regressions for
+private-worker help isolation, execution from `/tmp` with an absolute evidence
+root, foreign/symlink root rejection, and one deterministic public
+start/rerun/continue/validate/record lifecycle with fake stages. These tests do
+not launch measurements or mutate remote state.
 
 ## Remaining work
 
