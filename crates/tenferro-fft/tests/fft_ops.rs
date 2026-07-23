@@ -89,8 +89,21 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 fn fft_ad_context() -> tenferro_ad::AdContext {
     tenferro_ad::AdContext::builder()
         .with_extension_rules(tenferro_fft::ad_rules().unwrap())
+        .with_semantic_extension_rules(tenferro_fft::semantic_ad_rules().unwrap())
+        .unwrap()
         .build()
         .unwrap()
+}
+
+#[cfg(feature = "autodiff")]
+#[test]
+fn fft_semantic_ad_rules_register_all_roles() {
+    let rules = tenferro_fft::semantic_ad_rules().unwrap();
+    assert!(rules.lookup_linearize("tenferro-fft.fft.v1").is_some());
+    assert!(rules
+        .lookup_linear_transpose("tenferro-fft.fft.v1")
+        .is_some());
+    assert!(rules.lookup_primal_vjp("tenferro-fft.fft.v1").is_some());
 }
 
 #[cfg(feature = "autodiff")]

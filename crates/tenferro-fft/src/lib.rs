@@ -101,6 +101,13 @@ use tenferro_ad::extension::{
     ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionPrimalVjpRule,
     ExtensionRegistryError, ExtensionRuleSet,
 };
+#[cfg(feature = "autodiff")]
+use tenferro_ad::semantic_extension::{
+    AdValue, SemanticAdError, SemanticExtensionRegistryError, SemanticExtensionRuleSet,
+    SemanticLinearTransposeRequest, SemanticLinearTransposeRule, SemanticLinearizeRequest,
+    SemanticLinearizeResult, SemanticLinearizeRule, SemanticPrimalVjpRequest,
+    SemanticPrimalVjpRule,
+};
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::{transpose_input::TransposeInputRef, PrimitiveRuleBuilder};
@@ -110,6 +117,8 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOp, HostReference};
+#[cfg(feature = "autodiff")]
+use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
 use tenferro_tensor::{CacheStats, DType, ErrorKind, Tensor, TensorRead, ValidationError};
 #[cfg(feature = "autodiff")]
@@ -1236,6 +1245,194 @@ impl ExtensionPrimalVjpRule for FftAdRule {
 }
 
 #[cfg(feature = "autodiff")]
+impl SemanticLinearizeRule for FftAdRule {
+    fn family_id(&self) -> &'static str {
+        FFT_EXTENSION_FAMILY_ID
+    }
+
+    fn linearize(
+        &self,
+        request: SemanticLinearizeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<SemanticLinearizeResult, SemanticAdError> {
+        let fft_op = semantic_fft_payload(request.op(), SemanticAdRuleKind::Linearize)?;
+        if !fft_op.operation.is_c2c() {
+            return Err(semantic_fft_unsupported(
+                fft_op.operation,
+                SemanticAdRuleKind::Linearize,
+            ));
+        }
+        let tangent = match request.tangent_inputs()[0] {
+            AdValue::Absent => AdValue::Absent,
+            AdValue::Value(tangent) => {
+                AdValue::Value(builder.add_extension(Arc::new(fft_op.clone()), &[tangent])?[0])
+            }
+        };
+        Ok(SemanticLinearizeResult::new([tangent], []))
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl SemanticLinearTransposeRule for FftAdRule {
+    fn family_id(&self) -> &'static str {
+        FFT_EXTENSION_FAMILY_ID
+    }
+
+    fn linear_transpose(
+        &self,
+        request: SemanticLinearTransposeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        Ok([semantic_fft_adjoint(
+            request.op(),
+            request.cotangent_outputs()[0],
+            request.active_inputs()[0],
+            request.primal_inputs()[0],
+            builder,
+        )?]
+        .into())
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl SemanticPrimalVjpRule for FftAdRule {
+    fn family_id(&self) -> &'static str {
+        FFT_EXTENSION_FAMILY_ID
+    }
+
+    fn primal_vjp(
+        &self,
+        request: SemanticPrimalVjpRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        Ok([semantic_fft_adjoint(
+            request.op(),
+            request.cotangent_outputs()[0],
+            request.active_inputs()[0],
+            request.primal_inputs()[0],
+            builder,
+        )?]
+        .into())
+    }
+}
+
+#[cfg(feature = "autodiff")]
+#[derive(Clone, Copy)]
+enum SemanticAdRuleKind {
+    Linearize,
+    Transpose,
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_fft_payload(
+    op: &dyn ExtensionOp,
+    role: SemanticAdRuleKind,
+) -> std::result::Result<&FftOp, SemanticAdError> {
+    op.as_any().downcast_ref::<FftOp>().ok_or_else(|| {
+        semantic_fft_unsupported_family(
+            FFT_EXTENSION_FAMILY_ID,
+            role,
+            "FFT semantic AD received an incompatible extension payload",
+        )
+    })
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_fft_adjoint(
+    op: &dyn ExtensionOp,
+    cotangent: AdValue,
+    active: bool,
+    primal_input: ProgramValue,
+    builder: &mut SemanticProgramBuilder,
+) -> std::result::Result<AdValue, SemanticAdError> {
+    if !active {
+        return Ok(AdValue::Absent);
+    }
+    let AdValue::Value(cotangent) = cotangent else {
+        return Ok(AdValue::Absent);
+    };
+    let fft_op = semantic_fft_payload(op, SemanticAdRuleKind::Transpose)?;
+    if !fft_op.operation.is_c2c() {
+        return Err(semantic_fft_unsupported(
+            fft_op.operation,
+            SemanticAdRuleKind::Transpose,
+        ));
+    }
+    let adjoint_op = fft_op
+        .c2c_adjoint()
+        .ok_or_else(|| semantic_fft_unsupported(fft_op.operation, SemanticAdRuleKind::Transpose))?;
+    let adjoint = builder.add_extension(Arc::new(adjoint_op), &[cotangent])?[0];
+    restore_semantic_c2c_adjoint_input_length(builder, adjoint, primal_input, fft_op)
+        .map(AdValue::Value)
+}
+
+#[cfg(feature = "autodiff")]
+fn restore_semantic_c2c_adjoint_input_length(
+    builder: &mut SemanticProgramBuilder,
+    adjoint: ProgramValue,
+    primal_input: ProgramValue,
+    fft_op: &FftOp,
+) -> std::result::Result<ProgramValue, SemanticAdError> {
+    let Some(transform_len) = fft_op.n else {
+        return Ok(adjoint);
+    };
+    let input_len = builder
+        .value_metadata(primal_input)?
+        .shape()
+        .get(fft_op.axis)
+        .and_then(|extent| extent.as_exact())
+        .and_then(|dim| match dim {
+            tenferro_ops::dim_expr::DimExpr::Const(value) => Some(*value),
+            _ => None,
+        });
+    if input_len == Some(transform_len) {
+        return Ok(adjoint);
+    }
+
+    let size = builder.add_op(
+        CoreSemanticOp::ShapeOf { axis: fft_op.axis },
+        &[primal_input],
+    )?[0];
+    let truncated = builder.add_op(
+        CoreSemanticOp::DynamicTruncate { axis: fft_op.axis },
+        &[adjoint, size],
+    )?[0];
+    Ok(builder.add_op(
+        CoreSemanticOp::PadToMatch { axis: fft_op.axis },
+        &[truncated, primal_input],
+    )?[0])
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_fft_unsupported(operation: FftOperation, role: SemanticAdRuleKind) -> SemanticAdError {
+    semantic_fft_unsupported_family(
+        fft_ad_family_id(operation),
+        role,
+        "FFT operation has no semantic AD rule",
+    )
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_fft_unsupported_family(
+    family_id: &'static str,
+    role: SemanticAdRuleKind,
+    message: impl Into<String>,
+) -> SemanticAdError {
+    SemanticAdError::Unsupported {
+        family_id,
+        role: match role {
+            SemanticAdRuleKind::Linearize => {
+                tenferro_ad::semantic_extension::SemanticAdRuleRole::Linearize
+            }
+            SemanticAdRuleKind::Transpose => {
+                tenferro_ad::semantic_extension::SemanticAdRuleRole::LinearTranspose
+            }
+        },
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "autodiff")]
 fn transpose_fft_adjoint(
     op: &dyn ExtensionOp,
     builder: &mut dyn PrimitiveRuleBuilder,
@@ -1418,6 +1615,23 @@ fn restore_c2c_adjoint_input_length_from_transpose_input(
 /// rule for the family and role is already registered.
 pub fn ad_rules() -> std::result::Result<ExtensionRuleSet, ExtensionRegistryError> {
     ExtensionRuleSet::new()
+        .with_linearize(Arc::new(FftAdRule))?
+        .with_linear_transpose(Arc::new(FftAdRule))?
+        .with_primal_vjp(Arc::new(FftAdRule))
+}
+
+/// Return the semantic-program FFT extension AD rule set.
+#[cfg(feature = "autodiff")]
+///
+/// # Errors
+///
+/// Returns [`SemanticExtensionRegistryError::MalformedFamilyId`] if the FFT
+/// family identifier is invalid, or
+/// [`SemanticExtensionRegistryError::DuplicateRule`] if a rule for the family
+/// and role is already registered.
+pub fn semantic_ad_rules(
+) -> std::result::Result<SemanticExtensionRuleSet, SemanticExtensionRegistryError> {
+    SemanticExtensionRuleSet::new()
         .with_linearize(Arc::new(FftAdRule))?
         .with_linear_transpose(Arc::new(FftAdRule))?
         .with_primal_vjp(Arc::new(FftAdRule))
@@ -2003,16 +2217,16 @@ mod tests {
         let op = FftOp::new(FftOperation::C2cForward, 0, None, FftNorm::Backward);
         let mut builder = computegraph::graph::GraphBuilder::<StdTensorOp>::new();
         let cotangent = builder.add_input(tenferro_ops::input_key::TensorInputKey::User { id: 0 });
-        let result = rule
-            .linear_transpose(
-                &op,
-                &mut builder,
-                &[Some(cotangent)],
-                &[],
-                &[false],
-                &mut ShapeGuardContext::default(),
-            )
-            .unwrap();
+        let result = ExtensionLinearTransposeRule::linear_transpose(
+            &rule,
+            &op,
+            &mut builder,
+            &[Some(cotangent)],
+            &[],
+            &[false],
+            &mut ShapeGuardContext::default(),
+        )
+        .unwrap();
 
         assert_eq!(result, vec![None]);
         assert!(builder.build().operations().is_empty());
@@ -2032,19 +2246,19 @@ mod tests {
 
         let mut builder = computegraph::graph::GraphBuilder::<StdTensorOp>::new();
         let cotangent = builder.add_input(tenferro_ops::input_key::TensorInputKey::User { id: 0 });
-        let result = rule
-            .linear_transpose(
-                &op,
-                &mut builder,
-                &[Some(cotangent)],
-                &[tidu::PrimitiveTransposeInput::Linear {
-                    key: active_key.clone(),
-                    primal: None,
-                }],
-                &[true],
-                &mut ctx,
-            )
-            .unwrap();
+        let result = ExtensionLinearTransposeRule::linear_transpose(
+            &rule,
+            &op,
+            &mut builder,
+            &[Some(cotangent)],
+            &[tidu::PrimitiveTransposeInput::Linear {
+                key: active_key.clone(),
+                primal: None,
+            }],
+            &[true],
+            &mut ctx,
+        )
+        .unwrap();
 
         assert_eq!(result.len(), 1);
         assert!(result[0].is_some());
@@ -2062,5 +2276,89 @@ mod tests {
                     | StdTensorOp::PadToMatch { .. }
             )
         }));
+    }
+
+    #[cfg(feature = "autodiff")]
+    #[test]
+    fn fft_semantic_rules_emit_extension_first_jvp_and_length_restoring_transpose() {
+        use tenferro_ops::dim_expr::DimExpr;
+        use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef, SemanticProgramBuilder};
+
+        let fft_op = FftOp::new(FftOperation::C2cForward, 0, Some(2), FftNorm::Backward);
+        let mut source = SemanticProgramBuilder::new();
+        let source_input = source
+            .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(4)]))
+            .unwrap();
+        let source_output = source
+            .add_extension(Arc::new(fft_op), &[source_input])
+            .unwrap()[0];
+        let source = source.finish(&[source_output]).unwrap();
+        let operation = source.program.operations().next().unwrap();
+
+        let rules = semantic_ad_rules().unwrap();
+        let mut destination = SemanticProgramBuilder::new();
+        let primal = destination
+            .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(4)]))
+            .unwrap();
+        let tangent = destination
+            .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(4)]))
+            .unwrap();
+        let primal_output = destination
+            .add_extension(
+                Arc::new(FftOp::new(
+                    FftOperation::C2cForward,
+                    0,
+                    Some(2),
+                    FftNorm::Backward,
+                )),
+                &[primal],
+            )
+            .unwrap()[0];
+        let linearized = rules
+            .linearize_operation(
+                operation,
+                &[primal],
+                &[primal_output],
+                &[AdValue::Value(tangent)],
+                &[true],
+                &mut destination,
+            )
+            .unwrap();
+        let AdValue::Value(tangent_output) = linearized.tangent_outputs()[0] else {
+            panic!("FFT tangent must be active");
+        };
+        let cotangent_inputs = rules
+            .linear_transpose_operation(
+                operation,
+                &[primal],
+                &[primal_output],
+                &[AdValue::Value(tangent_output)],
+                &[true],
+                linearized.residuals(),
+                &mut destination,
+            )
+            .unwrap();
+        let AdValue::Value(cotangent_input) = cotangent_inputs[0] else {
+            panic!("FFT cotangent must be active");
+        };
+        let frozen = destination
+            .finish(&[tangent_output, cotangent_input])
+            .unwrap();
+        let operations: Vec<_> = frozen.program.operations().collect();
+        assert!(
+            operations
+                .iter()
+                .filter(|operation| matches!(operation.op(), SemanticOpRef::Extension(_)))
+                .count()
+                >= 3
+        );
+        assert!(operations.iter().any(|operation| matches!(
+            operation.op(),
+            SemanticOpRef::Core(CoreSemanticOp::DynamicTruncate { axis: 0 })
+        )));
+        assert!(operations.iter().any(|operation| matches!(
+            operation.op(),
+            SemanticOpRef::Core(CoreSemanticOp::PadToMatch { axis: 0 })
+        )));
     }
 }
