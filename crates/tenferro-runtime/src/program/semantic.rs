@@ -1,11 +1,12 @@
 use std::fmt;
 use std::sync::Arc;
 
+use super::identity::SemanticIdentity;
 use super::op::SemanticOperation;
 use super::value::ProgramBuilderNonce;
 use super::{
-    ProgramBindings, ProgramQueryError, ProgramValue, ProgramValueMetadata, SemanticOperationView,
-    ShapeGuard,
+    ProgramBindings, ProgramQueryError, ProgramValue, ProgramValueMetadata, SemanticFingerprint,
+    SemanticOperationView, ShapeGuard,
 };
 
 /// Immutable backend-neutral semantic SSA program.
@@ -16,6 +17,7 @@ pub struct SemanticProgram {
     pub(crate) values: Box<[ProgramValueMetadata]>,
     pub(crate) operations: Box<[SemanticOperation]>,
     pub(crate) shape_guards: Box<[ShapeGuard]>,
+    pub(crate) identity: SemanticIdentity,
 }
 
 impl SemanticProgram {
@@ -54,6 +56,33 @@ impl SemanticProgram {
     /// Borrow all symbolic guards in semantic operation order.
     pub fn shape_guards(&self) -> &[ShapeGuard] {
         &self.shape_guards
+    }
+
+    /// Return the cached normalized structural fingerprint.
+    pub const fn semantic_fingerprint(&self) -> SemanticFingerprint {
+        self.identity.fingerprint
+    }
+
+    /// Compare exact normalized semantics after the compact fingerprint check.
+    pub fn semantic_eq(&self, other: &Self) -> bool {
+        self.identity.exact_eq(self, &other.identity, other)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_fingerprint_for_test(&mut self, fingerprint: SemanticFingerprint) {
+        self.identity.fingerprint = fingerprint;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_first_provenance_for_test(&mut self, label: &str) {
+        if let Some(operation) = self.operations.first_mut() {
+            operation.provenance = super::metadata::SemanticProvenance::builder(Some(label));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fingerprint_computations_for_test(&self) -> usize {
+        self.identity.fingerprint_computations
     }
 }
 

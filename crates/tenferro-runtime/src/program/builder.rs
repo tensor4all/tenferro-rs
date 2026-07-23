@@ -9,6 +9,7 @@ use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::Tensor;
 
 use super::bindings::PendingBinding;
+use super::identity::SemanticIdentity;
 use super::metadata::SemanticProvenance;
 use super::op::{SemanticOp, SemanticOperation};
 use super::value::ProgramBuilderNonce;
@@ -162,19 +163,25 @@ impl SemanticProgramBuilder {
         )?;
         validate_bindings(&self.inputs, &self.input_specs, &self.bindings)?;
 
-        let shape_guards = self
-            .operations
+        let inputs = self.inputs.into_boxed_slice();
+        let outputs: Box<[ProgramValue]> = outputs.into();
+        let values = self.values.into_boxed_slice();
+        let operations = self.operations.into_boxed_slice();
+        let shape_guards: Box<[ShapeGuard]> = operations
             .iter()
             .flat_map(|operation| operation.shape_guards.iter().cloned())
             .collect();
+        let identity =
+            SemanticIdentity::build(&inputs, &outputs, &values, &operations, &shape_guards);
         let bindings = ProgramBindings::freeze(self.owner, self.bindings);
         let program = SemanticProgram {
             owner: self.owner,
-            inputs: self.inputs.into(),
-            outputs: outputs.into(),
-            values: self.values.into(),
-            operations: self.operations.into(),
+            inputs,
+            outputs,
+            values,
+            operations,
             shape_guards,
+            identity,
         };
         Ok(FrozenProgram {
             program: Arc::new(program),

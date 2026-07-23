@@ -3,6 +3,7 @@
 mod bindings;
 mod builder;
 mod error;
+mod identity;
 mod import;
 mod metadata;
 mod op;
@@ -15,6 +16,7 @@ pub use error::{
     EffectResourceError, ProgramBindingError, ProgramBuildError, ProgramFinishError,
     ProgramQueryError, ProgramStructuralError,
 };
+pub use identity::SemanticFingerprint;
 pub use import::{ImportedProgramValues, ProgramImport};
 pub use metadata::{
     Alias, AliasKind, Effect, EffectAccess, EffectResource, ProgramInputSpec, ProgramShapeRelation,

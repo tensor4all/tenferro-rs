@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::{
-    ExtensionAliasDeclaration, ExtensionEffect, ExtensionEffectAccess, ExtensionEffectDeclaration,
-    ExtensionOp,
+    ExtensionAlias, ExtensionAliasDeclaration, ExtensionEffect, ExtensionEffectAccess,
+    ExtensionEffectDeclaration, ExtensionOp,
 };
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_ops::sym_dim::SymDim;
@@ -23,6 +23,8 @@ use super::{
 struct IdentityExtension {
     declares_semantics: bool,
     effectful: bool,
+    guarded: bool,
+    view_alias: bool,
 }
 
 impl ExtensionOp for IdentityExtension {
@@ -33,11 +35,16 @@ impl ExtensionOp for IdentityExtension {
     fn payload_hash(&self, hasher: &mut dyn Hasher) {
         hasher.write_u8(u8::from(self.declares_semantics));
         hasher.write_u8(u8::from(self.effectful));
+        hasher.write_u8(u8::from(self.guarded));
+        hasher.write_u8(u8::from(self.view_alias));
     }
 
     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
         other.as_any().downcast_ref::<Self>().is_some_and(|other| {
-            other.declares_semantics == self.declares_semantics && other.effectful == self.effectful
+            other.declares_semantics == self.declares_semantics
+                && other.effectful == self.effectful
+                && other.guarded == self.guarded
+                && other.view_alias == self.view_alias
         })
     }
 
@@ -61,7 +68,7 @@ impl ExtensionOp for IdentityExtension {
         &self,
         context: &mut ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        if self.effectful {
+        if self.guarded {
             let extent = context.input_axis(0, 0)?;
             context.require_equal(extent, SymDim::from(2))?;
         }
@@ -90,7 +97,15 @@ impl ExtensionOp for IdentityExtension {
 
     fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
         if self.declares_semantics {
-            ExtensionAliasDeclaration::AllFresh
+            if self.view_alias {
+                static ALIASES: [ExtensionAlias; 1] = [ExtensionAlias::ViewOf {
+                    output: 0,
+                    input: 0,
+                }];
+                ExtensionAliasDeclaration::Declared(&ALIASES)
+            } else {
+                ExtensionAliasDeclaration::AllFresh
+            }
         } else {
             ExtensionAliasDeclaration::Undeclared
         }
@@ -219,6 +234,8 @@ fn extension_operations_require_explicit_effect_and_alias_declarations() {
     let undeclared: Arc<dyn ExtensionOp> = Arc::new(IdentityExtension {
         declares_semantics: false,
         effectful: false,
+        guarded: false,
+        view_alias: false,
     });
     assert!(matches!(
         builder.add_extension(undeclared, &[x]),
@@ -231,6 +248,8 @@ fn extension_operations_require_explicit_effect_and_alias_declarations() {
     let declared: Arc<dyn ExtensionOp> = Arc::new(IdentityExtension {
         declares_semantics: true,
         effectful: false,
+        guarded: false,
+        view_alias: false,
     });
     let y = builder.add_extension(declared, &[x]).unwrap()[0];
     assert_eq!(builder.value_metadata(y).unwrap().dtype(), DType::F64);
@@ -488,6 +507,8 @@ fn import_uses_value_dependency_closure_and_keeps_observable_effects() {
     let effect: Arc<dyn ExtensionOp> = Arc::new(IdentityExtension {
         declares_semantics: true,
         effectful: true,
+        guarded: true,
+        view_alias: false,
     });
     let _effect_output = source.add_extension(effect, &[unrelated]).unwrap()[0];
     let source = source.finish(&[selected_output]).unwrap();
@@ -513,4 +534,141 @@ fn import_uses_value_dependency_closure_and_keeps_observable_effects() {
             .count(),
         1
     );
+}
+
+#[test]
+fn semantic_identity_is_normalized_cached_and_excludes_bindings() {
+    fn build(with_binding: bool) -> super::FrozenProgram {
+        let mut builder = SemanticProgramBuilder::new();
+        let input = builder
+            .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+            .unwrap();
+        if with_binding {
+            let tensor = Arc::new(Tensor::F64(
+                TypedTensor::from_vec_col_major(vec![2], vec![1.0, 2.0]).unwrap(),
+            ));
+            builder.bind_input(input, tensor).unwrap();
+        }
+        let output = builder.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
+        builder.finish(&[output]).unwrap()
+    }
+
+    let unbound = build(false);
+    let bound = build(true);
+    assert_eq!(
+        unbound.program.semantic_fingerprint(),
+        bound.program.semantic_fingerprint()
+    );
+    assert!(unbound.program.semantic_eq(bound.program.as_ref()));
+    assert_eq!(
+        unbound.program.semantic_fingerprint().as_bytes(),
+        unbound.program.semantic_fingerprint().as_bytes()
+    );
+    assert_eq!(unbound.program.fingerprint_computations_for_test(), 1);
+    assert!(unbound.bindings.is_empty());
+    assert_eq!(bound.bindings.len(), 1);
+
+    let mut imported = SemanticProgramBuilder::new();
+    let roots = imported
+        .import(ProgramImport {
+            program: bound.program.as_ref(),
+            bindings: &bound.bindings,
+            roots: bound.program.outputs(),
+        })
+        .unwrap();
+    let imported = imported.finish(roots.roots()).unwrap();
+    assert!(bound.program.semantic_eq(imported.program.as_ref()));
+
+    let mut changed_provenance = build(false);
+    Arc::get_mut(&mut changed_provenance.program)
+        .unwrap()
+        .set_first_provenance_for_test("diagnostic-only");
+    assert_eq!(
+        unbound.program.semantic_fingerprint(),
+        changed_provenance.program.semantic_fingerprint()
+    );
+    assert!(unbound
+        .program
+        .semantic_eq(changed_provenance.program.as_ref()));
+}
+
+#[test]
+fn semantic_identity_detects_changes_even_after_a_forced_fingerprint_collision() {
+    let mut left = SemanticProgramBuilder::new();
+    let left_input = left
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let left_output = left.add_op(CoreSemanticOp::Neg, &[left_input]).unwrap()[0];
+    let left = left.finish(&[left_output]).unwrap();
+
+    let mut right = SemanticProgramBuilder::new();
+    let right_input = right
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let right_output = right.add_op(CoreSemanticOp::Abs, &[right_input]).unwrap()[0];
+    let mut right = right.finish(&[right_output]).unwrap();
+
+    assert_ne!(
+        left.program.semantic_fingerprint(),
+        right.program.semantic_fingerprint()
+    );
+    Arc::get_mut(&mut right.program)
+        .unwrap()
+        .set_fingerprint_for_test(left.program.semantic_fingerprint());
+    assert_eq!(
+        left.program.semantic_fingerprint(),
+        right.program.semantic_fingerprint()
+    );
+    assert!(!left.program.semantic_eq(right.program.as_ref()));
+}
+
+#[test]
+fn semantic_identity_covers_guards_effects_aliases_and_constants() {
+    fn build_extension(effectful: bool, guarded: bool, view_alias: bool) -> super::FrozenProgram {
+        let mut builder = SemanticProgramBuilder::new();
+        let input = builder
+            .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+            .unwrap();
+        let extension: Arc<dyn ExtensionOp> = Arc::new(IdentityExtension {
+            declares_semantics: true,
+            effectful,
+            guarded,
+            view_alias,
+        });
+        let output = builder.add_extension(extension, &[input]).unwrap()[0];
+        builder.finish(&[output]).unwrap()
+    }
+
+    let plain = build_extension(false, false, false);
+    let effectful = build_extension(true, false, false);
+    let guarded = build_extension(false, true, false);
+    let view = build_extension(false, false, true);
+    for changed in [&effectful, &guarded, &view] {
+        assert_ne!(
+            plain.program.semantic_fingerprint(),
+            changed.program.semantic_fingerprint()
+        );
+        assert!(!plain.program.semantic_eq(changed.program.as_ref()));
+    }
+
+    fn build_constant(byte: u8) -> super::FrozenProgram {
+        let mut builder = SemanticProgramBuilder::new();
+        let output = builder
+            .add_op(
+                CoreSemanticOp::Constant {
+                    dtype: DType::Bool,
+                    bytes: vec![byte],
+                },
+                &[],
+            )
+            .unwrap()[0];
+        builder.finish(&[output]).unwrap()
+    }
+    let zero = build_constant(0);
+    let one = build_constant(1);
+    assert_ne!(
+        zero.program.semantic_fingerprint(),
+        one.program.semantic_fingerprint()
+    );
+    assert!(!zero.program.semantic_eq(one.program.as_ref()));
 }
