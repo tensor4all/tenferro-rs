@@ -771,6 +771,191 @@ raise SystemExit(1)
             self.assertEqual(code, 0)
             self.assertEqual(called, [orchestrator.STAGE_ORDER[0]])
 
+    def test_timing_build_failure_is_persisted_before_inconclusive_return(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _path, context = self.make_stage_context(pathlib.Path(directory))
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(mode=0o700)
+            before = protocol.regular_file_inventory(root)
+            failure = orchestrator.build.CommandResult(
+                argv=("/controlled/cargo", "build"),
+                cwd="/worktree",
+                environment={"HOME": "/sealed-home", "PATH": "/controlled"},
+                deadline_seconds=17,
+                returncode=101,
+                stdout="captured stdout\n",
+                stderr="captured stderr\n",
+                validity_state="INCONCLUSIVE",
+                failure_reason="nonzero-exit",
+                terminated=False,
+                killed=False,
+                inherited_descriptors=(9,),
+            )
+            result = orchestrator.build.BuildSetResult(
+                "INCONCLUSIVE", {}, failure
+            )
+
+            with mock.patch.object(
+                orchestrator.build, "build_all", return_value=result
+            ):
+                code = orchestrator._timing_builds(context)
+
+            self.assertEqual(code, 2)
+            artifact = root / "timing-build-failure.json"
+            self.assertTrue(artifact.is_file())
+            payload = json.loads(artifact.read_text(encoding="utf-8"))
+            self.assertEqual(
+                payload,
+                {
+                    "version": 1,
+                    "protocol_version": protocol.PROTOCOL_VERSION,
+                    "stage": "timing-builds",
+                    "validity_state": "INCONCLUSIVE",
+                    "failure_reason": "nonzero-exit",
+                    "command": {
+                        "argv": ["/controlled/cargo", "build"],
+                        "cwd": "/worktree",
+                        "environment": {
+                            "HOME": "/sealed-home",
+                            "PATH": "/controlled",
+                        },
+                        "deadline_seconds": 17,
+                        "returncode": 101,
+                        "stdout": "captured stdout\n",
+                        "stderr": "captured stderr\n",
+                        "termination": {
+                            "terminated": False,
+                            "killed": False,
+                        },
+                        "inherited_descriptors": [9],
+                    },
+                },
+            )
+            inventory = protocol.regular_file_inventory(root)
+            self.assertEqual(
+                inventory["timing-build-failure.json"],
+                protocol.sha256_file(artifact),
+            )
+            orchestrator._write_child_record(
+                root,
+                [{"stage": "timing-builds", "exit_code": 2}],
+                before,
+                environment=protocol.runtime_environment(
+                    path="/controlled", home="/sealed-home"
+                ),
+            )
+            child = json.loads(
+                (root / "children/01-timing-builds.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                child["changed"]["timing-build-failure.json"],
+                protocol.sha256_file(artifact),
+            )
+            seal = orchestrator.seal_abandoned_root(root)
+            self.assertEqual(
+                seal["inventory"]["timing-build-failure.json"],
+                protocol.sha256_file(artifact),
+            )
+
+    def test_successful_timing_build_writes_no_failure_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _path, context = self.make_stage_context(pathlib.Path(directory))
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(mode=0o700)
+            result = orchestrator.build.BuildSetResult("COMPLETE", {}, None)
+
+            with mock.patch.object(
+                orchestrator.build, "build_all", return_value=result
+            ):
+                code = orchestrator._timing_builds(context)
+
+            self.assertEqual(code, 0)
+            self.assertFalse((root / "timing-build-failure.json").exists())
+
+    def test_timing_build_result_and_failure_evidence_must_be_consistent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _path, context = self.make_stage_context(pathlib.Path(directory))
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(mode=0o700)
+            malformed = orchestrator.build.CommandResult(
+                argv=("/controlled/cargo", "build"),
+                cwd="/worktree",
+                environment={"PATH": "/controlled"},
+                deadline_seconds=17,
+                returncode=0,
+                stdout="",
+                stderr="",
+                validity_state="COMPLETE",
+                failure_reason=None,
+                terminated=False,
+                killed=False,
+            )
+            cases = (
+                orchestrator.build.BuildSetResult("COMPLETE", {}, malformed),
+                orchestrator.build.BuildSetResult("INCONCLUSIVE", {}, None),
+                orchestrator.build.BuildSetResult(
+                    "INCONCLUSIVE", {}, malformed
+                ),
+            )
+
+            for result in cases:
+                with self.subTest(result=result), mock.patch.object(
+                    orchestrator.build, "build_all", return_value=result
+                ), self.assertRaises(protocol.ProtocolError):
+                    orchestrator._timing_builds(context)
+
+            self.assertFalse((root / "timing-build-failure.json").exists())
+
+    def test_successful_timing_build_rejects_reserved_failure_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _path, context = self.make_stage_context(pathlib.Path(directory))
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(mode=0o700)
+            artifact = root / "timing-build-failure.json"
+            protocol.atomic_write_json(artifact, {"extra": True})
+            before = artifact.read_bytes()
+
+            with mock.patch.object(
+                orchestrator.build,
+                "build_all",
+                return_value=orchestrator.build.BuildSetResult(
+                    "COMPLETE", {}, None
+                ),
+            ) as build_all, self.assertRaises(protocol.ProtocolError):
+                orchestrator._timing_builds(context)
+
+            build_all.assert_not_called()
+            self.assertEqual(artifact.read_bytes(), before)
+
+    def test_timing_build_failure_schema_rejects_extra_or_malformed_fields(self):
+        failure = orchestrator.build.CommandResult(
+            argv=("/controlled/cargo", "build"),
+            cwd="/worktree",
+            environment={"PATH": "/controlled"},
+            deadline_seconds=17,
+            returncode=101,
+            stdout="",
+            stderr="failed",
+            validity_state="INCONCLUSIVE",
+            failure_reason="nonzero-exit",
+            terminated=False,
+            killed=False,
+        )
+        payload = orchestrator._timing_build_failure_payload(failure)
+        orchestrator.validate_timing_build_failure(payload)
+        extra = {**payload, "unexpected": True}
+        malformed = {
+            **payload,
+            "command": {**payload["command"], "returncode": True},
+        }
+        for candidate in (extra, malformed):
+            with self.subTest(candidate=candidate), self.assertRaises(
+                protocol.ProtocolError
+            ):
+                orchestrator.validate_timing_build_failure(candidate)
+
     def test_private_stage_worker_invokes_real_registered_validator(self):
         with tempfile.TemporaryDirectory() as directory:
             base = pathlib.Path(directory)

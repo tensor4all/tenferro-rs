@@ -37,6 +37,7 @@ PROGRESS_MANIFEST = ".phase2e-progress.json"
 STAGE_CONTEXT = ".phase2e-stage-context.json"
 ABANDONMENT_SEAL = "abandoned-inventory.json"
 PROCESS_JOURNAL = ".phase2e-process-journal.json"
+TIMING_BUILD_FAILURE = "timing-build-failure.json"
 INDEX_PATH = pathlib.Path("docs/worklogs/2026-07-21-phase-2e-index.json")
 INDEX_LOCK_PATH = pathlib.Path("docs/worklogs/.phase2e-index.lock")
 WORKLOG_PATH = pathlib.Path("docs/worklogs/2026-07-21-phase-2e-noninferiority.md")
@@ -407,8 +408,157 @@ def _next_attempt(context: Mapping[str, Any], stage: str, lane: str) -> int:
 
 
 def _timing_builds(context: Mapping[str, Any]) -> int:
-    result = build.build_all(_build_config(context))
-    return 0 if result.validity_state == "COMPLETE" else 2
+    root = _context_path(context, "evidence_root")
+    identity = protocol.PreparedRootIdentity(root)
+    try:
+        _require_absent_timing_build_failure(identity)
+        result = build.build_all(_build_config(context))
+        if not isinstance(result, build.BuildSetResult):
+            raise protocol.ProtocolError("timing build returned an invalid result")
+        if result.validity_state == "COMPLETE":
+            if result.failure is not None:
+                raise protocol.ProtocolError(
+                    "complete timing build retained failure evidence"
+                )
+            return 0
+        if result.validity_state != "INCONCLUSIVE":
+            raise protocol.ProtocolError("timing build validity state is invalid")
+        if not isinstance(result.failure, build.CommandResult):
+            raise protocol.ProtocolError(
+                "inconclusive timing build omitted typed failure evidence"
+            )
+        payload = _timing_build_failure_payload(result.failure)
+        validate_timing_build_failure(payload)
+        _require_absent_timing_build_failure(identity)
+        _atomic_write_root_json(
+            root,
+            pathlib.PurePosixPath(TIMING_BUILD_FAILURE),
+            payload,
+            identity,
+        )
+        identity.revalidate()
+        return 2
+    finally:
+        identity.close()
+
+
+def _require_absent_timing_build_failure(
+    identity: protocol.PreparedRootIdentity,
+) -> None:
+    """Reserve the one timing-build failure artifact name without following links."""
+    identity.revalidate()
+    try:
+        os.stat(
+            TIMING_BUILD_FAILURE,
+            dir_fd=identity.descriptor,
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot inspect timing build failure evidence: {error}"
+        ) from error
+    raise protocol.ProtocolError("timing build failure evidence already exists")
+
+
+def _timing_build_failure_payload(
+    failure: build.CommandResult,
+) -> dict[str, Any]:
+    """Serialize one typed command failure without dropping captured fields."""
+    return {
+        "version": 1,
+        "protocol_version": protocol.PROTOCOL_VERSION,
+        "stage": "timing-builds",
+        "validity_state": failure.validity_state,
+        "failure_reason": failure.failure_reason,
+        "command": {
+            "argv": list(failure.argv),
+            "cwd": failure.cwd,
+            "environment": dict(sorted(failure.environment.items())),
+            "deadline_seconds": failure.deadline_seconds,
+            "returncode": failure.returncode,
+            "stdout": failure.stdout,
+            "stderr": failure.stderr,
+            "termination": {
+                "terminated": failure.terminated,
+                "killed": failure.killed,
+            },
+            "inherited_descriptors": list(failure.inherited_descriptors),
+        },
+    }
+
+
+def validate_timing_build_failure(payload: Mapping[str, Any]) -> None:
+    """Validate the exact canonical timing-build failure evidence schema."""
+    if type(payload) is not dict or set(payload) != {
+        "version",
+        "protocol_version",
+        "stage",
+        "validity_state",
+        "failure_reason",
+        "command",
+    }:
+        raise protocol.ProtocolError("timing build failure evidence schema is invalid")
+    if (
+        payload["version"] != 1
+        or payload["protocol_version"] != protocol.PROTOCOL_VERSION
+        or payload["stage"] != "timing-builds"
+        or payload["validity_state"] != "INCONCLUSIVE"
+        or type(payload["failure_reason"]) is not str
+        or not payload["failure_reason"]
+    ):
+        raise protocol.ProtocolError("timing build failure evidence header is invalid")
+    command = payload["command"]
+    if type(command) is not dict or set(command) != {
+        "argv",
+        "cwd",
+        "environment",
+        "deadline_seconds",
+        "returncode",
+        "stdout",
+        "stderr",
+        "termination",
+        "inherited_descriptors",
+    }:
+        raise protocol.ProtocolError("timing build command evidence schema is invalid")
+    argv = command["argv"]
+    environment = command["environment"]
+    returncode = command["returncode"]
+    descriptors = command["inherited_descriptors"]
+    if (
+        type(argv) is not list
+        or not argv
+        or any(type(part) is not str or not part for part in argv)
+        or type(command["cwd"]) is not str
+        or not pathlib.Path(command["cwd"]).is_absolute()
+        or type(environment) is not dict
+        or any(
+            type(key) is not str or type(value) is not str
+            for key, value in environment.items()
+        )
+        or type(command["deadline_seconds"]) is not int
+        or command["deadline_seconds"] <= 0
+        or (
+            returncode is not None
+            and type(returncode) is not int
+        )
+        or type(command["stdout"]) is not str
+        or type(command["stderr"]) is not str
+        or type(descriptors) is not list
+        or len(descriptors) > 1
+        or any(type(descriptor) is not int or descriptor <= 2 for descriptor in descriptors)
+        or len(set(descriptors)) != len(descriptors)
+    ):
+        raise protocol.ProtocolError("timing build command evidence is invalid")
+    termination = command["termination"]
+    if (
+        type(termination) is not dict
+        or set(termination) != {"terminated", "killed"}
+        or type(termination["terminated"]) is not bool
+        or type(termination["killed"]) is not bool
+    ):
+        raise protocol.ProtocolError("timing build termination evidence is invalid")
 
 
 def _probe_builds(context: Mapping[str, Any]) -> int:
