@@ -1,0 +1,48 @@
+{
+  "after_inventory_sha256": "1a8052818c6829b3208d29e86cec312396a0512a7ef7c28886f0dc1e3cfaff7d",
+  "argv": [
+    "/sharehome/tools/opt/Python-3.12.11/bin/python3.12",
+    "-m",
+    "scripts.run_phase2e",
+    "_stage-worker",
+    "--stage",
+    "timing-builds",
+    "--context",
+    "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-23e91907a13a-run-0005/.phase2e-stage-context.json",
+    "--context-sha256",
+    "1e8533d9fa5af7a7cd011f8e742bff0f20c063bcf547569e0da16ad093f2ab00"
+  ],
+  "attempt": 1,
+  "before_inventory_sha256": "9b323b719fbee92745c3c95997cc667e4c9c46938e451e47a31d3272ca3b262f",
+  "candidate_sha": "23e91907a13afd1b62c85e3a0589909ffedd8830",
+  "changed": {
+    ".phase2e-process-journal.json": "788ea1bb559737bdb31adbaca427d0971e4e3a617ff743831cab72c9f931633e",
+    "builds/candidate.json": "be89b5c8c8ffafb561e4d990475ff94089e29b498c3a2e9187bb419f3907873d",
+    "builds/common-lock-normalized-baseline.json": "72c143c37fd79ac280ee7117473de05e7d589d54b53450c8454835f3cfe9c4da",
+    "builds/direct-current-main-baseline.json": "e3cede994272a5a90e18070296ddbe4703bac8c0b428b13311b5a2cc246a52eb",
+    "builds/locks/common.Cargo.lock": "c03736ecf2e82ca565f13b46a7ec97bf8dd3294005d241740f8f3038fd979bd5",
+    "builds/locks/direct-current-main.Cargo.lock": "50028f4db785009b2ce0222f5b351b899bf31d53657b855281fbd49c49103c3b"
+  },
+  "command_contract_digest": "9075687ab17e9d43b83e4861d07597211a91fc56247895883c09eed2112f1fdb",
+  "context_sha256": "1e8533d9fa5af7a7cd011f8e742bff0f20c063bcf547569e0da16ad093f2ab00",
+  "environment": {
+    "HOME": "/tmp/.phase2e-scratch.Fmfy91-phase2e-home",
+    "LC_ALL": "C",
+    "MKL_DYNAMIC": "FALSE",
+    "MKL_NUM_THREADS": "1",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "PATH": "/usr/bin:/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin",
+    "RAYON_NUM_THREADS": "1",
+    "TZ": "UTC",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "exit_code": 0,
+  "experiment_identity_digest": "afabfb85843dd00605a778f0e5ed87f28b39e1df92df2d0c5447628a3180a64a",
+  "ordinal": 1,
+  "removed": [],
+  "reservation_id": "59b193688c72966c894fa1c83ef502f383960db03e72e7f636a7bb5a788f4942",
+  "stage": "timing-builds",
+  "version": 1
+}

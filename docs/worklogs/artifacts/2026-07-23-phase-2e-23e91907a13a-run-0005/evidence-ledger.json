@@ -1,0 +1,43 @@
+{
+  "active_attempt_id": null,
+  "attempts": [],
+  "candidate_sha": "23e91907a13afd1b62c85e3a0589909ffedd8830",
+  "next_transition_ordinal": 1,
+  "protocol_version": 2,
+  "stages": [
+    {
+      "lanes": [
+        {
+          "attempt_ids": [],
+          "name": "direct-current-main",
+          "result": null,
+          "state": "READY"
+        },
+        {
+          "attempt_ids": [],
+          "name": "common-lock-normalized",
+          "result": null,
+          "state": "BLOCKED"
+        }
+      ],
+      "name": "allocation"
+    },
+    {
+      "lanes": [
+        {
+          "attempt_ids": [],
+          "name": "direct-current-main",
+          "result": null,
+          "state": "READY"
+        },
+        {
+          "attempt_ids": [],
+          "name": "common-lock-normalized",
+          "result": null,
+          "state": "BLOCKED"
+        }
+      ],
+      "name": "timing"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "abandonment_kind": "UNCAUGHT_INTERRUPTION",
+  "inventory": {
+    ".orchestrator.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ".phase2e-process-journal.json": "b352290a39fb328abc2d445ecac31fae5cb5f311e870bfac8c4783116bc8c9f2",
+    ".phase2e-progress.json": "6a5dc5d36315dc2d88c62fce4deab7cbeb420104454cb9897c4fa2834874623d",
+    ".phase2e-stage-context.json": "1e8533d9fa5af7a7cd011f8e742bff0f20c063bcf547569e0da16ad093f2ab00",
+    "builds/candidate.json": "be89b5c8c8ffafb561e4d990475ff94089e29b498c3a2e9187bb419f3907873d",
+    "builds/common-lock-normalized-baseline.json": "72c143c37fd79ac280ee7117473de05e7d589d54b53450c8454835f3cfe9c4da",
+    "builds/direct-current-main-baseline.json": "e3cede994272a5a90e18070296ddbe4703bac8c0b428b13311b5a2cc246a52eb",
+    "builds/locks/common-probe.Cargo.lock": "2131289e13d7cec21ea4634073cfe34d146c1d50069e795b06e31787cc27ab93",
+    "builds/locks/common.Cargo.lock": "c03736ecf2e82ca565f13b46a7ec97bf8dd3294005d241740f8f3038fd979bd5",
+    "builds/locks/direct-current-main-probe.Cargo.lock": "d9d4fe23023292a20137ff563fc0b6efed7dae9f79370c2ff35e8fcf42bab9f4",
+    "builds/locks/direct-current-main.Cargo.lock": "50028f4db785009b2ce0222f5b351b899bf31d53657b855281fbd49c49103c3b",
+    "builds/probes/candidate.json": "b322ea0bc5d4a86004f45da761b1c003e1e35eb9dc5913b0b4e60fe8e6f004eb",
+    "builds/probes/common-lock-normalized-baseline.json": "08b35a7e5e09e9805323eee4ecd4c1de8889d62146442f0cd46d631c1ffef018",
+    "builds/probes/direct-current-main-baseline.json": "2d60103279b938472109eb14d98a122ac7289c550e7235c904cd1958209ac895",
+    "children/01-timing-builds.json": "88cf5105b96b3c0bb6a1c5efe0999844fafe9b36c826a7ce319aa894c6824bdd",
+    "children/02-probe-builds.json": "3d2c6694143d4b7e1d66297edda182ac670b6efd71d15e3ebbd56936a2a4542e",
+    "evidence-ledger.json": "9fd6ac0c817f5b735a96903397fc2454e2c0492ee98d525b14e82b23c14fd33d"
+  },
+  "protocol_version": 2,
+  "status": "ABANDONED",
+  "version": 1
+}

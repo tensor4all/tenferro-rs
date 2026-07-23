@@ -1,0 +1,48 @@
+{
+  "after_inventory_sha256": "3a2e99e4a301372a3f6a70e3dba5581b691cd2290c65da2a7ec010a34d5c5150",
+  "argv": [
+    "/sharehome/tools/opt/Python-3.12.11/bin/python3.12",
+    "-m",
+    "scripts.run_phase2e",
+    "_stage-worker",
+    "--stage",
+    "probe-builds",
+    "--context",
+    "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-23e91907a13a-run-0005/.phase2e-stage-context.json",
+    "--context-sha256",
+    "1e8533d9fa5af7a7cd011f8e742bff0f20c063bcf547569e0da16ad093f2ab00"
+  ],
+  "attempt": 1,
+  "before_inventory_sha256": "e7728fc1eba378470584fa4930457e1c5d839a98a5820fbe98f92bb9f66f222c",
+  "candidate_sha": "23e91907a13afd1b62c85e3a0589909ffedd8830",
+  "changed": {
+    ".phase2e-process-journal.json": "c7a895b706d2523492880d38d20ded838b901c64efbbd7032e3248755f10c6e8",
+    "builds/locks/common-probe.Cargo.lock": "2131289e13d7cec21ea4634073cfe34d146c1d50069e795b06e31787cc27ab93",
+    "builds/locks/direct-current-main-probe.Cargo.lock": "d9d4fe23023292a20137ff563fc0b6efed7dae9f79370c2ff35e8fcf42bab9f4",
+    "builds/probes/candidate.json": "b322ea0bc5d4a86004f45da761b1c003e1e35eb9dc5913b0b4e60fe8e6f004eb",
+    "builds/probes/common-lock-normalized-baseline.json": "08b35a7e5e09e9805323eee4ecd4c1de8889d62146442f0cd46d631c1ffef018",
+    "builds/probes/direct-current-main-baseline.json": "2d60103279b938472109eb14d98a122ac7289c550e7235c904cd1958209ac895"
+  },
+  "command_contract_digest": "9075687ab17e9d43b83e4861d07597211a91fc56247895883c09eed2112f1fdb",
+  "context_sha256": "1e8533d9fa5af7a7cd011f8e742bff0f20c063bcf547569e0da16ad093f2ab00",
+  "environment": {
+    "HOME": "/tmp/.phase2e-scratch.Fmfy91-phase2e-home",
+    "LC_ALL": "C",
+    "MKL_DYNAMIC": "FALSE",
+    "MKL_NUM_THREADS": "1",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "PATH": "/usr/bin:/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin",
+    "RAYON_NUM_THREADS": "1",
+    "TZ": "UTC",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "exit_code": 0,
+  "experiment_identity_digest": "afabfb85843dd00605a778f0e5ed87f28b39e1df92df2d0c5447628a3180a64a",
+  "ordinal": 2,
+  "removed": [],
+  "reservation_id": "59b193688c72966c894fa1c83ef502f383960db03e72e7f636a7bb5a788f4942",
+  "stage": "probe-builds",
+  "version": 1
+}

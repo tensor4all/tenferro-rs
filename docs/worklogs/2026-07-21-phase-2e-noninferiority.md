@@ -1,5 +1,97 @@
 # Phase 2E non-inferiority evidence history
 
+## Candidate `23e91907`: abandoned run 0005
+
+### Outcome
+
+The protocol-v2 outer root for candidate
+`23e91907a13afd1b62c85e3a0589909ffedd8830` is sealed as
+`ABANDONED`. The complete `timing-builds` and `probe-builds` stages passed.
+The first `allocation/direct-current-main` worker successfully found and
+opened the canonical `.orchestrator.lock`, proving that the run-0004 filename
+mismatch did not recur, but then made no progress.
+
+Read-only process inspection established an exact self-deadlock:
+
+- the outer `start` process held an exclusive flock on
+  `.orchestrator.lock` for the complete `active_campaign_lock` scope;
+- the allocation worker was blocked in the kernel wait channel
+  `locks_lock_inode_wait`;
+- `lslocks` showed the worker waiting for an exclusive flock on that exact
+  inode while the parent retained it; and
+- the allocation worker had created no attempt artifact or ledger attempt.
+
+The child cannot acquire a second independent open-file-description lock held
+by its parent. After confirming the wait was unbounded rather than a
+measurement interval, the outer process received `SIGINT`; its existing
+cleanup path terminated and reaped the child. No process remained before the
+root was sealed. The ledger contains no attempt IDs, so this root is not
+performance evidence and does not classify the candidate.
+
+### Immutable identities
+
+- Candidate: `23e91907a13afd1b62c85e3a0589909ffedd8830`
+- Candidate tree SHA-256:
+  `42142d6138e9fe663b10ea0d4c4e955660f9f1a1203afee2d15ebfaa69cc9685`
+- Experiment identity:
+  `afabfb85843dd00605a778f0e5ed87f28b39e1df92df2d0c5447628a3180a64a`
+- Campaign identity:
+  `39eae38cb48267feeacbde2ddbf2fa05b130e8319f6e14f378ec19f1ca58bde0`
+- Reservation:
+  `59b193688c72966c894fa1c83ef502f383960db03e72e7f636a7bb5a788f4942`
+- Command contract:
+  `9075687ab17e9d43b83e4861d07597211a91fc56247895883c09eed2112f1fdb`
+- Context SHA-256:
+  `1e8533d9fa5af7a7cd011f8e742bff0f20c063bcf547569e0da16ad093f2ab00`
+- Root digest:
+  `adde48dd8aa06384a3ac009b5ce647840ec03e287bd4b66b60e25c33e712badc`
+- Ledger digest:
+  `9fd6ac0c817f5b735a96903397fc2454e2c0492ee98d525b14e82b23c14fd33d`
+
+The canonical root is
+`docs/worklogs/artifacts/2026-07-23-phase-2e-23e91907a13a-run-0005`.
+Its `abandoned-inventory.json` is the normative ownership inventory. The
+index has `ACTIVE` followed by terminal `ABANDONED`; it deliberately has no
+new `current_evidence_root`.
+
+### Host and command
+
+The run began on 2026-07-23 in the Asia/Tokyo timezone with:
+
+- 64 process-allowed CPUs;
+- one-minute load 3.16 immediately before launch, normalized to 0.0494;
+- no overlapping real Cargo or rustc process; and
+- 390 GiB free on the filesystem before launch.
+
+The exact public command was:
+
+```text
+python3 scripts/run_phase2e.py start \
+  --repository <candidate-worktree> \
+  --candidate 23e91907a13afd1b62c85e3a0589909ffedd8830 \
+  --evidence-root docs/worklogs/artifacts/2026-07-23-phase-2e-23e91907a13a-run-0005 \
+  --index docs/worklogs/2026-07-21-phase-2e-index.json \
+  --scratch-parent /tmp/phase2e-scratch.Fmfy91
+```
+
+After interrupt cleanup and an independent no-live-process check,
+`record-index --abandoned --confirm-no-live-processes` sealed the root and
+returned `PENDING_PRESERVATION`.
+
+### Follow-up
+
+1. Preserve this negative root without modifying its sealed inventory.
+2. Keep standalone allocation invocation serialized by the canonical outer
+   root and lock inode.
+3. For nested outer-orchestrator execution, pass an authenticated inherited
+   lock capability (or an equivalently race-free ownership transfer) rather
+   than reacquiring the parent's lock or releasing it across a race window.
+4. Verify the inherited descriptor against the exact root/lock inode and
+   invocation binding; reject missing, forged, stale, or unrelated
+   descriptors and retain bounded child cleanup.
+5. Freeze a new candidate and run one fresh complete boundary campaign; do
+   not reuse any run-0005 build or result.
+
 ## Candidate `61d1dc37`: abandoned run 0004
 
 ### Outcome
