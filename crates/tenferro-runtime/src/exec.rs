@@ -103,17 +103,6 @@ pub struct ExecProgram {
     pub shape_guards: Vec<crate::ShapeGuard>,
 }
 
-impl ExecProgram {
-    /// Return a read-only lowering view over this execution program.
-    ///
-    /// This owner-scoped hook is used by peer lowerers and extension runtimes
-    /// that already operate on `ExecProgram` values.
-    #[doc(hidden)]
-    pub fn lowering_view(&self) -> crate::graph::GraphProgramLoweringView<'_> {
-        crate::graph::GraphProgramLoweringView::new(self)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DispatchMode {
     Unsegmented,

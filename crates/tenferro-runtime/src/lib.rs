@@ -66,8 +66,6 @@ pub use extension_runtime::{
 };
 pub use graph::{
     CompiledGraph, GraphCompiler, GraphCompilerCacheStats, GraphExecutor, GraphExecutorCacheStats,
-    GraphInstructionView, GraphOpView, GraphProgramInput, GraphProgramLoweringShapeError,
-    GraphProgramLoweringView,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;

@@ -10,7 +10,7 @@ fn traced_tensor_col_major_constructor_preserves_shape_and_storage() {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&traced).unwrap();
     assert_eq!(program.input_count(), 1);
-    assert_eq!(program.input_specs()[0].shape(), &[2, 3]);
+    assert_eq!(program.bindings().iter().next().unwrap().1.shape(), &[2, 3]);
     let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
     assert_eq!(
         out.as_slice::<f64>().unwrap(),

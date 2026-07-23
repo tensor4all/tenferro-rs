@@ -52,7 +52,7 @@ fn traced_jvp_optimizer_removes_identity_chain_before_compile() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&dy).unwrap();
-    assert_eq!(program.lowering_view().instructions().count(), 0);
+    assert_eq!(program.program().operations().count(), 0);
     assert_eq!(eval_f64(&dy), vec![0.25, -0.5]);
 }
 
@@ -73,7 +73,7 @@ fn traced_vjp_cotangent_accumulation_stays_bounded_before_compile() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&dx).unwrap();
-    let instruction_count = program.lowering_view().instructions().count();
+    let instruction_count = program.program().operations().count();
     assert!(
         instruction_count <= 3,
         "compiled accumulation graph should remain bounded, got {instruction_count} instructions"

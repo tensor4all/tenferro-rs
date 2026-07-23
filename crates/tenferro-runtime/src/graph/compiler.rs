@@ -199,7 +199,7 @@ impl GraphCompiler {
     /// let program = compiler
     ///     .compile_with_input_specs(&y, &[(&x, DType::F64, &[3])])
     ///     .unwrap();
-    /// assert_eq!(program.input_specs()[0].shape(), &[3]);
+    /// assert_eq!(program.input_count(), 1);
     /// ```
     ///
     /// # Errors
@@ -521,7 +521,6 @@ impl GraphCompiler {
             descriptors.push(GraphProgramInput::new(
                 descriptor.key,
                 descriptor.dtype,
-                descriptor.shape.clone(),
                 DimExpr::from_concrete(&descriptor.shape),
                 descriptor.default_tensor,
             ));
@@ -1140,14 +1139,15 @@ mod tests {
 
         let program = GraphCompiler::new().compile(&outputs[1]).unwrap();
         let pruned_instruction = program
-            .lowering_view()
-            .instructions()
-            .find_map(|inst| match inst.op() {
-                crate::GraphOpView::Extension { op }
+            .staging
+            .instructions
+            .iter()
+            .find_map(|inst| match &inst.op {
+                crate::extension::ExecOp::Extension(op)
                     if op.family_id() == "tenferro-runtime.test-prunable.v1" =>
                 {
                     Some((
-                        inst.output_slots().to_vec(),
+                        inst.output_slots.clone(),
                         format!("{op:?}"),
                         op.output_count(),
                     ))

@@ -1260,10 +1260,12 @@ fn register_test_eager_runtime(runtime: &EagerRuntime, family_id: &'static str) 
 fn compiled_program_contains_extension(output: &TracedTensor) -> bool {
     let mut compiler = tenferro_runtime::GraphCompiler::new();
     let program = compiler.compile(output).expect("compile traced tensor");
-    let contains_extension = program
-        .lowering_view()
-        .instructions()
-        .any(|instruction| instruction.op_name() == "Extension");
+    let contains_extension = program.program().operations().any(|operation| {
+        matches!(
+            operation.op(),
+            tenferro_runtime::program::SemanticOpRef::Extension(_)
+        )
+    });
     contains_extension
 }
 
@@ -1275,10 +1277,12 @@ fn compiled_program_contains_extension_with_specs(
     let program = compiler
         .compile_with_input_specs(output, specs)
         .expect("compile traced tensor with specs");
-    let contains_extension = program
-        .lowering_view()
-        .instructions()
-        .any(|instruction| instruction.op_name() == "Extension");
+    let contains_extension = program.program().operations().any(|operation| {
+        matches!(
+            operation.op(),
+            tenferro_runtime::program::SemanticOpRef::Extension(_)
+        )
+    });
     contains_extension
 }
 

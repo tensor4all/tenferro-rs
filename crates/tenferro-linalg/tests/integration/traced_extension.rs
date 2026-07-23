@@ -5,7 +5,7 @@ use tenferro_linalg::{
     TracedTensorLinalgExt,
 };
 use tenferro_runtime::{
-    DType, Error, GraphCompiler, GraphExecutor, GraphOpView, Tensor, TracedTensor, TypedTensor,
+    DType, Error, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
 };
 use tenferro_tensor::Error as TensorError;
 
@@ -187,10 +187,10 @@ fn spectral_norm_compile_prunes_residual_svd_to_values_only_op() {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&norm).unwrap();
     let extension_ops = program
-        .lowering_view()
-        .instructions()
-        .filter_map(|inst| match inst.op() {
-            GraphOpView::Extension { op }
+        .program()
+        .operations()
+        .filter_map(|operation| match operation.op() {
+            tenferro_runtime::program::SemanticOpRef::Extension(op)
                 if op.family_id() == tenferro_linalg::LINALG_EXTENSION_FAMILY_ID =>
             {
                 Some(format!("{op:?}"))

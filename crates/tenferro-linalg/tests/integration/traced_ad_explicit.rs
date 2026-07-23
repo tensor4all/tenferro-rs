@@ -927,18 +927,26 @@ struct GraphOpSummary {
 struct CompiledProgramSummary {
     input_count: usize,
     instruction_count: usize,
-    counts: BTreeMap<&'static str, usize>,
+    counts: BTreeMap<String, usize>,
 }
 
 fn compiled_program_summary(output: &TracedTensor) -> CompiledProgramSummary {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(output).unwrap();
-    let view = program.lowering_view();
     let mut counts = BTreeMap::new();
-    for instruction in view.instructions() {
-        *counts.entry(instruction.op_name()).or_insert(0) += 1;
+    for operation in program.program().operations() {
+        let label = match operation.op() {
+            tenferro_runtime::program::SemanticOpRef::Core(op) => format!("{op:?}")
+                .split([' ', '{', '('])
+                .next()
+                .unwrap_or("Core")
+                .to_string(),
+            tenferro_runtime::program::SemanticOpRef::Extension(_) => "Extension".to_string(),
+            _ => "Unknown".to_string(),
+        };
+        *counts.entry(label).or_insert(0) += 1;
     }
-    let instruction_count = view.instructions().len();
+    let instruction_count = program.program().operations().len();
     CompiledProgramSummary {
         input_count: program.input_count(),
         instruction_count,

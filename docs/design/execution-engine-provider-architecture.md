@@ -125,7 +125,7 @@ single-operation fast path. Sharing contracts does not require eager execution
 to construct graph-only artifacts or pay graph-level orchestration costs.
 
 The current `GraphProgram`, `ExecProgram`, `GraphExecutor<B>`, and
-`GraphProgramLoweringView` are migration inputs, not the final abstraction
+runtime-private execution staging is a migration input, not the final abstraction
 boundaries. In particular, an executor-shaped instruction stream is not the
 portable compiler artifact.
 

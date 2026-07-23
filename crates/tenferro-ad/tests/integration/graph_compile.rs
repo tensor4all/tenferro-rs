@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use tenferro_ops::{dim_expr::DimExpr, shape_extent::ShapeExtent};
 use tenferro_runtime::extension::{apply, ExtensionOp};
 use tenferro_runtime::SymDim;
 use tenferro_runtime::{CompilerOptions, OptimizerConfig};
@@ -89,7 +90,9 @@ fn graph_compiler_validates_placeholder_specs() {
         .unwrap();
 
     assert_eq!(program.input_count(), 1);
-    assert_eq!(program.input_specs()[0].shape(), &[3]);
+    let input = program.program().inputs()[0];
+    let metadata = program.program().value_metadata(input).unwrap();
+    assert_eq!(metadata.shape(), &[ShapeExtent::Exact(DimExpr::Const(3))]);
 
     let err = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F32, &[3])])
@@ -113,12 +116,13 @@ fn graph_program_input_accessors_report_compiled_contract() {
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[4])])
         .unwrap();
     let program = std::hint::black_box(program);
-    let input = std::hint::black_box(&program.input_specs()[0]);
+    let input = std::hint::black_box(program.program().inputs()[0]);
+    let metadata = program.program().value_metadata(input).unwrap();
 
     assert_eq!(std::hint::black_box(&program).input_count(), 1);
     assert_eq!(std::hint::black_box(&program).output_count(), 1);
-    assert_eq!(input.dtype(), DType::F64);
-    assert_eq!(input.shape(), &[4]);
+    assert_eq!(metadata.dtype(), DType::F64);
+    assert_eq!(metadata.shape(), &[ShapeExtent::Exact(DimExpr::Const(4))]);
 }
 
 #[test]
