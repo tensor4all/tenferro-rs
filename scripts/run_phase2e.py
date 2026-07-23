@@ -1255,10 +1255,10 @@ def required_root_paths(ledger: Mapping[str, Any]) -> frozenset[str]:
 
 
 def _canonical_root_paths(root: pathlib.Path, ledger: Mapping[str, Any]) -> frozenset[str]:
-    """Resolve the legacy fixture or the real combined-gate ownership tree."""
+    """Resolve the real combined-gate ownership tree."""
     gate_root = root / "gate-collector"
-    if not gate_root.exists():
-        return required_root_paths(ledger)
+    if not gate_root.is_dir():
+        raise protocol.ProtocolError("Task 8A gate-collector root is missing")
     required = set(required_root_paths(ledger))
     required.difference_update(
         path for path in tuple(required) if path.startswith("attempts/")
@@ -1358,23 +1358,24 @@ def validate_semantic_root(root: pathlib.Path) -> None:
                 attempt_id=attempt["attempt_id"], probe_manifests=probes,
                 tenferro_manifests=tenferro,
             )
-        elif attempt["state"] == "COMPLETE":
-            timing.validate_completed_attempt(
+        elif attempt["state"] in {"COMPLETE", "INCONCLUSIVE"}:
+            timing.validate_retained_attempt(
                 artifact, ledger, comparison_kind=attempt["lane"],
                 attempt_id=attempt["attempt_id"],
             )
     gate_root = root / "gate-collector"
-    if gate_root.exists():
-        from scripts import run_phase2e_gates as gates
+    if not gate_root.is_dir():
+        raise protocol.ProtocolError("Task 8A gate-collector root is missing")
+    from scripts import run_phase2e_gates as gates
 
-        common_lock = gate_root / build.LOCK_PATHS["common"]
-        gates.validate_terminal_evidence(
-            gate_root,
-            candidate=candidate,
-            repository=repository,
-            source_inventory=gates.validate_source_contract(repository),
-            common_lock=common_lock,
-        )
+    common_lock = gate_root / build.LOCK_PATHS["common"]
+    gates.validate_terminal_evidence(
+        gate_root,
+        candidate=candidate,
+        repository=repository,
+        source_inventory=gates.validate_source_contract(repository),
+        common_lock=common_lock,
+    )
 
 
 def seal_root(
@@ -1395,7 +1396,7 @@ def seal_root(
             "ledger candidate differs from aggregate candidate"
         )
     status = _terminal_ledger_status(ledger)
-    gate_prefix = "gate-collector/" if (root / "gate-collector").exists() else ""
+    gate_prefix = "gate-collector/"
     for relative in ("dispatch-gates/manifest.json", "characterization/manifest.json"):
         relative = gate_prefix + relative
         child = _read_json(root / relative, relative)
@@ -1487,7 +1488,7 @@ def validate_root(root: pathlib.Path) -> str:
         raise protocol.ProtocolError("aggregate status differs from ledger")
     if manifest["ledger_sha256"] != protocol.sha256_file(root / "evidence-ledger.json"):
         raise protocol.ProtocolError("aggregate ledger digest differs")
-    gate_prefix = "gate-collector/" if (root / "gate-collector").exists() else ""
+    gate_prefix = "gate-collector/"
     for relative in ("dispatch-gates/manifest.json", "characterization/manifest.json"):
         relative = gate_prefix + relative
         child = _read_json(root / relative, relative)

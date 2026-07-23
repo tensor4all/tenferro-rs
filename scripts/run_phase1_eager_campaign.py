@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import platform
+import re
 import signal
 import stat
 import subprocess
@@ -1500,6 +1501,17 @@ def _require_closed_attempt(
         raise protocol.ProtocolError("finalization ledger terminal state differs")
 
 
+def _require_inconclusive_attempt(ledger: Mapping[str, Any], args) -> None:
+    attempt = _ledger_attempt(ledger, args)
+    if (
+        ledger["active_attempt_id"] is not None
+        or attempt["state"] != "INCONCLUSIVE"
+        or attempt["validity_state"] != "INCONCLUSIVE"
+        or attempt["statistical_result"] is not None
+    ):
+        raise protocol.ProtocolError("inconclusive ledger terminal state differs")
+
+
 def _finalization_state_kind(
     validity_state: str,
     marker_exists: bool,
@@ -1632,6 +1644,229 @@ def _validate_completed_campaign(
     return campaign, EXIT_BY_RESULT[("COMPLETE", statistical_result)]
 
 
+def _validate_inconclusive_campaign(
+    root: PinnedDirectory,
+    args,
+    ledger: Mapping[str, Any],
+    *,
+    files: set[str],
+    directories: set[str],
+) -> int:
+    campaign = _read_root_json(root, "campaign.json")
+    fields = dict(classification.CAMPAIGN_FIELDS)
+    fields.update({"invalid": dict, "prefix_inventory": dict})
+    protocol.validate_manifest_fields(
+        campaign, fields, context="inconclusive campaign.json"
+    )
+    if (
+        campaign["protocol_version"] != protocol.PROTOCOL_VERSION
+        or campaign["protocol_sha256"]
+        != protocol.sha256_file(pathlib.Path(protocol.__file__))
+        or campaign["classifier_sha256"]
+        != protocol.sha256_file(pathlib.Path(classification.__file__))
+        or campaign["candidate_sha"] != ledger["candidate_sha"]
+        or campaign["comparison_kind"] != args.comparison_kind
+        or campaign["validity_state"] != "INCONCLUSIVE"
+        or campaign["statistical_result"] is not None
+        or not campaign["completed_at"]
+        or campaign["orders"] != list(PAIR_ORDERS)
+        or campaign["criterion"] != classification.CRITERION_SETTINGS
+        or campaign["thread_environment"] != THREAD_ENVIRONMENT
+        or campaign["classification_artifacts"] is not None
+        or campaign["prefix_inventory"] != campaign["artifact_inventory"]
+    ):
+        raise protocol.ProtocolError("inconclusive campaign identity differs")
+    classification._require_commit(
+        campaign["candidate_sha"], "inconclusive campaign candidate SHA"
+    )
+    protocol.validate_manifest_fields(
+        campaign["criterion_binding"],
+        classification.CRITERION_BINDING_FIELDS,
+        context="inconclusive campaign Criterion binding",
+    )
+    criterion_binding = campaign["criterion_binding"]
+    if (
+        not pathlib.Path(criterion_binding["logical_path"]).is_absolute()
+        or re.fullmatch(r"/proc/self/fd/[0-9]+", criterion_binding["actual_home"])
+        is None
+        or criterion_binding["device"] < 0
+        or criterion_binding["inode"] <= 0
+    ):
+        raise protocol.ProtocolError("inconclusive Criterion root binding is invalid")
+
+    selected_cpu = campaign["selected_cpu"]
+    allowed_count = campaign["allowed_cpu_count"]
+    if selected_cpu < 0 or not 0 < allowed_count <= classification.MAX_ALLOWED_CPU_COUNT:
+        raise protocol.ProtocolError("inconclusive campaign CPU identity is invalid")
+    allowed_intervals, observed_count = classification._parse_cpu_inventory_intervals(
+        campaign["allowed_cpus"]
+    )
+    if observed_count != allowed_count or not any(
+        first <= selected_cpu <= last for first, last in allowed_intervals
+    ):
+        raise protocol.ProtocolError("inconclusive allowed CPU inventory differs")
+    if classification._finite_real(
+        campaign["normalized_load_limit"], "inconclusive normalized load limit"
+    ) != 0.25:
+        raise protocol.ProtocolError("inconclusive normalized load limit differs")
+
+    binary_shas, build_manifests = classification._validate_build_manifests(campaign)
+    inventory, snapshots = classification._validate_artifact_inventory(
+        root.proc_path, campaign["artifact_inventory"]
+    )
+    if files != {"campaign.json", *inventory}:
+        raise protocol.ProtocolError("inconclusive campaign artifact inventory differs")
+    expected_directories = {
+        parent.as_posix()
+        for relative in files
+        for parent in pathlib.PurePosixPath(relative).parents
+        if parent.as_posix() != "."
+    }
+    if directories != expected_directories:
+        raise protocol.ProtocolError("inconclusive campaign directory inventory differs")
+
+    invalid = campaign["invalid"]
+    protocol.validate_manifest_fields(
+        invalid,
+        {"case": str, "pair": int, "role": str, "reason": str},
+        context="inconclusive failure",
+    )
+    startup = (invalid["case"], invalid["pair"], invalid["role"]) == (
+        "<startup>", 0, "<none>"
+    )
+    if (
+        not invalid["reason"]
+        or (
+            not startup
+            and (
+                invalid["case"] not in CANONICAL_CASES
+                or invalid["pair"] not in range(1, len(PAIR_ORDERS) + 1)
+                or invalid["role"] not in {"quiet_wait", *RUN_ROLES}
+            )
+        )
+    ):
+        raise protocol.ProtocolError("inconclusive failure location is invalid")
+
+    cases = campaign["cases"]
+    if set(cases) != set(CANONICAL_CASES):
+        raise protocol.ProtocolError("inconclusive canonical case inventory differs")
+    completed_paths: set[str] = set()
+    for case in sorted(CANONICAL_CASES):
+        record = cases[case]
+        expected_fields = {"benchmark", "statistical_result", "pairs"}
+        if "active_pair" in record:
+            expected_fields.add("active_pair")
+        if (
+            type(record) is not dict
+            or set(record) != expected_fields
+            or record["benchmark"] != CANONICAL_CASES[case]
+            or record["statistical_result"] is not None
+            or type(record["pairs"]) is not dict
+        ):
+            raise protocol.ProtocolError(f"inconclusive case differs: {case}")
+        expected_pair_keys = [str(pair) for pair in range(1, len(record["pairs"]) + 1)]
+        if set(record["pairs"]) != set(expected_pair_keys):
+            raise protocol.ProtocolError(f"inconclusive pair prefix differs: {case}")
+        for pair_text in expected_pair_keys:
+            pair = int(pair_text)
+            _interval, paths = classification._validate_pair(
+                root.proc_path,
+                case,
+                pair,
+                PAIR_ORDERS[pair - 1],
+                record["pairs"][pair_text],
+                selected_cpu=selected_cpu,
+                allowed_count=allowed_count,
+                load_limit=campaign["normalized_load_limit"],
+                binary_shas=binary_shas,
+                build_manifests=build_manifests,
+                build_records=campaign["build_manifests"],
+                criterion_binding=criterion_binding,
+                candidate_environment=build_manifests["candidate"]["environment"],
+                inventory=inventory,
+                snapshots=snapshots,
+            )
+            completed_paths.update(paths)
+        if "active_pair" in record:
+            active = record["active_pair"]
+            protocol.validate_manifest_fields(
+                active,
+                {"pair": int, "order": str, "runs": list},
+                context=f"inconclusive active pair {case}",
+            )
+            if (
+                case != invalid["case"]
+                or active["pair"] != invalid["pair"]
+                or active["pair"] != len(record["pairs"]) + 1
+                or active["pair"] not in range(1, len(PAIR_ORDERS) + 1)
+                or active["order"] != PAIR_ORDERS[active["pair"] - 1]
+                or len(active["runs"]) > len(RUN_ROLES)
+            ):
+                raise protocol.ProtocolError("inconclusive active pair differs")
+
+    failure_paths = set(inventory) - completed_paths
+    if startup:
+        if failure_paths:
+            raise protocol.ProtocolError("startup failure retains campaign artifacts")
+    else:
+        failure_prefix = f"{invalid['case']}/pair{invalid['pair']}/"
+        allowed_names = {
+            "change-estimates.json",
+            "sentinel-change-estimates.json",
+            "monitor-samples.json",
+            "validity.json",
+            *(
+                f"{role}.{stream}.log"
+                for role in RUN_ROLES
+                for stream in ("stdout", "stderr")
+            ),
+        }
+        if any(
+            not relative.startswith(failure_prefix)
+            or relative.removeprefix(failure_prefix) not in allowed_names
+            for relative in failure_paths
+        ):
+            raise protocol.ProtocolError("inconclusive failure artifacts differ")
+        validity_relative = failure_prefix + "validity.json"
+        if validity_relative in failure_paths:
+            validity = classification._decode_json(
+                snapshots[validity_relative], "inconclusive validity"
+            )
+            validity_fields = dict(classification.VALIDITY_FIELDS)
+            validity_fields["reason"] = str
+            protocol.validate_manifest_fields(
+                validity, validity_fields, context="inconclusive validity"
+            )
+            if (
+                validity["protocol_version"] != protocol.PROTOCOL_VERSION
+                or validity["case"] != invalid["case"]
+                or validity["pair"] != invalid["pair"]
+                or validity["order"] != PAIR_ORDERS[invalid["pair"] - 1]
+                or validity["selected_cpu"] != selected_cpu
+                or validity["allowed_cpu_count"] != allowed_count
+                or validity["validity_state"] != "INCONCLUSIVE"
+                or validity["reason"] != invalid["reason"]
+                or len(validity["runs"]) > len(RUN_ROLES)
+            ):
+                raise protocol.ProtocolError("inconclusive validity identity differs")
+            for name, artifact in validity["artifacts"].items():
+                if name not in allowed_names - {"validity.json"}:
+                    raise protocol.ProtocolError(
+                        "inconclusive local artifact name differs"
+                    )
+                digest = classification._artifact_record(
+                    artifact, f"inconclusive local artifact {name}"
+                )
+                if inventory.get(failure_prefix + name) != {"sha256": digest}:
+                    raise protocol.ProtocolError(
+                        "inconclusive local artifact inventory differs"
+                    )
+
+    root.validate_link()
+    _require_inconclusive_attempt(ledger, args)
+    return 2
+
+
 def validate_completed_attempt(
     artifact_root: pathlib.Path,
     ledger: Mapping[str, Any],
@@ -1654,6 +1889,43 @@ def validate_completed_attempt(
             root, args, ledger, marker=marker, files=files
         )
         return result
+    finally:
+        root.close()
+
+
+def validate_retained_attempt(
+    artifact_root: pathlib.Path,
+    ledger: Mapping[str, Any],
+    *,
+    comparison_kind: str,
+    attempt_id: int,
+) -> int:
+    """Read-only semantic validation for any retained terminal timing attempt."""
+    args = argparse.Namespace(
+        comparison_kind=comparison_kind, attempt_id=attempt_id
+    )
+    root = PinnedDirectory(pathlib.Path(artifact_root))
+    try:
+        files, directories = root.inventory()
+        campaign = _read_root_json(root, "campaign.json")
+        if campaign.get("validity_state") == "COMPLETE":
+            marker = None
+            if FINALIZATION_MARKER in files:
+                marker = _read_root_json(root, FINALIZATION_MARKER)
+                _validate_finalization_marker(marker, args)
+            _campaign, result = _validate_completed_campaign(
+                root, args, ledger, marker=marker, files=files
+            )
+            return result
+        if campaign.get("validity_state") == "INCONCLUSIVE":
+            if files & FINALIZATION_FILES:
+                raise protocol.ProtocolError(
+                    "inconclusive campaign retains finalization artifacts"
+                )
+            return _validate_inconclusive_campaign(
+                root, args, ledger, files=files, directories=directories
+            )
+        raise protocol.ProtocolError("retained timing attempt is not terminal")
     finally:
         root.close()
 

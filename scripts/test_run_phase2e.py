@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,11 +18,17 @@ from unittest import mock
 
 from scripts import phase2e_protocol as protocol
 from scripts import run_phase2e as orchestrator
+from scripts import run_phase2e_gates as gates
 from scripts import test_phase2e_build as build_test_fixtures
+from scripts import test_run_phase2e_gates as gate_test_fixtures
 
 
 class OuterOrchestratorTests(unittest.TestCase):
-    CANDIDATE = "a" * 40
+    REPOSITORY = pathlib.Path(__file__).resolve().parent.parent
+    CANDIDATE = subprocess.run(
+        ("git", "rev-parse", "HEAD"), cwd=REPOSITORY,
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
 
     def make_stage_context(self, base: pathlib.Path) -> tuple[pathlib.Path, dict]:
         repository = base / "repository"
@@ -285,12 +293,6 @@ class OuterOrchestratorTests(unittest.TestCase):
                 )
                 ledger = protocol.close_attempt(ledger, stage, lane, attempt, result)
         protocol.atomic_write_json(root / "evidence-ledger.json", ledger)
-        for directory in ("dispatch-gates", "characterization"):
-            (root / directory).mkdir()
-            protocol.atomic_write_json(
-                root / directory / "manifest.json",
-                {"candidate": self.CANDIDATE, "gating_result": "PASS"},
-            )
         manifest_factory = build_test_fixtures.ManifestTests()
         external_fixture = tempfile.TemporaryDirectory()
         self.addCleanup(external_fixture.cleanup)
@@ -320,21 +322,19 @@ class OuterOrchestratorTests(unittest.TestCase):
             manifest["head"] = self.CANDIDATE
             (root / relative).parent.mkdir(parents=True, exist_ok=True)
             protocol.atomic_write_json(root / relative, manifest)
+        self.make_gate_collector(root)
         for relative in orchestrator.required_root_paths(ledger):
             if relative == orchestrator.PROGRESS_MANIFEST or relative.startswith(
                 "children/"
-            ):
+            ) or relative.startswith(("dispatch-gates/", "characterization/")):
                 continue
             path = root / relative
             if path.exists():
                 continue
             path.parent.mkdir(parents=True, exist_ok=True)
             protocol.atomic_write_json(path, {})
-        orchestrator.run_fixed_stages(
-            root,
-            protocol.runtime_environment(path="/bin", home="/tmp"),
-            lambda _stage, _environment: 0,
-        )
+        scratch_fixture = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch_fixture.cleanup)
         probe_patch = mock.patch.object(
             orchestrator.build,
             "validate_allocation_probe_set",
@@ -345,12 +345,34 @@ class OuterOrchestratorTests(unittest.TestCase):
             return_value=0,
         )
         timing_patch = mock.patch(
-            "scripts.run_phase1_eager_campaign.validate_completed_attempt",
+            "scripts.run_phase1_eager_campaign.validate_retained_attempt",
             return_value=0,
         )
         for patcher in (probe_patch, allocation_patch, timing_patch):
             patcher.start()
             self.addCleanup(patcher.stop)
+        identity = {
+            "candidate_sha": self.CANDIDATE,
+            "candidate_tree_sha256": "c" * 64,
+            "reservation_id": "reservation-1",
+            "experiment_identity_digest": "b" * 64,
+            "command_contract_digest": orchestrator.command_contract_digest(),
+            "context_sha256": "e" * 64,
+            "repository": str(self.REPOSITORY),
+            "evidence_root": str(root.resolve()),
+            "scratch_parent": scratch_fixture.name,
+            "path": "/bin", "home": "/tmp", "cargo_home": "/tmp",
+            "index": str(root / "index.json"),
+            "index_lock": str(root / "index.lock"),
+            "context_path": "/context.json",
+        }
+        with mock.patch.object(orchestrator, "seal_root"):
+            orchestrator.run_fixed_stages(
+                root,
+                protocol.runtime_environment(path="/bin", home="/tmp"),
+                lambda _stage, _environment: 0,
+                identity=identity,
+            )
         if seal:
             orchestrator.seal_root(
                 root,
@@ -358,6 +380,144 @@ class OuterOrchestratorTests(unittest.TestCase):
                 reservation_id="reservation-1",
                 experiment_identity_digest="b" * 64,
             )
+
+    def make_gate_collector(self, root: pathlib.Path) -> None:
+        gate_root = root / "gate-collector"
+        common = gate_root / orchestrator.build.LOCK_PATHS["common"]
+        common.parent.mkdir(parents=True)
+        common.write_bytes((root / orchestrator.build.LOCK_PATHS["common"]).read_bytes())
+        cpu, ad = gate_test_fixtures.artifacts()
+        for short, artifact in (("cpu", cpu), ("ad", ad)):
+            path = gate_root / "dispatch-gates" / f"{short}-evidence.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            protocol.atomic_write_json(path, artifact)
+            for stream in ("stdout", "stderr"):
+                (path.parent / f"{short}-{stream}.log").write_bytes(b"")
+        dispatch_builds = {}
+        for package in ("tenferro-cpu", "tenferro-ad"):
+            relative = orchestrator.build.DISPATCH_BUILD_MANIFEST_PATHS[package]
+            path = gate_root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            protocol.atomic_write_json(path, {"executable_sha256": "7" * 64})
+            dispatch_builds[package] = path
+        bench_builds = {}
+        for owner, relative in orchestrator.build.CHARACTERIZATION_BUILD_MANIFEST_PATHS.items():
+            path = gate_root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            protocol.atomic_write_json(path, {"executable_sha256": "8" * 64})
+            bench_builds[owner] = path
+        source_inventory = gates.validate_source_contract(self.REPOSITORY)
+        tree = subprocess.run(
+            ("git", "ls-tree", "-r", "-z", "--full-tree", self.CANDIDATE),
+            cwd=self.REPOSITORY, check=True, capture_output=True, text=True,
+        ).stdout
+        tree_digest = hashlib.sha256(tree.encode()).hexdigest()
+        protocol_digest = protocol.sha256_file(
+            self.REPOSITORY / "scripts/phase2e_protocol.py"
+        )
+        composed = gates.compose_characterization(cpu, ad)
+        gates.attach_hardware_validity(
+            composed,
+            capacity_provenance={
+                "process_allowed_cpus": [0], "process_allowed_capacity": 1,
+                "managed_node_cpus": [0], "managed_node_capacity": 1,
+                "usable_numa_nodes": 1,
+            },
+        )
+        latency_rows = []
+        for row in composed["rows"]:
+            if row["surface"] in {"U-O", "U-I"}:
+                continue
+            row_id = row["key"].replace("/", "__")
+            record = {
+                "key": row["key"], "row_id": row_id,
+                "hardware_skip": row["affinity_hardware_skip"],
+                "placement_capacity": row["placement_capacity"],
+                "artifacts": {}, "latency_ns": None,
+            }
+            if row["affinity_hardware_skip"] is None:
+                row_root = gate_root / "characterization" / "rows" / row_id
+                row_root.mkdir(parents=True)
+                estimates = {
+                    "mean": {
+                        "point_estimate": 1.0,
+                        "confidence_interval": {
+                            "lower_bound": 0.9, "upper_bound": 1.1,
+                            "confidence_level": 0.95,
+                        },
+                    }
+                }
+                files = {
+                    "stdout": ("stdout.log", b""),
+                    "stderr": ("stderr.log", b""),
+                    "criterion_estimates": (
+                        "estimates.json",
+                        (json.dumps(estimates, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+                    ),
+                    "fixture_affinity": ("affinity.json", b"{}\n"),
+                }
+                for name, (filename, payload) in files.items():
+                    path = row_root / filename
+                    path.write_bytes(payload)
+                    record["artifacts"][name] = {
+                        "path": str(path.resolve()),
+                        "sha256": protocol.sha256_file(path),
+                    }
+                record["latency_ns"] = {
+                    "point_estimate": 1.0, "lower_bound": 0.9,
+                    "upper_bound": 1.1, "confidence_level": 0.95,
+                }
+            latency_rows.append(record)
+        common_fields = {
+            "validity_state": "PASS", "candidate": self.CANDIDATE,
+            "protocol_version": protocol.PROTOCOL_VERSION,
+            "protocol_sha256": protocol_digest,
+            "candidate_tree_sha256": tree_digest,
+            "source_inventory": source_inventory,
+            "common_lock_sha256": protocol.sha256_file(common),
+        }
+        dispatch_records = {}
+        for package, short in (("tenferro-cpu", "cpu"), ("tenferro-ad", "ad")):
+            artifact = gate_root / "dispatch-gates" / f"{short}-evidence.json"
+            dispatch_records[short] = {
+                "artifact": str(artifact.resolve()),
+                "sha256": protocol.sha256_file(artifact),
+                "stdout": {
+                    "path": str((artifact.parent / f"{short}-stdout.log").resolve()),
+                    "sha256": protocol.sha256_file(artifact.parent / f"{short}-stdout.log"),
+                },
+                "stderr": {
+                    "path": str((artifact.parent / f"{short}-stderr.log").resolve()),
+                    "sha256": protocol.sha256_file(artifact.parent / f"{short}-stderr.log"),
+                },
+                "build_manifest": {
+                    "path": str(dispatch_builds[package].resolve()),
+                    "sha256": protocol.sha256_file(dispatch_builds[package]),
+                },
+                "executable_sha256": "7" * 64,
+            }
+        protocol.atomic_write_json(
+            gate_root / "dispatch-gates/manifest.json",
+            {**common_fields, "row_count": 47, **dispatch_records},
+        )
+        composed.update(
+            {
+                **common_fields,
+                "bench_executable_sha256": {"cpu": "8" * 64, "ad": "8" * 64},
+                "latency_row_count": 45,
+                "latency_rows": latency_rows,
+                "bench_build_manifests": {
+                    owner: {
+                        "path": str(path.resolve()),
+                        "sha256": protocol.sha256_file(path),
+                    }
+                    for owner, path in bench_builds.items()
+                },
+            }
+        )
+        protocol.atomic_write_json(
+            gate_root / "characterization/manifest.json", composed
+        )
 
     def test_full_fake_stage_sequence_seals_and_validates_pass(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -443,12 +603,73 @@ class OuterOrchestratorTests(unittest.TestCase):
             root = pathlib.Path(directory)
             self.make_complete_root(root)
             self.assertEqual(orchestrator.validate_root(root), "PASS")
-            manifest_path = root / "characterization" / "manifest.json"
+            manifest_path = root / "gate-collector" / "characterization" / "manifest.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["gating_result"] = "FAIL"
             protocol.atomic_write_json(manifest_path, manifest)
             with self.assertRaises(protocol.ProtocolError):
                 orchestrator.validate_root(root)
+
+    def test_root_level_gate_fallback_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_complete_root(root, seal=False)
+            shutil.rmtree(root / "gate-collector")
+            for component in ("dispatch-gates", "characterization"):
+                path = root / component / "manifest.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                protocol.atomic_write_json(
+                    path, {"candidate": self.CANDIDATE, "gating_result": "PASS"}
+                )
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_semantic_root(root)
+
+    def test_semantic_root_validates_retained_inconclusive_timing_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_complete_root(root, seal=False)
+            ledger_path = root / "evidence-ledger.json"
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            attempt = next(
+                item
+                for item in ledger["attempts"]
+                if item["stage"] == "timing"
+                and item["lane"] == "common-lock-normalized"
+            )
+            attempt.update(
+                state="INCONCLUSIVE",
+                validity_state="INCONCLUSIVE",
+                statistical_result=None,
+            )
+            lane = next(
+                lane
+                for stage in ledger["stages"]
+                if stage["name"] == "timing"
+                for lane in stage["lanes"]
+                if lane["name"] == "common-lock-normalized"
+            )
+            lane.update(state="RETRYABLE", result=None)
+            protocol.validate_ledger(ledger)
+            protocol.atomic_write_json(ledger_path, ledger)
+            progress = json.loads(
+                (root / orchestrator.PROGRESS_MANIFEST).read_text(encoding="utf-8")
+            )
+            with mock.patch.object(
+                orchestrator, "validate_progress", return_value=progress
+            ), mock.patch(
+                "scripts.run_phase1_eager_campaign.validate_retained_attempt",
+                return_value=2,
+            ) as validate:
+                orchestrator.validate_semantic_root(root)
+            self.assertTrue(
+                any(
+                    call.kwargs == {
+                        "comparison_kind": "common-lock-normalized",
+                        "attempt_id": 1,
+                    }
+                    for call in validate.call_args_list
+                )
+            )
 
     def test_manifest_hashes_every_normative_file(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -459,11 +680,11 @@ class OuterOrchestratorTests(unittest.TestCase):
             )
             expected = {
                 "evidence-ledger.json",
-                "dispatch-gates/manifest.json",
-                "characterization/manifest.json",
+                "gate-collector/dispatch-gates/manifest.json",
+                "gate-collector/characterization/manifest.json",
             }
             self.assertTrue(expected.issubset(manifest["inventory"]))
-            (root / "dispatch-gates" / "manifest.json").write_text(
+            (root / "gate-collector" / "dispatch-gates" / "manifest.json").write_text(
                 "{}\n", encoding="utf-8"
             )
             with self.assertRaises(protocol.ProtocolError):

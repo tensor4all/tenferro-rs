@@ -403,6 +403,25 @@ class AtomicCampaignTests(unittest.TestCase):
         self.assertIsNone(manifest["statistical_result"])
         self.assertEqual(manifest["invalid"]["role"], "sentinel_before")
         self.assertNotIn("_rejected", json.dumps(manifest))
+        ledger = json.loads(args.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(
+            runner.validate_retained_attempt(
+                args.artifact_root,
+                ledger,
+                comparison_kind=args.comparison_kind,
+                attempt_id=args.attempt_id,
+            ),
+            2,
+        )
+        corrupted = args.artifact_root / next(iter(manifest["artifact_inventory"]))
+        corrupted.write_bytes(corrupted.read_bytes() + b"corrupt")
+        with self.assertRaises(protocol.ProtocolError):
+            runner.validate_retained_attempt(
+                args.artifact_root,
+                ledger,
+                comparison_kind=args.comparison_kind,
+                attempt_id=args.attempt_id,
+            )
 
     def test_fresh_roots_and_running_resume_are_rejected_before_launch(self):
         for root_kind in ("artifact", "criterion"):
@@ -2272,6 +2291,45 @@ while not os.path.exists(sys.argv[1]):
         self.assertEqual(result, 4)
         validate.assert_called_once()
         pinned.close.assert_called_once()
+
+    def test_retained_inconclusive_validator_rejects_minimized_campaign(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "campaign.json").write_text(
+                '{"validity_state":"INCONCLUSIVE"}\n', encoding="utf-8"
+            )
+            ledger = protocol.new_ledger("a" * 40)
+            for lane in protocol.LANE_NAMES:
+                ledger = protocol.open_attempt(
+                    ledger, "allocation", lane, 1,
+                    artifact_root=str((root / f"allocation-{lane}").resolve()),
+                )
+                ledger = protocol.bind_attempt_artifact(
+                    ledger, "allocation", lane, 1,
+                    artifact_root=str((root / f"allocation-{lane}").resolve()),
+                    artifact_device=1, artifact_inode=1,
+                )
+                ledger = protocol.close_attempt(
+                    ledger, "allocation", lane, 1, "PASS"
+                )
+            ledger = protocol.open_attempt(
+                ledger, "timing", "direct-current-main", 1
+            )
+            ledger = protocol.close_attempt(
+                ledger, "timing", "direct-current-main", 1, "PASS"
+            )
+            ledger = protocol.open_attempt(
+                ledger, "timing", "common-lock-normalized", 1
+            )
+            ledger = protocol.close_attempt(
+                ledger, "timing", "common-lock-normalized", 1, None,
+                validity_state="INCONCLUSIVE",
+            )
+            with self.assertRaises(protocol.ProtocolError):
+                runner.validate_retained_attempt(
+                    root, ledger, comparison_kind="common-lock-normalized",
+                    attempt_id=1,
+                )
 
 
 if __name__ == "__main__":
