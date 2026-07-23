@@ -6,7 +6,7 @@ use tenferro_runtime::program::{
     CoreSemanticOp, FrozenProgram, ProgramBuildError, ProgramFinishError, ProgramImport,
     ProgramInputSpec, ProgramQueryError, ProgramValue, SemanticOpRef, SemanticProgramBuilder,
 };
-use tenferro_runtime::{DType, DotGeneralConfig};
+use tenferro_runtime::{CompareDir, DType, DotGeneralConfig};
 
 use crate::semantic_extension::{AdValue, SemanticAdError, SemanticExtensionRuleSet};
 
@@ -488,12 +488,16 @@ fn linearize_core(
             convert_ad_value(builder, tangent, input_dtype, abs_output_dtype(input_dtype))?
         }
         CoreSemanticOp::Sign => AdValue::Absent,
+        CoreSemanticOp::Maximum | CoreSemanticOp::Minimum => {
+            linearize_extrema(builder, op, primal_inputs, tangent_inputs)?
+        }
         CoreSemanticOp::Select => select_ad_values(
             builder,
             primal_inputs[0],
             tangent_inputs[1],
             tangent_inputs[2],
         )?,
+        CoreSemanticOp::Clamp => linearize_clamp(builder, primal_inputs, tangent_inputs)?,
         CoreSemanticOp::Neg | CoreSemanticOp::Conj => {
             unary_ad_value(builder, op.clone(), tangent_inputs[0])?
         }
@@ -621,6 +625,9 @@ fn vjp_core(
             )?]
         }
         CoreSemanticOp::Sign => vec![AdValue::Absent],
+        CoreSemanticOp::Maximum | CoreSemanticOp::Minimum => {
+            extrema_vjp(builder, op, primal_inputs, cotangent, active_inputs)?
+        }
         CoreSemanticOp::Select => {
             let (on_true, on_false) = split_select_cotangent(
                 builder,
@@ -635,6 +642,7 @@ fn vjp_core(
                 normalize_ad_value(builder, on_false, active_inputs[2], primal_inputs[2])?,
             ]
         }
+        CoreSemanticOp::Clamp => clamp_vjp(builder, primal_inputs, cotangent, active_inputs)?,
         CoreSemanticOp::Neg => {
             let negated = unary_ad_value(builder, CoreSemanticOp::Neg, cotangent)?;
             vec![normalize_ad_value(
@@ -1354,6 +1362,169 @@ fn split_select_cotangent(
         AdValue::Absent
     };
     Ok((on_true, on_false))
+}
+
+fn linearize_extrema(
+    builder: &mut SemanticProgramBuilder,
+    op: &CoreSemanticOp,
+    primal_inputs: &[ProgramValue],
+    tangent_inputs: &[AdValue],
+) -> Result<AdValue, SemanticAdTransformError> {
+    let output = builder.add_op(op.clone(), primal_inputs)?[0];
+    let lhs_eq_output = builder.add_op(
+        CoreSemanticOp::Compare(CompareDir::Eq),
+        &[primal_inputs[0], output],
+    )?[0];
+    let rhs_eq_output = builder.add_op(
+        CoreSemanticOp::Compare(CompareDir::Eq),
+        &[primal_inputs[1], output],
+    )?[0];
+    let lhs = balanced_extrema_contribution(
+        builder,
+        tangent_inputs[0],
+        lhs_eq_output,
+        rhs_eq_output,
+        SemanticTransformRole::Jvp,
+    )?;
+    let rhs = balanced_extrema_contribution(
+        builder,
+        tangent_inputs[1],
+        rhs_eq_output,
+        lhs_eq_output,
+        SemanticTransformRole::Jvp,
+    )?;
+    Ok(add_ad_values(builder, lhs, rhs)?)
+}
+
+fn extrema_vjp(
+    builder: &mut SemanticProgramBuilder,
+    op: &CoreSemanticOp,
+    primal_inputs: &[ProgramValue],
+    cotangent: AdValue,
+    active_inputs: &[bool],
+) -> Result<Vec<AdValue>, SemanticAdTransformError> {
+    let output = builder.add_op(op.clone(), primal_inputs)?[0];
+    let lhs_eq_output = builder.add_op(
+        CoreSemanticOp::Compare(CompareDir::Eq),
+        &[primal_inputs[0], output],
+    )?[0];
+    let rhs_eq_output = builder.add_op(
+        CoreSemanticOp::Compare(CompareDir::Eq),
+        &[primal_inputs[1], output],
+    )?[0];
+    let lhs = balanced_extrema_contribution(
+        builder,
+        cotangent,
+        lhs_eq_output,
+        rhs_eq_output,
+        SemanticTransformRole::Vjp,
+    )?;
+    let rhs = balanced_extrema_contribution(
+        builder,
+        cotangent,
+        rhs_eq_output,
+        lhs_eq_output,
+        SemanticTransformRole::Vjp,
+    )?;
+    Ok(vec![
+        normalize_ad_value(builder, lhs, active_inputs[0], primal_inputs[0])?,
+        normalize_ad_value(builder, rhs, active_inputs[1], primal_inputs[1])?,
+    ])
+}
+
+fn balanced_extrema_contribution(
+    builder: &mut SemanticProgramBuilder,
+    active: AdValue,
+    self_eq_output: ProgramValue,
+    other_eq_output: ProgramValue,
+    role: SemanticTransformRole,
+) -> Result<AdValue, SemanticAdTransformError> {
+    let AdValue::Value(active) = active else {
+        return Ok(AdValue::Absent);
+    };
+    let zero = builder.add_op(CoreSemanticOp::Sub, &[active, active])?[0];
+    let selected = builder.add_op(CoreSemanticOp::Select, &[self_eq_output, active, zero])?[0];
+    let one = one_like(builder, active, role)?;
+    let two = builder.add_op(CoreSemanticOp::Add, &[one, one])?[0];
+    let half = builder.add_op(CoreSemanticOp::Div, &[selected, two])?[0];
+    Ok(AdValue::Value(
+        builder.add_op(CoreSemanticOp::Select, &[other_eq_output, half, selected])?[0],
+    ))
+}
+
+fn linearize_clamp(
+    builder: &mut SemanticProgramBuilder,
+    primal_inputs: &[ProgramValue],
+    tangent_inputs: &[AdValue],
+) -> Result<AdValue, ProgramBuildError> {
+    let masks = clamp_masks(builder, primal_inputs)?;
+    let input = mask_ad_value(builder, tangent_inputs[0], &[masks[0], masks[1]])?;
+    let lower = mask_ad_value(builder, tangent_inputs[1], &[masks[2], masks[3]])?;
+    let upper = mask_ad_value(builder, tangent_inputs[2], &[masks[4]])?;
+    let input_and_lower = add_ad_values(builder, input, lower)?;
+    add_ad_values(builder, input_and_lower, upper)
+}
+
+fn clamp_vjp(
+    builder: &mut SemanticProgramBuilder,
+    primal_inputs: &[ProgramValue],
+    cotangent: AdValue,
+    active_inputs: &[bool],
+) -> Result<Vec<AdValue>, SemanticAdTransformError> {
+    let masks = clamp_masks(builder, primal_inputs)?;
+    let input = mask_ad_value(builder, cotangent, &[masks[0], masks[1]])?;
+    let lower = mask_ad_value(builder, cotangent, &[masks[2], masks[3]])?;
+    let upper = mask_ad_value(builder, cotangent, &[masks[4]])?;
+    Ok(vec![
+        normalize_ad_value(builder, input, active_inputs[0], primal_inputs[0])?,
+        normalize_ad_value(builder, lower, active_inputs[1], primal_inputs[1])?,
+        normalize_ad_value(builder, upper, active_inputs[2], primal_inputs[2])?,
+    ])
+}
+
+fn clamp_masks(
+    builder: &mut SemanticProgramBuilder,
+    primal_inputs: &[ProgramValue],
+) -> Result<[ProgramValue; 5], ProgramBuildError> {
+    let input = primal_inputs[0];
+    let lower = primal_inputs[1];
+    let upper = primal_inputs[2];
+    let input_gt_lower =
+        builder.add_op(CoreSemanticOp::Compare(CompareDir::Gt), &[input, lower])?[0];
+    let input_lt_upper =
+        builder.add_op(CoreSemanticOp::Compare(CompareDir::Lt), &[input, upper])?[0];
+    let lower_gt_input =
+        builder.add_op(CoreSemanticOp::Compare(CompareDir::Gt), &[lower, input])?[0];
+    let lower_lt_upper =
+        builder.add_op(CoreSemanticOp::Compare(CompareDir::Lt), &[lower, upper])?[0];
+    let max_input_lower = builder.add_op(CoreSemanticOp::Maximum, &[input, lower])?[0];
+    let upper_lt_max_input_lower = builder.add_op(
+        CoreSemanticOp::Compare(CompareDir::Lt),
+        &[upper, max_input_lower],
+    )?[0];
+    Ok([
+        input_gt_lower,
+        input_lt_upper,
+        lower_gt_input,
+        lower_lt_upper,
+        upper_lt_max_input_lower,
+    ])
+}
+
+fn mask_ad_value(
+    builder: &mut SemanticProgramBuilder,
+    active: AdValue,
+    conditions: &[ProgramValue],
+) -> Result<AdValue, ProgramBuildError> {
+    let AdValue::Value(active) = active else {
+        return Ok(AdValue::Absent);
+    };
+    let zero = builder.add_op(CoreSemanticOp::Sub, &[active, active])?[0];
+    let mut value = active;
+    for condition in conditions {
+        value = builder.add_op(CoreSemanticOp::Select, &[*condition, value, zero])?[0];
+    }
+    Ok(AdValue::Value(value))
 }
 
 fn linearize_analytic_unary(

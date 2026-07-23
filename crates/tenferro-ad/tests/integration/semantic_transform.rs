@@ -762,3 +762,74 @@ fn semantic_core_dot_general_jvp_and_vjp_execute_numerically() {
         &[5.0, 7.0, 9.0, 5.0, 7.0, 9.0]
     );
 }
+
+#[test]
+fn semantic_core_extrema_split_ties_and_clamp_routes_active_values() {
+    let ad = ad_context();
+    for op in [CoreSemanticOp::Maximum, CoreSemanticOp::Minimum] {
+        let source = binary_core_program(
+            DType::F64,
+            [DimExpr::Const(3)],
+            DType::F64,
+            [DimExpr::Const(3)],
+            op,
+        );
+        assert!(ad.jvp_program(&source, &[true, true]).is_ok());
+        assert!(ad.vjp_program(&source, &[true, true], &[true]).is_ok());
+    }
+
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(3)]))
+        .unwrap();
+    let lower = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(3)]))
+        .unwrap();
+    let upper = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(3)]))
+        .unwrap();
+    let clamped = builder
+        .add_op(CoreSemanticOp::Clamp, &[input, lower, upper])
+        .unwrap()[0];
+    let source = builder.finish(&[clamped]).unwrap();
+    assert!(ad.jvp_program(&source, &[true, true, true]).is_ok());
+    assert!(ad
+        .vjp_program(&source, &[true, true, true], &[true])
+        .is_ok());
+}
+
+#[test]
+fn semantic_core_maximum_jvp_and_vjp_execute_with_balanced_ties() {
+    let source = binary_core_program(
+        DType::F64,
+        [DimExpr::Const(3)],
+        DType::F64,
+        [DimExpr::Const(3)],
+        CoreSemanticOp::Maximum,
+    );
+    let ad = ad_context();
+    let lhs = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![3], vec![2.0_f64, 2.0, 1.0]).unwrap();
+    let lhs_tangent = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap();
+    let rhs_tangent = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+
+    let jvp = ad.jvp_program(&source, &[true, true]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(jvp.frozen())
+        .unwrap();
+    let tangent = GraphExecutor::new(CpuBackend::new())
+        .run_with_inputs(&compiled, &[&lhs, &rhs, &lhs_tangent, &rhs_tangent])
+        .unwrap();
+    assert_eq!(tangent.as_slice::<f64>().unwrap(), &[1.0, 11.0, 30.0]);
+
+    let output_cotangent = Tensor::from_vec_col_major(vec![3], vec![2.0_f64, 4.0, 6.0]).unwrap();
+    let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(vjp.frozen())
+        .unwrap();
+    let cotangents = GraphExecutor::new(CpuBackend::new())
+        .run_many_with_inputs(&compiled, &[&lhs, &rhs, &output_cotangent])
+        .unwrap();
+    assert_eq!(cotangents[0].as_slice::<f64>().unwrap(), &[0.0, 2.0, 6.0]);
+    assert_eq!(cotangents[1].as_slice::<f64>().unwrap(), &[2.0, 2.0, 0.0]);
+}
