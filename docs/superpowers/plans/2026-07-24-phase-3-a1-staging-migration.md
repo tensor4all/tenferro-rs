@@ -60,12 +60,12 @@ other XLA tests, all-feature tests, doctests, and clippy gates pass.
 
 ## Task 4: Remove sibling-crate public ExecProgram construction
 
-- [ ] Replace tenferro-ad integration fixtures that construct `ExecProgram`
+- [x] Replace tenferro-ad integration fixtures that construct `ExecProgram`
   with traced/semantic public APIs, moving genuinely runtime-private staging
   coverage into tenferro-runtime tests.
-- [ ] Add source contracts proving no sibling crate constructs or imports
+- [x] Add source contracts proving no sibling crate constructs or imports
   public `ExecProgram`.
-- [ ] Run focused AD/runtime integration and doctests; commit the fixture
+- [x] Run focused AD/runtime integration and doctests; commit the fixture
   migration.
 
 ## Task 5: Serial einsum staging migration after semantic AD freezes

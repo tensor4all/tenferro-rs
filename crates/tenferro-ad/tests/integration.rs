@@ -41,8 +41,6 @@ mod eager_runtime_api;
 mod eager_tensor;
 #[path = "integration/engine_eval.rs"]
 mod engine_eval;
-#[path = "integration/exec_dispatch.rs"]
-mod exec_dispatch;
 #[path = "integration/extension_op.rs"]
 mod extension_op;
 #[path = "integration/fallible_api.rs"]
@@ -67,12 +65,12 @@ mod numpy_api;
 mod placement_bound_eager;
 #[path = "integration/primitive_ops.rs"]
 mod primitive_ops;
-#[path = "integration/segment_tests.rs"]
-mod segment_tests;
 #[path = "integration/shape_inference.rs"]
 mod shape_inference;
 #[path = "integration/shape_of.rs"]
 mod shape_of;
+#[path = "integration/staging_surface_contract.rs"]
+mod staging_surface_contract;
 #[path = "integration/sym_dim.rs"]
 mod sym_dim;
 #[path = "integration/symbolic_grad.rs"]

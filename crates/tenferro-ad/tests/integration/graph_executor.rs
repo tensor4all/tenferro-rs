@@ -7,7 +7,6 @@ use tenferro_cpu::CpuBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::error::Error;
-use tenferro_runtime::extension::{ExecInstruction, ExecOp, ExecProgram};
 use tenferro_runtime::{
     ad_support::{tensor_from_parts, ConstraintScopeTransfer, TracedTensorParts},
     DType, GraphCompiler, GraphExecutor, SymDim, Tensor, TensorRead, TracedTensor,
@@ -167,38 +166,6 @@ fn graph_executor_rejects_invalid_runtime_bindings() {
     let err = executor.run_with_inputs(&program, &[]).unwrap_err();
     assert!(
         matches!(err, Error::UnboundPlaceholder { .. }),
-        "got {err:?}"
-    );
-}
-
-#[test]
-fn graph_executor_eval_exec_ir_rejects_wrong_input_count() {
-    let program = ExecProgram {
-        instructions: vec![ExecInstruction {
-            op: ExecOp::Add,
-            input_slots: vec![0, 1],
-            output_slots: vec![2],
-            dtype: DType::F64,
-            output_shapes: vec![vec![]].into(),
-            output_extents: vec![vec![]].into(),
-            last_use: vec![true, true],
-        }],
-        input_slots: vec![0, 1],
-        output_slots: vec![2],
-        n_slots: 3,
-        shape_guards: Vec::new(),
-    };
-    let inputs = vec![
-        Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap(),
-        Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
-        Tensor::from_vec_col_major(vec![], vec![5.0_f64]).unwrap(),
-    ];
-
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    let err = executor.eval_exec_ir(&program, inputs).unwrap_err();
-
-    assert!(
-        format!("{err}").contains("expected 2 inputs"),
         "got {err:?}"
     );
 }
