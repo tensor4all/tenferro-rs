@@ -323,15 +323,14 @@ impl LinalgBackend for CpuBackend {
             CpuLinalgProvider::Faer => {
                 #[cfg(feature = "cpu-faer")]
                 {
-                    let ctx = self.linalg_context();
-                    self.with_linalg_pool(|buffers| match input {
-                        Tensor::F32(t) => linalg::faer::svd_full(ctx.as_ref(), buffers, t)
+                    self.with_linalg_pool_fresh(|context, buffers| match input {
+                        Tensor::F32(t) => linalg::faer::svd_full(context, buffers, t)
                             .map(|outputs| outputs.into_iter().map(Tensor::F32).collect()),
-                        Tensor::F64(t) => linalg::faer::svd_full(ctx.as_ref(), buffers, t)
+                        Tensor::F64(t) => linalg::faer::svd_full(context, buffers, t)
                             .map(|outputs| outputs.into_iter().map(Tensor::F64).collect()),
-                        Tensor::C32(t) => linalg::faer::svd_full(ctx.as_ref(), buffers, t)
+                        Tensor::C32(t) => linalg::faer::svd_full(context, buffers, t)
                             .and_then(svd_c32_outputs_to_public_tensors),
-                        Tensor::C64(t) => linalg::faer::svd_full(ctx.as_ref(), buffers, t)
+                        Tensor::C64(t) => linalg::faer::svd_full(context, buffers, t)
                             .and_then(svd_c64_outputs_to_public_tensors),
                         _ => Err(unsupported_dtype("svd_full", input.dtype())),
                     })

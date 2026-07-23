@@ -3104,7 +3104,7 @@ pub(crate) fn svd<T: FaerLinalg>(
 }
 
 pub(crate) fn svd_full<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {

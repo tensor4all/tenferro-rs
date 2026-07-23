@@ -338,6 +338,23 @@ fn faer_strided_read_fast_path_enters_once() {
     assert_eq!(submits.load(Ordering::Relaxed), 0);
 }
 
+#[cfg(feature = "cpu-faer")]
+#[test]
+fn faer_full_svd_enters_once() {
+    let (mut backend, installs, submits) = external_no_inner_backend();
+    let input =
+        Tensor::F64(TypedTensor::from_vec_col_major(vec![2, 1], vec![3.0_f64, 4.0]).unwrap());
+
+    let outputs = backend.svd_full(&input).unwrap();
+
+    assert_eq!(outputs.len(), 3);
+    assert_eq!(outputs[0].shape(), &[2, 2]);
+    assert_eq!(outputs[1].shape(), &[1]);
+    assert_eq!(outputs[2].shape(), &[1, 1]);
+    assert_eq!(installs.load(Ordering::Relaxed), 1);
+    assert_eq!(submits.load(Ordering::Relaxed), 0);
+}
+
 fn assert_one_install<R>(
     installs: &AtomicUsize,
     submits: &AtomicUsize,
