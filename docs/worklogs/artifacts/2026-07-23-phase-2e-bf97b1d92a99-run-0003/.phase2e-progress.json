@@ -1,0 +1,56 @@
+{
+  "candidate_sha": "bf97b1d92a99812fd30360e07589c305d0a20cc0",
+  "candidate_tree_sha256": "d6e191d2ea4033a7cb98764b12cfd368fa9872e4a2d37d3a8885b957eb1eb1a1",
+  "cargo_home": "/tmp/.phase2e-scratch.1AcZvg-phase2e-cargo-home",
+  "children": [
+    {
+      "exit_code": 0,
+      "stage": "timing-builds"
+    },
+    {
+      "exit_code": 3,
+      "stage": "probe-builds"
+    }
+  ],
+  "command_contract_digest": "736902defb69038938f79e9ddb949d505d332cd671ba0b180da05f9d8e907974",
+  "context_path": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-bf97b1d92a99-run-0003/.phase2e-stage-context.json",
+  "context_sha256": "5b466edc7120b4b5c7f97e117e83a5b6ffe413fc86b64350a2a6614f6e2a495e",
+  "evidence_root": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-bf97b1d92a99-run-0003",
+  "experiment_identity_digest": "9e7a45afe30a0a8bd6c68f96cae54ea3264474ec87cb9c902e1a37fac48d143c",
+  "home": "/tmp/.phase2e-scratch.1AcZvg-phase2e-home",
+  "index": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/2026-07-21-phase-2e-index.json",
+  "index_lock": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/.phase2e-index.lock",
+  "inventory": {
+    ".orchestrator.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ".phase2e-process-journal.json": "f2a70d07e5da4de392252df27491978c286b5a2c4dfd595abe7064b269dd5727",
+    ".phase2e-stage-context.json": "5b466edc7120b4b5c7f97e117e83a5b6ffe413fc86b64350a2a6614f6e2a495e",
+    "builds/candidate.json": "c4205040c3ccf894426c4c13dcfe7899b0e82f0164b3e0867bfc21d8b71d75cb",
+    "builds/common-lock-normalized-baseline.json": "53cf2d6098db95312d1cc9653b7344621385becbcae6755b4f6768dea6e4f5be",
+    "builds/direct-current-main-baseline.json": "09da49dac6ec95130bc54af0b46629f9b5d6387b785bc70517d53412332d8af8",
+    "builds/locks/common.Cargo.lock": "c03736ecf2e82ca565f13b46a7ec97bf8dd3294005d241740f8f3038fd979bd5",
+    "builds/locks/direct-current-main.Cargo.lock": "50028f4db785009b2ce0222f5b351b899bf31d53657b855281fbd49c49103c3b",
+    "children/01-timing-builds.json": "73ed8b1583e2ce421f13cdb4be75561be5744525a414109a87b20948ea5e5a84",
+    "children/02-probe-builds.json": "c0a7687fa2212591bc76b369dffc8eb3faf89698a52f0e27dcb485dc09868ede",
+    "evidence-ledger.json": "383b536f7df6474d96c332b1f1eb1b23d05783338c945eea402834f5b812dafa"
+  },
+  "ledger_sha256": "383b536f7df6474d96c332b1f1eb1b23d05783338c945eea402834f5b812dafa",
+  "path": "/usr/bin:/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin",
+  "protocol_version": 2,
+  "repository": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design",
+  "reservation_id": "3014cb45e39a4109ac38cc373c021ff706baa59c520d10d5811c356421a31387",
+  "scratch_parent": "/tmp/phase2e-scratch.1AcZvg",
+  "stage_order": [
+    "timing-builds",
+    "probe-builds",
+    "allocation/direct-current-main",
+    "allocation/common-lock-normalized",
+    "dispatch-builds",
+    "dispatch-gates",
+    "characterization-builds",
+    "characterization",
+    "timing/direct-current-main",
+    "timing/common-lock-normalized",
+    "aggregate-validation"
+  ],
+  "version": 1
+}

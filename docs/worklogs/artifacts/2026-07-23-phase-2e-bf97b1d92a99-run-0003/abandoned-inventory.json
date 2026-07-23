@@ -1,0 +1,20 @@
+{
+  "abandonment_kind": "UNCAUGHT_INTERRUPTION",
+  "inventory": {
+    ".orchestrator.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ".phase2e-process-journal.json": "f2a70d07e5da4de392252df27491978c286b5a2c4dfd595abe7064b269dd5727",
+    ".phase2e-progress.json": "ebaca2b1b12b98c548c9f32669ef60b38ee09647bd6544176870cdbe7c56b6f7",
+    ".phase2e-stage-context.json": "5b466edc7120b4b5c7f97e117e83a5b6ffe413fc86b64350a2a6614f6e2a495e",
+    "builds/candidate.json": "c4205040c3ccf894426c4c13dcfe7899b0e82f0164b3e0867bfc21d8b71d75cb",
+    "builds/common-lock-normalized-baseline.json": "53cf2d6098db95312d1cc9653b7344621385becbcae6755b4f6768dea6e4f5be",
+    "builds/direct-current-main-baseline.json": "09da49dac6ec95130bc54af0b46629f9b5d6387b785bc70517d53412332d8af8",
+    "builds/locks/common.Cargo.lock": "c03736ecf2e82ca565f13b46a7ec97bf8dd3294005d241740f8f3038fd979bd5",
+    "builds/locks/direct-current-main.Cargo.lock": "50028f4db785009b2ce0222f5b351b899bf31d53657b855281fbd49c49103c3b",
+    "children/01-timing-builds.json": "73ed8b1583e2ce421f13cdb4be75561be5744525a414109a87b20948ea5e5a84",
+    "children/02-probe-builds.json": "c0a7687fa2212591bc76b369dffc8eb3faf89698a52f0e27dcb485dc09868ede",
+    "evidence-ledger.json": "383b536f7df6474d96c332b1f1eb1b23d05783338c945eea402834f5b812dafa"
+  },
+  "protocol_version": 2,
+  "status": "ABANDONED",
+  "version": 1
+}

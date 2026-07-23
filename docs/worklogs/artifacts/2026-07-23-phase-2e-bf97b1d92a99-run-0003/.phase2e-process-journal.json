@@ -1,0 +1,51 @@
+{
+  "entries": [
+    {
+      "argv": [
+        "/sharehome/tools/opt/Python-3.12.11/bin/python3.12",
+        "-m",
+        "scripts.run_phase2e",
+        "_stage-worker",
+        "--stage",
+        "timing-builds",
+        "--context",
+        "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-bf97b1d92a99-run-0003/.phase2e-stage-context.json",
+        "--context-sha256",
+        "5b466edc7120b4b5c7f97e117e83a5b6ffe413fc86b64350a2a6614f6e2a495e"
+      ],
+      "exit_code": 0,
+      "ordinal": 1,
+      "pgid": 3533538,
+      "pid": 3533538,
+      "reaped": true,
+      "signals": [],
+      "stage": "timing-builds",
+      "start_ticks": 831981189,
+      "state": "EXITED"
+    },
+    {
+      "argv": [
+        "/sharehome/tools/opt/Python-3.12.11/bin/python3.12",
+        "-m",
+        "scripts.run_phase2e",
+        "_stage-worker",
+        "--stage",
+        "probe-builds",
+        "--context",
+        "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-bf97b1d92a99-run-0003/.phase2e-stage-context.json",
+        "--context-sha256",
+        "5b466edc7120b4b5c7f97e117e83a5b6ffe413fc86b64350a2a6614f6e2a495e"
+      ],
+      "exit_code": 3,
+      "ordinal": 2,
+      "pgid": 3551049,
+      "pid": 3551049,
+      "reaped": true,
+      "signals": [],
+      "stage": "probe-builds",
+      "start_ticks": 832095405,
+      "state": "EXITED"
+    }
+  ],
+  "version": 1
+}

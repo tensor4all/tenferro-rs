@@ -1,5 +1,93 @@
 # Phase 2E non-inferiority evidence history
 
+## Candidate `bf97b1d9`: abandoned run 0003
+
+### Outcome
+
+The protocol-v2 outer root for candidate
+`bf97b1d92a99812fd30360e07589c305d0a20cc0` is sealed as
+`ABANDONED`. The complete timing-build stage passed, including the
+common-lock-normalized baseline preflight and all three isolated release
+builds. The next `probe-builds` worker stopped before its handler ran with:
+
+```text
+regular-file inventory differs
+```
+
+No allocation or timing measurement attempt started, so this root is not
+performance evidence and does not classify the candidate.
+
+The failure exposed a stage-handoff defect in the outer orchestrator. After
+stage 1, `.phase2e-progress.json` bound the complete regular-file inventory.
+Spawning stage 2 then correctly appended its `RUNNING` entry to
+`.phase2e-process-journal.json`. The stage-2 worker immediately called
+`validate_progress`, compared the now-current journal against the stage-1
+inventory, and rejected its own lifecycle update before entering
+`_probe_builds`. The child record confirms that the process journal was the
+only changed file.
+
+This is an orchestrator durability defect, not a candidate performance result.
+The frozen-harness/common-lock defect from run 0002 did not recur.
+
+### Immutable identities
+
+- Candidate: `bf97b1d92a99812fd30360e07589c305d0a20cc0`
+- Candidate tree SHA-256:
+  `d6e191d2ea4033a7cb98764b12cfd368fa9872e4a2d37d3a8885b957eb1eb1a1`
+- Experiment identity:
+  `9e7a45afe30a0a8bd6c68f96cae54ea3264474ec87cb9c902e1a37fac48d143c`
+- Campaign identity:
+  `75fd7f9800359de992845c12df9f073f40656973d977ad5203ec7a3616ac47c6`
+- Reservation:
+  `3014cb45e39a4109ac38cc373c021ff706baa59c520d10d5811c356421a31387`
+- Command contract:
+  `736902defb69038938f79e9ddb949d505d332cd671ba0b180da05f9d8e907974`
+- Context SHA-256:
+  `5b466edc7120b4b5c7f97e117e83a5b6ffe413fc86b64350a2a6614f6e2a495e`
+- Root digest:
+  `225f5a1cba3fdbee6c6ae0fc19a4eea2414dba20943aa91156670dfb63ce3429`
+- Ledger digest:
+  `383b536f7df6474d96c332b1f1eb1b23d05783338c945eea402834f5b812dafa`
+
+The canonical root is
+`docs/worklogs/artifacts/2026-07-23-phase-2e-bf97b1d92a99-run-0003`.
+Its `abandoned-inventory.json` is the normative ownership inventory. The
+index has `ACTIVE` followed by terminal `ABANDONED`; it deliberately has no
+new `current_evidence_root`.
+
+### Host and command
+
+The run began on 2026-07-23 in the Asia/Tokyo timezone with:
+
+- 64 process-allowed CPUs;
+- one-minute load 3.27 immediately before launch, normalized to 0.0511;
+- no overlapping real Cargo or rustc process; and
+- 395 GiB free on the filesystem before launch.
+
+The exact public command was:
+
+```text
+python3 scripts/run_phase2e.py start \
+  --repository <candidate-worktree> \
+  --candidate bf97b1d92a99812fd30360e07589c305d0a20cc0 \
+  --evidence-root docs/worklogs/artifacts/2026-07-23-phase-2e-bf97b1d92a99-run-0003 \
+  --index docs/worklogs/2026-07-21-phase-2e-index.json \
+  --scratch-parent /tmp/phase2e-scratch.1AcZvg
+```
+
+After verifying that no orchestrator, stage worker, compiler, or benchmark
+process remained, `record-index --abandoned --confirm-no-live-processes`
+sealed the root and returned `PENDING_PRESERVATION`.
+
+### Follow-up
+
+1. Preserve this negative root without modifying its sealed inventory.
+2. Add a public lifecycle regression that crosses at least two stages.
+3. Keep the process journal tamper-evident while allowing the orchestrator's
+   authenticated `RUNNING`/`EXITED` transition during worker startup.
+4. Freeze the repaired orchestrator as a new candidate and run one fresh,
+   complete boundary campaign; do not reuse any run-0003 build or result.
+
 ## Candidate `eba500ed`: abandoned run 0002
 
 ### Outcome
