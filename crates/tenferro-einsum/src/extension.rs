@@ -14,6 +14,13 @@ use computegraph::resolve::resolve;
 use computegraph::types::{LocalValueId, OperationRole};
 use computegraph::types::{ValueKey, ValueRef};
 use smallvec::SmallVec;
+#[cfg(feature = "autodiff")]
+use tenferro_ad::semantic_extension::{
+    AdValue, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
+    SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
+    SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
+    SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
+};
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::context::ShapeGuardContext;
@@ -36,6 +43,8 @@ use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
 use tenferro_runtime::extension::{
     ExecInstruction, ExecOp, ExecProgram, ExtensionCacheKey, ExtensionExecutionContext,
 };
+#[cfg(feature = "autodiff")]
+use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
 use tenferro_tensor::{
     DType, Error as TensorError, RuntimeCacheControl, Tensor, TensorBackend, TensorRead,
 };
@@ -214,6 +223,14 @@ impl ExtensionOp for EinsumExtensionOp {
         1
     }
 
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
     fn infer_output_meta(
         &self,
         ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
@@ -344,6 +361,22 @@ pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
     ExtensionRuleSet::new()
         .with_linearize(Arc::new(EinsumAdRule))?
         .with_linear_transpose(Arc::new(EinsumAdRule))
+}
+
+/// Return the semantic-program einsum extension AD rules.
+#[cfg(feature = "autodiff")]
+///
+/// # Errors
+///
+/// Returns [`SemanticExtensionRegistryError::MalformedFamilyId`] for an
+/// invalid family identifier, or
+/// [`SemanticExtensionRegistryError::DuplicateRule`] for a duplicate role.
+pub fn semantic_ad_rules(
+) -> std::result::Result<SemanticExtensionRuleSet, SemanticExtensionRegistryError> {
+    SemanticExtensionRuleSet::new()
+        .with_linearize(Arc::new(EinsumAdRule))?
+        .with_linear_transpose(Arc::new(EinsumAdRule))?
+        .with_primal_vjp(Arc::new(EinsumAdRule))
 }
 
 #[derive(Debug)]
@@ -507,6 +540,314 @@ impl ExtensionLinearTransposeRule for EinsumAdRule {
         }
 
         Ok(result)
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl SemanticLinearizeRule for EinsumAdRule {
+    fn family_id(&self) -> &'static str {
+        EINSUM_EXTENSION_FAMILY_ID
+    }
+
+    fn linearize(
+        &self,
+        request: SemanticLinearizeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<SemanticLinearizeResult, SemanticAdError> {
+        let op = semantic_einsum_payload(request.op(), SemanticAdRuleRole::Linearize)?;
+        if !request.active_outputs()[0] {
+            return Ok(SemanticLinearizeResult::new([AdValue::Absent], []));
+        }
+        let mut terms = Vec::new();
+        for (active_idx, tangent) in request.tangent_inputs().iter().copied().enumerate() {
+            let AdValue::Value(tangent) = tangent else {
+                continue;
+            };
+            let inputs: Vec<_> = request
+                .primal_inputs()
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(input_idx, primal)| {
+                    if input_idx == active_idx {
+                        tangent
+                    } else {
+                        primal
+                    }
+                })
+                .collect();
+            terms.push(builder.add_extension(Arc::new(op.clone()), &inputs)?[0]);
+        }
+        let tangent = semantic_sum_terms(builder, terms)?;
+        Ok(SemanticLinearizeResult::new([tangent], []))
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl SemanticLinearTransposeRule for EinsumAdRule {
+    fn family_id(&self) -> &'static str {
+        EINSUM_EXTENSION_FAMILY_ID
+    }
+
+    fn linear_transpose(
+        &self,
+        request: SemanticLinearTransposeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_einsum_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.primal_outputs(),
+            request.cotangent_outputs(),
+            request.active_inputs(),
+            builder,
+        )
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl SemanticPrimalVjpRule for EinsumAdRule {
+    fn family_id(&self) -> &'static str {
+        EINSUM_EXTENSION_FAMILY_ID
+    }
+
+    fn primal_vjp(
+        &self,
+        request: SemanticPrimalVjpRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_einsum_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.primal_outputs(),
+            request.cotangent_outputs(),
+            request.active_inputs(),
+            builder,
+        )
+    }
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_einsum_vjp(
+    payload: &dyn ExtensionOp,
+    primal_inputs: &[ProgramValue],
+    primal_outputs: &[ProgramValue],
+    cotangent_outputs: &[AdValue],
+    active_inputs: &[bool],
+    builder: &mut SemanticProgramBuilder,
+) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+    let op = semantic_einsum_payload(payload, SemanticAdRuleRole::LinearTranspose)?;
+    let input_count = op.subscripts.inputs.len();
+    let AdValue::Value(cotangent) = cotangent_outputs[0] else {
+        return Ok(vec![AdValue::Absent; input_count].into_boxed_slice());
+    };
+    let primal_input_shapes = primal_inputs
+        .iter()
+        .copied()
+        .map(|value| semantic_value_shape(builder, value))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let cotangent_shape = semantic_value_shape(builder, primal_outputs[0])?;
+
+    let input_labels = &op.subscripts.inputs;
+    let output_labels = &op.subscripts.output;
+    let mut result = Vec::with_capacity(input_count);
+    for active_idx in 0..input_count {
+        if !active_inputs[active_idx] {
+            result.push(AdValue::Absent);
+            continue;
+        }
+        let mut available_labels: HashSet<u32> = output_labels.iter().copied().collect();
+        for (input_idx, labels) in input_labels.iter().enumerate() {
+            if input_idx != active_idx {
+                available_labels.extend(labels.iter().copied());
+            }
+        }
+        let vjp_output_labels: Vec<u32> = input_labels[active_idx]
+            .iter()
+            .copied()
+            .filter(|label| available_labels.contains(label))
+            .collect();
+        let mut vjp_input_labels = vec![output_labels.clone()];
+        let mut vjp_inputs = vec![cotangent];
+        let mut vjp_input_shapes = vec![cotangent_shape.clone()];
+        for input_idx in 0..input_count {
+            if input_idx == active_idx {
+                continue;
+            }
+            vjp_input_labels.push(input_labels[input_idx].clone());
+            vjp_input_shapes.push(primal_input_shapes[input_idx].clone());
+            vjp_inputs.push(semantic_conjugate_if_complex(
+                builder,
+                primal_inputs[input_idx],
+            )?);
+        }
+        let vjp_op = semantic_vjp_einsum_op(
+            op,
+            active_idx,
+            EinsumSubscripts {
+                inputs: vjp_input_labels,
+                output: vjp_output_labels.clone(),
+            },
+            &vjp_input_shapes,
+        )?;
+        let mut input_cotangent = builder.add_extension(Arc::new(vjp_op), &vjp_inputs)?[0];
+        if vjp_output_labels != input_labels[active_idx] {
+            input_cotangent = semantic_broadcast_einsum_vjp(
+                builder,
+                input_cotangent,
+                &vjp_output_labels,
+                &input_labels[active_idx],
+                primal_input_shapes[active_idx].clone(),
+            )?;
+        }
+        result.push(AdValue::Value(input_cotangent));
+    }
+    Ok(result.into_boxed_slice())
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_vjp_einsum_op(
+    primal_op: &EinsumExtensionOp,
+    active_idx: usize,
+    subscripts: EinsumSubscripts,
+    input_shapes: &[Vec<DimExpr>],
+) -> std::result::Result<EinsumExtensionOp, SemanticAdError> {
+    let plan_spec =
+        vjp_plan_spec_for_active(primal_op.plan_spec(), primal_op.input_count(), active_idx)
+            .map_err(|source| semantic_einsum_unsupported(source.to_string()))?;
+    let mut op = EinsumExtensionOp::with_plan_spec(subscripts.clone(), plan_spec.clone());
+    let sym_shapes: Vec<Vec<SymDim>> = input_shapes
+        .iter()
+        .enumerate()
+        .map(|(input_idx, shape)| {
+            let tensor_id = u64::MAX - input_idx as u64;
+            shape
+                .iter()
+                .enumerate()
+                .map(|(axis, dim)| match dim {
+                    DimExpr::Const(value) => SymDim::from(*value),
+                    _ => SymDim::tensor_axis(tensor_id, axis),
+                })
+                .collect()
+        })
+        .collect();
+    if let Some(concrete_shapes) = concrete_sym_shapes(&sym_shapes) {
+        let shape_refs: Vec<&[usize]> = concrete_shapes.iter().map(Vec::as_slice).collect();
+        let raw_subscripts = Subscripts::from(&subscripts);
+        let tree = resolve_plan_spec(&plan_spec, &raw_subscripts, &shape_refs)
+            .map_err(|source| semantic_einsum_unsupported(source.to_string()))?;
+        op = op.with_static_tree_hint(Arc::new(tree));
+    }
+    Ok(op)
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_value_shape(
+    builder: &SemanticProgramBuilder,
+    value: ProgramValue,
+) -> std::result::Result<Vec<DimExpr>, SemanticAdError> {
+    builder
+        .value_metadata(value)?
+        .shape()
+        .iter()
+        .map(|extent| {
+            extent.bound_expr().cloned().ok_or_else(|| {
+                semantic_einsum_unsupported(
+                    "einsum semantic AD requires a symbolic expression for every extent",
+                )
+            })
+        })
+        .collect()
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_conjugate_if_complex(
+    builder: &mut SemanticProgramBuilder,
+    value: ProgramValue,
+) -> std::result::Result<ProgramValue, SemanticAdError> {
+    if matches!(
+        builder.value_metadata(value)?.dtype(),
+        DType::C32 | DType::C64
+    ) {
+        Ok(builder.add_op(CoreSemanticOp::Conj, &[value])?[0])
+    } else {
+        Ok(value)
+    }
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_broadcast_einsum_vjp(
+    builder: &mut SemanticProgramBuilder,
+    cotangent: ProgramValue,
+    cotangent_labels: &[u32],
+    input_labels: &[u32],
+    shape: Vec<DimExpr>,
+) -> std::result::Result<ProgramValue, SemanticAdError> {
+    let dims = map_label_occurrences(cotangent_labels, input_labels).ok_or_else(|| {
+        semantic_einsum_unsupported(format!(
+            "einsum VJP cannot remap labels {cotangent_labels:?} into {input_labels:?}"
+        ))
+    })?;
+    let broadcast =
+        builder.add_op(CoreSemanticOp::BroadcastInDim { shape, dims }, &[cotangent])?[0];
+    semantic_project_repeated_labels(builder, broadcast, input_labels)
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_project_repeated_labels(
+    builder: &mut SemanticProgramBuilder,
+    cotangent: ProgramValue,
+    labels: &[u32],
+) -> std::result::Result<ProgramValue, SemanticAdError> {
+    let mut result = cotangent;
+    let mut first_axis_by_label = HashMap::new();
+    for (axis_b, label) in labels.iter().copied().enumerate() {
+        let Some(&axis_a) = first_axis_by_label.get(&label) else {
+            first_axis_by_label.insert(label, axis_b);
+            continue;
+        };
+        let extracted =
+            builder.add_op(CoreSemanticOp::ExtractDiag { axis_a, axis_b }, &[result])?[0];
+        result = builder.add_op(CoreSemanticOp::EmbedDiag { axis_a, axis_b }, &[extracted])?[0];
+    }
+    Ok(result)
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_sum_terms(
+    builder: &mut SemanticProgramBuilder,
+    terms: Vec<ProgramValue>,
+) -> std::result::Result<AdValue, SemanticAdError> {
+    let mut terms = terms.into_iter();
+    let Some(mut sum) = terms.next() else {
+        return Ok(AdValue::Absent);
+    };
+    for term in terms {
+        sum = builder.add_op(CoreSemanticOp::Add, &[sum, term])?[0];
+    }
+    Ok(AdValue::Value(sum))
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_einsum_payload(
+    op: &dyn ExtensionOp,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<&EinsumExtensionOp, SemanticAdError> {
+    op.as_any()
+        .downcast_ref::<EinsumExtensionOp>()
+        .ok_or_else(|| SemanticAdError::Unsupported {
+            family_id: EINSUM_EXTENSION_FAMILY_ID,
+            role,
+            message: "einsum semantic AD received an incompatible payload".into(),
+        })
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_einsum_unsupported(message: impl Into<String>) -> SemanticAdError {
+    SemanticAdError::Unsupported {
+        family_id: EINSUM_EXTENSION_FAMILY_ID,
+        role: SemanticAdRuleRole::LinearTranspose,
+        message: message.into(),
     }
 }
 

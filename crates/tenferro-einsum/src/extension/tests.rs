@@ -370,19 +370,19 @@ fn linear_transpose_broadcasts_linear_only_active_input_from_metadata() {
 
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let cotangent = builder.add_input(ad_input_key(0));
-    let result = rule
-        .linear_transpose(
-            &op,
-            &mut builder,
-            &[Some(cotangent)],
-            &[PrimitiveTransposeInput::Linear {
-                key: active_key.clone(),
-                primal: None,
-            }],
-            &[true],
-            &mut ctx,
-        )
-        .unwrap();
+    let result = ExtensionLinearTransposeRule::linear_transpose(
+        &rule,
+        &op,
+        &mut builder,
+        &[Some(cotangent)],
+        &[PrimitiveTransposeInput::Linear {
+            key: active_key.clone(),
+            primal: None,
+        }],
+        &[true],
+        &mut ctx,
+    )
+    .unwrap();
 
     assert_eq!(result.len(), 1);
     assert!(result[0].is_some());
@@ -428,29 +428,130 @@ fn linear_transpose_rejects_linear_only_coefficient_input() {
 
     let mut builder = GraphBuilder::<StdTensorOp>::new();
     let cotangent = builder.add_input(ad_input_key(0));
-    let err = rule
-        .linear_transpose(
-            &op,
-            &mut builder,
-            &[Some(cotangent)],
-            &[
-                PrimitiveTransposeInput::Linear {
-                    key: active_key,
-                    primal: None,
-                },
-                PrimitiveTransposeInput::Linear {
-                    key: coefficient_key,
-                    primal: None,
-                },
-            ],
-            &[true, false],
-            &mut ctx,
-        )
-        .unwrap_err();
+    let err = ExtensionLinearTransposeRule::linear_transpose(
+        &rule,
+        &op,
+        &mut builder,
+        &[Some(cotangent)],
+        &[
+            PrimitiveTransposeInput::Linear {
+                key: active_key,
+                primal: None,
+            },
+            PrimitiveTransposeInput::Linear {
+                key: coefficient_key,
+                primal: None,
+            },
+        ],
+        &[true, false],
+        &mut ctx,
+    )
+    .unwrap_err();
 
     let message = err.to_string();
     assert!(message.contains("linear-only"), "{message}");
     assert!(message.contains("einsum VJP"), "{message}");
+}
+
+#[test]
+#[cfg(feature = "autodiff")]
+fn semantic_rules_preserve_nary_order_absent_tangents_and_active_vjp_mask() {
+    use tenferro_ad::semantic_extension::AdValue;
+    use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef, SemanticProgramBuilder};
+
+    let subscripts = EinsumSubscripts {
+        inputs: vec![
+            vec![b'i' as u32, b'j' as u32],
+            vec![b'j' as u32, b'k' as u32],
+        ],
+        output: vec![b'i' as u32, b'k' as u32],
+    };
+    let make_op =
+        || EinsumExtensionOp::with_plan_spec(subscripts.clone(), EinsumPlanSpec::LeftToRight);
+
+    let mut source = SemanticProgramBuilder::new();
+    let source_lhs = source
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(3)],
+        ))
+        .unwrap();
+    let source_rhs = source
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(3), DimExpr::Const(4)],
+        ))
+        .unwrap();
+    let source_output = source
+        .add_extension(Arc::new(make_op()), &[source_lhs, source_rhs])
+        .unwrap()[0];
+    let source = source.finish(&[source_output]).unwrap();
+    let operation = source.program.operations().next().unwrap();
+
+    let mut builder = SemanticProgramBuilder::new();
+    let lhs = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(3)],
+        ))
+        .unwrap();
+    let rhs = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(3), DimExpr::Const(4)],
+        ))
+        .unwrap();
+    let dlhs = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(3)],
+        ))
+        .unwrap();
+    let cotangent = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(4)],
+        ))
+        .unwrap();
+    let primal_output = builder
+        .add_extension(Arc::new(make_op()), &[lhs, rhs])
+        .unwrap()[0];
+    let rules = semantic_ad_rules().unwrap();
+    let linearized = rules
+        .linearize_operation(
+            operation,
+            &[lhs, rhs],
+            &[primal_output],
+            &[AdValue::Value(dlhs), AdValue::Absent],
+            &[true],
+            &mut builder,
+        )
+        .unwrap();
+    let AdValue::Value(tangent_output) = linearized.tangent_outputs()[0] else {
+        panic!("einsum tangent must be active");
+    };
+    let input_cotangents = rules
+        .linear_transpose_operation(
+            operation,
+            &[lhs, rhs],
+            &[primal_output],
+            &[AdValue::Value(cotangent)],
+            &[true, false],
+            linearized.residuals(),
+            &mut builder,
+        )
+        .unwrap();
+    assert!(matches!(input_cotangents[0], AdValue::Value(_)));
+    assert_eq!(input_cotangents[1], AdValue::Absent);
+
+    let frozen = builder.finish(&[tangent_output]).unwrap();
+    let tangent_operation = frozen
+        .program
+        .operations()
+        .filter(|operation| matches!(operation.op(), SemanticOpRef::Extension(_)))
+        .nth(1)
+        .unwrap();
+    assert_eq!(tangent_operation.inputs(), &[dlhs, rhs]);
 }
 
 #[cfg(feature = "autodiff")]

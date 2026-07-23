@@ -92,6 +92,8 @@ pub use error::{Error, PlanningError, Result};
 #[cfg(feature = "autodiff")]
 pub use extension::ad_rules;
 pub use extension::register_runtime;
+#[cfg(feature = "autodiff")]
+pub use extension::semantic_ad_rules;
 pub use optimize::EinsumOptimize;
 pub use planning::tree::{ContractionOptimizerOptions, ContractionTree};
 pub use subscripts::{parse_einsum_subscripts, EinsumSubscripts};
