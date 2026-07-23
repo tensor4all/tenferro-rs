@@ -833,3 +833,87 @@ fn semantic_core_maximum_jvp_and_vjp_execute_with_balanced_ties() {
     assert_eq!(cotangents[0].as_slice::<f64>().unwrap(), &[0.0, 2.0, 6.0]);
     assert_eq!(cotangents[1].as_slice::<f64>().unwrap(), &[2.0, 2.0, 0.0]);
 }
+
+#[test]
+fn semantic_core_nonlinear_reductions_transform_product_and_balanced_extrema() {
+    let ad = ad_context();
+    for op in [
+        CoreSemanticOp::ReduceProd { axes: vec![0] },
+        CoreSemanticOp::ReduceMax { axes: vec![0] },
+        CoreSemanticOp::ReduceMin { axes: vec![0] },
+    ] {
+        let source = unary_core_program([DimExpr::Const(2), DimExpr::Const(3)], op);
+        assert!(ad.jvp_program(&source, &[true]).is_ok());
+        assert!(ad.vjp_program(&source, &[true], &[true]).is_ok());
+    }
+}
+
+#[test]
+fn semantic_core_reduce_prod_handles_zero_multiplicity_numerically() {
+    let source = unary_core_program(
+        [DimExpr::Const(2), DimExpr::Const(3)],
+        CoreSemanticOp::ReduceProd { axes: vec![0] },
+    );
+    let ad = ad_context();
+    let input =
+        Tensor::from_vec_col_major(vec![2, 3], vec![2.0_f64, 3.0, 0.0, 4.0, 0.0, 0.0]).unwrap();
+    let tangent = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+
+    let jvp = ad.jvp_program(&source, &[true]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(jvp.frozen())
+        .unwrap();
+    let result = GraphExecutor::new(CpuBackend::new())
+        .run_with_inputs(&compiled, &[&input, &tangent])
+        .unwrap();
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[5.0, 4.0, 0.0]);
+
+    let output_cotangent = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let vjp = ad.vjp_program(&source, &[true], &[true]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(vjp.frozen())
+        .unwrap();
+    let result = GraphExecutor::new(CpuBackend::new())
+        .run_with_inputs(&compiled, &[&input, &output_cotangent])
+        .unwrap();
+    assert_eq!(
+        result.as_slice::<f64>().unwrap(),
+        &[3.0, 2.0, 8.0, 0.0, 0.0, 0.0]
+    );
+}
+
+#[test]
+fn semantic_core_reduce_max_balances_ties_numerically() {
+    let source = unary_core_program(
+        [DimExpr::Const(2), DimExpr::Const(3)],
+        CoreSemanticOp::ReduceMax { axes: vec![0] },
+    );
+    let ad = ad_context();
+    let input =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 4.0, 4.0, 3.0, 1.0]).unwrap();
+    let tangent =
+        Tensor::from_vec_col_major(vec![2, 3], vec![10.0_f64, 20.0, 30.0, 50.0, 70.0, 80.0])
+            .unwrap();
+
+    let jvp = ad.jvp_program(&source, &[true]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(jvp.frozen())
+        .unwrap();
+    let result = GraphExecutor::new(CpuBackend::new())
+        .run_with_inputs(&compiled, &[&input, &tangent])
+        .unwrap();
+    assert_eq!(result.as_slice::<f64>().unwrap(), &[20.0, 40.0, 70.0]);
+
+    let output_cotangent = Tensor::from_vec_col_major(vec![3], vec![2.0_f64, 4.0, 6.0]).unwrap();
+    let vjp = ad.vjp_program(&source, &[true], &[true]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(vjp.frozen())
+        .unwrap();
+    let result = GraphExecutor::new(CpuBackend::new())
+        .run_with_inputs(&compiled, &[&input, &output_cotangent])
+        .unwrap();
+    assert_eq!(
+        result.as_slice::<f64>().unwrap(),
+        &[0.0, 2.0, 2.0, 2.0, 6.0, 0.0]
+    );
+}

@@ -1,5 +1,7 @@
 //! Whole-program automatic differentiation over semantic SSA programs.
 
+mod core_reductions;
+
 use std::collections::{HashMap, HashSet};
 
 use tenferro_runtime::program::{
@@ -9,6 +11,7 @@ use tenferro_runtime::program::{
 use tenferro_runtime::{CompareDir, DType, DotGeneralConfig};
 
 use crate::semantic_extension::{AdValue, SemanticAdError, SemanticExtensionRuleSet};
+use core_reductions::{linearize_nonlinear_reduction, nonlinear_reduction_vjp};
 
 /// Semantic AD transform role used by typed diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -530,6 +533,11 @@ fn linearize_core(
                 AdValue::Absent
             }
         }
+        CoreSemanticOp::ReduceProd { .. }
+        | CoreSemanticOp::ReduceMax { .. }
+        | CoreSemanticOp::ReduceMin { .. } => {
+            linearize_nonlinear_reduction(builder, op, primal_inputs, tangent_inputs[0])?
+        }
         _ => return Err(unsupported_core(SemanticTransformRole::Jvp, op)),
     };
     Ok([output].into())
@@ -795,6 +803,11 @@ fn vjp_core(
         | CoreSemanticOp::Reverse { .. } => {
             let transformed = unary_ad_value(builder, op.clone(), cotangent)?;
             primary_cotangent(builder, transformed, active_inputs, primal_inputs, false)?
+        }
+        CoreSemanticOp::ReduceProd { .. }
+        | CoreSemanticOp::ReduceMax { .. }
+        | CoreSemanticOp::ReduceMin { .. } => {
+            nonlinear_reduction_vjp(builder, op, primal_inputs, cotangent, active_inputs[0])?
         }
         _ => return Err(unsupported_core(SemanticTransformRole::Vjp, op)),
     };
