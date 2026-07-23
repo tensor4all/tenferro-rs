@@ -538,6 +538,10 @@ fn linearize_core(
         | CoreSemanticOp::ReduceMin { .. } => {
             linearize_nonlinear_reduction(builder, op, primal_inputs, tangent_inputs[0])?
         }
+        CoreSemanticOp::Rem
+        | CoreSemanticOp::Compare(_)
+        | CoreSemanticOp::ShapeOf { .. }
+        | CoreSemanticOp::Constant { .. } => AdValue::Absent,
         _ => return Err(unsupported_core(SemanticTransformRole::Jvp, op)),
     };
     Ok([output].into())
@@ -809,6 +813,11 @@ fn vjp_core(
         | CoreSemanticOp::ReduceMin { .. } => {
             nonlinear_reduction_vjp(builder, op, primal_inputs, cotangent, active_inputs[0])?
         }
+        CoreSemanticOp::Rem | CoreSemanticOp::Compare(_) => {
+            vec![AdValue::Absent, AdValue::Absent]
+        }
+        CoreSemanticOp::ShapeOf { .. } => vec![AdValue::Absent],
+        CoreSemanticOp::Constant { .. } => Vec::new(),
         _ => return Err(unsupported_core(SemanticTransformRole::Vjp, op)),
     };
     Ok(inputs.into_boxed_slice())

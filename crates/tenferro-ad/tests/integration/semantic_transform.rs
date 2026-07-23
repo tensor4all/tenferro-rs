@@ -917,3 +917,75 @@ fn semantic_core_reduce_max_balances_ties_numerically() {
         &[0.0, 2.0, 2.0, 2.0, 6.0, 0.0]
     );
 }
+
+#[test]
+fn semantic_core_discrete_ops_are_explicitly_inactive() {
+    let ad = ad_context();
+    let rem = binary_core_program(
+        DType::F64,
+        [DimExpr::Const(2)],
+        DType::F64,
+        [DimExpr::Const(2)],
+        CoreSemanticOp::Rem,
+    );
+    assert_eq!(
+        ad.jvp_program(&rem, &[true, true])
+            .unwrap()
+            .derivative_output_indices(),
+        &[None]
+    );
+    assert_eq!(
+        ad.vjp_program(&rem, &[true, true], &[true])
+            .unwrap()
+            .derivative_output_indices(),
+        &[None, None]
+    );
+
+    let compare = binary_core_program(
+        DType::F64,
+        [DimExpr::Const(2)],
+        DType::F64,
+        [DimExpr::Const(2)],
+        CoreSemanticOp::Compare(tenferro_runtime::CompareDir::Eq),
+    );
+    assert_eq!(
+        ad.jvp_program(&compare, &[true, true])
+            .unwrap()
+            .derivative_output_indices(),
+        &[None]
+    );
+
+    let shape = unary_core_program(
+        [DimExpr::Const(2), DimExpr::Const(3)],
+        CoreSemanticOp::ShapeOf { axis: 1 },
+    );
+    assert_eq!(
+        ad.jvp_program(&shape, &[true])
+            .unwrap()
+            .derivative_output_indices(),
+        &[None]
+    );
+
+    let mut builder = SemanticProgramBuilder::new();
+    let constant = builder
+        .add_op(
+            CoreSemanticOp::Constant {
+                dtype: DType::F64,
+                bytes: 2.0_f64.to_le_bytes().to_vec(),
+            },
+            &[],
+        )
+        .unwrap()[0];
+    let constant = builder.finish(&[constant]).unwrap();
+    assert_eq!(
+        ad.jvp_program(&constant, &[])
+            .unwrap()
+            .derivative_output_indices(),
+        &[None]
+    );
+    assert!(ad
+        .vjp_program(&constant, &[], &[true])
+        .unwrap()
+        .derivative_output_indices()
+        .is_empty());
+}
