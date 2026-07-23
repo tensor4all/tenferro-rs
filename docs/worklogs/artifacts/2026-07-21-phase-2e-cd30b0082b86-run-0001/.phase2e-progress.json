@@ -1,0 +1,48 @@
+{
+  "candidate_sha": "cd30b0082b86f968e21911db48d9b04bb0be820c",
+  "candidate_tree_sha256": "6f1c6dd3d7073289d1c3ccc74cc20ae4957961dec769e13e7337bfcd9b947daf",
+  "cargo_home": "/tmp/.phase2e-scratch.umT38m-phase2e-cargo-home",
+  "children": [
+    {
+      "exit_code": 2,
+      "stage": "timing-builds"
+    }
+  ],
+  "command_contract_digest": "60f7942a144371e651de3bb8c53b42fae6b29dab3879156476e28a0a1addfef1",
+  "context_path": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-21-phase-2e-cd30b0082b86-run-0001/.phase2e-stage-context.json",
+  "context_sha256": "8f3488eb6e9a908517e87135884ced615f070586ca0de318a8b11872eb6dda7e",
+  "evidence_root": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-21-phase-2e-cd30b0082b86-run-0001",
+  "experiment_identity_digest": "2e34bfcd173c5a5f181280d18b26d2c70db88c9559f030acc5b9b90fb99e0619",
+  "home": "/tmp/.phase2e-scratch.umT38m-phase2e-home",
+  "index": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/2026-07-21-phase-2e-index.json",
+  "index_lock": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/.phase2e-index.lock",
+  "inventory": {
+    ".orchestrator.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ".phase2e-process-journal.json": "e6dcf77f0e7c1f390176eceae43ad35326cc9741f2468126574860e1c32ec3cb",
+    ".phase2e-stage-context.json": "8f3488eb6e9a908517e87135884ced615f070586ca0de318a8b11872eb6dda7e",
+    "builds/locks/common.Cargo.lock": "c03736ecf2e82ca565f13b46a7ec97bf8dd3294005d241740f8f3038fd979bd5",
+    "builds/locks/direct-current-main.Cargo.lock": "8a96c44467a13b724b6974ead500d7c096a545be100ccee04109a739f58d677a",
+    "children/01-timing-builds.json": "2bc4cb469689906dac03cb3b86ac4234ffd8bbb743ae8dd0e62c26f822c86f8b",
+    "evidence-ledger.json": "f4cd38c0d18f058c9a149bdabbf8d6dee7ee9fd78a6ece62283fae990f0e1b2f"
+  },
+  "ledger_sha256": "f4cd38c0d18f058c9a149bdabbf8d6dee7ee9fd78a6ece62283fae990f0e1b2f",
+  "path": "/usr/bin:/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin",
+  "protocol_version": 2,
+  "repository": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design",
+  "reservation_id": "bcb7f0c44f8bf7b800ac113764939c49525c152a5ecb8fdc018c93f9dcb511e7",
+  "scratch_parent": "/tmp/phase2e-scratch.umT38m",
+  "stage_order": [
+    "timing-builds",
+    "probe-builds",
+    "allocation/direct-current-main",
+    "allocation/common-lock-normalized",
+    "dispatch-builds",
+    "dispatch-gates",
+    "characterization-builds",
+    "characterization",
+    "timing/direct-current-main",
+    "timing/common-lock-normalized",
+    "aggregate-validation"
+  ],
+  "version": 1
+}

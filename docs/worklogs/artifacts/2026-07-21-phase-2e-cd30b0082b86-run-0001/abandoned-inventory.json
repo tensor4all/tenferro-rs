@@ -1,0 +1,16 @@
+{
+  "abandonment_kind": "UNCAUGHT_INTERRUPTION",
+  "inventory": {
+    ".orchestrator.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ".phase2e-process-journal.json": "e6dcf77f0e7c1f390176eceae43ad35326cc9741f2468126574860e1c32ec3cb",
+    ".phase2e-progress.json": "e54599a98eed19d247c6aca69b377244004cce94b3a109ba3a36ed8746d954ad",
+    ".phase2e-stage-context.json": "8f3488eb6e9a908517e87135884ced615f070586ca0de318a8b11872eb6dda7e",
+    "builds/locks/common.Cargo.lock": "c03736ecf2e82ca565f13b46a7ec97bf8dd3294005d241740f8f3038fd979bd5",
+    "builds/locks/direct-current-main.Cargo.lock": "8a96c44467a13b724b6974ead500d7c096a545be100ccee04109a739f58d677a",
+    "children/01-timing-builds.json": "2bc4cb469689906dac03cb3b86ac4234ffd8bbb743ae8dd0e62c26f822c86f8b",
+    "evidence-ledger.json": "f4cd38c0d18f058c9a149bdabbf8d6dee7ee9fd78a6ece62283fae990f0e1b2f"
+  },
+  "protocol_version": 2,
+  "status": "ABANDONED",
+  "version": 1
+}

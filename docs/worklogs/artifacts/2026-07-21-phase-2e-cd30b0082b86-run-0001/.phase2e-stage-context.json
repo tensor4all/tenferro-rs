@@ -1,0 +1,16 @@
+{
+  "candidate_sha": "cd30b0082b86f968e21911db48d9b04bb0be820c",
+  "candidate_tree_sha256": "6f1c6dd3d7073289d1c3ccc74cc20ae4957961dec769e13e7337bfcd9b947daf",
+  "cargo_home": "/tmp/.phase2e-scratch.umT38m-phase2e-cargo-home",
+  "command_contract_digest": "60f7942a144371e651de3bb8c53b42fae6b29dab3879156476e28a0a1addfef1",
+  "evidence_root": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-21-phase-2e-cd30b0082b86-run-0001",
+  "experiment_identity_digest": "2e34bfcd173c5a5f181280d18b26d2c70db88c9559f030acc5b9b90fb99e0619",
+  "home": "/tmp/.phase2e-scratch.umT38m-phase2e-home",
+  "index": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/2026-07-21-phase-2e-index.json",
+  "index_lock": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/.phase2e-index.lock",
+  "path": "/usr/bin:/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin",
+  "repository": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design",
+  "reservation_id": "bcb7f0c44f8bf7b800ac113764939c49525c152a5ecb8fdc018c93f9dcb511e7",
+  "scratch_parent": "/tmp/phase2e-scratch.umT38m",
+  "version": 1
+}
