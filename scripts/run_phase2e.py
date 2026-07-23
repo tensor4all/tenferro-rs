@@ -43,6 +43,16 @@ INDEX_LOCK_PATH = pathlib.Path("docs/worklogs/.phase2e-index.lock")
 WORKLOG_PATH = pathlib.Path("docs/worklogs/2026-07-21-phase-2e-noninferiority.md")
 PRESERVATION_BRANCH = "origin/codex/execution-engine-through-phase9"
 ISSUE_NUMBER = 1436
+_TIMING_BUILD_ROLES = tuple(build.BUILD_MANIFEST_PATHS)
+_TIMEOUT_FAILURE_COMPONENTS = frozenset(
+    {
+        "term-signal-failed",
+        "kill-signal-failed",
+        "post-kill-drain-timeout",
+        "post-kill-drain-failed",
+        "term-drain-failed",
+    }
+)
 
 
 def _has_ascii_control(value: str) -> bool:
@@ -428,13 +438,11 @@ def _timing_builds(context: Mapping[str, Any]) -> int:
                 "inconclusive timing build omitted typed failure evidence"
             )
         payload = _timing_build_failure_payload(result.failure)
-        validate_timing_build_failure(payload)
+        validate_timing_build_failure(payload, context)
         _require_absent_timing_build_failure(identity)
-        _atomic_write_root_json(
-            root,
-            pathlib.PurePosixPath(TIMING_BUILD_FAILURE),
-            payload,
-            identity,
+        identity.revalidate()
+        protocol.atomic_write_json_new_at(
+            identity.descriptor, TIMING_BUILD_FAILURE, payload
         )
         identity.revalidate()
         return 2
@@ -489,7 +497,10 @@ def _timing_build_failure_payload(
     }
 
 
-def validate_timing_build_failure(payload: Mapping[str, Any]) -> None:
+def validate_timing_build_failure(
+    payload: Mapping[str, Any],
+    context: Mapping[str, Any],
+) -> None:
     """Validate the exact canonical timing-build failure evidence schema."""
     if type(payload) is not dict or set(payload) != {
         "version",
@@ -501,7 +512,9 @@ def validate_timing_build_failure(payload: Mapping[str, Any]) -> None:
     }:
         raise protocol.ProtocolError("timing build failure evidence schema is invalid")
     if (
-        payload["version"] != 1
+        type(payload["version"]) is not int
+        or payload["version"] != 1
+        or type(payload["protocol_version"]) is not int
         or payload["protocol_version"] != protocol.PROTOCOL_VERSION
         or payload["stage"] != "timing-builds"
         or payload["validity_state"] != "INCONCLUSIVE"
@@ -559,6 +572,105 @@ def validate_timing_build_failure(payload: Mapping[str, Any]) -> None:
         or type(termination["killed"]) is not bool
     ):
         raise protocol.ProtocolError("timing build termination evidence is invalid")
+    if descriptors:
+        raise protocol.ProtocolError(
+            "timing build commands cannot inherit executable descriptors"
+        )
+
+    role = _timing_build_failure_role(command["cwd"], context)
+    expected_environment = protocol.cargo_environment(
+        path=context["path"],
+        home=context["home"],
+        cargo_home=context["cargo_home"],
+        target_dir=str(pathlib.Path(context["scratch_parent"]) / "targets" / role),
+    )
+    if environment != expected_environment:
+        raise protocol.ProtocolError(
+            "timing build failure environment differs from sealed role environment"
+        )
+
+    reason = payload["failure_reason"]
+    terminated = termination["terminated"]
+    killed = termination["killed"]
+    if reason == "nonzero-exit":
+        if (
+            type(returncode) is not int
+            or returncode == 0
+            or terminated
+            or killed
+        ):
+            raise protocol.ProtocolError(
+                "nonzero timing build failure fields are inconsistent"
+            )
+        return
+    if reason == "deadline-exceeded":
+        components: list[str] = []
+    elif reason.startswith("deadline-exceeded:"):
+        components = reason.split(":", 1)[1].split("+")
+        if (
+            not components
+            or any(component not in _TIMEOUT_FAILURE_COMPONENTS for component in components)
+            or len(set(components)) != len(components)
+        ):
+            raise protocol.ProtocolError(
+                "timing build timeout failure reason is invalid"
+            )
+    else:
+        raise protocol.ProtocolError("timing build failure reason is invalid")
+    prefixes: list[list[str]]
+    if terminated:
+        prefixes = [[], ["term-drain-failed"]]
+    else:
+        prefixes = [["term-signal-failed"]]
+    if not killed:
+        prefixes = [prefix + ["kill-signal-failed"] for prefix in prefixes]
+    accepted = {
+        tuple(prefix + suffix)
+        for prefix in prefixes
+        for suffix in (
+            [],
+            ["post-kill-drain-timeout"],
+            ["post-kill-drain-failed"],
+        )
+    }
+    if tuple(components) not in accepted:
+        raise protocol.ProtocolError(
+            "timing build timeout termination fields are inconsistent"
+        )
+
+
+def _timing_build_failure_role(
+    cwd: str,
+    context: Mapping[str, Any],
+) -> str:
+    """Bind a captured build cwd to one exact existing role worktree."""
+    if type(context) is not dict or set(context) != STAGE_CONTEXT_FIELDS:
+        raise protocol.ProtocolError("timing build stage context schema differs")
+    if type(context["version"]) is not int or context["version"] != 1:
+        raise protocol.ProtocolError("timing build stage context version differs")
+    scratch = pathlib.Path(context["scratch_parent"])
+    try:
+        canonical_scratch = scratch.resolve(strict=True)
+        candidate = pathlib.Path(cwd)
+        canonical_candidate = candidate.resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot resolve timing build role worktree: {error}"
+        ) from error
+    if (
+        not scratch.is_absolute()
+        or canonical_scratch != scratch
+        or not candidate.is_absolute()
+        or canonical_candidate != candidate
+        or not candidate.is_dir()
+    ):
+        raise protocol.ProtocolError(
+            "timing build cwd is not an exact canonical role worktree"
+        )
+    for role in _TIMING_BUILD_ROLES:
+        if candidate == scratch / role:
+            return role
+    raise protocol.ProtocolError("timing build cwd is not a canonical build role")
 
 
 def _probe_builds(context: Mapping[str, Any]) -> int:
@@ -2996,6 +3108,35 @@ def seal_root(
     return manifest
 
 
+def _validate_retained_timing_build_failure(
+    root: pathlib.Path,
+    inventory: Mapping[str, str],
+) -> None:
+    """Rebind retained timing failure bytes to their immutable stage context."""
+    if TIMING_BUILD_FAILURE not in inventory:
+        return
+    if STAGE_CONTEXT not in inventory:
+        raise protocol.ProtocolError(
+            "timing build failure evidence has no stage context"
+        )
+    artifact = root / TIMING_BUILD_FAILURE
+    if protocol.sha256_file(artifact) != inventory[TIMING_BUILD_FAILURE]:
+        raise protocol.ProtocolError(
+            "timing build failure digest differs from owning inventory"
+        )
+    context = load_stage_context(
+        root / STAGE_CONTEXT,
+        inventory[STAGE_CONTEXT],
+        require_fresh_scratch=False,
+    )
+    if pathlib.Path(context["evidence_root"]) != root:
+        raise protocol.ProtocolError(
+            "timing build failure context names another evidence root"
+        )
+    payload = _read_json(artifact, "timing build failure evidence")
+    validate_timing_build_failure(payload, context)
+
+
 def validate_root(root: pathlib.Path) -> str:
     """Cryptographically reconstruct one complete aggregate evidence root."""
     root = _canonical_existing_root(root)
@@ -3019,7 +3160,12 @@ def validate_root(root: pathlib.Path) -> str:
         protocol.validate_regular_file_inventory(
             root, seal["inventory"], excluded=frozenset({ABANDONMENT_SEAL})
         )
+        _validate_retained_timing_build_failure(root, seal["inventory"])
         return "ABANDONED"
+    if os.path.lexists(root / TIMING_BUILD_FAILURE):
+        raise protocol.ProtocolError(
+            "complete evidence root contains timing build failure evidence"
+        )
     manifest = _read_json(root / AGGREGATE_MANIFEST, "aggregate manifest")
     validate_semantic_root(root)
     required = {

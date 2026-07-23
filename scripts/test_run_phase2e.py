@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import hashlib
 import os
 import pathlib
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -575,6 +577,47 @@ class OuterOrchestratorTests(unittest.TestCase):
         protocol.atomic_write_json(path, context)
         return path, context
 
+    def make_timing_build_failure(
+        self,
+        base: pathlib.Path,
+        *,
+        role: str = "candidate",
+        failure_reason: str = "nonzero-exit",
+        returncode: int | None = 101,
+        terminated: bool = False,
+        killed: bool = False,
+    ) -> tuple[dict, object]:
+        path, context = self.make_stage_context(base)
+        controlled = pathlib.Path(sys.executable).resolve().parent
+        scratch = pathlib.Path(context["scratch_parent"])
+        worktree = scratch / role
+        worktree.mkdir()
+        context["path"] = str(controlled)
+        context["command_contract_digest"] = (
+            orchestrator.stage_context_contract_digest(context)
+        )
+        protocol.atomic_write_json(path, context)
+        environment = protocol.cargo_environment(
+            path=context["path"],
+            home=context["home"],
+            cargo_home=context["cargo_home"],
+            target_dir=str(scratch / "targets" / role),
+        )
+        failure = orchestrator.build.CommandResult(
+            argv=(str(controlled / "cargo"), "build"),
+            cwd=str(worktree),
+            environment=environment,
+            deadline_seconds=17,
+            returncode=returncode,
+            stdout="captured stdout\n",
+            stderr="captured stderr\n",
+            validity_state="INCONCLUSIVE",
+            failure_reason=failure_reason,
+            terminated=terminated,
+            killed=killed,
+        )
+        return context, failure
+
     def test_stage_context_rejects_digest_tamper_and_reused_scratch(self):
         with tempfile.TemporaryDirectory() as directory:
             base = pathlib.Path(directory)
@@ -773,24 +816,12 @@ raise SystemExit(1)
 
     def test_timing_build_failure_is_persisted_before_inconclusive_return(self):
         with tempfile.TemporaryDirectory() as directory:
-            _path, context = self.make_stage_context(pathlib.Path(directory))
+            context, failure = self.make_timing_build_failure(
+                pathlib.Path(directory)
+            )
             root = pathlib.Path(context["evidence_root"])
             root.mkdir(mode=0o700)
             before = protocol.regular_file_inventory(root)
-            failure = orchestrator.build.CommandResult(
-                argv=("/controlled/cargo", "build"),
-                cwd="/worktree",
-                environment={"HOME": "/sealed-home", "PATH": "/controlled"},
-                deadline_seconds=17,
-                returncode=101,
-                stdout="captured stdout\n",
-                stderr="captured stderr\n",
-                validity_state="INCONCLUSIVE",
-                failure_reason="nonzero-exit",
-                terminated=False,
-                killed=False,
-                inherited_descriptors=(9,),
-            )
             result = orchestrator.build.BuildSetResult(
                 "INCONCLUSIVE", {}, failure
             )
@@ -813,12 +844,9 @@ raise SystemExit(1)
                     "validity_state": "INCONCLUSIVE",
                     "failure_reason": "nonzero-exit",
                     "command": {
-                        "argv": ["/controlled/cargo", "build"],
-                        "cwd": "/worktree",
-                        "environment": {
-                            "HOME": "/sealed-home",
-                            "PATH": "/controlled",
-                        },
+                        "argv": list(failure.argv),
+                        "cwd": failure.cwd,
+                        "environment": failure.environment,
                         "deadline_seconds": 17,
                         "returncode": 101,
                         "stdout": "captured stdout\n",
@@ -827,7 +855,7 @@ raise SystemExit(1)
                             "terminated": False,
                             "killed": False,
                         },
-                        "inherited_descriptors": [9],
+                        "inherited_descriptors": [],
                     },
                 },
             )
@@ -841,7 +869,7 @@ raise SystemExit(1)
                 [{"stage": "timing-builds", "exit_code": 2}],
                 before,
                 environment=protocol.runtime_environment(
-                    path="/controlled", home="/sealed-home"
+                    path=context["path"], home=context["home"]
                 ),
             )
             child = json.loads(
@@ -930,31 +958,346 @@ raise SystemExit(1)
             self.assertEqual(artifact.read_bytes(), before)
 
     def test_timing_build_failure_schema_rejects_extra_or_malformed_fields(self):
-        failure = orchestrator.build.CommandResult(
-            argv=("/controlled/cargo", "build"),
-            cwd="/worktree",
-            environment={"PATH": "/controlled"},
-            deadline_seconds=17,
-            returncode=101,
-            stdout="",
-            stderr="failed",
-            validity_state="INCONCLUSIVE",
-            failure_reason="nonzero-exit",
-            terminated=False,
-            killed=False,
-        )
-        payload = orchestrator._timing_build_failure_payload(failure)
-        orchestrator.validate_timing_build_failure(payload)
-        extra = {**payload, "unexpected": True}
-        malformed = {
-            **payload,
-            "command": {**payload["command"], "returncode": True},
+        with tempfile.TemporaryDirectory() as directory:
+            context, failure = self.make_timing_build_failure(
+                pathlib.Path(directory)
+            )
+            payload = orchestrator._timing_build_failure_payload(failure)
+            orchestrator.validate_timing_build_failure(payload, context)
+            candidates = (
+                {**payload, "unexpected": True},
+                {**payload, "version": True},
+                {**payload, "protocol_version": True},
+                {
+                    **payload,
+                    "command": {
+                        **payload["command"],
+                        "deadline_seconds": True,
+                    },
+                },
+                {
+                    **payload,
+                    "command": {**payload["command"], "returncode": True},
+                },
+                {
+                    **payload,
+                    "command": {
+                        **payload["command"],
+                        "inherited_descriptors": [True],
+                    },
+                },
+            )
+            for candidate in candidates:
+                with self.subTest(candidate=candidate), self.assertRaises(
+                    protocol.ProtocolError
+                ):
+                    orchestrator.validate_timing_build_failure(
+                        candidate, context
+                    )
+
+    def test_timing_build_failure_publish_does_not_clobber_racing_leaf(self):
+        creators = {
+            "regular": lambda path, _outside: path.write_bytes(b"foreign\n"),
+            "symlink": lambda path, outside: path.symlink_to(outside),
+            "fifo": lambda path, _outside: os.mkfifo(path),
+            "directory": lambda path, _outside: path.mkdir(),
         }
-        for candidate in (extra, malformed):
-            with self.subTest(candidate=candidate), self.assertRaises(
-                protocol.ProtocolError
+        real_link = os.link
+        for kind, create in creators.items():
+            with (
+                self.subTest(kind=kind),
+                tempfile.TemporaryDirectory() as directory,
             ):
-                orchestrator.validate_timing_build_failure(candidate)
+                base = pathlib.Path(directory)
+                context, failure = self.make_timing_build_failure(base)
+                root = pathlib.Path(context["evidence_root"])
+                root.mkdir(mode=0o700)
+                target = root / "timing-build-failure.json"
+                outside = base / "outside"
+                outside.write_bytes(b"outside\n")
+                before_fds = len(os.listdir("/proc/self/fd"))
+                inserted = {}
+
+                def racing_link(source, destination, *args, **kwargs):
+                    create(target, outside)
+                    metadata = target.lstat()
+                    inserted["identity"] = (metadata.st_dev, metadata.st_ino)
+                    return real_link(source, destination, *args, **kwargs)
+
+                result = orchestrator.build.BuildSetResult(
+                    "INCONCLUSIVE", {}, failure
+                )
+                with mock.patch.object(
+                    orchestrator.build, "build_all", return_value=result
+                ), mock.patch.object(
+                    orchestrator.protocol.os,
+                    "link",
+                    side_effect=racing_link,
+                ), self.assertRaises(protocol.ProtocolError):
+                    orchestrator._timing_builds(context)
+
+                metadata = target.lstat()
+                self.assertEqual(
+                    (metadata.st_dev, metadata.st_ino), inserted["identity"]
+                )
+                if kind == "regular":
+                    self.assertEqual(target.read_bytes(), b"foreign\n")
+                elif kind == "symlink":
+                    self.assertTrue(target.is_symlink())
+                    self.assertEqual(os.readlink(target), str(outside))
+                elif kind == "fifo":
+                    self.assertTrue(stat.S_ISFIFO(metadata.st_mode))
+                else:
+                    self.assertTrue(target.is_dir())
+                self.assertEqual(outside.read_bytes(), b"outside\n")
+                self.assertEqual(
+                    list(root.glob(".timing-build-failure.json.write-*.tmp")),
+                    [],
+                )
+                self.assertEqual(len(os.listdir("/proc/self/fd")), before_fds)
+
+    def test_timing_build_failure_is_bound_to_stage_context(self):
+        mutations = {
+            "cwd": lambda payload, _context: payload["command"].update(
+                cwd="/foreign-worktree"
+            ),
+            "environment-extra": lambda payload, _context: payload[
+                "command"
+            ]["environment"].update(SECRET_TOKEN="must-not-persist"),
+            "environment-missing": lambda payload, _context: payload[
+                "command"
+            ]["environment"].pop("CARGO_HOME"),
+            "failure-reason": lambda payload, _context: payload.update(
+                failure_reason="arbitrary"
+            ),
+        }
+        for name, mutate in mutations.items():
+            with (
+                self.subTest(name=name),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                base = pathlib.Path(directory)
+                context, failure = self.make_timing_build_failure(base)
+                root = pathlib.Path(context["evidence_root"])
+                root.mkdir(mode=0o700)
+                payload = orchestrator._timing_build_failure_payload(failure)
+                mutate(payload, context)
+                forged = orchestrator.build.CommandResult(
+                    argv=tuple(payload["command"]["argv"]),
+                    cwd=payload["command"]["cwd"],
+                    environment=payload["command"]["environment"],
+                    deadline_seconds=payload["command"]["deadline_seconds"],
+                    returncode=payload["command"]["returncode"],
+                    stdout=payload["command"]["stdout"],
+                    stderr=payload["command"]["stderr"],
+                    validity_state=payload["validity_state"],
+                    failure_reason=payload["failure_reason"],
+                    terminated=payload["command"]["termination"]["terminated"],
+                    killed=payload["command"]["termination"]["killed"],
+                    inherited_descriptors=tuple(
+                        payload["command"]["inherited_descriptors"]
+                    ),
+                )
+                with mock.patch.object(
+                    orchestrator.build,
+                    "build_all",
+                    return_value=orchestrator.build.BuildSetResult(
+                        "INCONCLUSIVE", {}, forged
+                    ),
+                ), self.assertRaises(protocol.ProtocolError):
+                    orchestrator._timing_builds(context)
+
+                self.assertFalse(
+                    (root / "timing-build-failure.json").exists()
+                )
+
+    def test_timing_build_failure_reason_matches_termination_state(self):
+        valid = (
+            ("deadline-exceeded", True, True),
+            ("deadline-exceeded:term-signal-failed", False, True),
+            ("deadline-exceeded:kill-signal-failed", True, False),
+            (
+                "deadline-exceeded:term-signal-failed+kill-signal-failed",
+                False,
+                False,
+            ),
+            (
+                "deadline-exceeded:term-drain-failed+post-kill-drain-timeout",
+                True,
+                True,
+            ),
+        )
+        invalid = (
+            ("deadline-exceeded", False, True),
+            ("deadline-exceeded:term-signal-failed", True, True),
+            ("deadline-exceeded:kill-signal-failed", True, True),
+            (
+                "deadline-exceeded:post-kill-drain-timeout+term-drain-failed",
+                True,
+                True,
+            ),
+            ("deadline-exceeded:unknown", True, True),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            context, failure = self.make_timing_build_failure(
+                pathlib.Path(directory)
+            )
+            for reason, terminated, killed in valid:
+                payload = orchestrator._timing_build_failure_payload(
+                    dataclasses.replace(
+                        failure,
+                        failure_reason=reason,
+                        returncode=None,
+                        terminated=terminated,
+                        killed=killed,
+                    )
+                )
+                orchestrator.validate_timing_build_failure(payload, context)
+            for reason, terminated, killed in invalid:
+                payload = orchestrator._timing_build_failure_payload(
+                    dataclasses.replace(
+                        failure,
+                        failure_reason=reason,
+                        returncode=None,
+                        terminated=terminated,
+                        killed=killed,
+                    )
+                )
+                with self.subTest(reason=reason), self.assertRaises(
+                    protocol.ProtocolError
+                ):
+                    orchestrator.validate_timing_build_failure(
+                        payload, context
+                    )
+
+    def test_timing_build_failure_publish_reports_commit_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            context, failure = self.make_timing_build_failure(base)
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(mode=0o700)
+            before_fds = len(os.listdir("/proc/self/fd"))
+            result = orchestrator.build.BuildSetResult(
+                "INCONCLUSIVE", {}, failure
+            )
+            with mock.patch.object(
+                orchestrator.build, "build_all", return_value=result
+            ), mock.patch.object(
+                orchestrator.protocol.os,
+                "link",
+                side_effect=OSError("injected pre-commit link failure"),
+            ), self.assertRaises(protocol.AtomicWriteError) as caught:
+                orchestrator._timing_builds(context)
+
+            self.assertFalse(caught.exception.committed)
+            self.assertFalse((root / "timing-build-failure.json").exists())
+            self.assertEqual(
+                list(root.glob(".timing-build-failure.json.write-*.tmp")),
+                [],
+            )
+            self.assertEqual(len(os.listdir("/proc/self/fd")), before_fds)
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            context, failure = self.make_timing_build_failure(base)
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(mode=0o700)
+            before_fds = len(os.listdir("/proc/self/fd"))
+            result = orchestrator.build.BuildSetResult(
+                "INCONCLUSIVE", {}, failure
+            )
+            real_fsync = os.fsync
+            fsync_calls = 0
+
+            def fail_directory_fsync(descriptor):
+                nonlocal fsync_calls
+                fsync_calls += 1
+                if fsync_calls == 2:
+                    raise OSError("injected post-commit directory fsync failure")
+                return real_fsync(descriptor)
+
+            with mock.patch.object(
+                orchestrator.build, "build_all", return_value=result
+            ), mock.patch.object(
+                orchestrator.protocol.os, "link", wraps=os.link
+            ) as link, mock.patch.object(
+                orchestrator.protocol.os,
+                "fsync",
+                side_effect=fail_directory_fsync,
+            ), self.assertRaises(
+                protocol.AtomicWriteDurabilityError
+            ) as caught:
+                orchestrator._timing_builds(context)
+
+            self.assertTrue(caught.exception.committed)
+            link.assert_called_once()
+            self.assertTrue(
+                (root / "timing-build-failure.json").is_file()
+            )
+            self.assertEqual(
+                list(root.glob(".timing-build-failure.json.write-*.tmp")),
+                [],
+            )
+            self.assertEqual(len(os.listdir("/proc/self/fd")), before_fds)
+
+    def test_abandoned_root_context_validates_timing_build_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            context, failure = self.make_timing_build_failure(base)
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(mode=0o700)
+            protocol.atomic_write_json(
+                root / orchestrator.STAGE_CONTEXT, context
+            )
+            artifact = root / "timing-build-failure.json"
+            protocol.atomic_write_json(
+                artifact,
+                orchestrator._timing_build_failure_payload(failure),
+            )
+            orchestrator.seal_abandoned_root(root)
+            self.assertEqual(orchestrator.validate_root(root), "ABANDONED")
+            payload = json.loads(artifact.read_text(encoding="utf-8"))
+            payload["command"]["stderr"] = "digest mutation"
+            protocol.atomic_write_json(artifact, payload)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_root(root)
+
+        for malformed in ("schema", "context", "canonical-json"):
+            with (
+                self.subTest(malformed=malformed),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                base = pathlib.Path(directory)
+                context, failure = self.make_timing_build_failure(base)
+                root = pathlib.Path(context["evidence_root"])
+                root.mkdir(mode=0o700)
+                protocol.atomic_write_json(
+                    root / orchestrator.STAGE_CONTEXT, context
+                )
+                artifact = root / "timing-build-failure.json"
+                payload = orchestrator._timing_build_failure_payload(failure)
+                if malformed == "schema":
+                    payload["version"] = True
+                    protocol.atomic_write_json(artifact, payload)
+                elif malformed == "context":
+                    payload["command"]["environment"]["SECRET_TOKEN"] = "secret"
+                    protocol.atomic_write_json(artifact, payload)
+                else:
+                    artifact.write_bytes(b'{"version":1}\n')
+                orchestrator.seal_abandoned_root(root)
+
+                with self.assertRaises(protocol.ProtocolError):
+                    orchestrator.validate_root(root)
+
+    def test_complete_root_rejects_timing_build_failure_artifact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_complete_root(root)
+            protocol.atomic_write_json(
+                root / "timing-build-failure.json", {"unexpected": True}
+            )
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_root(root)
 
     def test_private_stage_worker_invokes_real_registered_validator(self):
         with tempfile.TemporaryDirectory() as directory:

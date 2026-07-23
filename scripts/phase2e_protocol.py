@@ -543,6 +543,148 @@ def atomic_write_json_at(
         ) from error
 
 
+def atomic_write_json_new_at(
+    directory_descriptor: int, name: str, payload: Any
+) -> None:
+    """Atomically publish one new leaf without replacing a concurrent owner."""
+    if (
+        type(name) is not str
+        or not name
+        or name in {".", ".."}
+        or "/" in name
+    ):
+        raise ProtocolError("atomic JSON leaf name is invalid")
+    try:
+        directory_metadata = os.fstat(directory_descriptor)
+    except OSError as error:
+        raise AtomicWriteError(
+            f"cannot inspect parent directory for {name}: {error}", committed=False
+        ) from error
+    if not stat.S_ISDIR(directory_metadata.st_mode):
+        raise ProtocolError("atomic JSON parent descriptor is not a directory")
+
+    encoded = _canonical_json_bytes(payload)
+    temporary_name = f".{name}.write-{secrets.token_hex(16)}.tmp"
+    descriptor = -1
+    temporary_exists = False
+    committed = False
+    failure: BaseException | None = None
+    cause: BaseException | None = None
+    try:
+        try:
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | os.O_CLOEXEC
+                | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory_descriptor,
+            )
+            temporary_exists = True
+        except OSError as error:
+            failure = AtomicWriteError(
+                f"cannot create temporary for {name}: {error}", committed=False
+            )
+            cause = error
+
+        if failure is None:
+            try:
+                view = memoryview(encoded)
+                while view:
+                    try:
+                        written = os.write(descriptor, view)
+                    except InterruptedError:
+                        continue
+                    if written <= 0:
+                        raise OSError("short JSON write")
+                    view = view[written:]
+                os.fsync(descriptor)
+            except BaseException as error:
+                if isinstance(error, OSError):
+                    failure = AtomicWriteError(
+                        f"cannot write and fsync temporary for {name}: {error}",
+                        committed=False,
+                    )
+                    cause = error
+                else:
+                    failure = error
+
+        if descriptor >= 0:
+            close_failure = _close_descriptor(descriptor)
+            descriptor = -1
+            if failure is None and close_failure is not None:
+                failure = AtomicWriteError(
+                    f"cannot close temporary for {name}: {close_failure}",
+                    committed=False,
+                )
+                cause = close_failure
+
+        if failure is None:
+            try:
+                os.link(
+                    temporary_name,
+                    name,
+                    src_dir_fd=directory_descriptor,
+                    dst_dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+            except OSError as error:
+                failure = AtomicWriteError(
+                    f"cannot publish new evidence {name}: {error}",
+                    committed=False,
+                )
+                cause = error
+            else:
+                committed = True
+
+        if failure is None:
+            try:
+                os.fsync(directory_descriptor)
+            except OSError as error:
+                failure = AtomicWriteDurabilityError(
+                    f"publication committed for {name}, but parent fsync failed: {error}"
+                )
+                cause = error
+    finally:
+        if descriptor >= 0:
+            close_failure = _close_descriptor(descriptor)
+            if failure is None and close_failure is not None:
+                failure = AtomicWriteError(
+                    f"cannot close temporary for {name}: {close_failure}",
+                    committed=committed,
+                )
+                cause = close_failure
+        if temporary_exists:
+            try:
+                os.unlink(temporary_name, dir_fd=directory_descriptor)
+            except FileNotFoundError:
+                pass
+            except OSError as error:
+                if failure is None:
+                    failure = AtomicWriteError(
+                        f"cannot remove temporary for {name}: {error}",
+                        committed=committed,
+                    )
+                    cause = error
+            else:
+                try:
+                    os.fsync(directory_descriptor)
+                except OSError as error:
+                    if failure is None:
+                        failure = AtomicWriteError(
+                            f"cannot durably remove temporary for {name}: {error}",
+                            committed=committed,
+                        )
+                        cause = error
+
+    if failure is not None:
+        if cause is not None:
+            raise failure from cause
+        raise failure
+
+
 def _close_descriptor(descriptor: int) -> OSError | None:
     try:
         os.close(descriptor)
