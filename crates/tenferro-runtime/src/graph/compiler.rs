@@ -19,10 +19,16 @@ use super::cache::{
     DEFAULT_COMPILE_CACHE_CAPACITY,
 };
 use super::program::{GraphProgram, GraphProgramInput};
-use crate::compiler::{compile_std_to_exec_with_options_and_constraints, CompilerOptions};
+use crate::compiler::{
+    lower_scoped_dim_expr, semantic_staging::lower_semantic_to_exec_staging, CompilerOptions,
+};
 use crate::error::{Error, Result};
 use crate::exec::ExecProgram;
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
+use crate::program::{
+    CoreSemanticOp, FrozenProgram, ProgramInputSpec, ProgramShapeRelation, SemanticProgramBuilder,
+    ShapeGuard as ProgramShapeGuard,
+};
 use crate::shape_constraint::SlotScopedShapeConstraint;
 use crate::traced::{try_concrete_shape, TracedTensor};
 
@@ -497,8 +503,6 @@ impl GraphCompiler {
         }
 
         let mut descriptors = Vec::with_capacity(graph.inputs.len());
-        let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
-        let mut input_shapes = Vec::with_capacity(graph.inputs.len());
         for key in &graph.inputs {
             let ValueKey::Input(input_key) = key else {
                 return Err(Error::Internal(
@@ -506,8 +510,6 @@ impl GraphCompiler {
                 ));
             };
             let descriptor = descriptor_for_input(input_key, binding_specs, default_inputs)?;
-            input_dtypes.push(descriptor.dtype);
-            input_shapes.push(DimExpr::from_concrete(&descriptor.shape));
             descriptors.push(GraphProgramInput::new(
                 descriptor.key,
                 descriptor.dtype,
@@ -517,16 +519,11 @@ impl GraphCompiler {
             ));
         }
 
-        let exec = compile_std_to_exec_with_options_and_constraints(
-            &compiled,
-            &input_dtypes,
-            &input_shapes,
-            self.compiler_options,
-            &scoped_constraints,
-            &input_shapes,
-        )?;
+        let semantic =
+            compile_materialized_semantic_program(&compiled, &descriptors, &scoped_constraints)?;
+        let exec = lower_semantic_to_exec_staging(&semantic.program, self.compiler_options)?;
         let exec = self.get_or_compile(exec);
-        Ok(GraphProgram::new(exec, descriptors))
+        Ok(GraphProgram::new(exec, descriptors, semantic))
     }
 
     fn get_or_compile(&mut self, exec: ExecProgram) -> ExecProgram {
@@ -539,6 +536,167 @@ impl GraphCompiler {
         self.compile_cache.put(key, exec.clone());
         exec
     }
+}
+
+fn compile_materialized_semantic_program(
+    compiled: &CompiledProgram<StdTensorOp>,
+    descriptors: &[GraphProgramInput],
+    scoped_constraints: &[SlotScopedShapeConstraint],
+) -> Result<FrozenProgram> {
+    if compiled.input_slots.len() != descriptors.len() {
+        return Err(Error::runtime_state(
+            "graph_compile_semantic",
+            crate::ErrorPhase::Compile,
+            "materialized input count does not match semantic descriptors",
+        ));
+    }
+
+    let mut builder = SemanticProgramBuilder::new();
+    let mut values = vec![None; compiled.n_slots];
+    let mut slot_shapes = vec![None; compiled.n_slots];
+    for (&slot, descriptor) in compiled.input_slots.iter().zip(descriptors) {
+        let Some(value_slot) = values.get_mut(slot) else {
+            return Err(invalid_compiled_graph(format!(
+                "semantic input slot {slot} is outside slot table of length {}",
+                compiled.n_slots
+            )));
+        };
+        let value = builder
+            .input(ProgramInputSpec::new(
+                descriptor.dtype,
+                descriptor.dim_expr_shape.clone(),
+            ))
+            .map_err(semantic_build_error)?;
+        if let Some(tensor) = &descriptor.default_tensor {
+            builder
+                .bind_input(value, Arc::clone(tensor))
+                .map_err(semantic_build_error)?;
+        }
+        *value_slot = Some(value);
+        slot_shapes[slot] = Some(descriptor.dim_expr_shape.clone());
+    }
+
+    for instruction in &compiled.instructions {
+        let inputs = instruction
+            .inputs
+            .iter()
+            .map(|&slot| {
+                values.get(slot).and_then(|value| *value).ok_or_else(|| {
+                    invalid_compiled_graph(format!(
+                        "semantic operation input slot {slot} is unavailable"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let outputs = match &instruction.operation {
+            StdTensorOp::Extension(extension) => builder
+                .add_extension(Arc::clone(extension), &inputs)
+                .map_err(semantic_build_error)?,
+            operation => builder
+                .add_op(
+                    CoreSemanticOp::try_from(operation).map_err(|source| {
+                        Error::runtime_state_source(
+                            "graph_compile_semantic",
+                            crate::ErrorPhase::Compile,
+                            source,
+                        )
+                    })?,
+                    &inputs,
+                )
+                .map_err(semantic_build_error)?,
+        };
+        if outputs.len() != instruction.outputs.len() {
+            return Err(invalid_compiled_graph(format!(
+                "semantic operation produced {} outputs for {} materialized slots",
+                outputs.len(),
+                instruction.outputs.len()
+            )));
+        }
+        for (&slot, &value) in instruction.outputs.iter().zip(outputs.iter()) {
+            let Some(value_slot) = values.get_mut(slot) else {
+                return Err(invalid_compiled_graph(format!(
+                    "semantic output slot {slot} is outside slot table of length {}",
+                    compiled.n_slots
+                )));
+            };
+            if value_slot.replace(value).is_some() {
+                return Err(invalid_compiled_graph(format!(
+                    "semantic output slot {slot} has multiple producers"
+                )));
+            }
+            let metadata = builder
+                .value_metadata(value)
+                .map_err(semantic_build_error)?;
+            slot_shapes[slot] = Some(
+                metadata
+                    .shape()
+                    .iter()
+                    .enumerate()
+                    .map(|(axis, extent)| match extent {
+                        tenferro_ops::ShapeExtent::Exact(expression)
+                        | tenferro_ops::ShapeExtent::UpperBound(expression) => expression.clone(),
+                        tenferro_ops::ShapeExtent::Unknown => DimExpr::InputDim {
+                            input_idx: slot,
+                            axis,
+                        },
+                    })
+                    .collect(),
+            );
+        }
+    }
+
+    for scoped in scoped_constraints {
+        let target = scoped
+            .origin_slots
+            .iter()
+            .find_map(|&slot| values.get(slot).and_then(|value| *value))
+            .ok_or_else(|| {
+                invalid_compiled_graph(
+                    "semantic shape constraint has no available origin".to_string(),
+                )
+            })?;
+        let lhs = lower_scoped_dim_expr(
+            &scoped.local.lhs,
+            &scoped.input_slots,
+            &slot_shapes,
+            &scoped.local,
+        )?;
+        let rhs = lower_scoped_dim_expr(
+            &scoped.local.rhs,
+            &scoped.input_slots,
+            &slot_shapes,
+            &scoped.local,
+        )?;
+        let relation = match scoped.local.relation {
+            tenferro_ops::ShapeRelation::Equal => ProgramShapeRelation::Equal,
+        };
+        builder
+            .add_shape_guards_to_output(
+                target,
+                [ProgramShapeGuard::new(relation, lhs, rhs)
+                    .with_source_family(scoped.local.source.family_id)],
+            )
+            .map_err(semantic_build_error)?;
+    }
+
+    let outputs = compiled
+        .output_slots
+        .iter()
+        .map(|&slot| {
+            values.get(slot).and_then(|value| *value).ok_or_else(|| {
+                invalid_compiled_graph(format!(
+                    "semantic program output slot {slot} is unavailable"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    builder.finish(&outputs).map_err(|source| {
+        Error::runtime_state_source("graph_compile_semantic", crate::ErrorPhase::Compile, source)
+    })
+}
+
+fn semantic_build_error(source: crate::program::ProgramBuildError) -> Error {
+    Error::runtime_state_source("graph_compile_semantic", crate::ErrorPhase::Compile, source)
 }
 
 impl Default for GraphCompiler {
@@ -722,7 +880,11 @@ mod tests {
     use std::any::Any;
     use std::hash::Hasher;
     use std::sync::Arc;
-    use tenferro_ops::{dim_expr::DimExpr, ext_op::ExtensionOp, ShapeRelation, SymDim};
+    use tenferro_ops::{
+        dim_expr::DimExpr,
+        ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp},
+        ShapeRelation, SymDim,
+    };
     use tenferro_tensor::{
         Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
         TypedTensor,
@@ -773,6 +935,27 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn compile_publishes_semantic_program_and_separate_default_bindings() {
+        let input = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+        let output = input.neg().unwrap();
+
+        let program = GraphCompiler::new().compile(&output).unwrap();
+
+        assert_eq!(program.semantic_program().inputs().len(), 1);
+        assert_eq!(program.semantic_program().outputs().len(), 1);
+        assert_eq!(program.semantic_program().operations().count(), 1);
+        assert_eq!(program.program_bindings().len(), 1);
+        assert_eq!(
+            program
+                .semantic_program()
+                .value_metadata(program.semantic_program().outputs()[0])
+                .unwrap()
+                .dtype(),
+            DType::F64
+        );
     }
 
     fn test_guard(family_id: &'static str, instruction_index: usize) -> ShapeGuard {
@@ -882,6 +1065,14 @@ mod tests {
             } else {
                 3
             }
+        }
+
+        fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+            ExtensionEffectDeclaration::Declared(&[])
+        }
+
+        fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+            ExtensionAliasDeclaration::AllFresh
         }
 
         fn infer_output_meta(

@@ -115,7 +115,7 @@ pub use metadata::{
     ProgramValueMetadata, SemanticPlacementConstraint, SemanticPlacementKind,
     SemanticProvenanceKind, SemanticProvenanceView, ShapeGuard,
 };
-pub use op::{CoreSemanticOp, SemanticOpRef, SemanticOperationView};
+pub use op::{CoreSemanticOp, CoreSemanticOpConversionError, SemanticOpRef, SemanticOperationView};
 pub use semantic::{FrozenProgram, SemanticProgram};
 pub use transform::{SemanticTransform, SemanticTransformContext, TransformIdentity};
 pub use value::{BindingKey, ProgramValue};

@@ -714,6 +714,55 @@ fn semantic_identity_covers_guards_effects_aliases_and_constants() {
     assert!(!zero.program.semantic_eq(one.program.as_ref()));
 }
 
+#[test]
+fn shape_guard_diagnostic_family_is_preserved_but_excluded_from_identity() {
+    fn guarded(family: &'static str) -> super::FrozenProgram {
+        let mut builder = SemanticProgramBuilder::new();
+        let input = builder
+            .input(ProgramInputSpec::new(
+                DType::F64,
+                [DimExpr::InputDim {
+                    input_idx: 0,
+                    axis: 0,
+                }],
+            ))
+            .unwrap();
+        let output = builder.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
+        builder
+            .add_shape_guards_to_output(
+                output,
+                [ShapeGuard::new(
+                    ProgramShapeRelation::Equal,
+                    DimExpr::InputDim {
+                        input_idx: 0,
+                        axis: 0,
+                    },
+                    DimExpr::Const(2),
+                )
+                .with_source_family(family)],
+            )
+            .unwrap();
+        builder.finish(&[output]).unwrap()
+    }
+
+    let left = guarded("tenferro-tests.guard-left.v1");
+    let right = guarded("tenferro-tests.guard-right.v1");
+
+    assert_eq!(
+        left.program.shape_guards()[0].source_family(),
+        Some("tenferro-tests.guard-left.v1")
+    );
+    assert_eq!(
+        right.program.shape_guards()[0].source_family(),
+        Some("tenferro-tests.guard-right.v1")
+    );
+    assert_eq!(
+        left.program.semantic_fingerprint(),
+        right.program.semantic_fingerprint()
+    );
+    assert!(left.program.semantic_eq(&right.program));
+}
+
 struct IdentityTransform {
     identity: TransformIdentity,
 }

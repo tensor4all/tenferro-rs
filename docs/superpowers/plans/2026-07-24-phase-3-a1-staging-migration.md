@@ -26,13 +26,13 @@ public semantic views directly and never calls the private adapter.
 
 ## Task 2: Route traced graph compilation through SemanticProgram
 
-- [ ] Add failing tests proving `GraphCompiler` publishes a semantically
+- [x] Add failing tests proving `GraphCompiler` publishes a semantically
   equivalent artifact, freezes default tensors into `ProgramBindings`, and
   obtains execution staging only through the adapter.
-- [ ] Convert the temporary computegraph materialization directly into
+- [x] Convert the temporary computegraph materialization directly into
   `SemanticProgramBuilder` operations, with explicit extension
   effects/aliases and failure-atomic finish.
-- [ ] Add temporary read-only semantic accessors to `GraphProgram`; document
+- [x] Add temporary read-only semantic accessors to `GraphProgram`; document
   that the legacy container is deleted in P3-A3.
 - [ ] Migrate in-repository extension payloads reached by graph compilation to
   explicit pure/fresh (or their actual effect/alias) declarations.

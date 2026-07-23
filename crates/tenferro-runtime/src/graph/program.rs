@@ -6,6 +6,7 @@ use tenferro_tensor::{DType, Tensor};
 
 use crate::exec::ExecProgram;
 use crate::graph::lowering_view::GraphProgramLoweringView;
+use crate::program::{FrozenProgram, ProgramBindings, SemanticProgram};
 
 /// A compiled traced graph, independent of any execution backend.
 ///
@@ -24,11 +25,34 @@ use crate::graph::lowering_view::GraphProgramLoweringView;
 pub struct GraphProgram {
     pub(crate) exec: ExecProgram,
     pub(crate) inputs: Vec<GraphProgramInput>,
+    pub(crate) semantic: FrozenProgram,
 }
 
 impl GraphProgram {
-    pub(crate) fn new(exec: ExecProgram, inputs: Vec<GraphProgramInput>) -> Self {
-        Self { exec, inputs }
+    pub(crate) fn new(
+        exec: ExecProgram,
+        inputs: Vec<GraphProgramInput>,
+        semantic: FrozenProgram,
+    ) -> Self {
+        Self {
+            exec,
+            inputs,
+            semantic,
+        }
+    }
+
+    /// Borrow the backend-neutral semantic artifact compiled from this trace.
+    ///
+    /// This accessor is the peer-lowering migration boundary. The surrounding
+    /// `GraphProgram` compatibility container is removed in Phase 3 A3.
+    pub fn semantic_program(&self) -> &SemanticProgram {
+        &self.semantic.program
+    }
+
+    /// Borrow tensor defaults and large constants stored outside semantic
+    /// structure.
+    pub fn program_bindings(&self) -> &ProgramBindings {
+        &self.semantic.bindings
     }
 
     /// Return the number of graph inputs expected by this program.

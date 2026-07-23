@@ -18,6 +18,14 @@ impl std::fmt::Debug for ConstantDebugExtension {
 }
 
 impl ExtensionOp for ConstantDebugExtension {
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.graph_compile_constant_debug.v1"
     }

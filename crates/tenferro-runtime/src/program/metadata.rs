@@ -143,17 +143,28 @@ pub enum ProgramShapeRelation {
 }
 
 /// A backend-neutral symbolic-shape obligation.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug)]
 pub struct ShapeGuard {
     relation: ProgramShapeRelation,
     lhs: DimExpr,
     rhs: DimExpr,
+    source_family: Option<&'static str>,
 }
 
 impl ShapeGuard {
     /// Construct a shape guard.
     pub fn new(relation: ProgramShapeRelation, lhs: DimExpr, rhs: DimExpr) -> Self {
-        Self { relation, lhs, rhs }
+        Self {
+            relation,
+            lhs,
+            rhs,
+            source_family: None,
+        }
+    }
+
+    pub(crate) fn with_source_family(mut self, family: &'static str) -> Self {
+        self.source_family = Some(family);
+        self
     }
 
     /// Return the required relation.
@@ -169,6 +180,30 @@ impl ShapeGuard {
     /// Borrow the right expression.
     pub const fn rhs(&self) -> &DimExpr {
         &self.rhs
+    }
+
+    /// Return the diagnostic family that introduced this guard, when known.
+    ///
+    /// Diagnostic provenance does not participate in semantic equality or the
+    /// semantic fingerprint.
+    pub const fn source_family(&self) -> Option<&'static str> {
+        self.source_family
+    }
+}
+
+impl PartialEq for ShapeGuard {
+    fn eq(&self, other: &Self) -> bool {
+        self.relation == other.relation && self.lhs == other.lhs && self.rhs == other.rhs
+    }
+}
+
+impl Eq for ShapeGuard {}
+
+impl std::hash::Hash for ShapeGuard {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.relation.hash(state);
+        self.lhs.hash(state);
+        self.rhs.hash(state);
     }
 }
 

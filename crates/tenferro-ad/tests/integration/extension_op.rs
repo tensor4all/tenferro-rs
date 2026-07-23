@@ -40,6 +40,18 @@ use tenferro_runtime::{Error as RuntimeError, ErrorPhase, GraphExecutor, Tensor,
 use tenferro_tensor::{DType, TensorBackend, TypedTensor, ValidationError};
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
+macro_rules! declare_test_pure_fresh_semantics {
+    () => {
+        fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+            tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+        }
+
+        fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+            tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+        }
+    };
+}
+
 // ----------------------------------------------------------------------
 // TestScaleBy2: single-input, single-output. y = x + x (= 2x).
 // ----------------------------------------------------------------------
@@ -48,6 +60,8 @@ use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 struct TestScaleBy2;
 
 impl ExtensionOp for TestScaleBy2 {
+    declare_test_pure_fresh_semantics!();
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.scale_by_2.v1"
     }
@@ -200,6 +214,8 @@ fn scale_by_2_ad_context() -> AdContext {
 struct TestExactShapeIdentity;
 
 impl ExtensionOp for TestExactShapeIdentity {
+    declare_test_pure_fresh_semantics!();
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.exact_shape_identity.v1"
     }
@@ -251,6 +267,8 @@ impl HostReference for TestExactShapeIdentity {
 struct TestExactShapeLinear;
 
 impl ExtensionOp for TestExactShapeLinear {
+    declare_test_pure_fresh_semantics!();
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.exact_shape_linear.v1"
     }
@@ -385,6 +403,8 @@ fn exact_shape_ad_context() -> AdContext {
 struct TestSwap;
 
 impl ExtensionOp for TestSwap {
+    declare_test_pure_fresh_semantics!();
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.swap.v1"
     }
@@ -507,6 +527,8 @@ fn swap_ad_context() -> AdContext {
 struct TestPreferLinearize;
 
 impl ExtensionOp for TestPreferLinearize {
+    declare_test_pure_fresh_semantics!();
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.prefer_linearize.v1"
     }
@@ -640,6 +662,8 @@ fn prefer_linearize_ad_context() -> AdContext {
 struct TestCustomVjpInvalid;
 
 impl ExtensionOp for TestCustomVjpInvalid {
+    declare_test_pure_fresh_semantics!();
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.custom_vjp_invalid.v1"
     }
@@ -751,6 +775,8 @@ fn custom_vjp_invalid_ad_context() -> AdContext {
 struct TestPrimaryTransposeOnly;
 
 impl ExtensionOp for TestPrimaryTransposeOnly {
+    declare_test_pure_fresh_semantics!();
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.primary_transpose_only.v1"
     }
@@ -864,6 +890,8 @@ fn primary_transpose_only_ad_context() -> AdContext {
 struct TestNoAd;
 
 impl ExtensionOp for TestNoAd {
+    declare_test_pure_fresh_semantics!();
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.no_ad.v1"
     }
@@ -919,6 +947,8 @@ struct TestProbeIdentity {
 }
 
 impl ExtensionOp for TestProbeIdentity {
+    declare_test_pure_fresh_semantics!();
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.probe_identity.v1"
     }
@@ -971,6 +1001,8 @@ struct TestProbeLinear {
 }
 
 impl ExtensionOp for TestProbeLinear {
+    declare_test_pure_fresh_semantics!();
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.probe_linear.v1"
     }
@@ -1120,6 +1152,8 @@ fn transpose_input_value(
 struct TestBadOutputCount;
 
 impl ExtensionOp for TestBadOutputCount {
+    declare_test_pure_fresh_semantics!();
+
     fn family_id(&self) -> &'static str {
         "tenferro-tests.bad_output_count.v1"
     }

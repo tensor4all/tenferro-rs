@@ -121,6 +121,16 @@ pub enum CoreSemanticOp {
     },
 }
 
+/// Failure to convert a standard-operation carrier into the closed core
+/// semantic vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum CoreSemanticOpConversionError {
+    /// Extension payloads must enter through
+    /// [`SemanticProgramBuilder::add_extension`](super::SemanticProgramBuilder::add_extension).
+    #[error("extension operations are not core semantic operations")]
+    ExtensionCarrier,
+}
+
 impl CoreSemanticOp {
     pub(crate) fn input_count(&self) -> usize {
         let standard = StdTensorOp::from(self);
@@ -130,6 +140,104 @@ impl CoreSemanticOp {
     pub(crate) fn output_count(&self) -> usize {
         let standard = StdTensorOp::from(self);
         GraphOperation::output_count(&standard)
+    }
+}
+
+impl TryFrom<&StdTensorOp> for CoreSemanticOp {
+    type Error = CoreSemanticOpConversionError;
+
+    fn try_from(op: &StdTensorOp) -> Result<Self, Self::Error> {
+        Ok(match op {
+            StdTensorOp::Add => Self::Add,
+            StdTensorOp::Sub => Self::Sub,
+            StdTensorOp::Mul => Self::Mul,
+            StdTensorOp::Neg => Self::Neg,
+            StdTensorOp::Conj => Self::Conj,
+            StdTensorOp::DotGeneral { config } => Self::DotGeneral {
+                config: config.clone(),
+            },
+            StdTensorOp::Transpose { perm } => Self::Transpose { perm: perm.clone() },
+            StdTensorOp::Reshape { to_shape } => Self::Reshape {
+                to_shape: to_shape.clone(),
+            },
+            StdTensorOp::BroadcastInDim { shape, dims } => Self::BroadcastInDim {
+                shape: shape.clone(),
+                dims: dims.clone(),
+            },
+            StdTensorOp::Convert { from, to } => Self::Convert {
+                from: *from,
+                to: *to,
+            },
+            StdTensorOp::Constant { dtype, bytes } => Self::Constant {
+                dtype: *dtype,
+                bytes: bytes.clone(),
+            },
+            StdTensorOp::ReduceSum { axes } => Self::ReduceSum { axes: axes.clone() },
+            StdTensorOp::Div => Self::Div,
+            StdTensorOp::Rem => Self::Rem,
+            StdTensorOp::Abs => Self::Abs,
+            StdTensorOp::Sign => Self::Sign,
+            StdTensorOp::Maximum => Self::Maximum,
+            StdTensorOp::Minimum => Self::Minimum,
+            StdTensorOp::Compare(direction) => Self::Compare(direction.clone()),
+            StdTensorOp::Select => Self::Select,
+            StdTensorOp::Clamp => Self::Clamp,
+            StdTensorOp::Exp => Self::Exp,
+            StdTensorOp::Log => Self::Log,
+            StdTensorOp::Sin => Self::Sin,
+            StdTensorOp::Cos => Self::Cos,
+            StdTensorOp::Tanh => Self::Tanh,
+            StdTensorOp::Sqrt => Self::Sqrt,
+            StdTensorOp::Rsqrt => Self::Rsqrt,
+            StdTensorOp::Pow => Self::Pow,
+            StdTensorOp::Expm1 => Self::Expm1,
+            StdTensorOp::Log1p => Self::Log1p,
+            StdTensorOp::ExtractDiag { axis_a, axis_b } => Self::ExtractDiag {
+                axis_a: *axis_a,
+                axis_b: *axis_b,
+            },
+            StdTensorOp::EmbedDiag { axis_a, axis_b } => Self::EmbedDiag {
+                axis_a: *axis_a,
+                axis_b: *axis_b,
+            },
+            StdTensorOp::Tril { k } => Self::Tril { k: *k },
+            StdTensorOp::Triu { k } => Self::Triu { k: *k },
+            StdTensorOp::Gather(config) => Self::Gather(config.clone()),
+            StdTensorOp::GatherDynamicSliceSizes {
+                offset_dims,
+                collapsed_slice_dims,
+                start_index_map,
+                index_vector_dim,
+                slice_sizes,
+            } => Self::GatherDynamicSliceSizes {
+                offset_dims: offset_dims.clone(),
+                collapsed_slice_dims: collapsed_slice_dims.clone(),
+                start_index_map: start_index_map.clone(),
+                index_vector_dim: *index_vector_dim,
+                slice_sizes: slice_sizes.clone(),
+            },
+            StdTensorOp::Scatter(config) => Self::Scatter(config.clone()),
+            StdTensorOp::Slice(config) => Self::Slice(config.clone()),
+            StdTensorOp::DynamicSlice { slice_sizes } => Self::DynamicSlice {
+                slice_sizes: slice_sizes.clone(),
+            },
+            StdTensorOp::DynamicUpdateSlice => Self::DynamicUpdateSlice,
+            StdTensorOp::Pad(config) => Self::Pad(config.clone()),
+            StdTensorOp::Concatenate { axis, input_count } => Self::Concatenate {
+                axis: *axis,
+                input_count: *input_count,
+            },
+            StdTensorOp::Reverse { axes } => Self::Reverse { axes: axes.clone() },
+            StdTensorOp::ShapeOf { axis } => Self::ShapeOf { axis: *axis },
+            StdTensorOp::DynamicTruncate { axis } => Self::DynamicTruncate { axis: *axis },
+            StdTensorOp::PadToMatch { axis } => Self::PadToMatch { axis: *axis },
+            StdTensorOp::ReduceProd { axes } => Self::ReduceProd { axes: axes.clone() },
+            StdTensorOp::ReduceMax { axes } => Self::ReduceMax { axes: axes.clone() },
+            StdTensorOp::ReduceMin { axes } => Self::ReduceMin { axes: axes.clone() },
+            StdTensorOp::Extension(_) => {
+                return Err(CoreSemanticOpConversionError::ExtensionCarrier);
+            }
+        })
     }
 }
 

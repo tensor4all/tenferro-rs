@@ -7,17 +7,14 @@ use tenferro_ops::ShapeExtent;
 
 use crate::compiler::{compile_std_to_exec_with_options_and_constraints, CompilerOptions};
 use crate::exec::ExecProgram;
-use crate::program::{SemanticOpRef, SemanticProgram};
+use crate::program::{ProgramShapeRelation, SemanticOpRef, SemanticProgram};
+use crate::shape_constraint::{ConstraintSource, LocalShapeConstraint, SlotScopedShapeConstraint};
 use crate::{Error, ErrorPhase, Result};
 
 /// Lower one frozen semantic artifact into the temporary execution staging IR.
 ///
 /// This is the sole forward semantic-to-staging adapter. It remains
 /// crate-private and is deleted with execution staging in Phase 5.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into GraphCompiler in Phase 3 A1 task 2")
-)]
 pub(crate) fn lower_semantic_to_exec_staging(
     program: &SemanticProgram,
     options: CompilerOptions,
@@ -43,8 +40,9 @@ pub(crate) fn lower_semantic_to_exec_staging(
     }
 
     let mut instructions = Vec::with_capacity(program.operations().len());
-    for operation in program.operations() {
-        let inputs = operation
+    let mut semantic_constraints = Vec::new();
+    for semantic_operation in program.operations() {
+        let inputs = semantic_operation
             .inputs()
             .iter()
             .map(|input| {
@@ -53,8 +51,8 @@ pub(crate) fn lower_semantic_to_exec_staging(
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut outputs = Vec::with_capacity(operation.outputs().len());
-        for &output in operation.outputs() {
+        let mut outputs = Vec::with_capacity(semantic_operation.outputs().len());
+        for &output in semantic_operation.outputs() {
             let slot = slots.len();
             if slots.insert(output, slot).is_some() {
                 return Err(invalid_semantic_program(
@@ -63,10 +61,39 @@ pub(crate) fn lower_semantic_to_exec_staging(
             }
             outputs.push(slot);
         }
-        let operation = match operation.op() {
-            SemanticOpRef::Core(core) => StdTensorOp::from(core),
-            SemanticOpRef::Extension(extension) => StdTensorOp::Extension(extension.clone_arc()),
+        let (operation, operation_family) = match semantic_operation.op() {
+            SemanticOpRef::Core(core) => (StdTensorOp::from(core), "tenferro-runtime.core.v1"),
+            SemanticOpRef::Extension(extension) => (
+                StdTensorOp::Extension(extension.clone_arc()),
+                extension.family_id(),
+            ),
         };
+        for guard in semantic_operation.shape_guards() {
+            let family_id = guard.source_family().unwrap_or(operation_family);
+            let relation = match guard.relation() {
+                ProgramShapeRelation::Equal => tenferro_ops::ShapeRelation::Equal,
+                ProgramShapeRelation::LessEqual | ProgramShapeRelation::GreaterEqual => {
+                    return Err(Error::unsupported(
+                        "semantic_staging",
+                        ErrorPhase::Compile,
+                        "execution staging does not yet support ordered shape guards",
+                    ));
+                }
+            };
+            semantic_constraints.push(SlotScopedShapeConstraint {
+                origin_slots: outputs.clone(),
+                input_slots: input_slots.clone(),
+                local: LocalShapeConstraint {
+                    source: ConstraintSource {
+                        family_id,
+                        instruction_index: None,
+                    },
+                    relation,
+                    lhs: guard.lhs().clone(),
+                    rhs: guard.rhs().clone(),
+                },
+            });
+        }
         instructions.push(Instruction {
             operation,
             inputs,
@@ -95,7 +122,7 @@ pub(crate) fn lower_semantic_to_exec_staging(
         &input_dtypes,
         &input_shapes,
         options,
-        &[],
+        &semantic_constraints,
         &input_shapes,
     )
 }

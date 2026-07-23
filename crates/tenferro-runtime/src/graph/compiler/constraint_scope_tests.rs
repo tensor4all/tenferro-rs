@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use computegraph::types::ValueKey;
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::ext_op::ExtensionOp;
+use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
 use tenferro_ops::{ShapeRelation, SymDim};
 use tenferro_tensor::{DType, Tensor};
 
@@ -47,6 +47,14 @@ impl ExtensionOp for ScopedConstraintExtension {
 
     fn output_count(&self) -> usize {
         self.outputs
+    }
+
+    fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+        ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+        ExtensionAliasDeclaration::AllFresh
     }
 
     fn infer_output_meta(

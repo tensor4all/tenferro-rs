@@ -26,6 +26,9 @@ pub enum ProgramBuildError {
     /// A binding target is a computed value rather than an external input.
     #[error("tensor bindings may target only semantic-program inputs")]
     BindingTargetNotInput,
+    /// A shape guard target is not produced by a semantic operation.
+    #[error("semantic shape guards may target only operation outputs")]
+    GuardTargetNotOperationOutput,
     /// An external input already has a tensor binding.
     #[error("semantic-program input already has a tensor binding")]
     DuplicateBinding,

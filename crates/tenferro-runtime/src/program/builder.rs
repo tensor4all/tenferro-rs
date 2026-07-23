@@ -121,6 +121,23 @@ impl SemanticProgramBuilder {
         self.operations.len()
     }
 
+    pub(crate) fn add_shape_guards_to_output(
+        &mut self,
+        output: ProgramValue,
+        guards: impl IntoIterator<Item = ShapeGuard>,
+    ) -> Result<(), ProgramBuildError> {
+        self.validate_value(output)?;
+        let operation = self
+            .operations
+            .iter_mut()
+            .find(|operation| operation.outputs.contains(&output))
+            .ok_or(ProgramBuildError::GuardTargetNotOperationOutput)?;
+        let mut combined = operation.shape_guards.to_vec();
+        combined.extend(guards);
+        operation.shape_guards = combined.into_boxed_slice();
+        Ok(())
+    }
+
     /// Import the dependency closure of ordered source roots atomically.
     ///
     /// Empty and duplicate roots are preserved. Tensor bindings remain

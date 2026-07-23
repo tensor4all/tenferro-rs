@@ -540,6 +540,14 @@ impl ExtensionOp for LinalgExtensionOp {
         self.op.output_count()
     }
 
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
     fn prune_outputs(&self, live_outputs: &[bool]) -> Option<Arc<dyn ExtensionOp>> {
         match self.op {
             LinalgOp::Svd { derivative_eps, .. } if live_outputs == [false, true, false] => {

@@ -815,6 +815,14 @@ impl ExtensionOp for FftOp {
         1
     }
 
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
     fn infer_output_meta(
         &self,
         ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,

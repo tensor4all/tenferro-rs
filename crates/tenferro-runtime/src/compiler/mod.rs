@@ -16,7 +16,7 @@ use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 
 mod optimizer;
 mod options;
-mod semantic_staging;
+pub(crate) mod semantic_staging;
 
 pub use options::{CompilerOptions, OptimizerConfig};
 
@@ -419,7 +419,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
     Ok(program)
 }
 
-fn lower_scoped_dim_expr(
+pub(crate) fn lower_scoped_dim_expr(
     expr: &DimExpr,
     input_slots: &[usize],
     slot_shapes: &[Option<Vec<DimExpr>>],
