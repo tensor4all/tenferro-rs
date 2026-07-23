@@ -31,7 +31,7 @@ use crate::program::{
 };
 use crate::shape_constraint::SlotScopedShapeConstraint;
 use crate::trace::TracedGraph;
-use crate::traced::{try_concrete_shape, TracedTensor};
+use crate::traced::{next_input_key, try_concrete_shape, TracedTensor};
 
 #[derive(Clone)]
 struct InputDescriptor {
@@ -158,9 +158,6 @@ impl GraphCompiler {
     /// Returns typed semantic-staging, shape-inference, validation, or
     /// extension-lowering failures.
     pub fn compile_traced_graph(&mut self, graph: &TracedGraph) -> Result<CompiledGraph> {
-        let staging =
-            lower_semantic_to_exec_staging(&graph.frozen().program, self.compiler_options)?;
-        let staging = self.get_or_compile(staging);
         let inputs = graph
             .inputs()
             .iter()
@@ -168,7 +165,84 @@ impl GraphCompiler {
                 GraphProgramInput::new(input.key.clone(), input.dtype, input.shape.clone(), None)
             })
             .collect();
-        Ok(CompiledGraph::new(graph.frozen().clone(), staging, inputs))
+        self.compile_frozen_with_inputs(graph.frozen(), inputs)
+    }
+
+    /// Compile an immutable semantic program for ordered execution.
+    ///
+    /// This entry is used by validation-preserving semantic transforms such as
+    /// whole-program AD. Tensor bindings remain outside semantic identity and
+    /// are preserved in the returned [`CompiledGraph`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::dim_expr::DimExpr;
+    /// use tenferro_runtime::program::{
+    ///     CoreSemanticOp, ProgramInputSpec, SemanticProgramBuilder,
+    /// };
+    /// use tenferro_runtime::{DType, GraphCompiler};
+    ///
+    /// let mut builder = SemanticProgramBuilder::new();
+    /// let input = builder
+    ///     .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+    ///     .unwrap();
+    /// let output = builder.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
+    /// let frozen = builder.finish(&[output]).unwrap();
+    /// let compiled = GraphCompiler::new()
+    ///     .compile_frozen_program(&frozen)
+    ///     .unwrap();
+    /// assert_eq!(compiled.input_count(), 1);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns typed semantic-staging, shape-inference, validation, or
+    /// extension-lowering failures.
+    pub fn compile_frozen_program(&mut self, frozen: &FrozenProgram) -> Result<CompiledGraph> {
+        let inputs = frozen
+            .program
+            .inputs()
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(input_idx, value)| {
+                let metadata = frozen.program.value_metadata(value).map_err(|source| {
+                    Error::runtime_state_source(
+                        "GraphCompiler::compile_frozen_program",
+                        crate::error::ErrorPhase::Compile,
+                        source,
+                    )
+                })?;
+                let shape = metadata
+                    .shape()
+                    .iter()
+                    .enumerate()
+                    .map(|(axis, extent)| match extent {
+                        tenferro_ops::ShapeExtent::Exact(expression)
+                        | tenferro_ops::ShapeExtent::UpperBound(expression) => expression.clone(),
+                        tenferro_ops::ShapeExtent::Unknown => DimExpr::InputDim { input_idx, axis },
+                    })
+                    .collect();
+                Ok(GraphProgramInput::new(
+                    next_input_key(),
+                    metadata.dtype(),
+                    shape,
+                    None,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.compile_frozen_with_inputs(frozen, inputs)
+    }
+
+    fn compile_frozen_with_inputs(
+        &mut self,
+        frozen: &FrozenProgram,
+        inputs: Vec<GraphProgramInput>,
+    ) -> Result<CompiledGraph> {
+        let staging = lower_semantic_to_exec_staging(&frozen.program, self.compiler_options)?;
+        let staging = self.get_or_compile(staging);
+        Ok(CompiledGraph::new(frozen.clone(), staging, inputs))
     }
 
     /// Compile multiple traced outputs into one graph program.

@@ -6,7 +6,7 @@ use tenferro_runtime::program::{
     CoreSemanticOp, FrozenProgram, ProgramBuildError, ProgramFinishError, ProgramImport,
     ProgramInputSpec, ProgramQueryError, ProgramValue, SemanticOpRef, SemanticProgramBuilder,
 };
-use tenferro_runtime::DType;
+use tenferro_runtime::{DType, DotGeneralConfig};
 
 use crate::semantic_extension::{AdValue, SemanticAdError, SemanticExtensionRuleSet};
 
@@ -473,6 +473,9 @@ fn linearize_core(
             };
             add_ad_values(builder, lhs, rhs)?
         }
+        CoreSemanticOp::DotGeneral { config } => {
+            linearize_dot_general(builder, primal_inputs, tangent_inputs, config)?
+        }
         CoreSemanticOp::Abs => {
             let input_dtype = builder.value_metadata(primal_inputs[0])?.dtype();
             let sign = builder.add_op(CoreSemanticOp::Sign, &[primal_inputs[0]])?[0];
@@ -600,6 +603,9 @@ fn vjp_core(
                 normalize_ad_value(builder, lhs, active_inputs[0], primal_inputs[0])?,
                 normalize_ad_value(builder, rhs, active_inputs[1], primal_inputs[1])?,
             ]
+        }
+        CoreSemanticOp::DotGeneral { config } => {
+            dot_general_vjp(builder, primal_inputs, cotangent, active_inputs, config)?
         }
         CoreSemanticOp::Abs => {
             let input_dtype = builder.value_metadata(primal_inputs[0])?.dtype();
@@ -800,6 +806,263 @@ fn linearize_unary_core(
     inputs.push(tangent);
     inputs.extend_from_slice(&primal_inputs[1..]);
     Ok(AdValue::Value(builder.add_op(op, &inputs)?[0]))
+}
+
+fn linearize_dot_general(
+    builder: &mut SemanticProgramBuilder,
+    primal_inputs: &[ProgramValue],
+    tangent_inputs: &[AdValue],
+    config: &DotGeneralConfig,
+) -> Result<AdValue, SemanticAdTransformError> {
+    validate_dot_general_metadata(builder, primal_inputs, config, SemanticTransformRole::Jvp)?;
+    let mut terms = Vec::with_capacity(2);
+    if let AdValue::Value(tangent) = tangent_inputs[0] {
+        terms.push(
+            builder.add_op(
+                CoreSemanticOp::DotGeneral {
+                    config: config.clone(),
+                },
+                &[tangent, primal_inputs[1]],
+            )?[0],
+        );
+    }
+    if let AdValue::Value(tangent) = tangent_inputs[1] {
+        terms.push(
+            builder.add_op(
+                CoreSemanticOp::DotGeneral {
+                    config: config.clone(),
+                },
+                &[primal_inputs[0], tangent],
+            )?[0],
+        );
+    }
+    let mut terms = terms.into_iter();
+    let Some(mut result) = terms.next() else {
+        return Ok(AdValue::Absent);
+    };
+    for term in terms {
+        result = builder.add_op(CoreSemanticOp::Add, &[result, term])?[0];
+    }
+    Ok(AdValue::Value(result))
+}
+
+fn dot_general_vjp(
+    builder: &mut SemanticProgramBuilder,
+    primal_inputs: &[ProgramValue],
+    cotangent: AdValue,
+    active_inputs: &[bool],
+    config: &DotGeneralConfig,
+) -> Result<Vec<AdValue>, SemanticAdTransformError> {
+    let (lhs_rank, rhs_rank) =
+        validate_dot_general_metadata(builder, primal_inputs, config, SemanticTransformRole::Vjp)?;
+    let lhs_free = dot_general_free_dims(
+        lhs_rank,
+        &config.lhs_contracting_dims,
+        &config.lhs_batch_dims,
+        SemanticTransformRole::Vjp,
+    )?;
+    let rhs_free = dot_general_free_dims(
+        rhs_rank,
+        &config.rhs_contracting_dims,
+        &config.rhs_batch_dims,
+        SemanticTransformRole::Vjp,
+    )?;
+    let AdValue::Value(cotangent) = cotangent else {
+        return Ok(vec![AdValue::Absent, AdValue::Absent]);
+    };
+    let mut result = vec![AdValue::Absent, AdValue::Absent];
+
+    if active_inputs[0] {
+        let rhs = conjugate_if_complex(builder, primal_inputs[1])?;
+        let (transpose_config, perm) =
+            dot_general_transpose_plan_for_lhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free)?;
+        let value = builder.add_op(
+            CoreSemanticOp::DotGeneral {
+                config: transpose_config,
+            },
+            &[cotangent, rhs],
+        )?[0];
+        let value = transpose_if_needed(builder, value, &perm)?;
+        result[0] = normalize_ad_value(builder, AdValue::Value(value), true, primal_inputs[0])?;
+    }
+    if active_inputs[1] {
+        let lhs = conjugate_if_complex(builder, primal_inputs[0])?;
+        let (transpose_config, perm) =
+            dot_general_transpose_plan_for_rhs(config, lhs_rank, rhs_rank, &lhs_free, &rhs_free)?;
+        let value = builder.add_op(
+            CoreSemanticOp::DotGeneral {
+                config: transpose_config,
+            },
+            &[lhs, cotangent],
+        )?[0];
+        let value = transpose_if_needed(builder, value, &perm)?;
+        result[1] = normalize_ad_value(builder, AdValue::Value(value), true, primal_inputs[1])?;
+    }
+    Ok(result)
+}
+
+fn validate_dot_general_metadata(
+    builder: &SemanticProgramBuilder,
+    primal_inputs: &[ProgramValue],
+    config: &DotGeneralConfig,
+    role: SemanticTransformRole,
+) -> Result<(usize, usize), SemanticAdTransformError> {
+    let lhs_rank = builder.value_metadata(primal_inputs[0])?.shape().len();
+    let rhs_rank = builder.value_metadata(primal_inputs[1])?.shape().len();
+    config
+        .validate_dims_with_ranks(lhs_rank, rhs_rank)
+        .map_err(|error| SemanticAdTransformError::UnsupportedMetadata {
+            role,
+            message: format!(
+                "invalid dot_general dimensions for ranks {lhs_rank} and {rhs_rank}: {error}"
+            ),
+        })?;
+    Ok((lhs_rank, rhs_rank))
+}
+
+fn dot_general_free_dims(
+    rank: usize,
+    contracting: &[usize],
+    batch: &[usize],
+    role: SemanticTransformRole,
+) -> Result<Vec<usize>, SemanticAdTransformError> {
+    let mut bound = vec![false; rank];
+    for &axis in batch.iter().chain(contracting) {
+        let Some(slot) = bound.get_mut(axis) else {
+            return Err(SemanticAdTransformError::UnsupportedMetadata {
+                role,
+                message: format!("dot_general axis {axis} is out of bounds for rank {rank}"),
+            });
+        };
+        *slot = true;
+    }
+    Ok((0..rank).filter(|axis| !bound[*axis]).collect())
+}
+
+fn dot_general_transpose_plan_for_lhs(
+    config: &DotGeneralConfig,
+    lhs_rank: usize,
+    rhs_rank: usize,
+    lhs_free: &[usize],
+    rhs_free: &[usize],
+) -> Result<(DotGeneralConfig, Vec<usize>), SemanticAdTransformError> {
+    let batch_count = config.lhs_batch_dims.len();
+    let output_rank = lhs_free.len() + rhs_free.len() + batch_count;
+    let rhs_free_positions = (lhs_free.len()..lhs_free.len() + rhs_free.len()).collect();
+    let rhs_contracting_order = dot_general_free_dims(
+        rhs_rank,
+        rhs_free,
+        &config.rhs_batch_dims,
+        SemanticTransformRole::Vjp,
+    )?;
+    let mut result_order = lhs_free.to_vec();
+    for rhs_axis in rhs_contracting_order {
+        let Some(pair) = config
+            .rhs_contracting_dims
+            .iter()
+            .position(|&axis| axis == rhs_axis)
+        else {
+            return Err(dot_general_transpose_metadata_error(format!(
+                "rhs contracting axis {rhs_axis} has no lhs pair"
+            )));
+        };
+        result_order.push(config.lhs_contracting_dims[pair]);
+    }
+    result_order.extend(config.lhs_batch_dims.iter().copied());
+    Ok((
+        DotGeneralConfig {
+            lhs_contracting_dims: rhs_free_positions,
+            rhs_contracting_dims: rhs_free.to_vec(),
+            lhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
+            rhs_batch_dims: config.rhs_batch_dims.clone(),
+        },
+        permutation_to_original_order(lhs_rank, &result_order)?,
+    ))
+}
+
+fn dot_general_transpose_plan_for_rhs(
+    config: &DotGeneralConfig,
+    lhs_rank: usize,
+    rhs_rank: usize,
+    lhs_free: &[usize],
+    rhs_free: &[usize],
+) -> Result<(DotGeneralConfig, Vec<usize>), SemanticAdTransformError> {
+    let batch_count = config.lhs_batch_dims.len();
+    let lhs_contracting_order = dot_general_free_dims(
+        lhs_rank,
+        lhs_free,
+        &config.lhs_batch_dims,
+        SemanticTransformRole::Vjp,
+    )?;
+    let mut result_order = Vec::with_capacity(rhs_rank);
+    for lhs_axis in lhs_contracting_order {
+        let Some(pair) = config
+            .lhs_contracting_dims
+            .iter()
+            .position(|&axis| axis == lhs_axis)
+        else {
+            return Err(dot_general_transpose_metadata_error(format!(
+                "lhs contracting axis {lhs_axis} has no rhs pair"
+            )));
+        };
+        result_order.push(config.rhs_contracting_dims[pair]);
+    }
+    result_order.extend(rhs_free.iter().copied());
+    result_order.extend(config.rhs_batch_dims.iter().copied());
+    let output_rank = lhs_free.len() + rhs_free.len() + batch_count;
+    Ok((
+        DotGeneralConfig {
+            lhs_contracting_dims: lhs_free.to_vec(),
+            rhs_contracting_dims: (0..lhs_free.len()).collect(),
+            lhs_batch_dims: config.lhs_batch_dims.clone(),
+            rhs_batch_dims: (lhs_free.len() + rhs_free.len()..output_rank).collect(),
+        },
+        permutation_to_original_order(rhs_rank, &result_order)?,
+    ))
+}
+
+fn permutation_to_original_order(
+    rank: usize,
+    result_order: &[usize],
+) -> Result<Vec<usize>, SemanticAdTransformError> {
+    let mut permutation = vec![0; rank];
+    for (result_axis, &original_axis) in result_order.iter().enumerate() {
+        let Some(slot) = permutation.get_mut(original_axis) else {
+            return Err(dot_general_transpose_metadata_error(format!(
+                "dot_general transpose axis {original_axis} is out of bounds for rank {rank}"
+            )));
+        };
+        *slot = result_axis;
+    }
+    Ok(permutation)
+}
+
+fn transpose_if_needed(
+    builder: &mut SemanticProgramBuilder,
+    value: ProgramValue,
+    permutation: &[usize],
+) -> Result<ProgramValue, ProgramBuildError> {
+    if permutation
+        .iter()
+        .enumerate()
+        .all(|(axis, &mapped)| axis == mapped)
+    {
+        Ok(value)
+    } else {
+        Ok(builder.add_op(
+            CoreSemanticOp::Transpose {
+                perm: permutation.to_vec(),
+            },
+            &[value],
+        )?[0])
+    }
+}
+
+fn dot_general_transpose_metadata_error(message: String) -> SemanticAdTransformError {
+    SemanticAdTransformError::UnsupportedMetadata {
+        role: SemanticTransformRole::Vjp,
+        message,
+    }
 }
 
 fn primary_cotangent(

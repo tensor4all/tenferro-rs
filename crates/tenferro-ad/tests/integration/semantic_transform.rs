@@ -9,11 +9,13 @@ use tenferro_ad::semantic_extension::{
 };
 use tenferro_ad::semantic_transform::SemanticAdTransformError;
 use tenferro_ad::AdContext;
+use tenferro_cpu::CpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
 use tenferro_ops::{ExtensionShapeContext, SymDim};
 use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec, SemanticProgramBuilder};
-use tenferro_tensor::{DType, Tensor};
+use tenferro_runtime::{GraphCompiler, GraphExecutor};
+use tenferro_tensor::{DType, DotGeneralConfig, Tensor};
 
 const FAMILY: &str = "tenferro-ad.semantic-transform-test.v1";
 
@@ -645,5 +647,118 @@ fn semantic_core_pow_abs_sign_and_select_follow_activity_and_dtype_contracts() {
     assert_eq!(
         select_vjp.derivative_output_indices(),
         &[None, Some(0), Some(1)]
+    );
+}
+
+#[test]
+fn semantic_core_dot_general_supports_ordered_jvp_and_hermitian_vjp() {
+    let source = binary_core_program(
+        DType::C64,
+        [DimExpr::Const(2), DimExpr::Const(3)],
+        DType::C64,
+        [DimExpr::Const(3), DimExpr::Const(4)],
+        CoreSemanticOp::DotGeneral {
+            config: DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
+        },
+    );
+    let ad = ad_context();
+
+    let jvp = ad.jvp_program(&source, &[true, true]).unwrap();
+    assert_eq!(jvp.derivative_input_indices(), &[Some(2), Some(3)]);
+    assert_eq!(jvp.derivative_output_indices(), &[Some(0)]);
+    assert_eq!(
+        jvp.frozen()
+            .program
+            .operations()
+            .filter(|operation| matches!(
+                operation.op(),
+                tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::DotGeneral { .. })
+            ))
+            .count(),
+        3
+    );
+
+    let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
+    assert_eq!(vjp.derivative_output_indices(), &[Some(0), Some(1)]);
+    assert_eq!(
+        vjp.frozen()
+            .program
+            .operations()
+            .filter(|operation| matches!(
+                operation.op(),
+                tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::DotGeneral { .. })
+            ))
+            .count(),
+        3
+    );
+    assert!(
+        vjp.frozen()
+            .program
+            .operations()
+            .filter(|operation| matches!(
+                operation.op(),
+                tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Conj)
+            ))
+            .count()
+            >= 2
+    );
+}
+
+#[test]
+fn semantic_core_dot_general_jvp_and_vjp_execute_numerically() {
+    let source = binary_core_program(
+        DType::F64,
+        [DimExpr::Const(2), DimExpr::Const(3)],
+        DType::F64,
+        [DimExpr::Const(3), DimExpr::Const(2)],
+        CoreSemanticOp::DotGeneral {
+            config: DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
+        },
+    );
+    let ad = ad_context();
+    let lhs =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
+    let rhs =
+        Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f64, 9.0, 11.0, 8.0, 10.0, 12.0]).unwrap();
+    let lhs_tangent =
+        Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 0.0, 0.0, 0.0, 0.0, 0.0]).unwrap();
+    let rhs_tangent =
+        Tensor::from_vec_col_major(vec![3, 2], vec![0.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0]).unwrap();
+
+    let jvp = ad.jvp_program(&source, &[true, true]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(jvp.frozen())
+        .unwrap();
+    let jvp_value = GraphExecutor::new(CpuBackend::new())
+        .run_with_inputs(&compiled, &[&lhs, &rhs, &lhs_tangent, &rhs_tangent])
+        .unwrap();
+    assert_eq!(jvp_value.as_slice::<f64>().unwrap(), &[7.0, 0.0, 9.0, 4.0]);
+
+    let output_cotangent =
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 1.0, 1.0, 1.0]).unwrap();
+    let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(vjp.frozen())
+        .unwrap();
+    let cotangents = GraphExecutor::new(CpuBackend::new())
+        .run_many_with_inputs(&compiled, &[&lhs, &rhs, &output_cotangent])
+        .unwrap();
+    assert_eq!(
+        cotangents[0].as_slice::<f64>().unwrap(),
+        &[15.0, 15.0, 19.0, 19.0, 23.0, 23.0]
+    );
+    assert_eq!(
+        cotangents[1].as_slice::<f64>().unwrap(),
+        &[5.0, 7.0, 9.0, 5.0, 7.0, 9.0]
     );
 }
