@@ -38,6 +38,7 @@ STAGE_CONTEXT = ".phase2e-stage-context.json"
 ABANDONMENT_SEAL = "abandoned-inventory.json"
 PROCESS_JOURNAL = ".phase2e-process-journal.json"
 TIMING_BUILD_FAILURE = "timing-build-failure.json"
+ORCHESTRATOR_LOCK_NAME = protocol.ORCHESTRATOR_LOCK_NAME
 INDEX_PATH = pathlib.Path("docs/worklogs/2026-07-21-phase-2e-index.json")
 INDEX_LOCK_PATH = pathlib.Path("docs/worklogs/.phase2e-index.lock")
 WORKLOG_PATH = pathlib.Path("docs/worklogs/2026-07-21-phase-2e-noninferiority.md")
@@ -2670,7 +2671,7 @@ def run_fixed_stages(
     """Run remaining children in fixed order and durably hash every checkpoint."""
     root = pathlib.Path(root)
     if not _locked:
-        with exclusive_lock(root / ".orchestrator.lock"):
+        with exclusive_lock(root / ORCHESTRATOR_LOCK_NAME):
             return run_fixed_stages(
                 root,
                 environment,
@@ -2934,7 +2935,7 @@ def rerun_invalid_stage(
     """Append one fresh whole-stage attempt after retryable validity failure."""
     root = pathlib.Path(root)
     if not _locked:
-        with exclusive_lock(root / ".orchestrator.lock"):
+        with exclusive_lock(root / ORCHESTRATOR_LOCK_NAME):
             return rerun_invalid_stage(
                 root,
                 environment,
@@ -2992,7 +2993,7 @@ def continue_after_retry(
     """Continue only after a retained replacement attempt passed."""
     root = pathlib.Path(root)
     if not _locked:
-        with exclusive_lock(root / ".orchestrator.lock"):
+        with exclusive_lock(root / ORCHESTRATOR_LOCK_NAME):
             return continue_after_retry(
                 root,
                 environment,
@@ -3101,7 +3102,7 @@ def initialize_campaign(
         )
         root_identity = protocol.prepare_empty_root_identity(root)
         try:
-            root_lock = ".orchestrator.lock"
+            root_lock = ORCHESTRATOR_LOCK_NAME
             with exclusive_lock_at(root_identity.descriptor, root_lock):
                 active_committed = False
                 try:
@@ -3202,7 +3203,7 @@ def required_root_paths(ledger: Mapping[str, Any]) -> frozenset[str]:
         "evidence-ledger.json",
         PROGRESS_MANIFEST,
         STAGE_CONTEXT,
-        ".orchestrator.lock",
+        ORCHESTRATOR_LOCK_NAME,
         "dispatch-gates/manifest.json",
         "characterization/manifest.json",
         *(path.as_posix() for path in build.LOCK_PATHS.values()),
@@ -4553,7 +4554,7 @@ def active_campaign_lock(
             raise protocol.ProtocolError("active operation identity differs")
         identity = protocol.PreparedRootIdentity(root)
         try:
-            with exclusive_lock_at(identity.descriptor, ".orchestrator.lock"):
+            with exclusive_lock_at(identity.descriptor, ORCHESTRATOR_LOCK_NAME):
                 identity.revalidate()
                 yield active, identity
                 identity.revalidate()
@@ -4592,7 +4593,7 @@ def record_index_root(
             raise protocol.ProtocolError("record-index identity differs from ACTIVE")
         identity = protocol.PreparedRootIdentity(root)
         try:
-            with exclusive_lock_at(identity.descriptor, ".orchestrator.lock"):
+            with exclusive_lock_at(identity.descriptor, ORCHESTRATOR_LOCK_NAME):
                 if state == "PENDING_PRESERVATION":
                     status = validate_root(root)
                     if status == "ABANDONED":
@@ -4860,7 +4861,7 @@ def record_preserved(
             raise protocol.ProtocolError("curated worklog path is not canonical")
         root_identity = protocol.PreparedRootIdentity(root)
         try:
-            with exclusive_lock_at(root_identity.descriptor, ".orchestrator.lock"):
+            with exclusive_lock_at(root_identity.descriptor, ORCHESTRATOR_LOCK_NAME):
                 root_identity.revalidate()
                 remote_validator(pathlib.Path(repository), preservation_commit)
                 index_transaction.revalidate()

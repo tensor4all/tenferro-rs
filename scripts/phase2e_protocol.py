@@ -48,6 +48,7 @@ PAIR_ORDERS = ("A/B", "B/A", "A/B")
 RUN_ROLES = ("sentinel_before", "first_target", "second_target", "sentinel_after")
 STAGE_NAMES = ("allocation", "timing")
 LANE_NAMES = ("direct-current-main", "common-lock-normalized")
+ORCHESTRATOR_LOCK_NAME = ".orchestrator.lock"
 
 _THREAD_ENV = {
     "RAYON_NUM_THREADS": "1",

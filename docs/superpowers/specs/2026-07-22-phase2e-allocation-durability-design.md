@@ -9,11 +9,11 @@ finalization contracts remain unchanged.
 
 ## Durable ownership and serialization
 
-`orchestrator.lock`, located in the same canonical outer evidence root as
+`.orchestrator.lock`, located in the same canonical outer evidence root as
 `evidence-ledger.json`, is the stable shared lock authority. The allocation
 runner first opens and exclusively locks the canonical outer evidence directory.
 While holding that directory lock, it resolves the ledger and opens and locks
-`orchestrator.lock` relative to the pinned directory descriptor, without
+`.orchestrator.lock` relative to the pinned directory descriptor, without
 following symlinks. Holding both locks for the whole attempt prevents a
 conforming allocation runner on the same retained outer-root inode from using
 a replacement lockfile inode to bypass serialization. It never locks the
@@ -111,7 +111,7 @@ Tests cover forged closed PASS evidence, forged full-success INCONCLUSIVE
 evidence, launch-168 failure, the full adversarial mutation matrix, all durable
 initialization crash windows, pre/post-commit atomic-write states, normal and
 exceptional cleanup precedence, control-exception identity, and a real
-two-process race that replaces `orchestrator.lock` while the first process is
+two-process race that replaces `.orchestrator.lock` while the first process is
 blocked. Process readiness assertions are inside cleanup scopes whose bounded
 join escalates through terminate and kill. Each join, liveness check,
 terminate, kill, and final join is independently guarded, so the first

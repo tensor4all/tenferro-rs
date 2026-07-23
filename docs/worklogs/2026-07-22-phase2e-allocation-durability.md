@@ -19,9 +19,9 @@ different artifact roots.
 
 ## Decisions
 
-- Reuse the normative outer-root `orchestrator.lock`; no allocation-specific
+- Reuse the normative outer-root `.orchestrator.lock`; no allocation-specific
   lock file was added. The child first pins and locks the outer evidence
-  directory, then validates and locks `orchestrator.lock` relative to that
+  directory, then validates and locks `.orchestrator.lock` relative to that
   descriptor. This closes lockfile replacement bypass while preserving the
   future orchestrator's index-then-root order.
 - Extend every ledger attempt with one exact artifact ownership schema. Timing
@@ -59,7 +59,7 @@ different artifact roots.
 
 - Locking `evidence-ledger.json` itself is invalid because atomic replacement
   changes its inode.
-- Locking only `orchestrator.lock` is insufficient because replacing that
+- Locking only `.orchestrator.lock` is insufficient because replacing that
   pathname creates a new unlocked inode; the pinned directory lock is the
   stable outer serialization layer.
 - A new sibling allocation lock or ownership sidecar would duplicate the
@@ -118,7 +118,7 @@ future regression fails promptly instead of hanging the test runner.
 - A public-stage precommit reproducer now proves that a failed first launch is
   durably checkpointed as RUNNING and recovers to the same terminal descriptor
   and reason with exactly one actual launch.
-- A real forked-process race atomically replaces `orchestrator.lock` after the
+- A real forked-process race atomically replaces `.orchestrator.lock` after the
   first process acquires it; the pinned outer-directory lock still serializes
   the second process. Canonical path/ledger colocation and exact-once cleanup of
   both descriptors have direct coverage.
@@ -160,7 +160,7 @@ future regression fails promptly instead of hanging the test runner.
 ## Residual risks
 
 The lock contract assumes the accepted orchestrator has already created an
-empty canonical regular `orchestrator.lock`. The allocation child intentionally
+empty canonical regular `.orchestrator.lock`. The allocation child intentionally
 does not create, replace, truncate, or delete that authority.
 
 The allocation child is not the global pathname owner. Its guarantee covers

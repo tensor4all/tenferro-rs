@@ -786,7 +786,7 @@ standalone gate may import or overwrite a sibling from another root or
 candidate:
 
 ```text
-orchestrator.lock
+.orchestrator.lock
 phase2e-evidence.json
 evidence-ledger.json
 abandoned-inventory.json  # present only when an interrupted root is sealed

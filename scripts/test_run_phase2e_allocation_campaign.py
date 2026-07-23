@@ -21,6 +21,7 @@ from unittest import mock
 
 from scripts import phase2e_build as build
 from scripts import phase2e_protocol as protocol
+from scripts import run_phase2e as outer_orchestrator
 
 
 SCRIPT = pathlib.Path(__file__).with_name("run_phase2e_allocation_campaign.py")
@@ -400,7 +401,7 @@ def fixture(root: pathlib.Path, lane: str = "direct-current-main"):
             "PASS",
         )
     protocol.atomic_write_json(ledger, ledger_payload)
-    (root / "orchestrator.lock").write_bytes(b"")
+    (root / ".orchestrator.lock").write_bytes(b"")
     artifact = root / "attempt"
     args = argparse.Namespace(
         comparison_kind=lane,
@@ -710,7 +711,7 @@ class AllocationCampaignTests(unittest.TestCase):
         protocol.atomic_write_json(
             ledger, protocol.new_ledger(tenferro["candidate"]["head"])
         )
-        (evidence / "orchestrator.lock").write_bytes(b"")
+        (evidence / ".orchestrator.lock").write_bytes(b"")
         args = argparse.Namespace(
             comparison_kind="direct-current-main",
             ledger=ledger,
@@ -1837,7 +1838,7 @@ class AllocationCampaignTests(unittest.TestCase):
             with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as temporary:
                 root = pathlib.Path(temporary)
                 args, probes, tenferro = fixture(root)
-                lock = args.ledger.parent / "orchestrator.lock"
+                lock = args.ledger.parent / ".orchestrator.lock"
                 lock.unlink()
                 if corruption == "symlink":
                     lock.symlink_to(args.ledger)
@@ -1853,6 +1854,41 @@ class AllocationCampaignTests(unittest.TestCase):
                     )
                 self.assertEqual(commands.calls, [])
                 self.assertFalse(args.artifact_root.exists())
+
+    def test_outer_initialized_root_enters_allocation_lock_acquisition(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = pathlib.Path(temporary).resolve()
+            artifacts = repository / "docs" / "worklogs" / "artifacts"
+            artifacts.mkdir(parents=True)
+            root = artifacts / "outer-initialized-root"
+            with mock.patch.object(outer_orchestrator, "require_remote_index"):
+                code = outer_orchestrator.initialize_campaign(
+                    repository=repository,
+                    root=root,
+                    reservation_id="a" * 64,
+                    candidate_sha="c" * 40,
+                    candidate_tree_sha256="b" * 64,
+                    experiment_identity_digest="d" * 64,
+                    campaign_identity_digest="e" * 64,
+                )
+            self.assertEqual(code, 0)
+
+            lock = runner.EvidenceLock.acquire(root / "evidence-ledger.json")
+            try:
+                self.assertEqual(lock.path, root / ".orchestrator.lock")
+                lock.assert_root_identity()
+            finally:
+                lock.close()
+
+    def test_outer_and_allocation_consume_shared_lock_name(self) -> None:
+        runner = load_runner()
+        self.assertEqual(protocol.ORCHESTRATOR_LOCK_NAME, ".orchestrator.lock")
+        self.assertEqual(
+            outer_orchestrator.ORCHESTRATOR_LOCK_NAME,
+            protocol.ORCHESTRATOR_LOCK_NAME,
+        )
+        self.assertEqual(runner.ORCHESTRATOR_LOCK, protocol.ORCHESTRATOR_LOCK_NAME)
 
     def test_orchestrator_lock_control_exception_closes_descriptor_once(self) -> None:
         runner = load_runner()
@@ -2026,7 +2062,7 @@ class AllocationCampaignTests(unittest.TestCase):
                     (outer / "evidence-ledger.json").write_bytes(
                         (moved / "evidence-ledger.json").read_bytes()
                     )
-                    (outer / "orchestrator.lock").write_bytes(b"")
+                    (outer / ".orchestrator.lock").write_bytes(b"")
                     try:
                         raise interruption
                     except BaseException as caught:
@@ -2080,7 +2116,7 @@ class AllocationCampaignTests(unittest.TestCase):
             started.append(first)
             try:
                 wait_for_ready(ready, 10)
-                lock_path = args.ledger.parent / "orchestrator.lock"
+                lock_path = args.ledger.parent / ".orchestrator.lock"
                 original_lock_identity = lock_path.stat().st_ino
                 replacement = args.ledger.parent / ".replacement-orchestrator.lock"
                 replacement.write_bytes(b"")
@@ -2136,7 +2172,7 @@ class AllocationCampaignTests(unittest.TestCase):
                         (outer / "evidence-ledger.json").write_bytes(
                             self.replacement_ledger
                         )
-                        (outer / "orchestrator.lock").write_bytes(b"")
+                        (outer / ".orchestrator.lock").write_bytes(b"")
                     return result
 
             commands = ReplacingRunner(candidate_count=6, candidate_bytes=63)
@@ -2193,7 +2229,7 @@ class AllocationCampaignTests(unittest.TestCase):
                     moved / "evidence-ledger.json"
                 ).read_bytes()
                 (outer / "evidence-ledger.json").write_bytes(replacement_ledger)
-                (outer / "orchestrator.lock").write_bytes(b"")
+                (outer / ".orchestrator.lock").write_bytes(b"")
 
             recovery = FakeCommandRunner()
             with mock.patch.object(
