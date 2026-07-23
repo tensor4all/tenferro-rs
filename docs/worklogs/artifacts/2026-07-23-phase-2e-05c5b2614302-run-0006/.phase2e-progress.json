@@ -1,0 +1,66 @@
+{
+  "candidate_sha": "05c5b26143020a81d279f0300437c429fcd0c99a",
+  "candidate_tree_sha256": "188fe8fd37d7705c79ed18d0eaa12d66ead81fcbace7daecf44b8bdbcbeaebca",
+  "cargo_home": "/tmp/.phase2e-scratch.Z22izJ-phase2e-cargo-home",
+  "children": [
+    {
+      "exit_code": 0,
+      "stage": "timing-builds"
+    },
+    {
+      "exit_code": 0,
+      "stage": "probe-builds"
+    },
+    {
+      "exit_code": 2,
+      "stage": "allocation/direct-current-main"
+    }
+  ],
+  "command_contract_digest": "f0031903c653feb48e23b42e5a58555229b3efe766d2d040ef3b54cafa57c4b9",
+  "context_path": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-05c5b2614302-run-0006/.phase2e-stage-context.json",
+  "context_sha256": "4508347af27ebc3708347de7a23a0838aca863e19520877cfab651d73dd86e5e",
+  "evidence_root": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-05c5b2614302-run-0006",
+  "experiment_identity_digest": "b5dd9854cca893ed3044363b5781368f1c8f0dd7b64c80c3d0335e2eda7bdbf9",
+  "home": "/tmp/.phase2e-scratch.Z22izJ-phase2e-home",
+  "index": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/2026-07-21-phase-2e-index.json",
+  "index_lock": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/.phase2e-index.lock",
+  "inventory": {
+    ".orchestrator.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ".phase2e-stage-context.json": "4508347af27ebc3708347de7a23a0838aca863e19520877cfab651d73dd86e5e",
+    "builds/candidate.json": "d1867bf0988eada6f02e6f7f42709eede6de5bce25b42d181e71dbe8fe25265e",
+    "builds/common-lock-normalized-baseline.json": "c43cb0b4e4b34dbe4ab6024bb05f31818c31e52b75cc5e5b6575cf1bf0210a91",
+    "builds/direct-current-main-baseline.json": "e203785aebbf7d0998bbb979b69b60540fb312ece2139d67753e9ad95aa259a4",
+    "builds/locks/common-probe.Cargo.lock": "2131289e13d7cec21ea4634073cfe34d146c1d50069e795b06e31787cc27ab93",
+    "builds/locks/common.Cargo.lock": "c03736ecf2e82ca565f13b46a7ec97bf8dd3294005d241740f8f3038fd979bd5",
+    "builds/locks/direct-current-main-probe.Cargo.lock": "d9d4fe23023292a20137ff563fc0b6efed7dae9f79370c2ff35e8fcf42bab9f4",
+    "builds/locks/direct-current-main.Cargo.lock": "50028f4db785009b2ce0222f5b351b899bf31d53657b855281fbd49c49103c3b",
+    "builds/probes/candidate.json": "6c2e04edb01459473730aefda01f3f2c6e8b440ad84174c7ba02b838875ee6dd",
+    "builds/probes/common-lock-normalized-baseline.json": "57dfa9510299170224b5743265eee07abc736c9f8952ea0028ffe5458550d47d",
+    "builds/probes/direct-current-main-baseline.json": "8d6b11c83a6c8d20b892d22f569f77636def1da6ca73e872b1f4d8cd1bfddc8c",
+    "children/01-timing-builds.json": "b2fd8b11c0ac80ea979aec25ee79e9f9139356a438b7111e41c0835ef24bc780",
+    "children/02-probe-builds.json": "b0e644537477c2adbe2a322a63e1abead614f3fabb20f518371517d3f281c64c",
+    "children/03-allocation__direct-current-main.json": "a9e32f436b75542ea040a3836dd7a75cec93eb42c18753fa8c2ccda62b3a56ba",
+    "evidence-ledger.json": "f635e02a5de73775fa901b25deac5612853dbf3ab8f387301b3bafe919bb2a25"
+  },
+  "ledger_sha256": "f635e02a5de73775fa901b25deac5612853dbf3ab8f387301b3bafe919bb2a25",
+  "path": "/usr/bin:/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin",
+  "process_journal_sha256": "5215eddef7e8ae3930dc6d6bb842d090cb5c199684ac513a73f135e2104dfdde",
+  "protocol_version": 2,
+  "repository": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design",
+  "reservation_id": "11097071c516b83be6f01dfa367d23e32609b83dece5c0cdb0057bfeb121c43a",
+  "scratch_parent": "/tmp/phase2e-scratch.Z22izJ",
+  "stage_order": [
+    "timing-builds",
+    "probe-builds",
+    "allocation/direct-current-main",
+    "allocation/common-lock-normalized",
+    "dispatch-builds",
+    "dispatch-gates",
+    "characterization-builds",
+    "characterization",
+    "timing/direct-current-main",
+    "timing/common-lock-normalized",
+    "aggregate-validation"
+  ],
+  "version": 2
+}

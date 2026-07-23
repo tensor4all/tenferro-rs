@@ -225,6 +225,34 @@
       "root": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-23e91907a13a-run-0005",
       "root_digest": "adde48dd8aa06384a3ac009b5ce647840ec03e287bd4b66b60e25c33e712badc",
       "status": "ABANDONED"
+    },
+    {
+      "campaign_identity_digest": "a8eff61c5bf67c1c48bdfbb66391e8a162baf3655520e7bbdd7b246cc587da40",
+      "candidate_sha": "05c5b26143020a81d279f0300437c429fcd0c99a",
+      "candidate_tree_sha256": "188fe8fd37d7705c79ed18d0eaa12d66ead81fcbace7daecf44b8bdbcbeaebca",
+      "command_contract_digest": "f0031903c653feb48e23b42e5a58555229b3efe766d2d040ef3b54cafa57c4b9",
+      "context_sha256": "4508347af27ebc3708347de7a23a0838aca863e19520877cfab651d73dd86e5e",
+      "event": "ACTIVE",
+      "experiment_identity_digest": "b5dd9854cca893ed3044363b5781368f1c8f0dd7b64c80c3d0335e2eda7bdbf9",
+      "ordinal": 16,
+      "protocol_version": 2,
+      "reservation_id": "11097071c516b83be6f01dfa367d23e32609b83dece5c0cdb0057bfeb121c43a",
+      "root": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-05c5b2614302-run-0006"
+    },
+    {
+      "campaign_identity_digest": "a8eff61c5bf67c1c48bdfbb66391e8a162baf3655520e7bbdd7b246cc587da40",
+      "candidate_sha": "05c5b26143020a81d279f0300437c429fcd0c99a",
+      "candidate_tree_sha256": "188fe8fd37d7705c79ed18d0eaa12d66ead81fcbace7daecf44b8bdbcbeaebca",
+      "command_contract_digest": "f0031903c653feb48e23b42e5a58555229b3efe766d2d040ef3b54cafa57c4b9",
+      "context_sha256": "4508347af27ebc3708347de7a23a0838aca863e19520877cfab651d73dd86e5e",
+      "event": "TERMINAL",
+      "experiment_identity_digest": "b5dd9854cca893ed3044363b5781368f1c8f0dd7b64c80c3d0335e2eda7bdbf9",
+      "ledger_sha256": "f635e02a5de73775fa901b25deac5612853dbf3ab8f387301b3bafe919bb2a25",
+      "ordinal": 17,
+      "reservation_id": "11097071c516b83be6f01dfa367d23e32609b83dece5c0cdb0057bfeb121c43a",
+      "root": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-05c5b2614302-run-0006",
+      "root_digest": "cfad7f450445fb1d4d38fb68482c6f8b819e1f93c6a2c87351d0cd19a815d111",
+      "status": "ABANDONED"
     }
   ],
   "version": 1

@@ -1,0 +1,26 @@
+{
+  "abandonment_kind": "UNCAUGHT_INTERRUPTION",
+  "inventory": {
+    ".orchestrator.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ".phase2e-process-journal.json": "5215eddef7e8ae3930dc6d6bb842d090cb5c199684ac513a73f135e2104dfdde",
+    ".phase2e-progress.json": "f3dcad7497cba895cec46f6af9632955fb3dc9f1ffd631f613ab4e3ebfab5b65",
+    ".phase2e-stage-context.json": "4508347af27ebc3708347de7a23a0838aca863e19520877cfab651d73dd86e5e",
+    "builds/candidate.json": "d1867bf0988eada6f02e6f7f42709eede6de5bce25b42d181e71dbe8fe25265e",
+    "builds/common-lock-normalized-baseline.json": "c43cb0b4e4b34dbe4ab6024bb05f31818c31e52b75cc5e5b6575cf1bf0210a91",
+    "builds/direct-current-main-baseline.json": "e203785aebbf7d0998bbb979b69b60540fb312ece2139d67753e9ad95aa259a4",
+    "builds/locks/common-probe.Cargo.lock": "2131289e13d7cec21ea4634073cfe34d146c1d50069e795b06e31787cc27ab93",
+    "builds/locks/common.Cargo.lock": "c03736ecf2e82ca565f13b46a7ec97bf8dd3294005d241740f8f3038fd979bd5",
+    "builds/locks/direct-current-main-probe.Cargo.lock": "d9d4fe23023292a20137ff563fc0b6efed7dae9f79370c2ff35e8fcf42bab9f4",
+    "builds/locks/direct-current-main.Cargo.lock": "50028f4db785009b2ce0222f5b351b899bf31d53657b855281fbd49c49103c3b",
+    "builds/probes/candidate.json": "6c2e04edb01459473730aefda01f3f2c6e8b440ad84174c7ba02b838875ee6dd",
+    "builds/probes/common-lock-normalized-baseline.json": "57dfa9510299170224b5743265eee07abc736c9f8952ea0028ffe5458550d47d",
+    "builds/probes/direct-current-main-baseline.json": "8d6b11c83a6c8d20b892d22f569f77636def1da6ca73e872b1f4d8cd1bfddc8c",
+    "children/01-timing-builds.json": "b2fd8b11c0ac80ea979aec25ee79e9f9139356a438b7111e41c0835ef24bc780",
+    "children/02-probe-builds.json": "b0e644537477c2adbe2a322a63e1abead614f3fabb20f518371517d3f281c64c",
+    "children/03-allocation__direct-current-main.json": "a9e32f436b75542ea040a3836dd7a75cec93eb42c18753fa8c2ccda62b3a56ba",
+    "evidence-ledger.json": "f635e02a5de73775fa901b25deac5612853dbf3ab8f387301b3bafe919bb2a25"
+  },
+  "protocol_version": 2,
+  "status": "ABANDONED",
+  "version": 1
+}

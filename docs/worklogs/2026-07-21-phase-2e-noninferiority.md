@@ -1,5 +1,98 @@
 # Phase 2E non-inferiority evidence history
 
+## Candidate `05c5b261`: abandoned run 0006
+
+### Outcome
+
+The protocol-v2 outer root for candidate
+`05c5b26143020a81d279f0300437c429fcd0c99a` is sealed as
+`ABANDONED`. The complete `timing-builds` and `probe-builds` stages passed,
+including all three independent release timing builds and allocation-probe
+builds. This proves that the run-0005 inherited-lock self-deadlock did not
+recur: the first `allocation/direct-current-main` worker authenticated the
+inherited root and lock open-file descriptions, ran, exited, and was reaped.
+
+The worker returned exit code 2 before launching any allocation observation.
+Its ledger reserved attempt 1, but no artifact directory was created and no
+measurement record exists. The exact error was:
+
+```text
+cannot inspect allocation artifact parent: [Errno 2] No such file or directory:
+.../attempts/allocation/direct-current-main
+```
+
+The failure exposed a stage-composition contract gap. The outer orchestrator
+passes the canonical nested path
+`attempts/allocation/<lane>/<attempt>`, while the allocation runner
+intentionally creates only the final `<attempt>` directory exclusively and
+requires its parent to exist. Neither component created the trusted
+intermediate hierarchy. The analogous timing path uses the same hierarchy and
+must be covered by the correction.
+
+No Phase 2E statistical claim may be inferred from this run.
+
+### Identity and preservation
+
+- Candidate tree:
+  `188fe8fd37d7705c79ed18d0eaa12d66ead81fcbace7daecf44b8bdbcbeaebca`
+- Experiment identity:
+  `b5dd9854cca893ed3044363b5781368f1c8f0dd7b64c80c3d0335e2eda7bdbf9`
+- Campaign identity:
+  `a8eff61c5bf67c1c48bdfbb66391e8a162baf3655520e7bbdd7b246cc587da40`
+- Reservation:
+  `11097071c516b83be6f01dfa367d23e32609b83dece5c0cdb0057bfeb121c43a`
+- Command contract:
+  `f0031903c653feb48e23b42e5a58555229b3efe766d2d040ef3b54cafa57c4b9`
+- Context SHA-256:
+  `4508347af27ebc3708347de7a23a0838aca863e19520877cfab651d73dd86e5e`
+- Root digest:
+  `cfad7f450445fb1d4d38fb68482c6f8b819e1f93c6a2c87351d0cd19a815d111`
+- Ledger digest:
+  `f635e02a5de73775fa901b25deac5612853dbf3ab8f387301b3bafe919bb2a25`
+
+The canonical root is
+`docs/worklogs/artifacts/2026-07-23-phase-2e-05c5b2614302-run-0006`.
+Its `abandoned-inventory.json` is the normative ownership inventory. The
+index has `ACTIVE` followed by terminal `ABANDONED`; it deliberately has no
+new `current_evidence_root`.
+
+### Host and command
+
+The run began on 2026-07-23 in the Asia/Tokyo timezone with:
+
+- 64 process-allowed CPUs;
+- one-minute load 3.63 immediately before launch;
+- no overlapping real Cargo or rustc process; and
+- 388 GiB free on the filesystem before launch.
+
+The exact public command was:
+
+```text
+python3 scripts/run_phase2e.py start \
+  --repository <candidate-worktree> \
+  --candidate 05c5b26143020a81d279f0300437c429fcd0c99a \
+  --evidence-root docs/worklogs/artifacts/2026-07-23-phase-2e-05c5b2614302-run-0006 \
+  --index docs/worklogs/2026-07-21-phase-2e-index.json \
+  --scratch-parent /tmp/phase2e-scratch.Z22izJ
+```
+
+After the worker and its process group had exited and the process journal
+proved all three workers reaped, a separate no-live-process check found no
+campaign process. `record-index --abandoned --confirm-no-live-processes`
+sealed the root and returned `PENDING_PRESERVATION`.
+
+### Follow-up
+
+1. Preserve this negative root without modifying its sealed inventory.
+2. Add an outer-orchestrator-owned, descriptor-relative initialization
+   contract for the canonical allocation and timing parent hierarchies.
+3. Reject symlink, replacement, wrong-owner, and non-directory components;
+   never let a child silently create or accept an unproven parent hierarchy.
+4. Add an end-to-end regression that reaches the first allocation attempt
+   from a freshly initialized outer root, plus a timing-path regression.
+5. Freeze a new candidate and run one fresh complete boundary campaign; do
+   not reuse any run-0006 build or result.
+
 ## Candidate `23e91907`: abandoned run 0005
 
 ### Outcome

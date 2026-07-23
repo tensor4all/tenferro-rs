@@ -1,0 +1,27 @@
+{
+  "candidate_sha": "05c5b26143020a81d279f0300437c429fcd0c99a",
+  "candidate_tree_sha256": "188fe8fd37d7705c79ed18d0eaa12d66ead81fcbace7daecf44b8bdbcbeaebca",
+  "cargo_home": "/tmp/.phase2e-scratch.Z22izJ-phase2e-cargo-home",
+  "command_contract_digest": "f0031903c653feb48e23b42e5a58555229b3efe766d2d040ef3b54cafa57c4b9",
+  "evidence_root": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-05c5b2614302-run-0006",
+  "experiment_identity_digest": "b5dd9854cca893ed3044363b5781368f1c8f0dd7b64c80c3d0335e2eda7bdbf9",
+  "home": "/tmp/.phase2e-scratch.Z22izJ-phase2e-home",
+  "host_target": "x86_64-unknown-linux-gnu",
+  "index": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/2026-07-21-phase-2e-index.json",
+  "index_lock": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/.phase2e-index.lock",
+  "path": "/usr/bin:/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin",
+  "repository": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design",
+  "reservation_id": "11097071c516b83be6f01dfa367d23e32609b83dece5c0cdb0057bfeb121c43a",
+  "scratch_parent": "/tmp/phase2e-scratch.Z22izJ",
+  "tool_paths": {
+    "cargo": "/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+    "git": "/usr/bin/git",
+    "rustc": "/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc"
+  },
+  "tool_sha256": {
+    "cargo": "f30f9fd1b1d0b8fd10dc33219eb4cd4bec3543f40e434ac71f5a03fd0359063f",
+    "git": "2a8c18fbf43da9f692d75474c72bea9dfd796c260b0f3dfe456376abc3bbd668",
+    "rustc": "ba4b837efb6612dfa8d941c5a72b8a50d1d03a0f36216743b173949aa8d9eb75"
+  },
+  "version": 1
+}

@@ -1,0 +1,121 @@
+{
+  "benchmark_sha256": "d71824befc2a2e18abd950639ac035d6b381d3b302eba12cfee143505fae9ac5",
+  "benchmark_stanza_sha256": "47de36990eb4d998be23f4f45639c8216bade460e40a5d5dccf6c687976f6116",
+  "cargo_config_chain": [],
+  "command_template": [
+    "cargo",
+    "bench",
+    "--locked",
+    "--no-run",
+    "-p",
+    "tenferro-ad",
+    "--bench",
+    "eager_dispatch_baseline",
+    "--no-default-features",
+    "--features",
+    "cpu-faer"
+  ],
+  "commands": [
+    {
+      "argv": [
+        "/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+        "metadata",
+        "--locked",
+        "--format-version",
+        "1"
+      ],
+      "deadline_seconds": 300,
+      "name": "metadata"
+    },
+    {
+      "argv": [
+        "/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+        "tree",
+        "--locked",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+        "-p",
+        "tenferro-ad",
+        "--no-default-features",
+        "--features",
+        "cpu-faer",
+        "-e",
+        "features"
+      ],
+      "deadline_seconds": 300,
+      "name": "features"
+    },
+    {
+      "argv": [
+        "/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+        "bench",
+        "--locked",
+        "--no-run",
+        "-p",
+        "tenferro-ad",
+        "--bench",
+        "eager_dispatch_baseline",
+        "--no-default-features",
+        "--features",
+        "cpu-faer"
+      ],
+      "deadline_seconds": 1800,
+      "name": "build"
+    }
+  ],
+  "config_chain_sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+  "environment": {
+    "CARGO_HOME": "/tmp/.phase2e-scratch.Z22izJ-phase2e-cargo-home",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_NET_OFFLINE": "true",
+    "CARGO_TARGET_DIR": "/tmp/phase2e-scratch.Z22izJ/targets/common-lock-normalized-baseline",
+    "HOME": "/tmp/.phase2e-scratch.Z22izJ-phase2e-home",
+    "LC_ALL": "C",
+    "MKL_DYNAMIC": "FALSE",
+    "MKL_NUM_THREADS": "1",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "PATH": "/usr/bin:/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin",
+    "RAYON_NUM_THREADS": "1",
+    "TZ": "UTC",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "executable": "/tmp/phase2e-scratch.Z22izJ/targets/common-lock-normalized-baseline/release/deps/eager_dispatch_baseline-b78ef38a357c4714",
+  "executable_sha256": "9b7e358e9735a05510042f6113e75986d3b8652d1ff382d2a62f3d2c0cad2af8",
+  "head": "a3ce00277169896c64c92fb3d63a2e2ccae8a692",
+  "lock_sha256": "c03736ecf2e82ca565f13b46a7ec97bf8dd3294005d241740f8f3038fd979bd5",
+  "profile": "bench",
+  "protocol_version": 2,
+  "provider": "Faer",
+  "requested_features": [
+    "cpu-faer"
+  ],
+  "resolved_features_sha256": "fd58d9781c55b89528dc669ed7616ded40a636d2576e15e0f12bce5d45c5fcc6",
+  "role": "common-lock-normalized-baseline",
+  "source_delta": [
+    "frozen-benchmark-harness",
+    "five-strided-pins"
+  ],
+  "target": "x86_64-unknown-linux-gnu",
+  "target_dir": "/tmp/phase2e-scratch.Z22izJ/targets/common-lock-normalized-baseline",
+  "toolchain": {
+    "cargo": {
+      "path": "/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "f30f9fd1b1d0b8fd10dc33219eb4cd4bec3543f40e434ac71f5a03fd0359063f",
+      "version": "cargo 1.96.0 (30a34c682 2026-05-25)\nrelease: 1.96.0\ncommit-hash: 30a34c6821b57de0aaec83a901aca39f88f6778c\ncommit-date: 2026-05-25\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.19.0-DEV (sys:0.4.87+curl-8.19.0 vendored ssl:OpenSSL/3.5.4)\nssl: OpenSSL 3.5.4 30 Sep 2025\nos: Ubuntu 24.4.0 (noble) [64-bit]"
+    },
+    "git": {
+      "path": "/usr/bin/git",
+      "sha256": "2a8c18fbf43da9f692d75474c72bea9dfd796c260b0f3dfe456376abc3bbd668"
+    },
+    "rustc": {
+      "path": "/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "ba4b837efb6612dfa8d941c5a72b8a50d1d03a0f36216743b173949aa8d9eb75",
+      "version": "rustc 1.96.0 (ac68faa20 2026-05-25)\nbinary: rustc\ncommit-hash: ac68faa20c58cbccd01ee7208bf3b6e93a7d7f96\ncommit-date: 2026-05-25\nhost: x86_64-unknown-linux-gnu\nrelease: 1.96.0\nLLVM version: 22.1.2"
+    }
+  },
+  "tracked_tree_sha256": "0d700cd13a642e4cb582301dd4c65390cad3ec6428f58a946d6d46f0fdefc632",
+  "validity_state": "COMPLETE",
+  "worktree": "/tmp/phase2e-scratch.Z22izJ/common-lock-normalized-baseline"
+}

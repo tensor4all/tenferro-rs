@@ -1,0 +1,60 @@
+{
+  "active_attempt_id": 1,
+  "attempts": [
+    {
+      "artifact_device": null,
+      "artifact_inode": null,
+      "artifact_root": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-05c5b2614302-run-0006/attempts/allocation/direct-current-main/1",
+      "artifact_state": "RESERVED",
+      "attempt_id": 1,
+      "close_ordinal": null,
+      "lane": "direct-current-main",
+      "open_ordinal": 1,
+      "stage": "allocation",
+      "state": "RUNNING",
+      "statistical_result": null,
+      "validity_state": "RUNNING"
+    }
+  ],
+  "candidate_sha": "05c5b26143020a81d279f0300437c429fcd0c99a",
+  "next_transition_ordinal": 2,
+  "protocol_version": 2,
+  "stages": [
+    {
+      "lanes": [
+        {
+          "attempt_ids": [
+            1
+          ],
+          "name": "direct-current-main",
+          "result": null,
+          "state": "RUNNING"
+        },
+        {
+          "attempt_ids": [],
+          "name": "common-lock-normalized",
+          "result": null,
+          "state": "BLOCKED"
+        }
+      ],
+      "name": "allocation"
+    },
+    {
+      "lanes": [
+        {
+          "attempt_ids": [],
+          "name": "direct-current-main",
+          "result": null,
+          "state": "READY"
+        },
+        {
+          "attempt_ids": [],
+          "name": "common-lock-normalized",
+          "result": null,
+          "state": "BLOCKED"
+        }
+      ],
+      "name": "timing"
+    }
+  ]
+}
