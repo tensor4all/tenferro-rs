@@ -18,7 +18,10 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any
 
-import phase2e_protocol as protocol
+if __package__ in (None, ""):
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+from scripts import phase2e_protocol as protocol
 
 
 AGGREGATE_MANIFEST = "phase2e-evidence.json"

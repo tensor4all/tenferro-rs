@@ -6,20 +6,48 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import threading
 import unittest
 
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-
-import phase2e_protocol as protocol
-import run_phase2e as orchestrator
+from scripts import phase2e_protocol as protocol
+from scripts import run_phase2e as orchestrator
 
 
 class OuterOrchestratorTests(unittest.TestCase):
     CANDIDATE = "a" * 40
+
+    def test_direct_and_module_entrypoints_expose_every_help_surface(self):
+        repository = pathlib.Path(__file__).resolve().parent.parent
+        direct = str(repository / "scripts" / "run_phase2e.py")
+        commands = (
+            None,
+            "start",
+            "rerun-invalid-lane",
+            "continue",
+            "validate",
+            "record-index",
+            "record-preserved",
+            "compare-experiment-identity",
+        )
+        for prefix in (
+            (sys.executable, direct),
+            (sys.executable, "-m", "scripts.run_phase2e"),
+        ):
+            for command in commands:
+                argv = [*prefix, *(() if command is None else (command,)), "--help"]
+                result = subprocess.run(
+                    argv,
+                    cwd=repository,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, (argv, result.stderr))
+                self.assertIn("usage:", result.stdout)
 
     def make_complete_root(self, root: pathlib.Path) -> None:
         ledger = protocol.new_ledger(self.CANDIDATE)
