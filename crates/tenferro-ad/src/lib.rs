@@ -38,6 +38,7 @@ pub(crate) mod eager_exec;
 pub(crate) mod eager_ops;
 pub(crate) mod eager_ops_elementwise;
 pub mod extension;
+pub mod semantic_extension;
 mod shape_packing;
 pub mod traced;
 mod transform_cache;

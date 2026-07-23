@@ -65,6 +65,8 @@ mod numpy_api;
 mod placement_bound_eager;
 #[path = "integration/primitive_ops.rs"]
 mod primitive_ops;
+#[path = "integration/semantic_extension.rs"]
+mod semantic_extension;
 #[path = "integration/shape_inference.rs"]
 mod shape_inference;
 #[path = "integration/shape_of.rs"]
