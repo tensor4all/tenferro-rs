@@ -575,6 +575,7 @@ class OuterOrchestratorTests(unittest.TestCase):
                 name: str((controlled / name).resolve())
                 for name in ("git", "cargo", "rustc")
             },
+            "host_target": "x86_64-unknown-linux-gnu",
             "home": str((base / "home").resolve()),
             "cargo_home": str((base / "cargo-home").resolve()),
             "index": str((base / "index.json").resolve()),
@@ -1100,6 +1101,31 @@ raise SystemExit(1)
                     require_live_paths=False,
                 )
 
+    def test_timing_failure_rejects_forged_feature_target(self):
+        for require_live_paths in (True, False):
+            with (
+                self.subTest(require_live_paths=require_live_paths),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                context, failure = self.make_timing_build_failure(
+                    pathlib.Path(directory)
+                )
+                payload = orchestrator._timing_build_failure_payload(failure)
+                cargo = pathlib.Path(context["tool_paths"]["cargo"])
+                payload["command"]["argv"] = [
+                    str(cargo),
+                    *orchestrator.build.timing_feature_command(
+                        "aarch64-unknown-linux-gnu"
+                    )[1:],
+                ]
+
+                with self.assertRaises(protocol.ProtocolError):
+                    orchestrator.validate_timing_build_failure(
+                        payload,
+                        context,
+                        require_live_paths=require_live_paths,
+                    )
+
     def test_timing_build_failure_publish_does_not_clobber_racing_leaf(self):
         creators = {
             "regular": lambda path, _outside: path.write_bytes(b"foreign\n"),
@@ -1390,6 +1416,34 @@ raise SystemExit(1)
                 else:
                     artifact.write_bytes(b'{"version":1}\n')
                 orchestrator.seal_abandoned_root(root)
+
+                with self.assertRaises(protocol.ProtocolError):
+                    orchestrator.validate_root(root)
+
+    def test_abandonment_seal_rejects_non_exact_field_types(self):
+        mutations = {
+            "version-bool": lambda seal: seal.update(version=True),
+            "protocol-version-bool": lambda seal: seal.update(
+                protocol_version=True
+            ),
+            "status-bool": lambda seal: seal.update(status=True),
+            "kind-bool": lambda seal: seal.update(abandonment_kind=True),
+            "inventory-list": lambda seal: seal.update(inventory=[]),
+        }
+        for name, mutate in mutations.items():
+            with (
+                self.subTest(name=name),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = pathlib.Path(directory)
+                (root / "partial.log").write_text(
+                    "partial\n", encoding="utf-8"
+                )
+                seal = orchestrator.seal_abandoned_root(root)
+                mutate(seal)
+                protocol.atomic_write_json(
+                    root / orchestrator.ABANDONMENT_SEAL, seal
+                )
 
                 with self.assertRaises(protocol.ProtocolError):
                     orchestrator.validate_root(root)
@@ -2604,10 +2658,14 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
                 "path": str(toolchain),
                 "home": str(home),
                 "cargo_home": str(cargo_home),
+                "host_target": "x86_64-unknown-linux-gnu",
             }
             tools = mock.Mock()
             tools.rustc.path = toolchain / "rustc"
-            host_probe = mock.Mock(returncode=0, stdout="host: target-triple\n")
+            host_probe = mock.Mock(
+                returncode=0,
+                stdout="host: x86_64-unknown-linux-gnu\n",
+            )
             query_result = mock.Mock(returncode=0, stdout="features\n")
             with mock.patch.object(
                 orchestrator.build, "resolve_toolchain", return_value=tools
@@ -2625,7 +2683,7 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
                 self.assertEqual(
                     call.args[0],
                     orchestrator.build.feature_query_command(
-                        "target-triple",
+                        context["host_target"],
                         package=package,
                         requested_features=orchestrator.build.REQUESTED_FEATURES,
                         no_default_features=True,
@@ -2635,6 +2693,44 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
                 self.assertEqual(environment["CARGO_NET_OFFLINE"], "true")
                 self.assertEqual(environment["HOME"], str(home))
                 self.assertEqual(environment["CARGO_HOME"], str(cargo_home))
+
+    def test_stage_host_target_uses_exact_resolved_rustc(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            _path, context = self.make_stage_context(base)
+            tools = orchestrator.build.resolve_toolchain(context["path"])
+            result = mock.Mock(
+                returncode=0,
+                stdout="host: x86_64-unknown-linux-gnu\n",
+            )
+            with mock.patch.object(
+                orchestrator.build,
+                "run_bounded_command",
+                return_value=result,
+            ) as run, mock.patch.object(
+                orchestrator.build,
+                "validate_resolved_tool",
+                wraps=orchestrator.build.validate_resolved_tool,
+            ) as validate_tool:
+                target = orchestrator._measure_stage_host_target(
+                    repository=pathlib.Path(context["repository"]),
+                    scratch=pathlib.Path(context["scratch_parent"]),
+                    path=context["path"],
+                    home=pathlib.Path(context["home"]),
+                    cargo_home=pathlib.Path(context["cargo_home"]),
+                    tools=tools,
+                )
+
+            self.assertEqual(target, context["host_target"])
+            self.assertEqual(
+                run.call_args.args[0],
+                (context["tool_paths"]["rustc"], "--version", "--verbose"),
+            )
+            self.assertEqual(
+                run.call_args.kwargs["deadline_seconds"],
+                orchestrator.build.QUERY_DEADLINE_SECONDS,
+            )
+            self.assertEqual(validate_tool.call_count, 2)
 
     def test_validate_prints_only_when_print_status_is_requested(self):
         artifacts = self.REPOSITORY / "docs" / "worklogs" / "artifacts"
@@ -4425,6 +4521,15 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
         with tempfile.TemporaryDirectory() as directory:
             base = pathlib.Path(directory)
             context, failure = self.make_timing_build_failure(base)
+            failure = dataclasses.replace(
+                failure,
+                argv=(
+                    context["tool_paths"]["cargo"],
+                    *orchestrator.build.timing_feature_command(
+                        context["host_target"]
+                    )[1:],
+                ),
+            )
             repository = pathlib.Path(context["repository"])
             subprocess.run(("git", "init", "-q"), cwd=repository, check=True)
             root = pathlib.Path(context["evidence_root"])

@@ -268,6 +268,7 @@ STAGE_CONTEXT_FIELDS = frozenset(
         "command_contract_digest",
         "path",
         "tool_paths",
+        "host_target",
         "home",
         "cargo_home",
         "index",
@@ -354,6 +355,16 @@ def _validate_stage_context_record(
         or len(set(tool_paths.values())) != 3
     ):
         raise protocol.ProtocolError("stage context resolved tool paths are invalid")
+    if (
+        type(context["host_target"]) is not str
+        or re.fullmatch(
+            r"[A-Za-z0-9_][A-Za-z0-9_.]*"
+            r"(?:-[A-Za-z0-9_][A-Za-z0-9_.]*){2,}",
+            context["host_target"],
+        )
+        is None
+    ):
+        raise protocol.ProtocolError("stage context host target is invalid")
     _require_sha(context["candidate_sha"], sha256=False, context="context candidate")
     for name in (
         "candidate_tree_sha256",
@@ -693,6 +704,7 @@ def validate_timing_build_failure(
         role=role,
         path=context["path"],
         tool_paths=context["tool_paths"],
+        host_target=context["host_target"],
         require_live_paths=require_live_paths,
     )
     if command["deadline_seconds"] != expected_deadline:
@@ -808,6 +820,7 @@ def _timing_build_failure_deadline(
     role: str,
     path: str,
     tool_paths: Mapping[str, Any],
+    host_target: str,
     require_live_paths: bool,
 ) -> int:
     """Bind a failure to one exact command eligible for its build role."""
@@ -837,19 +850,7 @@ def _timing_build_failure_deadline(
     if deadline is not None:
         return deadline
 
-    feature_prefix = (cargo, "tree", "--locked", "--target")
-    target_index = len(feature_prefix)
-    if (
-        len(argv) > target_index
-        and argv[:target_index] == feature_prefix
-        and re.fullmatch(
-            r"[A-Za-z0-9_][A-Za-z0-9_.]*"
-            r"(?:-[A-Za-z0-9_][A-Za-z0-9_.]*){2,}",
-            argv[target_index],
-        )
-        and argv
-        == (cargo, *build.timing_feature_command(argv[target_index])[1:])
-    ):
+    if argv == (cargo, *build.timing_feature_command(host_target)[1:]):
         return build.QUERY_DEADLINE_SECONDS
     raise protocol.ProtocolError(
         "timing build failure argv is not a canonical role command"
@@ -1730,6 +1731,10 @@ def _preflight_offline_feature_queries(context: Mapping[str, Any]) -> None:
         if rustc.returncode != 0:
             raise protocol.ProtocolError("offline preflight rustc probe failed")
         target = build._rustc_host(rustc.stdout, "offline preflight")
+        if target != context["host_target"]:
+            raise protocol.ProtocolError(
+                "offline preflight host target differs from stage context"
+            )
         for package in ("tenferro-cpu", "tenferro-ad"):
             result = build.run_bounded_command(
                 build.feature_query_command(
@@ -1769,6 +1774,35 @@ def _preflight_offline_feature_queries(context: Mapping[str, Any]) -> None:
                 raise
 
 
+def _measure_stage_host_target(
+    *,
+    repository: pathlib.Path,
+    scratch: pathlib.Path,
+    path: str,
+    home: pathlib.Path,
+    cargo_home: pathlib.Path,
+    tools: build.ResolvedToolchain,
+) -> str:
+    """Measure and bind the exact resolved rustc host before root mutation."""
+    environment = protocol.cargo_environment(
+        path=path,
+        home=str(home),
+        cargo_home=str(cargo_home),
+        target_dir=str(scratch / ".phase2e-host-target"),
+    )
+    build.validate_resolved_tool(tools.rustc)
+    result = build.run_bounded_command(
+        (str(tools.rustc.path), "--version", "--verbose"),
+        cwd=repository,
+        environment=environment,
+        deadline_seconds=build.QUERY_DEADLINE_SECONDS,
+    )
+    build.validate_resolved_tool(tools.rustc)
+    if result.returncode != 0:
+        raise protocol.ProtocolError("stage host-target rustc probe failed")
+    return build._rustc_host(result.stdout, "stage host-target probe")
+
+
 def _prepare_start_context(
     *,
     repository: pathlib.Path,
@@ -1803,6 +1837,14 @@ def _prepare_start_context(
     index, index_lock = campaign_index_paths(repository)
     path = _minimal_toolchain_path()
     tools = build.resolve_toolchain(path)
+    host_target = _measure_stage_host_target(
+        repository=repository,
+        scratch=scratch,
+        path=path,
+        home=home,
+        cargo_home=cargo_home,
+        tools=tools,
+    )
     context = {
         "version": 1,
         "repository": str(repository),
@@ -1818,6 +1860,7 @@ def _prepare_start_context(
             name: str(getattr(tools, name).path)
             for name in ("git", "cargo", "rustc")
         },
+        "host_target": host_target,
         "home": str(home),
         "cargo_home": str(cargo_home),
         "index": str(index),
@@ -3352,11 +3395,16 @@ def _validate_root(
             "abandonment_kind",
             "inventory",
         } or (
-            seal["version"] != 1
+            type(seal["version"]) is not int
+            or seal["version"] != 1
+            or type(seal["protocol_version"]) is not int
             or seal["protocol_version"] != protocol.PROTOCOL_VERSION
+            or type(seal["status"]) is not str
             or seal["status"] != "ABANDONED"
+            or type(seal["abandonment_kind"]) is not str
             or seal["abandonment_kind"]
             not in {"INITIALIZATION_FAILURE", "UNCAUGHT_INTERRUPTION"}
+            or type(seal["inventory"]) is not dict
         ):
             raise protocol.ProtocolError("abandonment seal schema is invalid")
         protocol.validate_regular_file_inventory(
