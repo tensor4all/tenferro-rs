@@ -1243,6 +1243,152 @@ class OuterOrchestratorTests(unittest.TestCase):
             actual = json.loads(index_path.read_text(encoding="utf-8"))
             self.assertEqual(actual["audit"], list(range(8)))
 
+    def test_parallel_start_has_one_authoritative_active_and_no_root_reuse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            (repository / "docs" / "worklogs").mkdir(parents=True)
+            entered = threading.Event()
+            release = threading.Event()
+            results = []
+
+            def start(number):
+                root = repository / "docs" / "worklogs" / f"root-{number}"
+
+                def initialize(_root):
+                    entered.set()
+                    release.wait(timeout=5)
+
+                try:
+                    result = orchestrator.initialize_campaign(
+                        repository=repository,
+                        root=root,
+                        reservation_id=f"r{number}",
+                        candidate_sha=self.CANDIDATE,
+                        candidate_tree_sha256="c" * 64,
+                        experiment_identity_digest=f"{number}" * 64,
+                        campaign_identity_digest="e" * 64,
+                        initializer=initialize,
+                    )
+                    results.append((number, result))
+                except BaseException as error:
+                    results.append((number, error))
+
+            with mock.patch.object(orchestrator, "require_remote_index"):
+                first = threading.Thread(target=start, args=(1,))
+                second = threading.Thread(target=start, args=(2,))
+                first.start()
+                self.assertTrue(entered.wait(timeout=5))
+                second.start()
+                release.set()
+                first.join(timeout=5)
+                second.join(timeout=5)
+            self.assertFalse(first.is_alive() or second.is_alive())
+            self.assertEqual(sum(result == 0 for _, result in results), 1)
+            self.assertEqual(
+                sum(isinstance(result, protocol.ProtocolError) for _, result in results),
+                1,
+            )
+            index = orchestrator._read_index(repository / orchestrator.INDEX_PATH)
+            self.assertEqual(orchestrator.index_state(index), "ACTIVE")
+            winner = next(number for number, result in results if result == 0)
+            loser = 1 if winner == 2 else 2
+            self.assertFalse(
+                (repository / "docs" / "worklogs" / f"root-{loser}").exists()
+            )
+
+    def test_parallel_record_index_has_one_transition_and_identical_replay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            root = repository / "docs" / "worklogs" / "root"
+            root.mkdir(parents=True, mode=0o700)
+            self.write_process_journal(root)
+            active = orchestrator.record_active(
+                orchestrator.new_campaign_index(),
+                reservation_id="r1",
+                candidate_sha=self.CANDIDATE,
+                candidate_tree_sha256="c" * 64,
+                root=str(root),
+                experiment_identity_digest="d" * 64,
+                campaign_identity_digest="e" * 64,
+            )
+            protocol.atomic_write_json(repository / orchestrator.INDEX_PATH, active)
+            results = []
+
+            def record():
+                try:
+                    results.append(
+                        orchestrator.record_index_root(
+                            repository=repository,
+                            root=root,
+                            reservation_id="r1",
+                            abandoned=True,
+                        )
+                    )
+                except BaseException as error:
+                    results.append(error)
+
+            with mock.patch.object(orchestrator.os, "killpg", side_effect=ProcessLookupError):
+                threads = [threading.Thread(target=record) for _ in range(2)]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=5)
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertTrue(all(type(result) is dict for result in results))
+            self.assertEqual(results[0], results[1])
+            self.assertEqual(len(results[0]["events"]), 2)
+
+    def test_active_operation_and_record_follow_index_then_root_without_deadlock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            root = repository / "docs" / "worklogs" / "root"
+            root.mkdir(parents=True, mode=0o700)
+            self.write_process_journal(root)
+            active = orchestrator.record_active(
+                orchestrator.new_campaign_index(),
+                reservation_id="r1",
+                candidate_sha=self.CANDIDATE,
+                candidate_tree_sha256="c" * 64,
+                root=str(root),
+                experiment_identity_digest="d" * 64,
+                campaign_identity_digest="e" * 64,
+            )
+            protocol.atomic_write_json(repository / orchestrator.INDEX_PATH, active)
+            entered = threading.Event()
+            release = threading.Event()
+
+            def hold_active():
+                with orchestrator.active_campaign_lock(
+                    repository, root, reservation_id="r1"
+                ):
+                    entered.set()
+                    release.wait(timeout=5)
+
+            holder = threading.Thread(target=hold_active)
+            holder.start()
+            self.assertTrue(entered.wait(timeout=5))
+            with mock.patch.object(orchestrator.os, "killpg", side_effect=ProcessLookupError):
+                recorder = threading.Thread(
+                    target=lambda: orchestrator.record_index_root(
+                        repository=repository,
+                        root=root,
+                        reservation_id="r1",
+                        abandoned=True,
+                    )
+                )
+                recorder.start()
+                self.assertTrue(recorder.is_alive())
+                release.set()
+                holder.join(timeout=5)
+                recorder.join(timeout=5)
+            self.assertFalse(holder.is_alive() or recorder.is_alive())
+            self.assertEqual(
+                orchestrator.index_state(
+                    orchestrator._read_index(repository / orchestrator.INDEX_PATH)
+                ),
+                "PENDING_PRESERVATION",
+            )
+
     def test_gitignore_has_only_the_exact_normative_lock(self):
         repository = pathlib.Path(__file__).resolve().parent.parent
         matches = [
@@ -1505,6 +1651,38 @@ class OuterOrchestratorTests(unittest.TestCase):
                 orchestrator.index_state(orchestrator._read_index(index_path)),
                 "PENDING_PRESERVATION",
             )
+
+    def test_committed_active_write_failure_self_seals_initialization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            (repository / "docs" / "worklogs").mkdir(parents=True)
+            root = repository / "docs" / "worklogs" / "root"
+            real_write = orchestrator._atomic_write_path
+
+            def fail_after_active(path, payload):
+                real_write(path, payload)
+                events = payload.get("events", [])
+                if events and events[-1].get("event") == "ACTIVE":
+                    raise protocol.AtomicWriteDurabilityError(
+                        "ACTIVE committed but parent fsync failed"
+                    )
+
+            with mock.patch.object(orchestrator, "require_remote_index"), mock.patch.object(
+                orchestrator, "_atomic_write_path", side_effect=fail_after_active
+            ):
+                code = orchestrator.initialize_campaign(
+                    repository=repository,
+                    root=root,
+                    reservation_id="r1",
+                    candidate_sha=self.CANDIDATE,
+                    candidate_tree_sha256="c" * 64,
+                    experiment_identity_digest="d" * 64,
+                    campaign_identity_digest="e" * 64,
+                )
+            self.assertEqual(code, 5)
+            index = orchestrator._read_index(repository / orchestrator.INDEX_PATH)
+            self.assertEqual(orchestrator.index_state(index), "PENDING_PRESERVATION")
+            self.assertEqual(index["events"][-1]["status"], "ABANDONED")
 
     def test_git_inventory_requires_exact_root_bytes(self):
         with tempfile.TemporaryDirectory() as directory:

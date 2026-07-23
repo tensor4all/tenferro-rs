@@ -1362,8 +1362,17 @@ def initialize_campaign(
         try:
             root_lock = ".orchestrator.lock"
             with exclusive_lock_at(root_identity.descriptor, root_lock):
-                _atomic_write_path(index_path, updated)
+                active_committed = False
                 try:
+                    try:
+                        _atomic_write_path(index_path, updated)
+                    except protocol.AtomicWriteError as error:
+                        active_committed = error.committed
+                        if not active_committed:
+                            raise
+                        raise
+                    else:
+                        active_committed = True
                     if initializer is None:
                         protocol.atomic_write_json_at(
                             root_identity.descriptor,
@@ -1373,6 +1382,13 @@ def initialize_campaign(
                     else:
                         initializer(root)
                 except BaseException:
+                    if not active_committed:
+                        try:
+                            active_committed = _read_index(index_path) == updated
+                        except BaseException:
+                            active_committed = False
+                    if not active_committed:
+                        raise
                     seal = seal_abandoned_root(
                         root,
                         identity=root_identity,
@@ -2285,6 +2301,36 @@ def _validate_terminal_root_binding(
         raise protocol.ProtocolError("terminal progress identity differs from ACTIVE")
 
 
+@contextmanager
+def active_campaign_lock(
+    repository: pathlib.Path,
+    root: pathlib.Path,
+    *,
+    reservation_id: str,
+):
+    """Hold the fixed index then the ACTIVE root lock for one operation."""
+    index_path, index_lock = campaign_index_paths(repository)
+    with exclusive_lock(index_lock):
+        index = _read_index(index_path)
+        if index_state(index) != "ACTIVE":
+            raise protocol.ProtocolError("campaign reservation is finalized")
+        active = index["events"][-1]
+        root = _canonical_existing_root(root)
+        if (
+            active["reservation_id"] != reservation_id
+            or active["root"] != str(root)
+        ):
+            raise protocol.ProtocolError("active operation identity differs")
+        identity = protocol.PreparedRootIdentity(root)
+        try:
+            with exclusive_lock_at(identity.descriptor, ".orchestrator.lock"):
+                identity.revalidate()
+                yield active
+                identity.revalidate()
+        finally:
+            identity.close()
+
+
 def record_index_root(
     *,
     repository: pathlib.Path,
@@ -2647,21 +2693,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("ABANDONED_INITIALIZATION")
                 return 5
             environment = protocol.runtime_environment(path=args.path, home=args.home)
-            return run_fixed_stages(
-                args.root,
-                environment,
-                _subprocess_stage_runner(
-                    args.context,
-                    args.context_sha256,
-                    args.repository,
-                    root=args.root,
-                ),
-                identity={
-                    **stage_context,
-                    "context_sha256": args.context_sha256,
-                    "context_path": str(args.context.resolve(strict=True)),
-                },
-            )
+            with active_campaign_lock(
+                args.repository, args.root, reservation_id=args.reservation_id
+            ):
+                return run_fixed_stages(
+                    args.root,
+                    environment,
+                    _subprocess_stage_runner(
+                        args.context,
+                        args.context_sha256,
+                        args.repository,
+                        root=args.root,
+                    ),
+                    identity={
+                        **stage_context,
+                        "context_sha256": args.context_sha256,
+                        "context_path": str(args.context.resolve(strict=True)),
+                    },
+                    _locked=True,
+                )
         if args.command in {"rerun-invalid-lane", "continue"}:
             stage_context = load_stage_context(
                 args.context,
@@ -2676,32 +2726,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.repository,
                 root=args.root,
             )
-            index_path, index_lock = campaign_index_paths(args.repository)
-            with exclusive_lock(index_lock):
-                index = _read_index(index_path)
-                if index_state(index) != "ACTIVE":
-                    raise protocol.ProtocolError("campaign reservation is finalized")
-                active = index["events"][-1]
-                if pathlib.Path(active["root"]) != args.root:
-                    raise protocol.ProtocolError("active reservation root differs")
-                with exclusive_lock(args.root / ".orchestrator.lock"):
-                    progress = validate_progress(args.root)
-                    validate_resume_identity(
-                        active, stage_context, args.context_sha256, progress
-                    )
-                    if args.command == "rerun-invalid-lane":
-                        return rerun_invalid_stage(
-                            args.root,
-                            environment,
-                            runner,
-                            identity={
-                                **stage_context,
-                                "context_sha256": args.context_sha256,
-                                "context_path": str(args.context.resolve(strict=True)),
-                            },
-                            _locked=True,
-                        )
-                    return continue_after_retry(
+            with active_campaign_lock(
+                args.repository,
+                args.root,
+                reservation_id=stage_context["reservation_id"],
+            ) as active:
+                progress = validate_progress(args.root)
+                validate_resume_identity(
+                    active, stage_context, args.context_sha256, progress
+                )
+                if args.command == "rerun-invalid-lane":
+                    return rerun_invalid_stage(
                         args.root,
                         environment,
                         runner,
@@ -2712,6 +2747,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                         },
                         _locked=True,
                     )
+                return continue_after_retry(
+                    args.root,
+                    environment,
+                    runner,
+                    identity={
+                        **stage_context,
+                        "context_sha256": args.context_sha256,
+                        "context_path": str(args.context.resolve(strict=True)),
+                    },
+                    _locked=True,
+                )
         if args.command == "record-index":
             updated = record_index_root(
                 repository=args.repository,
