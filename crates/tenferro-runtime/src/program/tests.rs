@@ -270,6 +270,63 @@ fn operation_metadata_resolves_local_shape_axes_to_program_inputs() {
 }
 
 #[test]
+fn concatenate_validates_resolved_input_shapes_not_operation_local_placeholders() {
+    let mut builder = SemanticProgramBuilder::new();
+    let lhs = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(2)],
+        ))
+        .unwrap();
+    let rhs = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(2)],
+        ))
+        .unwrap();
+    let expand = |builder: &mut SemanticProgramBuilder, input| {
+        builder
+            .add_op(
+                CoreSemanticOp::Reshape {
+                    to_shape: vec![
+                        DimExpr::InputDim {
+                            input_idx: 0,
+                            axis: 0,
+                        },
+                        DimExpr::InputDim {
+                            input_idx: 0,
+                            axis: 1,
+                        },
+                        DimExpr::Const(1),
+                    ],
+                },
+                &[input],
+            )
+            .unwrap()[0]
+    };
+    let lhs = expand(&mut builder, lhs);
+    let rhs = expand(&mut builder, rhs);
+    let output = builder
+        .add_op(
+            CoreSemanticOp::Concatenate {
+                axis: 2,
+                input_count: 2,
+            },
+            &[lhs, rhs],
+        )
+        .unwrap()[0];
+
+    assert_eq!(
+        builder.value_metadata(output).unwrap().shape(),
+        &[
+            ShapeExtent::Exact(DimExpr::Const(2)),
+            ShapeExtent::Exact(DimExpr::Const(2)),
+            ShapeExtent::Exact(DimExpr::Const(2)),
+        ]
+    );
+}
+
+#[test]
 fn operations_validate_arity_and_infer_ordered_metadata() {
     let mut builder = SemanticProgramBuilder::new();
     let x = builder

@@ -371,25 +371,43 @@ impl SemanticProgramBuilder {
             .collect();
         let input_shapes = inference_shapes(&input_metadata);
         let input_shape_refs: Vec<_> = input_shapes.iter().map(Vec::as_slice).collect();
-        let local_input_shapes: Vec<_> = input_metadata
-            .iter()
-            .enumerate()
-            .map(|(input_idx, metadata)| DimExpr::input_shape(input_idx, metadata.shape().len()))
-            .collect();
-        let local_input_shape_refs: Vec<_> = local_input_shapes.iter().map(Vec::as_slice).collect();
         let standard = tenferro_ops::std_tensor_op::StdTensorOp::from(op);
         let dtype = crate::shape_infer::infer_output_dtype(&standard, &input_dtypes)
             .map_err(metadata_error)?;
-        let output_extents =
-            crate::shape_infer::infer_output_extents(&standard, &local_input_shape_refs)
-                .map_err(metadata_error)?;
-        output_extents
-            .into_iter()
-            .map(|shape| {
-                resolve_inferred_extents(shape, precision, &input_shape_refs)
-                    .map(|shape| ProgramValueMetadata::from_extents(dtype, shape))
-            })
-            .collect()
+        if core_output_uses_local_shape_coordinates(op) {
+            let local_input_shapes: Vec<_> = input_metadata
+                .iter()
+                .enumerate()
+                .map(|(input_idx, metadata)| {
+                    DimExpr::input_shape(input_idx, metadata.shape().len())
+                })
+                .collect();
+            let local_input_shape_refs: Vec<_> =
+                local_input_shapes.iter().map(Vec::as_slice).collect();
+            let output_extents =
+                crate::shape_infer::infer_output_extents(&standard, &local_input_shape_refs)
+                    .map_err(metadata_error)?;
+            output_extents
+                .into_iter()
+                .map(|shape| {
+                    resolve_inferred_extents(shape, precision, &input_shape_refs)
+                        .map(|shape| ProgramValueMetadata::from_extents(dtype, shape))
+                })
+                .collect()
+        } else {
+            let output_extents =
+                crate::shape_infer::infer_output_extents(&standard, &input_shape_refs)
+                    .map_err(metadata_error)?;
+            Ok(output_extents
+                .into_iter()
+                .map(|shape| {
+                    ProgramValueMetadata::from_extents(
+                        dtype,
+                        conservatively_bound_extents(shape, precision),
+                    )
+                })
+                .collect())
+        }
     }
 
     fn infer_extension_metadata(
@@ -475,6 +493,15 @@ impl SemanticProgramBuilder {
         });
         Ok(outputs)
     }
+}
+
+fn core_output_uses_local_shape_coordinates(op: &CoreSemanticOp) -> bool {
+    matches!(
+        op,
+        CoreSemanticOp::Reshape { .. }
+            | CoreSemanticOp::BroadcastInDim { .. }
+            | CoreSemanticOp::GatherDynamicSliceSizes { .. }
+    )
 }
 
 fn validate_arity(expected: usize, actual: usize) -> Result<(), ProgramBuildError> {
