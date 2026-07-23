@@ -1,5 +1,93 @@
 # Phase 2E non-inferiority evidence history
 
+## Candidate `61d1dc37`: abandoned run 0004
+
+### Outcome
+
+The protocol-v2 outer root for candidate
+`61d1dc37a644650f46997b74e86c7e7989e299bb` is sealed as
+`ABANDONED`. The complete `timing-builds` and `probe-builds` stages passed.
+This proves that the run-0003 process-journal handoff defect did not recur:
+the orchestrator crossed multiple real subprocess stages and produced all
+three timing executables and all three allocation probes.
+
+The first `allocation/direct-current-main` worker then returned exit code 2
+before launching any observation:
+
+```text
+phase2e allocation campaign error: cannot acquire orchestrator lock:
+[Errno 2] No such file or directory: 'orchestrator.lock'
+```
+
+The outer orchestrator owns the canonical hidden file
+`.orchestrator.lock`, while the standalone allocation runner independently
+required `orchestrator.lock`. Their isolated test fixtures each matched their
+own spelling, so the mismatch appeared only at the real integration boundary.
+The ledger contains no attempt IDs and all measurement lanes remain `READY`
+or `BLOCKED`. This root is not performance evidence and does not classify the
+candidate.
+
+### Immutable identities
+
+- Candidate: `61d1dc37a644650f46997b74e86c7e7989e299bb`
+- Candidate tree SHA-256:
+  `97677decbb56ab4335c2839c7b5ed360092f88f8e57bedc65ae0e3ed203093a4`
+- Experiment identity:
+  `5ce4b9035646ccbf60aeed6ff9b8688f31be6f4aefc576f2247033df9113f9ca`
+- Campaign identity:
+  `83cb5d48147550255e219a6f4f6cdffca4771c5ba4a90f6c6f87995b936c11d4`
+- Reservation:
+  `f474a75de11a7f3b0d3edd83c655fd21cc4e648b53c3667199c88fd7ff2a35bb`
+- Command contract:
+  `f8aad1839150155f45d4cc925d5c186332c5583b07bb11dbb8e102262a7e1804`
+- Context SHA-256:
+  `68ca9053cbfa522afa5507e2aa07349c4a74c88cd7a15d1938c96f7177c1e6f6`
+- Root digest:
+  `192843d1e5f8583d4f1bda3aa781a5e68099eb346c9f3106676404e9b13f4248`
+- Ledger digest:
+  `0156604039c9df52c1529e63b2ab957b74eb3895fc047c81f611765ecf60ddca`
+
+The canonical root is
+`docs/worklogs/artifacts/2026-07-23-phase-2e-61d1dc37a644-run-0004`.
+Its `abandoned-inventory.json` is the normative ownership inventory. The
+index has `ACTIVE` followed by terminal `ABANDONED`; it deliberately has no
+new `current_evidence_root`.
+
+### Host and command
+
+The run began on 2026-07-23 in the Asia/Tokyo timezone with:
+
+- 64 process-allowed CPUs;
+- one-minute load 3.59 immediately before launch, normalized to 0.0561;
+- no overlapping real Cargo or rustc process; and
+- 393 GiB free on the filesystem before launch.
+
+The exact public command was:
+
+```text
+python3 scripts/run_phase2e.py start \
+  --repository <candidate-worktree> \
+  --candidate 61d1dc37a644650f46997b74e86c7e7989e299bb \
+  --evidence-root docs/worklogs/artifacts/2026-07-23-phase-2e-61d1dc37a644-run-0004 \
+  --index docs/worklogs/2026-07-21-phase-2e-index.json \
+  --scratch-parent /tmp/phase2e-scratch.iZt3Ae
+```
+
+After verifying that no orchestrator, stage worker, compiler, probe, or
+benchmark process remained,
+`record-index --abandoned --confirm-no-live-processes` sealed the root and
+returned `PENDING_PRESERVATION`.
+
+### Follow-up
+
+1. Preserve this negative root without modifying its sealed inventory.
+2. Define `.orchestrator.lock` once as the canonical outer-root lock name and
+   reuse that contract in the allocation runner and its fixtures.
+3. Add a public integration regression that acquires the allocation lock from
+   an outer-orchestrator-initialized root.
+4. Freeze a new candidate and run one fresh complete boundary campaign; do not
+   reuse any run-0004 build or result.
+
 ## Candidate `bf97b1d9`: abandoned run 0003
 
 ### Outcome

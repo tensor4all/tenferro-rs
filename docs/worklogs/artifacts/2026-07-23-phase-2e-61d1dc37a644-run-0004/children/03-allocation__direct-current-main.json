@@ -1,0 +1,43 @@
+{
+  "after_inventory_sha256": "47087a0888e1937e482eded7b99787c1834d910aacfdcbcac0810814e7244147",
+  "argv": [
+    "/sharehome/tools/opt/Python-3.12.11/bin/python3.12",
+    "-m",
+    "scripts.run_phase2e",
+    "_stage-worker",
+    "--stage",
+    "allocation/direct-current-main",
+    "--context",
+    "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-23-phase-2e-61d1dc37a644-run-0004/.phase2e-stage-context.json",
+    "--context-sha256",
+    "68ca9053cbfa522afa5507e2aa07349c4a74c88cd7a15d1938c96f7177c1e6f6"
+  ],
+  "attempt": 1,
+  "before_inventory_sha256": "b363bb9353bf971886fc2f31080fd890b82e2fc8867f9a4fcd704e607d31d238",
+  "candidate_sha": "61d1dc37a644650f46997b74e86c7e7989e299bb",
+  "changed": {
+    ".phase2e-process-journal.json": "f25ff77bd1e50845400588a52b49ee96b53a4832c0d97888093d8caa2cae8e9c"
+  },
+  "command_contract_digest": "f8aad1839150155f45d4cc925d5c186332c5583b07bb11dbb8e102262a7e1804",
+  "context_sha256": "68ca9053cbfa522afa5507e2aa07349c4a74c88cd7a15d1938c96f7177c1e6f6",
+  "environment": {
+    "HOME": "/tmp/.phase2e-scratch.iZt3Ae-phase2e-home",
+    "LC_ALL": "C",
+    "MKL_DYNAMIC": "FALSE",
+    "MKL_NUM_THREADS": "1",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "PATH": "/usr/bin:/home/shinaoka/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin",
+    "RAYON_NUM_THREADS": "1",
+    "TZ": "UTC",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "exit_code": 2,
+  "experiment_identity_digest": "5ce4b9035646ccbf60aeed6ff9b8688f31be6f4aefc576f2247033df9113f9ca",
+  "ordinal": 3,
+  "removed": [],
+  "reservation_id": "f474a75de11a7f3b0d3edd83c655fd21cc4e648b53c3667199c88fd7ff2a35bb",
+  "stage": "allocation/direct-current-main",
+  "version": 1
+}
