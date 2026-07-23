@@ -3,7 +3,10 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
+use tenferro_ops::ext_op::{
+    ExtensionAliasDeclaration, ExtensionEffect, ExtensionEffectAccess, ExtensionEffectDeclaration,
+    ExtensionOp,
+};
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_ops::sym_dim::SymDim;
 use tenferro_ops::ExtensionShapeContext;
@@ -11,13 +14,15 @@ use tenferro_tensor::{DType, Tensor, TypedTensor};
 
 use super::{
     Alias, CoreSemanticOp, Effect, EffectAccess, EffectResource, ProgramBuildError,
-    ProgramFinishError, ProgramInputSpec, ProgramShapeRelation, ProgramValueMetadata,
-    SemanticPlacementConstraint, SemanticProgramBuilder, SemanticProvenanceKind, ShapeGuard,
+    ProgramFinishError, ProgramImport, ProgramInputSpec, ProgramShapeRelation,
+    ProgramValueMetadata, SemanticPlacementConstraint, SemanticProgramBuilder,
+    SemanticProvenanceKind, ShapeGuard,
 };
 
 #[derive(Clone, Debug)]
 struct IdentityExtension {
     declares_semantics: bool,
+    effectful: bool,
 }
 
 impl ExtensionOp for IdentityExtension {
@@ -27,13 +32,13 @@ impl ExtensionOp for IdentityExtension {
 
     fn payload_hash(&self, hasher: &mut dyn Hasher) {
         hasher.write_u8(u8::from(self.declares_semantics));
+        hasher.write_u8(u8::from(self.effectful));
     }
 
     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<Self>()
-            .is_some_and(|other| other.declares_semantics == self.declares_semantics)
+        other.as_any().downcast_ref::<Self>().is_some_and(|other| {
+            other.declares_semantics == self.declares_semantics && other.effectful == self.effectful
+        })
     }
 
     fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
@@ -56,6 +61,10 @@ impl ExtensionOp for IdentityExtension {
         &self,
         context: &mut ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        if self.effectful {
+            let extent = context.input_axis(0, 0)?;
+            context.require_equal(extent, SymDim::from(2))?;
+        }
         Ok(vec![(
             context.input_dtype(0)?,
             context.input_shape(0)?.to_vec(),
@@ -64,7 +73,16 @@ impl ExtensionOp for IdentityExtension {
 
     fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
         if self.declares_semantics {
-            ExtensionEffectDeclaration::Declared(&[])
+            if self.effectful {
+                static EFFECTS: [ExtensionEffect; 1] = [ExtensionEffect {
+                    family: "tenferro-tests.state.v1",
+                    key: 0,
+                    access: ExtensionEffectAccess::Write,
+                }];
+                ExtensionEffectDeclaration::Declared(&EFFECTS)
+            } else {
+                ExtensionEffectDeclaration::Declared(&[])
+            }
         } else {
             ExtensionEffectDeclaration::Undeclared
         }
@@ -200,6 +218,7 @@ fn extension_operations_require_explicit_effect_and_alias_declarations() {
 
     let undeclared: Arc<dyn ExtensionOp> = Arc::new(IdentityExtension {
         declares_semantics: false,
+        effectful: false,
     });
     assert!(matches!(
         builder.add_extension(undeclared, &[x]),
@@ -211,6 +230,7 @@ fn extension_operations_require_explicit_effect_and_alias_declarations() {
 
     let declared: Arc<dyn ExtensionOp> = Arc::new(IdentityExtension {
         declares_semantics: true,
+        effectful: false,
     });
     let y = builder.add_extension(declared, &[x]).unwrap()[0];
     assert_eq!(builder.value_metadata(y).unwrap().dtype(), DType::F64);
@@ -335,4 +355,162 @@ fn inputs_may_be_declared_between_operations_without_confusing_bindings() {
         frozen.bindings.get(key).unwrap(),
         tensor.as_ref()
     ));
+}
+
+#[test]
+fn import_preserves_ordered_duplicate_roots_structure_binding_and_provenance() {
+    let tensor = Arc::new(Tensor::F64(
+        TypedTensor::from_vec_col_major(vec![2], vec![5.0, 6.0]).unwrap(),
+    ));
+    let mut source = SemanticProgramBuilder::new();
+    let x = source
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let y = source.add_op(CoreSemanticOp::Neg, &[x]).unwrap()[0];
+    let source_key = source.bind_input(x, Arc::clone(&tensor)).unwrap();
+    let source = source.finish(&[y, x]).unwrap();
+
+    let mut destination = SemanticProgramBuilder::new();
+    let imported = destination
+        .import(ProgramImport {
+            program: source.program.as_ref(),
+            bindings: &source.bindings,
+            roots: &[y, x, y],
+        })
+        .unwrap();
+    assert_eq!(imported.roots().len(), 3);
+    assert_eq!(imported.roots()[0], imported.roots()[2]);
+    assert_ne!(imported.roots()[0], imported.roots()[1]);
+
+    let frozen = destination.finish(imported.roots()).unwrap();
+    assert_eq!(frozen.program.inputs().len(), 1);
+    assert_eq!(frozen.program.operations().count(), 1);
+    assert_eq!(
+        frozen
+            .program
+            .operations()
+            .next()
+            .unwrap()
+            .provenance()
+            .kind(),
+        source
+            .program
+            .operations()
+            .next()
+            .unwrap()
+            .provenance()
+            .kind()
+    );
+    assert_eq!(frozen.bindings.len(), 1);
+    let imported_key = frozen.bindings.iter().next().unwrap().0;
+    assert!(std::ptr::eq(
+        frozen.bindings.get(imported_key).unwrap(),
+        source.bindings.get(source_key).unwrap()
+    ));
+}
+
+#[test]
+fn import_empty_roots_is_a_noop_and_foreign_roots_roll_back() {
+    let mut source = SemanticProgramBuilder::new();
+    let source_input = source
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let source = source.finish(&[source_input]).unwrap();
+
+    let mut other = SemanticProgramBuilder::new();
+    let foreign = other
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+
+    let mut destination = SemanticProgramBuilder::new();
+    let local = destination
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let empty = destination
+        .import(ProgramImport {
+            program: source.program.as_ref(),
+            bindings: &source.bindings,
+            roots: &[],
+        })
+        .unwrap();
+    assert!(empty.roots().is_empty());
+    assert!(matches!(
+        destination.import(ProgramImport {
+            program: source.program.as_ref(),
+            bindings: &source.bindings,
+            roots: &[source_input, foreign],
+        }),
+        Err(ProgramBuildError::ForeignImportRoot)
+    ));
+
+    let frozen = destination.finish(&[local]).unwrap();
+    assert_eq!(frozen.program.inputs(), &[local]);
+    assert_eq!(frozen.program.operations().count(), 0);
+    assert!(frozen.bindings.is_empty());
+}
+
+#[test]
+fn import_rejects_bindings_from_another_frozen_program() {
+    let mut left = SemanticProgramBuilder::new();
+    let left_input = left
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let left = left.finish(&[left_input]).unwrap();
+
+    let mut right = SemanticProgramBuilder::new();
+    let right_input = right
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let right = right.finish(&[right_input]).unwrap();
+
+    let mut destination = SemanticProgramBuilder::new();
+    assert!(matches!(
+        destination.import(ProgramImport {
+            program: left.program.as_ref(),
+            bindings: &right.bindings,
+            roots: &[left_input],
+        }),
+        Err(ProgramBuildError::ForeignBindings)
+    ));
+}
+
+#[test]
+fn import_uses_value_dependency_closure_and_keeps_observable_effects() {
+    let mut source = SemanticProgramBuilder::new();
+    let selected = source
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let unrelated = source
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let selected_output = source.add_op(CoreSemanticOp::Neg, &[selected]).unwrap()[0];
+    let _unrelated_output = source.add_op(CoreSemanticOp::Neg, &[unrelated]).unwrap()[0];
+    let effect: Arc<dyn ExtensionOp> = Arc::new(IdentityExtension {
+        declares_semantics: true,
+        effectful: true,
+    });
+    let _effect_output = source.add_extension(effect, &[unrelated]).unwrap()[0];
+    let source = source.finish(&[selected_output]).unwrap();
+
+    let mut destination = SemanticProgramBuilder::new();
+    let imported = destination
+        .import(ProgramImport {
+            program: source.program.as_ref(),
+            bindings: &source.bindings,
+            roots: &[selected_output],
+        })
+        .unwrap();
+    let frozen = destination.finish(imported.roots()).unwrap();
+
+    assert_eq!(frozen.program.inputs().len(), 2);
+    assert_eq!(frozen.program.operations().count(), 2);
+    assert_eq!(frozen.program.shape_guards().len(), 1);
+    assert_eq!(
+        frozen
+            .program
+            .operations()
+            .filter(|operation| !operation.effects().is_empty())
+            .count(),
+        1
+    );
 }

@@ -3,6 +3,7 @@
 mod bindings;
 mod builder;
 mod error;
+mod import;
 mod metadata;
 mod op;
 mod semantic;
@@ -14,6 +15,7 @@ pub use error::{
     EffectResourceError, ProgramBindingError, ProgramBuildError, ProgramFinishError,
     ProgramQueryError, ProgramStructuralError,
 };
+pub use import::{ImportedProgramValues, ProgramImport};
 pub use metadata::{
     Alias, AliasKind, Effect, EffectAccess, EffectResource, ProgramInputSpec, ProgramShapeRelation,
     ProgramValueMetadata, SemanticPlacementConstraint, SemanticPlacementKind,

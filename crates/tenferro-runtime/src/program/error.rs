@@ -5,6 +5,18 @@ pub enum ProgramBuildError {
     /// A value token was issued by another builder.
     #[error("value does not belong to this semantic-program builder")]
     ForeignValue,
+    /// An import root belongs to another semantic program.
+    #[error("import root does not belong to the source semantic program")]
+    ForeignImportRoot,
+    /// Import bindings were frozen for another semantic program.
+    #[error("import bindings do not belong to the source semantic program")]
+    ForeignBindings,
+    /// A frozen source program failed import-time structural validation.
+    #[error("source semantic program is invalid for import: {source}")]
+    InvalidImport {
+        #[source]
+        source: ProgramStructuralError,
+    },
     /// A binding target is a computed value rather than an external input.
     #[error("tensor bindings may target only semantic-program inputs")]
     BindingTargetNotInput,

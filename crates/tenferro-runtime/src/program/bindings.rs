@@ -40,6 +40,21 @@ impl ProgramBindings {
         }
     }
 
+    pub(crate) fn belongs_to(&self, owner: ProgramBuilderNonce) -> bool {
+        self.owner == owner
+    }
+
+    pub(crate) fn tensor_for_input(&self, input: ProgramValue) -> Option<Arc<Tensor>> {
+        if input.owner != self.owner {
+            return None;
+        }
+        self.entries
+            .binary_search_by_key(&input.slot, |entry| entry.key.slot)
+            .ok()
+            .and_then(|index| self.entries.get(index))
+            .map(|entry| Arc::clone(&entry.tensor))
+    }
+
     /// Return the number of tensor bindings.
     pub fn len(&self) -> usize {
         self.entries.len()

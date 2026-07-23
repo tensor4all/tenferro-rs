@@ -14,9 +14,10 @@ use super::op::{SemanticOp, SemanticOperation};
 use super::value::ProgramBuilderNonce;
 use super::{
     Alias, BindingKey, CoreSemanticOp, Effect, EffectAccess, EffectResource, FrozenProgram,
-    ProgramBindingError, ProgramBindings, ProgramBuildError, ProgramFinishError, ProgramInputSpec,
-    ProgramShapeRelation, ProgramStructuralError, ProgramValue, ProgramValueMetadata,
-    SemanticPlacementConstraint, SemanticProgram, ShapeGuard,
+    ImportedProgramValues, ProgramBindingError, ProgramBindings, ProgramBuildError,
+    ProgramFinishError, ProgramImport, ProgramInputSpec, ProgramShapeRelation,
+    ProgramStructuralError, ProgramValue, ProgramValueMetadata, SemanticPlacementConstraint,
+    SemanticProgram, ShapeGuard,
 };
 
 /// Mutable validation boundary for one semantic program.
@@ -114,6 +115,29 @@ impl SemanticProgramBuilder {
     /// Return the number of semantic operations added so far.
     pub fn operation_count(&self) -> usize {
         self.operations.len()
+    }
+
+    /// Import the dependency closure of ordered source roots atomically.
+    ///
+    /// Empty and duplicate roots are preserved. Tensor bindings remain
+    /// separate and are remapped only for imported source inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for foreign roots/bindings or an unrepresentable
+    /// destination value count. On error this builder is unchanged.
+    pub fn import(
+        &mut self,
+        request: ProgramImport<'_>,
+    ) -> Result<ImportedProgramValues, ProgramBuildError> {
+        let transaction = ImportTransaction::prepare(self, request)?;
+        let roots = transaction.roots.clone();
+        self.inputs.extend(transaction.inputs);
+        self.input_specs.extend(transaction.input_specs);
+        self.values.extend(transaction.values);
+        self.operations.extend(transaction.operations);
+        self.bindings.extend(transaction.bindings);
+        Ok(ImportedProgramValues::new(roots))
     }
 
     /// Consume this builder and atomically freeze semantic structure and bindings.
@@ -355,6 +379,193 @@ fn validate_output_count(expected: usize, actual: usize) -> Result<(), ProgramBu
         Ok(())
     } else {
         Err(ProgramBuildError::OutputMetadataCount { expected, actual })
+    }
+}
+
+struct ImportTransaction {
+    inputs: Vec<ProgramValue>,
+    input_specs: Vec<ProgramInputSpec>,
+    values: Vec<ProgramValueMetadata>,
+    operations: Vec<SemanticOperation>,
+    bindings: Vec<PendingBinding>,
+    roots: Box<[ProgramValue]>,
+}
+
+impl ImportTransaction {
+    fn prepare(
+        destination: &SemanticProgramBuilder,
+        request: ProgramImport<'_>,
+    ) -> Result<Self, ProgramBuildError> {
+        let source = request.program;
+        if !request.bindings.belongs_to(source.owner) {
+            return Err(ProgramBuildError::ForeignBindings);
+        }
+        if request
+            .roots
+            .iter()
+            .any(|root| root.owner != source.owner || root.slot as usize >= source.values.len())
+        {
+            return Err(ProgramBuildError::ForeignImportRoot);
+        }
+
+        let mut producer = vec![None; source.values.len()];
+        for (operation_index, operation) in source.operations.iter().enumerate() {
+            for output in &operation.outputs {
+                producer[output.slot as usize] = Some(operation_index);
+            }
+        }
+
+        let mut needed_values = vec![false; source.values.len()];
+        let mut needed_operations = vec![false; source.operations.len()];
+        let mut pending: Vec<_> = request
+            .roots
+            .iter()
+            .map(|root| root.slot as usize)
+            .collect();
+        for (operation_index, operation) in source.operations.iter().enumerate() {
+            if !operation.effects.is_empty() {
+                needed_operations[operation_index] = true;
+                for output in &operation.outputs {
+                    needed_values[output.slot as usize] = true;
+                }
+                pending.extend(operation.inputs.iter().map(|input| input.slot as usize));
+            }
+        }
+        while let Some(slot) = pending.pop() {
+            if needed_values[slot] {
+                continue;
+            }
+            needed_values[slot] = true;
+            if let Some(operation_index) = producer[slot] {
+                if !needed_operations[operation_index] {
+                    needed_operations[operation_index] = true;
+                    let operation = &source.operations[operation_index];
+                    for output in &operation.outputs {
+                        needed_values[output.slot as usize] = true;
+                    }
+                    pending.extend(operation.inputs.iter().map(|input| input.slot as usize));
+                }
+            }
+        }
+
+        let imported_input_count = source
+            .inputs
+            .iter()
+            .filter(|input| needed_values[input.slot as usize])
+            .count();
+        let imported_output_count: usize = source
+            .operations
+            .iter()
+            .zip(&needed_operations)
+            .filter(|(_, needed)| **needed)
+            .map(|(operation, _)| operation.outputs.len())
+            .sum();
+        let imported_value_count = imported_input_count
+            .checked_add(imported_output_count)
+            .ok_or(ProgramBuildError::TooManyValues)?;
+        let final_value_count = destination
+            .values
+            .len()
+            .checked_add(imported_value_count)
+            .ok_or(ProgramBuildError::TooManyValues)?;
+        if final_value_count > u32::MAX as usize {
+            return Err(ProgramBuildError::TooManyValues);
+        }
+
+        let mut transaction = Self {
+            inputs: Vec::with_capacity(imported_input_count),
+            input_specs: Vec::with_capacity(imported_input_count),
+            values: Vec::with_capacity(imported_value_count),
+            operations: Vec::with_capacity(
+                needed_operations.iter().filter(|needed| **needed).count(),
+            ),
+            bindings: Vec::new(),
+            roots: Box::new([]),
+        };
+        let mut remap = vec![None; source.values.len()];
+
+        for &input in &source.inputs {
+            if !needed_values[input.slot as usize] {
+                continue;
+            }
+            let metadata = source.values[input.slot as usize].clone();
+            let imported = transaction.next_value(destination.values.len(), destination.owner)?;
+            transaction.inputs.push(imported);
+            transaction
+                .input_specs
+                .push(ProgramInputSpec::from_metadata(metadata.clone()));
+            transaction.values.push(metadata);
+            remap[input.slot as usize] = Some(imported);
+            if let Some(tensor) = request.bindings.tensor_for_input(input) {
+                transaction.bindings.push(PendingBinding {
+                    key: BindingKey::new(imported.slot, destination.owner),
+                    input: imported,
+                    tensor,
+                });
+            }
+        }
+
+        for (operation, needed) in source.operations.iter().zip(needed_operations) {
+            if !needed {
+                continue;
+            }
+            let inputs: Box<[_]> = operation
+                .inputs
+                .iter()
+                .map(|input| {
+                    remap[input.slot as usize].ok_or(ProgramBuildError::InvalidImport {
+                        source: ProgramStructuralError::InvalidSsaOrder,
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            let mut outputs = Vec::with_capacity(operation.outputs.len());
+            for output in &operation.outputs {
+                let imported =
+                    transaction.next_value(destination.values.len(), destination.owner)?;
+                transaction
+                    .values
+                    .push(source.values[output.slot as usize].clone());
+                remap[output.slot as usize] = Some(imported);
+                outputs.push(imported);
+            }
+            let op = match &operation.op {
+                SemanticOp::Core(op) => SemanticOp::Core(op.clone()),
+                SemanticOp::Extension(op) => SemanticOp::Extension(op.clone_arc()),
+            };
+            transaction.operations.push(SemanticOperation {
+                op,
+                inputs,
+                outputs: outputs.into(),
+                effects: operation.effects.clone(),
+                aliases: operation.aliases.clone(),
+                shape_guards: operation.shape_guards.clone(),
+                placement: operation.placement,
+                provenance: operation.provenance.clone(),
+            });
+        }
+
+        transaction.roots = request
+            .roots
+            .iter()
+            .map(|root| {
+                remap[root.slot as usize].ok_or(ProgramBuildError::InvalidImport {
+                    source: ProgramStructuralError::InvalidValueReference,
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(transaction)
+    }
+
+    fn next_value(
+        &self,
+        destination_value_count: usize,
+        owner: ProgramBuilderNonce,
+    ) -> Result<ProgramValue, ProgramBuildError> {
+        let slot = destination_value_count
+            .checked_add(self.values.len())
+            .ok_or(ProgramBuildError::TooManyValues)?;
+        let slot = u32::try_from(slot).map_err(|_| ProgramBuildError::TooManyValues)?;
+        Ok(ProgramValue::new(slot, owner))
     }
 }
 
