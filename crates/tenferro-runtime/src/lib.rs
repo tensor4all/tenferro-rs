@@ -43,6 +43,7 @@ pub mod extension_cache;
 pub mod extension_runtime;
 pub mod graph;
 mod metadata;
+pub mod program;
 #[doc(hidden)]
 pub mod scalar_semantics;
 mod segment;
