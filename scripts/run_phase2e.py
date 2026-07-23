@@ -11,7 +11,9 @@ import json
 import os
 import pathlib
 import re
+import secrets
 import signal
+import shutil
 import stat
 import subprocess
 import sys
@@ -31,10 +33,12 @@ from scripts import phase2e_protocol as protocol
 
 AGGREGATE_MANIFEST = "phase2e-evidence.json"
 PROGRESS_MANIFEST = ".phase2e-progress.json"
+STAGE_CONTEXT = ".phase2e-stage-context.json"
 ABANDONMENT_SEAL = "abandoned-inventory.json"
 PROCESS_JOURNAL = ".phase2e-process-journal.json"
-INDEX_PATH = pathlib.Path("docs/worklogs/phase2e-index.json")
+INDEX_PATH = pathlib.Path("docs/worklogs/2026-07-21-phase-2e-index.json")
 INDEX_LOCK_PATH = pathlib.Path("docs/worklogs/.phase2e-index.lock")
+WORKLOG_PATH = pathlib.Path("docs/worklogs/2026-07-21-phase-2e-noninferiority.md")
 PRESERVATION_BRANCH = "origin/codex/execution-engine-through-phase9"
 ISSUE_NUMBER = 1436
 
@@ -65,6 +69,76 @@ def campaign_index_paths(repository: pathlib.Path) -> tuple[pathlib.Path, pathli
     ):
         raise protocol.ProtocolError("Phase 2E repository is not a directory")
     return repository / INDEX_PATH, repository / INDEX_LOCK_PATH
+
+
+def _canonical_repository(repository: pathlib.Path | None = None) -> pathlib.Path:
+    """Resolve the one Git repository that owns the fixed Phase 2E index."""
+    requested = pathlib.Path.cwd() if repository is None else pathlib.Path(repository)
+    try:
+        canonical = requested.resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot resolve Phase 2E repository: {error}") from error
+    if not canonical.is_dir():
+        raise protocol.ProtocolError("Phase 2E repository is not a directory")
+    result = subprocess.run(
+        ("git", "rev-parse", "--show-toplevel"),
+        cwd=canonical,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if result.returncode:
+        raise protocol.ProtocolError("cannot infer the Phase 2E Git repository")
+    try:
+        top_level = pathlib.Path(result.stdout.strip()).resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot resolve Git top level: {error}") from error
+    if repository is not None and canonical != top_level:
+        raise protocol.ProtocolError("--repository must name the exact Git top level")
+    return top_level
+
+
+def _canonical_evidence_root(
+    repository: pathlib.Path, root: pathlib.Path, *, must_exist: bool
+) -> pathlib.Path:
+    """Canonicalize an evidence root and keep it in the owned artifacts tree."""
+    root = pathlib.Path(root)
+    if not root.is_absolute():
+        root = repository / root
+    try:
+        canonical = root.resolve(strict=must_exist)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot resolve evidence root: {error}") from error
+    artifacts = (repository / "docs" / "worklogs" / "artifacts").resolve(strict=True)
+    if artifacts not in canonical.parents or canonical == artifacts:
+        raise protocol.ProtocolError(
+            "evidence root must be a child of docs/worklogs/artifacts"
+        )
+    if must_exist and not canonical.is_dir():
+        raise protocol.ProtocolError("evidence root is not a directory")
+    if not must_exist and canonical.exists():
+        raise protocol.ProtocolError("start requires an absent evidence root")
+    return canonical
+
+
+def _require_fixed_index_argument(
+    repository: pathlib.Path, supplied: pathlib.Path
+) -> pathlib.Path:
+    supplied = pathlib.Path(supplied)
+    if not supplied.is_absolute():
+        supplied = repository / supplied
+    canonical = supplied.resolve(strict=False)
+    expected, _lock = campaign_index_paths(repository)
+    if canonical != expected:
+        raise protocol.ProtocolError(
+            f"--index must equal the fixed repository path {INDEX_PATH.as_posix()}"
+        )
+    return expected
+
+
+def _infer_repository_for_root(root: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+    repository = _canonical_repository()
+    return repository, _canonical_evidence_root(repository, root, must_exist=True)
 
 STAGE_ORDER = (
     "timing-builds",
@@ -200,12 +274,25 @@ def load_stage_context(
             raise protocol.ProtocolError(f"stage context {name} is not absolute")
     repository = pathlib.Path(context["repository"]).resolve(strict=True)
     scratch = pathlib.Path(context["scratch_parent"]).resolve(strict=True)
+    home = pathlib.Path(context["home"]).resolve(strict=True)
+    cargo_home = pathlib.Path(context["cargo_home"]).resolve(strict=True)
     evidence = pathlib.Path(context["evidence_root"]).resolve(strict=False)
-    if not repository.is_dir() or not scratch.is_dir():
-        raise protocol.ProtocolError("stage repository/scratch is not a directory")
-    for protected in (repository, evidence):
-        if scratch == protected or scratch in protected.parents or protected in scratch.parents:
-            raise protocol.ProtocolError("stage scratch is not external and disjoint")
+    roots = (scratch, home, cargo_home)
+    if any(
+        left == right or left in right.parents or right in left.parents
+        for index, left in enumerate(roots)
+        for right in roots[index + 1 :]
+    ) or any(
+        runtime == protected
+        or runtime in protected.parents
+        or protected in runtime.parents
+        for runtime in roots
+        for protected in (repository, evidence)
+    ):
+        raise protocol.ProtocolError("stage filesystem roots are not disjoint")
+    if not all(path.is_dir() for path in (repository, scratch, home, cargo_home)):
+        raise protocol.ProtocolError("stage repository/runtime root is not a directory")
+    build.validate_controlled_cargo_home(cargo_home)
     if require_fresh_scratch and next(scratch.iterdir(), None) is not None:
         raise protocol.ProtocolError("stage scratch parent is not fresh")
     _require_sha(context["candidate_sha"], sha256=False, context="context candidate")
@@ -556,6 +643,281 @@ def git_experiment_identity(
     if result.returncode != 0:
         raise protocol.ProtocolError("cannot read candidate Git tree")
     return experiment_identity_digest(parse_git_tree(result.stdout), contract)
+
+
+def canonical_experiment_contract() -> dict[str, Any]:
+    """Return the immutable protocol/build/classifier contract for Task 10."""
+    from scripts import classify_criterion_noninferiority as classifier
+
+    return {
+        "version": 1,
+        "protocol_version": protocol.PROTOCOL_VERSION,
+        "implementation_baseline": build.IMPLEMENTATION_BASELINE,
+        "harness_commit": build.HARNESS_COMMIT,
+        "old_strided": build.OLD_STRIDED,
+        "common_strided": build.COMMON_STRIDED,
+        "requested_features": list(build.REQUESTED_FEATURES),
+        "bench_command": list(build.BENCH_COMMAND),
+        "dispatch_test_commands": {
+            package: list(command)
+            for package, command in build.DISPATCH_TEST_COMMANDS.items()
+        },
+        "characterization_bench_commands": {
+            owner: list(command)
+            for owner, command in build.CHARACTERIZATION_BENCH_COMMANDS.items()
+        },
+        "criterion_threshold": classifier.THRESHOLD,
+        "criterion_settings": dict(classifier.CRITERION_SETTINGS),
+        "pair_orders": list(protocol.PAIR_ORDERS),
+        "run_roles": list(protocol.RUN_ROLES),
+        "cases": dict(protocol.CANONICAL_CASES),
+        "stage_order": list(STAGE_ORDER),
+    }
+
+
+def _candidate_provenance(
+    repository: pathlib.Path, candidate: str
+) -> tuple[str, str]:
+    """Resolve one exact commit and derive its tree and experiment identities."""
+    _require_sha(candidate, sha256=False, context="candidate SHA")
+    resolved = _git(
+        repository, "rev-parse", f"{candidate}^{{commit}}", text=True
+    ).strip()
+    if resolved != candidate:
+        raise protocol.ProtocolError("--candidate must be the exact commit SHA")
+    tree = _git(repository, "ls-tree", "-r", "-z", "--full-tree", candidate)
+    tree_sha256 = hashlib.sha256(tree).hexdigest()
+    identity = git_experiment_identity(
+        repository, candidate, canonical_experiment_contract()
+    )
+    validate_candidate_provenance(
+        repository, candidate, tree_sha256, identity, canonical_experiment_contract()
+    )
+    return tree_sha256, identity
+
+
+def _minimal_toolchain_path() -> str:
+    """Derive the canonical minimal PATH containing Git, Cargo, and rustc."""
+    directories: list[pathlib.Path] = []
+    for name in ("git", "cargo", "rustc"):
+        found = shutil.which(name)
+        if found is None:
+            raise protocol.ProtocolError(f"required executable is unavailable: {name}")
+        candidate = pathlib.Path(found)
+        if candidate.is_symlink() and name in {"cargo", "rustc"}:
+            rustup = shutil.which("rustup")
+            if rustup is None:
+                raise protocol.ProtocolError(
+                    f"cannot resolve rustup proxy for required executable: {name}"
+                )
+            result = subprocess.run(
+                (rustup, "which", name),
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            if result.returncode:
+                raise protocol.ProtocolError(
+                    f"rustup cannot resolve required executable: {name}"
+                )
+            candidate = pathlib.Path(result.stdout.strip())
+        try:
+            executable = candidate.resolve(strict=True)
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"cannot resolve required executable {name}: {error}"
+            ) from error
+        directory = executable.parent
+        if directory not in directories:
+            directories.append(directory)
+    path = os.pathsep.join(str(directory) for directory in directories)
+    return build.resolve_toolchain(path).path
+
+
+def _canonical_cargo_home() -> pathlib.Path:
+    raw = os.environ.get("CARGO_HOME")
+    if raw is None:
+        ambient_home = os.environ.get("HOME")
+        if not ambient_home:
+            raise protocol.ProtocolError("neither CARGO_HOME nor HOME is available")
+        raw = str(pathlib.Path(ambient_home) / ".cargo")
+    try:
+        cargo_home = pathlib.Path(raw).resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot resolve source CARGO_HOME: {error}"
+        ) from error
+    if not cargo_home.is_dir():
+        raise protocol.ProtocolError("source CARGO_HOME is not a directory")
+    return cargo_home
+
+
+def _execution_home_paths(
+    scratch_parent: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path]:
+    scratch = pathlib.Path(scratch_parent)
+    return (
+        scratch.parent / f".{scratch.name}-phase2e-home",
+        scratch.parent / f".{scratch.name}-phase2e-cargo-home",
+    )
+
+
+def _prepare_execution_homes(
+    scratch_parent: pathlib.Path,
+    *,
+    source_cargo_home: pathlib.Path | None = None,
+) -> tuple[pathlib.Path, pathlib.Path]:
+    """Create isolated homes exposing only Cargo's reusable source caches."""
+    scratch = pathlib.Path(scratch_parent).resolve(strict=True)
+    home, cargo_home = _execution_home_paths(scratch)
+    source = pathlib.Path(
+        source_cargo_home if source_cargo_home is not None else _canonical_cargo_home()
+    ).resolve(strict=True)
+    for destination in (home, cargo_home):
+        try:
+            destination.mkdir(mode=0o700)
+        except FileExistsError as error:
+            raise protocol.ProtocolError(
+                f"controlled execution home is not fresh: {destination}"
+            ) from error
+    for name in ("git", "registry"):
+        cache = source / name
+        if not cache.exists():
+            continue
+        try:
+            target = cache.resolve(strict=True)
+        except OSError as error:
+            raise protocol.ProtocolError(
+                f"cannot resolve source Cargo {name} cache: {error}"
+            ) from error
+        if not target.is_dir():
+            raise protocol.ProtocolError(
+                f"source Cargo {name} cache is not a directory"
+            )
+        (cargo_home / name).symlink_to(target, target_is_directory=True)
+    build.validate_controlled_cargo_home(cargo_home)
+    return home.resolve(strict=True), cargo_home.resolve(strict=True)
+
+
+def _preflight_offline_feature_queries(context: Mapping[str, Any]) -> None:
+    """Prove the isolated Cargo cache can resolve Task 7 before ACTIVE."""
+    repository = _context_path(context, "repository")
+    scratch = _context_path(context, "scratch_parent")
+    target_dir = scratch / ".phase2e-preflight-target"
+    try:
+        target_dir.mkdir(mode=0o700)
+    except FileExistsError as error:
+        raise protocol.ProtocolError("offline preflight target is not fresh") from error
+    tools = build.resolve_toolchain(context["path"])
+    environment = protocol.cargo_environment(
+        path=context["path"],
+        home=context["home"],
+        cargo_home=context["cargo_home"],
+        target_dir=str(target_dir),
+    )
+    primary: BaseException | None = None
+    try:
+        rustc = build.run_bounded_command(
+            (str(tools.rustc.path), "-vV"),
+            cwd=repository,
+            environment=environment,
+            deadline_seconds=build.QUERY_DEADLINE_SECONDS,
+        )
+        if rustc.returncode != 0:
+            raise protocol.ProtocolError("offline preflight rustc probe failed")
+        target = build._rustc_host(rustc.stdout, "offline preflight")
+        for package in ("tenferro-cpu", "tenferro-ad"):
+            result = build.run_bounded_command(
+                build.feature_query_command(
+                    target,
+                    package=package,
+                    requested_features=build.REQUESTED_FEATURES,
+                    no_default_features=True,
+                ),
+                cwd=repository,
+                environment=environment,
+                deadline_seconds=build.QUERY_DEADLINE_SECONDS,
+            )
+            if result.returncode != 0:
+                raise protocol.ProtocolError(
+                    f"offline Task 7 feature query failed for {package}"
+                )
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        try:
+            shutil.rmtree(target_dir)
+        except BaseException as cleanup_error:
+            if primary is not None:
+                try:
+                    primary.add_note(
+                        "suppressed offline preflight cleanup failure: "
+                        f"{type(cleanup_error).__name__}: {cleanup_error}"
+                    )
+                except BaseException:
+                    pass
+            elif isinstance(cleanup_error, Exception):
+                raise protocol.ProtocolError(
+                    f"cannot clean offline preflight target: {cleanup_error}"
+                ) from cleanup_error
+            else:
+                raise
+
+
+def _prepare_start_context(
+    *,
+    repository: pathlib.Path,
+    root: pathlib.Path,
+    scratch_parent: pathlib.Path,
+    candidate: str,
+) -> tuple[dict[str, Any], str, str]:
+    """Derive every immutable identity and context field from public inputs."""
+    try:
+        scratch = pathlib.Path(scratch_parent).resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot resolve scratch parent: {error}") from error
+    if not scratch.is_dir() or next(scratch.iterdir(), None) is not None:
+        raise protocol.ProtocolError("scratch parent must be an existing empty directory")
+    for protected in (repository, root):
+        if scratch == protected or scratch in protected.parents or protected in scratch.parents:
+            raise protocol.ProtocolError("scratch parent must be external and disjoint")
+    candidate_tree_sha256, experiment_identity = _candidate_provenance(
+        repository, candidate
+    )
+    reservation_id = secrets.token_hex(32)
+    campaign_identity = protocol.sha256_json(
+        {
+            "version": 1,
+            "protocol_version": protocol.PROTOCOL_VERSION,
+            "candidate_sha": candidate,
+            "experiment_identity_digest": experiment_identity,
+            "evidence_root": str(root),
+        }
+    )
+    home, cargo_home = _execution_home_paths(scratch)
+    index, index_lock = campaign_index_paths(repository)
+    context = {
+        "version": 1,
+        "repository": str(repository),
+        "evidence_root": str(root),
+        "scratch_parent": str(scratch),
+        "candidate_sha": candidate,
+        "candidate_tree_sha256": candidate_tree_sha256,
+        "reservation_id": reservation_id,
+        "experiment_identity_digest": experiment_identity,
+        "command_contract_digest": "",
+        "path": _minimal_toolchain_path(),
+        "home": str(home),
+        "cargo_home": str(cargo_home),
+        "index": str(index),
+        "index_lock": str(index_lock),
+    }
+    context["command_contract_digest"] = stage_context_contract_digest(context)
+    context_sha256 = hashlib.sha256(
+        protocol._canonical_json_bytes(context)
+    ).hexdigest()
+    return context, context_sha256, campaign_identity
 
 
 def validate_candidate_provenance(
@@ -1774,6 +2136,7 @@ def required_root_paths(ledger: Mapping[str, Any]) -> frozenset[str]:
     required = {
         "evidence-ledger.json",
         PROGRESS_MANIFEST,
+        STAGE_CONTEXT,
         ".orchestrator.lock",
         "dispatch-gates/manifest.json",
         "characterization/manifest.json",
@@ -1971,6 +2334,10 @@ def seal_root(
     if set(inventory) != required:
         raise protocol.ProtocolError("root inventory is not the canonical Task 8A set")
     progress = _read_json(root / PROGRESS_MANIFEST, "aggregate progress")
+    if progress["context_sha256"] != inventory[STAGE_CONTEXT]:
+        raise protocol.ProtocolError(
+            "aggregate progress differs from normative context bytes"
+        )
     bound_command_digest = progress.get(
         "command_contract_digest", command_contract_digest()
     )
@@ -2048,6 +2415,10 @@ def validate_root(root: pathlib.Path) -> str:
         "command_contract_digest", command_contract_digest()
     ) or manifest["context_sha256"] != progress.get("context_sha256"):
         raise protocol.ProtocolError("aggregate command contract differs")
+    if manifest["context_sha256"] != manifest["inventory"][STAGE_CONTEXT]:
+        raise protocol.ProtocolError(
+            "aggregate context digest differs from normative context bytes"
+        )
     if set(manifest["inventory"]) != _canonical_root_paths(root, ledger):
         raise protocol.ProtocolError("aggregate inventory contract differs")
     status = _terminal_ledger_status(ledger)
@@ -3327,11 +3698,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="run_phase2e.py", exit_on_error=False)
     subparsers = parser.add_subparsers(dest="command", required=True)
     validate = subparsers.add_parser("validate", exit_on_error=False)
-    validate.add_argument("--root", required=True, type=pathlib.Path)
+    validate.add_argument("--evidence-root", required=True, type=pathlib.Path)
+    validate.add_argument("--print-status", action="store_true")
     validate.add_argument("--require-pass", action="store_true")
     validate.add_argument("--git-index", action="store_true")
-    validate.add_argument("--repository", type=pathlib.Path)
-    validate.add_argument("--worklog", type=pathlib.Path)
     compare = subparsers.add_parser("compare-experiment-identity", exit_on_error=False)
     compare.add_argument("--repository", required=True, type=pathlib.Path)
     compare.add_argument("--left", required=True)
@@ -3341,34 +3711,91 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--stage", required=True, choices=STAGE_ORDER)
     worker.add_argument("--context", required=True, type=pathlib.Path)
     worker.add_argument("--context-sha256", required=True)
-    for name in ("start", "rerun-invalid-lane", "continue"):
+    start = subparsers.add_parser("start", exit_on_error=False)
+    start.add_argument("--repository", required=True, type=pathlib.Path)
+    start.add_argument("--candidate", required=True)
+    start.add_argument("--evidence-root", required=True, type=pathlib.Path)
+    start.add_argument("--index", required=True, type=pathlib.Path)
+    start.add_argument("--scratch-parent", required=True, type=pathlib.Path)
+    for name in ("rerun-invalid-lane", "continue"):
         command = subparsers.add_parser(name, exit_on_error=False)
-        command.add_argument("--repository", required=True, type=pathlib.Path)
-        command.add_argument("--root", required=True, type=pathlib.Path)
-        command.add_argument("--context", required=True, type=pathlib.Path)
-        command.add_argument("--context-sha256", required=True)
-        command.add_argument("--path", required=True)
-        command.add_argument("--home", required=True)
-        if name == "start":
-            command.add_argument("--reservation-id", required=True)
-            command.add_argument("--candidate", required=True)
-            command.add_argument("--candidate-tree-sha256", required=True)
-            command.add_argument("--experiment-identity-digest", required=True)
-            command.add_argument("--campaign-identity-digest", required=True)
-            command.add_argument("--contract", required=True, type=pathlib.Path)
+        command.add_argument("--evidence-root", required=True, type=pathlib.Path)
     record = subparsers.add_parser("record-index", exit_on_error=False)
-    record.add_argument("--repository", required=True, type=pathlib.Path)
-    record.add_argument("--root", required=True, type=pathlib.Path)
-    record.add_argument("--reservation-id", required=True)
+    record.add_argument("--evidence-root", required=True, type=pathlib.Path)
+    record.add_argument("--index", required=True, type=pathlib.Path)
     record.add_argument("--abandoned", action="store_true")
+    record.add_argument("--confirm-no-live-processes", action="store_true")
     preserved = subparsers.add_parser("record-preserved", exit_on_error=False)
-    preserved.add_argument("--repository", required=True, type=pathlib.Path)
-    preserved.add_argument("--root", required=True, type=pathlib.Path)
-    preserved.add_argument("--reservation-id", required=True)
+    preserved.add_argument("--evidence-root", required=True, type=pathlib.Path)
+    preserved.add_argument("--index", required=True, type=pathlib.Path)
     preserved.add_argument("--preservation-commit", required=True)
-    preserved.add_argument("--issue-url", required=True)
-    preserved.add_argument("--worklog", required=True, type=pathlib.Path)
+    preserved.add_argument("--issue-comment-url", required=True)
     return parser
+
+
+def _active_for_root(
+    repository: pathlib.Path,
+    root: pathlib.Path,
+    *,
+    allowed_states: frozenset[str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read the fixed durable index and locate the reservation owning ``root``."""
+    with campaign_index_transaction(repository) as transaction:
+        index = transaction.read()
+    state = index_state(index)
+    if state not in allowed_states:
+        raise protocol.ProtocolError("campaign index state is not valid for this command")
+    current = index["events"][-1]
+    reservation_id = current["reservation_id"]
+    active = next(
+        event
+        for event in reversed(index["events"])
+        if event["event"] == "ACTIVE"
+        and event["reservation_id"] == reservation_id
+    )
+    if active["root"] != str(root):
+        raise protocol.ProtocolError("evidence root differs from the durable reservation")
+    return index, active
+
+
+def _load_bound_context(
+    repository: pathlib.Path,
+    root: pathlib.Path,
+    active: Mapping[str, Any],
+) -> tuple[pathlib.Path, dict[str, Any], str]:
+    """Load only the normative context bound by ACTIVE."""
+    context_path = root / STAGE_CONTEXT
+    context_sha256 = active["context_sha256"]
+    context = load_stage_context(
+        context_path, context_sha256, require_fresh_scratch=False
+    )
+    expected = {
+        "repository": str(repository),
+        "evidence_root": str(root),
+        "index": str(repository / INDEX_PATH),
+        "index_lock": str(repository / INDEX_LOCK_PATH),
+        "candidate_sha": active["candidate_sha"],
+        "candidate_tree_sha256": active["candidate_tree_sha256"],
+        "reservation_id": active["reservation_id"],
+        "experiment_identity_digest": active["experiment_identity_digest"],
+        "command_contract_digest": active["command_contract_digest"],
+    }
+    for name, value in expected.items():
+        if context[name] != value:
+            raise protocol.ProtocolError(f"normative context differs at {name}")
+    head = _git(repository, "rev-parse", "HEAD", text=True).strip()
+    tree = _git(repository, "ls-tree", "-r", "-z", "--full-tree", head)
+    if (
+        head != active["candidate_sha"]
+        or hashlib.sha256(tree).hexdigest() != active["candidate_tree_sha256"]
+        or git_experiment_identity(
+            repository, head, canonical_experiment_contract()
+        )
+        != active["experiment_identity_digest"]
+    ):
+        raise protocol.ProtocolError("current candidate provenance differs from ACTIVE")
+    context["context_path"] = str(context_path)
+    return context_path, context, context_sha256
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -3379,21 +3806,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.stage, args.context, args.context_sha256
             )
         if args.command == "validate":
-            status = validate_root(args.root)
+            repository, root = _infer_repository_for_root(args.evidence_root)
+            status = validate_root(root)
             if args.git_index:
-                if args.repository is None or args.worklog is None:
-                    raise protocol.ProtocolError(
-                        "--git-index requires --repository and --worklog"
-                    )
-                index_path, _lock_path = campaign_index_paths(args.repository)
+                index_path, _lock_path = campaign_index_paths(repository)
                 index = _read_index(index_path)
-                canonical_root = str(pathlib.Path(args.root).resolve(strict=True))
                 terminal = next(
                     (
                         event
                         for event in reversed(index["events"])
                         if event["event"] == "TERMINAL"
-                        and event["root"] == canonical_root
+                        and event["root"] == str(root)
                     ),
                     None,
                 )
@@ -3402,14 +3825,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "staged root has no matching TERMINAL event"
                     )
                 validate_preservation_objects(
-                    args.repository,
+                    repository,
                     selector=":",
-                    root=args.root,
+                    root=root,
                     index_path=index_path,
-                    worklog=args.worklog,
+                    worklog=repository / WORKLOG_PATH,
                     terminal_event=terminal,
                 )
-            print(status)
+            if args.print_status:
+                print(status)
             return _exit_for_status(status, require_pass=args.require_pass)
         if args.command == "compare-experiment-identity":
             contract = _read_json(args.contract, "experiment contract")
@@ -3418,138 +3842,174 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(left)
             return 0 if left == right else 1
         if args.command == "start":
-            stage_context = load_stage_context(args.context, args.context_sha256)
-            stage_context["context_path"] = str(args.context.resolve(strict=True))
-            index_path, index_lock = campaign_index_paths(args.repository)
-            expected_context = {
-                "repository": str(args.repository.resolve(strict=True)),
-                "evidence_root": str(args.root.resolve(strict=False)),
-                "candidate_sha": args.candidate,
-                "candidate_tree_sha256": args.candidate_tree_sha256,
-                "reservation_id": args.reservation_id,
-                "experiment_identity_digest": args.experiment_identity_digest,
-                "command_contract_digest": stage_context["command_contract_digest"],
-                "path": args.path,
-                "home": args.home,
-                "index": str(index_path),
-                "index_lock": str(index_lock),
-            }
-            for name, value in expected_context.items():
-                if stage_context[name] != value:
-                    raise protocol.ProtocolError(
-                        f"stage context differs from start at {name}"
-                    )
-            contract = _read_json(args.contract, "experiment contract")
-            validate_candidate_provenance(
-                args.repository,
-                args.candidate,
-                args.candidate_tree_sha256,
-                args.experiment_identity_digest,
-                contract,
+            repository = _canonical_repository(args.repository)
+            root = _canonical_evidence_root(
+                repository, args.evidence_root, must_exist=False
             )
+            _require_fixed_index_argument(repository, args.index)
+            stage_context, context_sha256, campaign_identity = _prepare_start_context(
+                repository=repository,
+                root=root,
+                scratch_parent=args.scratch_parent,
+                candidate=args.candidate,
+            )
+            home, cargo_home = _prepare_execution_homes(
+                pathlib.Path(stage_context["scratch_parent"])
+            )
+            if (
+                home != pathlib.Path(stage_context["home"])
+                or cargo_home != pathlib.Path(stage_context["cargo_home"])
+            ):
+                raise protocol.ProtocolError(
+                    "derived execution home paths changed during start"
+                )
+            _preflight_offline_feature_queries(stage_context)
+            context_path = root / STAGE_CONTEXT
+
+            def initialize_root(initializing_root: pathlib.Path) -> None:
+                protocol.atomic_write_json(
+                    initializing_root / STAGE_CONTEXT, stage_context
+                )
+                protocol.atomic_write_json(
+                    initializing_root / "evidence-ledger.json",
+                    protocol.new_ledger(args.candidate),
+                )
+
             code = initialize_campaign(
-                repository=args.repository,
-                root=args.root,
-                reservation_id=args.reservation_id,
+                repository=repository,
+                root=root,
+                reservation_id=stage_context["reservation_id"],
                 candidate_sha=args.candidate,
-                candidate_tree_sha256=args.candidate_tree_sha256,
-                experiment_identity_digest=args.experiment_identity_digest,
-                campaign_identity_digest=args.campaign_identity_digest,
+                candidate_tree_sha256=stage_context["candidate_tree_sha256"],
+                experiment_identity_digest=stage_context[
+                    "experiment_identity_digest"
+                ],
+                campaign_identity_digest=campaign_identity,
                 command_digest=stage_context["command_contract_digest"],
-                context_sha256=args.context_sha256,
+                context_sha256=context_sha256,
+                initializer=initialize_root,
             )
             if code == 5:
                 print("ABANDONED_INITIALIZATION")
                 return 5
-            environment = protocol.runtime_environment(path=args.path, home=args.home)
+            stage_context = load_stage_context(
+                context_path, context_sha256, require_fresh_scratch=False
+            )
+            stage_context["context_path"] = str(context_path)
+            environment = protocol.runtime_environment(
+                path=stage_context["path"], home=stage_context["home"]
+            )
             with active_campaign_lock(
-                args.repository, args.root, reservation_id=args.reservation_id
+                repository,
+                root,
+                reservation_id=stage_context["reservation_id"],
             ) as (_active, root_identity):
                 return run_fixed_stages(
-                    args.root,
+                    root,
                     environment,
                     _subprocess_stage_runner(
-                        args.context,
-                        args.context_sha256,
-                        args.repository,
-                        root=args.root,
+                        context_path,
+                        context_sha256,
+                        repository,
+                        root=root,
                         root_identity=root_identity,
                     ),
                     identity={
                         **stage_context,
-                        "context_sha256": args.context_sha256,
-                        "context_path": str(args.context.resolve(strict=True)),
+                        "context_sha256": context_sha256,
+                        "context_path": str(context_path),
                     },
                     root_identity=root_identity,
                     _locked=True,
                 )
         if args.command in {"rerun-invalid-lane", "continue"}:
-            stage_context = load_stage_context(
-                args.context,
-                args.context_sha256,
-                require_fresh_scratch=False,
+            repository, root = _infer_repository_for_root(args.evidence_root)
+            _index, preliminary = _active_for_root(
+                repository, root, allowed_states=frozenset({"ACTIVE"})
             )
-            stage_context["context_path"] = str(args.context.resolve(strict=True))
-            environment = protocol.runtime_environment(path=args.path, home=args.home)
             with active_campaign_lock(
-                args.repository,
-                args.root,
-                reservation_id=stage_context["reservation_id"],
+                repository,
+                root,
+                reservation_id=preliminary["reservation_id"],
             ) as (active, root_identity):
+                context_path, stage_context, context_sha256 = _load_bound_context(
+                    repository, root, active
+                )
+                environment = protocol.runtime_environment(
+                    path=stage_context["path"], home=stage_context["home"]
+                )
                 runner = _subprocess_stage_runner(
-                    args.context,
-                    args.context_sha256,
-                    args.repository,
-                    root=args.root,
+                    context_path,
+                    context_sha256,
+                    repository,
+                    root=root,
                     root_identity=root_identity,
                 )
                 root_identity.revalidate()
-                progress = validate_progress(args.root)
+                progress = validate_progress(root)
                 validate_resume_identity(
-                    active, stage_context, args.context_sha256, progress
+                    active, stage_context, context_sha256, progress
                 )
                 if args.command == "rerun-invalid-lane":
                     return rerun_invalid_stage(
-                        args.root,
+                        root,
                         environment,
                         runner,
                         identity={
                             **stage_context,
-                            "context_sha256": args.context_sha256,
-                            "context_path": str(args.context.resolve(strict=True)),
+                            "context_sha256": context_sha256,
+                            "context_path": str(context_path),
                         },
                         root_identity=root_identity,
                         _locked=True,
                     )
                 return continue_after_retry(
-                    args.root,
+                    root,
                     environment,
                     runner,
                     identity={
                         **stage_context,
-                        "context_sha256": args.context_sha256,
-                        "context_path": str(args.context.resolve(strict=True)),
+                        "context_sha256": context_sha256,
+                        "context_path": str(context_path),
                     },
                     root_identity=root_identity,
                     _locked=True,
                 )
         if args.command == "record-index":
+            repository, root = _infer_repository_for_root(args.evidence_root)
+            _require_fixed_index_argument(repository, args.index)
+            if args.abandoned != args.confirm_no_live_processes:
+                raise protocol.ProtocolError(
+                    "--confirm-no-live-processes is required exactly with --abandoned"
+                )
+            _index, active = _active_for_root(
+                repository,
+                root,
+                allowed_states=frozenset({"ACTIVE", "PENDING_PRESERVATION"}),
+            )
             updated = record_index_root(
-                repository=args.repository,
-                root=args.root,
-                reservation_id=args.reservation_id,
+                repository=repository,
+                root=root,
+                reservation_id=active["reservation_id"],
                 abandoned=args.abandoned,
             )
             print(index_state(updated))
             return 0
         if args.command == "record-preserved":
+            repository, root = _infer_repository_for_root(args.evidence_root)
+            _require_fixed_index_argument(repository, args.index)
+            _index, active = _active_for_root(
+                repository,
+                root,
+                allowed_states=frozenset({"PENDING_PRESERVATION", "PRESERVED"}),
+            )
             updated = record_preserved(
-                repository=args.repository,
-                root=args.root,
-                reservation_id=args.reservation_id,
+                repository=repository,
+                root=root,
+                reservation_id=active["reservation_id"],
                 preservation_commit=args.preservation_commit,
-                issue_url=args.issue_url,
-                worklog=args.worklog,
+                issue_url=args.issue_comment_url,
+                worklog=repository / WORKLOG_PATH,
             )
             print(index_state(updated))
             return 0

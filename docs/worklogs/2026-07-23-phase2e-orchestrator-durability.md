@@ -24,7 +24,8 @@ machine. The checked-out shared rules repository was available and used.
 
 ## Decisions
 
-- The only index paths are `docs/worklogs/phase2e-index.json` and
+- The only index paths are
+  `docs/worklogs/2026-07-21-phase-2e-index.json` and
   `docs/worklogs/.phase2e-index.lock` below the canonical repository root.
   CLI callers cannot substitute either path.
 - The first remote comparison, optional index creation, index read, and ACTIVE
@@ -116,6 +117,26 @@ It includes strict four-line preservation-comment parsing, durable index URL
 validation, and staged/commit rejection of the force-added index lock. Focused
 Git tests use temporary local repositories and fake remote/comment adapters.
 No push, fetch from a real remote, or GitHub comment was performed.
+
+## Task 10 operational wrapper
+
+The Task 10 integration pass narrowed the public CLI to the six literal
+operational command shapes in the umbrella plan while retaining the read-only
+experiment-identity comparison command. Internal reservation, provenance,
+contract, runtime-path, and context identities are derived by `start`, stored
+as a digest-bound canonical context under the evidence root, and recovered
+from the fixed index/root pair for continuation and preservation commands.
+The dated index path is fixed; alternate indexes, foreign roots, reused
+scratch, stale candidates, and the former internal identity flags are rejected.
+
+`start` now creates a private empty `HOME` and a private `CARGO_HOME` outside
+the measured scratch root. The latter links only canonical Cargo `git` and
+`registry` source caches and contains no Cargo config or credentials. Before
+creating `ACTIVE`, the wrapper runs both Task 7 `cpu-faer` feature queries with
+`CARGO_NET_OFFLINE=true`. A real local preflight on 2026-07-23 passed for
+`tenferro-cpu` and `tenferro-ad`; the focused outer-orchestrator suite passed
+83 tests after final context-integrity review. The exact seven-module Phase 2E
+verification matrix passed 441 tests in 213.9 seconds.
 
 ## Remaining work
 

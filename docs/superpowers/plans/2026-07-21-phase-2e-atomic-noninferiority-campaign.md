@@ -1070,6 +1070,36 @@ closure is keyed by `experiment_identity_digest`, never by raw candidate SHA;
 for a permitted validity/abandonment retry, the exact original candidate SHA
 must also remain unchanged.
 
+The public operational surfaces are intentionally narrow and match Task 10
+literally:
+
+- `start --repository --candidate --evidence-root --index --scratch-parent`;
+- `rerun-invalid-lane --evidence-root`;
+- `continue --evidence-root`;
+- `validate --evidence-root [--print-status] [--require-pass] [--git-index]`;
+- `record-index --evidence-root --index [--abandoned
+  --confirm-no-live-processes]`;
+- `record-preserved --evidence-root --index --preservation-commit
+  --issue-comment-url`.
+
+The only accepted index argument is
+`docs/worklogs/2026-07-21-phase-2e-index.json`. Reservation, candidate-tree,
+experiment, campaign, command-contract, context, toolchain, and process
+identities are never caller-provided operational flags. `start` derives and
+binds them before `ACTIVE`; later commands recover them from the fixed index
+and the canonical context stored under the evidence root. The private
+`_stage-worker` interface is not an operator surface.
+
+Before reserving `ACTIVE`, `start` creates fresh mutually disjoint execution
+homes next to the external scratch parent. `HOME` is empty. `CARGO_HOME`
+contains no configuration or credential files and exposes only canonical
+`git` and `registry` source-cache directories from the ambient Cargo cache.
+With the sealed offline Cargo environment it runs the exact Task 7
+`cargo tree --locked --no-default-features --features cpu-faer -e features`
+queries for both `tenferro-cpu` and `tenferro-ad`. Failure leaves the evidence
+root and global index unreserved, so a missing Git checkout is discovered
+before the long campaign.
+
 If initialization fails after the ACTIVE event, `start` itself, while still
 holding index then root locks and before any child process has been launched,
 rejects symlinks/special files, hashes every existing regular file including

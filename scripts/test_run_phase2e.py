@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import hashlib
 import os
@@ -13,7 +14,8 @@ import sys
 import tempfile
 import threading
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
+from io import StringIO
 from unittest import mock
 
 
@@ -89,16 +91,97 @@ class OuterOrchestratorTests(unittest.TestCase):
                 ),
             )
         parser = orchestrator.build_parser()
-        for command in ("start", "rerun-invalid-lane", "continue", "record-index"):
+        choices = parser._subparsers._group_actions[0].choices
+        self.assertEqual(
+            set(choices),
+            {
+                "start",
+                "rerun-invalid-lane",
+                "continue",
+                "validate",
+                "record-index",
+                "record-preserved",
+                "compare-experiment-identity",
+                "_stage-worker",
+            },
+        )
+        expected_options = {
+            "start": {
+                "-h",
+                "--help",
+                "--repository",
+                "--candidate",
+                "--evidence-root",
+                "--index",
+                "--scratch-parent",
+            },
+            "rerun-invalid-lane": {"-h", "--help", "--evidence-root"},
+            "continue": {"-h", "--help", "--evidence-root"},
+            "validate": {
+                "-h",
+                "--help",
+                "--evidence-root",
+                "--print-status",
+                "--require-pass",
+                "--git-index",
+            },
+            "record-index": {
+                "-h",
+                "--help",
+                "--evidence-root",
+                "--index",
+                "--abandoned",
+                "--confirm-no-live-processes",
+            },
+            "record-preserved": {
+                "-h",
+                "--help",
+                "--evidence-root",
+                "--index",
+                "--preservation-commit",
+                "--issue-comment-url",
+            },
+        }
+        for command, expected in expected_options.items():
             option_strings = {
                 option
-                for action in parser._subparsers._group_actions[0]
-                .choices[command]
-                ._actions
+                for action in choices[command]._actions
                 for option in action.option_strings
             }
-            self.assertNotIn("--index", option_strings)
-            self.assertNotIn("--index-lock", option_strings)
+            self.assertEqual(option_strings, expected)
+
+    def test_public_cli_rejects_every_old_internal_identity_argument(self):
+        parser = orchestrator.build_parser()
+        old_arguments = (
+            "--root",
+            "--context",
+            "--context-sha256",
+            "--path",
+            "--home",
+            "--reservation-id",
+            "--candidate-tree-sha256",
+            "--experiment-identity-digest",
+            "--campaign-identity-digest",
+            "--contract",
+            "--repository",
+            "--worklog",
+            "--issue-url",
+        )
+        public_commands = (
+            "rerun-invalid-lane",
+            "continue",
+            "validate",
+            "record-index",
+            "record-preserved",
+        )
+        choices = next(
+            action.choices
+            for action in parser._actions
+            if isinstance(action, argparse._SubParsersAction)
+        )
+        for command in public_commands:
+            for argument in old_arguments:
+                self.assertNotIn(argument, choices[command]._option_string_actions)
 
     def test_first_index_create_compare_and_reserve_share_one_lock(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -307,6 +390,8 @@ class OuterOrchestratorTests(unittest.TestCase):
         repository.mkdir()
         evidence.parent.mkdir(parents=True)
         scratch.mkdir()
+        (base / "home").mkdir()
+        (base / "cargo-home").mkdir()
         context = {
             "version": 1,
             "repository": str(repository.resolve()),
@@ -532,6 +617,229 @@ class OuterOrchestratorTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, (argv, result.stderr))
                 self.assertIn("usage:", result.stdout)
 
+    def test_exact_public_start_command_reports_typed_error_without_traceback(self):
+        repository = pathlib.Path(__file__).resolve().parent.parent
+        direct = str(repository / "scripts" / "run_phase2e.py")
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = pathlib.Path(directory).resolve()
+            evidence = (
+                repository
+                / "docs"
+                / "worklogs"
+                / "artifacts"
+                / "phase2e-public-cli-red-root"
+            )
+            result = subprocess.run(
+                (
+                    sys.executable,
+                    direct,
+                    "start",
+                    "--repository",
+                    str(repository),
+                    "--candidate",
+                    "0" * 40,
+                    "--evidence-root",
+                    str(evidence),
+                    "--index",
+                    str(orchestrator.INDEX_PATH),
+                    "--scratch-parent",
+                    str(scratch),
+                ),
+                cwd=repository,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 3)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("phase2e orchestrator error:", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertFalse(evidence.exists())
+
+    def test_public_start_rejects_alternate_index_root_and_reused_scratch(self):
+        repository = pathlib.Path(__file__).resolve().parent.parent
+        direct = str(repository / "scripts" / "run_phase2e.py")
+        artifacts = repository / "docs" / "worklogs" / "artifacts"
+        candidate = subprocess.run(
+            ("git", "rev-parse", "HEAD"),
+            cwd=repository,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        with tempfile.TemporaryDirectory(dir=artifacts) as root_parent_name:
+            root_parent = pathlib.Path(root_parent_name).resolve()
+            with tempfile.TemporaryDirectory() as scratch_name:
+                scratch = pathlib.Path(scratch_name).resolve()
+                base = [
+                    sys.executable,
+                    direct,
+                    "start",
+                    "--repository",
+                    str(repository),
+                    "--candidate",
+                    candidate,
+                    "--evidence-root",
+                    str(root_parent / "root"),
+                    "--index",
+                    str(orchestrator.INDEX_PATH),
+                    "--scratch-parent",
+                    str(scratch),
+                ]
+                cases = {
+                    "alternate index": (
+                        base.index(str(orchestrator.INDEX_PATH)),
+                        "docs/worklogs/alternate-index.json",
+                    ),
+                    "external evidence root": (
+                        base.index(str(root_parent / "root")),
+                        str(scratch / "root"),
+                    ),
+                }
+                for name, (position, replacement) in cases.items():
+                    with self.subTest(name=name):
+                        argv = list(base)
+                        argv[position] = replacement
+                        result = subprocess.run(
+                            argv,
+                            cwd=repository,
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        self.assertEqual(result.returncode, 3, result.stderr)
+                        self.assertNotIn("Traceback", result.stderr)
+                (scratch / "foreign").write_text("occupied", encoding="utf-8")
+                result = subprocess.run(
+                    base,
+                    cwd=repository,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 3, result.stderr)
+                self.assertIn("scratch parent", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_public_start_derives_a_canonical_regular_toolchain(self):
+        path = orchestrator._minimal_toolchain_path()
+        tools = orchestrator.build.resolve_toolchain(path)
+        for tool in (tools.git, tools.cargo, tools.rustc):
+            self.assertTrue(tool.path.is_file())
+            self.assertFalse(tool.path.is_symlink())
+
+    def test_public_start_creates_isolated_offline_capable_execution_homes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            (source / "git" / "checkouts").mkdir(parents=True)
+            (source / "registry" / "index").mkdir(parents=True)
+
+            home, cargo_home = orchestrator._prepare_execution_homes(
+                scratch, source_cargo_home=source
+            )
+
+            self.assertEqual(home.parent, scratch.parent)
+            self.assertEqual(cargo_home.parent, scratch.parent)
+            self.assertNotEqual(home, cargo_home)
+            self.assertEqual(list(home.iterdir()), [])
+            self.assertEqual(
+                {path.name for path in cargo_home.iterdir()},
+                {"git", "registry"},
+            )
+            self.assertEqual(
+                (cargo_home / "git").resolve(strict=True),
+                (source / "git").resolve(strict=True),
+            )
+            self.assertEqual(
+                (cargo_home / "registry").resolve(strict=True),
+                (source / "registry").resolve(strict=True),
+            )
+            for forbidden in (
+                "config",
+                "config.toml",
+                "credentials",
+                "credentials.toml",
+            ):
+                self.assertFalse((cargo_home / forbidden).exists())
+                self.assertFalse((cargo_home / forbidden).is_symlink())
+            orchestrator.build.validate_controlled_cargo_home(cargo_home)
+
+    def test_offline_preflight_runs_task7_feature_queries_before_campaign(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            repository = base / "repository"
+            scratch = base / "scratch"
+            home = base / "home"
+            cargo_home = base / "cargo-home"
+            toolchain = base / "toolchain"
+            for path in (repository, scratch, home, cargo_home, toolchain):
+                path.mkdir()
+            context = {
+                "repository": str(repository),
+                "scratch_parent": str(scratch),
+                "path": str(toolchain),
+                "home": str(home),
+                "cargo_home": str(cargo_home),
+            }
+            tools = mock.Mock()
+            tools.rustc.path = toolchain / "rustc"
+            host_probe = mock.Mock(returncode=0, stdout="host: target-triple\n")
+            query_result = mock.Mock(returncode=0, stdout="features\n")
+            with mock.patch.object(
+                orchestrator.build, "resolve_toolchain", return_value=tools
+            ), mock.patch.object(
+                orchestrator.build,
+                "run_bounded_command",
+                side_effect=(host_probe, query_result, query_result),
+            ) as run:
+                orchestrator._preflight_offline_feature_queries(context)
+
+            self.assertEqual(run.call_count, 3)
+            for package, call in zip(
+                ("tenferro-cpu", "tenferro-ad"), run.call_args_list[1:]
+            ):
+                self.assertEqual(
+                    call.args[0],
+                    orchestrator.build.feature_query_command(
+                        "target-triple",
+                        package=package,
+                        requested_features=orchestrator.build.REQUESTED_FEATURES,
+                        no_default_features=True,
+                    ),
+                )
+                environment = call.kwargs["environment"]
+                self.assertEqual(environment["CARGO_NET_OFFLINE"], "true")
+                self.assertEqual(environment["HOME"], str(home))
+                self.assertEqual(environment["CARGO_HOME"], str(cargo_home))
+
+    def test_validate_prints_only_when_print_status_is_requested(self):
+        artifacts = self.REPOSITORY / "docs" / "worklogs" / "artifacts"
+        with tempfile.TemporaryDirectory(dir=artifacts) as directory:
+            root = pathlib.Path(directory).resolve()
+            self.make_complete_root(root)
+            output = StringIO()
+            with redirect_stdout(output):
+                code = orchestrator.main(
+                    ["validate", "--evidence-root", str(root)]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(output.getvalue(), "")
+            output = StringIO()
+            with redirect_stdout(output):
+                code = orchestrator.main(
+                    [
+                        "validate",
+                        "--evidence-root",
+                        str(root),
+                        "--print-status",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(output.getvalue(), "PASS\n")
+
     def make_complete_root(
         self, root: pathlib.Path, *, seal: bool = True,
         normalized_timing_result: str = "PASS",
@@ -629,7 +937,9 @@ class OuterOrchestratorTests(unittest.TestCase):
             "reservation_id": "reservation-1",
             "experiment_identity_digest": "b" * 64,
             "command_contract_digest": orchestrator.command_contract_digest(),
-            "context_sha256": "e" * 64,
+            "context_sha256": protocol.sha256_file(
+                root / orchestrator.STAGE_CONTEXT
+            ),
             "repository": str(self.REPOSITORY),
             "evidence_root": str(root.resolve()),
             "scratch_parent": scratch_fixture.name,
@@ -1894,7 +2204,7 @@ class OuterOrchestratorTests(unittest.TestCase):
             self.assertEqual(entry["state"], "TERMINATED")
             self.assertTrue(entry["reaped"])
 
-    def test_abandonment_cli_has_no_boolean_or_process_group_bypass(self):
+    def test_abandonment_cli_accepts_confirmation_but_no_process_group_bypass(self):
         parser = orchestrator.build_parser()
         options = {
             option
@@ -1903,7 +2213,7 @@ class OuterOrchestratorTests(unittest.TestCase):
             ._actions
             for option in action.option_strings
         }
-        self.assertNotIn("--confirm-no-live-processes", options)
+        self.assertIn("--confirm-no-live-processes", options)
         self.assertNotIn("--process-group", options)
 
     def test_spawn_journal_becomes_normative_root_evidence(self):
