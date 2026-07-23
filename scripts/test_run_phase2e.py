@@ -930,6 +930,146 @@ class OuterOrchestratorTests(unittest.TestCase):
         self.assertEqual(orchestrator.index_state(preserved), "PRESERVED")
         self.assertEqual(preserved["current_evidence_root"], "docs/worklogs/root-1")
 
+    def test_terminal_event_carries_complete_active_and_root_identity(self):
+        active = orchestrator.record_active(
+            orchestrator.new_campaign_index(),
+            reservation_id="r1",
+            candidate_sha=self.CANDIDATE,
+            candidate_tree_sha256="c" * 64,
+            root="/canonical/root",
+            experiment_identity_digest="d" * 64,
+            campaign_identity_digest="e" * 64,
+            command_digest="f" * 64,
+            context_sha256="1" * 64,
+        )
+        pending = orchestrator.record_terminal(
+            active,
+            reservation_id="r1",
+            status="PASS",
+            root_digest="2" * 64,
+            ledger_sha256="3" * 64,
+        )
+        terminal = pending["events"][-1]
+        self.assertEqual(
+            terminal,
+            {
+                "ordinal": 2,
+                "event": "TERMINAL",
+                "reservation_id": "r1",
+                "status": "PASS",
+                "root_digest": "2" * 64,
+                "ledger_sha256": "3" * 64,
+                "candidate_sha": self.CANDIDATE,
+                "candidate_tree_sha256": "c" * 64,
+                "root": "/canonical/root",
+                "experiment_identity_digest": "d" * 64,
+                "campaign_identity_digest": "e" * 64,
+                "command_contract_digest": "f" * 64,
+                "context_sha256": "1" * 64,
+            },
+        )
+
+    def test_record_index_rejects_foreign_root_before_sealing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            worklogs = repository / "docs" / "worklogs"
+            worklogs.mkdir(parents=True)
+            active_root = worklogs / "active"
+            foreign_root = worklogs / "foreign"
+            active_root.mkdir(mode=0o700)
+            foreign_root.mkdir(mode=0o700)
+            index = orchestrator.record_active(
+                orchestrator.new_campaign_index(),
+                reservation_id="r1",
+                candidate_sha=self.CANDIDATE,
+                candidate_tree_sha256="c" * 64,
+                root=str(active_root),
+                experiment_identity_digest="d" * 64,
+                campaign_identity_digest="e" * 64,
+            )
+            protocol.atomic_write_json(repository / orchestrator.INDEX_PATH, index)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.record_index_root(
+                    repository=repository,
+                    root=foreign_root,
+                    reservation_id="r1",
+                    abandoned=True,
+                    confirm_no_live_processes=True,
+                )
+            self.assertFalse((foreign_root / orchestrator.ABANDONMENT_SEAL).exists())
+            self.assertEqual(
+                orchestrator.index_state(
+                    orchestrator._read_index(repository / orchestrator.INDEX_PATH)
+                ),
+                "ACTIVE",
+            )
+
+    def test_record_index_exact_replay_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            worklogs = repository / "docs" / "worklogs"
+            worklogs.mkdir(parents=True)
+            root = worklogs / "active"
+            root.mkdir(mode=0o700)
+            index = orchestrator.record_active(
+                orchestrator.new_campaign_index(),
+                reservation_id="r1",
+                candidate_sha=self.CANDIDATE,
+                candidate_tree_sha256="c" * 64,
+                root=str(root),
+                experiment_identity_digest="d" * 64,
+                campaign_identity_digest="e" * 64,
+            )
+            protocol.atomic_write_json(repository / orchestrator.INDEX_PATH, index)
+            first = orchestrator.record_index_root(
+                repository=repository,
+                root=root,
+                reservation_id="r1",
+                abandoned=True,
+                confirm_no_live_processes=True,
+            )
+            second = orchestrator.record_index_root(
+                repository=repository,
+                root=root,
+                reservation_id="r1",
+                abandoned=True,
+                confirm_no_live_processes=True,
+            )
+            self.assertEqual(second, first)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.record_index_root(
+                    repository=repository,
+                    root=root,
+                    reservation_id="changed",
+                    abandoned=True,
+                    confirm_no_live_processes=True,
+                )
+
+    def test_record_index_rejects_self_consistent_root_for_foreign_active(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            root = repository / "docs" / "worklogs" / "root"
+            root.mkdir(parents=True)
+            self.make_complete_root(root)
+            index = orchestrator.record_active(
+                orchestrator.new_campaign_index(),
+                reservation_id="reservation-1",
+                candidate_sha="f" * 40,
+                candidate_tree_sha256="c" * 64,
+                root=str(root),
+                experiment_identity_digest="b" * 64,
+                campaign_identity_digest="e" * 64,
+                command_digest=orchestrator.command_contract_digest(),
+                context_sha256="e" * 64,
+            )
+            protocol.atomic_write_json(repository / orchestrator.INDEX_PATH, index)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.record_index_root(
+                    repository=repository,
+                    root=root,
+                    reservation_id="reservation-1",
+                )
+
     def test_only_preserved_validity_inconclusive_allows_retry(self):
         index = orchestrator.new_campaign_index()
         active = orchestrator.record_active(

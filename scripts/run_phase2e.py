@@ -618,9 +618,14 @@ def _validate_index(index: Mapping[str, Any]) -> None:
                 "reservation_id",
                 "status",
                 "root_digest",
+                "ledger_sha256",
                 "candidate_sha",
+                "candidate_tree_sha256",
                 "root",
                 "experiment_identity_digest",
+                "campaign_identity_digest",
+                "command_contract_digest",
+                "context_sha256",
             }:
                 raise protocol.ProtocolError("TERMINAL event schema is invalid")
             if states.get(reservation) != "ACTIVE" or active_global != reservation:
@@ -628,9 +633,20 @@ def _validate_index(index: Mapping[str, Any]) -> None:
             if event.get("status") not in TERMINAL_STATUSES:
                 raise protocol.ProtocolError("TERMINAL status is invalid")
             _require_sha(event.get("root_digest"), sha256=True, context="root digest")
+            _require_sha(
+                event.get("ledger_sha256"), sha256=True, context="ledger digest"
+            )
             if any(
                 event[name] != records[reservation][name]
-                for name in ("candidate_sha", "root", "experiment_identity_digest")
+                for name in (
+                    "candidate_sha",
+                    "candidate_tree_sha256",
+                    "root",
+                    "experiment_identity_digest",
+                    "campaign_identity_digest",
+                    "command_contract_digest",
+                    "context_sha256",
+                )
             ):
                 raise protocol.ProtocolError("TERMINAL event identity differs")
             states[reservation] = "PENDING_PRESERVATION"
@@ -769,6 +785,7 @@ def record_terminal(
     reservation_id: str,
     status: str,
     root_digest: str,
+    ledger_sha256: str = "0" * 64,
 ) -> dict[str, Any]:
     """Close ACTIVE and make its root pending preservation."""
     _validate_index(index)
@@ -787,9 +804,19 @@ def record_terminal(
             "reservation_id": reservation_id,
             "status": status,
             "root_digest": root_digest,
-            "candidate_sha": active["candidate_sha"],
-            "root": active["root"],
-            "experiment_identity_digest": active["experiment_identity_digest"],
+            "ledger_sha256": ledger_sha256,
+            **{
+                name: active[name]
+                for name in (
+                    "candidate_sha",
+                    "candidate_tree_sha256",
+                    "root",
+                    "experiment_identity_digest",
+                    "campaign_identity_digest",
+                    "command_contract_digest",
+                    "context_sha256",
+                )
+            },
         },
     )
 
@@ -1350,6 +1377,9 @@ def initialize_campaign(
                         reservation_id=reservation_id,
                         status="ABANDONED",
                         root_digest=protocol.sha256_json(seal),
+                        ledger_sha256=seal["inventory"].get(
+                            "evidence-ledger.json", "0" * 64
+                        ),
                     )
                     _atomic_write_path(index_path, terminal)
                     return 5
@@ -2015,6 +2045,38 @@ def validate_resume_identity(
             raise protocol.ProtocolError(f"retry progress differs at {name}")
 
 
+def _validate_terminal_root_binding(
+    active: Mapping[str, Any], root: pathlib.Path, status: str
+) -> None:
+    """Bind terminal complete evidence to every identity carried by ACTIVE."""
+    if status == "ABANDONED":
+        return
+    manifest = _read_json(root / AGGREGATE_MANIFEST, "aggregate manifest")
+    progress = _read_json(root / PROGRESS_MANIFEST, "aggregate progress")
+    ledger = _read_json(root / "evidence-ledger.json", "evidence ledger")
+    expected_manifest = {
+        "candidate_sha": active["candidate_sha"],
+        "reservation_id": active["reservation_id"],
+        "experiment_identity_digest": active["experiment_identity_digest"],
+        "command_contract_digest": active["command_contract_digest"],
+        "context_sha256": active["context_sha256"],
+    }
+    if any(manifest.get(name) != value for name, value in expected_manifest.items()):
+        raise protocol.ProtocolError("terminal aggregate identity differs from ACTIVE")
+    if (
+        progress.get("candidate_sha") != active["candidate_sha"]
+        or progress.get("candidate_tree_sha256") != active["candidate_tree_sha256"]
+        or progress.get("reservation_id") != active["reservation_id"]
+        or progress.get("experiment_identity_digest")
+        != active["experiment_identity_digest"]
+        or progress.get("command_contract_digest")
+        != active["command_contract_digest"]
+        or progress.get("context_sha256") != active["context_sha256"]
+        or ledger.get("candidate_sha") != active["candidate_sha"]
+    ):
+        raise protocol.ProtocolError("terminal progress identity differs from ACTIVE")
+
+
 def record_index_root(
     *,
     repository: pathlib.Path,
@@ -2027,11 +2089,54 @@ def record_index_root(
     """Validate and transition one ACTIVE reservation to pending preservation."""
     index_path, index_lock = campaign_index_paths(repository)
     with exclusive_lock(index_lock):
+        index = _read_index(index_path)
         root = _canonical_existing_root(root)
+        state = index_state(index)
+        if state == "ACTIVE":
+            active = index["events"][-1]
+        elif state == "PENDING_PRESERVATION":
+            terminal = index["events"][-1]
+            active = next(
+                event
+                for event in reversed(index["events"])
+                if event["event"] == "ACTIVE"
+                and event["reservation_id"] == terminal["reservation_id"]
+            )
+        else:
+            raise protocol.ProtocolError("campaign has no recordable reservation")
+        if (
+            active["reservation_id"] != reservation_id
+            or active["root"] != str(root)
+        ):
+            raise protocol.ProtocolError("record-index identity differs from ACTIVE")
         identity = protocol.PreparedRootIdentity(root)
         try:
             with exclusive_lock_at(identity.descriptor, ".orchestrator.lock"):
-                index = _read_index(index_path)
+                if state == "PENDING_PRESERVATION":
+                    status = validate_root(root)
+                    if status == "ABANDONED":
+                        seal = _read_json(
+                            root / ABANDONMENT_SEAL, "abandonment seal"
+                        )
+                        digest = protocol.sha256_json(seal)
+                        ledger_digest = seal["inventory"].get(
+                            "evidence-ledger.json", "0" * 64
+                        )
+                    else:
+                        digest = protocol.sha256_file(root / AGGREGATE_MANIFEST)
+                        ledger_digest = protocol.sha256_file(
+                            root / "evidence-ledger.json"
+                        )
+                    if abandoned != (status == "ABANDONED") or (
+                        terminal["status"] != status
+                        or terminal["root_digest"] != digest
+                        or terminal["ledger_sha256"] != ledger_digest
+                    ):
+                        raise protocol.ProtocolError(
+                            "record-index replay differs from terminal evidence"
+                        )
+                    identity.revalidate()
+                    return index
                 if abandoned:
                     if not confirm_no_live_processes:
                         raise protocol.ProtocolError(
@@ -2052,15 +2157,27 @@ def record_index_root(
                     seal = seal_abandoned_root(root, identity=identity)
                     status = "ABANDONED"
                     digest = protocol.sha256_json(seal)
+                    ledger_digest = seal["inventory"].get(
+                        "evidence-ledger.json", "0" * 64
+                    )
                 else:
                     status = validate_root(root)
+                    if status == "ABANDONED":
+                        raise protocol.ProtocolError(
+                            "normal record-index cannot record abandoned evidence"
+                        )
                     digest = protocol.sha256_file(root / AGGREGATE_MANIFEST)
+                    ledger_digest = protocol.sha256_file(
+                        root / "evidence-ledger.json"
+                    )
+                _validate_terminal_root_binding(active, root, status)
                 identity.revalidate()
                 updated = record_terminal(
                     index,
                     reservation_id=reservation_id,
                     status=status,
                     root_digest=digest,
+                    ledger_sha256=ledger_digest,
                 )
                 _atomic_write_path(index_path, updated)
                 return updated
