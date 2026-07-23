@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import unittest
 from unittest import mock
 
@@ -44,11 +45,9 @@ def source_fixtures():
         build.AD_CARGO_PATH: baseline[build.AD_CARGO_PATH]
         + build.BENCH_STANZA.encode(),
         build.BENCH_SOURCE_PATH: b"fn main() {}\n",
+        build.CHARACTERIZATION_BENCH_SOURCE_PATH: b"fn main() {}\n",
     }
-    direct = {
-        build.AD_CARGO_PATH: harness[build.AD_CARGO_PATH],
-        build.BENCH_SOURCE_PATH: harness[build.BENCH_SOURCE_PATH],
-    }
+    direct = dict(harness)
     normalized = dict(direct)
     normalized[build.ROOT_CARGO_PATH] = old_root_cargo().replace(
         build.OLD_STRIDED.encode(), build.COMMON_STRIDED.encode()
@@ -179,6 +178,53 @@ class FakeProbeRunner:
 
 
 class IdentityAndDeltaTests(unittest.TestCase):
+    def test_frozen_harness_manifest_matches_candidate_dependency_contract(self) -> None:
+        repository = pathlib.Path(build.__file__).resolve().parent.parent
+
+        def git_bytes(*arguments: str) -> bytes:
+            completed = subprocess.run(
+                ["git", *arguments],
+                cwd=repository,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+            return completed.stdout
+
+        def dependency_contract(payload: bytes) -> dict:
+            manifest = tomllib.loads(payload.decode("utf-8"))
+            contract = {
+                scope: manifest.get(scope, {})
+                for scope in (
+                    "dependencies",
+                    "dev-dependencies",
+                    "build-dependencies",
+                )
+            }
+            contract["target"] = {
+                target: {
+                    scope: tables.get(scope, {})
+                    for scope in (
+                        "dependencies",
+                        "dev-dependencies",
+                        "build-dependencies",
+                    )
+                }
+                for target, tables in manifest.get("target", {}).items()
+            }
+            return contract
+
+        frozen_manifest = git_bytes(
+            "show", f"{build.HARNESS_COMMIT}:{build.AD_CARGO_PATH.as_posix()}"
+        )
+        candidate_manifest = (repository / build.AD_CARGO_PATH).read_bytes()
+        self.assertEqual(
+            dependency_contract(frozen_manifest),
+            dependency_contract(candidate_manifest),
+            "the candidate common lock cannot be installed into a baseline "
+            "whose frozen harness declares a different package dependency set",
+        )
+
     def test_dispatch_and_characterization_build_contracts_are_provenance_bound(self) -> None:
         self.assertEqual(build.DISPATCH_TEST_DEADLINE_SECONDS, 120)
         self.assertEqual(build.CHARACTERIZATION_ROW_DEADLINE_SECONDS, 30)
@@ -347,7 +393,7 @@ class IdentityAndDeltaTests(unittest.TestCase):
             "85855e272b1495611deb601a9ee06f3546772c3c",
         )
         self.assertEqual(
-            build.HARNESS_COMMIT, "4471d6145c4d8793de3a96f8d99400c24ca8c6d1"
+            build.HARNESS_COMMIT, "ebb5fb6cfd234d85f91d287e7fbd4cb05024c7de"
         )
         self.assertEqual(
             build.OLD_STRIDED, "10fc972d3c0f8cdfd4ecb45d21d815aebfd7d1f2"
@@ -472,6 +518,9 @@ class IdentityAndDeltaTests(unittest.TestCase):
             benchmark = repository / build.BENCH_SOURCE_PATH
             benchmark.parent.mkdir(parents=True)
             benchmark.write_bytes(b"fn main() {}\n")
+            (repository / build.CHARACTERIZATION_BENCH_SOURCE_PATH).write_bytes(
+                b"fn main() {}\n"
+            )
             git("add", ".")
             git("commit", "--quiet", "-m", "harness")
             harness_commit = git("rev-parse", "HEAD")
@@ -548,6 +597,9 @@ class IdentityAndDeltaTests(unittest.TestCase):
             benchmark = repository / build.BENCH_SOURCE_PATH
             benchmark.parent.mkdir(parents=True)
             benchmark.write_bytes(b"fn main() {}\n")
+            (repository / build.CHARACTERIZATION_BENCH_SOURCE_PATH).write_bytes(
+                b"fn main() {}\n"
+            )
             git(repository, "add", ".")
             git(repository, "commit", "--quiet", "-m", "harness")
             harness_commit = git(repository, "rev-parse", "HEAD")
@@ -2740,10 +2792,21 @@ class FakeSourceControl:
 
 
 class FakeCargoRunner:
-    def __init__(self, *, timeout_build=False, mismatched_role=None) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_build=False,
+        mismatched_role=None,
+        fail_common_lock_metadata=False,
+        common_lock_failure_reason="nonzero-exit",
+        common_lock_failure_stderr="the lock file needs to be updated",
+    ) -> None:
         self.calls = []
         self.timeout_build = timeout_build
         self.mismatched_role = mismatched_role
+        self.fail_common_lock_metadata = fail_common_lock_metadata
+        self.common_lock_failure_reason = common_lock_failure_reason
+        self.common_lock_failure_stderr = common_lock_failure_stderr
 
     def __call__(self, argv, *, cwd, environment, deadline_seconds):
         argv = tuple(argv)
@@ -2771,7 +2834,21 @@ class FakeCargoRunner:
             lock = b"direct lock\n" if "direct" in cwd.name else b"common lock\n"
             (cwd / "Cargo.lock").write_bytes(lock)
         elif tool == "cargo" and arguments == build.METADATA_COMMAND[1:]:
-            stdout = json.dumps({"packages": [], "resolve": {"nodes": []}})
+            if (
+                self.fail_common_lock_metadata
+                and cwd.name == "common-lock-normalized-baseline"
+            ):
+                validity = "INCONCLUSIVE"
+                reason = self.common_lock_failure_reason
+                stderr = self.common_lock_failure_stderr
+                if reason == "deadline-exceeded":
+                    returncode = None
+                    terminated = True
+                    killed = True
+                else:
+                    returncode = 101
+            else:
+                stdout = json.dumps({"packages": [], "resolve": {"nodes": []}})
         elif tool == "cargo" and arguments[:1] == ("tree",):
             stdout = f'tenferro-ad ({cwd})\ntenferro-cpu feature "cpu-faer"\n'
         elif tool == "cargo" and arguments == build.BENCH_COMMAND[1:]:
@@ -3059,7 +3136,7 @@ class BuildOrchestratorTests(unittest.TestCase):
                     "common-lock-normalized-baseline",
                 ],
             )
-            self.assertEqual(len(runner.calls), 17)
+            self.assertEqual(len(runner.calls), 18)
             direct_lock = config.evidence_root / build.LOCK_PATHS["direct"]
             common_lock = config.evidence_root / build.LOCK_PATHS["common"]
             self.assertNotEqual(direct_lock.read_bytes(), common_lock.read_bytes())
@@ -3103,6 +3180,85 @@ class BuildOrchestratorTests(unittest.TestCase):
                     config,
                     source_control,
                     command_runner=FakeCargoRunner(),
+                )
+
+    def test_common_lock_dependency_drift_is_preserved_and_rejected_before_build(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config = self.config(root)
+            source_control = self.fake_source(config)
+            runner = FakeCargoRunner(fail_common_lock_metadata=True)
+
+            try:
+                result = build._build_all_with_dependencies(
+                    config,
+                    source_control=source_control,
+                    command_runner=runner,
+                )
+            except protocol.ProtocolError as error:
+                self.fail(f"preflight failure evidence was discarded: {error}")
+
+            self.assertEqual(result.validity_state, "INCONCLUSIVE")
+            self.assertIsInstance(result.failure, build.CommandResult)
+            self.assertEqual(result.failure.returncode, 101)
+            self.assertEqual(
+                result.failure.stderr, "the lock file needs to be updated"
+            )
+            self.assertFalse(
+                any(
+                    pathlib.Path(argv[0]).name == "cargo"
+                    and argv[1:] == build.BENCH_COMMAND[1:]
+                    for argv, _cwd, _environment, _deadline in runner.calls
+                ),
+                "common-lock compatibility must fail before release bench compilation",
+            )
+
+    def test_common_lock_environment_failures_remain_inconclusive_evidence(self) -> None:
+        cases = (
+            ("deadline-exceeded", "", None, True, True),
+            (
+                "nonzero-exit",
+                "failed to download registry metadata",
+                101,
+                False,
+                False,
+            ),
+        )
+        for reason, stderr, returncode, terminated, killed in cases:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as temporary:
+                root = pathlib.Path(temporary)
+                config = self.config(root)
+                source_control = self.fake_source(config)
+                runner = FakeCargoRunner(
+                    fail_common_lock_metadata=True,
+                    common_lock_failure_reason=reason,
+                    common_lock_failure_stderr=stderr,
+                )
+
+                try:
+                    result = build._build_all_with_dependencies(
+                        config,
+                        source_control=source_control,
+                        command_runner=runner,
+                    )
+                except protocol.ProtocolError as error:
+                    self.fail(f"environmental failure was misclassified: {error}")
+
+                self.assertEqual(result.validity_state, "INCONCLUSIVE")
+                self.assertIsInstance(result.failure, build.CommandResult)
+                self.assertEqual(result.failure.failure_reason, reason)
+                self.assertEqual(result.failure.stderr, stderr)
+                self.assertEqual(result.failure.returncode, returncode)
+                self.assertEqual(result.failure.terminated, terminated)
+                self.assertEqual(result.failure.killed, killed)
+                self.assertFalse(
+                    any(
+                        pathlib.Path(argv[0]).name == "cargo"
+                        and argv[1:] == build.BENCH_COMMAND[1:]
+                        for argv, _cwd, _environment, _deadline in runner.calls
+                    )
                 )
 
     def test_role_local_toolchain_probe_mismatch_is_rejected_before_build(self) -> None:

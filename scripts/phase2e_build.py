@@ -44,7 +44,9 @@ INHERITED_EXECUTABLE_SEALS = (
 
 
 IMPLEMENTATION_BASELINE = "85855e272b1495611deb601a9ee06f3546772c3c"
-HARNESS_COMMIT = "4471d6145c4d8793de3a96f8d99400c24ca8c6d1"
+# This is the final commit that completes the Phase 2E manifest and its two
+# benchmark sources; materialization remains limited to FROZEN_HARNESS_PATHS.
+HARNESS_COMMIT = "ebb5fb6cfd234d85f91d287e7fbd4cb05024c7de"
 OLD_STRIDED = "10fc972d3c0f8cdfd4ecb45d21d815aebfd7d1f2"
 COMMON_STRIDED = "6b0b4a46b7dd9a9ea1677a0d596c0b4adab1acbc"
 
@@ -449,7 +451,14 @@ AD_CARGO_PATH = pathlib.Path("crates/tenferro-ad/Cargo.toml")
 BENCH_SOURCE_PATH = pathlib.Path(
     "crates/tenferro-ad/benches/eager_dispatch_baseline.rs"
 )
-FROZEN_HARNESS_PATHS = (AD_CARGO_PATH, BENCH_SOURCE_PATH)
+CHARACTERIZATION_BENCH_SOURCE_PATH = pathlib.Path(
+    "crates/tenferro-ad/benches/phase2e_characterization.rs"
+)
+FROZEN_HARNESS_PATHS = (
+    AD_CARGO_PATH,
+    BENCH_SOURCE_PATH,
+    CHARACTERIZATION_BENCH_SOURCE_PATH,
+)
 STRIDED_DEPENDENCIES = (
     "strided-view",
     "strided-traits",
@@ -821,22 +830,18 @@ def validate_source_delta(
     try:
         baseline_ad = baseline_files[AD_CARGO_PATH]
         harness_ad = harness_files[AD_CARGO_PATH]
-        harness_bench = harness_files[BENCH_SOURCE_PATH]
     except KeyError as error:
         raise protocol.ProtocolError(f"source snapshot is missing {error.args[0]}") from error
-    if not all(isinstance(item, bytes) for item in (baseline_ad, harness_ad, harness_bench)):
+    if set(harness_files) != set(FROZEN_HARNESS_PATHS):
+        raise protocol.ProtocolError("frozen harness path inventory mismatch")
+    if not all(isinstance(harness_files[path], bytes) for path in FROZEN_HARNESS_PATHS):
         raise protocol.ProtocolError("source snapshot payloads must be bytes")
 
     stanza = BENCH_STANZA.encode("utf-8")
-    if harness_ad.count(stanza) != 1 or harness_ad.replace(stanza, b"", 1) != baseline_ad:
-        raise protocol.ProtocolError(
-            "harness Cargo.toml delta is not the exact benchmark stanza"
-        )
+    if not isinstance(baseline_ad, bytes) or harness_ad.count(stanza) != 1:
+        raise protocol.ProtocolError("frozen harness manifest is invalid")
 
-    expected = {
-        AD_CARGO_PATH: harness_ad,
-        BENCH_SOURCE_PATH: harness_bench,
-    }
+    expected = dict(harness_files)
     if role == "common-lock-normalized-baseline":
         try:
             expected[ROOT_CARGO_PATH] = normalized_root_cargo(
@@ -981,12 +986,11 @@ class GitSourceControl:
                 "checkout",
                 self.harness_commit,
                 "--",
-                str(AD_CARGO_PATH),
-                str(BENCH_SOURCE_PATH),
+                *(str(path) for path in FROZEN_HARNESS_PATHS),
             ),
             cwd=spec.path,
         )
-        paths = [AD_CARGO_PATH, BENCH_SOURCE_PATH]
+        paths = list(FROZEN_HARNESS_PATHS)
         if spec.role == "common-lock-normalized-baseline":
             root_cargo = spec.path / ROOT_CARGO_PATH
             _replace_regular_bytes(
@@ -1099,10 +1103,8 @@ class GitSourceControl:
                 ),
             },
             {
-                AD_CARGO_PATH: self._show_bytes(self.harness_commit, AD_CARGO_PATH),
-                BENCH_SOURCE_PATH: self._show_bytes(
-                    self.harness_commit, BENCH_SOURCE_PATH
-                ),
+                path: self._show_bytes(self.harness_commit, path)
+                for path in FROZEN_HARNESS_PATHS
             },
             changed,
         )
@@ -1134,10 +1136,8 @@ class GitSourceControl:
                 ),
             },
             {
-                AD_CARGO_PATH: self._show_bytes(self.harness_commit, AD_CARGO_PATH),
-                BENCH_SOURCE_PATH: self._show_bytes(
-                    self.harness_commit, BENCH_SOURCE_PATH
-                ),
+                path: self._show_bytes(self.harness_commit, path)
+                for path in FROZEN_HARNESS_PATHS
             },
             changed,
         )
@@ -2154,6 +2154,24 @@ def _build_all_with_dependencies(
     }
     for spec in specs:
         install_root_owned_lock(role_locks[spec.role], spec.path)
+
+    common_baseline = specs_by_role["common-lock-normalized-baseline"]
+    common_environment = protocol.cargo_environment(
+        path=tools.path,
+        home=str(config.home),
+        cargo_home=str(config.cargo_home),
+        target_dir=str(target_dirs[common_baseline.role]),
+    )
+    common_metadata = _run_build_command(
+        command_runner,
+        _absolute_tool_command(METADATA_COMMAND, tools.cargo),
+        cwd=common_baseline.path,
+        environment=common_environment,
+        deadline_seconds=QUERY_DEADLINE_SECONDS,
+        executable_identity=tools.cargo,
+    )
+    if common_metadata.validity_state != "COMPLETE":
+        return BuildSetResult("INCONCLUSIVE", {}, common_metadata)
 
     manifests: dict[str, dict[str, Any]] = {}
     for spec in specs:

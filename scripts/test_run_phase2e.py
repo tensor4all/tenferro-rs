@@ -926,6 +926,60 @@ raise SystemExit(1)
                 protocol.sha256_file(artifact),
             )
 
+    def test_common_lock_preflight_timeout_is_persisted_by_public_timing_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            _path, context = self.make_stage_context(base)
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(mode=0o700)
+            source_control = build_test_fixtures.FakeSourceControl()
+            source_control.tools = orchestrator._stage_context_toolchain(context)
+            runner = build_test_fixtures.FakeCargoRunner(
+                fail_common_lock_metadata=True,
+                common_lock_failure_reason="deadline-exceeded",
+                common_lock_failure_stderr="metadata query timed out",
+            )
+
+            with mock.patch.object(
+                orchestrator.build,
+                "GitSourceControl",
+                return_value=source_control,
+            ), mock.patch.object(
+                orchestrator.build,
+                "run_bounded_command",
+                side_effect=runner,
+            ):
+                try:
+                    code = orchestrator._timing_builds(context)
+                except protocol.ProtocolError as error:
+                    self.fail(f"public timing stage discarded preflight evidence: {error}")
+
+            self.assertEqual(code, 2)
+            artifact = root / orchestrator.TIMING_BUILD_FAILURE
+            payload = json.loads(artifact.read_text(encoding="utf-8"))
+            self.assertEqual(payload["failure_reason"], "deadline-exceeded")
+            self.assertEqual(
+                payload["command"]["argv"][1:],
+                list(orchestrator.build.METADATA_COMMAND[1:]),
+            )
+            self.assertEqual(
+                pathlib.Path(payload["command"]["cwd"]).name,
+                "common-lock-normalized-baseline",
+            )
+            self.assertIsNone(payload["command"]["returncode"])
+            self.assertEqual(payload["command"]["stderr"], "metadata query timed out")
+            self.assertEqual(
+                payload["command"]["termination"],
+                {"terminated": True, "killed": True},
+            )
+            self.assertFalse(
+                any(
+                    pathlib.Path(argv[0]).name == "cargo"
+                    and argv[1:] == orchestrator.build.BENCH_COMMAND[1:]
+                    for argv, _cwd, _environment, _deadline in runner.calls
+                )
+            )
+
     def test_successful_timing_build_writes_no_failure_artifact(self):
         with tempfile.TemporaryDirectory() as directory:
             _path, context = self.make_stage_context(pathlib.Path(directory))
