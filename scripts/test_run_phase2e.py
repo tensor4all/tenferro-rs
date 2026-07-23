@@ -69,6 +69,105 @@ class OuterOrchestratorTests(unittest.TestCase):
         )
         return repository
 
+    def run_start_with_committed_home_close_failure(
+        self, base: pathlib.Path, committed_code: int
+    ):
+        repository = self.init_git_repository(base).resolve()
+        artifacts = repository / "docs" / "worklogs" / "artifacts"
+        artifacts.mkdir(parents=True)
+        root = artifacts / "root"
+        scratch = base / "scratch"
+        source = base / "source-cargo"
+        scratch.mkdir()
+        source.mkdir()
+        home, cargo_home = orchestrator._execution_home_paths(scratch)
+        context = {
+            "version": 1,
+            "repository": str(repository),
+            "evidence_root": str(root),
+            "scratch_parent": str(scratch),
+            "candidate_sha": self.CANDIDATE,
+            "candidate_tree_sha256": "c" * 64,
+            "reservation_id": "reservation-1",
+            "experiment_identity_digest": "d" * 64,
+            "command_contract_digest": "e" * 64,
+            "path": "/bin",
+            "home": str(home),
+            "cargo_home": str(cargo_home),
+            "index": str(repository / orchestrator.INDEX_PATH),
+            "index_lock": str(repository / orchestrator.INDEX_LOCK_PATH),
+        }
+        argv = [
+            "start",
+            "--repository",
+            str(repository),
+            "--candidate",
+            self.CANDIDATE,
+            "--evidence-root",
+            str(root),
+            "--index",
+            str(orchestrator.INDEX_PATH),
+            "--scratch-parent",
+            str(scratch),
+        ]
+        real_close = orchestrator._PreparedExecutionHomes.close
+
+        def close_then_report_failure(prepared, primary=None):
+            real_close(prepared, primary)
+            raise protocol.ProtocolError("reported committed close failure")
+
+        @contextmanager
+        def active_lock(*_args, **_kwargs):
+            yield {}, mock.Mock()
+
+        descriptor_count = len(os.listdir("/proc/self/fd"))
+        stdout = StringIO()
+        stderr = StringIO()
+        with mock.patch.object(
+            orchestrator,
+            "_prepare_start_context",
+            return_value=(context, "f" * 64, "a" * 64),
+        ), mock.patch.object(
+            orchestrator,
+            "_canonical_cargo_home",
+            return_value=source,
+        ), mock.patch.object(
+            orchestrator, "_preflight_offline_feature_queries"
+        ), mock.patch.object(
+            orchestrator,
+            "initialize_campaign",
+            return_value=committed_code,
+        ), mock.patch.object(
+            orchestrator._PreparedExecutionHomes,
+            "close",
+            new=close_then_report_failure,
+        ), mock.patch.object(
+            orchestrator,
+            "load_stage_context",
+            return_value=context.copy(),
+        ), mock.patch.object(
+            orchestrator.protocol,
+            "runtime_environment",
+            return_value={},
+        ), mock.patch.object(
+            orchestrator,
+            "active_campaign_lock",
+            side_effect=active_lock,
+        ), mock.patch.object(
+            orchestrator,
+            "run_fixed_stages",
+            return_value=0,
+        ) as run_stages, redirect_stdout(stdout), redirect_stderr(stderr):
+            result = orchestrator.main(argv)
+        return {
+            "result": result,
+            "stdout": stdout.getvalue(),
+            "stderr": stderr.getvalue(),
+            "run_stages": run_stages.call_count,
+            "descriptor_count": descriptor_count,
+            "final_descriptor_count": len(os.listdir("/proc/self/fd")),
+        }
+
     @staticmethod
     def preservation_body(
         commit: str, root: str, candidate: str, status: str
@@ -1515,13 +1614,100 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             marker.write_text("untouched", encoding="utf-8")
             primary = protocol.ProtocolError("primary pre-ACTIVE failure")
             prepared.rollback(primary)
-            self.assertTrue(marker.is_file())
-            self.assertEqual(marker.read_text(encoding="utf-8"), "untouched")
+            quarantines = tuple(
+                scratch.parent.glob(".phase2e-cleanup-*")
+            )
+            self.assertEqual(len(quarantines), 1)
+            quarantined_marker = quarantines[0] / marker.name
+            self.assertEqual(
+                quarantined_marker.read_text(encoding="utf-8"), "untouched"
+            )
             self.assertTrue(moved.is_dir())
+            self.assertEqual(list(moved.iterdir()), [])
             self.assertFalse(cargo_home.exists())
             self.assertTrue(
                 any(
-                    "cleanup identity failure" in note
+                    "quarantine identity mismatch" in note
+                    for note in getattr(primary, "__notes__", ())
+                )
+            )
+            self.assertEqual(len(os.listdir("/proc/self/fd")), descriptor_count)
+
+    def test_retained_leaf_rmtree_accepts_only_final_root_einval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            leaf = pathlib.Path(directory) / "leaf"
+            leaf.mkdir()
+            (leaf / "nested").mkdir()
+            (leaf / "nested" / "payload").write_text(
+                "payload", encoding="utf-8"
+            )
+            descriptor = os.open(
+                leaf,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+            )
+            try:
+                orchestrator._empty_retained_directory(descriptor)
+                self.assertEqual(list(leaf.iterdir()), [])
+                with mock.patch.object(
+                    orchestrator.shutil,
+                    "rmtree",
+                    side_effect=OSError(5, "other failure", "."),
+                ):
+                    with self.assertRaises(OSError) as caught:
+                        orchestrator._empty_retained_directory(descriptor)
+                self.assertEqual(caught.exception.errno, 5)
+            finally:
+                os.close(descriptor)
+
+    def test_execution_home_rmtree_call_swap_cannot_delete_foreign_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            scratch = base / "scratch"
+            source = base / "source-cargo"
+            scratch.mkdir()
+            source.mkdir()
+            descriptor_count = len(os.listdir("/proc/self/fd"))
+            prepared = orchestrator._prepare_execution_homes(
+                scratch, source_cargo_home=source
+            )
+            home, cargo_home = prepared
+            owned_descriptor = prepared.owned[0].descriptor
+            moved = base / "moved-at-rmtree"
+            real_rmtree = shutil.rmtree
+            marker_name = "foreign-marker"
+
+            def swap_at_rmtree(path, *args, **kwargs):
+                if (
+                    path == "."
+                    and kwargs.get("dir_fd") == owned_descriptor
+                ):
+                    home.rename(moved)
+                    home.mkdir()
+                    (home / marker_name).write_text(
+                        "untouched", encoding="utf-8"
+                    )
+                return real_rmtree(path, *args, **kwargs)
+
+            primary = protocol.ProtocolError("primary pre-ACTIVE failure")
+            with mock.patch.object(
+                orchestrator.shutil, "rmtree", new=swap_at_rmtree
+            ):
+                prepared.rollback(primary)
+            quarantines = tuple(
+                scratch.parent.glob(".phase2e-cleanup-*")
+            )
+            self.assertEqual(len(quarantines), 1)
+            self.assertEqual(
+                (quarantines[0] / marker_name).read_text(encoding="utf-8"),
+                "untouched",
+            )
+            self.assertTrue(moved.is_dir())
+            self.assertEqual(list(moved.iterdir()), [])
+            self.assertFalse(home.exists())
+            self.assertFalse(cargo_home.exists())
+            self.assertTrue(
+                any(
+                    "quarantine identity mismatch" in note
                     for note in getattr(primary, "__notes__", ())
                 )
             )
@@ -1600,6 +1786,38 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             self.assertEqual(second_stdout.getvalue(), "ABANDONED_INITIALIZATION\n")
             self.assertTrue(home.is_dir())
             self.assertTrue(cargo_home.is_dir())
+
+    def test_committed_close_failure_does_not_strand_active_before_stages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_start_with_committed_home_close_failure(
+                pathlib.Path(directory).resolve(), 0
+            )
+        self.assertEqual(result["result"], 0)
+        self.assertEqual(result["stdout"], "")
+        self.assertIn(
+            "execution-home cleanup warning: reported committed close failure",
+            result["stderr"],
+        )
+        self.assertEqual(result["run_stages"], 1)
+        self.assertEqual(
+            result["final_descriptor_count"], result["descriptor_count"]
+        )
+
+    def test_committed_close_failure_preserves_abandoned_initialization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_start_with_committed_home_close_failure(
+                pathlib.Path(directory).resolve(), 5
+            )
+        self.assertEqual(result["result"], 5)
+        self.assertEqual(result["stdout"], "ABANDONED_INITIALIZATION\n")
+        self.assertIn(
+            "execution-home cleanup warning: reported committed close failure",
+            result["stderr"],
+        )
+        self.assertEqual(result["run_stages"], 0)
+        self.assertEqual(
+            result["final_descriptor_count"], result["descriptor_count"]
+        )
 
     def test_pre_active_remote_index_failure_rolls_back_execution_homes(self):
         with tempfile.TemporaryDirectory() as directory:

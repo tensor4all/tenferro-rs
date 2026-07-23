@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import errno
 import fcntl
 import hashlib
 import json
@@ -873,6 +874,19 @@ def _add_cleanup_note(primary: BaseException, text: str) -> None:
         pass
 
 
+def _empty_retained_directory(descriptor: int) -> None:
+    """Remove contents through a held leaf fd, never through its parent name."""
+    try:
+        shutil.rmtree(".", dir_fd=descriptor)
+    except OSError as error:
+        if error.errno == errno.EINVAL and error.filename == ".":
+            return
+        raise
+    raise protocol.ProtocolError(
+        "retained-directory rmtree unexpectedly removed its root"
+    )
+
+
 class _PreparedExecutionHomes:
     """Retain parent and leaf identities until ACTIVE or safe rollback."""
 
@@ -995,11 +1009,6 @@ class _PreparedExecutionHomes:
                 return
             for home in reversed(self.owned):
                 try:
-                    current = os.stat(
-                        home.path.name,
-                        dir_fd=self.parent_descriptor,
-                        follow_symlinks=False,
-                    )
                     held = os.fstat(home.descriptor)
                 except OSError as error:
                     _add_cleanup_note(
@@ -1008,32 +1017,70 @@ class _PreparedExecutionHomes:
                         f"{home.path}: {error}",
                     )
                     continue
-                if not (
-                    _is_directory_identity(held, home.device, home.inode)
-                    and _is_directory_identity(
-                        current, home.device, home.inode
-                    )
+                if not _is_directory_identity(
+                    held, home.device, home.inode
                 ):
                     _add_cleanup_note(
                         primary,
                         f"execution-home cleanup identity failure for "
-                        f"{home.path}: leaf changed",
-                    )
-                    continue
-                if not shutil.rmtree.avoids_symlink_attacks:
-                    _add_cleanup_note(
-                        primary,
-                        "execution-home cleanup identity failure: Python "
-                        "rmtree lacks symlink-attack resistance",
+                        f"{home.path}: retained leaf changed",
                     )
                     continue
                 try:
-                    # rmtree's fd-based implementation performs its own
-                    # lstat/open/fstat identity check at the leaf. A hostile
-                    # same-UID process can still force a safe cleanup failure,
-                    # but cannot redirect deletion to a substituted inode.
-                    shutil.rmtree(
+                    _empty_retained_directory(home.descriptor)
+                except BaseException as cleanup_error:
+                    _add_cleanup_note(
+                        primary,
+                        "suppressed execution-home cleanup failure for "
+                        f"{home.path}: {type(cleanup_error).__name__}: "
+                        f"{cleanup_error}",
+                    )
+                    continue
+                quarantine = (
+                    f".phase2e-cleanup-{secrets.token_hex(16)}"
+                )
+                try:
+                    os.rename(
                         home.path.name,
+                        quarantine,
+                        src_dir_fd=self.parent_descriptor,
+                        dst_dir_fd=self.parent_descriptor,
+                    )
+                    os.fsync(self.parent_descriptor)
+                except BaseException as cleanup_error:
+                    _add_cleanup_note(
+                        primary,
+                        "suppressed execution-home cleanup failure for "
+                        f"{home.path}: {type(cleanup_error).__name__}: "
+                        f"{cleanup_error}",
+                    )
+                    continue
+                try:
+                    quarantined = os.stat(
+                        quarantine,
+                        dir_fd=self.parent_descriptor,
+                        follow_symlinks=False,
+                    )
+                except OSError as cleanup_error:
+                    _add_cleanup_note(
+                        primary,
+                        "execution-home quarantine identity failure for "
+                        f"{home.path}: {cleanup_error}; retained as "
+                        f"{self.parent / quarantine}",
+                    )
+                    continue
+                if not _is_directory_identity(
+                    quarantined, home.device, home.inode
+                ):
+                    _add_cleanup_note(
+                        primary,
+                        "execution-home quarantine identity mismatch for "
+                        f"{home.path}; retained as {self.parent / quarantine}",
+                    )
+                    continue
+                try:
+                    os.rmdir(
+                        quarantine,
                         dir_fd=self.parent_descriptor,
                     )
                     os.fsync(self.parent_descriptor)
@@ -1193,6 +1240,19 @@ def _prepare_execution_homes(
     except BaseException as primary:
         prepared.rollback(primary)
         raise
+
+
+def _close_committed_execution_homes(
+    execution_homes: _PreparedExecutionHomes,
+) -> None:
+    """Report cleanup failure without replacing a committed lifecycle result."""
+    try:
+        execution_homes.close()
+    except Exception as error:
+        print(
+            f"execution-home cleanup warning: {error}",
+            file=sys.stderr,
+        )
 
 
 def _preflight_offline_feature_queries(context: Mapping[str, Any]) -> None:
@@ -4338,7 +4398,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if execution_homes is not None:
                     execution_homes.rollback(primary)
                 raise
-            execution_homes.close()
+            _close_committed_execution_homes(execution_homes)
             if code == 5:
                 print("ABANDONED_INITIALIZATION")
                 return 5
