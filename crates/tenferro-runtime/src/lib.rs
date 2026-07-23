@@ -65,7 +65,7 @@ pub use extension_runtime::{
     ExtensionRuntimeRegistryError, HostReferenceRuntime,
 };
 pub use graph::{
-    GraphCompiler, GraphCompilerCacheStats, GraphExecutor, GraphExecutorCacheStats,
+    CompiledGraph, GraphCompiler, GraphCompilerCacheStats, GraphExecutor, GraphExecutorCacheStats,
     GraphInstructionView, GraphOpView, GraphProgram, GraphProgramInput,
     GraphProgramLoweringShapeError, GraphProgramLoweringView,
 };

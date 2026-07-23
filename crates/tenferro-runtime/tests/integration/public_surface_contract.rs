@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use tenferro_runtime::{GraphCompiler, GraphOpView, TracedTensor};
+use tenferro_runtime::{CompiledGraph, GraphCompiler, GraphOpView, TracedTensor};
 
 fn repo_file(path: &str) -> String {
     let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -21,6 +21,20 @@ fn assert_no_panic_helpers(path: &str, source: &str) {
             line_idx + 1
         );
     }
+}
+
+#[test]
+fn compiled_graph_is_the_semantic_artifact_boundary() {
+    fn accepts_compiled_graph(graph: &CompiledGraph) {
+        let _ = (
+            graph.program(),
+            graph.bindings(),
+            graph.input_count(),
+            graph.output_count(),
+        );
+    }
+
+    let _public_api: fn(&CompiledGraph) = accepts_compiled_graph;
 }
 
 #[test]
