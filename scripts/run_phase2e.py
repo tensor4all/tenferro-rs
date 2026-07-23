@@ -267,12 +267,102 @@ STAGE_CONTEXT_FIELDS = frozenset(
         "experiment_identity_digest",
         "command_contract_digest",
         "path",
+        "tool_paths",
         "home",
         "cargo_home",
         "index",
         "index_lock",
     }
 )
+
+
+def _validate_stage_context_record(
+    context: Mapping[str, Any],
+) -> None:
+    """Validate immutable context values without consulting external roots."""
+    if (
+        type(context) is not dict
+        or set(context) != STAGE_CONTEXT_FIELDS
+        or type(context["version"]) is not int
+        or context["version"] != 1
+    ):
+        raise protocol.ProtocolError("stage context schema differs")
+    path_names = (
+        "repository",
+        "evidence_root",
+        "scratch_parent",
+        "home",
+        "cargo_home",
+        "index",
+        "index_lock",
+    )
+    paths = []
+    for name in path_names:
+        value = context[name]
+        candidate = pathlib.Path(value) if type(value) is str else pathlib.Path()
+        if (
+            type(value) is not str
+            or not candidate.is_absolute()
+            or pathlib.Path(os.path.normpath(value)) != candidate
+        ):
+            raise protocol.ProtocolError(
+                f"stage context {name} is not canonical absolute"
+            )
+        paths.append(candidate)
+    repository, evidence, scratch, home, cargo_home, _index, _index_lock = paths
+    roots = (scratch, home, cargo_home)
+    if any(
+        left == right or left in right.parents or right in left.parents
+        for index, left in enumerate(roots)
+        for right in roots[index + 1 :]
+    ) or any(
+        runtime == protected
+        or runtime in protected.parents
+        or protected in runtime.parents
+        for runtime in roots
+        for protected in (repository, evidence)
+    ):
+        raise protocol.ProtocolError("stage filesystem roots are not disjoint")
+    if type(context["path"]) is not str or not context["path"]:
+        raise protocol.ProtocolError("stage context controlled PATH is invalid")
+    components = context["path"].split(os.pathsep)
+    if (
+        len(set(components)) != len(components)
+        or any(
+            not component
+            or not pathlib.Path(component).is_absolute()
+            or pathlib.Path(os.path.normpath(component))
+            != pathlib.Path(component)
+            for component in components
+        )
+    ):
+        raise protocol.ProtocolError("stage context controlled PATH is invalid")
+    tool_paths = context["tool_paths"]
+    if (
+        type(tool_paths) is not dict
+        or set(tool_paths) != {"git", "cargo", "rustc"}
+        or any(
+            type(tool_paths[name]) is not str
+            or pathlib.Path(tool_paths[name]).name != name
+            or not pathlib.Path(tool_paths[name]).is_absolute()
+            or pathlib.Path(os.path.normpath(tool_paths[name]))
+            != pathlib.Path(tool_paths[name])
+            or pathlib.Path(tool_paths[name]).parent
+            not in tuple(pathlib.Path(component) for component in components)
+            for name in ("git", "cargo", "rustc")
+        )
+        or len(set(tool_paths.values())) != 3
+    ):
+        raise protocol.ProtocolError("stage context resolved tool paths are invalid")
+    _require_sha(context["candidate_sha"], sha256=False, context="context candidate")
+    for name in (
+        "candidate_tree_sha256",
+        "experiment_identity_digest",
+        "command_contract_digest",
+    ):
+        _require_sha(context[name], sha256=True, context=name)
+    if context["command_contract_digest"] != stage_context_contract_digest(context):
+        raise protocol.ProtocolError("stage context command contract differs")
 
 
 def load_stage_context(
@@ -338,15 +428,14 @@ def load_stage_context(
     context = protocol.decode_canonical_json_bytes(payload, "stage context")
     if type(context) is not dict:
         raise protocol.ProtocolError("stage context is not an object")
-    if set(context) != STAGE_CONTEXT_FIELDS or context["version"] != 1:
-        raise protocol.ProtocolError("stage context schema differs")
-    for name in (
-        "repository", "evidence_root", "scratch_parent", "home", "cargo_home",
-        "index", "index_lock",
-    ):
-        value = context[name]
-        if type(value) is not str or not pathlib.Path(value).is_absolute():
-            raise protocol.ProtocolError(f"stage context {name} is not absolute")
+    _validate_stage_context_record(context)
+    resolved_tools = build.resolve_toolchain(context["path"])
+    observed_tool_paths = {
+        name: str(getattr(resolved_tools, name).path)
+        for name in ("git", "cargo", "rustc")
+    }
+    if context["tool_paths"] != observed_tool_paths:
+        raise protocol.ProtocolError("stage context resolved tool paths differ")
     try:
         repository = pathlib.Path(context["repository"]).resolve(strict=True)
         scratch = pathlib.Path(context["scratch_parent"]).resolve(strict=True)
@@ -375,15 +464,6 @@ def load_stage_context(
     build.validate_controlled_cargo_home(cargo_home)
     if require_fresh_scratch and next(scratch.iterdir(), None) is not None:
         raise protocol.ProtocolError("stage scratch parent is not fresh")
-    _require_sha(context["candidate_sha"], sha256=False, context="context candidate")
-    for name in (
-        "candidate_tree_sha256",
-        "experiment_identity_digest",
-        "command_contract_digest",
-    ):
-        _require_sha(context[name], sha256=True, context=name)
-    if context["command_contract_digest"] != stage_context_contract_digest(context):
-        raise protocol.ProtocolError("stage context command contract differs")
     return context
 
 
@@ -500,6 +580,8 @@ def _timing_build_failure_payload(
 def validate_timing_build_failure(
     payload: Mapping[str, Any],
     context: Mapping[str, Any],
+    *,
+    require_live_paths: bool = True,
 ) -> None:
     """Validate the exact canonical timing-build failure evidence schema."""
     if type(payload) is not dict or set(payload) != {
@@ -577,16 +659,45 @@ def validate_timing_build_failure(
             "timing build commands cannot inherit executable descriptors"
         )
 
-    role = _timing_build_failure_role(command["cwd"], context)
-    expected_environment = protocol.cargo_environment(
-        path=context["path"],
-        home=context["home"],
-        cargo_home=context["cargo_home"],
-        target_dir=str(pathlib.Path(context["scratch_parent"]) / "targets" / role),
+    role = _timing_build_failure_role(
+        command["cwd"], context, require_live_paths=require_live_paths
     )
+    target_dir = str(
+        pathlib.Path(context["scratch_parent"]) / "targets" / role
+    )
+    if require_live_paths:
+        expected_environment = protocol.cargo_environment(
+            path=context["path"],
+            home=context["home"],
+            cargo_home=context["cargo_home"],
+            target_dir=target_dir,
+        )
+    else:
+        expected_environment = {
+            "PATH": context["path"],
+            "HOME": context["home"],
+            "LC_ALL": "C",
+            "TZ": "UTC",
+            **protocol.THREAD_ENV,
+            "CARGO_HOME": context["cargo_home"],
+            "CARGO_TARGET_DIR": target_dir,
+            "CARGO_INCREMENTAL": "0",
+            "CARGO_NET_OFFLINE": "true",
+        }
     if environment != expected_environment:
         raise protocol.ProtocolError(
             "timing build failure environment differs from sealed role environment"
+        )
+    expected_deadline = _timing_build_failure_deadline(
+        tuple(argv),
+        role=role,
+        path=context["path"],
+        tool_paths=context["tool_paths"],
+        require_live_paths=require_live_paths,
+    )
+    if command["deadline_seconds"] != expected_deadline:
+        raise protocol.ProtocolError(
+            "timing build failure deadline differs from canonical command"
         )
 
     reason = payload["failure_reason"]
@@ -642,6 +753,8 @@ def validate_timing_build_failure(
 def _timing_build_failure_role(
     cwd: str,
     context: Mapping[str, Any],
+    *,
+    require_live_paths: bool,
 ) -> str:
     """Bind a captured build cwd to one exact existing role worktree."""
     if type(context) is not dict or set(context) != STAGE_CONTEXT_FIELDS:
@@ -649,9 +762,25 @@ def _timing_build_failure_role(
     if type(context["version"]) is not int or context["version"] != 1:
         raise protocol.ProtocolError("timing build stage context version differs")
     scratch = pathlib.Path(context["scratch_parent"])
+    candidate = pathlib.Path(cwd)
+    if not require_live_paths:
+        if (
+            not scratch.is_absolute()
+            or pathlib.Path(os.path.normpath(scratch)) != scratch
+            or not candidate.is_absolute()
+            or pathlib.Path(os.path.normpath(candidate)) != candidate
+        ):
+            raise protocol.ProtocolError(
+                "timing build cwd is not an exact canonical role worktree"
+            )
+        for role in _TIMING_BUILD_ROLES:
+            if candidate == scratch / role:
+                return role
+        raise protocol.ProtocolError(
+            "timing build cwd is not a canonical build role"
+        )
     try:
         canonical_scratch = scratch.resolve(strict=True)
-        candidate = pathlib.Path(cwd)
         canonical_candidate = candidate.resolve(strict=True)
     except OSError as error:
         raise protocol.ProtocolError(
@@ -671,6 +800,60 @@ def _timing_build_failure_role(
         if candidate == scratch / role:
             return role
     raise protocol.ProtocolError("timing build cwd is not a canonical build role")
+
+
+def _timing_build_failure_deadline(
+    argv: tuple[str, ...],
+    *,
+    role: str,
+    path: str,
+    tool_paths: Mapping[str, Any],
+    require_live_paths: bool,
+) -> int:
+    """Bind a failure to one exact command eligible for its build role."""
+    if require_live_paths:
+        tools = build.resolve_toolchain(path)
+        observed = {
+            name: str(getattr(tools, name).path)
+            for name in ("git", "cargo", "rustc")
+        }
+        if tool_paths != observed:
+            raise protocol.ProtocolError(
+                "timing build resolved tool paths differ from stage context"
+            )
+    cargo = tool_paths["cargo"]
+    rustc = tool_paths["rustc"]
+    fixed_commands = {
+        (rustc, "--version", "--verbose"): build.QUERY_DEADLINE_SECONDS,
+        (cargo, "--version", "--verbose"): build.QUERY_DEADLINE_SECONDS,
+        (cargo, *build.METADATA_COMMAND[1:]): build.QUERY_DEADLINE_SECONDS,
+        (cargo, *build.BENCH_COMMAND[1:]): build.BUILD_DEADLINE_SECONDS,
+    }
+    if role in {"direct-current-main-baseline", "candidate"}:
+        fixed_commands[(cargo, *build.LOCK_COMMAND[1:])] = (
+            build.QUERY_DEADLINE_SECONDS
+        )
+    deadline = fixed_commands.get(argv)
+    if deadline is not None:
+        return deadline
+
+    feature_prefix = (cargo, "tree", "--locked", "--target")
+    target_index = len(feature_prefix)
+    if (
+        len(argv) > target_index
+        and argv[:target_index] == feature_prefix
+        and re.fullmatch(
+            r"[A-Za-z0-9_][A-Za-z0-9_.]*"
+            r"(?:-[A-Za-z0-9_][A-Za-z0-9_.]*){2,}",
+            argv[target_index],
+        )
+        and argv
+        == (cargo, *build.timing_feature_command(argv[target_index])[1:])
+    ):
+        return build.QUERY_DEADLINE_SECONDS
+    raise protocol.ProtocolError(
+        "timing build failure argv is not a canonical role command"
+    )
 
 
 def _probe_builds(context: Mapping[str, Any]) -> int:
@@ -1618,6 +1801,8 @@ def _prepare_start_context(
     )
     home, cargo_home = _execution_home_paths(scratch)
     index, index_lock = campaign_index_paths(repository)
+    path = _minimal_toolchain_path()
+    tools = build.resolve_toolchain(path)
     context = {
         "version": 1,
         "repository": str(repository),
@@ -1628,7 +1813,11 @@ def _prepare_start_context(
         "reservation_id": reservation_id,
         "experiment_identity_digest": experiment_identity,
         "command_contract_digest": "",
-        "path": _minimal_toolchain_path(),
+        "path": path,
+        "tool_paths": {
+            name: str(getattr(tools, name).path)
+            for name in ("git", "cargo", "rustc")
+        },
         "home": str(home),
         "cargo_home": str(cargo_home),
         "index": str(index),
@@ -3111,6 +3300,8 @@ def seal_root(
 def _validate_retained_timing_build_failure(
     root: pathlib.Path,
     inventory: Mapping[str, str],
+    *,
+    expected_evidence_root: pathlib.Path,
 ) -> None:
     """Rebind retained timing failure bytes to their immutable stage context."""
     if TIMING_BUILD_FAILURE not in inventory:
@@ -3124,22 +3315,33 @@ def _validate_retained_timing_build_failure(
         raise protocol.ProtocolError(
             "timing build failure digest differs from owning inventory"
         )
-    context = load_stage_context(
-        root / STAGE_CONTEXT,
-        inventory[STAGE_CONTEXT],
-        require_fresh_scratch=False,
-    )
-    if pathlib.Path(context["evidence_root"]) != root:
+    context_path = root / STAGE_CONTEXT
+    if protocol.sha256_file(context_path) != inventory[STAGE_CONTEXT]:
+        raise protocol.ProtocolError(
+            "timing build stage context digest differs from owning inventory"
+        )
+    context = _read_json(context_path, "retained timing build stage context")
+    _validate_stage_context_record(context)
+    if pathlib.Path(context["evidence_root"]) != expected_evidence_root:
         raise protocol.ProtocolError(
             "timing build failure context names another evidence root"
         )
     payload = _read_json(artifact, "timing build failure evidence")
-    validate_timing_build_failure(payload, context)
+    validate_timing_build_failure(
+        payload,
+        context,
+        require_live_paths=False,
+    )
 
 
-def validate_root(root: pathlib.Path) -> str:
-    """Cryptographically reconstruct one complete aggregate evidence root."""
+def _validate_root(
+    root: pathlib.Path,
+    *,
+    expected_evidence_root: pathlib.Path,
+) -> str:
+    """Validate physical bytes against their immutable original root identity."""
     root = _canonical_existing_root(root)
+    expected_evidence_root = _canonical_existing_root(expected_evidence_root)
     abandonment_path = root / ABANDONMENT_SEAL
     if abandonment_path.exists():
         seal = _read_json(abandonment_path, "abandonment seal")
@@ -3160,7 +3362,11 @@ def validate_root(root: pathlib.Path) -> str:
         protocol.validate_regular_file_inventory(
             root, seal["inventory"], excluded=frozenset({ABANDONMENT_SEAL})
         )
-        _validate_retained_timing_build_failure(root, seal["inventory"])
+        _validate_retained_timing_build_failure(
+            root,
+            seal["inventory"],
+            expected_evidence_root=expected_evidence_root,
+        )
         return "ABANDONED"
     if os.path.lexists(root / TIMING_BUILD_FAILURE):
         raise protocol.ProtocolError(
@@ -3219,6 +3425,12 @@ def validate_root(root: pathlib.Path) -> str:
         ):
             raise protocol.ProtocolError(f"{relative} does not pass every gate")
     return status
+
+
+def validate_root(root: pathlib.Path) -> str:
+    """Cryptographically reconstruct one complete aggregate evidence root."""
+    root = _canonical_existing_root(root)
+    return _validate_root(root, expected_evidence_root=root)
 
 
 def seal_abandoned_root(
@@ -3471,7 +3683,10 @@ def validate_git_selector(
             destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             destination.write_bytes(entry.content)
             destination.chmod(0o755 if entry.mode == "100755" else 0o644)
-        status = validate_root(reconstructed)
+        status = _validate_root(
+            reconstructed,
+            expected_evidence_root=root,
+        )
         if terminal_event is not None:
             if terminal_event.get("status") != status:
                 raise protocol.ProtocolError("Git root status differs from TERMINAL")

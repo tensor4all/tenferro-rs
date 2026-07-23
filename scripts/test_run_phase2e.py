@@ -554,6 +554,12 @@ class OuterOrchestratorTests(unittest.TestCase):
         scratch.mkdir()
         (base / "home").mkdir()
         (base / "cargo-home").mkdir()
+        controlled = base / "controlled-path"
+        controlled.mkdir()
+        for name in ("git", "cargo", "rustc"):
+            executable = controlled / name
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o700)
         context = {
             "version": 1,
             "repository": str(repository.resolve()),
@@ -564,7 +570,11 @@ class OuterOrchestratorTests(unittest.TestCase):
             "reservation_id": "reservation-1",
             "experiment_identity_digest": "b" * 64,
             "command_contract_digest": "0" * 64,
-            "path": "/bin",
+            "path": str(controlled.resolve()),
+            "tool_paths": {
+                name: str((controlled / name).resolve())
+                for name in ("git", "cargo", "rustc")
+            },
             "home": str((base / "home").resolve()),
             "cargo_home": str((base / "cargo-home").resolve()),
             "index": str((base / "index.json").resolve()),
@@ -588,11 +598,11 @@ class OuterOrchestratorTests(unittest.TestCase):
         killed: bool = False,
     ) -> tuple[dict, object]:
         path, context = self.make_stage_context(base)
-        controlled = pathlib.Path(sys.executable).resolve().parent
+        controlled = pathlib.Path(context["path"])
         scratch = pathlib.Path(context["scratch_parent"])
         worktree = scratch / role
         worktree.mkdir()
-        context["path"] = str(controlled)
+        context["path"] = str(controlled.resolve())
         context["command_contract_digest"] = (
             orchestrator.stage_context_contract_digest(context)
         )
@@ -604,10 +614,10 @@ class OuterOrchestratorTests(unittest.TestCase):
             target_dir=str(scratch / "targets" / role),
         )
         failure = orchestrator.build.CommandResult(
-            argv=(str(controlled / "cargo"), "build"),
+            argv=(str(controlled / "rustc"), "--version", "--verbose"),
             cwd=str(worktree),
             environment=environment,
-            deadline_seconds=17,
+            deadline_seconds=orchestrator.build.QUERY_DEADLINE_SECONDS,
             returncode=returncode,
             stdout="captured stdout\n",
             stderr="captured stderr\n",
@@ -847,7 +857,8 @@ raise SystemExit(1)
                         "argv": list(failure.argv),
                         "cwd": failure.cwd,
                         "environment": failure.environment,
-                        "deadline_seconds": 17,
+                        "deadline_seconds":
+                            orchestrator.build.QUERY_DEADLINE_SECONDS,
                         "returncode": 101,
                         "stdout": "captured stdout\n",
                         "stderr": "captured stderr\n",
@@ -994,6 +1005,100 @@ raise SystemExit(1)
                     orchestrator.validate_timing_build_failure(
                         candidate, context
                     )
+
+    def test_timing_build_failure_rejects_forged_argv_and_deadline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            context, failure = self.make_timing_build_failure(
+                pathlib.Path(directory)
+            )
+            payload = orchestrator._timing_build_failure_payload(failure)
+            mutations = {
+                "argv": lambda command: command.update(
+                    argv=[command["argv"][0], "forged-subcommand"]
+                ),
+                "deadline-value": lambda command: command.update(
+                    deadline_seconds=command["deadline_seconds"] + 1
+                ),
+                "deadline-bool": lambda command: command.update(
+                    deadline_seconds=True
+                ),
+            }
+            for name, mutate in mutations.items():
+                with self.subTest(name=name):
+                    forged = json.loads(json.dumps(payload))
+                    mutate(forged["command"])
+                    with self.assertRaises(protocol.ProtocolError):
+                        orchestrator.validate_timing_build_failure(
+                            forged, context
+                        )
+
+    def test_timing_build_failure_commands_are_role_specific(self):
+        cases = (
+            ("candidate", orchestrator.build.LOCK_COMMAND, True),
+            (
+                "common-lock-normalized-baseline",
+                orchestrator.build.LOCK_COMMAND,
+                False,
+            ),
+            ("candidate", orchestrator.build.METADATA_COMMAND, True),
+            ("candidate", orchestrator.build.BENCH_COMMAND, True),
+            (
+                "candidate",
+                orchestrator.build.timing_feature_command(
+                    "x86_64-unknown-linux-gnu"
+                ),
+                True,
+            ),
+        )
+        for role, template, accepted in cases:
+            with (
+                self.subTest(role=role, template=template),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                context, failure = self.make_timing_build_failure(
+                    pathlib.Path(directory), role=role
+                )
+                payload = orchestrator._timing_build_failure_payload(failure)
+                cargo = pathlib.Path(context["path"]) / "cargo"
+                payload["command"]["argv"] = [str(cargo), *template[1:]]
+                payload["command"]["deadline_seconds"] = (
+                    orchestrator.build.BUILD_DEADLINE_SECONDS
+                    if template == orchestrator.build.BENCH_COMMAND
+                    else orchestrator.build.QUERY_DEADLINE_SECONDS
+                )
+                if accepted:
+                    orchestrator.validate_timing_build_failure(payload, context)
+                else:
+                    with self.assertRaises(protocol.ProtocolError):
+                        orchestrator.validate_timing_build_failure(
+                            payload, context
+                        )
+
+    def test_offline_timing_failure_rejects_wrong_controlled_path_component(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            context, failure = self.make_timing_build_failure(base)
+            correct = pathlib.Path(context["path"])
+            wrong = base / "wrong-controlled-path"
+            wrong.mkdir()
+            for name in ("git", "cargo", "rustc"):
+                executable = wrong / name
+                executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                executable.chmod(0o700)
+            context["path"] = os.pathsep.join((str(correct), str(wrong)))
+            context["command_contract_digest"] = (
+                orchestrator.stage_context_contract_digest(context)
+            )
+            payload = orchestrator._timing_build_failure_payload(failure)
+            payload["command"]["environment"]["PATH"] = context["path"]
+            payload["command"]["argv"][0] = str(wrong / "rustc")
+
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_timing_build_failure(
+                    payload,
+                    context,
+                    require_live_paths=False,
+                )
 
     def test_timing_build_failure_publish_does_not_clobber_racing_leaf(self):
         creators = {
@@ -4315,6 +4420,44 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             )
             with self.assertRaises(protocol.ProtocolError):
                 orchestrator.validate_git_selector(repository, root, selector=":")
+
+    def test_git_selector_reconstructs_bound_abandoned_timing_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            context, failure = self.make_timing_build_failure(base)
+            repository = pathlib.Path(context["repository"])
+            subprocess.run(("git", "init", "-q"), cwd=repository, check=True)
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(parents=True, mode=0o700)
+            protocol.atomic_write_json(
+                root / orchestrator.STAGE_CONTEXT, context
+            )
+            protocol.atomic_write_json(
+                root / orchestrator.TIMING_BUILD_FAILURE,
+                orchestrator._timing_build_failure_payload(failure),
+            )
+            seal = orchestrator.seal_abandoned_root(root)
+            subprocess.run(
+                ("git", "add", "-f", "--", root.relative_to(repository)),
+                cwd=repository,
+                check=True,
+            )
+            terminal = {
+                "status": "ABANDONED",
+                "root_digest": protocol.sha256_json(seal),
+                "ledger_sha256": "0" * 64,
+            }
+            for external in (
+                pathlib.Path(context["scratch_parent"]),
+                pathlib.Path(context["home"]),
+                pathlib.Path(context["cargo_home"]),
+                pathlib.Path(context["path"]),
+            ):
+                shutil.rmtree(external)
+
+            orchestrator.validate_git_selector(
+                repository, root, selector=":", terminal_event=terminal
+            )
 
     def test_preservation_objects_require_exact_index_worklog_and_root(self):
         with tempfile.TemporaryDirectory() as directory:
