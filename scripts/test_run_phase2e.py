@@ -250,6 +250,7 @@ class OuterOrchestratorTests(unittest.TestCase):
             self.assertEqual(
                 set(seal["inventory"]), {"partial.log", "unique.tmp"}
             )
+            self.assertEqual(orchestrator.validate_root(root), "ABANDONED")
             os.symlink("partial.log", root / "bad-link")
             with self.assertRaises(protocol.ProtocolError):
                 orchestrator.seal_abandoned_root(root)
@@ -295,6 +296,124 @@ class OuterOrchestratorTests(unittest.TestCase):
             if "phase2e-index.lock" in line
         ]
         self.assertEqual(matches, ["docs/worklogs/.phase2e-index.lock"])
+
+    def test_fixed_stage_runner_stops_and_checkpoints_after_each_child(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            calls = []
+
+            def runner(stage, environment):
+                calls.append((stage, dict(environment)))
+                return 3 if stage == STAGE_FAILURE else 0
+
+            STAGE_FAILURE = orchestrator.STAGE_ORDER[3]
+            environment = protocol.runtime_environment(path="/bin", home="/tmp")
+            code = orchestrator.run_fixed_stages(
+                root, environment, runner
+            )
+            self.assertEqual(code, 3)
+            self.assertEqual(
+                [stage for stage, _ in calls],
+                list(orchestrator.STAGE_ORDER[:4]),
+            )
+            progress = json.loads(
+                (root / orchestrator.PROGRESS_MANIFEST).read_text(encoding="utf-8")
+            )
+            self.assertEqual(len(progress["children"]), 4)
+            self.assertTrue(all(environment == calls[0][1] for _, environment in calls))
+
+    def test_rerun_retains_invalid_attempt_and_runs_only_failed_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            environment = protocol.runtime_environment(path="/bin", home="/tmp")
+            failure = orchestrator.STAGE_ORDER[1]
+            orchestrator.run_fixed_stages(
+                root,
+                environment,
+                lambda stage, _environment: 2 if stage == failure else 0,
+            )
+            calls = []
+            code = orchestrator.rerun_invalid_stage(
+                root,
+                environment,
+                lambda stage, _environment: calls.append(stage) or 0,
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(calls, [failure])
+            progress = orchestrator.validate_progress(root)
+            self.assertEqual(
+                [child["stage"] for child in progress["children"]],
+                [orchestrator.STAGE_ORDER[0], failure, failure],
+            )
+
+    def test_initialization_failure_self_seals_and_records_pending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            index_path = base / "index.json"
+            lock_path = base / "index.lock"
+            root = base / "root"
+            protocol.atomic_write_json(index_path, orchestrator.new_campaign_index())
+            def fail(_root):
+                raise OSError("boom")
+
+            code = orchestrator.initialize_campaign(
+                index_path=index_path,
+                index_lock=lock_path,
+                root=root,
+                reservation_id="r1",
+                candidate_sha=self.CANDIDATE,
+                candidate_tree_sha256="c" * 64,
+                experiment_identity_digest="d" * 64,
+                campaign_identity_digest="e" * 64,
+                initializer=fail,
+            )
+            self.assertEqual(code, 5)
+            self.assertTrue((root / orchestrator.ABANDONMENT_SEAL).is_file())
+            self.assertEqual(
+                orchestrator.index_state(orchestrator._read_index(index_path)),
+                "PENDING_PRESERVATION",
+            )
+
+    def test_git_inventory_requires_exact_root_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_complete_root(root)
+            expected = {
+                path.relative_to(root).as_posix(): path.read_bytes()
+                for path in root.rglob("*")
+                if path.is_file()
+            }
+            orchestrator.validate_git_blob_inventory(root, expected)
+            missing = dict(expected)
+            missing.pop(next(iter(missing)))
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_git_blob_inventory(root, missing)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_git_blob_inventory(
+                    root, {**expected, "extra": b"foreign"}
+                )
+
+    def test_preservation_comment_binds_commit_root_candidate_and_status(self):
+        text = " ".join(
+            ["1" * 40, "docs/worklogs/root-1", self.CANDIDATE, "PASS"]
+        )
+        orchestrator.validate_preservation_comment(
+            "https://github.com/tensor4all/tenferro-rs/issues/1436#issuecomment-9",
+            text,
+            preservation_commit="1" * 40,
+            root="docs/worklogs/root-1",
+            candidate_sha=self.CANDIDATE,
+            status="PASS",
+        )
+        with self.assertRaises(protocol.ProtocolError):
+            orchestrator.validate_preservation_comment(
+                "https://github.com/tensor4all/tenferro-rs/issues/1435#issuecomment-9",
+                text,
+                preservation_commit="1" * 40,
+                root="docs/worklogs/root-1",
+                candidate_sha=self.CANDIDATE,
+                status="PASS",
+            )
 
 
 if __name__ == "__main__":
