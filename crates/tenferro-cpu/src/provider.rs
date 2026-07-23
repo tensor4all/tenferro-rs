@@ -438,6 +438,58 @@ impl<'a> CpuOperationEntry<'a> {
         })
     }
 
+    pub(crate) fn enter_or_reuse<R: Send>(
+        self,
+        entered: Option<&CpuExecutionContext<'_>>,
+        parallel_mode: ParallelMode,
+        operation: impl FnOnce(&CpuExecutionContext<'_>) -> R + Send,
+    ) -> Result<R, CpuDomainExecutorError> {
+        let Some(entered) = entered else {
+            return self.enter(parallel_mode, operation);
+        };
+        if parallel_mode == ParallelMode::Outer {
+            return Err(CpuDomainExecutorError::Scheduling {
+                message: "entered CPU session requires Sequential or Inner mode, got Outer"
+                    .to_owned(),
+            });
+        }
+        if entered.domain_id() != self.domain.id() {
+            return Err(CpuDomainExecutorError::Scheduling {
+                message: format!(
+                    "entered CPU session domain {:?} does not match operation domain {:?}",
+                    entered.domain_id(),
+                    self.domain.id()
+                ),
+            });
+        }
+        let owner = self.permit.owner();
+        Ok(with_execution_owner(owner, || {
+            let context = CpuExecutionContext::entered(self.domain, parallel_mode);
+            operation(&context)
+        }))
+    }
+
+    pub(crate) fn supports_infallible_session_entry(self) -> bool {
+        self.domain.ownership() == crate::CpuDomainOwnership::Managed
+    }
+
+    pub(crate) fn enter_managed_session<R: Send>(
+        self,
+        operation: impl FnOnce(CpuExecutionContext<'a>) -> R + Send,
+    ) -> R {
+        assert!(
+            self.supports_infallible_session_entry(),
+            "managed session entry requires a Tenferro-managed CPU domain"
+        );
+        let mode = self.preferred_engine_mode();
+        self.enter(mode, |_| {
+            operation(CpuExecutionContext::entered(self.domain, mode))
+        })
+        .unwrap_or_else(|error| {
+            panic!("Tenferro-managed CPU executor violated synchronous install contract: {error}")
+        })
+    }
+
     pub(crate) fn submit_outer(
         self,
         len: usize,

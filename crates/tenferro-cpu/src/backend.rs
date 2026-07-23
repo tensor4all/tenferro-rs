@@ -2972,13 +2972,14 @@ impl CpuBackend {
         let owner = inherited_or_new_execution_owner();
         let permit = self.acquire_execution_permit(owner);
         let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
-        let run = || {
+        let run = |entered| {
             self.with_execution_resources(&permit, |resources| {
                 let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
                 let cache = cache.unwrap_or(&mut resources.gemm_analysis_cache);
                 let session_started = Instant::now();
                 let mut session = CpuExecSession {
                     entry,
+                    entered,
                     buffers: buffers.get_mut(),
                     gemm_analysis_cache: cache,
                     providers: &providers,
@@ -2996,7 +2997,11 @@ impl CpuBackend {
                 result
             })
         };
-        with_execution_owner(owner, run)
+        if entry.supports_infallible_session_entry() {
+            entry.enter_managed_session(|context| run(Some(context)))
+        } else {
+            with_execution_owner(owner, || run(None))
+        }
     }
 }
 

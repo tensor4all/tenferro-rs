@@ -308,9 +308,10 @@ impl CpuPlacementBoundEager {
 
     /// Enter one CPU backend session and run core operations through it.
     ///
-    /// One call creates one backend session. Each core operation invoked on
-    /// `session` still enters its own operation boundary exactly once. The
-    /// closure may borrow stack data and need not be `'static`.
+    /// One call creates one backend session. Tenferro-managed CPU executors
+    /// enter once around the closure and core operations reuse that compatible
+    /// execution scope. The closure may borrow stack data and need not be
+    /// `'static`.
     ///
     /// This phase-2 bridge accepts only core [`BackendSession`] operations. It
     /// does not lock or dispatch the eager runtime's linalg, FFT, einsum, or

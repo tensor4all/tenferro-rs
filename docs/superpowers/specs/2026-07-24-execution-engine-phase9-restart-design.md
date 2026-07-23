@@ -83,14 +83,19 @@ executor.install`, potentially paying pool entry once per operation.
 
 The repaired contract is:
 
-- explicit backend sessions enter the selected execution domain at most once
-  for a multi-operation closure;
+- explicit backend sessions on Tenferro-managed executors enter the selected
+  execution domain at most once for a multi-operation closure;
 - compiled multi-operation programs enter at most once per compatible
   execution scope;
 - eager standalone operations retain a cheap single-operation path;
 - nested provider work reuses the active compatible execution scope;
 - sequential, inner-parallel, and outer-parallel ownership remain explicit
   and do not double-fan out.
+
+Fallible external executors retain operation-level entry until the generic
+`BackendSessionHost` callback contract can represent a typed admission failure
+before the callback begins. The repair must not replace that failure with a
+panic, a hidden fallback, or an untyped side channel.
 
 Implementation follows test-driven development. A regression test must first
 demonstrate that two or more operations in one session cause repeated entry on

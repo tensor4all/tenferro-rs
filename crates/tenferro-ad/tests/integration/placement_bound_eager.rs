@@ -236,7 +236,7 @@ fn placement_binding_is_idle_until_a_session_operation_runs() {
 }
 
 #[test]
-fn one_session_enters_each_core_operation_exactly_once() {
+fn fallible_external_session_enters_each_core_operation_exactly_once() {
     let counters = Arc::new(ExecutorCounters::default());
     let runtime = EagerRuntime::with_cpu_backend(external_backend(Arc::clone(&counters)));
     let mut cpu = runtime.on_cpu(placement()).unwrap();

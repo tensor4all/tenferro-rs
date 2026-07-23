@@ -87,6 +87,8 @@ pub struct CpuContext {
     pool: Option<Arc<rayon::ThreadPool>>,
     pinned_cpus: Option<CpuSet>,
     execution_scope: Arc<ExecutionScopeState>,
+    #[cfg(test)]
+    executor_install_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl CpuContext {
@@ -206,6 +208,8 @@ impl CpuContext {
             pool,
             pinned_cpus: None,
             execution_scope,
+            #[cfg(test)]
+            executor_install_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 
@@ -303,6 +307,8 @@ impl CpuContext {
             pool: Some(pool),
             pinned_cpus: Some(cpus),
             execution_scope,
+            #[cfg(test)]
+            executor_install_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 
@@ -312,6 +318,8 @@ impl CpuContext {
             pool: None,
             pinned_cpus: None,
             execution_scope: Arc::new(ExecutionScopeState::default()),
+            #[cfg(test)]
+            executor_install_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -376,6 +384,12 @@ impl CpuContext {
     pub(crate) fn owns_current_worker_for_test(&self) -> bool {
         worker_execution_scope_matches(&self.execution_scope)
     }
+
+    #[cfg(test)]
+    pub(crate) fn executor_install_calls_for_test(&self) -> usize {
+        self.executor_install_calls
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 impl CpuDomainExecutor for CpuContext {
@@ -422,6 +436,9 @@ impl CpuDomainExecutor for CpuContext {
         &self,
         job: &mut dyn ScopedCpuJob,
     ) -> std::result::Result<(), CpuDomainExecutorError> {
+        #[cfg(test)]
+        self.executor_install_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let _scope = current_execution_owner().map(|owner| self.execution_scope.enter(owner));
         self.install_if_needed(|| job.run())
     }

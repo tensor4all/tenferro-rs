@@ -316,16 +316,17 @@ phase 2.
 borrowed `&mut dyn BackendSession` adapter to the closure. The bridge operates
 on concrete `Tensor` values through the existing public backend-session traits;
 it does not ask ordinary `EagerTensor` methods to recursively lock the runtime.
-Nested operation-family calls through the borrowed session delegate below that
-session boundary and do not call `CpuBackend::install` again.
+Nested operation-family calls through a Tenferro-managed borrowed session
+delegate below that entered executor boundary and do not call
+`CpuBackend::install` again.
 
 The phase-2 adapter exposes only the core operations already implemented by
 `BackendSession`. It does not enter the eager runtime's extension registry and
 does not add linalg, FFT, einsum, or other operation-family methods. Those
-families remain phase-4/phase-6 work. “One session entry” means one
-`CpuBackend::with_backend_session` call for each `with_eager_session` scope;
-each core operation invoked on the borrowed session still crosses its own
-`CpuOperationEntry` exactly once.
+families remain phase-4/phase-6 work. “One session entry” means one managed
+executor entry for each `with_eager_session` scope; each compatible core
+operation reuses that entered scope while preserving its own logical
+`ParallelMode`. Fallible external executors retain operation-level entry.
 
 The existing CPU backend re-entry guard is panic-based rather than a typed
 admission API: calling an ordinary same-runtime `EagerTensor` operation from

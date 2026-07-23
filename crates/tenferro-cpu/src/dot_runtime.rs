@@ -382,9 +382,38 @@ impl CpuProviderBundle {
         accumulation: DotGeneralAccumulation,
         output: TensorWrite<'_>,
     ) -> Result<()> {
+        self.execute_dot_general_into_scoped(
+            entry,
+            None,
+            buffers,
+            cache,
+            cache_slot,
+            lhs,
+            rhs,
+            config,
+            accumulation,
+            output,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_dot_general_into_scoped(
+        &self,
+        entry: &CpuOperationEntry<'_>,
+        entered: Option<&CpuExecutionContext<'_>>,
+        buffers: &mut BufferPool,
+        cache: &mut GemmAnalysisCache,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        accumulation: DotGeneralAccumulation,
+        output: TensorWrite<'_>,
+    ) -> Result<()> {
         self.inner.dot_general.execute_into(
             &self.inner,
             entry,
+            entered,
             buffers,
             cache,
             cache_slot,
@@ -404,9 +433,21 @@ impl CpuProviderBundle {
         config: &tenferro_tensor::backend::GroupedGemmConfig<'_>,
         output: TensorWrite<'_>,
     ) -> Result<()> {
+        self.execute_grouped_gemm_scoped(entry, None, lhs, rhs, config, output)
+    }
+
+    pub(crate) fn execute_grouped_gemm_scoped(
+        &self,
+        entry: &CpuOperationEntry<'_>,
+        entered: Option<&CpuExecutionContext<'_>>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &tenferro_tensor::backend::GroupedGemmConfig<'_>,
+        output: TensorWrite<'_>,
+    ) -> Result<()> {
         self.inner
             .dot_general
-            .execute_grouped(entry, lhs, rhs, config, output)
+            .execute_grouped(entry, entered, lhs, rhs, config, output)
     }
 }
 
@@ -474,6 +515,7 @@ impl DotGeneralRuntime {
         &self,
         bundle_identity: &Arc<CpuProviderBundleInner>,
         entry: &CpuOperationEntry<'_>,
+        entered: Option<&CpuExecutionContext<'_>>,
         buffers: &mut BufferPool,
         cache: &mut GemmAnalysisCache,
         cache_slot: Option<usize>,
@@ -489,7 +531,7 @@ impl DotGeneralRuntime {
             .map_err(|error| Error::backend_source(OP, error))?;
         cache.bind_provider_bundle(bundle_identity);
         entry
-            .enter(mode, |provider_context| {
+            .enter_or_reuse(entered, mode, |provider_context| {
                 self.execute_into_validated(
                     provider_context,
                     validated,
@@ -658,6 +700,7 @@ impl DotGeneralRuntime {
     fn execute_grouped(
         &self,
         entry: &CpuOperationEntry<'_>,
+        entered: Option<&CpuExecutionContext<'_>>,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
         config: &tenferro_tensor::backend::GroupedGemmConfig<'_>,
@@ -670,7 +713,8 @@ impl DotGeneralRuntime {
             config,
             "grouped_gemm",
         )?;
-        if self.grouped_scheduling == GroupedGemmScheduling::EngineOuter
+        if entered.is_none()
+            && self.grouped_scheduling == GroupedGemmScheduling::EngineOuter
             && entry.supports_outer()
             && config.jobs().len() > 1
         {
@@ -788,7 +832,7 @@ impl DotGeneralRuntime {
             .grouped_mode(entry)
             .map_err(|error| Error::backend_source("grouped_gemm", error))?;
         entry
-            .enter(mode, |provider_context| {
+            .enter_or_reuse(entered, mode, |provider_context| {
                 let request = CpuGroupedGemmRequest::new(
                     &lhs,
                     &rhs,

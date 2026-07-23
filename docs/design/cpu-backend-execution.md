@@ -32,9 +32,11 @@ A supported graph execution holds one permit and one backend session across
 Host operations, native operations, and session-capable FFI operations.
 Non-session extension runtimes are boundaries. Cache ownership follows engine
 ownership so clone handles do not duplicate retained execution state.
-The session stores `CpuOperationEntry`, not a provider context; each operation
-performs exactly one executor entry. Direct and session execution therefore
-have identical placement and call-count contracts.
+The session stores `CpuOperationEntry` plus an optional entered execution
+context. Tenferro-managed sessions enter once and reuse that executor boundary
+while selecting an explicit logical mode for each native or provider
+operation. Fallible external executors retain operation-level entry so their
+typed admission failures are not replaced by panic or fallback.
 
 Every successfully returned fresh CPU allocation records the selected resource
 domain as `Placement::cpu_affinity`. The tag is routing/locality metadata, not

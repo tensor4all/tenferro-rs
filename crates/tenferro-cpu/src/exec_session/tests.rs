@@ -10,6 +10,7 @@ fn native_operation_enters_the_selected_rayon_executor() {
     let providers = CpuProviderBundle::standard(kind, kind == crate::CpuBackendKind::Blas);
     let mut session = CpuExecSession {
         entry: fixture.entry(),
+        entered: None,
         buffers: &mut buffers,
         gemm_analysis_cache: &mut gemm_analysis_cache,
         providers: &providers,

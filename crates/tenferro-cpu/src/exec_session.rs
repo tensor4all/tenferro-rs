@@ -11,7 +11,7 @@ use tenferro_tensor::{
 };
 
 use super::backend::{reclaim_typed, tag_fresh_output, FreshCpuOutput};
-use super::provider::CpuOperationEntry;
+use super::provider::{CpuExecutionContext, CpuOperationEntry};
 use super::CpuProviderBundle;
 use super::{
     analytic, copy_tensor_read_into, elementwise, gemm, indexing, materialize_tensor_read,
@@ -20,6 +20,7 @@ use super::{
 
 pub(crate) struct CpuExecSession<'a> {
     pub(crate) entry: CpuOperationEntry<'a>,
+    pub(crate) entered: Option<CpuExecutionContext<'a>>,
     pub(crate) buffers: &'a mut BufferPool,
     pub(crate) gemm_analysis_cache: &'a mut gemm::GemmAnalysisCache,
     pub(crate) providers: &'a CpuProviderBundle,
@@ -65,6 +66,9 @@ impl CpuExecSession<'_> {
         op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
     ) -> crate::Result<R> {
         let buffers = &mut *self.buffers;
+        if let Some(context) = self.entered {
+            return context.with_native_parallelism(|| op(buffers));
+        }
         let mode = self.entry.preferred_engine_mode();
         self.entry
             .enter(mode, |context| {
@@ -78,6 +82,13 @@ impl CpuExecSession<'_> {
         op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
     ) -> crate::Result<R> {
         let buffers = &mut *self.buffers;
+        if let Some(context) = self.entered {
+            return context.with_native_parallelism(|| {
+                let mut output = op(buffers)?;
+                output.tag_fresh(context.domain_id());
+                Ok(output)
+            });
+        }
         let mode = self.entry.preferred_engine_mode();
         self.entry
             .enter(mode, |context| {
@@ -113,7 +124,7 @@ impl TensorDeviceTransfer for CpuExecSession<'_> {
     }
 }
 
-/// Simple delegation with one operation-level executor entry and no dtype dispatch.
+/// Simple delegation that reuses an entered managed session when available.
 macro_rules! delegate {
     ($name:ident($($arg:ident : $ty:ty),*) => $body:expr) => {
         fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
@@ -132,7 +143,7 @@ macro_rules! delegate_with_pool {
 }
 
 impl TensorElementwise for CpuExecSession<'_> {
-    // Elementwise — direct delegation with one operation-level executor entry.
+    // Elementwise — direct delegation within the current session scope.
     delegate_with_pool!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
 
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
@@ -301,8 +312,9 @@ impl CpuExecSession<'_> {
             alpha: ContractionScalar::one(dtype)?,
             beta: ContractionScalar::zero(dtype)?,
         };
-        self.providers.execute_dot_general_into(
+        self.providers.execute_dot_general_into_scoped(
             &self.entry,
+            self.entered.as_ref(),
             self.buffers,
             self.gemm_analysis_cache,
             cache_slot,
@@ -362,8 +374,9 @@ impl TensorDot for CpuExecSession<'_> {
         accumulation: DotGeneralAccumulation,
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        self.providers.execute_dot_general_into(
+        self.providers.execute_dot_general_into_scoped(
             &self.entry,
+            self.entered.as_ref(),
             self.buffers,
             self.gemm_analysis_cache,
             None,
@@ -440,8 +453,9 @@ impl SessionCachedDot for CpuExecSession<'_> {
         accumulation: DotGeneralAccumulation,
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        self.providers.execute_dot_general_into(
+        self.providers.execute_dot_general_into_scoped(
             &self.entry,
+            self.entered.as_ref(),
             self.buffers,
             self.gemm_analysis_cache,
             cache_slot,
@@ -461,8 +475,14 @@ impl SessionCachedDot for CpuExecSession<'_> {
         config: &GroupedGemmConfig<'_>,
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        self.providers
-            .execute_grouped_gemm(&self.entry, lhs, rhs, config, out)
+        self.providers.execute_grouped_gemm_scoped(
+            &self.entry,
+            self.entered.as_ref(),
+            lhs,
+            rhs,
+            config,
+            out,
+        )
     }
 }
 

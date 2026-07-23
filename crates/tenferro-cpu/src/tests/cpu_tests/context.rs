@@ -131,11 +131,39 @@ fn cpu_install_accepts_send_state() {
 }
 
 #[test]
-fn cpu_backend_exec_session_defers_executor_entry_to_operations() {
-    let mut backend = CpuBackend::with_threads(2).unwrap();
-    backend.with_backend_session(|_| {
-        assert!(rayon::current_thread_index().is_none());
+fn cpu_backend_multi_operation_session_enters_executor_once() {
+    let context = Arc::new(CpuContext::with_threads(2).unwrap());
+    let mut backend = CpuBackend::from_context(Arc::clone(&context));
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap());
+    let before = context.executor_install_calls_for_test();
+
+    backend.with_backend_session(|session| {
+        session.add(&lhs, &rhs).unwrap();
+        session.neg(&lhs).unwrap();
+        session.mul(&lhs, &rhs).unwrap();
+        session
+            .dot_general(
+                &lhs,
+                &rhs,
+                &DotGeneralConfig {
+                    lhs_contracting_dims: vec![0],
+                    rhs_contracting_dims: vec![0],
+                    lhs_batch_dims: vec![],
+                    rhs_batch_dims: vec![],
+                },
+            )
+            .unwrap();
     });
+
+    assert_eq!(context.executor_install_calls_for_test() - before, 1);
+
+    let before_standalone = context.executor_install_calls_for_test();
+    backend.add(&lhs, &rhs).unwrap();
+    assert_eq!(
+        context.executor_install_calls_for_test() - before_standalone,
+        1
+    );
 }
 
 #[test]
