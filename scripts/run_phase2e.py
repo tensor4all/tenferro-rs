@@ -37,8 +37,12 @@ ISSUE_NUMBER = 1436
 
 def campaign_index_paths(repository: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
     """Return the only repository-owned Phase 2E index and lock paths."""
-    repository = pathlib.Path(repository).resolve(strict=True)
-    if not repository.is_dir():
+    repository = pathlib.Path(repository)
+    if (
+        not repository.is_absolute()
+        or repository.resolve(strict=True) != repository
+        or not repository.is_dir()
+    ):
         raise protocol.ProtocolError("Phase 2E repository is not a directory")
     return repository / INDEX_PATH, repository / INDEX_LOCK_PATH
 
@@ -838,24 +842,173 @@ def record_preserved_event(
     return updated
 
 
+def _open_directory_descriptor(path: pathlib.Path) -> int:
+    path = pathlib.Path(path)
+    if not path.is_absolute():
+        raise protocol.ProtocolError("trusted directory path must be absolute")
+    try:
+        descriptor = os.open(
+            path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+        )
+    except OSError as error:
+        raise protocol.ProtocolError(
+            f"cannot open trusted directory {path}: {error}"
+        ) from error
+    try:
+        for component in path.parts[1:]:
+            try:
+                child = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+            except OSError as error:
+                raise protocol.ProtocolError(
+                    f"trusted directory traverses an invalid component: {path}: {error}"
+                ) from error
+            os.close(descriptor)
+            descriptor = child
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode) or (
+            hasattr(os, "geteuid") and metadata.st_uid != os.geteuid()
+        ):
+            raise protocol.ProtocolError("trusted directory is not owned")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _validate_lock_identity(
+    directory_descriptor: int, name: str, expected: os.stat_result
+) -> None:
+    try:
+        current = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+    except OSError as error:
+        raise protocol.ProtocolError(f"lock identity disappeared: {name}: {error}") from error
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino)
+    ):
+        raise protocol.ProtocolError(f"lock identity changed: {name}")
+
+
 @contextmanager
-def exclusive_lock(path: pathlib.Path):
-    """Hold one process-exclusive advisory lock on an exact regular path."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+def exclusive_lock_at(directory_descriptor: int, name: str):
+    """Hold one no-follow regular lock relative to a retained directory."""
+    try:
+        prior = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        prior = None
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot inspect lock {name}: {error}") from error
+    if prior is not None and not stat.S_ISREG(prior.st_mode):
+        raise protocol.ProtocolError(f"lock is not a regular file: {name}")
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o600,
+            dir_fd=directory_descriptor,
+        )
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot securely open lock {name}: {error}") from error
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or (hasattr(os, "geteuid") and metadata.st_uid != os.geteuid())
+        or prior is not None
+        and (prior.st_dev, prior.st_ino) != (metadata.st_dev, metadata.st_ino)
+    ):
+        os.close(descriptor)
+        raise protocol.ProtocolError(f"lock identity or mode differs: {name}")
+    if prior is None:
+        os.fsync(directory_descriptor)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX)
+        _validate_lock_identity(directory_descriptor, name, metadata)
         yield descriptor
+        _validate_lock_identity(directory_descriptor, name, metadata)
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
 
 
-def _read_index(path: pathlib.Path) -> dict[str, Any]:
+@contextmanager
+def exclusive_lock(path: pathlib.Path):
+    """Hold one process-exclusive lock without following any path symlink."""
+    path = pathlib.Path(path)
+    parent = _open_directory_descriptor(path.parent)
     try:
-        payload = path.read_bytes()
+        with exclusive_lock_at(parent, path.name) as descriptor:
+            yield descriptor
+    finally:
+        os.close(parent)
+
+
+def _read_regular_path(path: pathlib.Path, context: str) -> bytes:
+    path = pathlib.Path(path)
+    parent = _open_directory_descriptor(path.parent)
+    descriptor = None
+    try:
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+            dir_fd=parent,
+        )
+        before = os.fstat(descriptor)
+        chunks = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        identity = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns)
+        if not stat.S_ISREG(before.st_mode) or identity(before) != identity(after):
+            raise protocol.ProtocolError(f"{context} is not a stable regular file")
+        return b"".join(chunks)
     except OSError as error:
-        raise protocol.ProtocolError(f"cannot read Phase 2E index: {error}") from error
+        raise protocol.ProtocolError(f"cannot securely read {context}: {error}") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
+
+
+def _regular_path_exists(path: pathlib.Path, context: str) -> bool:
+    path = pathlib.Path(path)
+    parent = _open_directory_descriptor(path.parent)
+    try:
+        try:
+            metadata = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if not stat.S_ISREG(metadata.st_mode):
+            raise protocol.ProtocolError(f"{context} is not a regular file")
+        return True
+    finally:
+        os.close(parent)
+
+
+def _atomic_write_path(path: pathlib.Path, payload: Mapping[str, Any]) -> None:
+    path = pathlib.Path(path)
+    parent = _open_directory_descriptor(path.parent)
+    try:
+        try:
+            current = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            current = None
+        if current is not None and not stat.S_ISREG(current.st_mode):
+            raise protocol.ProtocolError(f"write target is not regular: {path}")
+        protocol.atomic_write_json_at(parent, path.name, payload)
+    finally:
+        os.close(parent)
+
+
+def _read_index(path: pathlib.Path) -> dict[str, Any]:
+    payload = _read_regular_path(path, "Phase 2E index")
     decoded = protocol.decode_canonical_json_bytes(payload, "Phase 2E index")
     _validate_index(decoded)
     return decoded
@@ -872,7 +1025,7 @@ def mutate_index(
         updated = mutation(copy.deepcopy(current))
         if type(updated) is not dict:
             raise protocol.ProtocolError("index mutation returned a non-object")
-        protocol.atomic_write_json(index_path, updated)
+        _atomic_write_path(index_path, updated)
         return updated
 
 
@@ -1160,12 +1313,11 @@ def initialize_campaign(
     index_path, index_lock = campaign_index_paths(repository)
     with exclusive_lock(index_lock):
         require_remote_index(repository, index_path, allow_absent=True)
-        if index_path.exists():
+        if _regular_path_exists(index_path, "Phase 2E index"):
             current = _read_index(index_path)
         else:
-            index_path.parent.mkdir(parents=True, exist_ok=True)
             current = new_campaign_index()
-            protocol.atomic_write_json(index_path, current)
+            _atomic_write_path(index_path, current)
         updated = record_active(
             current,
             reservation_id=reservation_id,
@@ -1177,28 +1329,32 @@ def initialize_campaign(
             command_digest=command_digest,
             context_sha256=context_sha256,
         )
-        protocol.prepare_empty_root(root)
-        root_lock = root / ".orchestrator.lock"
-        with exclusive_lock(root_lock):
-            protocol.atomic_write_json(index_path, updated)
-            try:
-                if initializer is None:
-                    protocol.atomic_write_json(
-                        root / "evidence-ledger.json",
-                        protocol.new_ledger(candidate_sha),
+        root_identity = protocol.prepare_empty_root_identity(root)
+        try:
+            root_lock = ".orchestrator.lock"
+            with exclusive_lock_at(root_identity.descriptor, root_lock):
+                _atomic_write_path(index_path, updated)
+                try:
+                    if initializer is None:
+                        protocol.atomic_write_json_at(
+                            root_identity.descriptor,
+                            "evidence-ledger.json",
+                            protocol.new_ledger(candidate_sha),
+                        )
+                    else:
+                        initializer(root)
+                except BaseException:
+                    seal = seal_abandoned_root(root, identity=root_identity)
+                    terminal = record_terminal(
+                        updated,
+                        reservation_id=reservation_id,
+                        status="ABANDONED",
+                        root_digest=protocol.sha256_json(seal),
                     )
-                else:
-                    initializer(root)
-            except BaseException:
-                seal = seal_abandoned_root(root)
-                terminal = record_terminal(
-                    updated,
-                    reservation_id=reservation_id,
-                    status="ABANDONED",
-                    root_digest=protocol.sha256_json(seal),
-                )
-                protocol.atomic_write_json(index_path, terminal)
-                return 5
+                    _atomic_write_path(index_path, terminal)
+                    return 5
+        finally:
+            root_identity.close()
     return 0
 
 
@@ -1391,6 +1547,17 @@ def validate_semantic_root(root: pathlib.Path) -> None:
     )
 
 
+def _canonical_existing_root(root: pathlib.Path) -> pathlib.Path:
+    root = pathlib.Path(root)
+    try:
+        canonical = root.resolve(strict=True)
+    except OSError as error:
+        raise protocol.ProtocolError(f"cannot resolve evidence root: {error}") from error
+    if not root.is_absolute() or canonical != root or not root.is_dir():
+        raise protocol.ProtocolError("evidence root must be a canonical directory")
+    return root
+
+
 def seal_root(
     root: pathlib.Path,
     *,
@@ -1401,7 +1568,7 @@ def seal_root(
     """Write the aggregate manifest after all four measured lanes close."""
     _require_sha(candidate_sha, sha256=False, context="candidate SHA")
     _require_sha(experiment_identity_digest, sha256=True, context="experiment identity")
-    root = pathlib.Path(root)
+    root = _canonical_existing_root(root)
     validate_semantic_root(root)
     ledger = _read_json(root / "evidence-ledger.json", "evidence ledger")
     if ledger.get("candidate_sha") != candidate_sha:
@@ -1448,7 +1615,7 @@ def seal_root(
 
 def validate_root(root: pathlib.Path) -> str:
     """Cryptographically reconstruct one complete aggregate evidence root."""
-    root = pathlib.Path(root)
+    root = _canonical_existing_root(root)
     abandonment_path = root / ABANDONMENT_SEAL
     if abandonment_path.exists():
         seal = _read_json(abandonment_path, "abandonment seal")
@@ -1513,11 +1680,15 @@ def validate_root(root: pathlib.Path) -> str:
     return status
 
 
-def seal_abandoned_root(root: pathlib.Path) -> dict[str, Any]:
+def seal_abandoned_root(
+    root: pathlib.Path, *, identity: protocol.PreparedRootIdentity | None = None
+) -> dict[str, Any]:
     """Own every preexisting regular byte after an unresumable interruption."""
     root = pathlib.Path(root)
-    inventory = protocol.regular_file_inventory(
-        root, excluded=frozenset({ABANDONMENT_SEAL})
+    owned_identity = identity is None
+    identity = identity or protocol.PreparedRootIdentity(root)
+    inventory = protocol.regular_file_inventory_at(
+        identity.descriptor, excluded=frozenset({ABANDONMENT_SEAL})
     )
     seal = {
         "version": 1,
@@ -1525,8 +1696,12 @@ def seal_abandoned_root(root: pathlib.Path) -> dict[str, Any]:
         "status": "ABANDONED",
         "inventory": inventory,
     }
-    protocol.atomic_write_json(root / ABANDONMENT_SEAL, seal)
-    return seal
+    try:
+        protocol.atomic_write_json_at(identity.descriptor, ABANDONMENT_SEAL, seal)
+        return seal
+    finally:
+        if owned_identity:
+            identity.close()
 
 
 def validate_git_blob_inventory(
@@ -1852,39 +2027,45 @@ def record_index_root(
     """Validate and transition one ACTIVE reservation to pending preservation."""
     index_path, index_lock = campaign_index_paths(repository)
     with exclusive_lock(index_lock):
-        with exclusive_lock(root / ".orchestrator.lock"):
-            index = _read_index(index_path)
-            if abandoned:
-                if not confirm_no_live_processes:
-                    raise protocol.ProtocolError(
-                        "abandonment requires no-live-process confirmation"
-                    )
-                for process_group in process_groups:
-                    try:
-                        os.killpg(process_group, 0)
-                    except ProcessLookupError:
-                        continue
-                    except PermissionError as error:
+        root = _canonical_existing_root(root)
+        identity = protocol.PreparedRootIdentity(root)
+        try:
+            with exclusive_lock_at(identity.descriptor, ".orchestrator.lock"):
+                index = _read_index(index_path)
+                if abandoned:
+                    if not confirm_no_live_processes:
                         raise protocol.ProtocolError(
-                            "cannot confirm process-group state"
-                        ) from error
-                    raise protocol.ProtocolError(
-                        "a recorded process group is still live"
-                    )
-                seal = seal_abandoned_root(root)
-                status = "ABANDONED"
-                digest = protocol.sha256_json(seal)
-            else:
-                status = validate_root(root)
-                digest = protocol.sha256_file(root / AGGREGATE_MANIFEST)
-            updated = record_terminal(
-                index,
-                reservation_id=reservation_id,
-                status=status,
-                root_digest=digest,
-            )
-            protocol.atomic_write_json(index_path, updated)
-            return updated
+                            "abandonment requires no-live-process confirmation"
+                        )
+                    for process_group in process_groups:
+                        try:
+                            os.killpg(process_group, 0)
+                        except ProcessLookupError:
+                            continue
+                        except PermissionError as error:
+                            raise protocol.ProtocolError(
+                                "cannot confirm process-group state"
+                            ) from error
+                        raise protocol.ProtocolError(
+                            "a recorded process group is still live"
+                        )
+                    seal = seal_abandoned_root(root, identity=identity)
+                    status = "ABANDONED"
+                    digest = protocol.sha256_json(seal)
+                else:
+                    status = validate_root(root)
+                    digest = protocol.sha256_file(root / AGGREGATE_MANIFEST)
+                identity.revalidate()
+                updated = record_terminal(
+                    index,
+                    reservation_id=reservation_id,
+                    status=status,
+                    root_digest=digest,
+                )
+                _atomic_write_path(index_path, updated)
+                return updated
+        finally:
+            identity.close()
 
 
 def fetch_comment(url: str) -> str:
@@ -1944,10 +2125,13 @@ def require_remote_index(
         check=False,
     )
     if result.returncode:
-        if allow_absent and not index_path.exists():
+        if allow_absent and not _regular_path_exists(index_path, "Phase 2E index"):
             return
         raise protocol.ProtocolError("remote branch lacks the durable Phase 2E index")
-    if not index_path.exists() or result.stdout != index_path.read_bytes():
+    if (
+        not _regular_path_exists(index_path, "Phase 2E index")
+        or result.stdout != _read_regular_path(index_path, "Phase 2E index")
+    ):
         raise protocol.ProtocolError("local Phase 2E index is not pushed byte-for-byte")
 
 
@@ -1980,7 +2164,7 @@ def record_preserved(
         committed_index = _git(
             repository, "show", f"{preservation_commit}:{relative_index}"
         )
-        if committed_index != index_path.read_bytes():
+        if committed_index != _read_regular_path(index_path, "Phase 2E index"):
             raise protocol.ProtocolError(
                 "preservation commit has the wrong pending index"
             )
@@ -2005,7 +2189,7 @@ def record_preserved(
             preservation_commit=preservation_commit,
             issue_url=issue_url,
         )
-        protocol.atomic_write_json(index_path, updated)
+        _atomic_write_path(index_path, updated)
         return updated
 
 

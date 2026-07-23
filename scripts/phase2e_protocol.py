@@ -635,6 +635,85 @@ def regular_file_inventory(
     return inventory
 
 
+def regular_file_inventory_at(
+    root_descriptor: int, *, excluded: frozenset[str] = frozenset()
+) -> dict[str, str]:
+    """Hash a descriptor-bound tree without following any symbolic link."""
+    inventory: dict[str, str] = {}
+
+    def visit(directory_descriptor: int, prefix: str) -> None:
+        for name in sorted(os.listdir(directory_descriptor)):
+            relative = f"{prefix}/{name}" if prefix else name
+            try:
+                metadata = os.stat(
+                    name, dir_fd=directory_descriptor, follow_symlinks=False
+                )
+            except OSError as error:
+                raise ProtocolError(
+                    f"cannot inspect inventory path {relative}: {error}"
+                ) from error
+            if stat.S_ISDIR(metadata.st_mode):
+                try:
+                    child = os.open(
+                        name,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                        dir_fd=directory_descriptor,
+                    )
+                except OSError as error:
+                    raise ProtocolError(
+                        f"cannot open inventory directory {relative}: {error}"
+                    ) from error
+                try:
+                    visit(child, relative)
+                finally:
+                    os.close(child)
+                continue
+            if relative in excluded:
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ProtocolError(
+                    f"inventory path is not a regular file: {relative}"
+                )
+            try:
+                descriptor = os.open(
+                    name,
+                    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+                    dir_fd=directory_descriptor,
+                )
+            except OSError as error:
+                raise ProtocolError(
+                    f"cannot open inventory file {relative}: {error}"
+                ) from error
+            try:
+                before = os.fstat(descriptor)
+                digest = hashlib.sha256()
+                while True:
+                    chunk = os.read(descriptor, 1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                after = os.fstat(descriptor)
+                identity = lambda item: (
+                    item.st_dev,
+                    item.st_ino,
+                    item.st_size,
+                    item.st_mtime_ns,
+                )
+                if not stat.S_ISREG(before.st_mode) or identity(before) != identity(after):
+                    raise ProtocolError(
+                        f"inventory file changed while hashing: {relative}"
+                    )
+                inventory[relative] = digest.hexdigest()
+            finally:
+                os.close(descriptor)
+
+    root_metadata = os.fstat(root_descriptor)
+    if not stat.S_ISDIR(root_metadata.st_mode):
+        raise ProtocolError("inventory descriptor is not a directory")
+    visit(root_descriptor, "")
+    return inventory
+
+
 def validate_regular_file_inventory(
     root: pathlib.Path,
     expected: Mapping[str, str],

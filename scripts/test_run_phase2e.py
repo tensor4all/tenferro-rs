@@ -93,12 +93,25 @@ class OuterOrchestratorTests(unittest.TestCase):
                 self.assertTrue(allow_absent)
                 events.append("remote-compare")
 
+            @contextmanager
+            def observed_root_lock(_descriptor, name):
+                nonlocal root_lock_held
+                self.assertEqual(name, ".orchestrator.lock")
+                self.assertTrue(lock_held)
+                root_lock_held = True
+                events.append("root-lock-enter")
+                try:
+                    yield 2
+                finally:
+                    events.append("root-lock-exit")
+                    root_lock_held = False
+
             with mock.patch.object(
                 orchestrator, "exclusive_lock", side_effect=observed_lock
             ), mock.patch.object(
-                orchestrator, "require_remote_index", side_effect=compare
+                orchestrator, "exclusive_lock_at", side_effect=observed_root_lock
             ), mock.patch.object(
-                orchestrator.protocol, "prepare_empty_root", side_effect=lambda path: path.mkdir()
+                orchestrator, "require_remote_index", side_effect=compare
             ), mock.patch.object(
                 orchestrator, "seal_abandoned_root"
             ):
@@ -124,6 +137,81 @@ class OuterOrchestratorTests(unittest.TestCase):
             )
             index = orchestrator._read_index(repository / orchestrator.INDEX_PATH)
             self.assertEqual(orchestrator.index_state(index), "ACTIVE")
+
+    def test_lock_rejects_symlink_ancestor_leaf_and_special_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            real = base / "real"
+            real.mkdir(mode=0o700)
+            alias = base / "alias"
+            alias.symlink_to(real, target_is_directory=True)
+            target = real / "target"
+            target.write_text("untouched", encoding="utf-8")
+            leaf = real / "leaf.lock"
+            leaf.symlink_to(target)
+            fifo = real / "fifo.lock"
+            os.mkfifo(fifo)
+            for path in (alias / "new.lock", leaf, fifo):
+                with self.subTest(path=path), self.assertRaises(protocol.ProtocolError):
+                    with orchestrator.exclusive_lock(path):
+                        self.fail("untrusted lock acquired")
+            self.assertEqual(target.read_text(encoding="utf-8"), "untouched")
+            self.assertFalse((real / "new.lock").exists())
+
+    def test_index_symlink_is_rejected_without_touching_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            index_path = repository / orchestrator.INDEX_PATH
+            index_path.parent.mkdir(parents=True)
+            target = repository / "foreign-index.json"
+            protocol.atomic_write_json(target, orchestrator.new_campaign_index())
+            original = target.read_bytes()
+            index_path.symlink_to(target)
+            with mock.patch.object(orchestrator, "require_remote_index"):
+                with self.assertRaises(protocol.ProtocolError):
+                    orchestrator.initialize_campaign(
+                        repository=repository,
+                        root=repository / "docs" / "worklogs" / "root",
+                        reservation_id="r1",
+                        candidate_sha=self.CANDIDATE,
+                        candidate_tree_sha256="c" * 64,
+                        experiment_identity_digest="d" * 64,
+                        campaign_identity_digest="e" * 64,
+                    )
+            self.assertTrue(index_path.is_symlink())
+            self.assertEqual(target.read_bytes(), original)
+
+    def test_root_replacement_self_seals_held_inode_and_leaves_target_untouched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            (repository / "docs" / "worklogs").mkdir(parents=True)
+            root = repository / "docs" / "worklogs" / "root"
+            moved = repository / "docs" / "worklogs" / "moved-root"
+            target = repository / "foreign"
+            target.mkdir(mode=0o700)
+            marker = target / "marker"
+            marker.write_text("untouched", encoding="utf-8")
+
+            def replace(path):
+                path.rename(moved)
+                path.symlink_to(target, target_is_directory=True)
+                raise OSError("replacement")
+
+            with mock.patch.object(orchestrator, "require_remote_index"):
+                code = orchestrator.initialize_campaign(
+                    repository=repository,
+                    root=root,
+                    reservation_id="r1",
+                    candidate_sha=self.CANDIDATE,
+                    candidate_tree_sha256="c" * 64,
+                    experiment_identity_digest="d" * 64,
+                    campaign_identity_digest="e" * 64,
+                    initializer=replace,
+                )
+            self.assertEqual(code, 5)
+            self.assertTrue((moved / orchestrator.ABANDONMENT_SEAL).is_file())
+            self.assertEqual(marker.read_text(encoding="utf-8"), "untouched")
+            self.assertFalse((target / orchestrator.ABANDONMENT_SEAL).exists())
 
     def make_stage_context(self, base: pathlib.Path) -> tuple[pathlib.Path, dict]:
         repository = base / "repository"
