@@ -15,9 +15,11 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 if __package__ in (None, ""):
@@ -690,7 +692,12 @@ def _validate_index(index: Mapping[str, Any]) -> None:
                 "root",
                 "status",
                 "root_digest",
+                "ledger_sha256",
+                "candidate_tree_sha256",
                 "experiment_identity_digest",
+                "campaign_identity_digest",
+                "command_contract_digest",
+                "context_sha256",
             }:
                 raise protocol.ProtocolError("PRESERVED event schema is invalid")
             if (
@@ -707,10 +714,25 @@ def _validate_index(index: Mapping[str, Any]) -> None:
                 raise protocol.ProtocolError("PRESERVED event lacks issue URL")
             if any(
                 event[name] != records[reservation][name]
-                for name in ("candidate_sha", "root", "experiment_identity_digest")
+                for name in (
+                    "candidate_sha",
+                    "candidate_tree_sha256",
+                    "root",
+                    "experiment_identity_digest",
+                    "campaign_identity_digest",
+                    "command_contract_digest",
+                    "context_sha256",
+                )
             ) or (
                 event["status"] != terminal_statuses[reservation]
                 or event["root_digest"] != terminal_digests[reservation]
+                or event["ledger_sha256"]
+                != next(
+                    prior["ledger_sha256"]
+                    for prior in reversed(index["events"][: event["ordinal"] - 1])
+                    if prior["reservation_id"] == reservation
+                    and prior["event"] == "TERMINAL"
+                )
             ):
                 raise protocol.ProtocolError("PRESERVED event identity differs")
             states[reservation] = "PRESERVED"
@@ -856,12 +878,25 @@ def record_preserved_event(
 ) -> dict[str, Any]:
     """Record remote Git and issue preservation after both are verified."""
     _validate_index(index)
+    if index_state(index) == "PRESERVED":
+        preserved = index["events"][-1]
+        if (
+            preserved["reservation_id"] == reservation_id
+            and preserved["preservation_commit"] == preservation_commit
+            and preserved["issue_url"] == issue_url
+        ):
+            return copy.deepcopy(index)
+        raise protocol.ProtocolError("PRESERVED replay differs")
     if (
         index_state(index) != "PENDING_PRESERVATION"
         or index["events"][-1]["reservation_id"] != reservation_id
     ):
         raise protocol.ProtocolError("reservation is not pending preservation")
-    if f"/issues/{ISSUE_NUMBER}#issuecomment-" not in issue_url:
+    if re.fullmatch(
+        rf"https://github\.com/tensor4all/tenferro-rs/issues/{ISSUE_NUMBER}"
+        r"#issuecomment-[0-9]+",
+        issue_url,
+    ) is None:
         raise protocol.ProtocolError("preservation report is not on issue #1436")
     updated = copy.deepcopy(index)
     active = next(
@@ -881,7 +916,17 @@ def record_preserved_event(
             "root": active["root"],
             "status": terminal["status"],
             "root_digest": terminal["root_digest"],
-            "experiment_identity_digest": active["experiment_identity_digest"],
+            "ledger_sha256": terminal["ledger_sha256"],
+            **{
+                name: active[name]
+                for name in (
+                    "candidate_tree_sha256",
+                    "experiment_identity_digest",
+                    "campaign_identity_digest",
+                    "command_contract_digest",
+                    "context_sha256",
+                )
+            },
         }
     )
     matching = [
@@ -2039,12 +2084,20 @@ def seal_abandoned_root(
             identity.close()
 
 
+@dataclass(frozen=True)
+class GitBlob:
+    mode: str
+    object_id: str
+    content: bytes
+
+
 def validate_git_blob_inventory(
-    root: pathlib.Path, staged_blobs: Mapping[str, bytes]
+    root: pathlib.Path, staged_blobs: Mapping[str, bytes | GitBlob]
 ) -> None:
-    """Require Git's staged/reconstructed bytes to equal every root-owned byte."""
+    """Require Git objects and modes to equal every root-owned regular file."""
     if type(staged_blobs) is not dict or any(
-        type(path) is not str or type(payload) is not bytes
+        type(path) is not str
+        or not isinstance(payload, (bytes, GitBlob))
         for path, payload in staged_blobs.items()
     ):
         raise protocol.ProtocolError("Git blob inventory schema is invalid")
@@ -2052,7 +2105,16 @@ def validate_git_blob_inventory(
     if set(staged_blobs) != set(inventory):
         raise protocol.ProtocolError("Git blob inventory has missing or extra paths")
     for relative, digest in inventory.items():
-        if hashlib.sha256(staged_blobs[relative]).hexdigest() != digest:
+        entry = staged_blobs[relative]
+        content = entry if isinstance(entry, bytes) else entry.content
+        if isinstance(entry, GitBlob):
+            path_mode = stat.S_IMODE((pathlib.Path(root) / relative).stat().st_mode)
+            expected_mode = "100755" if path_mode & 0o111 else "100644"
+            if entry.mode != expected_mode:
+                raise protocol.ProtocolError(f"Git mode differs: {relative}")
+            if re.fullmatch(r"[0-9a-f]{40}", entry.object_id) is None:
+                raise protocol.ProtocolError(f"Git blob identity differs: {relative}")
+        if hashlib.sha256(content).hexdigest() != digest:
             raise protocol.ProtocolError(f"Git blob differs: {relative}")
 
 
@@ -2079,11 +2141,91 @@ def validate_preservation_comment(
             raise protocol.ProtocolError("preservation comment omits campaign identity")
 
 
+def validate_preservation_comment_proof(
+    issue_url: str,
+    proof: Mapping[str, Any],
+    *,
+    preservation_commit: str,
+    root: str,
+    candidate_sha: str,
+    status: str,
+) -> None:
+    """Validate canonical GitHub API metadata, not only caller-supplied text."""
+    match = re.fullmatch(
+        rf"https://github\.com/tensor4all/tenferro-rs/issues/{ISSUE_NUMBER}"
+        r"#issuecomment-([0-9]+)",
+        issue_url,
+    )
+    if match is None or type(proof) is not dict or set(proof) != {
+        "id",
+        "html_url",
+        "issue_url",
+        "body",
+    }:
+        raise protocol.ProtocolError("preservation comment proof schema differs")
+    comment_id = int(match.group(1))
+    if (
+        type(proof["id"]) is not int
+        or proof["id"] != comment_id
+        or proof["html_url"] != issue_url
+        or proof["issue_url"]
+        != f"https://api.github.com/repos/tensor4all/tenferro-rs/issues/{ISSUE_NUMBER}"
+    ):
+        raise protocol.ProtocolError("preservation comment proof association differs")
+    validate_preservation_comment(
+        issue_url,
+        proof["body"],
+        preservation_commit=preservation_commit,
+        root=root,
+        candidate_sha=candidate_sha,
+        status=status,
+    )
+
+
+def _parse_git_blob_listing(
+    payload: bytes, *, selector: str, root_relative: str
+) -> list[tuple[str, str, str]]:
+    prefix = root_relative.rstrip("/") + "/"
+    result = []
+    for record in payload.split(b"\0"):
+        if not record:
+            continue
+        try:
+            metadata, raw_path = record.split(b"\t", 1)
+            fields = metadata.decode("ascii").split()
+            path = raw_path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise protocol.ProtocolError("Git evidence inventory is malformed") from error
+        if selector == ":":
+            if len(fields) != 3 or fields[2] != "0":
+                raise protocol.ProtocolError("staged Git inventory has nonzero stage")
+            mode, object_id = fields[:2]
+        else:
+            if len(fields) != 3 or fields[1] != "blob":
+                raise protocol.ProtocolError("commit Git inventory is not blobs")
+            mode, object_id = fields[0], fields[2]
+        if mode not in {"100644", "100755"}:
+            raise protocol.ProtocolError(f"Git evidence mode is forbidden: {mode}")
+        if re.fullmatch(r"[0-9a-f]{40}", object_id) is None:
+            raise protocol.ProtocolError("Git evidence object id is invalid")
+        if not path.startswith(prefix):
+            raise protocol.ProtocolError("Git evidence path escapes its root")
+        relative = path.removeprefix(prefix)
+        pure = pathlib.PurePosixPath(relative)
+        if not relative or pure.is_absolute() or ".." in pure.parts:
+            raise protocol.ProtocolError("Git evidence path is invalid")
+        result.append((mode, object_id, relative))
+    if len({relative for _, _, relative in result}) != len(result):
+        raise protocol.ProtocolError("Git evidence inventory has duplicate paths")
+    return result
+
+
 def git_blob_inventory(
     repository: pathlib.Path, selector: str, root_relative: str
-) -> dict[str, bytes]:
+) -> dict[str, GitBlob]:
     """Read one exact root inventory from the index (``:``) or a commit."""
-    prefix = root_relative.rstrip("/") + "/"
+    if selector != ":" and re.fullmatch(r"[0-9a-f]{40}", selector) is None:
+        raise protocol.ProtocolError("Git selector must be index or exact commit")
     command = ["git", "ls-files", "-z", "--stage", "--", root_relative]
     if selector != ":":
         command = [
@@ -2091,7 +2233,6 @@ def git_blob_inventory(
             "ls-tree",
             "-r",
             "-z",
-            "--name-only",
             selector,
             "--",
             root_relative,
@@ -2099,35 +2240,19 @@ def git_blob_inventory(
     listing = subprocess.run(command, cwd=repository, capture_output=True, check=False)
     if listing.returncode:
         raise protocol.ProtocolError("cannot enumerate Git evidence blobs")
-    paths = []
-    for record in listing.stdout.split(b"\0"):
-        if not record:
-            continue
-        if selector == ":":
-            try:
-                _metadata, raw = record.split(b"\t", 1)
-            except ValueError as error:
-                raise protocol.ProtocolError(
-                    "staged Git inventory is malformed"
-                ) from error
-        else:
-            raw = record
-        try:
-            path = raw.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise protocol.ProtocolError("Git evidence path is not UTF-8") from error
-        if not path.startswith(prefix):
-            raise protocol.ProtocolError("Git evidence path escapes its root")
-        paths.append(path)
     result = {}
-    for path in paths:
-        spec = f":{path}" if selector == ":" else f"{selector}:{path}"
+    for mode, object_id, relative in _parse_git_blob_listing(
+        listing.stdout, selector=selector, root_relative=root_relative
+    ):
         blob = subprocess.run(
-            ("git", "show", spec), cwd=repository, capture_output=True, check=False
+            ("git", "cat-file", "blob", object_id),
+            cwd=repository,
+            capture_output=True,
+            check=False,
         )
         if blob.returncode:
-            raise protocol.ProtocolError(f"cannot read Git evidence blob: {path}")
-        result[path.removeprefix(prefix)] = blob.stdout
+            raise protocol.ProtocolError(f"cannot read Git evidence blob: {relative}")
+        result[relative] = GitBlob(mode, object_id, blob.stdout)
     return result
 
 
@@ -2136,16 +2261,124 @@ def validate_git_selector(
     root: pathlib.Path,
     *,
     selector: str,
+    terminal_event: Mapping[str, Any] | None = None,
 ) -> None:
-    """Validate staged or committed evidence, including ignored files."""
+    """Validate exact staged/committed objects and a fresh reconstruction."""
     repository = pathlib.Path(repository).resolve(strict=True)
     root = pathlib.Path(root).resolve(strict=True)
     try:
         relative = root.relative_to(repository).as_posix()
     except ValueError as error:
         raise protocol.ProtocolError("evidence root is outside repository") from error
-    validate_git_blob_inventory(
-        root, git_blob_inventory(repository, selector, relative)
+    entries = git_blob_inventory(repository, selector, relative)
+    validate_git_blob_inventory(root, entries)
+    with tempfile.TemporaryDirectory() as directory:
+        reconstructed = pathlib.Path(directory) / "root"
+        reconstructed.mkdir(mode=0o700)
+        for name, entry in entries.items():
+            destination = reconstructed / name
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            destination.write_bytes(entry.content)
+            destination.chmod(0o755 if entry.mode == "100755" else 0o644)
+        status = validate_root(reconstructed)
+        if terminal_event is not None:
+            if terminal_event.get("status") != status:
+                raise protocol.ProtocolError("Git root status differs from TERMINAL")
+            if status == "ABANDONED":
+                seal = _read_json(
+                    reconstructed / ABANDONMENT_SEAL, "reconstructed abandonment seal"
+                )
+                root_digest = protocol.sha256_json(seal)
+                ledger_digest = seal["inventory"].get(
+                    "evidence-ledger.json", "0" * 64
+                )
+            else:
+                root_digest = protocol.sha256_file(
+                    reconstructed / AGGREGATE_MANIFEST
+                )
+                ledger_digest = protocol.sha256_file(
+                    reconstructed / "evidence-ledger.json"
+                )
+            if (
+                terminal_event.get("root_digest") != root_digest
+                or terminal_event.get("ledger_sha256") != ledger_digest
+            ):
+                raise protocol.ProtocolError(
+                    "Git root digest differs from TERMINAL"
+                )
+
+
+def _git_exact_blob(
+    repository: pathlib.Path, selector: str, relative: str
+) -> GitBlob:
+    if selector != ":" and re.fullmatch(r"[0-9a-f]{40}", selector) is None:
+        raise protocol.ProtocolError("Git selector must be index or exact commit")
+    if selector == ":":
+        command = ("git", "ls-files", "-z", "--stage", "--", relative)
+    else:
+        command = ("git", "ls-tree", "-z", selector, "--", relative)
+    listing = subprocess.run(
+        command, cwd=repository, capture_output=True, check=False
+    )
+    if listing.returncode:
+        raise protocol.ProtocolError(f"cannot inspect Git object: {relative}")
+    parsed = _parse_git_blob_listing(
+        listing.stdout,
+        selector=selector,
+        root_relative=str(pathlib.PurePosixPath(relative).parent),
+    )
+    expected_name = pathlib.PurePosixPath(relative).name
+    if len(parsed) != 1 or parsed[0][2] != expected_name:
+        raise protocol.ProtocolError(f"Git object is missing or duplicated: {relative}")
+    mode, object_id, _name = parsed[0]
+    blob = subprocess.run(
+        ("git", "cat-file", "blob", object_id),
+        cwd=repository,
+        capture_output=True,
+        check=False,
+    )
+    if blob.returncode:
+        raise protocol.ProtocolError(f"cannot read Git object: {relative}")
+    return GitBlob(mode, object_id, blob.stdout)
+
+
+def validate_preservation_objects(
+    repository: pathlib.Path,
+    *,
+    selector: str,
+    root: pathlib.Path,
+    index_path: pathlib.Path,
+    worklog: pathlib.Path,
+    terminal_event: Mapping[str, Any],
+    expected_index: Mapping[str, Any] | None = None,
+) -> None:
+    """Validate root, durable index, and curated worklog as exact Git blobs."""
+    repository = pathlib.Path(repository).resolve(strict=True)
+    root = pathlib.Path(root).resolve(strict=True)
+    index_path = pathlib.Path(index_path).resolve(strict=True)
+    worklog = pathlib.Path(worklog).resolve(strict=True)
+    for path, context in ((index_path, "index"), (worklog, "worklog")):
+        try:
+            relative = path.relative_to(repository).as_posix()
+        except ValueError as error:
+            raise protocol.ProtocolError(
+                f"preservation {context} is outside repository"
+            ) from error
+        entry = _git_exact_blob(repository, selector, relative)
+        expected = (
+            protocol._canonical_json_bytes(expected_index)
+            if context == "index" and expected_index is not None
+            else path.read_bytes()
+        )
+        if entry.mode != "100644" or entry.content != expected:
+            raise protocol.ProtocolError(
+                f"preservation {context} object differs"
+            )
+    validate_git_selector(
+        repository,
+        root,
+        selector=selector,
+        terminal_event=terminal_event,
     )
 
 
@@ -2795,7 +3028,7 @@ def record_index_root(
             identity.close()
 
 
-def fetch_comment(url: str) -> str:
+def fetch_comment(url: str) -> dict[str, Any]:
     """Fetch one permanent GitHub comment representation."""
     match = re.fullmatch(
         r"https://github\.com/([^/]+)/([^/]+)/issues/1436#issuecomment-([0-9]+)",
@@ -2824,10 +3057,18 @@ def fetch_comment(url: str) -> str:
         raise protocol.ProtocolError(
             "preservation comment response is malformed"
         ) from error
-    body = decoded.get("body") if type(decoded) is dict else None
-    if type(body) is not str:
-        raise protocol.ProtocolError("preservation comment response lacks body")
-    return body
+    if type(decoded) is not dict:
+        raise protocol.ProtocolError("preservation comment response is not an object")
+    proof = {
+        name: decoded.get(name)
+        for name in ("id", "html_url", "issue_url", "body")
+    }
+    if (
+        type(proof["id"]) is not int
+        or any(type(proof[name]) is not str for name in ("html_url", "issue_url", "body"))
+    ):
+        raise protocol.ProtocolError("preservation comment response lacks proof fields")
+    return proof
 
 
 def _git(repository: pathlib.Path, *argv: str, text: bool = False):
@@ -2837,6 +3078,35 @@ def _git(repository: pathlib.Path, *argv: str, text: bool = False):
     if result.returncode:
         raise protocol.ProtocolError(f"Git command failed: {' '.join(argv)}")
     return result.stdout
+
+
+def validate_canonical_origin_url(url: str) -> None:
+    """Allow only canonical transport forms for tensor4all/tenferro-rs."""
+    if url not in {
+        "https://github.com/tensor4all/tenferro-rs.git",
+        "git@github.com:tensor4all/tenferro-rs.git",
+        "ssh://git@github.com/tensor4all/tenferro-rs.git",
+    }:
+        raise protocol.ProtocolError("origin URL is not canonical tenferro-rs")
+
+
+def validate_remote_preservation(
+    repository: pathlib.Path, preservation_commit: str
+) -> None:
+    """Fetch the one preservation branch and prove commit reachability."""
+    _require_sha(
+        preservation_commit, sha256=False, context="preservation commit"
+    )
+    origin = _git(repository, "remote", "get-url", "origin", text=True).strip()
+    validate_canonical_origin_url(origin)
+    _git(repository, "fetch", "origin", "codex/execution-engine-through-phase9")
+    _git(
+        repository,
+        "merge-base",
+        "--is-ancestor",
+        preservation_commit,
+        PRESERVATION_BRANCH,
+    )
 
 
 def require_remote_index(
@@ -2849,6 +3119,8 @@ def require_remote_index(
     """Require the local durable index to equal the fetched branch blob."""
     if transaction is not None:
         transaction.revalidate()
+    origin = _git(repository, "remote", "get-url", "origin", text=True).strip()
+    validate_canonical_origin_url(origin)
     _git(repository, "fetch", "origin", "codex/execution-engine-through-phase9")
     if transaction is not None:
         transaction.revalidate()
@@ -2893,55 +3165,91 @@ def record_preserved(
     reservation_id: str,
     preservation_commit: str,
     issue_url: str,
-    comment_fetcher: Callable[[str], str] = fetch_comment,
+    worklog: pathlib.Path,
+    remote_validator: Callable[[pathlib.Path, str], None] = validate_remote_preservation,
+    comment_fetcher: Callable[[str], Mapping[str, Any]] = fetch_comment,
 ) -> dict[str, Any]:
     """Verify remote Git/root/index/comment preservation, then append PRESERVED."""
     _index_path, _index_lock = campaign_index_paths(repository)
     with campaign_index_transaction(repository) as index_transaction:
         index = index_transaction.read()
-        if index_state(index) != "PENDING_PRESERVATION":
+        state = index_state(index)
+        replay = state == "PRESERVED"
+        if state not in {"PENDING_PRESERVATION", "PRESERVED"}:
             raise protocol.ProtocolError("no campaign is pending preservation")
-        _git(repository, "fetch", "origin", "codex/execution-engine-through-phase9")
-        index_transaction.revalidate()
-        _git(
-            repository,
-            "merge-base",
-            "--is-ancestor",
-            preservation_commit,
-            PRESERVATION_BRANCH,
-        )
-        index_transaction.revalidate()
-        relative_index = pathlib.Path(INDEX_PATH).as_posix()
-        committed_index = _git(
-            repository, "show", f"{preservation_commit}:{relative_index}"
-        )
-        if committed_index != index_transaction.read_bytes():
-            raise protocol.ProtocolError(
-                "preservation commit has the wrong pending index"
+        if replay:
+            preserved = index["events"][-1]
+            if (
+                preserved["reservation_id"] != reservation_id
+                or preserved["preservation_commit"] != preservation_commit
+                or preserved["issue_url"] != issue_url
+            ):
+                raise protocol.ProtocolError("record-preserved replay differs")
+            pending = copy.deepcopy(index)
+            pending["events"].pop()
+            previous_passes = [
+                event["root"]
+                for event in pending["events"]
+                if event["event"] == "PRESERVED" and event["status"] == "PASS"
+            ]
+            pending["current_evidence_root"] = (
+                previous_passes[-1] if previous_passes else None
             )
-        validate_git_selector(repository, root, selector=preservation_commit)
+            _validate_index(pending)
+        else:
+            pending = index
         active = next(
             event
-            for event in reversed(index["events"])
+            for event in reversed(pending["events"])
             if event["reservation_id"] == reservation_id and event["event"] == "ACTIVE"
         )
-        terminal = index["events"][-1]
-        validate_preservation_comment(
-            issue_url,
-            comment_fetcher(issue_url),
-            preservation_commit=preservation_commit,
-            root=active["root"],
-            candidate_sha=active["candidate_sha"],
-            status=terminal["status"],
-        )
-        updated = record_preserved_event(
-            index,
-            reservation_id=reservation_id,
-            preservation_commit=preservation_commit,
-            issue_url=issue_url,
-        )
-        index_transaction.write(updated)
-        return updated
+        terminal = pending["events"][-1]
+        root = _canonical_existing_root(root)
+        if active["root"] != str(root) or terminal["root"] != str(root):
+            raise protocol.ProtocolError("record-preserved root differs from pending")
+        worklog = pathlib.Path(worklog).resolve(strict=True)
+        if (
+            worklog.parent != pathlib.Path(repository) / INDEX_PATH.parent
+            or worklog.suffix != ".md"
+        ):
+            raise protocol.ProtocolError("curated worklog path is not canonical")
+        root_identity = protocol.PreparedRootIdentity(root)
+        try:
+            with exclusive_lock_at(root_identity.descriptor, ".orchestrator.lock"):
+                root_identity.revalidate()
+                remote_validator(pathlib.Path(repository), preservation_commit)
+                index_transaction.revalidate()
+                validate_preservation_objects(
+                    repository,
+                    selector=preservation_commit,
+                    root=root,
+                    index_path=pathlib.Path(repository) / INDEX_PATH,
+                    worklog=worklog,
+                    terminal_event=terminal,
+                    expected_index=pending,
+                )
+                root_identity.revalidate()
+                validate_preservation_comment_proof(
+                    issue_url,
+                    comment_fetcher(issue_url),
+                    preservation_commit=preservation_commit,
+                    root=active["root"],
+                    candidate_sha=active["candidate_sha"],
+                    status=terminal["status"],
+                )
+                root_identity.revalidate()
+                if replay:
+                    return index
+                updated = record_preserved_event(
+                    index,
+                    reservation_id=reservation_id,
+                    preservation_commit=preservation_commit,
+                    issue_url=issue_url,
+                )
+                index_transaction.write(updated)
+                return updated
+        finally:
+            root_identity.close()
 
 
 def _exit_for_status(status: str, *, require_pass: bool) -> int:
@@ -2964,6 +3272,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--require-pass", action="store_true")
     validate.add_argument("--git-index", action="store_true")
     validate.add_argument("--repository", type=pathlib.Path)
+    validate.add_argument("--worklog", type=pathlib.Path)
     compare = subparsers.add_parser("compare-experiment-identity", exit_on_error=False)
     compare.add_argument("--repository", required=True, type=pathlib.Path)
     compare.add_argument("--left", required=True)
@@ -2999,6 +3308,7 @@ def build_parser() -> argparse.ArgumentParser:
     preserved.add_argument("--reservation-id", required=True)
     preserved.add_argument("--preservation-commit", required=True)
     preserved.add_argument("--issue-url", required=True)
+    preserved.add_argument("--worklog", required=True, type=pathlib.Path)
     return parser
 
 
@@ -3012,9 +3322,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "validate":
             status = validate_root(args.root)
             if args.git_index:
-                if args.repository is None:
-                    raise protocol.ProtocolError("--git-index requires --repository")
-                validate_git_selector(args.repository, args.root, selector=":")
+                if args.repository is None or args.worklog is None:
+                    raise protocol.ProtocolError(
+                        "--git-index requires --repository and --worklog"
+                    )
+                index_path, _lock_path = campaign_index_paths(args.repository)
+                index = _read_index(index_path)
+                canonical_root = str(pathlib.Path(args.root).resolve(strict=True))
+                terminal = next(
+                    (
+                        event
+                        for event in reversed(index["events"])
+                        if event["event"] == "TERMINAL"
+                        and event["root"] == canonical_root
+                    ),
+                    None,
+                )
+                if terminal is None:
+                    raise protocol.ProtocolError(
+                        "staged root has no matching TERMINAL event"
+                    )
+                validate_preservation_objects(
+                    args.repository,
+                    selector=":",
+                    root=args.root,
+                    index_path=index_path,
+                    worklog=args.worklog,
+                    terminal_event=terminal,
+                )
             print(status)
             return _exit_for_status(status, require_pass=args.require_pass)
         if args.command == "compare-experiment-identity":
@@ -3155,6 +3490,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 reservation_id=args.reservation_id,
                 preservation_commit=args.preservation_commit,
                 issue_url=args.issue_url,
+                worklog=args.worklog,
             )
             print(index_state(updated))
             return 0

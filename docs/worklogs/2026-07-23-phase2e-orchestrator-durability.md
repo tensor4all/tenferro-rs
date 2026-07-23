@@ -91,7 +91,32 @@ distinguish “no child launched” from missing or tampered evidence.
 The focused replacement/cleanup tests and the complete affected matrix pass:
 228 tests across the outer orchestrator, protocol, build, and gate suites.
 
+## Task 8C preservation validation
+
+Task 8C completes the local preservation implementation without performing any
+remote mutation or GitHub write. Git-index and commit validation now retain
+each exact `(mode, path, blob identity, content)` tuple, reject symlink/special
+modes, include ignored normative files, and reconstruct the root in a fresh
+temporary directory for structural and semantic validation. The staged or
+committed root is bound to the exact TERMINAL status, aggregate/abandonment
+digest, and ledger digest; the durable pending index and curated worklog must
+also be exact mode-`100644` Git objects.
+
+Remote validation accepts only canonical SSH/HTTPS origin URLs for
+`tensor4all/tenferro-rs`, fetches only the fixed preservation branch, and
+requires the preservation commit to be reachable from it. GitHub proof uses
+the canonical API representation and verifies comment id, permanent URL,
+repository/issue association, and body identity. PRESERVED events now retain
+the complete ACTIVE/TERMINAL identity, support only exact idempotent replay,
+and serialize against both parallel preservation and later starts under the
+index-then-root lock order.
+
+The exact Step 4 suite from the implementation plan passed 430 tests. Focused
+Git tests use temporary local repositories and fake remote/comment adapters.
+No push, fetch from a real remote, or GitHub comment was performed.
+
 ## Remaining work
 
-Only Task C remains: remote branch preservation and GitHub preservation/report
-validation. No remote mutation, push, or GitHub write was performed here.
+No Task 8 implementation scope remains. Operational preservation (committing,
+pushing, and posting the real #1436 proof) remains an explicit later external
+action and was not authorized in this implementation pass.

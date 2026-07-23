@@ -51,6 +51,22 @@ class OuterOrchestratorTests(unittest.TestCase):
             {"version": 1, "entries": [entry]},
         )
 
+    def init_git_repository(self, base: pathlib.Path) -> pathlib.Path:
+        repository = base / "repository"
+        repository.mkdir()
+        subprocess.run(("git", "init", "-q"), cwd=repository, check=True)
+        subprocess.run(
+            ("git", "config", "user.email", "phase2e@example.invalid"),
+            cwd=repository,
+            check=True,
+        )
+        subprocess.run(
+            ("git", "config", "user.name", "Phase 2E Test"),
+            cwd=repository,
+            check=True,
+        )
+        return repository
+
     def test_global_index_paths_are_fixed_repository_constants(self):
         with tempfile.TemporaryDirectory() as directory:
             repository = pathlib.Path(directory).resolve()
@@ -2091,6 +2107,353 @@ class OuterOrchestratorTests(unittest.TestCase):
                 orchestrator.validate_git_blob_inventory(
                     root, {**expected, "extra": b"foreign"}
                 )
+
+    def test_git_selector_reconstructs_abandoned_ignored_inventory_and_modes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = self.init_git_repository(pathlib.Path(directory))
+            root = repository / "docs" / "worklogs" / "root"
+            root.mkdir(parents=True, mode=0o700)
+            (root / "Cargo.lock").write_text("lock\n", encoding="utf-8")
+            (root / "partial.log").write_text("partial\n", encoding="utf-8")
+            seal = orchestrator.seal_abandoned_root(root)
+            subprocess.run(
+                ("git", "add", "-f", "--", root.relative_to(repository)),
+                cwd=repository,
+                check=True,
+            )
+            terminal = {
+                "status": "ABANDONED",
+                "root_digest": protocol.sha256_json(seal),
+                "ledger_sha256": "0" * 64,
+            }
+            orchestrator.validate_git_selector(
+                repository, root, selector=":", terminal_event=terminal
+            )
+            (root / "alias").symlink_to("Cargo.lock")
+            subprocess.run(
+                ("git", "add", "-f", "--", root.relative_to(repository)),
+                cwd=repository,
+                check=True,
+            )
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_git_selector(repository, root, selector=":")
+
+    def test_preservation_objects_require_exact_index_worklog_and_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = self.init_git_repository(pathlib.Path(directory))
+            worklogs = repository / "docs" / "worklogs"
+            root = worklogs / "root"
+            root.mkdir(parents=True, mode=0o700)
+            (root / "partial.log").write_text("partial\n", encoding="utf-8")
+            (root / ".orchestrator.lock").touch(mode=0o600)
+            seal = orchestrator.seal_abandoned_root(root)
+            index_path = repository / orchestrator.INDEX_PATH
+            protocol.atomic_write_json(index_path, orchestrator.new_campaign_index())
+            worklog = worklogs / "campaign.md"
+            worklog.write_text("campaign\n", encoding="utf-8")
+            subprocess.run(
+                (
+                    "git",
+                    "add",
+                    "-f",
+                    "--",
+                    root.relative_to(repository),
+                    index_path.relative_to(repository),
+                    worklog.relative_to(repository),
+                ),
+                cwd=repository,
+                check=True,
+            )
+            orchestrator.validate_preservation_objects(
+                repository,
+                selector=":",
+                root=root,
+                index_path=index_path,
+                worklog=worklog,
+                terminal_event={
+                    "status": "ABANDONED",
+                    "root_digest": protocol.sha256_json(seal),
+                    "ledger_sha256": "0" * 64,
+                },
+            )
+            subprocess.run(
+                ("git", "rm", "--cached", "-q", worklog.relative_to(repository)),
+                cwd=repository,
+                check=True,
+            )
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_preservation_objects(
+                    repository,
+                    selector=":",
+                    root=root,
+                    index_path=index_path,
+                    worklog=worklog,
+                    terminal_event={
+                        "status": "ABANDONED",
+                        "root_digest": protocol.sha256_json(seal),
+                        "ledger_sha256": "0" * 64,
+                    },
+                )
+
+    def test_comment_proof_rejects_cross_issue_or_fabricated_metadata(self):
+        url = (
+            "https://github.com/tensor4all/tenferro-rs/issues/1436"
+            "#issuecomment-99"
+        )
+        proof = {
+            "id": 99,
+            "html_url": url,
+            "issue_url": (
+                "https://api.github.com/repos/tensor4all/tenferro-rs/issues/1436"
+            ),
+            "body": " ".join(
+                ["1" * 40, "docs/worklogs/root", self.CANDIDATE, "PASS"]
+            ),
+        }
+        orchestrator.validate_preservation_comment_proof(
+            url,
+            proof,
+            preservation_commit="1" * 40,
+            root="docs/worklogs/root",
+            candidate_sha=self.CANDIDATE,
+            status="PASS",
+        )
+        with self.assertRaises(protocol.ProtocolError):
+            orchestrator.validate_preservation_comment_proof(
+                url,
+                {**proof, "issue_url": proof["issue_url"].replace("1436", "1435")},
+                preservation_commit="1" * 40,
+                root="docs/worklogs/root",
+                candidate_sha=self.CANDIDATE,
+                status="PASS",
+            )
+
+    def test_origin_url_allows_only_canonical_tensor4all_tenferro_forms(self):
+        for url in (
+            "https://github.com/tensor4all/tenferro-rs.git",
+            "git@github.com:tensor4all/tenferro-rs.git",
+            "ssh://git@github.com/tensor4all/tenferro-rs.git",
+        ):
+            orchestrator.validate_canonical_origin_url(url)
+        for url in (
+            "https://github.com/tensor4all/tenferro-rs",
+            "https://github.com/other/tenferro-rs.git",
+            "git@github.com:tensor4all/tenferro-rs",
+            "file:///tmp/tenferro-rs.git",
+        ):
+            with self.subTest(url=url), self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_canonical_origin_url(url)
+
+    def test_record_preserved_uses_commit_objects_and_structured_comment_proof(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = self.init_git_repository(pathlib.Path(directory)).resolve()
+            worklogs = repository / "docs" / "worklogs"
+            root = worklogs / "root"
+            root.mkdir(parents=True, mode=0o700)
+            (root / "partial.log").write_text("partial\n", encoding="utf-8")
+            (root / ".orchestrator.lock").touch(mode=0o600)
+            seal = orchestrator.seal_abandoned_root(root)
+            active = orchestrator.record_active(
+                orchestrator.new_campaign_index(),
+                reservation_id="r1",
+                candidate_sha=self.CANDIDATE,
+                candidate_tree_sha256="c" * 64,
+                root=str(root),
+                experiment_identity_digest="d" * 64,
+                campaign_identity_digest="e" * 64,
+            )
+            pending = orchestrator.record_terminal(
+                active,
+                reservation_id="r1",
+                status="ABANDONED",
+                root_digest=protocol.sha256_json(seal),
+                ledger_sha256="0" * 64,
+            )
+            index_path = repository / orchestrator.INDEX_PATH
+            protocol.atomic_write_json(index_path, pending)
+            worklog = worklogs / "campaign.md"
+            worklog.write_text("campaign\n", encoding="utf-8")
+            subprocess.run(
+                (
+                    "git",
+                    "add",
+                    "-f",
+                    "--",
+                    root.relative_to(repository),
+                    index_path.relative_to(repository),
+                    worklog.relative_to(repository),
+                ),
+                cwd=repository,
+                check=True,
+            )
+            subprocess.run(
+                ("git", "commit", "-q", "-m", "preserve"),
+                cwd=repository,
+                check=True,
+            )
+            commit = subprocess.run(
+                ("git", "rev-parse", "HEAD"),
+                cwd=repository,
+                check=True,
+                text=True,
+                capture_output=True,
+            ).stdout.strip()
+            url = (
+                "https://github.com/tensor4all/tenferro-rs/issues/1436"
+                "#issuecomment-99"
+            )
+            proof = {
+                "id": 99,
+                "html_url": url,
+                "issue_url": (
+                    "https://api.github.com/repos/tensor4all/tenferro-rs/issues/1436"
+                ),
+                "body": " ".join(
+                    [commit, str(root), self.CANDIDATE, "ABANDONED"]
+                ),
+            }
+            remote_calls = []
+            updated = orchestrator.record_preserved(
+                repository=repository,
+                root=root,
+                reservation_id="r1",
+                preservation_commit=commit,
+                issue_url=url,
+                worklog=worklog,
+                remote_validator=lambda repo, sha: remote_calls.append((repo, sha)),
+                comment_fetcher=lambda _url: proof,
+            )
+            self.assertEqual(remote_calls, [(repository, commit)])
+            self.assertEqual(orchestrator.index_state(updated), "PRESERVED")
+            self.assertEqual(
+                orchestrator._read_index(index_path),
+                updated,
+            )
+            results = []
+
+            def replay():
+                try:
+                    results.append(
+                        orchestrator.record_preserved(
+                            repository=repository,
+                            root=root,
+                            reservation_id="r1",
+                            preservation_commit=commit,
+                            issue_url=url,
+                            worklog=worklog,
+                            remote_validator=lambda _repo, _sha: None,
+                            comment_fetcher=lambda _url: proof,
+                        )
+                    )
+                except BaseException as error:
+                    results.append(error)
+
+            threads = [threading.Thread(target=replay) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+            self.assertFalse(any(thread.is_alive() for thread in threads))
+            self.assertTrue(all(result == updated for result in results))
+
+            race_results = []
+            barrier = threading.Barrier(2)
+            next_root = worklogs / "root-2"
+
+            def replay_during_start():
+                barrier.wait(timeout=5)
+                try:
+                    race_results.append(
+                        orchestrator.record_preserved(
+                            repository=repository,
+                            root=root,
+                            reservation_id="r1",
+                            preservation_commit=commit,
+                            issue_url=url,
+                            worklog=worklog,
+                            remote_validator=lambda _repo, _sha: None,
+                            comment_fetcher=lambda _url: proof,
+                        )
+                    )
+                except BaseException as error:
+                    race_results.append(error)
+
+            def start_next():
+                barrier.wait(timeout=5)
+                try:
+                    with mock.patch.object(orchestrator, "require_remote_index"):
+                        race_results.append(
+                            orchestrator.initialize_campaign(
+                                repository=repository,
+                                root=next_root,
+                                reservation_id="r2",
+                                candidate_sha=self.CANDIDATE,
+                                candidate_tree_sha256="c" * 64,
+                                experiment_identity_digest="d" * 64,
+                                campaign_identity_digest="e" * 64,
+                            )
+                        )
+                except BaseException as error:
+                    race_results.append(error)
+
+            racers = [
+                threading.Thread(target=replay_during_start),
+                threading.Thread(target=start_next),
+            ]
+            for racer in racers:
+                racer.start()
+            for racer in racers:
+                racer.join(timeout=5)
+            self.assertFalse(any(racer.is_alive() for racer in racers))
+            raced_index = orchestrator._read_index(index_path)
+            self.assertIn(orchestrator.index_state(raced_index), {"PRESERVED", "ACTIVE"})
+            self.assertLessEqual(
+                sum(event["event"] == "ACTIVE" for event in raced_index["events"]),
+                2,
+            )
+
+    def test_preserved_exact_replay_is_idempotent_and_changed_replay_rejected(self):
+        active = orchestrator.record_active(
+            orchestrator.new_campaign_index(),
+            reservation_id="r1",
+            candidate_sha=self.CANDIDATE,
+            candidate_tree_sha256="c" * 64,
+            root="docs/worklogs/root",
+            experiment_identity_digest="d" * 64,
+            campaign_identity_digest="e" * 64,
+        )
+        pending = orchestrator.record_terminal(
+            active,
+            reservation_id="r1",
+            status="ABANDONED",
+            root_digest="f" * 64,
+        )
+        url = (
+            "https://github.com/tensor4all/tenferro-rs/issues/1436"
+            "#issuecomment-99"
+        )
+        preserved = orchestrator.record_preserved_event(
+            pending,
+            reservation_id="r1",
+            preservation_commit="1" * 40,
+            issue_url=url,
+        )
+        self.assertEqual(
+            orchestrator.record_preserved_event(
+                preserved,
+                reservation_id="r1",
+                preservation_commit="1" * 40,
+                issue_url=url,
+            ),
+            preserved,
+        )
+        with self.assertRaises(protocol.ProtocolError):
+            orchestrator.record_preserved_event(
+                preserved,
+                reservation_id="r1",
+                preservation_commit="2" * 40,
+                issue_url=url,
+            )
 
     def test_preservation_comment_binds_commit_root_candidate_and_status(self):
         text = " ".join(
