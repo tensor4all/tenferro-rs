@@ -178,6 +178,24 @@ fn unary_core_program(
     builder.finish(&[output]).unwrap()
 }
 
+fn binary_core_program(
+    lhs_dtype: DType,
+    lhs_shape: impl IntoIterator<Item = DimExpr>,
+    rhs_dtype: DType,
+    rhs_shape: impl IntoIterator<Item = DimExpr>,
+    op: CoreSemanticOp,
+) -> tenferro_runtime::program::FrozenProgram {
+    let mut builder = SemanticProgramBuilder::new();
+    let lhs = builder
+        .input(ProgramInputSpec::new(lhs_dtype, lhs_shape))
+        .unwrap();
+    let rhs = builder
+        .input(ProgramInputSpec::new(rhs_dtype, rhs_shape))
+        .unwrap();
+    let output = builder.add_op(op, &[lhs, rhs]).unwrap()[0];
+    builder.finish(&[output]).unwrap()
+}
+
 fn rules() -> SemanticExtensionRuleSet {
     let mut rules = SemanticExtensionRuleSet::new();
     rules.register_linearize(Arc::new(AddInputsRule)).unwrap();
@@ -443,4 +461,87 @@ fn semantic_core_self_adjoint_structural_ops_reapply_their_payloads() {
             "VJP for {op:?}"
         );
     }
+}
+
+#[test]
+fn semantic_core_analytic_unary_rules_support_real_and_complex_jvp_vjp() {
+    let operations = [
+        CoreSemanticOp::Exp,
+        CoreSemanticOp::Log,
+        CoreSemanticOp::Sin,
+        CoreSemanticOp::Cos,
+        CoreSemanticOp::Tanh,
+        CoreSemanticOp::Sqrt,
+        CoreSemanticOp::Rsqrt,
+        CoreSemanticOp::Expm1,
+        CoreSemanticOp::Log1p,
+    ];
+
+    for dtype in [DType::F64, DType::C64] {
+        for op in &operations {
+            let mut builder = SemanticProgramBuilder::new();
+            let input = builder
+                .input(ProgramInputSpec::new(dtype, [DimExpr::Const(2)]))
+                .unwrap();
+            let output = builder.add_op(op.clone(), &[input]).unwrap()[0];
+            let source = builder.finish(&[output]).unwrap();
+            let ad = ad_context();
+            assert!(
+                ad.jvp_program(&source, &[true]).is_ok(),
+                "JVP for {dtype:?} {op:?}"
+            );
+            let vjp = ad.vjp_program(&source, &[true], &[true]).unwrap();
+            assert_eq!(vjp.derivative_output_indices(), &[Some(0)]);
+            if dtype == DType::C64 {
+                assert!(vjp.frozen().program.operations().any(|operation| matches!(
+                    operation.op(),
+                    tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Conj)
+                )));
+            }
+        }
+    }
+}
+
+#[test]
+fn semantic_core_div_jvp_vjp_handle_broadcast_and_hermitian_coefficients() {
+    let source = binary_core_program(
+        DType::F64,
+        [DimExpr::Const(2), DimExpr::Const(1)],
+        DType::C64,
+        [DimExpr::Const(3)],
+        CoreSemanticOp::Div,
+    );
+    let ad = ad_context();
+
+    let jvp = ad.jvp_program(&source, &[true, true]).unwrap();
+    assert_eq!(jvp.derivative_input_indices(), &[Some(2), Some(3)]);
+    assert!(matches!(
+        jvp.frozen().program.operations().last().unwrap().op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Sub)
+    ));
+
+    let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
+    assert_eq!(vjp.derivative_output_indices(), &[Some(0), Some(1)]);
+    assert!(vjp.frozen().program.operations().any(|operation| matches!(
+        operation.op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Conj)
+    )));
+    let lhs_cotangent = vjp.frozen().program.outputs()[0];
+    let rhs_cotangent = vjp.frozen().program.outputs()[1];
+    assert_eq!(
+        vjp.frozen()
+            .program
+            .value_metadata(lhs_cotangent)
+            .unwrap()
+            .dtype(),
+        DType::F64
+    );
+    assert_eq!(
+        vjp.frozen()
+            .program
+            .value_metadata(rhs_cotangent)
+            .unwrap()
+            .dtype(),
+        DType::C64
+    );
 }

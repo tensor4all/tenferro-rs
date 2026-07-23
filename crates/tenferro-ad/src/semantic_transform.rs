@@ -441,8 +441,27 @@ fn linearize_core(
             let rhs = multiply_ad_value(builder, tangent_inputs[1], primal_inputs[0])?;
             add_ad_values(builder, lhs, rhs)?
         }
+        CoreSemanticOp::Div => {
+            let lhs = divide_ad_value(builder, tangent_inputs[0], primal_inputs[1])?;
+            let rhs_numerator = multiply_ad_value(builder, tangent_inputs[1], primal_inputs[0])?;
+            let denominator =
+                builder.add_op(CoreSemanticOp::Mul, &[primal_inputs[1], primal_inputs[1]])?[0];
+            let rhs = divide_ad_value(builder, rhs_numerator, denominator)?;
+            sub_ad_values(builder, lhs, rhs)?
+        }
         CoreSemanticOp::Neg | CoreSemanticOp::Conj => {
             unary_ad_value(builder, op.clone(), tangent_inputs[0])?
+        }
+        CoreSemanticOp::Exp
+        | CoreSemanticOp::Log
+        | CoreSemanticOp::Sin
+        | CoreSemanticOp::Cos
+        | CoreSemanticOp::Tanh
+        | CoreSemanticOp::Sqrt
+        | CoreSemanticOp::Rsqrt
+        | CoreSemanticOp::Expm1
+        | CoreSemanticOp::Log1p => {
+            linearize_analytic_unary(builder, op, primal_inputs[0], tangent_inputs[0])?
         }
         CoreSemanticOp::Transpose { .. }
         | CoreSemanticOp::Reshape { .. }
@@ -497,6 +516,20 @@ fn vjp_core(
                 normalize_ad_value(builder, rhs, active_inputs[1], primal_inputs[1])?,
             ]
         }
+        CoreSemanticOp::Div => {
+            let rhs_coefficient = conjugate_if_complex(builder, primal_inputs[1])?;
+            let lhs = divide_ad_value(builder, cotangent, rhs_coefficient)?;
+            let lhs_coefficient = conjugate_if_complex(builder, primal_inputs[0])?;
+            let denominator =
+                builder.add_op(CoreSemanticOp::Mul, &[rhs_coefficient, rhs_coefficient])?[0];
+            let rhs = multiply_ad_value(builder, cotangent, lhs_coefficient)?;
+            let rhs = divide_ad_value(builder, rhs, denominator)?;
+            let rhs = unary_ad_value(builder, CoreSemanticOp::Neg, rhs)?;
+            vec![
+                normalize_ad_value(builder, lhs, active_inputs[0], primal_inputs[0])?,
+                normalize_ad_value(builder, rhs, active_inputs[1], primal_inputs[1])?,
+            ]
+        }
         CoreSemanticOp::Neg => {
             let negated = unary_ad_value(builder, CoreSemanticOp::Neg, cotangent)?;
             vec![normalize_ad_value(
@@ -511,6 +544,30 @@ fn vjp_core(
             vec![normalize_ad_value(
                 builder,
                 conjugated,
+                active_inputs[0],
+                primal_inputs[0],
+            )?]
+        }
+        CoreSemanticOp::Exp
+        | CoreSemanticOp::Log
+        | CoreSemanticOp::Sin
+        | CoreSemanticOp::Cos
+        | CoreSemanticOp::Tanh
+        | CoreSemanticOp::Sqrt
+        | CoreSemanticOp::Rsqrt
+        | CoreSemanticOp::Expm1
+        | CoreSemanticOp::Log1p => {
+            let coefficient = analytic_unary_coefficient(
+                builder,
+                op,
+                primal_inputs[0],
+                SemanticTransformRole::Vjp,
+            )?;
+            let coefficient = conjugate_if_complex(builder, coefficient)?;
+            let cotangent = multiply_ad_value(builder, cotangent, coefficient)?;
+            vec![normalize_ad_value(
+                builder,
+                cotangent,
                 active_inputs[0],
                 primal_inputs[0],
             )?]
@@ -829,6 +886,122 @@ fn multiply_ad_value(
         AdValue::Value(value) => Ok(AdValue::Value(
             builder.add_op(CoreSemanticOp::Mul, &[value, coefficient])?[0],
         )),
+    }
+}
+
+fn divide_ad_value(
+    builder: &mut SemanticProgramBuilder,
+    value: AdValue,
+    denominator: ProgramValue,
+) -> Result<AdValue, ProgramBuildError> {
+    match value {
+        AdValue::Absent => Ok(AdValue::Absent),
+        AdValue::Value(value) => Ok(AdValue::Value(
+            builder.add_op(CoreSemanticOp::Div, &[value, denominator])?[0],
+        )),
+    }
+}
+
+fn linearize_analytic_unary(
+    builder: &mut SemanticProgramBuilder,
+    op: &CoreSemanticOp,
+    primal_input: ProgramValue,
+    tangent: AdValue,
+) -> Result<AdValue, SemanticAdTransformError> {
+    if matches!(tangent, AdValue::Absent) {
+        return Ok(AdValue::Absent);
+    }
+    let coefficient =
+        analytic_unary_coefficient(builder, op, primal_input, SemanticTransformRole::Jvp)?;
+    Ok(multiply_ad_value(builder, tangent, coefficient)?)
+}
+
+fn analytic_unary_coefficient(
+    builder: &mut SemanticProgramBuilder,
+    op: &CoreSemanticOp,
+    primal_input: ProgramValue,
+    role: SemanticTransformRole,
+) -> Result<ProgramValue, SemanticAdTransformError> {
+    let coefficient = match op {
+        CoreSemanticOp::Exp | CoreSemanticOp::Expm1 => {
+            builder.add_op(CoreSemanticOp::Exp, &[primal_input])?[0]
+        }
+        CoreSemanticOp::Log => {
+            let one = one_like(builder, primal_input, role)?;
+            builder.add_op(CoreSemanticOp::Div, &[one, primal_input])?[0]
+        }
+        CoreSemanticOp::Sin => builder.add_op(CoreSemanticOp::Cos, &[primal_input])?[0],
+        CoreSemanticOp::Cos => {
+            let sin = builder.add_op(CoreSemanticOp::Sin, &[primal_input])?[0];
+            builder.add_op(CoreSemanticOp::Neg, &[sin])?[0]
+        }
+        CoreSemanticOp::Tanh => {
+            let tanh = builder.add_op(CoreSemanticOp::Tanh, &[primal_input])?[0];
+            let square = builder.add_op(CoreSemanticOp::Mul, &[tanh, tanh])?[0];
+            let one = one_like(builder, primal_input, role)?;
+            builder.add_op(CoreSemanticOp::Sub, &[one, square])?[0]
+        }
+        CoreSemanticOp::Sqrt => {
+            let sqrt = builder.add_op(CoreSemanticOp::Sqrt, &[primal_input])?[0];
+            let twice = builder.add_op(CoreSemanticOp::Add, &[sqrt, sqrt])?[0];
+            let one = one_like(builder, primal_input, role)?;
+            builder.add_op(CoreSemanticOp::Div, &[one, twice])?[0]
+        }
+        CoreSemanticOp::Rsqrt => {
+            let rsqrt = builder.add_op(CoreSemanticOp::Rsqrt, &[primal_input])?[0];
+            let negated = builder.add_op(CoreSemanticOp::Neg, &[rsqrt])?[0];
+            let twice = builder.add_op(CoreSemanticOp::Add, &[primal_input, primal_input])?[0];
+            builder.add_op(CoreSemanticOp::Div, &[negated, twice])?[0]
+        }
+        CoreSemanticOp::Log1p => {
+            let one = one_like(builder, primal_input, role)?;
+            let denominator = builder.add_op(CoreSemanticOp::Add, &[primal_input, one])?[0];
+            builder.add_op(CoreSemanticOp::Div, &[one, denominator])?[0]
+        }
+        _ => return Err(unsupported_core(role, op)),
+    };
+    Ok(coefficient)
+}
+
+fn one_like(
+    builder: &mut SemanticProgramBuilder,
+    anchor: ProgramValue,
+    role: SemanticTransformRole,
+) -> Result<ProgramValue, SemanticAdTransformError> {
+    let metadata = builder.value_metadata(anchor)?.clone();
+    let dtype = metadata.dtype();
+    let bytes = match dtype {
+        DType::F32 => 1.0_f32.to_ne_bytes().to_vec(),
+        DType::F64 => 1.0_f64.to_ne_bytes().to_vec(),
+        DType::C32 => {
+            let mut bytes = 1.0_f32.to_ne_bytes().to_vec();
+            bytes.extend_from_slice(&0.0_f32.to_ne_bytes());
+            bytes
+        }
+        DType::C64 => {
+            let mut bytes = 1.0_f64.to_ne_bytes().to_vec();
+            bytes.extend_from_slice(&0.0_f64.to_ne_bytes());
+            bytes
+        }
+        _ => {
+            return Err(SemanticAdTransformError::UnsupportedMetadata {
+                role,
+                message: format!("cannot construct a differentiable one for {dtype:?}"),
+            });
+        }
+    };
+    let scalar = builder.add_op(CoreSemanticOp::Constant { dtype, bytes }, &[])?[0];
+    if metadata.shape().is_empty() {
+        Ok(scalar)
+    } else {
+        let shape = exact_shape(metadata.shape(), role, "one-like anchor")?;
+        Ok(builder.add_op(
+            CoreSemanticOp::BroadcastInDim {
+                shape,
+                dims: Vec::new(),
+            },
+            &[scalar],
+        )?[0])
     }
 }
 
