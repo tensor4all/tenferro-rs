@@ -612,6 +612,8 @@ class BuildConfig:
     path: str
     home: pathlib.Path
     cargo_home: pathlib.Path
+    expected_toolchain: ResolvedToolchain | None = None
+    expected_host_target: str | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -736,6 +738,27 @@ def validate_resolved_toolchain(tools: ResolvedToolchain) -> None:
     observed = resolve_toolchain(tools.path)
     if observed != tools:
         raise protocol.ProtocolError("resolved toolchain changed")
+
+
+def _validate_expected_build_identity(
+    config: BuildConfig,
+    observed: ResolvedToolchain,
+) -> None:
+    """Require the live build to match its immutable stage identity."""
+    if not isinstance(config.expected_toolchain, ResolvedToolchain):
+        raise protocol.ProtocolError("build config omits sealed toolchain identity")
+    if config.expected_toolchain != observed:
+        raise protocol.ProtocolError("build toolchain differs from sealed identity")
+    if (
+        type(config.expected_host_target) is not str
+        or re.fullmatch(
+            r"[A-Za-z0-9_][A-Za-z0-9_.]*"
+            r"(?:-[A-Za-z0-9_][A-Za-z0-9_.]*){2,}",
+            config.expected_host_target,
+        )
+        is None
+    ):
+        raise protocol.ProtocolError("build config host target is invalid")
 
 
 def normalized_root_cargo(payload: bytes) -> bytes:
@@ -1980,6 +2003,7 @@ def build_all(
     _validate_build_config(config)
     tools = resolve_toolchain(config.path)
     validate_resolved_toolchain(tools)
+    _validate_expected_build_identity(config, tools)
     validate_controlled_cargo_home(config.cargo_home)
     source_control = GitSourceControl(
         config.repository,
@@ -2008,6 +2032,7 @@ def _build_all_with_dependencies(
     _validate_build_config(config)
     tools = resolve_toolchain(config.path)
     validate_resolved_toolchain(tools)
+    _validate_expected_build_identity(config, tools)
     scratch_root = prepare_fresh_worktree_destination(config.scratch_root)
     protocol.prepare_empty_root(config.home)
     validate_controlled_cargo_home(config.cargo_home)
@@ -2061,6 +2086,11 @@ def _build_all_with_dependencies(
         )
         if rustc.validity_state != "COMPLETE":
             return BuildSetResult("INCONCLUSIVE", {}, rustc)
+        host_target = _rustc_host(rustc.stdout, f"role-local {spec.role}")
+        if host_target != config.expected_host_target:
+            raise protocol.ProtocolError(
+                f"role-local host target differs from sealed target: {spec.role}"
+            )
         cargo = _run_build_command(
             command_runner,
             (str(tools.cargo.path), "--version", "--verbose"),
@@ -2071,7 +2101,6 @@ def _build_all_with_dependencies(
         )
         if cargo.validity_state != "COMPLETE":
             return BuildSetResult("INCONCLUSIVE", {}, cargo)
-        host_target = _rustc_host(rustc.stdout, f"role-local {spec.role}")
         role_targets[spec.role] = host_target
         role_toolchains[spec.role] = _toolchain_manifest(
             tools, cargo.stdout.strip(), rustc.stdout.strip()
@@ -2552,6 +2581,8 @@ def validate_build_set(
     _validate_build_config(config)
     tools = resolve_toolchain(config.path)
     validate_resolved_toolchain(tools)
+    if config.expected_toolchain is not None:
+        _validate_expected_build_identity(config, tools)
     validate_controlled_cargo_home(config.cargo_home)
     source_control = GitSourceControl(
         config.repository,
@@ -2576,6 +2607,8 @@ def _validate_build_set_with_source_control(
     _validate_build_config(config)
     tools = resolve_toolchain(config.path)
     validate_resolved_toolchain(tools)
+    if config.expected_toolchain is not None:
+        _validate_expected_build_identity(config, tools)
     validate_controlled_cargo_home(config.cargo_home)
     source_tools = getattr(source_control, "tools", None)
     if not isinstance(source_tools, ResolvedToolchain):
@@ -2605,6 +2638,22 @@ def _validate_build_set_with_source_control(
         validate_build_manifest(decoded)
         if decoded["role"] != role:
             raise protocol.ProtocolError(f"build manifest stored under wrong role: {path}")
+        if (
+            config.expected_toolchain is not None
+            and (
+                decoded["target"] != config.expected_host_target
+                or any(
+                    decoded["toolchain"][name]["path"]
+                    != str(getattr(config.expected_toolchain, name).path)
+                    or decoded["toolchain"][name]["sha256"]
+                    != getattr(config.expected_toolchain, name).sha256
+                    for name in ("git", "cargo", "rustc")
+                )
+            )
+        ):
+            raise protocol.ProtocolError(
+                f"build manifest differs from sealed identity: {role}"
+            )
         manifests[role] = decoded
 
     direct_sha256 = protocol.sha256_file(evidence_root / LOCK_PATHS["direct"])

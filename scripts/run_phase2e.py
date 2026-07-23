@@ -268,6 +268,7 @@ STAGE_CONTEXT_FIELDS = frozenset(
         "command_contract_digest",
         "path",
         "tool_paths",
+        "tool_sha256",
         "host_target",
         "home",
         "cargo_home",
@@ -355,6 +356,17 @@ def _validate_stage_context_record(
         or len(set(tool_paths.values())) != 3
     ):
         raise protocol.ProtocolError("stage context resolved tool paths are invalid")
+    tool_sha256 = context["tool_sha256"]
+    if (
+        type(tool_sha256) is not dict
+        or set(tool_sha256) != {"git", "cargo", "rustc"}
+        or any(
+            type(tool_sha256[name]) is not str
+            or re.fullmatch(r"[0-9a-f]{64}", tool_sha256[name]) is None
+            for name in ("git", "cargo", "rustc")
+        )
+    ):
+        raise protocol.ProtocolError("stage context tool digests are invalid")
     if (
         type(context["host_target"]) is not str
         or re.fullmatch(
@@ -365,6 +377,11 @@ def _validate_stage_context_record(
         is None
     ):
         raise protocol.ProtocolError("stage context host target is invalid")
+    if (
+        type(context["reservation_id"]) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", context["reservation_id"]) is None
+    ):
+        raise protocol.ProtocolError("stage context reservation id is invalid")
     _require_sha(context["candidate_sha"], sha256=False, context="context candidate")
     for name in (
         "candidate_tree_sha256",
@@ -441,12 +458,9 @@ def load_stage_context(
         raise protocol.ProtocolError("stage context is not an object")
     _validate_stage_context_record(context)
     resolved_tools = build.resolve_toolchain(context["path"])
-    observed_tool_paths = {
-        name: str(getattr(resolved_tools, name).path)
-        for name in ("git", "cargo", "rustc")
-    }
-    if context["tool_paths"] != observed_tool_paths:
-        raise protocol.ProtocolError("stage context resolved tool paths differ")
+    expected_tools = _stage_context_toolchain(context)
+    if resolved_tools != expected_tools:
+        raise protocol.ProtocolError("stage context resolved tool identity differs")
     try:
         repository = pathlib.Path(context["repository"]).resolve(strict=True)
         scratch = pathlib.Path(context["scratch_parent"]).resolve(strict=True)
@@ -491,6 +505,28 @@ def _build_config(context: Mapping[str, Any]) -> build.BuildConfig:
         path=context["path"],
         home=_context_path(context, "home"),
         cargo_home=_context_path(context, "cargo_home"),
+        expected_toolchain=_stage_context_toolchain(context),
+        expected_host_target=context["host_target"],
+    )
+
+
+def _stage_context_toolchain(
+    context: Mapping[str, Any],
+) -> build.ResolvedToolchain:
+    """Reconstruct the exact sealed tool identities without filesystem reads."""
+    tools = {
+        name: build.ResolvedTool(
+            name=name,
+            path=pathlib.Path(context["tool_paths"][name]),
+            sha256=context["tool_sha256"][name],
+        )
+        for name in ("git", "cargo", "rustc")
+    }
+    return build.ResolvedToolchain(
+        path=context["path"],
+        git=tools["git"],
+        cargo=tools["cargo"],
+        rustc=tools["rustc"],
     )
 
 
@@ -704,6 +740,7 @@ def validate_timing_build_failure(
         role=role,
         path=context["path"],
         tool_paths=context["tool_paths"],
+        tool_sha256=context["tool_sha256"],
         host_target=context["host_target"],
         require_live_paths=require_live_paths,
     )
@@ -820,19 +857,27 @@ def _timing_build_failure_deadline(
     role: str,
     path: str,
     tool_paths: Mapping[str, Any],
+    tool_sha256: Mapping[str, Any],
     host_target: str,
     require_live_paths: bool,
 ) -> int:
     """Bind a failure to one exact command eligible for its build role."""
     if require_live_paths:
         tools = build.resolve_toolchain(path)
-        observed = {
-            name: str(getattr(tools, name).path)
-            for name in ("git", "cargo", "rustc")
-        }
-        if tool_paths != observed:
+        expected = build.ResolvedToolchain(
+            path=path,
+            **{
+                name: build.ResolvedTool(
+                    name,
+                    pathlib.Path(tool_paths[name]),
+                    tool_sha256[name],
+                )
+                for name in ("git", "cargo", "rustc")
+            },
+        )
+        if tools != expected:
             raise protocol.ProtocolError(
-                "timing build resolved tool paths differ from stage context"
+                "timing build resolved tool identity differs from stage context"
             )
     cargo = tool_paths["cargo"]
     rustc = tool_paths["rustc"]
@@ -1858,6 +1903,10 @@ def _prepare_start_context(
         "path": path,
         "tool_paths": {
             name: str(getattr(tools, name).path)
+            for name in ("git", "cargo", "rustc")
+        },
+        "tool_sha256": {
+            name: getattr(tools, name).sha256
             for name in ("git", "cargo", "rustc")
         },
         "host_target": host_target,

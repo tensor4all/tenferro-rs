@@ -90,7 +90,7 @@ class OuterOrchestratorTests(unittest.TestCase):
             "scratch_parent": str(scratch),
             "candidate_sha": self.CANDIDATE,
             "candidate_tree_sha256": "c" * 64,
-            "reservation_id": "reservation-1",
+            "reservation_id": "a" * 64,
             "experiment_identity_digest": "d" * 64,
             "command_contract_digest": "e" * 64,
             "path": "/bin",
@@ -567,12 +567,16 @@ class OuterOrchestratorTests(unittest.TestCase):
             "scratch_parent": str(scratch.resolve()),
             "candidate_sha": self.CANDIDATE,
             "candidate_tree_sha256": "c" * 64,
-            "reservation_id": "reservation-1",
+            "reservation_id": "a" * 64,
             "experiment_identity_digest": "b" * 64,
             "command_contract_digest": "0" * 64,
             "path": str(controlled.resolve()),
             "tool_paths": {
                 name: str((controlled / name).resolve())
+                for name in ("git", "cargo", "rustc")
+            },
+            "tool_sha256": {
+                name: protocol.sha256_file(controlled / name)
                 for name in ("git", "cargo", "rustc")
             },
             "host_target": "x86_64-unknown-linux-gnu",
@@ -645,6 +649,29 @@ class OuterOrchestratorTests(unittest.TestCase):
             protocol.atomic_write_json(path, context)
             with self.assertRaises(protocol.ProtocolError):
                 orchestrator.load_stage_context(path)
+
+    def test_stage_context_rejects_noncanonical_reservation_id(self):
+        mutations = (
+            True,
+            "a" * 63,
+            "A" * 64,
+            "g" * 64,
+        )
+        for reservation_id in mutations:
+            with (
+                self.subTest(reservation_id=reservation_id),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                _path, context = self.make_stage_context(
+                    pathlib.Path(directory)
+                )
+                context["reservation_id"] = reservation_id
+                context["command_contract_digest"] = (
+                    orchestrator.stage_context_contract_digest(context)
+                )
+
+                with self.assertRaises(protocol.ProtocolError):
+                    orchestrator._validate_stage_context_record(context)
 
     def test_stage_context_fifo_is_rejected_without_blocking(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1125,6 +1152,28 @@ raise SystemExit(1)
                         context,
                         require_live_paths=require_live_paths,
                     )
+
+    def test_live_timing_failure_rejects_same_path_tool_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            context, failure = self.make_timing_build_failure(base)
+            payload = orchestrator._timing_build_failure_payload(failure)
+            cargo = context["tool_paths"]["cargo"]
+            payload["command"]["argv"] = [
+                cargo,
+                *orchestrator.build.METADATA_COMMAND[1:],
+            ]
+            rustc = pathlib.Path(context["tool_paths"]["rustc"])
+            rustc.write_text(
+                "#!/bin/sh\necho 'host: aarch64-unknown-linux-gnu'\n",
+                encoding="utf-8",
+            )
+            rustc.chmod(0o700)
+
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.load_stage_context(base / "context.json")
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_timing_build_failure(payload, context)
 
     def test_timing_build_failure_publish_does_not_clobber_racing_leaf(self):
         creators = {

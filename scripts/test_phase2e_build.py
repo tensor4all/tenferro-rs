@@ -567,14 +567,17 @@ class IdentityAndDeltaTests(unittest.TestCase):
             cargo_home.mkdir()
             (cargo_home / "registry").mkdir()
             (cargo_home / "git").mkdir()
+            path = system_tool_path()
             config = build.BuildConfig(
                 repository=repository,
                 evidence_root=evidence,
                 scratch_root=root / "scratch",
                 candidate_commit=candidate_commit,
-                path=system_tool_path(),
+                path=path,
                 home=home,
                 cargo_home=cargo_home,
+                expected_toolchain=build.resolve_toolchain(path),
+                expected_host_target="x86_64-unknown-linux-gnu",
             )
 
             class LocalGitSource(build.GitSourceControl):
@@ -2818,14 +2821,17 @@ class BuildOrchestratorTests(unittest.TestCase):
         cargo_home.mkdir()
         (cargo_home / "registry").mkdir()
         (cargo_home / "git").mkdir()
+        path = controlled_tool_path(root / "controlled-tools")
         return build.BuildConfig(
             repository=repository,
             evidence_root=evidence,
             scratch_root=root / "scratch",
             candidate_commit="c" * 40,
-            path=controlled_tool_path(root / "controlled-tools"),
+            path=path,
             home=home,
             cargo_home=cargo_home,
+            expected_toolchain=build.resolve_toolchain(path),
+            expected_host_target="x86_64-unknown-linux-gnu",
         )
 
     def fake_source(self, config: build.BuildConfig) -> FakeSourceControl:
@@ -3113,13 +3119,41 @@ class BuildOrchestratorTests(unittest.TestCase):
                     source_control=source_control,
                     command_runner=runner,
                 )
-            self.assertFalse(
-                any(
-                    pathlib.Path(argv[0]).name == "cargo"
-                    and argv[1:] == build.LOCK_COMMAND[1:]
-                    for argv, _cwd, _environment, _deadline in runner.calls
-                )
+            self.assertEqual(
+                [
+                    (pathlib.Path(argv[0]).name, argv[1:], cwd.name)
+                    for argv, cwd, _environment, _deadline in runner.calls
+                ],
+                [
+                    (
+                        "rustc",
+                        ("--version", "--verbose"),
+                        "direct-current-main-baseline",
+                    )
+                ],
             )
+
+    def test_same_path_tool_replacement_is_rejected_before_role_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            config = self.config(root)
+            rustc = config.expected_toolchain.rustc.path
+            rustc.write_text(
+                "#!/bin/sh\necho 'host: aarch64-unknown-linux-gnu'\n",
+                encoding="utf-8",
+            )
+            rustc.chmod(0o700)
+            source_control = self.fake_source(config)
+            runner = FakeCargoRunner()
+
+            with self.assertRaises(protocol.ProtocolError):
+                build._build_all_with_dependencies(
+                    config,
+                    source_control=source_control,
+                    command_runner=runner,
+                )
+
+            self.assertEqual(runner.calls, [])
 
     def test_persisted_validation_recomputes_fake_proofs_and_binds_roots(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
