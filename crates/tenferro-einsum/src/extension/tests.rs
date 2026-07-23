@@ -20,6 +20,61 @@ use tenferro_tensor::{TensorOwnedView, TensorRead};
 #[cfg(feature = "autodiff")]
 use tidu::PrimitiveTransposeInput;
 
+#[cfg(feature = "autodiff")]
+#[test]
+fn semantic_rules_run_through_whole_program_jvp_and_vjp() {
+    use tenferro_ad::AdContext;
+    use tenferro_ops::dim_expr::DimExpr;
+    use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef, SemanticProgramBuilder};
+
+    let mut builder = SemanticProgramBuilder::new();
+    let lhs = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(3)],
+        ))
+        .unwrap();
+    let rhs = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(3), DimExpr::Const(4)],
+        ))
+        .unwrap();
+    let output = builder
+        .add_extension(
+            Arc::new(EinsumExtensionOp::new(EinsumSubscripts::new(
+                &[&[0, 1], &[1, 2]],
+                &[0, 2],
+            ))),
+            &[lhs, rhs],
+        )
+        .unwrap()[0];
+    let source = builder.finish(&[output]).unwrap();
+    let ad = AdContext::builder()
+        .with_semantic_extension_rules(semantic_ad_rules().unwrap())
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let jvp = ad.jvp_program(&source, &[true, true]).unwrap();
+    assert_eq!(jvp.derivative_input_indices(), &[Some(2), Some(3)]);
+    assert!(matches!(
+        jvp.frozen().program.operations().last().unwrap().op(),
+        SemanticOpRef::Core(CoreSemanticOp::Add)
+    ));
+
+    let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
+    assert_eq!(vjp.derivative_output_indices(), &[Some(0), Some(1)]);
+    assert!(
+        vjp.frozen()
+            .program
+            .operations()
+            .filter(|operation| matches!(operation.op(), SemanticOpRef::Extension(_)))
+            .count()
+            >= 3
+    );
+}
+
 #[test]
 fn infer_output_meta_uses_output_labels_and_promotes_dtype() {
     let op = EinsumExtensionOp::new(EinsumSubscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]));
