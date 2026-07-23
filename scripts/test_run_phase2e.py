@@ -120,7 +120,9 @@ class OuterOrchestratorTests(unittest.TestCase):
 
         @contextmanager
         def active_lock(*_args, **_kwargs):
-            yield {}, mock.Mock()
+            identity = mock.Mock()
+            identity.descriptor = 101
+            yield {}, identity, 102
 
         descriptor_count = len(os.listdir("/proc/self/fd"))
         stdout = StringIO()
@@ -3973,6 +3975,303 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             journal = orchestrator.validate_process_journal(root, require_entries=True)
             self.assertEqual(journal["entries"][-1]["state"], "EXITED")
             self.assertTrue(journal["entries"][-1]["reaped"])
+
+    def test_stage_runner_passes_sealed_lock_capability_only_to_allocation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
+            lock_path = root / protocol.ORCHESTRATOR_LOCK_NAME
+            lock_path.touch(mode=0o600)
+            lock_path.chmod(0o600)
+            root_descriptor = orchestrator._open_directory_descriptor(root)
+            orchestrator.fcntl.flock(root_descriptor, orchestrator.fcntl.LOCK_EX)
+            observed = []
+
+            class Process:
+                pid = 4242
+                returncode = 0
+
+                def wait(self, timeout=None):
+                    return 0
+
+            def process_factory(_argv, **kwargs):
+                inherited = kwargs.get("pass_fds", ())
+                observed.append(inherited)
+                self.assertEqual(inherited[:2], (root_descriptor, lock_descriptor))
+                self.assertEqual(len(inherited), 3)
+                record = protocol.InheritedCampaignLockCapability._read_record(
+                    inherited[2]
+                )
+                self.assertEqual(record["stage"], "allocation/direct-current-main")
+                self.assertEqual(record["context_sha256"], "e" * 64)
+                self.assertEqual(record["reservation_id"], "reservation-1")
+                self.assertTrue(
+                    all(not os.get_inheritable(descriptor) for descriptor in inherited)
+                )
+                return Process()
+
+            try:
+                with orchestrator.exclusive_lock_at(
+                    root_descriptor, protocol.ORCHESTRATOR_LOCK_NAME
+                ) as lock_descriptor:
+                    runner = orchestrator._subprocess_stage_runner(
+                        pathlib.Path("/context.json"),
+                        "e" * 64,
+                        self.REPOSITORY,
+                        root=root,
+                        campaign_lock_descriptors=(
+                            root_descriptor,
+                            lock_descriptor,
+                        ),
+                        reservation_id="reservation-1",
+                        process_factory=process_factory,
+                        process_identity=lambda pid: {"pid": pid, "start_ticks": 99},
+                        process_group=lambda pid: pid,
+                    )
+                    self.assertEqual(
+                        runner(
+                            "allocation/direct-current-main",
+                            {"PATH": "/bin"},
+                        ),
+                        0,
+                    )
+            finally:
+                orchestrator.fcntl.flock(
+                    root_descriptor, orchestrator.fcntl.LOCK_UN
+                )
+                os.close(root_descriptor)
+            self.assertEqual(len(observed), 1)
+            with self.assertRaises(OSError):
+                os.fstat(observed[0][2])
+
+    def test_stage_worker_rejects_allocation_without_inherited_lock_capability(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            context_path, context = self.make_stage_context(base)
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(mode=0o700)
+            stage = "allocation/direct-current-main"
+            called = []
+            with mock.patch.object(
+                orchestrator, "validate_worker_binding"
+            ), mock.patch.dict(
+                orchestrator.STAGE_HANDLERS,
+                {stage: lambda _context: called.append(True) or 0},
+            ):
+                with self.assertRaisesRegex(
+                    protocol.ProtocolError,
+                    "inherited campaign lock capability",
+                ):
+                    orchestrator.execute_stage_worker(
+                        stage,
+                        context_path,
+                        protocol.sha256_file(context_path),
+                    )
+            self.assertEqual(called, [])
+
+    def test_nonallocation_stage_never_inherits_campaign_lock_authority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
+            lock = root / protocol.ORCHESTRATOR_LOCK_NAME
+            lock.touch(mode=0o600)
+            lock.chmod(0o600)
+            root_descriptor = orchestrator._open_directory_descriptor(root)
+            orchestrator.fcntl.flock(root_descriptor, orchestrator.fcntl.LOCK_EX)
+
+            class Process:
+                pid = 4242
+                returncode = 0
+
+                def wait(self, timeout=None):
+                    return 0
+
+            def process_factory(_argv, **kwargs):
+                self.assertNotIn("pass_fds", kwargs)
+                return Process()
+
+            try:
+                with orchestrator.exclusive_lock_at(
+                    root_descriptor, protocol.ORCHESTRATOR_LOCK_NAME
+                ) as lock_descriptor:
+                    runner = orchestrator._subprocess_stage_runner(
+                        pathlib.Path("/context.json"),
+                        "e" * 64,
+                        self.REPOSITORY,
+                        root=root,
+                        campaign_lock_descriptors=(
+                            root_descriptor,
+                            lock_descriptor,
+                        ),
+                        reservation_id="reservation-1",
+                        process_factory=process_factory,
+                        process_identity=lambda pid: {"pid": pid, "start_ticks": 99},
+                        process_group=lambda pid: pid,
+                    )
+                    self.assertEqual(
+                        runner("timing-builds", {"PATH": "/bin"}),
+                        0,
+                    )
+            finally:
+                orchestrator.fcntl.flock(
+                    root_descriptor, orchestrator.fcntl.LOCK_UN
+                )
+                os.close(root_descriptor)
+
+    def test_allocation_timeout_reaps_child_and_retains_parent_lock_authority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
+            lock = root / protocol.ORCHESTRATOR_LOCK_NAME
+            lock.touch(mode=0o600)
+            lock.chmod(0o600)
+            root_descriptor = orchestrator._open_directory_descriptor(root)
+            orchestrator.fcntl.flock(root_descriptor, orchestrator.fcntl.LOCK_EX)
+            signals = []
+            record_descriptors = []
+
+            class Process:
+                pid = 4242
+                returncode = None
+                waits = 0
+
+                def wait(self, timeout=None):
+                    self.waits += 1
+                    if self.waits == 1:
+                        raise subprocess.TimeoutExpired(("worker",), timeout)
+                    self.returncode = -15
+                    return self.returncode
+
+            def process_factory(_argv, **kwargs):
+                record_descriptors.append(kwargs["pass_fds"][2])
+                return Process()
+
+            try:
+                with orchestrator.exclusive_lock_at(
+                    root_descriptor, protocol.ORCHESTRATOR_LOCK_NAME
+                ) as lock_descriptor:
+                    runner = orchestrator._subprocess_stage_runner(
+                        pathlib.Path("/context.json"),
+                        "e" * 64,
+                        self.REPOSITORY,
+                        root=root,
+                        campaign_lock_descriptors=(
+                            root_descriptor,
+                            lock_descriptor,
+                        ),
+                        reservation_id="reservation-1",
+                        process_factory=process_factory,
+                        process_identity=lambda pid: {"pid": pid, "start_ticks": 99},
+                        process_group=lambda pid: pid,
+                        kill_process_group=lambda pgid, signal: signals.append(
+                            (pgid, signal)
+                        ),
+                        deadline_seconds=0.01,
+                        termination_grace_seconds=0.01,
+                    )
+                    with self.assertRaisesRegex(
+                        protocol.ProtocolError,
+                        "deadline exceeded",
+                    ):
+                        runner(
+                            "allocation/direct-current-main",
+                            {"PATH": "/bin"},
+                        )
+                    self.assertEqual(
+                        signals,
+                        [(4242, orchestrator.signal.SIGTERM)],
+                    )
+                    os.fstat(root_descriptor)
+                    os.fstat(lock_descriptor)
+                    with self.assertRaises(OSError):
+                        os.fstat(record_descriptors[0])
+                    entry = orchestrator.validate_process_journal(
+                        root, require_entries=True
+                    )["entries"][-1]
+                    self.assertEqual(entry["state"], "TERMINATED")
+                    self.assertTrue(entry["reaped"])
+            finally:
+                orchestrator.fcntl.flock(
+                    root_descriptor, orchestrator.fcntl.LOCK_UN
+                )
+                os.close(root_descriptor)
+
+    def test_allocation_record_close_failure_terminates_and_reaps_spawned_child(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory).resolve()
+            protocol.atomic_write_json(
+                root / orchestrator.PROCESS_JOURNAL,
+                {"version": 1, "entries": []},
+            )
+            lock = root / protocol.ORCHESTRATOR_LOCK_NAME
+            lock.touch(mode=0o600)
+            lock.chmod(0o600)
+            root_descriptor = orchestrator._open_directory_descriptor(root)
+            orchestrator.fcntl.flock(root_descriptor, orchestrator.fcntl.LOCK_EX)
+            signals = []
+            process = mock.Mock(pid=4242, returncode=None)
+            process.wait.return_value = -15
+            original_close = protocol.SealedCampaignLockRecord.close
+
+            def close_then_fail(record):
+                original_close(record)
+                raise OSError("injected capability record close failure")
+
+            try:
+                with orchestrator.exclusive_lock_at(
+                    root_descriptor, protocol.ORCHESTRATOR_LOCK_NAME
+                ) as lock_descriptor:
+                    runner = orchestrator._subprocess_stage_runner(
+                        pathlib.Path("/context.json"),
+                        "e" * 64,
+                        self.REPOSITORY,
+                        root=root,
+                        campaign_lock_descriptors=(
+                            root_descriptor,
+                            lock_descriptor,
+                        ),
+                        reservation_id="reservation-1",
+                        process_factory=lambda *_args, **_kwargs: process,
+                        process_identity=lambda pid: {"pid": pid, "start_ticks": 99},
+                        process_group=lambda pid: pid,
+                        kill_process_group=lambda pgid, signal: signals.append(
+                            (pgid, signal)
+                        ),
+                    )
+                    with mock.patch.object(
+                        protocol.SealedCampaignLockRecord,
+                        "close",
+                        close_then_fail,
+                    ):
+                        with self.assertRaisesRegex(
+                            OSError,
+                            "capability record close failure",
+                        ):
+                            runner(
+                                "allocation/direct-current-main",
+                                {"PATH": "/bin"},
+                            )
+                    self.assertEqual(
+                        signals,
+                        [(4242, orchestrator.signal.SIGTERM)],
+                    )
+                    process.wait.assert_called_once()
+            finally:
+                orchestrator.fcntl.flock(
+                    root_descriptor, orchestrator.fcntl.LOCK_UN
+                )
+                os.close(root_descriptor)
 
     def test_post_popen_identity_failure_terminates_and_reaps(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -913,6 +913,16 @@ def _allocation(context: Mapping[str, Any], lane: str) -> int:
 
     root = _context_path(context, "evidence_root")
     attempt = _next_attempt(context, "allocation", lane)
+    stage = f"allocation/{lane}"
+    capability = context.get("_campaign_lock_capability")
+    context_sha256 = context.get("_stage_context_sha256")
+    if (
+        not isinstance(capability, protocol.InheritedCampaignLockCapability)
+        or type(context_sha256) is not str
+    ):
+        raise protocol.ProtocolError(
+            "allocation stage lacks its inherited campaign lock capability"
+        )
     return allocation.main(
         [
             "--comparison-kind", lane,
@@ -923,7 +933,11 @@ def _allocation(context: Mapping[str, Any], lane: str) -> int:
             "--probe-manifest-root", str(root),
             "--tenferro-manifest-root", str(root),
             "--repository", context["repository"],
-        ]
+        ],
+        inherited_capability=capability,
+        stage=stage,
+        context_sha256=context_sha256,
+        reservation_id=context["reservation_id"],
     )
 
 
@@ -1084,21 +1098,49 @@ def execute_stage_worker(
     context = load_stage_context(
         context_path, context_sha256, require_fresh_scratch=False
     )
-    validate_worker_binding(stage, context, context_path, context_sha256)
     root_identity = protocol.PreparedRootIdentity(
         pathlib.Path(context["evidence_root"])
     )
+    capability = None
+    primary = None
     try:
+        if stage in ALLOCATION_LANE_STAGES:
+            capability = protocol.InheritedCampaignLockCapability.discover(
+                root_identity,
+                stage=stage,
+                context_sha256=context_sha256,
+                reservation_id=context["reservation_id"],
+                parent_identity=_linux_process_identity(os.getppid()),
+            )
+        validate_worker_binding(stage, context, context_path, context_sha256)
         guarded_context = dict(context)
         guarded_context["evidence_root"] = GuardedRootPath(root_identity)
+        if capability is not None:
+            guarded_context["_campaign_lock_capability"] = capability
+            guarded_context["_stage_context_sha256"] = context_sha256
         root_identity.revalidate()
         result = STAGE_HANDLERS[stage](guarded_context)
         root_identity.revalidate()
         if type(result) is not int or result not in {0, 2, 3, 4}:
             raise protocol.ProtocolError("stage worker returned an invalid status")
         return result
+    except BaseException as error:
+        primary = error
+        raise
     finally:
-        root_identity.close()
+        cleanup_failure = None
+        for resource in (capability, root_identity):
+            if resource is None:
+                continue
+            try:
+                resource.close()
+            except BaseException as error:
+                if primary is not None:
+                    primary.add_note(f"stage lock capability cleanup failed: {error}")
+                elif cleanup_failure is None:
+                    cleanup_failure = error
+        if primary is None and cleanup_failure is not None:
+            raise cleanup_failure
 
 
 def validate_worker_binding(
@@ -4375,6 +4417,8 @@ def _subprocess_stage_runner(
     *,
     root: pathlib.Path | None = None,
     root_identity: protocol.PreparedRootIdentity | None = None,
+    campaign_lock_descriptors: tuple[int, int] | None = None,
+    reservation_id: str | None = None,
     process_factory=subprocess.Popen,
     process_identity: Callable[[int], Mapping[str, int]] = _linux_process_identity,
     process_group: Callable[[int], int] = os.getpgid,
@@ -4387,16 +4431,61 @@ def _subprocess_stage_runner(
     def run(stage: str, environment: Mapping[str, str]) -> int:
         argv = stage_argv(stage, context, context_sha256)
         validate_stage_argv(stage, argv, context, context_sha256)
-        process = process_factory(
-            argv,
-            cwd=repository,
-            env=dict(environment),
-            start_new_session=True,
-        )
+        capability_record = None
+        process_arguments = {
+            "cwd": repository,
+            "env": dict(environment),
+            "start_new_session": True,
+        }
+        if stage in ALLOCATION_LANE_STAGES:
+            if (
+                type(campaign_lock_descriptors) is not tuple
+                or len(campaign_lock_descriptors) != 2
+                or any(
+                    type(descriptor) is not int or descriptor <= 2
+                    for descriptor in campaign_lock_descriptors
+                )
+                or len(set(campaign_lock_descriptors)) != 2
+                or type(reservation_id) is not str
+                or not reservation_id
+            ):
+                raise protocol.ProtocolError(
+                    "allocation stage lacks exact campaign lock descriptors"
+                )
+            capability_record = protocol.SealedCampaignLockRecord.create(
+                stage=stage,
+                context_sha256=context_sha256,
+                reservation_id=reservation_id,
+                root_descriptor=campaign_lock_descriptors[0],
+                lock_descriptor=campaign_lock_descriptors[1],
+                parent_identity=_linux_process_identity(os.getpid()),
+            )
+            process_arguments["pass_fds"] = (
+                *campaign_lock_descriptors,
+                capability_record.descriptor,
+            )
+        elif campaign_lock_descriptors is not None and reservation_id is None:
+            raise protocol.ProtocolError(
+                "campaign lock descriptor binding lacks its reservation"
+            )
+        try:
+            process = process_factory(argv, **process_arguments)
+        except BaseException as primary:
+            if capability_record is not None:
+                try:
+                    capability_record.close()
+                except BaseException as close_error:
+                    primary.add_note(
+                        f"campaign lock capability cleanup failed: {close_error}"
+                    )
+            raise
         pgid = process.pid
         ordinal = None
         reaped = False
         try:
+            if capability_record is not None:
+                capability_record.close()
+                capability_record = None
             if root is None:
                 raise protocol.ProtocolError("stage subprocess runner lacks evidence root")
             if root_identity is not None:
@@ -4419,6 +4508,7 @@ def _subprocess_stage_runner(
             code = process.wait(timeout=deadline_seconds)
             reaped = True
         except BaseException as primary:
+            cleanup_error = None
             try:
                 signal_errors = []
                 signals = []
@@ -4439,7 +4529,22 @@ def _subprocess_stage_runner(
                         signals=signals,
                         root_identity=root_identity,
                     )
-            except BaseException as cleanup_error:
+            except BaseException as error:
+                cleanup_error = error
+            if capability_record is not None:
+                try:
+                    capability_record.close()
+                    capability_record = None
+                except BaseException as close_error:
+                    if cleanup_error is None:
+                        primary.add_note(
+                            f"campaign lock capability cleanup failed: {close_error}"
+                        )
+                    else:
+                        cleanup_error.add_note(
+                            f"campaign lock capability cleanup failed: {close_error}"
+                        )
+            if cleanup_error is not None:
                 raise protocol.ProtocolError(
                     f"cannot terminate and reap stage process: {cleanup_error}"
                 ) from cleanup_error
@@ -4554,10 +4659,16 @@ def active_campaign_lock(
             raise protocol.ProtocolError("active operation identity differs")
         identity = protocol.PreparedRootIdentity(root)
         try:
-            with exclusive_lock_at(identity.descriptor, ORCHESTRATOR_LOCK_NAME):
-                identity.revalidate()
-                yield active, identity
-                identity.revalidate()
+            fcntl.flock(identity.descriptor, fcntl.LOCK_EX)
+            try:
+                with exclusive_lock_at(
+                    identity.descriptor, ORCHESTRATOR_LOCK_NAME
+                ) as lock_descriptor:
+                    identity.revalidate()
+                    yield active, identity, lock_descriptor
+                    identity.revalidate()
+            finally:
+                fcntl.flock(identity.descriptor, fcntl.LOCK_UN)
         finally:
             identity.close()
 
@@ -5141,7 +5252,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repository,
                 root,
                 reservation_id=stage_context["reservation_id"],
-            ) as (_active, root_identity):
+            ) as (_active, root_identity, lock_descriptor):
                 return run_fixed_stages(
                     root,
                     environment,
@@ -5151,6 +5262,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         repository,
                         root=root,
                         root_identity=root_identity,
+                        campaign_lock_descriptors=(
+                            root_identity.descriptor,
+                            lock_descriptor,
+                        ),
+                        reservation_id=stage_context["reservation_id"],
                     ),
                     identity={
                         **stage_context,
@@ -5169,7 +5285,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repository,
                 root,
                 reservation_id=preliminary["reservation_id"],
-            ) as (active, root_identity):
+            ) as (active, root_identity, lock_descriptor):
                 context_path, stage_context, context_sha256 = _load_bound_context(
                     repository, root, active
                 )
@@ -5182,6 +5298,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     repository,
                     root=root,
                     root_identity=root_identity,
+                    campaign_lock_descriptors=(
+                        root_identity.descriptor,
+                        lock_descriptor,
+                    ),
+                    reservation_id=stage_context["reservation_id"],
                 )
                 root_identity.revalidate()
                 progress = validate_progress(root)

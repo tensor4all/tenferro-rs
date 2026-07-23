@@ -203,7 +203,18 @@ def install_temp_copy_adapters(namespace: MutableMapping[str, Any]) -> None:
         *,
         root,
         root_identity,
+        campaign_lock_descriptors,
+        reservation_id,
     ):
+        if (
+            type(campaign_lock_descriptors) is not tuple
+            or len(campaign_lock_descriptors) != 2
+            or campaign_lock_descriptors[0] != root_identity.descriptor
+        ):
+            raise AssertionError("fixture campaign lock descriptor binding differs")
+        if not reservation_id:
+            raise AssertionError("fixture campaign lock reservation is missing")
+
         def run(stage, _environment):
             fixture_root = pathlib.Path(root)
             _write_fixture_journal(namespace, fixture_root)

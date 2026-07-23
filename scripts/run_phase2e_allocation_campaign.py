@@ -77,12 +77,15 @@ class EvidenceLock:
         root_path: pathlib.Path,
         path: pathlib.Path,
         root_identity: tuple[int, int],
+        *,
+        borrowed: bool = False,
     ) -> None:
         self.root_descriptor: int | None = root_descriptor
         self.descriptor: int | None = descriptor
         self.root_path = root_path
         self.path = path
         self.root_identity = root_identity
+        self.borrowed = borrowed
 
     def assert_root_identity(self) -> None:
         root_descriptor = self.root_descriptor
@@ -106,7 +109,15 @@ class EvidenceLock:
             )
 
     @classmethod
-    def acquire(cls, ledger_path: pathlib.Path) -> "EvidenceLock":
+    def acquire(
+        cls,
+        ledger_path: pathlib.Path,
+        *,
+        inherited_capability: protocol.InheritedCampaignLockCapability | None = None,
+        stage: str | None = None,
+        context_sha256: str | None = None,
+        reservation_id: str | None = None,
+    ) -> "EvidenceLock":
         ledger_path = pathlib.Path(ledger_path)
         try:
             canonical_ledger = ledger_path.resolve(strict=True)
@@ -128,6 +139,56 @@ class EvidenceLock:
                 "allocation ledger must be canonical outer-root evidence-ledger.json"
             )
         lock_path = canonical_parent / ORCHESTRATOR_LOCK
+        if inherited_capability is not None:
+            if (
+                type(stage) is not str
+                or type(context_sha256) is not str
+                or type(reservation_id) is not str
+            ):
+                raise protocol.ProtocolError(
+                    "inherited allocation lock requires an exact invocation binding"
+                )
+            identity = protocol.PreparedRootIdentity(canonical_parent)
+            try:
+                inherited_capability.validate(
+                    identity,
+                    stage=stage,
+                    context_sha256=context_sha256,
+                    reservation_id=reservation_id,
+                )
+                root_descriptor = inherited_capability.root_descriptor
+                descriptor = inherited_capability.lock_descriptor
+                opened_parent = os.fstat(root_descriptor)
+                current_ledger = os.stat(
+                    LEDGER_NAME,
+                    dir_fd=root_descriptor,
+                    follow_symlinks=False,
+                )
+                if (
+                    not stat.S_ISDIR(opened_parent.st_mode)
+                    or (opened_parent.st_dev, opened_parent.st_ino)
+                    != (identity.device, identity.inode)
+                    or not stat.S_ISREG(current_ledger.st_mode)
+                    or (current_ledger.st_dev, current_ledger.st_ino)
+                    != (ledger_metadata.st_dev, ledger_metadata.st_ino)
+                ):
+                    raise protocol.ProtocolError(
+                        "inherited allocation ledger is not in the pinned evidence root"
+                    )
+                return cls(
+                    root_descriptor,
+                    descriptor,
+                    canonical_parent,
+                    lock_path,
+                    (opened_parent.st_dev, opened_parent.st_ino),
+                    borrowed=True,
+                )
+            finally:
+                identity.close()
+        if any(value is not None for value in (stage, context_sha256, reservation_id)):
+            raise protocol.ProtocolError(
+                "standalone allocation lock cannot accept an inherited invocation binding"
+            )
         root_descriptor: int | None = None
         descriptor: int | None = None
         failure: BaseException | None = None
@@ -227,6 +288,10 @@ class EvidenceLock:
             failure = error
         self.descriptor = None
         self.root_descriptor = None
+        if self.borrowed:
+            if failure is not None:
+                raise failure
+            return
         steps = []
         if descriptor is not None:
             steps.extend(
@@ -1724,10 +1789,20 @@ def _run_comparison(
     tenferro_manifests: Mapping[str, Mapping[str, Any]],
     command_runner: Callable[..., build.CommandResult] = build.run_bounded_command,
     atomic_writer: Callable[[pathlib.Path, Any], None] = protocol.atomic_write_json,
+    inherited_capability: protocol.InheritedCampaignLockCapability | None = None,
+    stage: str | None = None,
+    context_sha256: str | None = None,
+    reservation_id: str | None = None,
 ) -> int:
     """Serialize one allocation attempt under the stable outer-root lock."""
     _validate_inputs(args.comparison_kind, probe_manifests, tenferro_manifests)
-    lock = EvidenceLock.acquire(pathlib.Path(args.ledger))
+    lock = EvidenceLock.acquire(
+        pathlib.Path(args.ledger),
+        inherited_capability=inherited_capability,
+        stage=stage,
+        context_sha256=context_sha256,
+        reservation_id=reservation_id,
+    )
 
     def guarded_atomic_writer(path: pathlib.Path, payload: Any) -> None:
         lock.assert_root_identity()
@@ -1815,6 +1890,10 @@ def run_campaign(
     args,
     *,
     command_runner: Callable[..., build.CommandResult] = build.run_bounded_command,
+    inherited_capability: protocol.InheritedCampaignLockCapability | None = None,
+    stage: str | None = None,
+    context_sha256: str | None = None,
+    reservation_id: str | None = None,
 ) -> int:
     tenferro = {
         role: _read_json(
@@ -1835,12 +1914,29 @@ def run_campaign(
         probe_manifests=probes,
         tenferro_manifests=tenferro,
         command_runner=command_runner,
+        inherited_capability=inherited_capability,
+        stage=stage,
+        context_sha256=context_sha256,
+        reservation_id=reservation_id,
     )
 
 
-def main(argv=None) -> int:
+def main(
+    argv=None,
+    *,
+    inherited_capability: protocol.InheritedCampaignLockCapability | None = None,
+    stage: str | None = None,
+    context_sha256: str | None = None,
+    reservation_id: str | None = None,
+) -> int:
     try:
-        return run_campaign(parse_args(argv))
+        return run_campaign(
+            parse_args(argv),
+            inherited_capability=inherited_capability,
+            stage=stage,
+            context_sha256=context_sha256,
+            reservation_id=reservation_id,
+        )
     except protocol.ProtocolError as error:
         print(f"phase2e allocation campaign error: {error}", file=sys.stderr)
         return 2

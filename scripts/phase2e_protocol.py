@@ -12,6 +12,7 @@ but its crash durability is unknown; replacement is never rolled back.
 from __future__ import annotations
 
 import copy
+import fcntl
 import hashlib
 import json
 import os
@@ -49,6 +50,14 @@ RUN_ROLES = ("sentinel_before", "first_target", "second_target", "sentinel_after
 STAGE_NAMES = ("allocation", "timing")
 LANE_NAMES = ("direct-current-main", "common-lock-normalized")
 ORCHESTRATOR_LOCK_NAME = ".orchestrator.lock"
+CAMPAIGN_LOCK_CAPABILITY_VERSION = 1
+CAMPAIGN_LOCK_CAPABILITY_SEALS = (
+    fcntl.F_SEAL_SEAL
+    | fcntl.F_SEAL_SHRINK
+    | fcntl.F_SEAL_GROW
+    | fcntl.F_SEAL_WRITE
+)
+CAMPAIGN_LOCK_CAPABILITY_MAX_BYTES = 4096
 
 _THREAD_ENV = {
     "RAYON_NUM_THREADS": "1",
@@ -194,6 +203,463 @@ class PreparedRootIdentity:
         descriptor, self.descriptor = self.descriptor, -1
         if descriptor >= 0:
             os.close(descriptor)
+
+
+def _validate_campaign_lock_binding(
+    *,
+    stage: str,
+    context_sha256: str,
+    reservation_id: str,
+) -> None:
+    if (
+        stage not in tuple(f"allocation/{lane}" for lane in LANE_NAMES)
+        or type(context_sha256) is not str
+        or len(context_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in context_sha256)
+        or type(reservation_id) is not str
+        or not reservation_id
+    ):
+        raise ProtocolError("inherited campaign lock invocation binding is invalid")
+
+
+def _validate_process_identity(identity: Mapping[str, int], context: str) -> None:
+    if (
+        type(identity) is not dict
+        or set(identity) != {"pid", "start_ticks"}
+        or type(identity["pid"]) is not int
+        or identity["pid"] <= 0
+        or type(identity["start_ticks"]) is not int
+        or identity["start_ticks"] <= 0
+    ):
+        raise ProtocolError(f"{context} process identity is invalid")
+
+
+def _campaign_lock_record_payload(
+    *,
+    stage: str,
+    context_sha256: str,
+    reservation_id: str,
+    root_descriptor: int,
+    lock_descriptor: int,
+    parent_identity: Mapping[str, int],
+) -> dict[str, Any]:
+    _validate_campaign_lock_binding(
+        stage=stage,
+        context_sha256=context_sha256,
+        reservation_id=reservation_id,
+    )
+    _validate_process_identity(parent_identity, "campaign lock owner")
+    try:
+        root = os.fstat(root_descriptor)
+        lock = os.fstat(lock_descriptor)
+        expected_lock = os.stat(
+            ORCHESTRATOR_LOCK_NAME,
+            dir_fd=root_descriptor,
+            follow_symlinks=False,
+        )
+    except OSError as error:
+        raise ProtocolError(f"cannot inspect inherited campaign lock: {error}") from error
+    if (
+        root_descriptor <= 2
+        or lock_descriptor <= 2
+        or root_descriptor == lock_descriptor
+        or not stat.S_ISDIR(root.st_mode)
+        or not stat.S_ISREG(lock.st_mode)
+        or stat.S_IMODE(lock.st_mode) != 0o600
+        or lock.st_size != 0
+        or (lock.st_dev, lock.st_ino) != (expected_lock.st_dev, expected_lock.st_ino)
+        or os.get_inheritable(root_descriptor)
+        or os.get_inheritable(lock_descriptor)
+    ):
+        raise ProtocolError("campaign lock descriptors are not exact CLOEXEC authorities")
+    for descriptor in (root_descriptor, lock_descriptor):
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ProtocolError(
+                "campaign lock descriptor does not share the held open-file description"
+            ) from error
+    return {
+        "version": CAMPAIGN_LOCK_CAPABILITY_VERSION,
+        "stage": stage,
+        "context_sha256": context_sha256,
+        "reservation_id": reservation_id,
+        "parent_pid": parent_identity["pid"],
+        "parent_start_ticks": parent_identity["start_ticks"],
+        "root_descriptor": root_descriptor,
+        "root_device": root.st_dev,
+        "root_inode": root.st_ino,
+        "lock_descriptor": lock_descriptor,
+        "lock_device": lock.st_dev,
+        "lock_inode": lock.st_ino,
+    }
+
+
+class SealedCampaignLockRecord:
+    """Parent-owned sealed binding for one inherited allocation-stage lock."""
+
+    def __init__(self, descriptor: int) -> None:
+        self.descriptor = descriptor
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        stage: str,
+        context_sha256: str,
+        reservation_id: str,
+        root_descriptor: int,
+        lock_descriptor: int,
+        parent_identity: Mapping[str, int],
+    ) -> "SealedCampaignLockRecord":
+        payload = _campaign_lock_record_payload(
+            stage=stage,
+            context_sha256=context_sha256,
+            reservation_id=reservation_id,
+            root_descriptor=root_descriptor,
+            lock_descriptor=lock_descriptor,
+            parent_identity=parent_identity,
+        )
+        descriptor = os.memfd_create(
+            "phase2e-campaign-lock-capability",
+            os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
+        )
+        try:
+            encoded = _canonical_json_bytes(payload)
+            if len(encoded) > CAMPAIGN_LOCK_CAPABILITY_MAX_BYTES:
+                raise ProtocolError("campaign lock capability record is oversized")
+            view = memoryview(encoded)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("short campaign lock capability write")
+                view = view[written:]
+            os.fchmod(descriptor, 0o400)
+            fcntl.fcntl(
+                descriptor,
+                fcntl.F_ADD_SEALS,
+                CAMPAIGN_LOCK_CAPABILITY_SEALS,
+            )
+            if (
+                fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+                != CAMPAIGN_LOCK_CAPABILITY_SEALS
+                or os.get_inheritable(descriptor)
+            ):
+                raise ProtocolError("campaign lock capability record sealing failed")
+            return cls(descriptor)
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def close(self) -> None:
+        descriptor, self.descriptor = self.descriptor, -1
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+class InheritedCampaignLockCapability:
+    """Child-owned duplicates of the parent's exact root and lock authorities."""
+
+    def __init__(
+        self,
+        *,
+        root_descriptor: int,
+        lock_descriptor: int,
+        record_descriptor: int,
+        record: Mapping[str, Any],
+        root_path: pathlib.Path,
+    ) -> None:
+        self.root_descriptor = root_descriptor
+        self.lock_descriptor = lock_descriptor
+        self.record_descriptor = record_descriptor
+        self.record = dict(record)
+        self.root_path = pathlib.Path(root_path)
+
+    @staticmethod
+    def _read_record(descriptor: int) -> dict[str, Any] | None:
+        try:
+            metadata = os.fstat(descriptor)
+            seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+        except OSError:
+            return None
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o400
+            or metadata.st_size <= 0
+            or metadata.st_size > CAMPAIGN_LOCK_CAPABILITY_MAX_BYTES
+            or seals != CAMPAIGN_LOCK_CAPABILITY_SEALS
+        ):
+            return None
+        try:
+            decoded = decode_canonical_json_bytes(
+                os.pread(descriptor, metadata.st_size, 0),
+                "inherited campaign lock capability",
+            )
+        except ProtocolError:
+            return None
+        expected_fields = {
+            "version",
+            "stage",
+            "context_sha256",
+            "reservation_id",
+            "parent_pid",
+            "parent_start_ticks",
+            "root_descriptor",
+            "root_device",
+            "root_inode",
+            "lock_descriptor",
+            "lock_device",
+            "lock_inode",
+        }
+        integer_fields = (
+            "parent_pid",
+            "parent_start_ticks",
+            "root_descriptor",
+            "root_device",
+            "root_inode",
+            "lock_descriptor",
+            "lock_device",
+            "lock_inode",
+        )
+        if (
+            type(decoded) is not dict
+            or set(decoded) != expected_fields
+            or decoded["version"] != CAMPAIGN_LOCK_CAPABILITY_VERSION
+            or decoded["stage"] not in tuple(
+                f"allocation/{lane}" for lane in LANE_NAMES
+            )
+            or type(decoded["context_sha256"]) is not str
+            or len(decoded["context_sha256"]) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in decoded["context_sha256"]
+            )
+            or type(decoded["reservation_id"]) is not str
+            or not decoded["reservation_id"]
+            or any(
+                type(decoded[field]) is not int or decoded[field] <= 0
+                for field in integer_fields
+            )
+            or decoded["root_descriptor"] <= 2
+            or decoded["lock_descriptor"] <= 2
+        ):
+            return None
+        return decoded
+
+    @classmethod
+    def discover(
+        cls,
+        root_identity: PreparedRootIdentity,
+        *,
+        stage: str,
+        context_sha256: str,
+        reservation_id: str,
+        parent_identity: Mapping[str, int],
+    ) -> "InheritedCampaignLockCapability":
+        _validate_campaign_lock_binding(
+            stage=stage,
+            context_sha256=context_sha256,
+            reservation_id=reservation_id,
+        )
+        _validate_process_identity(parent_identity, "stage parent")
+        root_identity.revalidate()
+        candidates = []
+        try:
+            descriptor_names = os.listdir("/proc/self/fd")
+        except OSError as error:
+            raise ProtocolError(
+                f"cannot enumerate inherited campaign lock descriptors: {error}"
+            ) from error
+        for name in descriptor_names:
+            try:
+                descriptor = int(name)
+            except ValueError:
+                continue
+            if descriptor <= 2 or descriptor == root_identity.descriptor:
+                continue
+            record = cls._read_record(descriptor)
+            if record is not None and (
+                record["stage"],
+                record["context_sha256"],
+                record["reservation_id"],
+                record["parent_pid"],
+                record["parent_start_ticks"],
+            ) == (
+                stage,
+                context_sha256,
+                reservation_id,
+                parent_identity["pid"],
+                parent_identity["start_ticks"],
+            ):
+                candidates.append((descriptor, record))
+        if len(candidates) != 1:
+            raise ProtocolError(
+                "allocation stage requires one exact inherited campaign lock capability"
+            )
+        record_descriptor, record = candidates[0]
+        if record["parent_pid"] != os.getppid():
+            raise ProtocolError("inherited campaign lock parent process differs")
+        descriptors = (
+            record["root_descriptor"],
+            record["lock_descriptor"],
+            record_descriptor,
+        )
+        if (
+            any(type(descriptor) is not int or descriptor <= 2 for descriptor in descriptors)
+            or len(set(descriptors)) != 3
+            or root_identity.descriptor in descriptors
+        ):
+            raise ProtocolError("inherited campaign lock descriptor binding is invalid")
+        try:
+            inherited_root = os.fstat(record["root_descriptor"])
+            inherited_lock = os.fstat(record["lock_descriptor"])
+            expected_lock = os.stat(
+                ORCHESTRATOR_LOCK_NAME,
+                dir_fd=root_identity.descriptor,
+                follow_symlinks=False,
+            )
+            inherited_flags = tuple(
+                os.get_inheritable(descriptor) for descriptor in descriptors
+            )
+        except OSError as error:
+            raise ProtocolError(
+                f"cannot inspect inherited campaign lock descriptors: {error}"
+            ) from error
+        if (
+            not stat.S_ISDIR(inherited_root.st_mode)
+            or (inherited_root.st_dev, inherited_root.st_ino)
+            != (record["root_device"], record["root_inode"])
+            or (root_identity.device, root_identity.inode)
+            != (record["root_device"], record["root_inode"])
+            or not stat.S_ISREG(inherited_lock.st_mode)
+            or stat.S_IMODE(inherited_lock.st_mode) != 0o600
+            or inherited_lock.st_size != 0
+            or (inherited_lock.st_dev, inherited_lock.st_ino)
+            != (record["lock_device"], record["lock_inode"])
+            or (expected_lock.st_dev, expected_lock.st_ino)
+            != (record["lock_device"], record["lock_inode"])
+            or not all(inherited_flags)
+        ):
+            raise ProtocolError("inherited campaign lock descriptor identity differs")
+        for descriptor in (record["root_descriptor"], record["lock_descriptor"]):
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise ProtocolError(
+                    "inherited campaign lock does not share the held open-file description"
+                ) from error
+        capability = cls(
+            root_descriptor=record["root_descriptor"],
+            lock_descriptor=record["lock_descriptor"],
+            record_descriptor=record_descriptor,
+            record=record,
+            root_path=root_identity.path,
+        )
+        try:
+            for descriptor in descriptors:
+                os.set_inheritable(descriptor, False)
+            capability.validate(
+                root_identity,
+                stage=stage,
+                context_sha256=context_sha256,
+                reservation_id=reservation_id,
+            )
+            return capability
+        except BaseException:
+            capability.close()
+            raise
+
+    def validate(
+        self,
+        root_identity: PreparedRootIdentity,
+        *,
+        stage: str,
+        context_sha256: str,
+        reservation_id: str,
+    ) -> None:
+        _validate_campaign_lock_binding(
+            stage=stage,
+            context_sha256=context_sha256,
+            reservation_id=reservation_id,
+        )
+        root_identity.revalidate()
+        if pathlib.Path(root_identity.path) != self.root_path:
+            raise ProtocolError("inherited campaign lock root binding differs")
+        if os.getppid() != self.record["parent_pid"]:
+            raise ProtocolError("inherited campaign lock owner process changed")
+        current_record = self._read_record(self.record_descriptor)
+        if current_record != self.record or (
+            self.record["stage"],
+            self.record["context_sha256"],
+            self.record["reservation_id"],
+        ) != (stage, context_sha256, reservation_id):
+            raise ProtocolError("inherited campaign lock invocation binding differs")
+        try:
+            root = os.fstat(self.root_descriptor)
+            held_root = os.fstat(root_identity.descriptor)
+            lock = os.fstat(self.lock_descriptor)
+            expected_lock = os.stat(
+                ORCHESTRATOR_LOCK_NAME,
+                dir_fd=root_identity.descriptor,
+                follow_symlinks=False,
+            )
+        except OSError as error:
+            raise ProtocolError(
+                f"cannot revalidate inherited campaign lock: {error}"
+            ) from error
+        if (
+            not stat.S_ISDIR(root.st_mode)
+            or (root.st_dev, root.st_ino)
+            != (self.record["root_device"], self.record["root_inode"])
+            or (held_root.st_dev, held_root.st_ino)
+            != (self.record["root_device"], self.record["root_inode"])
+            or not stat.S_ISREG(lock.st_mode)
+            or stat.S_IMODE(lock.st_mode) != 0o600
+            or lock.st_size != 0
+            or (lock.st_dev, lock.st_ino)
+            != (self.record["lock_device"], self.record["lock_inode"])
+            or (expected_lock.st_dev, expected_lock.st_ino)
+            != (self.record["lock_device"], self.record["lock_inode"])
+            or any(
+                os.get_inheritable(descriptor)
+                for descriptor in (
+                    self.root_descriptor,
+                    self.lock_descriptor,
+                    self.record_descriptor,
+                )
+            )
+        ):
+            raise ProtocolError("inherited campaign lock identity changed")
+        for descriptor in (self.root_descriptor, self.lock_descriptor):
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise ProtocolError(
+                    "inherited campaign lock does not share the held open-file description"
+                ) from error
+
+    def close(self) -> None:
+        descriptors = (
+            self.record_descriptor,
+            self.lock_descriptor,
+            self.root_descriptor,
+        )
+        self.record_descriptor = -1
+        self.lock_descriptor = -1
+        self.root_descriptor = -1
+        failure = None
+        for descriptor in descriptors:
+            if descriptor < 0:
+                continue
+            try:
+                # Do not LOCK_UN: these descriptors share the parent's open-file
+                # descriptions, so unlocking here would release parent ownership.
+                os.close(descriptor)
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+        if failure is not None:
+            raise failure
 
 
 def prepare_empty_root_identity(root: pathlib.Path) -> PreparedRootIdentity:

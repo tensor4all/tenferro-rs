@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import contextlib
+import fcntl
 import importlib.util
 import io
 import json
@@ -1880,6 +1881,436 @@ class AllocationCampaignTests(unittest.TestCase):
                 lock.assert_root_identity()
             finally:
                 lock.close()
+
+    def test_inherited_capability_rejects_missing_forged_and_wrong_descriptors(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            args, _probes, _tenferro = fixture(root)
+            (root / protocol.ORCHESTRATOR_LOCK_NAME).chmod(0o600)
+            root_descriptor = outer_orchestrator._open_directory_descriptor(root)
+            outer_orchestrator.fcntl.flock(
+                root_descriptor, outer_orchestrator.fcntl.LOCK_EX
+            )
+            parent_identity = outer_orchestrator._linux_process_identity(os.getpid())
+
+            def seal(payload):
+                descriptor = os.memfd_create(
+                    "phase2e-test-forged-capability",
+                    os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
+                )
+                encoded = protocol._canonical_json_bytes(payload)
+                os.write(descriptor, encoded)
+                os.fchmod(descriptor, 0o400)
+                fcntl.fcntl(
+                    descriptor,
+                    fcntl.F_ADD_SEALS,
+                    protocol.CAMPAIGN_LOCK_CAPABILITY_SEALS,
+                )
+                return descriptor
+
+            source = """
+import os
+import pathlib
+from scripts import phase2e_protocol as protocol
+from scripts import run_phase2e as outer
+
+root = pathlib.Path(os.environ["PHASE2E_TEST_ROOT"])
+identity = protocol.PreparedRootIdentity(root)
+try:
+    try:
+        capability = protocol.InheritedCampaignLockCapability.discover(
+            identity,
+            stage="allocation/direct-current-main",
+            context_sha256="a" * 64,
+            reservation_id="reservation-1",
+            parent_identity=outer._linux_process_identity(os.getppid()),
+        )
+    except protocol.ProtocolError:
+        identity.revalidate()
+        raise SystemExit(0)
+    else:
+        capability.close()
+        raise SystemExit(9)
+finally:
+    identity.close()
+"""
+            try:
+                with outer_orchestrator.exclusive_lock_at(
+                    root_descriptor, protocol.ORCHESTRATOR_LOCK_NAME
+                ) as lock_descriptor:
+                    valid = protocol._campaign_lock_record_payload(
+                        stage="allocation/direct-current-main",
+                        context_sha256="a" * 64,
+                        reservation_id="reservation-1",
+                        root_descriptor=root_descriptor,
+                        lock_descriptor=lock_descriptor,
+                        parent_identity=parent_identity,
+                    )
+                    cases = [("missing-record", (root_descriptor, lock_descriptor))]
+                    wrong_lock = os.open(
+                        root / protocol.ORCHESTRATOR_LOCK_NAME,
+                        os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    )
+                    wrong_root = os.open(
+                        root,
+                        os.O_RDONLY
+                        | os.O_DIRECTORY
+                        | os.O_CLOEXEC
+                        | os.O_NOFOLLOW,
+                    )
+                    records = []
+                    try:
+                        for name, field, descriptor in (
+                            ("wrong-lock-ofd", "lock_descriptor", wrong_lock),
+                            ("wrong-root-ofd", "root_descriptor", wrong_root),
+                        ):
+                            payload = dict(valid)
+                            payload[field] = descriptor
+                            record = seal(payload)
+                            records.append(record)
+                            cases.append(
+                                (
+                                    name,
+                                    (
+                                        root_descriptor
+                                        if field != "root_descriptor"
+                                        else wrong_root,
+                                        lock_descriptor
+                                        if field != "lock_descriptor"
+                                        else wrong_lock,
+                                        record,
+                                    ),
+                                )
+                            )
+                        wrong_parent_payload = dict(valid)
+                        wrong_parent_payload["parent_start_ticks"] += 1
+                        wrong_parent_record = seal(wrong_parent_payload)
+                        records.append(wrong_parent_record)
+                        cases.append(
+                            (
+                                "wrong-parent",
+                                (
+                                    root_descriptor,
+                                    lock_descriptor,
+                                    wrong_parent_record,
+                                ),
+                            )
+                        )
+                        environment = dict(os.environ)
+                        environment["PHASE2E_TEST_ROOT"] = str(root)
+                        for name, inherited in cases:
+                            with self.subTest(case=name):
+                                completed = subprocess.run(
+                                    [os.sys.executable, "-c", source],
+                                    cwd=pathlib.Path(__file__).resolve().parent.parent,
+                                    env=environment,
+                                    pass_fds=inherited,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=2,
+                                    check=False,
+                                )
+                                self.assertEqual(
+                                    completed.returncode,
+                                    0,
+                                    msg=(
+                                        f"case={name} stdout={completed.stdout!r} "
+                                        f"stderr={completed.stderr!r}"
+                                    ),
+                                )
+                    finally:
+                        for descriptor in records:
+                            os.close(descriptor)
+                        os.close(wrong_root)
+                        os.close(wrong_lock)
+            finally:
+                outer_orchestrator.fcntl.flock(
+                    root_descriptor, outer_orchestrator.fcntl.LOCK_UN
+                )
+                os.close(root_descriptor)
+
+    def test_outer_owned_lock_capability_enters_allocation_without_self_deadlock(
+        self,
+    ) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            args, _probes, _tenferro = fixture(root)
+            (root / protocol.ORCHESTRATOR_LOCK_NAME).chmod(0o600)
+            root_descriptor = outer_orchestrator._open_directory_descriptor(root)
+            record = None
+            try:
+                outer_orchestrator.fcntl.flock(
+                    root_descriptor, outer_orchestrator.fcntl.LOCK_EX
+                )
+                with outer_orchestrator.exclusive_lock_at(
+                    root_descriptor, protocol.ORCHESTRATOR_LOCK_NAME
+                ) as lock_descriptor:
+                    inherited = [root_descriptor, lock_descriptor]
+                    if hasattr(protocol, "SealedCampaignLockRecord"):
+                        record = protocol.SealedCampaignLockRecord.create(
+                            stage="allocation/direct-current-main",
+                            context_sha256="a" * 64,
+                            reservation_id="reservation-1",
+                            root_descriptor=root_descriptor,
+                            lock_descriptor=lock_descriptor,
+                            parent_identity=outer_orchestrator._linux_process_identity(
+                                os.getpid()
+                            ),
+                        )
+                        inherited.append(record.descriptor)
+                    source = """
+import json
+import os
+import pathlib
+import subprocess
+import sys
+from scripts import phase2e_protocol as protocol
+from scripts import run_phase2e as outer
+from scripts import run_phase2e_allocation_campaign as allocation
+
+ledger = pathlib.Path(os.environ["PHASE2E_TEST_LEDGER"])
+if hasattr(protocol, "InheritedCampaignLockCapability"):
+    identity = protocol.PreparedRootIdentity(ledger.parent)
+    capability = protocol.InheritedCampaignLockCapability.discover(
+        identity,
+        stage="allocation/direct-current-main",
+        context_sha256="a" * 64,
+        reservation_id="reservation-1",
+        parent_identity=outer._linux_process_identity(os.getppid()),
+    )
+    try:
+        inherited_identities = [
+            [os.fstat(descriptor).st_dev, os.fstat(descriptor).st_ino]
+            for descriptor in (
+                capability.root_descriptor,
+                capability.lock_descriptor,
+                capability.record_descriptor,
+            )
+        ]
+        leakage_probe = '''
+import json
+import os
+import sys
+expected = {tuple(item) for item in json.loads(sys.argv[1])}
+for name in os.listdir("/proc/self/fd"):
+    try:
+        metadata = os.fstat(int(name))
+    except (OSError, ValueError):
+        continue
+    if (metadata.st_dev, metadata.st_ino) in expected:
+        raise SystemExit(7)
+'''
+        leaked = subprocess.run(
+            [sys.executable, "-c", leakage_probe, json.dumps(inherited_identities)],
+            check=False,
+        )
+        if leaked.returncode:
+            raise SystemExit(leaked.returncode)
+        lock = allocation.EvidenceLock.acquire(
+            ledger,
+            inherited_capability=capability,
+            stage="allocation/direct-current-main",
+            context_sha256="a" * 64,
+            reservation_id="reservation-1",
+        )
+        lock.close()
+    finally:
+        capability.close()
+        identity.close()
+else:
+    lock = allocation.EvidenceLock.acquire(ledger)
+    lock.close()
+"""
+                    environment = dict(os.environ)
+                    environment["PHASE2E_TEST_LEDGER"] = str(args.ledger)
+                    completed = subprocess.run(
+                        [os.sys.executable, "-c", source],
+                        cwd=pathlib.Path(__file__).resolve().parent.parent,
+                        env=environment,
+                        pass_fds=tuple(inherited),
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        completed.returncode,
+                        0,
+                        msg=f"stdout={completed.stdout!r}\nstderr={completed.stderr!r}",
+                    )
+            finally:
+                if record is not None:
+                    record.close()
+                outer_orchestrator.fcntl.flock(
+                    root_descriptor, outer_orchestrator.fcntl.LOCK_UN
+                )
+                os.close(root_descriptor)
+
+    def test_standalone_allocation_waits_for_outer_lock_then_completes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary).resolve()
+            args, _probes, _tenferro = fixture(root)
+            (root / protocol.ORCHESTRATOR_LOCK_NAME).chmod(0o600)
+            root_descriptor = outer_orchestrator._open_directory_descriptor(root)
+            outer_orchestrator.fcntl.flock(
+                root_descriptor, outer_orchestrator.fcntl.LOCK_EX
+            )
+            environment = dict(os.environ)
+            environment["PHASE2E_TEST_LEDGER"] = str(args.ledger)
+            source = """
+import os
+import pathlib
+from scripts import run_phase2e_allocation_campaign as allocation
+lock = allocation.EvidenceLock.acquire(
+    pathlib.Path(os.environ["PHASE2E_TEST_LEDGER"])
+)
+lock.close()
+"""
+            process = None
+            try:
+                with outer_orchestrator.exclusive_lock_at(
+                    root_descriptor, protocol.ORCHESTRATOR_LOCK_NAME
+                ):
+                    process = subprocess.Popen(
+                        [os.sys.executable, "-c", source],
+                        cwd=pathlib.Path(__file__).resolve().parent.parent,
+                        env=environment,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    time.sleep(0.1)
+                    self.assertIsNone(process.poll())
+                self.assertIsNone(process.poll())
+                outer_orchestrator.fcntl.flock(
+                    root_descriptor, outer_orchestrator.fcntl.LOCK_UN
+                )
+                stdout, stderr = process.communicate(timeout=2)
+                self.assertEqual(
+                    process.returncode,
+                    0,
+                    msg=f"stdout={stdout!r}\nstderr={stderr!r}",
+                )
+            finally:
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=2)
+                try:
+                    outer_orchestrator.fcntl.flock(
+                        root_descriptor, outer_orchestrator.fcntl.LOCK_UN
+                    )
+                finally:
+                    os.close(root_descriptor)
+
+    def test_inherited_capability_rejects_root_and_lock_path_replacement(
+        self,
+    ) -> None:
+        source = """
+import os
+import pathlib
+from scripts import phase2e_protocol as protocol
+from scripts import run_phase2e as outer
+
+identity = protocol.PreparedRootIdentity(
+    pathlib.Path(os.environ["PHASE2E_TEST_ROOT"])
+)
+try:
+    try:
+        capability = protocol.InheritedCampaignLockCapability.discover(
+            identity,
+            stage="allocation/direct-current-main",
+            context_sha256="a" * 64,
+            reservation_id="reservation-1",
+            parent_identity=outer._linux_process_identity(os.getppid()),
+        )
+    except protocol.ProtocolError:
+        raise SystemExit(0)
+    else:
+        capability.close()
+        raise SystemExit(9)
+finally:
+    identity.close()
+"""
+        for replacement in ("root", "lock"):
+            with self.subTest(
+                replacement=replacement
+            ), tempfile.TemporaryDirectory() as temporary:
+                base = pathlib.Path(temporary).resolve()
+                root = base / "evidence"
+                root.mkdir(mode=0o700)
+                fixture(root)
+                lock_path = root / protocol.ORCHESTRATOR_LOCK_NAME
+                lock_path.chmod(0o600)
+                root_descriptor = outer_orchestrator._open_directory_descriptor(root)
+                lock_descriptor = os.open(
+                    lock_path,
+                    os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+                )
+                outer_orchestrator.fcntl.flock(
+                    root_descriptor, outer_orchestrator.fcntl.LOCK_EX
+                )
+                outer_orchestrator.fcntl.flock(
+                    lock_descriptor, outer_orchestrator.fcntl.LOCK_EX
+                )
+                record = protocol.SealedCampaignLockRecord.create(
+                    stage="allocation/direct-current-main",
+                    context_sha256="a" * 64,
+                    reservation_id="reservation-1",
+                    root_descriptor=root_descriptor,
+                    lock_descriptor=lock_descriptor,
+                    parent_identity=outer_orchestrator._linux_process_identity(
+                        os.getpid()
+                    ),
+                )
+                displaced = base / f"retained-{replacement}"
+                try:
+                    if replacement == "lock":
+                        lock_path.rename(displaced)
+                        lock_path.touch(mode=0o600)
+                        lock_path.chmod(0o600)
+                    else:
+                        root.rename(displaced)
+                        root.mkdir(mode=0o700)
+                    environment = dict(os.environ)
+                    environment["PHASE2E_TEST_ROOT"] = str(root)
+                    completed = subprocess.run(
+                        [os.sys.executable, "-c", source],
+                        cwd=pathlib.Path(__file__).resolve().parent.parent,
+                        env=environment,
+                        pass_fds=(
+                            root_descriptor,
+                            lock_descriptor,
+                            record.descriptor,
+                        ),
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        completed.returncode,
+                        0,
+                        msg=f"stdout={completed.stdout!r}\nstderr={completed.stderr!r}",
+                    )
+                finally:
+                    if replacement == "lock":
+                        lock_path.unlink()
+                        displaced.rename(lock_path)
+                    else:
+                        root.rmdir()
+                        displaced.rename(root)
+                    record.close()
+                    outer_orchestrator.fcntl.flock(
+                        lock_descriptor, outer_orchestrator.fcntl.LOCK_UN
+                    )
+                    os.close(lock_descriptor)
+                    outer_orchestrator.fcntl.flock(
+                        root_descriptor, outer_orchestrator.fcntl.LOCK_UN
+                    )
+                    os.close(root_descriptor)
 
     def test_outer_and_allocation_consume_shared_lock_name(self) -> None:
         runner = load_runner()
