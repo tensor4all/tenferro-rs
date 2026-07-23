@@ -1,4 +1,5 @@
 use tenferro_cpu::CpuBackend;
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::{
     DType, DotGeneralConfig, Error, ErrorPhase, GatherConfig, GraphCompiler, GraphExecutor,
     PadConfig, ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TensorRead, TensorValue,
@@ -18,6 +19,29 @@ fn runtime_crate_exposes_traced_graph_execution_api() {
         .unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+}
+
+#[test]
+fn runtime_program_api_is_public_read_only_and_bounded_debug() {
+    use tenferro_runtime::program::{
+        CoreSemanticOp, ProgramInputSpec, SemanticProgramBuilder, SemanticTransform,
+    };
+
+    fn accepts_transform_object(_: &dyn SemanticTransform) {}
+
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let output = builder.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
+    let frozen = builder.finish(&[output]).unwrap();
+    let operation = frozen.program.operations().next().unwrap();
+
+    assert_eq!(frozen.program.inputs(), &[input]);
+    assert_eq!(frozen.program.outputs(), &[output]);
+    assert!(format!("{operation:?}").len() < 256);
+    assert!(format!("{:?}", frozen.program).len() < 256);
+    let _ = accepts_transform_object;
 }
 
 #[test]

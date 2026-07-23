@@ -54,7 +54,10 @@ impl SemanticProgramBuilder {
     ///
     /// # Errors
     ///
-    /// Returns a typed error for foreign/computed values or duplicate bindings.
+    /// Returns [`ProgramBuildError::ForeignValue`] for a token from another
+    /// builder, [`ProgramBuildError::BindingTargetNotInput`] for a computed
+    /// value, or [`ProgramBuildError::DuplicateBinding`] when the input already
+    /// has a binding.
     pub fn bind_input(
         &mut self,
         input: ProgramValue,
@@ -125,8 +128,12 @@ impl SemanticProgramBuilder {
     ///
     /// # Errors
     ///
-    /// Returns a typed error for foreign roots/bindings or an unrepresentable
-    /// destination value count. On error this builder is unchanged.
+    /// Returns [`ProgramBuildError::ForeignImportRoot`] for a root outside the
+    /// source program, [`ProgramBuildError::ForeignBindings`] for bindings
+    /// frozen with another program, [`ProgramBuildError::InvalidImport`] for
+    /// invalid source structure, or [`ProgramBuildError::TooManyValues`] when
+    /// the destination cannot represent the imported values. On error this
+    /// builder is unchanged.
     pub fn import(
         &mut self,
         request: ProgramImport<'_>,
@@ -145,8 +152,10 @@ impl SemanticProgramBuilder {
     ///
     /// # Errors
     ///
-    /// Returns a typed error for foreign outputs, invalid SSA structure, or a
-    /// tensor binding that does not match its input declaration.
+    /// Returns [`ProgramFinishError::ForeignOutput`] for an output outside this
+    /// builder, [`ProgramFinishError::StructuralValidation`] for invalid SSA
+    /// structure, or [`ProgramFinishError::BindingFinalization`] when a tensor
+    /// binding does not match its input declaration.
     pub fn finish(self, outputs: &[ProgramValue]) -> Result<FrozenProgram, ProgramFinishError> {
         if outputs
             .iter()
@@ -226,6 +235,64 @@ impl SemanticProgramBuilder {
     }
 
     /// Add one extension semantic operation with explicit effects and aliases.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::any::Any;
+    /// use std::hash::Hasher;
+    /// use std::sync::Arc;
+    /// use tenferro_ops::dim_expr::DimExpr;
+    /// use tenferro_ops::ext_op::{
+    ///     ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp,
+    /// };
+    /// use tenferro_ops::{ExtensionShapeContext, SymDim};
+    /// use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
+    /// use tenferro_tensor::DType;
+    ///
+    /// #[derive(Clone, Debug)]
+    /// struct Identity;
+    /// impl ExtensionOp for Identity {
+    ///     fn family_id(&self) -> &'static str { "example.identity.v1" }
+    ///     fn payload_hash(&self, hasher: &mut dyn Hasher) {
+    ///         hasher.write_u8(1);
+    ///     }
+    ///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+    ///         other.as_any().is::<Self>()
+    ///     }
+    ///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+    ///         Arc::new(self.clone())
+    ///     }
+    ///     fn as_any(&self) -> &dyn Any { self }
+    ///     fn input_count(&self) -> usize { 1 }
+    ///     fn output_count(&self) -> usize { 1 }
+    ///     fn infer_output_meta(
+    ///         &self,
+    ///         context: &mut ExtensionShapeContext<'_>,
+    ///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+    ///         Ok(vec![(
+    ///             context.input_dtype(0)?,
+    ///             context.input_shape(0)?.to_vec(),
+    ///         )])
+    ///     }
+    ///     fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+    ///         ExtensionEffectDeclaration::Declared(&[])
+    ///     }
+    ///     fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+    ///         ExtensionAliasDeclaration::AllFresh
+    ///     }
+    /// }
+    ///
+    /// let mut builder = SemanticProgramBuilder::new();
+    /// let input = builder.input(ProgramInputSpec::new(
+    ///     DType::F64,
+    ///     [DimExpr::Const(2)],
+    /// ))?;
+    /// let output = builder.add_extension(Arc::new(Identity), &[input])?[0];
+    /// let frozen = builder.finish(&[output])?;
+    /// assert_eq!(frozen.program.operations().count(), 1);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
     ///
     /// # Errors
     ///

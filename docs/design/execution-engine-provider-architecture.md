@@ -167,6 +167,43 @@ an acyclic dependency graph and must not change the artifact semantics.
 service, trace integration, and cache are closely tied to runtime-facing
 workflows. It may be split later without changing the program artifact.
 
+### Phase 3 A0 implementation checkpoint (2026-07-24)
+
+The first program-artifact checkpoint is implemented in
+`tenferro_runtime::program`. It freezes the following contracts before any
+legacy graph caller is migrated:
+
+- opaque builder-owned `ProgramValue` and `BindingKey` identities with
+  constant-form Debug output and typed foreign-value errors;
+- a public non-exhaustive `CoreSemanticOp` vocabulary plus extension
+  operations that must explicitly declare effects and aliases;
+- borrowed immutable operation, metadata, provenance, guard, effect, alias,
+  placement, input, and output views;
+- separate `ProgramBindings` storage for tensor defaults and large constants;
+- consuming, failure-atomic program/binding freeze and failure-atomic
+  dependency import, including empty and duplicate ordered roots;
+- exact, bounded, and unknown symbolic extents, conservatively preserving a
+  non-exact input guarantee through core and extension inference;
+- a freeze-time cached SHA-256 `SemanticFingerprint` plus normalized exact
+  equality. Bindings and diagnostic provenance are excluded, while semantic
+  operations, metadata, constants, guards, effects, aliases, placement, and
+  output order are included;
+- object-safe validation-preserving semantic transforms. Transform import
+  preserves all bindings, returned roots are destination-builder-local, and
+  collision buckets verify exact input structure after compact-key lookup.
+
+The program module has no dependency on provider, resource-domain,
+scheduling, execution, graph, or AD modules. Its public objects expose no raw
+slots, nonces, mutable frozen storage, source-to-destination remap, or
+operation index.
+
+This checkpoint does not claim Phase 3 complete. P3-A1 still owns the sole
+private forward staging adapter and XLA/einsum caller migration. P3-A2/A3
+still own `TraceContext`, pure `GraphCompiler`, `CompiledGraph`, semantic AD
+for core/FFT/einsum/linalg/sparse/tropical, production wiring of the transform
+cache, and deletion of public `GraphProgram`/`ExecProgram` and old semantic
+rule surfaces.
+
 ## Compiler and Artifact Boundaries
 
 ### `GraphCompiler` and `SemanticProgram`

@@ -252,6 +252,18 @@ pub enum SemanticOpRef<'a> {
     Extension(&'a dyn ExtensionOp),
 }
 
+impl std::fmt::Debug for SemanticOpRef<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Core(_) => formatter.write_str("SemanticOpRef::Core(<bounded>)"),
+            Self::Extension(op) => formatter
+                .debug_tuple("SemanticOpRef::Extension")
+                .field(&op.family_id())
+                .finish(),
+        }
+    }
+}
+
 /// Allocation-free immutable view of one semantic operation.
 #[derive(Clone, Copy)]
 pub struct SemanticOperationView<'a> {
@@ -304,5 +316,19 @@ impl<'a> SemanticOperationView<'a> {
     /// Return the unresolved placement constraint.
     pub fn placement(self) -> SemanticPlacementConstraint {
         self.operation.placement
+    }
+}
+
+impl std::fmt::Debug for SemanticOperationView<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SemanticOperationView")
+            .field("op", &self.op())
+            .field("inputs", &self.inputs().len())
+            .field("outputs", &self.outputs().len())
+            .field("effects", &self.effects().len())
+            .field("aliases", &self.aliases().len())
+            .field("shape_guards", &self.shape_guards().len())
+            .finish()
     }
 }

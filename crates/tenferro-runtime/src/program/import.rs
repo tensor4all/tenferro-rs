@@ -4,8 +4,11 @@ use super::{ProgramBindings, ProgramValue, SemanticProgram};
 
 /// Read-only request to import the dependency closure of ordered roots.
 pub struct ProgramImport<'a> {
+    /// Immutable source semantic program.
     pub program: &'a SemanticProgram,
+    /// Tensor bindings frozen with the source program.
     pub bindings: &'a ProgramBindings,
+    /// Ordered source roots to remap; empty and duplicate roots are valid.
     pub roots: &'a [ProgramValue],
 }
 

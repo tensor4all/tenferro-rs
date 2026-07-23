@@ -11,6 +11,12 @@ pub enum ProgramBuildError {
     /// Import bindings were frozen for another semantic program.
     #[error("import bindings do not belong to the source semantic program")]
     ForeignBindings,
+    /// Structured control flow is reserved for the later region/block model.
+    #[error("semantic control-flow construct {construct:?} is not supported")]
+    UnsupportedControlFlow {
+        /// Frontend construct that could not be represented.
+        construct: &'static str,
+    },
     /// A frozen source program failed import-time structural validation.
     #[error("source semantic program is invalid for import: {source}")]
     InvalidImport {
@@ -124,17 +130,27 @@ pub enum ProgramBindingError {
     /// Tensor dtype differs from the input declaration.
     #[error("tensor binding dtype mismatch: expected {expected:?}, got {actual:?}")]
     DTypeMismatch {
+        /// Declared input dtype.
         expected: tenferro_tensor::DType,
+        /// Bound tensor dtype.
         actual: tenferro_tensor::DType,
     },
     /// Tensor rank differs from the input declaration.
     #[error("tensor binding rank mismatch: expected {expected}, got {actual}")]
-    RankMismatch { expected: usize, actual: usize },
+    RankMismatch {
+        /// Declared input rank.
+        expected: usize,
+        /// Bound tensor rank.
+        actual: usize,
+    },
     /// A statically exact dimension differs from the input declaration.
     #[error("tensor binding extent mismatch at axis {axis}: expected {expected}, got {actual}")]
     ExactExtentMismatch {
+        /// Mismatching axis.
         axis: usize,
+        /// Declared exact extent.
         expected: usize,
+        /// Bound tensor extent.
         actual: usize,
     },
     /// A bounded dimension exceeds the declared upper bound.
@@ -142,8 +158,11 @@ pub enum ProgramBindingError {
         "tensor binding extent exceeds upper bound at axis {axis}: bound {bound}, got {actual}"
     )]
     UpperBoundExceeded {
+        /// Axis whose bound was exceeded.
         axis: usize,
+        /// Declared upper bound.
         bound: usize,
+        /// Bound tensor extent.
         actual: usize,
     },
 }
@@ -158,12 +177,14 @@ pub enum ProgramFinishError {
     /// Frozen structure failed an invariant check.
     #[error("semantic-program structural validation failed: {source}")]
     StructuralValidation {
+        /// Typed structural invariant failure.
         #[source]
         source: ProgramStructuralError,
     },
     /// A tensor default or large constant does not match its input declaration.
     #[error("semantic-program binding finalization failed: {source}")]
     BindingFinalization {
+        /// Typed binding mismatch.
         #[source]
         source: ProgramBindingError,
     },

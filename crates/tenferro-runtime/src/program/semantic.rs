@@ -102,7 +102,9 @@ impl fmt::Debug for SemanticProgram {
 /// One atomically frozen semantic program and its separate tensor bindings.
 #[derive(Clone)]
 pub struct FrozenProgram {
+    /// Immutable backend-neutral semantic structure.
     pub program: Arc<SemanticProgram>,
+    /// Process-local tensor defaults and large constants.
     pub bindings: ProgramBindings,
 }
 

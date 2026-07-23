@@ -28,6 +28,13 @@ pub struct SemanticTransformContext<'a> {
 
 impl SemanticTransformContext<'_> {
     /// Import source structure, bindings, and ordered roots atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticTransformError::Build`] when the underlying
+    /// [`SemanticProgramBuilder`](super::SemanticProgramBuilder) rejects
+    /// foreign roots/bindings, invalid structure, or an unrepresentable value
+    /// count.
     pub fn import_program(
         &mut self,
         input: &FrozenProgram,
@@ -49,11 +56,50 @@ impl SemanticTransformContext<'_> {
 }
 
 /// Object-safe transformation over immutable semantic programs and bindings.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::program::{
+///     FrozenProgram, ProgramValue, SemanticTransform, SemanticTransformContext,
+///     SemanticTransformError, TransformIdentity,
+/// };
+///
+/// struct Identity;
+/// impl SemanticTransform for Identity {
+///     fn identity(&self) -> TransformIdentity {
+///         TransformIdentity::from_bytes([7; 16])
+///     }
+///
+///     fn apply(
+///         &self,
+///         context: &mut SemanticTransformContext<'_>,
+///         input: &FrozenProgram,
+///     ) -> Result<Box<[ProgramValue]>, SemanticTransformError> {
+///         Ok(context
+///             .import_program(input, input.program.outputs())?
+///             .roots()
+///             .into())
+///     }
+/// }
+///
+/// fn accepts_object_safe(_: &dyn SemanticTransform) {}
+/// accepts_object_safe(&Identity);
+/// ```
 pub trait SemanticTransform: Send + Sync {
     /// Return caller-stable identity including transform configuration.
     fn identity(&self) -> TransformIdentity;
 
     /// Import/build into the supplied fresh destination and return local roots.
+    ///
+    /// # Errors
+    ///
+    /// Implementations return [`SemanticTransformError::Build`] for validated
+    /// builder/import failures or [`SemanticTransformError::Rejected`] when
+    /// their semantic policy does not support the input. The compiler driver
+    /// additionally reports [`SemanticTransformError::ForeignReturnedValue`],
+    /// [`SemanticTransformError::DroppedBindings`], or
+    /// [`SemanticTransformError::Finish`] after this callback returns.
     fn apply(
         &self,
         context: &mut SemanticTransformContext<'_>,

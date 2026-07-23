@@ -178,3 +178,58 @@ fn traced_metadata_registration_is_fallible_without_panic_helpers() {
         "concatenate metadata registration must not panic"
     );
 }
+
+#[test]
+fn semantic_program_module_stays_opaque_and_dependency_neutral() {
+    for path in [
+        "crates/tenferro-runtime/src/program/bindings.rs",
+        "crates/tenferro-runtime/src/program/builder.rs",
+        "crates/tenferro-runtime/src/program/error.rs",
+        "crates/tenferro-runtime/src/program/identity.rs",
+        "crates/tenferro-runtime/src/program/import.rs",
+        "crates/tenferro-runtime/src/program/metadata.rs",
+        "crates/tenferro-runtime/src/program/mod.rs",
+        "crates/tenferro-runtime/src/program/op.rs",
+        "crates/tenferro-runtime/src/program/semantic.rs",
+        "crates/tenferro-runtime/src/program/transform.rs",
+        "crates/tenferro-runtime/src/program/value.rs",
+    ] {
+        let source = repo_file(path);
+        assert_no_panic_helpers(path, &source);
+        for forbidden in [
+            "crate::provider",
+            "crate::resource",
+            "crate::scheduler",
+            "crate::graph",
+            "crate::exec",
+            "crate::ad",
+            "tenferro_ad",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} must not depend on forbidden runtime/AD layer `{forbidden}`"
+            );
+        }
+    }
+
+    let values = repo_file("crates/tenferro-runtime/src/program/value.rs");
+    for exposed in ["pub slot:", "pub owner:", "pub nonce:"] {
+        assert!(
+            !values.contains(exposed),
+            "opaque program identities must not expose `{exposed}`"
+        );
+    }
+
+    let program = repo_file("crates/tenferro-runtime/src/program/semantic.rs");
+    for mutable_escape in [
+        "operations_mut",
+        "values_mut",
+        "outputs_mut",
+        "source_to_local",
+    ] {
+        assert!(
+            !program.contains(mutable_escape),
+            "frozen semantic program leaked `{mutable_escape}`"
+        );
+    }
+}
