@@ -448,6 +448,24 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
     /// successful [`Self::infer_output_meta`] call.
     fn output_count(&self) -> usize;
 
+    /// Declare observable semantic effects for this extension payload.
+    ///
+    /// The compatibility default is deliberately `Undeclared`, not pure.
+    /// Semantic-program construction rejects an undeclared payload so an
+    /// extension cannot silently acquire purity during migration.
+    fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+        ExtensionEffectDeclaration::Undeclared
+    }
+
+    /// Declare semantic output aliasing for this extension payload.
+    ///
+    /// The compatibility default is deliberately `Undeclared`, not fresh.
+    /// Execution-only users may continue to carry an older payload, while
+    /// semantic-program construction requires an explicit declaration.
+    fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+        ExtensionAliasDeclaration::Undeclared
+    }
+
     // ----- Shape and dtype inference (spec Section 7) -----
 
     /// Infer output dtypes and shapes for each output slot.
@@ -523,6 +541,79 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
     }
 
     // AD rules are registered separately; see the role-specific rule traits.
+}
+
+/// Access mode for one extension-declared semantic resource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ExtensionEffectAccess {
+    /// Read-only access.
+    Read,
+    /// Mutating access.
+    Write,
+}
+
+/// Backend-neutral resource access declared by an extension payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ExtensionEffect {
+    /// Stable versioned resource family.
+    pub family: &'static str,
+    /// Family-local resource identity.
+    pub key: u64,
+    /// Read or write access.
+    pub access: ExtensionEffectAccess,
+}
+
+/// Explicit effect declaration returned by an extension payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtensionEffectDeclaration<'a> {
+    /// The payload has not been migrated to the semantic contract.
+    Undeclared,
+    /// Complete ordered effect list; an empty slice explicitly means pure.
+    Declared(&'a [ExtensionEffect]),
+}
+
+/// One extension-declared output alias.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ExtensionAlias {
+    /// The output is semantically fresh.
+    Fresh {
+        /// Operation-local output index.
+        output: usize,
+    },
+    /// The output is a view of an input.
+    ViewOf {
+        /// Operation-local output index.
+        output: usize,
+        /// Operation-local input index.
+        input: usize,
+    },
+    /// The output must alias an input.
+    MustAlias {
+        /// Operation-local output index.
+        output: usize,
+        /// Operation-local input index.
+        input: usize,
+    },
+    /// The output aliases an external typed resource.
+    ExternalAlias {
+        /// Operation-local output index.
+        output: usize,
+        /// Stable versioned resource family.
+        family: &'static str,
+        /// Family-local resource identity.
+        key: u64,
+    },
+}
+
+/// Explicit alias declaration returned by an extension payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtensionAliasDeclaration<'a> {
+    /// The payload has not been migrated to the semantic contract.
+    Undeclared,
+    /// Every output is semantically fresh.
+    AllFresh,
+    /// Complete ordered alias list.
+    Declared(&'a [ExtensionAlias]),
 }
 
 /// Definitional JVP rule provider for an extension family.
