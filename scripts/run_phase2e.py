@@ -34,6 +34,14 @@ INDEX_LOCK_PATH = pathlib.Path("docs/worklogs/.phase2e-index.lock")
 PRESERVATION_BRANCH = "origin/codex/execution-engine-through-phase9"
 ISSUE_NUMBER = 1436
 
+
+def campaign_index_paths(repository: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+    """Return the only repository-owned Phase 2E index and lock paths."""
+    repository = pathlib.Path(repository).resolve(strict=True)
+    if not repository.is_dir():
+        raise protocol.ProtocolError("Phase 2E repository is not a directory")
+    return repository / INDEX_PATH, repository / INDEX_LOCK_PATH
+
 STAGE_ORDER = (
     "timing-builds",
     "probe-builds",
@@ -854,12 +862,11 @@ def _read_index(path: pathlib.Path) -> dict[str, Any]:
 
 
 def mutate_index(
-    index_path: pathlib.Path,
+    repository: pathlib.Path,
     mutation: Callable[[dict[str, Any]], dict[str, Any]],
-    *,
-    lock_path: pathlib.Path,
 ) -> dict[str, Any]:
     """Serialize one atomic read-modify-write operation on the campaign index."""
+    index_path, lock_path = campaign_index_paths(repository)
     with exclusive_lock(lock_path):
         current = _read_index(index_path)
         updated = mutation(copy.deepcopy(current))
@@ -1137,8 +1144,7 @@ def continue_after_retry(
 
 def initialize_campaign(
     *,
-    index_path: pathlib.Path,
-    index_lock: pathlib.Path,
+    repository: pathlib.Path,
     root: pathlib.Path,
     reservation_id: str,
     candidate_sha: str,
@@ -1151,8 +1157,15 @@ def initialize_campaign(
 ) -> int:
     """Reserve globally, initialize locally, or self-seal atomically on failure."""
     root = pathlib.Path(root)
+    index_path, index_lock = campaign_index_paths(repository)
     with exclusive_lock(index_lock):
-        current = _read_index(index_path)
+        require_remote_index(repository, index_path, allow_absent=True)
+        if index_path.exists():
+            current = _read_index(index_path)
+        else:
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            current = new_campaign_index()
+            protocol.atomic_write_json(index_path, current)
         updated = record_active(
             current,
             reservation_id=reservation_id,
@@ -1829,8 +1842,7 @@ def validate_resume_identity(
 
 def record_index_root(
     *,
-    index_path: pathlib.Path,
-    index_lock: pathlib.Path,
+    repository: pathlib.Path,
     root: pathlib.Path,
     reservation_id: str,
     abandoned: bool = False,
@@ -1838,6 +1850,7 @@ def record_index_root(
     process_groups: Sequence[int] = (),
 ) -> dict[str, Any]:
     """Validate and transition one ACTIVE reservation to pending preservation."""
+    index_path, index_lock = campaign_index_paths(repository)
     with exclusive_lock(index_lock):
         with exclusive_lock(root / ".orchestrator.lock"):
             index = _read_index(index_path)
@@ -1941,8 +1954,6 @@ def require_remote_index(
 def record_preserved(
     *,
     repository: pathlib.Path,
-    index_path: pathlib.Path,
-    index_lock: pathlib.Path,
     root: pathlib.Path,
     reservation_id: str,
     preservation_commit: str,
@@ -1950,6 +1961,7 @@ def record_preserved(
     comment_fetcher: Callable[[str], str] = fetch_comment,
 ) -> dict[str, Any]:
     """Verify remote Git/root/index/comment preservation, then append PRESERVED."""
+    index_path, index_lock = campaign_index_paths(repository)
     with exclusive_lock(index_lock):
         index = _read_index(index_path)
         if index_state(index) != "PENDING_PRESERVATION":
@@ -2030,8 +2042,6 @@ def build_parser() -> argparse.ArgumentParser:
         command = subparsers.add_parser(name, exit_on_error=False)
         command.add_argument("--repository", required=True, type=pathlib.Path)
         command.add_argument("--root", required=True, type=pathlib.Path)
-        command.add_argument("--index", required=True, type=pathlib.Path)
-        command.add_argument("--index-lock", required=True, type=pathlib.Path)
         command.add_argument("--context", required=True, type=pathlib.Path)
         command.add_argument("--context-sha256", required=True)
         command.add_argument("--path", required=True)
@@ -2044,8 +2054,7 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--campaign-identity-digest", required=True)
             command.add_argument("--contract", required=True, type=pathlib.Path)
     record = subparsers.add_parser("record-index", exit_on_error=False)
-    record.add_argument("--index", required=True, type=pathlib.Path)
-    record.add_argument("--index-lock", required=True, type=pathlib.Path)
+    record.add_argument("--repository", required=True, type=pathlib.Path)
     record.add_argument("--root", required=True, type=pathlib.Path)
     record.add_argument("--reservation-id", required=True)
     record.add_argument("--abandoned", action="store_true")
@@ -2053,8 +2062,6 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--process-group", action="append", type=int, default=[])
     preserved = subparsers.add_parser("record-preserved", exit_on_error=False)
     preserved.add_argument("--repository", required=True, type=pathlib.Path)
-    preserved.add_argument("--index", required=True, type=pathlib.Path)
-    preserved.add_argument("--index-lock", required=True, type=pathlib.Path)
     preserved.add_argument("--root", required=True, type=pathlib.Path)
     preserved.add_argument("--reservation-id", required=True)
     preserved.add_argument("--preservation-commit", required=True)
@@ -2086,6 +2093,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "start":
             stage_context = load_stage_context(args.context, args.context_sha256)
             stage_context["context_path"] = str(args.context.resolve(strict=True))
+            index_path, index_lock = campaign_index_paths(args.repository)
             expected_context = {
                 "repository": str(args.repository.resolve(strict=True)),
                 "evidence_root": str(args.root.resolve(strict=False)),
@@ -2096,8 +2104,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "command_contract_digest": stage_context["command_contract_digest"],
                 "path": args.path,
                 "home": args.home,
-                "index": str(args.index.resolve(strict=False)),
-                "index_lock": str(args.index_lock.resolve(strict=False)),
+                "index": str(index_path),
+                "index_lock": str(index_lock),
             }
             for name, value in expected_context.items():
                 if stage_context[name] != value:
@@ -2112,13 +2120,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.experiment_identity_digest,
                 contract,
             )
-            require_remote_index(args.repository, args.index, allow_absent=True)
-            if not args.index.exists():
-                args.index.parent.mkdir(parents=True, exist_ok=True)
-                protocol.atomic_write_json(args.index, new_campaign_index())
             code = initialize_campaign(
-                index_path=args.index,
-                index_lock=args.index_lock,
+                repository=args.repository,
                 root=args.root,
                 reservation_id=args.reservation_id,
                 candidate_sha=args.candidate,
@@ -2155,8 +2158,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             runner = _subprocess_stage_runner(
                 args.context, args.context_sha256, args.repository
             )
-            with exclusive_lock(args.index_lock):
-                index = _read_index(args.index)
+            index_path, index_lock = campaign_index_paths(args.repository)
+            with exclusive_lock(index_lock):
+                index = _read_index(index_path)
                 if index_state(index) != "ACTIVE":
                     raise protocol.ProtocolError("campaign reservation is finalized")
                 active = index["events"][-1]
@@ -2192,8 +2196,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
         if args.command == "record-index":
             updated = record_index_root(
-                index_path=args.index,
-                index_lock=args.index_lock,
+                repository=args.repository,
                 root=args.root,
                 reservation_id=args.reservation_id,
                 abandoned=args.abandoned,
@@ -2205,8 +2208,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "record-preserved":
             updated = record_preserved(
                 repository=args.repository,
-                index_path=args.index,
-                index_lock=args.index_lock,
                 root=args.root,
                 reservation_id=args.reservation_id,
                 preservation_commit=args.preservation_commit,

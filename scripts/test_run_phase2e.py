@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from unittest import mock
 
 
@@ -29,6 +30,100 @@ class OuterOrchestratorTests(unittest.TestCase):
         ("git", "rev-parse", "HEAD"), cwd=REPOSITORY,
         check=True, capture_output=True, text=True,
     ).stdout.strip()
+
+    def test_global_index_paths_are_fixed_repository_constants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            self.assertEqual(
+                orchestrator.campaign_index_paths(repository),
+                (
+                    repository / orchestrator.INDEX_PATH,
+                    repository / orchestrator.INDEX_LOCK_PATH,
+                ),
+            )
+        parser = orchestrator.build_parser()
+        for command in ("start", "rerun-invalid-lane", "continue", "record-index"):
+            option_strings = {
+                option
+                for action in parser._subparsers._group_actions[0]
+                .choices[command]
+                ._actions
+                for option in action.option_strings
+            }
+            self.assertNotIn("--index", option_strings)
+            self.assertNotIn("--index-lock", option_strings)
+
+    def test_first_index_create_compare_and_reserve_share_one_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = pathlib.Path(directory).resolve()
+            (repository / "docs" / "worklogs").mkdir(parents=True)
+            root = repository / "docs" / "worklogs" / "root"
+            lock_held = False
+            root_lock_held = False
+            events = []
+
+            @contextmanager
+            def observed_lock(path):
+                nonlocal lock_held, root_lock_held
+                is_index = path == repository / orchestrator.INDEX_LOCK_PATH
+                if is_index:
+                    self.assertFalse(lock_held)
+                    lock_held = True
+                    events.append("index-lock-enter")
+                else:
+                    self.assertEqual(path, root / ".orchestrator.lock")
+                    self.assertTrue(lock_held)
+                    self.assertFalse(root_lock_held)
+                    root_lock_held = True
+                    events.append("root-lock-enter")
+                try:
+                    yield 1
+                finally:
+                    if is_index:
+                        self.assertFalse(root_lock_held)
+                        events.append("index-lock-exit")
+                        lock_held = False
+                    else:
+                        events.append("root-lock-exit")
+                        root_lock_held = False
+
+            def compare(_repository, index_path, *, allow_absent):
+                self.assertTrue(lock_held)
+                self.assertEqual(index_path, repository / orchestrator.INDEX_PATH)
+                self.assertTrue(allow_absent)
+                events.append("remote-compare")
+
+            with mock.patch.object(
+                orchestrator, "exclusive_lock", side_effect=observed_lock
+            ), mock.patch.object(
+                orchestrator, "require_remote_index", side_effect=compare
+            ), mock.patch.object(
+                orchestrator.protocol, "prepare_empty_root", side_effect=lambda path: path.mkdir()
+            ), mock.patch.object(
+                orchestrator, "seal_abandoned_root"
+            ):
+                code = orchestrator.initialize_campaign(
+                    repository=repository,
+                    root=root,
+                    reservation_id="r1",
+                    candidate_sha=self.CANDIDATE,
+                    candidate_tree_sha256="c" * 64,
+                    experiment_identity_digest="d" * 64,
+                    campaign_identity_digest="e" * 64,
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                events,
+                [
+                    "index-lock-enter",
+                    "remote-compare",
+                    "root-lock-enter",
+                    "root-lock-exit",
+                    "index-lock-exit",
+                ],
+            )
+            index = orchestrator._read_index(repository / orchestrator.INDEX_PATH)
+            self.assertEqual(orchestrator.index_state(index), "ACTIVE")
 
     def make_stage_context(self, base: pathlib.Path) -> tuple[pathlib.Path, dict]:
         repository = base / "repository"
@@ -837,19 +932,20 @@ class OuterOrchestratorTests(unittest.TestCase):
 
     def test_index_updates_are_serialized(self):
         with tempfile.TemporaryDirectory() as directory:
-            index_path = pathlib.Path(directory) / "index.json"
+            repository = pathlib.Path(directory).resolve()
+            index_path = repository / orchestrator.INDEX_PATH
+            index_path.parent.mkdir(parents=True)
             protocol.atomic_write_json(index_path, orchestrator.new_campaign_index())
             failures = []
 
             def update(number: int) -> None:
                 try:
                     orchestrator.mutate_index(
-                        index_path,
+                        repository,
                         lambda value: {
                             **value,
                             "audit": sorted([*value.get("audit", []), number]),
                         },
-                        lock_path=pathlib.Path(directory) / "index.lock",
                     )
                 except BaseException as error:
                     failures.append(error)
@@ -969,25 +1065,24 @@ class OuterOrchestratorTests(unittest.TestCase):
 
     def test_initialization_failure_self_seals_and_records_pending(self):
         with tempfile.TemporaryDirectory() as directory:
-            base = pathlib.Path(directory)
-            index_path = base / "index.json"
-            lock_path = base / "index.lock"
-            root = base / "root"
-            protocol.atomic_write_json(index_path, orchestrator.new_campaign_index())
+            base = pathlib.Path(directory).resolve()
+            (base / "docs" / "worklogs").mkdir(parents=True)
+            index_path = base / orchestrator.INDEX_PATH
+            root = base / "docs" / "worklogs" / "root"
             def fail(_root):
                 raise OSError("boom")
 
-            code = orchestrator.initialize_campaign(
-                index_path=index_path,
-                index_lock=lock_path,
-                root=root,
-                reservation_id="r1",
-                candidate_sha=self.CANDIDATE,
-                candidate_tree_sha256="c" * 64,
-                experiment_identity_digest="d" * 64,
-                campaign_identity_digest="e" * 64,
-                initializer=fail,
-            )
+            with mock.patch.object(orchestrator, "require_remote_index"):
+                code = orchestrator.initialize_campaign(
+                    repository=base,
+                    root=root,
+                    reservation_id="r1",
+                    candidate_sha=self.CANDIDATE,
+                    candidate_tree_sha256="c" * 64,
+                    experiment_identity_digest="d" * 64,
+                    campaign_identity_digest="e" * 64,
+                    initializer=fail,
+                )
             self.assertEqual(code, 5)
             self.assertTrue((root / orchestrator.ABANDONMENT_SEAL).is_file())
             self.assertEqual(
