@@ -371,20 +371,25 @@ impl SemanticProgramBuilder {
             .collect();
         let input_shapes = inference_shapes(&input_metadata);
         let input_shape_refs: Vec<_> = input_shapes.iter().map(Vec::as_slice).collect();
+        let local_input_shapes: Vec<_> = input_metadata
+            .iter()
+            .enumerate()
+            .map(|(input_idx, metadata)| DimExpr::input_shape(input_idx, metadata.shape().len()))
+            .collect();
+        let local_input_shape_refs: Vec<_> = local_input_shapes.iter().map(Vec::as_slice).collect();
         let standard = tenferro_ops::std_tensor_op::StdTensorOp::from(op);
         let dtype = crate::shape_infer::infer_output_dtype(&standard, &input_dtypes)
             .map_err(metadata_error)?;
-        let output_extents = crate::shape_infer::infer_output_extents(&standard, &input_shape_refs)
-            .map_err(metadata_error)?;
-        Ok(output_extents
+        let output_extents =
+            crate::shape_infer::infer_output_extents(&standard, &local_input_shape_refs)
+                .map_err(metadata_error)?;
+        output_extents
             .into_iter()
             .map(|shape| {
-                ProgramValueMetadata::from_extents(
-                    dtype,
-                    conservatively_bound_extents(shape, precision),
-                )
+                resolve_inferred_extents(shape, precision, &input_shape_refs)
+                    .map(|shape| ProgramValueMetadata::from_extents(dtype, shape))
             })
-            .collect())
+            .collect()
     }
 
     fn infer_extension_metadata(
@@ -714,6 +719,42 @@ fn conservatively_bound_extents(
         },
         InputExtentPrecision::Unknown => ShapeExtent::Unknown,
     })
+}
+
+fn resolve_inferred_extents(
+    extents: impl IntoIterator<Item = ShapeExtent<DimExpr>>,
+    precision: InputExtentPrecision,
+    input_shapes: &[&[DimExpr]],
+) -> Result<Vec<ShapeExtent<DimExpr>>, ProgramBuildError> {
+    extents
+        .into_iter()
+        .map(|extent| {
+            if matches!(precision, InputExtentPrecision::Unknown) {
+                return Ok(ShapeExtent::Unknown);
+            }
+            let resolved = match extent {
+                ShapeExtent::Exact(expression) => ShapeExtent::Exact(
+                    crate::shape_infer::resolve_dim_expr_from_shapes(&expression, input_shapes)
+                        .map_err(metadata_error)?,
+                ),
+                ShapeExtent::UpperBound(expression) => ShapeExtent::UpperBound(
+                    crate::shape_infer::resolve_dim_expr_from_shapes(&expression, input_shapes)
+                        .map_err(metadata_error)?,
+                ),
+                ShapeExtent::Unknown => ShapeExtent::Unknown,
+            };
+            Ok(match precision {
+                InputExtentPrecision::Exact => resolved,
+                InputExtentPrecision::Bounded => match resolved {
+                    ShapeExtent::Exact(expression) | ShapeExtent::UpperBound(expression) => {
+                        ShapeExtent::UpperBound(expression)
+                    }
+                    ShapeExtent::Unknown => ShapeExtent::Unknown,
+                },
+                InputExtentPrecision::Unknown => unreachable!("handled above"),
+            })
+        })
+        .collect()
 }
 
 fn inference_shapes(metadata: &[&ProgramValueMetadata]) -> Vec<Vec<DimExpr>> {

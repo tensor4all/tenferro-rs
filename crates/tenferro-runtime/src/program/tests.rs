@@ -227,6 +227,49 @@ fn operation_metadata_preserves_bounded_and_unknown_input_guarantees() {
 }
 
 #[test]
+fn operation_metadata_resolves_local_shape_axes_to_program_inputs() {
+    let mut builder = SemanticProgramBuilder::new();
+    let _first = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            }],
+        ))
+        .unwrap();
+    let second = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::InputDim {
+                input_idx: 1,
+                axis: 0,
+            }],
+        ))
+        .unwrap();
+
+    let output = builder
+        .add_op(
+            CoreSemanticOp::Reshape {
+                to_shape: vec![DimExpr::InputDim {
+                    input_idx: 0,
+                    axis: 0,
+                }],
+            },
+            &[second],
+        )
+        .unwrap()[0];
+
+    assert_eq!(
+        builder.value_metadata(output).unwrap().shape(),
+        &[ShapeExtent::Exact(DimExpr::InputDim {
+            input_idx: 1,
+            axis: 0,
+        })]
+    );
+}
+
+#[test]
 fn operations_validate_arity_and_infer_ordered_metadata() {
     let mut builder = SemanticProgramBuilder::new();
     let x = builder

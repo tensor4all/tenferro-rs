@@ -575,7 +575,10 @@ fn require_input<'a>(
     })
 }
 
-fn resolve_dim_expr_from_shapes(expr: &DimExpr, input_shapes: &[&[DimExpr]]) -> Result<DimExpr> {
+pub(crate) fn resolve_dim_expr_from_shapes(
+    expr: &DimExpr,
+    input_shapes: &[&[DimExpr]],
+) -> Result<DimExpr> {
     match expr {
         DimExpr::Const(value) => Ok(DimExpr::Const(*value)),
         DimExpr::InputDim { input_idx, axis } => {
