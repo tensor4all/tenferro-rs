@@ -1922,6 +1922,119 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
             )
             self.assertEqual(index["events"][-1]["event"], "PRESERVED")
 
+    def test_public_subprocess_hands_off_two_real_workers_and_detects_journal_tampering(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory).resolve()
+            repository = self.init_git_repository(base)
+            scripts = repository / "scripts"
+            scripts.mkdir()
+            actual_scripts = self.REPOSITORY / "scripts"
+            (scripts / "__init__.py").write_text(
+                f"__path__.append({str(actual_scripts)!r})\n",
+                encoding="utf-8",
+            )
+            from scripts import phase2e_public_lifecycle_fixture as fixture
+
+            fixture.instrument_orchestrator_copy(
+                actual_scripts / "run_phase2e.py",
+                scripts / "run_phase2e.py",
+            )
+            shutil.copy2(
+                actual_scripts / "phase2e_protocol.py",
+                scripts / "phase2e_protocol.py",
+            )
+            (repository / ".gitignore").write_text(
+                "__pycache__/\n*.pyc\n", encoding="utf-8"
+            )
+            (repository / ".phase2e-real-handoff-fixture").write_text(
+                "real-handoff\n", encoding="utf-8"
+            )
+            (repository / "docs" / "worklogs" / "artifacts").mkdir(parents=True)
+            subprocess.run(("git", "add", "."), cwd=repository, check=True)
+            subprocess.run(
+                ("git", "commit", "-qm", "fixture candidate"),
+                cwd=repository,
+                check=True,
+            )
+            candidate = subprocess.run(
+                ("git", "rev-parse", "HEAD"),
+                cwd=repository,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            root = repository / "docs" / "worklogs" / "artifacts" / "root"
+            scratch = base / "scratch"
+            scratch.mkdir()
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = os.pathsep.join(
+                (str(repository), str(self.REPOSITORY))
+            )
+            environment["PHASE2E_FIXTURE_MODE"] = "real-handoff"
+
+            def run(*arguments: str) -> subprocess.CompletedProcess:
+                return subprocess.run(
+                    (sys.executable, "-m", "scripts.run_phase2e", *arguments),
+                    cwd="/tmp",
+                    env=environment,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+            start = run(
+                "start",
+                "--repository",
+                str(repository),
+                "--candidate",
+                candidate,
+                "--evidence-root",
+                str(root),
+                "--index",
+                str(orchestrator.INDEX_PATH),
+                "--scratch-parent",
+                str(scratch),
+            )
+            self.assertEqual(start.returncode, 2, start.stderr)
+            journal_path = root / orchestrator.PROCESS_JOURNAL
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(journal["entries"]), 2)
+            self.assertEqual(
+                [entry["state"] for entry in journal["entries"]],
+                ["EXITED", "EXITED"],
+            )
+            self.assertEqual(
+                [entry["exit_code"] for entry in journal["entries"]],
+                [0, 2],
+            )
+            self.assertNotEqual(
+                journal["entries"][0]["pid"], journal["entries"][1]["pid"]
+            )
+            progress = json.loads(
+                (root / orchestrator.PROGRESS_MANIFEST).read_text(encoding="utf-8")
+            )
+            self.assertEqual(progress["version"], 2)
+            self.assertNotIn(orchestrator.PROCESS_JOURNAL, progress["inventory"])
+            self.assertEqual(
+                progress["process_journal_sha256"],
+                protocol.sha256_json(journal),
+            )
+            self.assertEqual(
+                progress["children"],
+                [
+                    {"stage": orchestrator.STAGE_ORDER[0], "exit_code": 0},
+                    {"stage": orchestrator.STAGE_ORDER[1], "exit_code": 2},
+                ],
+            )
+
+            journal["entries"][0]["start_ticks"] += 1
+            protocol.atomic_write_json(journal_path, journal)
+            validation = run("rerun-invalid-lane", "--evidence-root", str(root))
+            self.assertEqual(validation.returncode, 3)
+            self.assertIn("process journal", validation.stderr)
+
     def test_lifecycle_fixture_injection_is_single_point_and_source_bound(self):
         try:
             from scripts import phase2e_public_lifecycle_fixture as fixture
@@ -4262,6 +4375,54 @@ gates.validate_terminal_evidence = lambda *_args, **_kwargs: None
                 orchestrator.PROCESS_JOURNAL,
                 orchestrator._canonical_root_paths(root, ledger),
             )
+
+    def test_running_process_journal_binding_rejects_current_entry_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            stage = orchestrator.STAGE_ORDER[0]
+            context = pathlib.Path("/context.json")
+            context_sha256 = "e" * 64
+            running_process = {
+                "stage": stage,
+                "argv": list(
+                    orchestrator.stage_argv(stage, context, context_sha256)
+                ),
+                "pid": 4242,
+                "pgid": 4242,
+                "start_ticks": 99,
+            }
+            empty = {"version": 1, "entries": []}
+            protocol.atomic_write_json(root / orchestrator.PROCESS_JOURNAL, empty)
+            orchestrator._start_process_journal_entry(
+                root,
+                stage=stage,
+                argv=running_process["argv"],
+                pid=running_process["pid"],
+                pgid=running_process["pgid"],
+                identity={
+                    "pid": running_process["pid"],
+                    "start_ticks": running_process["start_ticks"],
+                },
+            )
+            orchestrator._validate_process_journal_handoff(
+                root,
+                protocol.sha256_json(empty),
+                running_process,
+            )
+
+            journal_path = root / orchestrator.PROCESS_JOURNAL
+            journal = json.loads(journal_path.read_text(encoding="utf-8"))
+            journal["entries"][-1]["start_ticks"] += 1
+            protocol.atomic_write_json(journal_path, journal)
+            with self.assertRaisesRegex(
+                protocol.ProtocolError,
+                "RUNNING binding differs",
+            ):
+                orchestrator._validate_process_journal_handoff(
+                    root,
+                    protocol.sha256_json(empty),
+                    running_process,
+                )
 
     def test_rerun_retains_invalid_attempt_and_runs_only_failed_stage(self):
         retryable = (

@@ -1083,7 +1083,7 @@ def execute_stage_worker(
     context = load_stage_context(
         context_path, context_sha256, require_fresh_scratch=False
     )
-    validate_worker_binding(context, context_sha256)
+    validate_worker_binding(stage, context, context_path, context_sha256)
     root_identity = protocol.PreparedRootIdentity(
         pathlib.Path(context["evidence_root"])
     )
@@ -1101,7 +1101,10 @@ def execute_stage_worker(
 
 
 def validate_worker_binding(
-    context: Mapping[str, Any], context_sha256: str
+    stage: str,
+    context: Mapping[str, Any],
+    context_path: pathlib.Path,
+    context_sha256: str,
 ) -> None:
     """Revalidate ACTIVE, Git candidate, and any checkpoint before stage action."""
     index = _read_index(pathlib.Path(context["index"]))
@@ -1128,9 +1131,32 @@ def validate_worker_binding(
     ):
         raise protocol.ProtocolError("stage worker candidate provenance differs")
     progress_path = pathlib.Path(context["evidence_root"]) / PROGRESS_MANIFEST
+    process_identity = _linux_process_identity(os.getpid())
+    running_process = {
+        "stage": stage,
+        "argv": list(stage_argv(stage, context_path, context_sha256)),
+        "pid": os.getpid(),
+        "pgid": os.getpgrp(),
+        "start_ticks": process_identity["start_ticks"],
+    }
     if progress_path.exists():
-        progress = validate_progress(pathlib.Path(context["evidence_root"]))
-        validate_resume_identity(active, context, context_sha256, progress)
+        progress = validate_progress(
+            pathlib.Path(context["evidence_root"]),
+            running_process=running_process,
+        )
+        validate_resume_identity(
+            active,
+            context,
+            context_sha256,
+            progress,
+            context_path=context_path,
+        )
+    else:
+        _validate_process_journal_handoff(
+            pathlib.Path(context["evidence_root"]),
+            protocol.sha256_json({"version": 1, "entries": []}),
+            running_process,
+        )
 
 TERMINAL_STATUSES = frozenset(
     {"PASS", "FAIL", "STATISTICAL_INCONCLUSIVE", "VALIDITY_INCONCLUSIVE", "ABANDONED"}
@@ -2845,11 +2871,21 @@ def _write_progress(
         # without constructing the campaign protocol fixture.
         candidate_sha = bound.get("candidate_sha", "a" * 40)
         ledger_sha256 = "0" * 64
+    process_journal_path = io_root / PROCESS_JOURNAL
+    process_journal_sha256 = (
+        protocol.sha256_json(
+            _read_process_journal_at(root_identity)
+            if root_identity is not None
+            else validate_process_journal(root)
+        )
+        if process_journal_path.exists()
+        else "0" * 64
+    )
     _atomic_write_root_json(
         root,
         pathlib.PurePosixPath(PROGRESS_MANIFEST),
         {
-            "version": 1,
+            "version": 2,
             "stage_order": list(STAGE_ORDER),
             "children": list(children),
             "protocol_version": protocol.PROTOCOL_VERSION,
@@ -2873,10 +2909,13 @@ def _write_progress(
             "index_lock": bound.get("index_lock", "/tmp/index.lock"),
             "context_path": bound.get("context_path", "/context.json"),
             "ledger_sha256": ledger_sha256,
+            "process_journal_sha256": process_journal_sha256,
             "inventory": _root_inventory(
                 root,
                 root_identity,
-                excluded=frozenset({PROGRESS_MANIFEST, AGGREGATE_MANIFEST}),
+                excluded=frozenset(
+                    {PROGRESS_MANIFEST, AGGREGATE_MANIFEST, PROCESS_JOURNAL}
+                ),
             ),
         },
         root_identity,
@@ -3907,7 +3946,11 @@ def validate_preservation_objects(
     )
 
 
-def validate_progress(root: pathlib.Path) -> dict[str, Any]:
+def validate_progress(
+    root: pathlib.Path,
+    *,
+    running_process: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Re-hash the complete root before any retry/continuation mutation."""
     progress = _read_json(root / PROGRESS_MANIFEST, "Phase 2E progress")
     if (
@@ -3934,8 +3977,9 @@ def validate_progress(root: pathlib.Path) -> dict[str, Any]:
             "index_lock",
             "context_path",
             "ledger_sha256",
+            "process_journal_sha256",
         }
-        or progress["version"] != 1
+        or progress["version"] != 2
         or progress["protocol_version"] != protocol.PROTOCOL_VERSION
         or progress["stage_order"] != list(STAGE_ORDER)
         or type(progress["children"]) is not list
@@ -3947,11 +3991,38 @@ def validate_progress(root: pathlib.Path) -> dict[str, Any]:
         context="progress command contract",
     )
     _require_sha(progress["context_sha256"], sha256=True, context="progress context")
+    _require_sha(
+        progress["process_journal_sha256"],
+        sha256=True,
+        context="progress process journal",
+    )
     protocol.validate_regular_file_inventory(
         root,
         progress["inventory"],
-        excluded=frozenset({PROGRESS_MANIFEST, AGGREGATE_MANIFEST}),
+        excluded=frozenset(
+            {PROGRESS_MANIFEST, AGGREGATE_MANIFEST, PROCESS_JOURNAL}
+        ),
     )
+    if running_process is None:
+        process_journal_path = root / PROCESS_JOURNAL
+        if progress["process_journal_sha256"] == "0" * 64:
+            if process_journal_path.exists():
+                raise protocol.ProtocolError(
+                    "synthetic progress unexpectedly has a process journal"
+                )
+        else:
+            journal = validate_process_journal(root)
+            if (
+                protocol.sha256_json(journal)
+                != progress["process_journal_sha256"]
+            ):
+                raise protocol.ProtocolError("process journal snapshot differs")
+    else:
+        _validate_process_journal_handoff(
+            root,
+            progress["process_journal_sha256"],
+            running_process,
+        )
     cursor = 0
     previous: Mapping[str, Any] | None = None
     child_schema = {
@@ -4065,6 +4136,46 @@ def validate_progress(root: pathlib.Path) -> dict[str, Any]:
     elif progress["ledger_sha256"] != "0" * 64:
         raise protocol.ProtocolError("progress ledger is absent but not marked synthetic")
     return progress
+
+
+def _validate_process_journal_handoff(
+    root: pathlib.Path,
+    completed_sha256: str,
+    running_process: Mapping[str, Any],
+) -> None:
+    """Validate one exact mutable RUNNING suffix over a retained journal prefix."""
+    _require_sha(
+        completed_sha256,
+        sha256=True,
+        context="completed process journal",
+    )
+    expected_fields = {"stage", "argv", "pid", "pgid", "start_ticks"}
+    if (
+        type(running_process) is not dict
+        or set(running_process) != expected_fields
+        or running_process["stage"] not in STAGE_ORDER
+        or type(running_process["argv"]) is not list
+        or any(type(value) is not str for value in running_process["argv"])
+        or any(
+            type(running_process[name]) is not int
+            for name in ("pid", "pgid", "start_ticks")
+        )
+    ):
+        raise protocol.ProtocolError("running process identity differs")
+    journal = validate_process_journal(root, require_entries=True)
+    running = journal["entries"][-1]
+    prefix = {"version": journal["version"], "entries": journal["entries"][:-1]}
+    _validate_process_journal_payload(prefix)
+    if (
+        protocol.sha256_json(prefix) != completed_sha256
+        or any(entry["state"] == "RUNNING" for entry in prefix["entries"])
+    ):
+        raise protocol.ProtocolError("process journal completed prefix differs")
+    if (
+        running["state"] != "RUNNING"
+        or any(running[name] != running_process[name] for name in expected_fields)
+    ):
+        raise protocol.ProtocolError("process journal RUNNING binding differs")
 
 
 def _linux_process_identity(pid: int) -> dict[str, int]:
@@ -4362,6 +4473,8 @@ def validate_resume_identity(
     stage_context: Mapping[str, Any],
     context_sha256: str,
     progress: Mapping[str, Any],
+    *,
+    context_path: pathlib.Path | None = None,
 ) -> None:
     """Reject every mutable resume identity before a child can mutate evidence."""
     for name in (
@@ -4379,7 +4492,10 @@ def validate_resume_identity(
         "index", "index_lock",
         "context_path",
     ):
-        expected = active[name] if name in active else stage_context[name]
+        if name == "context_path" and context_path is not None:
+            expected = str(context_path)
+        else:
+            expected = active[name] if name in active else stage_context[name]
         if progress[name] != expected:
             raise protocol.ProtocolError(f"retry progress differs at {name}")
 
@@ -5069,7 +5185,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 root_identity.revalidate()
                 progress = validate_progress(root)
                 validate_resume_identity(
-                    active, stage_context, context_sha256, progress
+                    active,
+                    stage_context,
+                    context_sha256,
+                    progress,
+                    context_path=context_path,
                 )
                 if args.command == "rerun-invalid-lane":
                     return rerun_invalid_stage(

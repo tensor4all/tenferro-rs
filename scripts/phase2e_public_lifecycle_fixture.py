@@ -177,6 +177,24 @@ def _run_fixture_lane(
 
 def install_temp_copy_adapters(namespace: MutableMapping[str, Any]) -> None:
     """Install adapters into one already-loaded temporary orchestrator copy."""
+    fixture_marker = (
+        pathlib.Path(namespace["__file__"]).resolve().parent.parent
+        / ".phase2e-real-handoff-fixture"
+    )
+    mode = os.environ.get("PHASE2E_FIXTURE_MODE")
+    if fixture_marker.is_file():
+        mode = "real-handoff"
+    if mode is None:
+        raise AssertionError("Phase 2E lifecycle fixture mode is missing")
+    if mode == "real-handoff":
+        for ordinal, stage in enumerate(namespace["STAGE_ORDER"]):
+            exit_code = 2 if ordinal == 1 else 0
+            namespace["STAGE_HANDLERS"][stage] = (
+                lambda _context, code=exit_code: code
+            )
+        namespace["_preflight_offline_feature_queries"] = lambda _context: None
+        namespace["require_remote_index"] = lambda *_args, **_kwargs: None
+        return
 
     def stage_runner(
         context_path,
@@ -186,8 +204,6 @@ def install_temp_copy_adapters(namespace: MutableMapping[str, Any]) -> None:
         root,
         root_identity,
     ):
-        mode = os.environ["PHASE2E_FIXTURE_MODE"]
-
         def run(stage, _environment):
             fixture_root = pathlib.Path(root)
             _write_fixture_journal(namespace, fixture_root)
