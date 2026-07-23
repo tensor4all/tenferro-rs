@@ -5,12 +5,21 @@ use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+#[cfg(feature = "autodiff")]
+use tenferro_ad::semantic_extension::{
+    AdValue, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
+    SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
+    SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
+    SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
+};
 use tenferro_einsum::Subscripts;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ad::{transpose_input::TransposeInputRef, PrimitiveRuleBuilder};
+use tenferro_ops::ext_op::{
+    ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp, HostReference,
+};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::ext_op::{ExtensionLinearTransposeRule, ExtensionLinearizeRule};
-use tenferro_ops::ext_op::{ExtensionOp, HostReference};
 #[cfg(feature = "autodiff")]
 use tenferro_ops::std_tensor_op::StdTensorOp;
 #[cfg(feature = "autodiff")]
@@ -18,6 +27,8 @@ use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
+#[cfg(feature = "autodiff")]
+use tenferro_runtime::program::{ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError, HostReferenceRuntime};
 #[cfg(feature = "autodiff")]
 use tenferro_tensor::TensorScalar;
@@ -26,9 +37,9 @@ use tenferro_tensor::{DType, Tensor, TensorBackend};
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 use crate::einsum::tropical_einsum_subscripts_with_argmax;
-use crate::error::unsupported_dtype;
 #[cfg(feature = "autodiff")]
 use crate::einsum::TropicalArgmaxStep;
+use crate::error::unsupported_dtype;
 use crate::TropicalKind;
 
 pub(crate) const TROPICAL_EINSUM_FAMILY_ID: &str = "tenferro-ext-tropical.einsum.v1";
@@ -134,6 +145,14 @@ impl ExtensionOp for TropicalEinsumOp {
         1
     }
 
+    fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+        ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+        ExtensionAliasDeclaration::AllFresh
+    }
+
     fn infer_output_meta(
         &self,
         ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
@@ -214,6 +233,14 @@ impl ExtensionOp for TropicalEinsumJvpOp {
 
     fn output_count(&self) -> usize {
         1
+    }
+
+    fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+        ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+        ExtensionAliasDeclaration::AllFresh
     }
 
     fn infer_output_meta(
@@ -324,6 +351,14 @@ impl ExtensionOp for TropicalEinsumVjpOp {
 
     fn output_count(&self) -> usize {
         1
+    }
+
+    fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+        ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+        ExtensionAliasDeclaration::AllFresh
     }
 
     fn infer_output_meta(
@@ -469,6 +504,51 @@ impl ExtensionLinearizeRule for TropicalEinsumAdRule {
 }
 
 #[cfg(feature = "autodiff")]
+impl SemanticLinearizeRule for TropicalEinsumAdRule {
+    fn family_id(&self) -> &'static str {
+        TROPICAL_EINSUM_FAMILY_ID
+    }
+
+    fn linearize(
+        &self,
+        request: SemanticLinearizeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<SemanticLinearizeResult, SemanticAdError> {
+        let op = semantic_primal_op(request.op(), SemanticAdRuleRole::Linearize)?;
+        validate_semantic_ad_supported(&op.subscripts, SemanticAdRuleRole::Linearize)?;
+        if !request.active_outputs()[0] {
+            return Ok(SemanticLinearizeResult::new([AdValue::Absent], []));
+        }
+        let active_inputs: Vec<usize> = request
+            .tangent_inputs()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tangent)| matches!(tangent, AdValue::Value(_)).then_some(index))
+            .collect();
+        if active_inputs.is_empty() {
+            return Ok(SemanticLinearizeResult::new([AdValue::Absent], []));
+        }
+        let mut inputs = request.primal_inputs().to_vec();
+        inputs.extend(active_inputs.iter().filter_map(|&index| {
+            request
+                .tangent_inputs()
+                .get(index)
+                .copied()
+                .and_then(AdValue::value)
+        }));
+        let tangent = builder.add_extension(
+            Arc::new(TropicalEinsumJvpOp::new(
+                op.kind,
+                op.subscripts.clone(),
+                active_inputs,
+            )),
+            &inputs,
+        )?[0];
+        Ok(SemanticLinearizeResult::new([AdValue::Value(tangent)], []))
+    }
+}
+
+#[cfg(feature = "autodiff")]
 #[derive(Debug)]
 struct TropicalEinsumJvpAdRule;
 
@@ -519,6 +599,50 @@ impl ExtensionLinearTransposeRule for TropicalEinsumJvpAdRule {
     }
 }
 
+#[cfg(feature = "autodiff")]
+impl SemanticLinearTransposeRule for TropicalEinsumAdRule {
+    fn family_id(&self) -> &'static str {
+        TROPICAL_EINSUM_FAMILY_ID
+    }
+
+    fn linear_transpose(
+        &self,
+        request: SemanticLinearTransposeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_tropical_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.cotangent_outputs()[0],
+            request.active_inputs(),
+            builder,
+            SemanticAdRuleRole::LinearTranspose,
+        )
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl SemanticPrimalVjpRule for TropicalEinsumAdRule {
+    fn family_id(&self) -> &'static str {
+        TROPICAL_EINSUM_FAMILY_ID
+    }
+
+    fn primal_vjp(
+        &self,
+        request: SemanticPrimalVjpRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_tropical_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.cotangent_outputs()[0],
+            request.active_inputs(),
+            builder,
+            SemanticAdRuleRole::PrimalVjp,
+        )
+    }
+}
+
 /// Build an explicit AD rule set for tropical traced einsum extensions.
 ///
 /// The returned set is intended for `tenferro_ad::AdContext`. It registers
@@ -544,6 +668,121 @@ pub fn tropical_ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
     rules.register_linearize(Arc::new(TropicalEinsumAdRule))?;
     rules.register_linear_transpose(Arc::new(TropicalEinsumJvpAdRule))?;
     Ok(rules)
+}
+
+/// Build semantic-program AD rules for tropical traced einsum extensions.
+///
+/// # Errors
+///
+/// Returns [`SemanticExtensionRegistryError::MalformedFamilyId`] if the
+/// tropical family identifier is invalid, or
+/// [`SemanticExtensionRegistryError::DuplicateRule`] if a semantic rule role
+/// is already registered.
+///
+/// # Examples
+///
+/// ```
+/// let rules = tenferro_ext_tropical::tropical_semantic_ad_rules().unwrap();
+/// assert!(rules
+///     .lookup_linearize("tenferro-ext-tropical.einsum.v1")
+///     .is_some());
+/// assert!(rules
+///     .lookup_linear_transpose("tenferro-ext-tropical.einsum.v1")
+///     .is_some());
+/// assert!(rules
+///     .lookup_primal_vjp("tenferro-ext-tropical.einsum.v1")
+///     .is_some());
+/// ```
+#[cfg(feature = "autodiff")]
+pub fn tropical_semantic_ad_rules(
+) -> Result<SemanticExtensionRuleSet, SemanticExtensionRegistryError> {
+    SemanticExtensionRuleSet::new()
+        .with_linearize(Arc::new(TropicalEinsumAdRule))?
+        .with_linear_transpose(Arc::new(TropicalEinsumAdRule))?
+        .with_primal_vjp(Arc::new(TropicalEinsumAdRule))
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_tropical_vjp(
+    op: &dyn ExtensionOp,
+    primal_inputs: &[ProgramValue],
+    cotangent: AdValue,
+    active_inputs: &[bool],
+    builder: &mut SemanticProgramBuilder,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+    let op = semantic_primal_op(op, role)?;
+    validate_semantic_ad_supported(&op.subscripts, role)?;
+    let AdValue::Value(cotangent) = cotangent else {
+        return Ok(vec![AdValue::Absent; op.input_count()].into_boxed_slice());
+    };
+    active_inputs
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(active_input, active)| {
+            if !active {
+                return Ok(AdValue::Absent);
+            }
+            let mut inputs = primal_inputs.to_vec();
+            inputs.push(cotangent);
+            let value = builder.add_extension(
+                Arc::new(TropicalEinsumVjpOp::new(
+                    op.kind,
+                    op.subscripts.clone(),
+                    active_input,
+                )),
+                &inputs,
+            )?[0];
+            Ok(AdValue::Value(value))
+        })
+        .collect()
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_primal_op(
+    op: &dyn ExtensionOp,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<&TropicalEinsumOp, SemanticAdError> {
+    op.as_any()
+        .downcast_ref::<TropicalEinsumOp>()
+        .ok_or_else(|| SemanticAdError::Unsupported {
+            family_id: TROPICAL_EINSUM_FAMILY_ID,
+            role,
+            message: "tropical einsum semantic AD received an incompatible payload".into(),
+        })
+}
+
+#[cfg(feature = "autodiff")]
+fn validate_semantic_ad_supported(
+    subscripts: &Subscripts,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<(), SemanticAdError> {
+    let message = if subscripts.inputs.len() != 2 {
+        Some("tropical einsum AD supports only binary inputs")
+    } else if has_repeated_labels(&subscripts.output)
+        || subscripts
+            .inputs
+            .iter()
+            .any(|labels| has_repeated_labels(labels))
+    {
+        Some("tropical einsum AD does not support repeated labels")
+    } else if !subscripts.inputs[0]
+        .iter()
+        .any(|label| subscripts.inputs[1].contains(label) && !subscripts.output.contains(label))
+    {
+        Some("tropical einsum AD requires contracted modes")
+    } else {
+        None
+    };
+    if let Some(message) = message {
+        return Err(SemanticAdError::Unsupported {
+            family_id: TROPICAL_EINSUM_FAMILY_ID,
+            role,
+            message: message.into(),
+        });
+    }
+    Ok(())
 }
 
 fn infer_tropical_output_meta(

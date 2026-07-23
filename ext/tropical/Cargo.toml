@@ -20,12 +20,14 @@ path = "src/lib.rs"
 default = []
 autodiff = [
     "dep:computegraph",
+    "dep:tenferro-ad",
     "dep:tidu",
     "tenferro-internal-ops/autodiff",
 ]
 tropical-gemm = ["dep:tropical-gemm"]
 
 [dependencies]
+tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false, optional = true }
 tenferro-einsum = { path = "../../crates/tenferro-einsum" }
 tenferro-internal-ops = { path = "../../crates/tenferro-internal-ops", default-features = false }
 tenferro-runtime = { path = "../../crates/tenferro-runtime" }

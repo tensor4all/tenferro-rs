@@ -1,13 +1,22 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
+use tenferro_ad::AdContext;
+use tenferro_cpu::CpuBackend;
 use tenferro_einsum::Subscripts;
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::HostReference;
+use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
+use tenferro_runtime::{GraphCompiler, GraphExecutor};
 use tenferro_tensor::{
-    core::DType as CoreDType, Error, ErrorKind, ShapeMismatch, Tensor, ValidationError,
+    core::DType as CoreDType, DType, Error, ErrorKind, ShapeMismatch, Tensor, ValidationError,
     ValidationKind,
 };
 
-use super::{TropicalEinsumJvpOp, TropicalEinsumVjpOp};
+use super::{
+    register_runtime, tropical_semantic_ad_rules, TropicalEinsumJvpOp, TropicalEinsumOp,
+    TropicalEinsumVjpOp,
+};
 use crate::TropicalKind;
 
 fn matrix(shape: Vec<usize>) -> Tensor {
@@ -15,9 +24,33 @@ fn matrix(shape: Vec<usize>) -> Tensor {
     Tensor::from_vec_col_major(shape, vec![1.0_f64; len]).unwrap()
 }
 
-fn host_error(
-    result: std::thread::Result<tenferro_tensor::Result<Vec<Tensor>>>,
-) -> Error {
+fn semantic_tropical_program() -> tenferro_runtime::program::FrozenProgram {
+    let mut builder = SemanticProgramBuilder::new();
+    let lhs = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(2)],
+        ))
+        .unwrap();
+    let rhs = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(2)],
+        ))
+        .unwrap();
+    let output = builder
+        .add_extension(
+            Arc::new(TropicalEinsumOp::new(
+                TropicalKind::MaxPlus,
+                Subscripts::parse("ij,jk->ik").unwrap(),
+            )),
+            &[lhs, rhs],
+        )
+        .unwrap()[0];
+    builder.finish(&[output]).unwrap()
+}
+
+fn host_error(result: std::thread::Result<tenferro_tensor::Result<Vec<Tensor>>>) -> Error {
     result
         .expect("host-reference validation must not panic")
         .expect_err("malformed host-reference inputs must be rejected")
@@ -148,4 +181,53 @@ fn tropical_vjp_host_boundary_rejects_count_dtype_and_exact_shape() {
         HostReference::execute(&op, &[&lhs, &rhs, &wrong_shape])
     })));
     assert_shape_mismatch(&error, "tropical_einsum_vjp", &[2, 2], &[4]);
+}
+
+#[test]
+fn tropical_semantic_rules_execute_jvp_and_vjp_numerically() {
+    let source = semantic_tropical_program();
+    let ad = AdContext::builder()
+        .with_semantic_extension_rules(
+            tropical_semantic_ad_rules().expect("tropical semantic AD rules"),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 4.0, 3.0, 2.0]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 1.0, 2.0, 6.0]).unwrap();
+    let lhs_tangent =
+        Tensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
+    let rhs_tangent = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+
+    let jvp = ad.jvp_program(&source, &[true, true]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(jvp.frozen())
+        .unwrap();
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+    executor.register_extension(register_runtime).unwrap();
+    let tangent = executor
+        .run_with_inputs(&compiled, &[&lhs, &rhs, &lhs_tangent, &rhs_tangent])
+        .unwrap();
+    assert_eq!(
+        tangent.as_slice::<f64>().unwrap(),
+        &[11.0, 21.0, 34.0, 44.0]
+    );
+
+    let output_cotangent =
+        Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 1.0, 1.0, 1.0]).unwrap();
+    let vjp = ad.vjp_program(&source, &[true, true], &[true]).unwrap();
+    let compiled = GraphCompiler::new()
+        .compile_frozen_program(vjp.frozen())
+        .unwrap();
+    let cotangents = executor
+        .run_many_with_inputs(&compiled, &[&lhs, &rhs, &output_cotangent])
+        .unwrap();
+    assert_eq!(
+        cotangents[0].as_slice::<f64>().unwrap(),
+        &[1.0, 1.0, 1.0, 1.0]
+    );
+    assert_eq!(
+        cotangents[1].as_slice::<f64>().unwrap(),
+        &[2.0, 0.0, 0.0, 2.0]
+    );
 }

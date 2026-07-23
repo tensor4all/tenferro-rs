@@ -48,7 +48,7 @@ pub mod traced;
 
 pub use extension::register_runtime;
 #[cfg(feature = "autodiff")]
-pub use extension::tropical_ad_rules;
+pub use extension::{tropical_ad_rules, tropical_semantic_ad_rules};
 pub use newtype::{MaxMul, MaxPlus, MinPlus};
 
 /// Tropical semiring flavor used by traced and future fused tropical ops.
