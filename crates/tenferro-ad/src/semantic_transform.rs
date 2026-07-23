@@ -1,6 +1,7 @@
 //! Whole-program automatic differentiation over semantic SSA programs.
 
 mod core_reductions;
+mod core_structural;
 
 use std::collections::{HashMap, HashSet};
 
@@ -12,6 +13,7 @@ use tenferro_runtime::{CompareDir, DType, DotGeneralConfig};
 
 use crate::semantic_extension::{AdValue, SemanticAdError, SemanticExtensionRuleSet};
 use core_reductions::{linearize_nonlinear_reduction, nonlinear_reduction_vjp};
+use core_structural::{concatenate_vjp, linearize_concatenate, pad_vjp, slice_vjp};
 
 /// Semantic AD transform role used by typed diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -523,8 +525,13 @@ fn linearize_core(
         | CoreSemanticOp::EmbedDiag { .. }
         | CoreSemanticOp::Tril { .. }
         | CoreSemanticOp::Triu { .. }
+        | CoreSemanticOp::Slice(_)
+        | CoreSemanticOp::Pad(_)
         | CoreSemanticOp::Reverse { .. } => {
             linearize_unary_core(builder, op.clone(), primal_inputs, tangent_inputs[0])?
+        }
+        CoreSemanticOp::Concatenate { axis, input_count } => {
+            linearize_concatenate(builder, primal_inputs, tangent_inputs, *axis, *input_count)?
         }
         CoreSemanticOp::Convert { from, to } => {
             if is_differentiable_dtype(*from) && is_differentiable_dtype(*to) {
@@ -808,6 +815,28 @@ fn vjp_core(
             let transformed = unary_ad_value(builder, op.clone(), cotangent)?;
             primary_cotangent(builder, transformed, active_inputs, primal_inputs, false)?
         }
+        CoreSemanticOp::Slice(config) => slice_vjp(
+            builder,
+            primal_inputs[0],
+            cotangent,
+            active_inputs[0],
+            config,
+        )?,
+        CoreSemanticOp::Pad(config) => pad_vjp(
+            builder,
+            primal_inputs[0],
+            cotangent,
+            active_inputs[0],
+            config,
+        )?,
+        CoreSemanticOp::Concatenate { axis, input_count } => concatenate_vjp(
+            builder,
+            primal_inputs,
+            cotangent,
+            active_inputs,
+            *axis,
+            *input_count,
+        )?,
         CoreSemanticOp::ReduceProd { .. }
         | CoreSemanticOp::ReduceMax { .. }
         | CoreSemanticOp::ReduceMin { .. } => {
