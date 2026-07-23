@@ -52,6 +52,7 @@ mod shape_infer;
 mod shape_packing;
 pub mod sym_dim;
 mod tensor;
+mod trace;
 pub mod traced;
 mod typed_tensor;
 
@@ -77,6 +78,7 @@ pub use tenferro_tensor::{
     SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar, TensorValue, TensorView,
     TypedTensor, TypedTensorView,
 };
+pub use trace::{TraceContext, TraceValue, TracedGraph};
 
 /// Backend-explicit concrete tensor operations.
 ///

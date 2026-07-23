@@ -30,6 +30,7 @@ use crate::program::{
     ShapeGuard as ProgramShapeGuard,
 };
 use crate::shape_constraint::SlotScopedShapeConstraint;
+use crate::trace::TracedGraph;
 use crate::traced::{try_concrete_shape, TracedTensor};
 
 #[derive(Clone)]
@@ -144,6 +145,30 @@ impl GraphCompiler {
     /// their typed [`Error::Extension`] source.
     pub fn compile(&mut self, output: &TracedTensor) -> Result<CompiledGraph> {
         self.compile_many(&[output])
+    }
+
+    /// Compile an immutable semantic trace without consulting a backend.
+    ///
+    /// This is the forward-only trace boundary. The compiler preserves the
+    /// frozen semantic program and bindings and creates only runtime-private
+    /// execution staging.
+    ///
+    /// # Errors
+    ///
+    /// Returns typed semantic-staging, shape-inference, validation, or
+    /// extension-lowering failures.
+    pub fn compile_traced_graph(&mut self, graph: &TracedGraph) -> Result<CompiledGraph> {
+        let staging =
+            lower_semantic_to_exec_staging(&graph.frozen().program, self.compiler_options)?;
+        let staging = self.get_or_compile(staging);
+        let inputs = graph
+            .inputs()
+            .iter()
+            .map(|input| {
+                GraphProgramInput::new(input.key.clone(), input.dtype, input.shape.clone(), None)
+            })
+            .collect();
+        Ok(CompiledGraph::new(graph.frozen().clone(), staging, inputs))
     }
 
     /// Compile multiple traced outputs into one graph program.

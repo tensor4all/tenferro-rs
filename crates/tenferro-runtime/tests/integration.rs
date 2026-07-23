@@ -8,6 +8,8 @@ mod public_surface_contract;
 mod runtime_error_api;
 #[path = "integration/runtime_public_api.rs"]
 mod runtime_public_api;
+#[path = "integration/trace_context.rs"]
+mod trace_context;
 #[path = "integration/typed_tensor_contract.rs"]
 mod typed_tensor_contract;
 #[path = "integration/typed_tensor_ops.rs"]
