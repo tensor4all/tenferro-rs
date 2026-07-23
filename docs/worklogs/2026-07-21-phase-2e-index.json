@@ -28,6 +28,23 @@
       "root": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-21-phase-2e-cd30b0082b86-run-0001",
       "root_digest": "ef8e332588db3d662dad6882276bb68bb9768d663ccff1a1a3f5be9b4fa8cb1b",
       "status": "ABANDONED"
+    },
+    {
+      "campaign_identity_digest": "60cef344d5d86aee46fc6877b902445f4666fa87c09628a79d01979581043740",
+      "candidate_sha": "cd30b0082b86f968e21911db48d9b04bb0be820c",
+      "candidate_tree_sha256": "6f1c6dd3d7073289d1c3ccc74cc20ae4957961dec769e13e7337bfcd9b947daf",
+      "command_contract_digest": "60f7942a144371e651de3bb8c53b42fae6b29dab3879156476e28a0a1addfef1",
+      "context_sha256": "8f3488eb6e9a908517e87135884ced615f070586ca0de318a8b11872eb6dda7e",
+      "event": "PRESERVED",
+      "experiment_identity_digest": "2e34bfcd173c5a5f181280d18b26d2c70db88c9559f030acc5b9b90fb99e0619",
+      "issue_url": "https://github.com/tensor4all/tenferro-rs/issues/1436#issuecomment-5055483629",
+      "ledger_sha256": "f4cd38c0d18f058c9a149bdabbf8d6dee7ee9fd78a6ece62283fae990f0e1b2f",
+      "ordinal": 3,
+      "preservation_commit": "89adf00d297dd7e8fe07d94700989a533180e14c",
+      "reservation_id": "bcb7f0c44f8bf7b800ac113764939c49525c152a5ecb8fdc018c93f9dcb511e7",
+      "root": "/home/shinaoka/tensor4all/tenferro-rs/.worktrees/execution-engine-provider-design/docs/worklogs/artifacts/2026-07-21-phase-2e-cd30b0082b86-run-0001",
+      "root_digest": "ef8e332588db3d662dad6882276bb68bb9768d663ccff1a1a3f5be9b4fa8cb1b",
+      "status": "ABANDONED"
     }
   ],
   "version": 1

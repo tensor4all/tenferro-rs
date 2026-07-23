@@ -81,6 +81,20 @@ The command returned `PENDING_PRESERVATION`. A later preservation commit,
 push, issue comment, and `record-preserved` transition must complete this
 root before run 0002 may be allocated.
 
+## Remote preservation
+
+The sealed root and pending index were pushed in commit
+`89adf00d297dd7e8fe07d94700989a533180e14c`. The permanent explanatory
+report is
+<https://github.com/tensor4all/tenferro-rs/issues/1436#issuecomment-5055476266>.
+The exact machine-validated preservation proof is
+<https://github.com/tensor4all/tenferro-rs/issues/1436#issuecomment-5055483629>.
+
+`record-preserved` fetched the branch, validated the commit's root, index and
+worklog blobs, fetched the exact proof comment, and returned `PRESERVED`.
+The follow-up index commit records that durable transition. Run 0001 remains
+negative evidence and does not become `current_evidence_root`.
+
 ## Follow-up
 
 1. Preserve this negative root without modifying its sealed inventory.
