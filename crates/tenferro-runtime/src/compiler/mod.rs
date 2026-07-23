@@ -16,6 +16,7 @@ use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 
 mod optimizer;
 mod options;
+mod semantic_staging;
 
 pub use options::{CompilerOptions, OptimizerConfig};
 
