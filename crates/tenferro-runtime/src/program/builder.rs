@@ -280,6 +280,7 @@ impl SemanticProgramBuilder {
         inputs: &[ProgramValue],
     ) -> Result<Vec<ProgramValueMetadata>, ProgramBuildError> {
         let input_metadata = self.input_metadata(inputs)?;
+        let precision = input_extent_precision(&input_metadata);
         let input_dtypes: Vec<_> = input_metadata
             .iter()
             .map(|metadata| metadata.dtype())
@@ -293,7 +294,12 @@ impl SemanticProgramBuilder {
             .map_err(metadata_error)?;
         Ok(output_extents
             .into_iter()
-            .map(|shape| ProgramValueMetadata::from_extents(dtype, shape))
+            .map(|shape| {
+                ProgramValueMetadata::from_extents(
+                    dtype,
+                    conservatively_bound_extents(shape, precision),
+                )
+            })
             .collect())
     }
 
@@ -303,6 +309,7 @@ impl SemanticProgramBuilder {
         inputs: &[ProgramValue],
     ) -> Result<(Vec<ProgramValueMetadata>, Vec<ShapeGuard>), ProgramBuildError> {
         let input_metadata = self.input_metadata(inputs)?;
+        let precision = input_extent_precision(&input_metadata);
         let input_dtypes: Vec<_> = input_metadata
             .iter()
             .map(|metadata| metadata.dtype())
@@ -318,7 +325,15 @@ impl SemanticProgramBuilder {
         let metadata = inferred
             .output_metas
             .into_iter()
-            .map(|(dtype, shape)| ProgramValueMetadata::new(dtype, shape))
+            .map(|(dtype, shape)| {
+                ProgramValueMetadata::from_extents(
+                    dtype,
+                    conservatively_bound_extents(
+                        shape.into_iter().map(ShapeExtent::Exact),
+                        precision,
+                    ),
+                )
+            })
             .collect();
         let guards = inferred
             .constraints
@@ -580,6 +595,41 @@ impl ImportTransaction {
         let slot = u32::try_from(slot).map_err(|_| ProgramBuildError::TooManyValues)?;
         Ok(ProgramValue::new(slot, owner))
     }
+}
+
+#[derive(Clone, Copy)]
+enum InputExtentPrecision {
+    Exact,
+    Bounded,
+    Unknown,
+}
+
+fn input_extent_precision(metadata: &[&ProgramValueMetadata]) -> InputExtentPrecision {
+    let mut precision = InputExtentPrecision::Exact;
+    for extent in metadata.iter().flat_map(|metadata| metadata.shape()) {
+        match extent {
+            ShapeExtent::Unknown => return InputExtentPrecision::Unknown,
+            ShapeExtent::UpperBound(_) => precision = InputExtentPrecision::Bounded,
+            ShapeExtent::Exact(_) => {}
+        }
+    }
+    precision
+}
+
+fn conservatively_bound_extents(
+    extents: impl IntoIterator<Item = ShapeExtent<DimExpr>>,
+    precision: InputExtentPrecision,
+) -> impl Iterator<Item = ShapeExtent<DimExpr>> {
+    extents.into_iter().map(move |extent| match precision {
+        InputExtentPrecision::Exact => extent,
+        InputExtentPrecision::Bounded => match extent {
+            ShapeExtent::Exact(expression) | ShapeExtent::UpperBound(expression) => {
+                ShapeExtent::UpperBound(expression)
+            }
+            ShapeExtent::Unknown => ShapeExtent::Unknown,
+        },
+        InputExtentPrecision::Unknown => ShapeExtent::Unknown,
+    })
 }
 
 fn inference_shapes(metadata: &[&ProgramValueMetadata]) -> Vec<Vec<DimExpr>> {

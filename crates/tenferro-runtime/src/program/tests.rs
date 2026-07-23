@@ -187,6 +187,46 @@ fn tokens_and_metadata_cover_guards_effects_aliases_and_placement() {
 }
 
 #[test]
+fn operation_metadata_preserves_bounded_and_unknown_input_guarantees() {
+    let mut bounded_builder = SemanticProgramBuilder::new();
+    let bounded = bounded_builder
+        .input(ProgramInputSpec::from_metadata(
+            ProgramValueMetadata::from_extents(
+                DType::F64,
+                [ShapeExtent::UpperBound(DimExpr::Const(32))],
+            ),
+        ))
+        .unwrap();
+    let bounded_output = bounded_builder
+        .add_op(CoreSemanticOp::Neg, &[bounded])
+        .unwrap()[0];
+    assert_eq!(
+        bounded_builder
+            .value_metadata(bounded_output)
+            .unwrap()
+            .shape(),
+        &[ShapeExtent::UpperBound(DimExpr::Const(32))]
+    );
+
+    let mut unknown_builder = SemanticProgramBuilder::new();
+    let unknown = unknown_builder
+        .input(ProgramInputSpec::from_metadata(
+            ProgramValueMetadata::from_extents(DType::F64, [ShapeExtent::Unknown]),
+        ))
+        .unwrap();
+    let unknown_output = unknown_builder
+        .add_op(CoreSemanticOp::Neg, &[unknown])
+        .unwrap()[0];
+    assert_eq!(
+        unknown_builder
+            .value_metadata(unknown_output)
+            .unwrap()
+            .shape(),
+        &[ShapeExtent::Unknown]
+    );
+}
+
+#[test]
 fn operations_validate_arity_and_infer_ordered_metadata() {
     let mut builder = SemanticProgramBuilder::new();
     let x = builder

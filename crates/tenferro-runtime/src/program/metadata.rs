@@ -119,7 +119,8 @@ impl ProgramInputSpec {
         }
     }
 
-    pub(crate) fn from_metadata(metadata: ProgramValueMetadata) -> Self {
+    /// Construct an input specification with exact, bounded, or unknown extents.
+    pub fn from_metadata(metadata: ProgramValueMetadata) -> Self {
         Self { metadata }
     }
 
