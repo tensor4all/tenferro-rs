@@ -449,6 +449,40 @@ fn linearize_core(
             let rhs = divide_ad_value(builder, rhs_numerator, denominator)?;
             sub_ad_values(builder, lhs, rhs)?
         }
+        CoreSemanticOp::Pow => {
+            let one = one_like(builder, primal_inputs[1], SemanticTransformRole::Jvp)?;
+            let exponent_minus_one =
+                builder.add_op(CoreSemanticOp::Sub, &[primal_inputs[1], one])?[0];
+            let power =
+                builder.add_op(CoreSemanticOp::Pow, &[primal_inputs[0], exponent_minus_one])?[0];
+            let lhs_coefficient =
+                builder.add_op(CoreSemanticOp::Mul, &[primal_inputs[1], power])?[0];
+            let lhs = multiply_ad_value(builder, tangent_inputs[0], lhs_coefficient)?;
+            let log = builder.add_op(CoreSemanticOp::Log, &[primal_inputs[0]])?[0];
+            let power =
+                builder.add_op(CoreSemanticOp::Pow, &[primal_inputs[0], primal_inputs[1]])?[0];
+            let rhs_coefficient = builder.add_op(CoreSemanticOp::Mul, &[log, power])?[0];
+            let rhs = multiply_ad_value(builder, tangent_inputs[1], rhs_coefficient)?;
+            add_ad_values(builder, lhs, rhs)?
+        }
+        CoreSemanticOp::Abs => {
+            let input_dtype = builder.value_metadata(primal_inputs[0])?.dtype();
+            let sign = builder.add_op(CoreSemanticOp::Sign, &[primal_inputs[0]])?[0];
+            let coefficient = if is_complex_dtype(input_dtype) {
+                builder.add_op(CoreSemanticOp::Conj, &[sign])?[0]
+            } else {
+                sign
+            };
+            let tangent = multiply_ad_value(builder, tangent_inputs[0], coefficient)?;
+            convert_ad_value(builder, tangent, input_dtype, abs_output_dtype(input_dtype))?
+        }
+        CoreSemanticOp::Sign => AdValue::Absent,
+        CoreSemanticOp::Select => select_ad_values(
+            builder,
+            primal_inputs[0],
+            tangent_inputs[1],
+            tangent_inputs[2],
+        )?,
         CoreSemanticOp::Neg | CoreSemanticOp::Conj => {
             unary_ad_value(builder, op.clone(), tangent_inputs[0])?
         }
@@ -528,6 +562,55 @@ fn vjp_core(
             vec![
                 normalize_ad_value(builder, lhs, active_inputs[0], primal_inputs[0])?,
                 normalize_ad_value(builder, rhs, active_inputs[1], primal_inputs[1])?,
+            ]
+        }
+        CoreSemanticOp::Pow => {
+            let one = one_like(builder, primal_inputs[1], SemanticTransformRole::Vjp)?;
+            let exponent_minus_one =
+                builder.add_op(CoreSemanticOp::Sub, &[primal_inputs[1], one])?[0];
+            let power =
+                builder.add_op(CoreSemanticOp::Pow, &[primal_inputs[0], exponent_minus_one])?[0];
+            let lhs_coefficient =
+                builder.add_op(CoreSemanticOp::Mul, &[primal_inputs[1], power])?[0];
+            let lhs_coefficient = conjugate_if_complex(builder, lhs_coefficient)?;
+            let lhs = multiply_ad_value(builder, cotangent, lhs_coefficient)?;
+            let log = builder.add_op(CoreSemanticOp::Log, &[primal_inputs[0]])?[0];
+            let power =
+                builder.add_op(CoreSemanticOp::Pow, &[primal_inputs[0], primal_inputs[1]])?[0];
+            let rhs_coefficient = builder.add_op(CoreSemanticOp::Mul, &[log, power])?[0];
+            let rhs_coefficient = conjugate_if_complex(builder, rhs_coefficient)?;
+            let rhs = multiply_ad_value(builder, cotangent, rhs_coefficient)?;
+            vec![
+                normalize_ad_value(builder, lhs, active_inputs[0], primal_inputs[0])?,
+                normalize_ad_value(builder, rhs, active_inputs[1], primal_inputs[1])?,
+            ]
+        }
+        CoreSemanticOp::Abs => {
+            let input_dtype = builder.value_metadata(primal_inputs[0])?.dtype();
+            let output_dtype = abs_output_dtype(input_dtype);
+            let cotangent = convert_ad_value(builder, cotangent, output_dtype, input_dtype)?;
+            let sign = builder.add_op(CoreSemanticOp::Sign, &[primal_inputs[0]])?[0];
+            let cotangent = multiply_ad_value(builder, cotangent, sign)?;
+            vec![normalize_ad_value(
+                builder,
+                cotangent,
+                active_inputs[0],
+                primal_inputs[0],
+            )?]
+        }
+        CoreSemanticOp::Sign => vec![AdValue::Absent],
+        CoreSemanticOp::Select => {
+            let (on_true, on_false) = split_select_cotangent(
+                builder,
+                primal_inputs[0],
+                cotangent,
+                active_inputs[1],
+                active_inputs[2],
+            )?;
+            vec![
+                AdValue::Absent,
+                normalize_ad_value(builder, on_true, active_inputs[1], primal_inputs[1])?,
+                normalize_ad_value(builder, on_false, active_inputs[2], primal_inputs[2])?,
             ]
         }
         CoreSemanticOp::Neg => {
@@ -835,6 +918,18 @@ fn is_differentiable_dtype(dtype: DType) -> bool {
     matches!(dtype, DType::F32 | DType::F64 | DType::C32 | DType::C64)
 }
 
+fn is_complex_dtype(dtype: DType) -> bool {
+    matches!(dtype, DType::C32 | DType::C64)
+}
+
+fn abs_output_dtype(dtype: DType) -> DType {
+    match dtype {
+        DType::C32 => DType::F32,
+        DType::C64 => DType::F64,
+        other => other,
+    }
+}
+
 fn add_ad_values(
     builder: &mut SemanticProgramBuilder,
     lhs: AdValue,
@@ -900,6 +995,86 @@ fn divide_ad_value(
             builder.add_op(CoreSemanticOp::Div, &[value, denominator])?[0],
         )),
     }
+}
+
+fn convert_ad_value(
+    builder: &mut SemanticProgramBuilder,
+    value: AdValue,
+    from: DType,
+    to: DType,
+) -> Result<AdValue, ProgramBuildError> {
+    if from == to {
+        return Ok(value);
+    }
+    unary_ad_value(builder, CoreSemanticOp::Convert { from, to }, value)
+}
+
+fn zero_from_ad_value(
+    builder: &mut SemanticProgramBuilder,
+    value: AdValue,
+) -> Result<AdValue, ProgramBuildError> {
+    let negated = unary_ad_value(builder, CoreSemanticOp::Neg, value)?;
+    add_ad_values(builder, value, negated)
+}
+
+fn select_ad_values(
+    builder: &mut SemanticProgramBuilder,
+    condition: ProgramValue,
+    on_true: AdValue,
+    on_false: AdValue,
+) -> Result<AdValue, ProgramBuildError> {
+    match (on_true, on_false) {
+        (AdValue::Absent, AdValue::Absent) => Ok(AdValue::Absent),
+        (AdValue::Value(on_true), AdValue::Value(on_false)) => Ok(AdValue::Value(
+            builder.add_op(CoreSemanticOp::Select, &[condition, on_true, on_false])?[0],
+        )),
+        (AdValue::Value(on_true), AdValue::Absent) => {
+            let AdValue::Value(zero) = zero_from_ad_value(builder, AdValue::Value(on_true))? else {
+                unreachable!();
+            };
+            Ok(AdValue::Value(
+                builder.add_op(CoreSemanticOp::Select, &[condition, on_true, zero])?[0],
+            ))
+        }
+        (AdValue::Absent, AdValue::Value(on_false)) => {
+            let AdValue::Value(zero) = zero_from_ad_value(builder, AdValue::Value(on_false))?
+            else {
+                unreachable!();
+            };
+            Ok(AdValue::Value(
+                builder.add_op(CoreSemanticOp::Select, &[condition, zero, on_false])?[0],
+            ))
+        }
+    }
+}
+
+fn split_select_cotangent(
+    builder: &mut SemanticProgramBuilder,
+    condition: ProgramValue,
+    cotangent: AdValue,
+    true_active: bool,
+    false_active: bool,
+) -> Result<(AdValue, AdValue), ProgramBuildError> {
+    if !true_active && !false_active {
+        return Ok((AdValue::Absent, AdValue::Absent));
+    }
+    let AdValue::Value(cotangent) = cotangent else {
+        return Ok((AdValue::Absent, AdValue::Absent));
+    };
+    let AdValue::Value(zero) = zero_from_ad_value(builder, AdValue::Value(cotangent))? else {
+        unreachable!();
+    };
+    let on_true = if true_active {
+        AdValue::Value(builder.add_op(CoreSemanticOp::Select, &[condition, cotangent, zero])?[0])
+    } else {
+        AdValue::Absent
+    };
+    let on_false = if false_active {
+        AdValue::Value(builder.add_op(CoreSemanticOp::Select, &[condition, zero, cotangent])?[0])
+    } else {
+        AdValue::Absent
+    };
+    Ok((on_true, on_false))
 }
 
 fn linearize_analytic_unary(

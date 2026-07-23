@@ -545,3 +545,87 @@ fn semantic_core_div_jvp_vjp_handle_broadcast_and_hermitian_coefficients() {
         DType::C64
     );
 }
+
+#[test]
+fn semantic_core_pow_abs_sign_and_select_follow_activity_and_dtype_contracts() {
+    let pow = binary_core_program(
+        DType::C64,
+        [DimExpr::Const(2)],
+        DType::F64,
+        [],
+        CoreSemanticOp::Pow,
+    );
+    let ad = ad_context();
+    assert!(ad.jvp_program(&pow, &[true, true]).is_ok());
+    let pow_vjp = ad.vjp_program(&pow, &[true, true], &[true]).unwrap();
+    assert_eq!(pow_vjp.derivative_output_indices(), &[Some(0), Some(1)]);
+    assert!(pow_vjp
+        .frozen()
+        .program
+        .operations()
+        .any(|operation| matches!(
+            operation.op(),
+            tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Conj)
+        )));
+
+    let mut builder = SemanticProgramBuilder::new();
+    let abs_input = builder
+        .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(2)]))
+        .unwrap();
+    let abs_output = builder.add_op(CoreSemanticOp::Abs, &[abs_input]).unwrap()[0];
+    let abs = builder.finish(&[abs_output]).unwrap();
+    let abs_jvp = ad.jvp_program(&abs, &[true]).unwrap();
+    assert_eq!(
+        abs_jvp
+            .frozen()
+            .program
+            .value_metadata(abs_jvp.frozen().program.outputs()[0])
+            .unwrap()
+            .dtype(),
+        DType::F64
+    );
+    assert!(ad.vjp_program(&abs, &[true], &[true]).is_ok());
+
+    let sign = unary_core_program([DimExpr::Const(2)], CoreSemanticOp::Sign);
+    let sign_jvp = ad.jvp_program(&sign, &[true]).unwrap();
+    assert_eq!(sign_jvp.derivative_output_indices(), &[None]);
+    let sign_vjp = ad.vjp_program(&sign, &[true], &[true]).unwrap();
+    assert_eq!(sign_vjp.derivative_output_indices(), &[None]);
+
+    let mut builder = SemanticProgramBuilder::new();
+    let condition = builder
+        .input(ProgramInputSpec::new(DType::Bool, [DimExpr::Const(2)]))
+        .unwrap();
+    let on_true = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let on_false = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let selected = builder
+        .add_op(CoreSemanticOp::Select, &[condition, on_true, on_false])
+        .unwrap()[0];
+    let select = builder.finish(&[selected]).unwrap();
+    let select_jvp = ad.jvp_program(&select, &[false, true, false]).unwrap();
+    assert_eq!(
+        select_jvp.derivative_input_indices(),
+        &[None, Some(3), None]
+    );
+    assert!(matches!(
+        select_jvp
+            .frozen()
+            .program
+            .operations()
+            .last()
+            .unwrap()
+            .op(),
+        tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Select)
+    ));
+    let select_vjp = ad
+        .vjp_program(&select, &[false, true, true], &[true])
+        .unwrap();
+    assert_eq!(
+        select_vjp.derivative_output_indices(),
+        &[None, Some(0), Some(1)]
+    );
+}
