@@ -60,6 +60,10 @@ crates, traced/eager AD integration tests, Cargo tests/clippy/rustdoc.
   PASS.
 - [ ] Commit context ownership.
 
+Progress: `AdContext` now owns and atomically merges
+`SemanticExtensionRuleSet`; the legacy registry remains temporarily only
+because the current traced transform and unmigrated families still consume it.
+
 ### Task 3: Transform extension operations semantically
 
 **Files:**
@@ -99,6 +103,11 @@ crates, traced/eager AD integration tests, Cargo tests/clippy/rustdoc.
   migration; expected result is PASS except explicitly documented unrelated
   holds.
 - [ ] Commit migrations in reviewable owner-crate groups.
+
+Progress: FFT implements all three semantic roles and has extension-first JVP,
+adjoint normalization, active/absent handling, and transform-length
+truncate/pad coverage. The old FFT trait impl remains only until the traced
+semantic transform switches over.
 
 ### Task 5: Delete the old AD and execution compatibility surfaces
 
