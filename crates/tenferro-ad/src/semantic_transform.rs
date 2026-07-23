@@ -450,19 +450,27 @@ fn linearize_core(
             sub_ad_values(builder, lhs, rhs)?
         }
         CoreSemanticOp::Pow => {
-            let one = one_like(builder, primal_inputs[1], SemanticTransformRole::Jvp)?;
-            let exponent_minus_one =
-                builder.add_op(CoreSemanticOp::Sub, &[primal_inputs[1], one])?[0];
-            let power =
-                builder.add_op(CoreSemanticOp::Pow, &[primal_inputs[0], exponent_minus_one])?[0];
-            let lhs_coefficient =
-                builder.add_op(CoreSemanticOp::Mul, &[primal_inputs[1], power])?[0];
-            let lhs = multiply_ad_value(builder, tangent_inputs[0], lhs_coefficient)?;
-            let log = builder.add_op(CoreSemanticOp::Log, &[primal_inputs[0]])?[0];
-            let power =
-                builder.add_op(CoreSemanticOp::Pow, &[primal_inputs[0], primal_inputs[1]])?[0];
-            let rhs_coefficient = builder.add_op(CoreSemanticOp::Mul, &[log, power])?[0];
-            let rhs = multiply_ad_value(builder, tangent_inputs[1], rhs_coefficient)?;
+            let lhs = if matches!(tangent_inputs[0], AdValue::Value(_)) {
+                let one = one_like(builder, primal_inputs[1], SemanticTransformRole::Jvp)?;
+                let exponent_minus_one =
+                    builder.add_op(CoreSemanticOp::Sub, &[primal_inputs[1], one])?[0];
+                let power = builder
+                    .add_op(CoreSemanticOp::Pow, &[primal_inputs[0], exponent_minus_one])?[0];
+                let coefficient =
+                    builder.add_op(CoreSemanticOp::Mul, &[primal_inputs[1], power])?[0];
+                multiply_ad_value(builder, tangent_inputs[0], coefficient)?
+            } else {
+                AdValue::Absent
+            };
+            let rhs = if matches!(tangent_inputs[1], AdValue::Value(_)) {
+                let log = builder.add_op(CoreSemanticOp::Log, &[primal_inputs[0]])?[0];
+                let power =
+                    builder.add_op(CoreSemanticOp::Pow, &[primal_inputs[0], primal_inputs[1]])?[0];
+                let coefficient = builder.add_op(CoreSemanticOp::Mul, &[log, power])?[0];
+                multiply_ad_value(builder, tangent_inputs[1], coefficient)?
+            } else {
+                AdValue::Absent
+            };
             add_ad_values(builder, lhs, rhs)?
         }
         CoreSemanticOp::Abs => {
@@ -565,21 +573,29 @@ fn vjp_core(
             ]
         }
         CoreSemanticOp::Pow => {
-            let one = one_like(builder, primal_inputs[1], SemanticTransformRole::Vjp)?;
-            let exponent_minus_one =
-                builder.add_op(CoreSemanticOp::Sub, &[primal_inputs[1], one])?[0];
-            let power =
-                builder.add_op(CoreSemanticOp::Pow, &[primal_inputs[0], exponent_minus_one])?[0];
-            let lhs_coefficient =
-                builder.add_op(CoreSemanticOp::Mul, &[primal_inputs[1], power])?[0];
-            let lhs_coefficient = conjugate_if_complex(builder, lhs_coefficient)?;
-            let lhs = multiply_ad_value(builder, cotangent, lhs_coefficient)?;
-            let log = builder.add_op(CoreSemanticOp::Log, &[primal_inputs[0]])?[0];
-            let power =
-                builder.add_op(CoreSemanticOp::Pow, &[primal_inputs[0], primal_inputs[1]])?[0];
-            let rhs_coefficient = builder.add_op(CoreSemanticOp::Mul, &[log, power])?[0];
-            let rhs_coefficient = conjugate_if_complex(builder, rhs_coefficient)?;
-            let rhs = multiply_ad_value(builder, cotangent, rhs_coefficient)?;
+            let lhs = if active_inputs[0] {
+                let one = one_like(builder, primal_inputs[1], SemanticTransformRole::Vjp)?;
+                let exponent_minus_one =
+                    builder.add_op(CoreSemanticOp::Sub, &[primal_inputs[1], one])?[0];
+                let power = builder
+                    .add_op(CoreSemanticOp::Pow, &[primal_inputs[0], exponent_minus_one])?[0];
+                let coefficient =
+                    builder.add_op(CoreSemanticOp::Mul, &[primal_inputs[1], power])?[0];
+                let coefficient = conjugate_if_complex(builder, coefficient)?;
+                multiply_ad_value(builder, cotangent, coefficient)?
+            } else {
+                AdValue::Absent
+            };
+            let rhs = if active_inputs[1] {
+                let log = builder.add_op(CoreSemanticOp::Log, &[primal_inputs[0]])?[0];
+                let power =
+                    builder.add_op(CoreSemanticOp::Pow, &[primal_inputs[0], primal_inputs[1]])?[0];
+                let coefficient = builder.add_op(CoreSemanticOp::Mul, &[log, power])?[0];
+                let coefficient = conjugate_if_complex(builder, coefficient)?;
+                multiply_ad_value(builder, cotangent, coefficient)?
+            } else {
+                AdValue::Absent
+            };
             vec![
                 normalize_ad_value(builder, lhs, active_inputs[0], primal_inputs[0])?,
                 normalize_ad_value(builder, rhs, active_inputs[1], primal_inputs[1])?,
@@ -1146,16 +1162,16 @@ fn one_like(
     let metadata = builder.value_metadata(anchor)?.clone();
     let dtype = metadata.dtype();
     let bytes = match dtype {
-        DType::F32 => 1.0_f32.to_ne_bytes().to_vec(),
-        DType::F64 => 1.0_f64.to_ne_bytes().to_vec(),
+        DType::F32 => 1.0_f32.to_le_bytes().to_vec(),
+        DType::F64 => 1.0_f64.to_le_bytes().to_vec(),
         DType::C32 => {
-            let mut bytes = 1.0_f32.to_ne_bytes().to_vec();
-            bytes.extend_from_slice(&0.0_f32.to_ne_bytes());
+            let mut bytes = 1.0_f32.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&0.0_f32.to_le_bytes());
             bytes
         }
         DType::C64 => {
-            let mut bytes = 1.0_f64.to_ne_bytes().to_vec();
-            bytes.extend_from_slice(&0.0_f64.to_ne_bytes());
+            let mut bytes = 1.0_f64.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&0.0_f64.to_le_bytes());
             bytes
         }
         _ => {

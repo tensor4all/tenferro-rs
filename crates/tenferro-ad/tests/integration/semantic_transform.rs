@@ -567,6 +567,24 @@ fn semantic_core_pow_abs_sign_and_select_follow_activity_and_dtype_contracts() {
             operation.op(),
             tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Conj)
         )));
+    let lhs_only_jvp = ad.jvp_program(&pow, &[true, false]).unwrap();
+    assert!(!lhs_only_jvp
+        .frozen()
+        .program
+        .operations()
+        .any(|operation| matches!(
+            operation.op(),
+            tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Log)
+        )));
+    let lhs_only_vjp = ad.vjp_program(&pow, &[true, false], &[true]).unwrap();
+    assert!(!lhs_only_vjp
+        .frozen()
+        .program
+        .operations()
+        .any(|operation| matches!(
+            operation.op(),
+            tenferro_runtime::program::SemanticOpRef::Core(CoreSemanticOp::Log)
+        )));
 
     let mut builder = SemanticProgramBuilder::new();
     let abs_input = builder
