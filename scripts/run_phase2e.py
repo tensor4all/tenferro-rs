@@ -39,6 +39,10 @@ PRESERVATION_BRANCH = "origin/codex/execution-engine-through-phase9"
 ISSUE_NUMBER = 1436
 
 
+def _has_ascii_control(value: str) -> bool:
+    return any(ord(character) <= 0x1F or ord(character) == 0x7F for character in value)
+
+
 def _is_canonical_issue_comment_url(url: Any) -> bool:
     return (
         type(url) is str
@@ -639,6 +643,10 @@ def _validate_index(index: Mapping[str, Any]) -> None:
             ):
                 if type(event.get(name)) is not str or not event[name]:
                     raise protocol.ProtocolError(f"ACTIVE event lacks {name}")
+            if _has_ascii_control(event["root"]):
+                raise protocol.ProtocolError(
+                    "ACTIVE evidence root contains a control character"
+                )
             _require_sha(event["candidate_sha"], sha256=False, context="candidate SHA")
             for name in (
                 "candidate_tree_sha256",
@@ -2146,7 +2154,7 @@ def validate_preservation_comment(
     _require_sha(candidate_sha, sha256=False, context="candidate SHA")
     if status not in TERMINAL_STATUSES:
         raise protocol.ProtocolError("preservation comment status is invalid")
-    if type(root) is not str:
+    if type(root) is not str or _has_ascii_control(root):
         raise protocol.ProtocolError("preservation comment root is not canonical")
     root_path = pathlib.PurePosixPath(root)
     if (
@@ -2155,13 +2163,14 @@ def validate_preservation_comment(
         or ".." in root_path.parts
     ):
         raise protocol.ProtocolError("preservation comment root is not canonical")
-    expected = (
-        f"preservation_commit: {preservation_commit}\n"
-        f"evidence_root: {root}\n"
-        f"candidate: {candidate_sha}\n"
-        f"terminal_status: {status}\n"
-    )
-    if body != expected:
+    expected_lines = [
+        f"preservation_commit: {preservation_commit}",
+        f"evidence_root: {root}",
+        f"candidate: {candidate_sha}",
+        f"terminal_status: {status}",
+    ]
+    expected = "\n".join(expected_lines) + "\n"
+    if body != expected or body.splitlines() != expected_lines:
         raise protocol.ProtocolError("preservation comment format or identity differs")
 
 

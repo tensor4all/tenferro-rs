@@ -2639,6 +2639,37 @@ class OuterOrchestratorTests(unittest.TestCase):
                         status=status,
                     )
 
+    def test_preservation_comment_and_index_reject_control_character_root(self):
+        commit = "1" * 40
+        candidate = self.CANDIDATE
+        injected_root = f"/canonical/root\ncandidate: {candidate}"
+        url = (
+            "https://github.com/tensor4all/tenferro-rs/issues/1436"
+            "#issuecomment-9"
+        )
+        injected_body = self.preservation_body(
+            commit, injected_root, candidate, "PASS"
+        )
+        with self.assertRaises(protocol.ProtocolError):
+            orchestrator.validate_preservation_comment(
+                url,
+                injected_body,
+                preservation_commit=commit,
+                root=injected_root,
+                candidate_sha=candidate,
+                status="PASS",
+            )
+        with self.assertRaises(protocol.ProtocolError):
+            orchestrator.record_active(
+                orchestrator.new_campaign_index(),
+                reservation_id="r1",
+                candidate_sha=candidate,
+                candidate_tree_sha256="c" * 64,
+                root="/canonical/root\x7f",
+                experiment_identity_digest="d" * 64,
+                campaign_identity_digest="e" * 64,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
