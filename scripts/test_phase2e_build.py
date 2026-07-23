@@ -314,11 +314,32 @@ class IdentityAndDeltaTests(unittest.TestCase):
             build.build_dispatch_and_characterization_artifacts
         ).parameters
         self.assertNotIn("command_runner", parameters)
-        source = inspect.getsource(build.build_dispatch_and_characterization_artifacts)
+        source = inspect.getsource(build._build_task7_artifacts)
         self.assertIn('LOCK_PATHS["common"]', source)
         self.assertIn("target_dir.mkdir(mode=0o700)", source)
         self.assertIn("DISPATCH_TEST_COMMANDS.items()", source)
         self.assertIn("CHARACTERIZATION_BENCH_COMMANDS.items()", source)
+
+    def test_task7_exposes_disjoint_dispatch_and_characterization_builders(self) -> None:
+        with mock.patch.object(build, "_build_task7_artifacts", return_value={}) as owner:
+            build.build_dispatch_artifacts(**self._task7_dummy_arguments())
+            build.build_characterization_artifacts(**self._task7_dummy_arguments())
+        self.assertEqual(
+            [call.kwargs["kinds"] for call in owner.call_args_list],
+            [frozenset({"dispatch"}), frozenset({"characterization"})],
+        )
+
+    @staticmethod
+    def _task7_dummy_arguments() -> dict:
+        return {
+            "repository": pathlib.Path("/repo"),
+            "evidence_root": pathlib.Path("/evidence"),
+            "scratch_root": pathlib.Path("/scratch"),
+            "candidate": "a" * 40,
+            "path": "/bin",
+            "home": pathlib.Path("/home"),
+            "cargo_home": pathlib.Path("/cargo"),
+        }
 
     def test_immutable_identities_commands_and_field_axes(self) -> None:
         self.assertEqual(

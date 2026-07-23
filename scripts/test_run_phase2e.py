@@ -16,6 +16,7 @@ from unittest import mock
 
 from scripts import phase2e_protocol as protocol
 from scripts import run_phase2e as orchestrator
+from scripts import test_phase2e_build as build_test_fixtures
 
 
 class OuterOrchestratorTests(unittest.TestCase):
@@ -41,6 +42,8 @@ class OuterOrchestratorTests(unittest.TestCase):
             "path": "/bin",
             "home": str((base / "home").resolve()),
             "cargo_home": str((base / "cargo-home").resolve()),
+            "index": str((base / "index.json").resolve()),
+            "index_lock": str((base / "index.lock").resolve()),
         }
         context["command_contract_digest"] = orchestrator.stage_context_contract_digest(
             context
@@ -91,6 +94,20 @@ class OuterOrchestratorTests(unittest.TestCase):
             protocol.atomic_write_json(path, context)
             with self.assertRaises(protocol.ProtocolError):
                 orchestrator.load_stage_context(path)
+
+    def test_worker_rejects_replaced_self_rehashed_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path, context = self.make_stage_context(pathlib.Path(directory))
+            original_sha = protocol.sha256_file(path)
+            context["path"] = "/usr/bin"
+            context["command_contract_digest"] = orchestrator.stage_context_contract_digest(
+                context
+            )
+            protocol.atomic_write_json(path, context)
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.execute_stage_worker(
+                    "dispatch-gates", path, original_sha
+                )
     def test_private_stage_worker_dispatches_exact_registered_handler(self):
         self.assertEqual(set(orchestrator.STAGE_HANDLERS), set(orchestrator.STAGE_ORDER))
         with tempfile.TemporaryDirectory() as directory:
@@ -100,7 +117,9 @@ class OuterOrchestratorTests(unittest.TestCase):
                 stage: (lambda _context, stage=stage: called.append(stage) or 0)
                 for stage in orchestrator.STAGE_ORDER
             }
-            with mock.patch.object(orchestrator, "STAGE_HANDLERS", handlers):
+            with mock.patch.object(orchestrator, "STAGE_HANDLERS", handlers), mock.patch.object(
+                orchestrator, "validate_worker_binding"
+            ):
                 code = orchestrator.main(
                     [
                         "_stage-worker",
@@ -108,6 +127,8 @@ class OuterOrchestratorTests(unittest.TestCase):
                         orchestrator.STAGE_ORDER[0],
                         "--context",
                         str(path.resolve()),
+                        "--context-sha256",
+                        protocol.sha256_file(path),
                     ]
                 )
             self.assertEqual(code, 0)
@@ -117,30 +138,42 @@ class OuterOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = pathlib.Path(directory)
             path, context = self.make_stage_context(base)
-            manifest = (
-                pathlib.Path(context["evidence_root"])
-                / "gate-collector"
-                / "dispatch-gates"
-                / "manifest.json"
-            )
-            manifest.parent.mkdir(parents=True)
-            protocol.atomic_write_json(
-                manifest,
-                {"candidate": self.CANDIDATE, "gating_result": "PASS"},
-            )
-            self.assertEqual(
-                orchestrator.main(
+            with mock.patch(
+                "scripts.run_phase2e_gates.run_dispatch_gate_stage"
+            ) as stage, mock.patch.object(orchestrator, "validate_worker_binding"):
+                self.assertEqual(orchestrator.main(
                     [
                         "_stage-worker",
                         "--stage",
                         "dispatch-gates",
                         "--context",
                         str(path.resolve()),
+                        "--context-sha256",
+                        protocol.sha256_file(path),
                     ]
-                ),
-                0,
-            )
+                ), 0)
+            stage.assert_called_once()
 
+    def test_timing_handlers_use_the_two_canonical_baseline_manifests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _path, context = self.make_stage_context(pathlib.Path(directory))
+            pathlib.Path(context["evidence_root"]).mkdir(parents=True)
+            calls = []
+            with mock.patch.object(orchestrator, "_next_attempt", return_value=1), mock.patch(
+                "scripts.run_phase1_eager_campaign.main",
+                side_effect=lambda argv: calls.append(argv) or 0,
+            ):
+                self.assertEqual(orchestrator._timing(context, "direct-current-main"), 0)
+                self.assertEqual(orchestrator._timing(context, "common-lock-normalized"), 0)
+            root = pathlib.Path(context["evidence_root"])
+            self.assertEqual(
+                pathlib.Path(calls[0][calls[0].index("--baseline-build-manifest") + 1]),
+                root / orchestrator.build.BUILD_MANIFEST_PATHS["direct-current-main-baseline"],
+            )
+            self.assertEqual(
+                pathlib.Path(calls[1][calls[1].index("--baseline-build-manifest") + 1]),
+                root / orchestrator.build.BUILD_MANIFEST_PATHS["common-lock-normalized-baseline"],
+            )
     def test_stage_contract_rejects_shell_and_foreign_executable(self):
         for argv in (("/bin/sh", "-c", "true"), ("/usr/bin/true",)):
             with self.assertRaises(protocol.ProtocolError):
@@ -148,6 +181,7 @@ class OuterOrchestratorTests(unittest.TestCase):
                     orchestrator.STAGE_ORDER[0],
                     argv,
                     pathlib.Path("/repo/context.json"),
+                    "c" * 64,
                 )
 
     def test_progress_journal_never_aliases_terminal_aggregate(self):
@@ -179,6 +213,16 @@ class OuterOrchestratorTests(unittest.TestCase):
                     experiment_identity_digest="b" * 64,
                 )
 
+    def test_seal_rejects_empty_placeholder_build_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_complete_root(root, seal=False)
+            protocol.atomic_write_json(
+                root / orchestrator.build.BUILD_MANIFEST_PATHS["candidate"], {}
+            )
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_semantic_root(root)
+
     def test_direct_and_module_entrypoints_expose_every_help_surface(self):
         repository = pathlib.Path(__file__).resolve().parent.parent
         direct = str(repository / "scripts" / "run_phase2e.py")
@@ -208,7 +252,10 @@ class OuterOrchestratorTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, (argv, result.stderr))
                 self.assertIn("usage:", result.stdout)
 
-    def make_complete_root(self, root: pathlib.Path, *, seal: bool = True) -> None:
+    def make_complete_root(
+        self, root: pathlib.Path, *, seal: bool = True,
+        normalized_timing_result: str = "PASS",
+    ) -> None:
         ledger = protocol.new_ledger(self.CANDIDATE)
         for stage in protocol.STAGE_NAMES:
             for lane in protocol.LANE_NAMES:
@@ -231,9 +278,12 @@ class OuterOrchestratorTests(unittest.TestCase):
                         artifact_device=1,
                         artifact_inode=1,
                     )
-                ledger = protocol.close_attempt(
-                    ledger, stage, lane, attempt, "PASS"
+                result = (
+                    normalized_timing_result
+                    if stage == "timing" and lane == "common-lock-normalized"
+                    else "PASS"
                 )
+                ledger = protocol.close_attempt(ledger, stage, lane, attempt, result)
         protocol.atomic_write_json(root / "evidence-ledger.json", ledger)
         for directory in ("dispatch-gates", "characterization"):
             (root / directory).mkdir()
@@ -241,12 +291,66 @@ class OuterOrchestratorTests(unittest.TestCase):
                 root / directory / "manifest.json",
                 {"candidate": self.CANDIDATE, "gating_result": "PASS"},
             )
+        manifest_factory = build_test_fixtures.ManifestTests()
+        external_fixture = tempfile.TemporaryDirectory()
+        self.addCleanup(external_fixture.cleanup)
+        for relative in orchestrator.build.LOCK_PATHS.values():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture lock\n")
+        for role, relative in orchestrator.build.BUILD_MANIFEST_PATHS.items():
+            fixture_root = pathlib.Path(external_fixture.name) / role
+            fixture_root.mkdir(parents=True)
+            target = fixture_root / "target"
+            target.mkdir()
+            executable = target / "bench"
+            executable.write_bytes(b"fixture executable")
+            executable.chmod(0o700)
+            lock_key = (
+                "direct" if role == "direct-current-main-baseline" else "common"
+            )
+            manifest = manifest_factory.manifest(
+                role,
+                executable,
+                target,
+                lock_sha256=protocol.sha256_file(
+                    root / orchestrator.build.LOCK_PATHS[lock_key]
+                ),
+            )
+            manifest["head"] = self.CANDIDATE
+            (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            protocol.atomic_write_json(root / relative, manifest)
         for relative in orchestrator.required_root_paths(ledger):
+            if relative == orchestrator.PROGRESS_MANIFEST or relative.startswith(
+                "children/"
+            ):
+                continue
             path = root / relative
             if path.exists():
                 continue
             path.parent.mkdir(parents=True, exist_ok=True)
             protocol.atomic_write_json(path, {})
+        orchestrator.run_fixed_stages(
+            root,
+            protocol.runtime_environment(path="/bin", home="/tmp"),
+            lambda _stage, _environment: 0,
+        )
+        probe_patch = mock.patch.object(
+            orchestrator.build,
+            "validate_allocation_probe_set",
+            return_value={role: {} for role in orchestrator.build.PROBE_BUILD_MANIFEST_PATHS},
+        )
+        allocation_patch = mock.patch(
+            "scripts.run_phase2e_allocation_campaign.validate_completed_attempt",
+            return_value=0,
+        )
+        timing_patch = mock.patch(
+            "scripts.run_phase1_eager_campaign.validate_completed_attempt",
+            return_value=0,
+        )
+        for patcher in (probe_patch, allocation_patch, timing_patch):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         if seal:
             orchestrator.seal_root(
                 root,
@@ -259,24 +363,62 @@ class OuterOrchestratorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             self.make_complete_root(root, seal=False)
-            environment = protocol.runtime_environment(path="/bin", home="/tmp")
-            self.assertEqual(
-                orchestrator.run_fixed_stages(
-                    root,
-                    environment,
-                    lambda _stage, _environment: 0,
-                    identity={
-                        "candidate_sha": self.CANDIDATE,
-                        "candidate_tree_sha256": "c" * 64,
-                        "reservation_id": "reservation-1",
-                        "experiment_identity_digest": "b" * 64,
-                        "command_contract_digest": orchestrator.command_contract_digest(),
-                    },
-                ),
-                0,
+            orchestrator.seal_root(
+                root,
+                candidate_sha=self.CANDIDATE,
+                reservation_id="reservation-1",
+                experiment_identity_digest="b" * 64,
             )
             self.assertTrue((root / orchestrator.AGGREGATE_MANIFEST).is_file())
             self.assertEqual(orchestrator.validate_root(root), "PASS")
+
+    def test_aggregate_worker_maps_normalized_timing_fail_to_exit_three(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_complete_root(
+                root, seal=False, normalized_timing_result="FAIL"
+            )
+            self.assertEqual(
+                orchestrator._aggregate_validation({"evidence_root": str(root)}),
+                3,
+            )
+
+    def test_normalized_timing_fail_seals_as_valid_fail_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            self.make_complete_root(
+                root, seal=False, normalized_timing_result="FAIL"
+            )
+            orchestrator.seal_root(
+                root,
+                candidate_sha=self.CANDIDATE,
+                reservation_id="reservation-1",
+                experiment_identity_digest="b" * 64,
+            )
+            self.assertEqual(orchestrator.validate_root(root), "FAIL")
+
+    def test_parent_seals_and_returns_terminal_aggregate_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            identity = {
+                "candidate_sha": self.CANDIDATE,
+                "candidate_tree_sha256": "c" * 64,
+                "reservation_id": "reservation-1",
+                "experiment_identity_digest": "b" * 64,
+                "command_contract_digest": "d" * 64,
+                "context_sha256": "e" * 64,
+            }
+            with mock.patch.object(orchestrator, "seal_root") as seal:
+                result = orchestrator.run_fixed_stages(
+                    root,
+                    protocol.runtime_environment(path="/bin", home="/tmp"),
+                    lambda stage, _environment: (
+                        3 if stage == "aggregate-validation" else 0
+                    ),
+                    identity=identity,
+                )
+            self.assertEqual(result, 3)
+            seal.assert_called_once()
 
     def test_stage_order_is_frozen(self):
         self.assertEqual(
@@ -578,6 +720,31 @@ class OuterOrchestratorTests(unittest.TestCase):
                 orchestrator.rerun_invalid_stage(
                     root, environment, lambda _stage, _environment: 0
                 )
+
+    def test_resume_identity_mismatch_leaves_evidence_byte_identical(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = pathlib.Path(directory)
+            _path, context = self.make_stage_context(base)
+            root = pathlib.Path(context["evidence_root"])
+            root.mkdir(parents=True)
+            protocol.atomic_write_json(root / "owned.json", {"value": 1})
+            before = protocol.regular_file_inventory(root)
+            context_sha = "e" * 64
+            active = {
+                **{name: context[name] for name in (
+                    "candidate_sha", "candidate_tree_sha256",
+                    "experiment_identity_digest", "command_contract_digest",
+                )},
+                "reservation_id": context["reservation_id"],
+                "context_sha256": context_sha,
+            }
+            progress = {**context, "context_sha256": context_sha}
+            changed = {**context, "candidate_sha": "f" * 40}
+            with self.assertRaises(protocol.ProtocolError):
+                orchestrator.validate_resume_identity(
+                    active, changed, context_sha, progress
+                )
+            self.assertEqual(protocol.regular_file_inventory(root), before)
 
     def test_initialization_failure_self_seals_and_records_pending(self):
         with tempfile.TemporaryDirectory() as directory:

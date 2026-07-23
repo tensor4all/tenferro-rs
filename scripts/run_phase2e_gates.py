@@ -1173,6 +1173,136 @@ def validate_terminal_evidence(
         raise protocol.ProtocolError("terminal evidence recursive file inventory mismatch")
 
 
+def run_dispatch_gate_stage(
+    *, repository: pathlib.Path, evidence_root: pathlib.Path, candidate: str,
+    path: str, home: pathlib.Path,
+) -> dict[str, Any]:
+    """Execute and publish only the two dispatch conformance gates."""
+    evidence_root = pathlib.Path(evidence_root).resolve(strict=True)
+    repository = pathlib.Path(repository).resolve(strict=True)
+    common_lock = evidence_root / build.LOCK_PATHS["common"]
+    source_inventory = validate_source_contract(repository)
+    runtime_environment = protocol.runtime_environment(
+        path=path, home=str(pathlib.Path(home).resolve(strict=True))
+    )
+    manifests = {}
+    for package, short, filter_name in (
+        ("tenferro-cpu", "cpu", CPU_FILTER), ("tenferro-ad", "ad", AD_FILTER)
+    ):
+        manifest = _read_json(evidence_root / build.DISPATCH_BUILD_MANIFEST_PATHS[package])
+        executable = validate_test_build_manifest(
+            manifest, package=package, candidate=candidate,
+            repository=repository, common_lock=common_lock,
+        )
+        result = run_test_executable(
+            executable, filter_name, repository=repository,
+            evidence_root=evidence_root, environment=runtime_environment,
+        )
+        artifact = evidence_root / "dispatch-gates" / f"{short}-evidence.json"
+        stdout_path = evidence_root / "dispatch-gates" / f"{short}-stdout.log"
+        stderr_path = evidence_root / "dispatch-gates" / f"{short}-stderr.log"
+        _write_new_bytes(stdout_path, result.stdout.encode())
+        _write_new_bytes(stderr_path, result.stderr.encode())
+        build_manifest_path = evidence_root / build.DISPATCH_BUILD_MANIFEST_PATHS[package]
+        manifests[short] = {
+            "artifact": str(artifact.resolve()), "sha256": sha256_file(artifact),
+            "stdout": {"path": str(stdout_path.resolve()), "sha256": sha256_file(stdout_path)},
+            "stderr": {"path": str(stderr_path.resolve()), "sha256": sha256_file(stderr_path)},
+            "build_manifest": {
+                "path": str(build_manifest_path.resolve()),
+                "sha256": sha256_file(build_manifest_path),
+            },
+            "executable_sha256": manifest["executable_sha256"],
+        }
+    cpu = _read_json(pathlib.Path(manifests["cpu"]["artifact"]))
+    ad = _read_json(pathlib.Path(manifests["ad"]["artifact"]))
+    composed = compose_characterization(cpu, ad)
+    result = {
+        "validity_state": "PASS", "candidate": candidate,
+        "protocol_version": protocol.PROTOCOL_VERSION,
+        "protocol_sha256": sha256_file(repository / "scripts/phase2e_protocol.py"),
+        "candidate_tree_sha256": _read_json(
+            evidence_root / build.DISPATCH_BUILD_MANIFEST_PATHS["tenferro-cpu"]
+        )["candidate_tree_sha256"],
+        "source_inventory": source_inventory,
+        "common_lock_sha256": sha256_file(common_lock),
+        "row_count": composed["row_count"], **manifests,
+    }
+    atomic_write_json(evidence_root / "dispatch-gates/manifest.json", result)
+    return result
+
+
+def run_characterization_stage(
+    *, repository: pathlib.Path, evidence_root: pathlib.Path, candidate: str,
+    scratch_root: pathlib.Path, path: str, home: pathlib.Path,
+) -> dict[str, Any]:
+    """Execute and publish only the 45 characterization measurements."""
+    evidence_root = pathlib.Path(evidence_root).resolve(strict=True)
+    repository = pathlib.Path(repository).resolve(strict=True)
+    scratch_root = pathlib.Path(scratch_root).resolve(strict=True)
+    common_lock = evidence_root / build.LOCK_PATHS["common"]
+    source_inventory = validate_source_contract(repository)
+    dispatch = _read_json(evidence_root / "dispatch-gates/manifest.json")
+    cpu = _read_json(pathlib.Path(dispatch["cpu"]["artifact"]))
+    ad = _read_json(pathlib.Path(dispatch["ad"]["artifact"]))
+    characterization = compose_characterization(cpu, ad)
+    attach_hardware_validity(characterization, capacity_provenance=hardware_availability())
+    runtime_environment = protocol.runtime_environment(
+        path=path, home=str(pathlib.Path(home).resolve(strict=True))
+    )
+    bench_digests, bench_manifests, latency_rows = {}, {}, []
+    criterion_root = scratch_root / "task7-criterion"
+    criterion_root.mkdir(mode=0o700, exist_ok=False)
+    try:
+        for owner, surfaces in (("cpu", {"D-N", "D-D", "G-O"}), ("ad", {"E-N", "E-D"})):
+            manifest = _read_json(evidence_root / build.CHARACTERIZATION_BUILD_MANIFEST_PATHS[owner])
+            executable = validate_bench_build_manifest(
+                manifest, owner=owner, candidate=candidate,
+                repository=repository, common_lock=common_lock,
+            )
+            for row in sorted(characterization["rows"], key=lambda value: value["key"]):
+                if row["surface"] in surfaces:
+                    row_scratch = criterion_root / row["key"].replace("/", "__")
+                    row_scratch.mkdir(mode=0o700)
+                    try:
+                        latency_rows.append(capture_bench_row(
+                            executable, row["key"], repository=repository,
+                            environment=runtime_environment, criterion_home=row_scratch,
+                            evidence_root=evidence_root,
+                            placement_capacity=row["placement_capacity"],
+                            hardware_skip=row["affinity_hardware_skip"],
+                        ))
+                    finally:
+                        shutil.rmtree(row_scratch, ignore_errors=True)
+            bench_digests[owner] = manifest["executable_sha256"]
+            bench_path = evidence_root / build.CHARACTERIZATION_BUILD_MANIFEST_PATHS[owner]
+            bench_manifests[owner] = {
+                "path": str(bench_path.resolve()), "sha256": sha256_file(bench_path)
+            }
+    finally:
+        shutil.rmtree(criterion_root, ignore_errors=True)
+    if len(latency_rows) != 45 or len({row["key"] for row in latency_rows}) != 45:
+        raise protocol.ProtocolError("characterization must preserve exactly 45 latency rows")
+    characterization.update({
+        "bench_executable_sha256": bench_digests,
+        "latency_row_count": len(latency_rows), "latency_rows": latency_rows,
+        "candidate": candidate, "protocol_version": protocol.PROTOCOL_VERSION,
+        "protocol_sha256": sha256_file(repository / "scripts/phase2e_protocol.py"),
+        "candidate_tree_sha256": _read_json(
+            evidence_root / build.CHARACTERIZATION_BUILD_MANIFEST_PATHS["cpu"]
+        )["candidate_tree_sha256"],
+        "source_inventory": source_inventory,
+        "common_lock_sha256": sha256_file(common_lock),
+        "bench_build_manifests": bench_manifests,
+    })
+    atomic_write_json(evidence_root / "characterization/manifest.json", characterization)
+    validate_terminal_evidence(
+        evidence_root, candidate=candidate, repository=repository,
+        source_inventory=source_inventory, common_lock=common_lock,
+    )
+    return characterization
+
+
 def _run_main(
     argv: Sequence[str] | None,
     identity_sink: Callable[[protocol.PreparedRootIdentity], None] | None = None,
@@ -1197,13 +1327,12 @@ def _run_main(
     scratch_root = validate_external_scratch_root(
         args.repository, evidence_root, args.scratch_root
     )
-    source_inventory = validate_source_contract(args.repository)
     common_lock = args.common_lock.resolve(strict=True)
     common_destination = evidence_root / build.LOCK_PATHS["common"]
     common_destination.parent.mkdir(parents=True)
     with common_lock.open("rb") as source:
         build._write_new_regular(common_destination, source.read())
-    build.build_dispatch_and_characterization_artifacts(
+    build.build_dispatch_artifacts(
         repository=args.repository,
         evidence_root=evidence_root,
         scratch_root=scratch_root,
@@ -1212,113 +1341,19 @@ def _run_main(
         home=args.home,
         cargo_home=args.cargo_home,
     )
-    manifests = {}
-    runtime_environment = protocol.runtime_environment(
-        path=args.path, home=str(args.home.resolve(strict=True))
+    run_dispatch_gate_stage(
+        repository=args.repository, evidence_root=evidence_root,
+        candidate=args.candidate, path=args.path, home=args.home,
     )
-    for package, short, filter_name in (
-        ("tenferro-cpu", "cpu", CPU_FILTER), ("tenferro-ad", "ad", AD_FILTER)
-    ):
-        manifest = _read_json(evidence_root / build.DISPATCH_BUILD_MANIFEST_PATHS[package])
-        executable = validate_test_build_manifest(
-            manifest, package=package, candidate=args.candidate,
-            repository=args.repository, common_lock=common_destination,
-        )
-        result = run_test_executable(
-            executable, filter_name, repository=args.repository,
-            evidence_root=evidence_root, environment=runtime_environment,
-        )
-        artifact = evidence_root / "dispatch-gates" / f"{short}-evidence.json"
-        stdout_path = evidence_root / "dispatch-gates" / f"{short}-stdout.log"
-        stderr_path = evidence_root / "dispatch-gates" / f"{short}-stderr.log"
-        _write_new_bytes(stdout_path, result.stdout.encode())
-        _write_new_bytes(stderr_path, result.stderr.encode())
-        build_manifest_path = evidence_root / build.DISPATCH_BUILD_MANIFEST_PATHS[package]
-        manifests[short] = {
-            "artifact": str(artifact.resolve()), "sha256": sha256_file(artifact),
-            "stdout": {"path": str(stdout_path.resolve()), "sha256": sha256_file(stdout_path)},
-            "stderr": {"path": str(stderr_path.resolve()), "sha256": sha256_file(stderr_path)},
-            "build_manifest": {
-                "path": str(build_manifest_path.resolve()),
-                "sha256": sha256_file(build_manifest_path),
-            },
-            "executable_sha256": manifest["executable_sha256"],
-        }
-    cpu = _read_json(pathlib.Path(manifests["cpu"]["artifact"]))
-    ad = _read_json(pathlib.Path(manifests["ad"]["artifact"]))
-    characterization = compose_characterization(cpu, ad)
-    capacity_provenance = hardware_availability()
-    attach_hardware_validity(
-        characterization,
-        capacity_provenance=capacity_provenance,
+    build.build_characterization_artifacts(
+        repository=args.repository, evidence_root=evidence_root,
+        scratch_root=scratch_root, candidate=args.candidate,
+        path=args.path, home=args.home, cargo_home=args.cargo_home,
     )
-    bench_digests = {}
-    bench_manifests = {}
-    latency_rows = []
-    criterion_root = scratch_root / "task7-criterion"
-    criterion_root.mkdir(mode=0o700, exist_ok=False)
-    try:
-        for owner, surfaces in (("cpu", {"D-N", "D-D", "G-O"}), ("ad", {"E-N", "E-D"})):
-            manifest = _read_json(
-                evidence_root / build.CHARACTERIZATION_BUILD_MANIFEST_PATHS[owner]
-            )
-            executable = validate_bench_build_manifest(
-                manifest, owner=owner, candidate=args.candidate,
-                repository=args.repository, common_lock=common_destination,
-            )
-            for row in sorted(characterization["rows"], key=lambda value: value["key"]):
-                if row["surface"] in surfaces:
-                    row_scratch = criterion_root / row["key"].replace("/", "__")
-                    row_scratch.mkdir(mode=0o700)
-                    try:
-                        latency_rows.append(capture_bench_row(
-                            executable, row["key"], repository=args.repository,
-                            environment=runtime_environment,
-                            criterion_home=row_scratch, evidence_root=evidence_root,
-                            placement_capacity=row["placement_capacity"],
-                            hardware_skip=row["affinity_hardware_skip"],
-                        ))
-                    finally:
-                        shutil.rmtree(row_scratch, ignore_errors=True)
-            bench_digests[owner] = manifest["executable_sha256"]
-            bench_path = evidence_root / build.CHARACTERIZATION_BUILD_MANIFEST_PATHS[owner]
-            bench_manifests[owner] = {
-                "path": str(bench_path.resolve()), "sha256": sha256_file(bench_path)
-            }
-    finally:
-        shutil.rmtree(criterion_root, ignore_errors=True)
-    if len(latency_rows) != 45 or len({row["key"] for row in latency_rows}) != 45:
-        raise protocol.ProtocolError("characterization must preserve exactly 45 latency rows")
-    characterization["bench_executable_sha256"] = bench_digests
-    characterization["latency_row_count"] = len(latency_rows)
-    characterization["latency_rows"] = latency_rows
-    characterization["candidate"] = args.candidate
-    characterization["protocol_version"] = protocol.PROTOCOL_VERSION
-    characterization["protocol_sha256"] = sha256_file(
-        args.repository / "scripts/phase2e_protocol.py"
-    )
-    characterization["candidate_tree_sha256"] = _read_json(
-        evidence_root / build.CHARACTERIZATION_BUILD_MANIFEST_PATHS["cpu"]
-    )["candidate_tree_sha256"]
-    characterization["source_inventory"] = source_inventory
-    characterization["common_lock_sha256"] = sha256_file(common_destination)
-    characterization["bench_build_manifests"] = bench_manifests
-    atomic_write_json(
-        evidence_root / "dispatch-gates/manifest.json",
-        {
-            "validity_state": "PASS", "candidate": args.candidate,
-            "protocol_version": protocol.PROTOCOL_VERSION,
-            "protocol_sha256": sha256_file(args.repository / "scripts/phase2e_protocol.py"),
-            "candidate_tree_sha256": characterization["candidate_tree_sha256"],
-            "source_inventory": source_inventory,
-            "common_lock_sha256": sha256_file(common_destination),
-            "row_count": characterization["row_count"], **manifests,
-        },
-    )
-    atomic_write_json(evidence_root / "characterization/manifest.json", characterization)
-    validate_terminal_evidence(
-        evidence_root, candidate=args.candidate, repository=args.repository,
-        source_inventory=source_inventory, common_lock=common_destination,
+    run_characterization_stage(
+        repository=args.repository, evidence_root=evidence_root,
+        candidate=args.candidate, scratch_root=scratch_root,
+        path=args.path, home=args.home,
     )
     return 0
 

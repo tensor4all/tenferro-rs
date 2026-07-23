@@ -2259,6 +2259,20 @@ while not os.path.exists(sys.argv[1]):
         self.assertEqual(args.ledger.read_bytes(), original)
         self.assertEqual(fake.launch_count, 0)
 
+    def test_read_only_completed_attempt_api_pins_validates_and_closes(self):
+        pinned = mock.Mock()
+        pinned.inventory.return_value = ({"campaign.json"}, set())
+        with mock.patch.object(runner, "PinnedDirectory", return_value=pinned), mock.patch.object(
+            runner, "_validate_completed_campaign", return_value=({}, 4)
+        ) as validate:
+            result = runner.validate_completed_attempt(
+                pathlib.Path("/evidence/timing"), {},
+                comparison_kind="common-lock-normalized", attempt_id=2,
+            )
+        self.assertEqual(result, 4)
+        validate.assert_called_once()
+        pinned.close.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

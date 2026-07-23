@@ -1632,6 +1632,32 @@ def _validate_completed_campaign(
     return campaign, EXIT_BY_RESULT[("COMPLETE", statistical_result)]
 
 
+def validate_completed_attempt(
+    artifact_root: pathlib.Path,
+    ledger: Mapping[str, Any],
+    *,
+    comparison_kind: str,
+    attempt_id: int,
+) -> int:
+    """Read-only semantic validation for one retained timing attempt."""
+    args = argparse.Namespace(
+        comparison_kind=comparison_kind, attempt_id=attempt_id
+    )
+    root = PinnedDirectory(pathlib.Path(artifact_root))
+    try:
+        files, _directories = root.inventory()
+        marker = None
+        if FINALIZATION_MARKER in files:
+            marker = _read_root_json(root, FINALIZATION_MARKER)
+            _validate_finalization_marker(marker, args)
+        _campaign, result = _validate_completed_campaign(
+            root, args, ledger, marker=marker, files=files
+        )
+        return result
+    finally:
+        root.close()
+
+
 def _recover_finalization(args, atomic_writer) -> int | None:
     artifact_path = pathlib.Path(os.path.abspath(args.artifact_root))
     try:

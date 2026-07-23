@@ -974,6 +974,30 @@ def _require_closed_allocation_attempt(
         raise protocol.ProtocolError("terminal allocation ledger differs")
 
 
+def validate_completed_attempt(
+    artifact_root: pathlib.Path,
+    ledger: Mapping[str, Any],
+    *,
+    comparison_kind: str,
+    attempt_id: int,
+    probe_manifests: Mapping[str, Mapping[str, Any]],
+    tenferro_manifests: Mapping[str, Mapping[str, Any]],
+) -> int:
+    """Read-only semantic validation for one retained allocation attempt."""
+    args = argparse.Namespace(
+        comparison_kind=comparison_kind, attempt_id=attempt_id
+    )
+    terminal = _read_json(
+        pathlib.Path(artifact_root) / "manifest.json", "allocation manifest"
+    )
+    result = _validate_terminal_allocation(
+        terminal, ledger, args, probe_manifests, tenferro_manifests,
+        validate_live_sources=True,
+    )
+    _require_closed_allocation_attempt(ledger, args, terminal)
+    return result
+
+
 def _validate_running_allocation(
     running: Mapping[str, Any],
     ledger: Mapping[str, Any],

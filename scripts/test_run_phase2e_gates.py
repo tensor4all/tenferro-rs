@@ -534,7 +534,18 @@ class ProvenanceTests(unittest.TestCase):
 
     def test_cli_builds_candidate_artifacts_before_running_evidence(self) -> None:
         source = __import__("inspect").getsource(gates._run_main)
-        self.assertIn("build_dispatch_and_characterization_artifacts", source)
+        self.assertLess(
+            source.index("build_dispatch_artifacts"),
+            source.index("run_dispatch_gate_stage"),
+        )
+        self.assertLess(
+            source.index("run_dispatch_gate_stage"),
+            source.index("build_characterization_artifacts"),
+        )
+        self.assertLess(
+            source.index("build_characterization_artifacts"),
+            source.index("run_characterization_stage"),
+        )
         for option in (
             "--common-lock", "--scratch-root", "--path", "--home", "--cargo-home"
         ):

@@ -249,11 +249,14 @@ def dispatch_build_provenance(
     }
 
 
-def build_dispatch_and_characterization_artifacts(
+def _build_task7_artifacts(
     *, repository: pathlib.Path, evidence_root: pathlib.Path, scratch_root: pathlib.Path,
     candidate: str, path: str, home: pathlib.Path, cargo_home: pathlib.Path,
+    kinds: frozenset[str],
 ) -> dict[str, dict[str, Any]]:
-    """Build all four candidate-owned Task 7 executables in fresh external targets."""
+    """Build exactly the requested candidate-owned Task 7 executable family."""
+    if not kinds or not kinds <= {"dispatch", "characterization"}:
+        raise protocol.ProtocolError("Task 7 build kind is invalid")
     repository = pathlib.Path(repository).resolve(strict=True)
     evidence_root = pathlib.Path(evidence_root).resolve(strict=True)
     scratch_root = pathlib.Path(scratch_root).resolve(strict=True)
@@ -309,20 +312,20 @@ def build_dispatch_and_characterization_artifacts(
     toolchain = _toolchain_manifest(
         tools, cargo_probe.stdout.strip(), rustc_probe.stdout.strip()
     )
-    specs = [
+    specs = ([
         ("dispatch", package, None, command, DISPATCH_BUILD_MANIFEST_PATHS[package])
         for package, command in DISPATCH_TEST_COMMANDS.items()
-    ] + [
+    ] if "dispatch" in kinds else []) + ([
         (
             "characterization", "tenferro-cpu" if owner == "cpu" else "tenferro-ad",
             "numa_execution" if owner == "cpu" else "phase2e_characterization",
             command, CHARACTERIZATION_BUILD_MANIFEST_PATHS[owner],
         )
         for owner, command in CHARACTERIZATION_BENCH_COMMANDS.items()
-    ]
+    ] if "characterization" in kinds else [])
     manifests: dict[str, dict[str, Any]] = {}
     for index, (kind, package, bench, command, relative) in enumerate(specs):
-        target_dir = scratch_root / f"task7-target-{index}-{package}"
+        target_dir = scratch_root / f"task7-{kind}-target-{index}-{package}"
         try:
             target_dir.mkdir(mode=0o700)
         except FileExistsError as error:
@@ -384,6 +387,25 @@ def build_dispatch_and_characterization_artifacts(
         protocol.atomic_write_json(destination, manifest)
         manifests[str(relative)] = manifest
     return manifests
+
+
+def build_dispatch_artifacts(**kwargs) -> dict[str, dict[str, Any]]:
+    """Build only the two dispatch-test executables."""
+    return _build_task7_artifacts(**kwargs, kinds=frozenset({"dispatch"}))
+
+
+def build_characterization_artifacts(**kwargs) -> dict[str, dict[str, Any]]:
+    """Build only the two characterization benchmark executables."""
+    return _build_task7_artifacts(**kwargs, kinds=frozenset({"characterization"}))
+
+
+def build_dispatch_and_characterization_artifacts(
+    **kwargs,
+) -> dict[str, dict[str, Any]]:
+    """Preserve the owning CLI's atomic all-four Task 7 build behavior."""
+    return _build_task7_artifacts(
+        **kwargs, kinds=frozenset({"dispatch", "characterization"})
+    )
 
 INVARIANT_FIELDS = frozenset(
     {

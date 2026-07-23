@@ -2964,6 +2964,23 @@ class AllocationCampaignTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             runner.parse_args([])
 
+    def test_read_only_completed_attempt_api_delegates_to_owning_validators(self):
+        runner = load_runner()
+        terminal = {"validity_state": "COMPLETE"}
+        with mock.patch.object(runner, "_read_json", return_value=terminal), mock.patch.object(
+            runner, "_validate_terminal_allocation", return_value=3
+        ) as validate, mock.patch.object(
+            runner, "_require_closed_allocation_attempt"
+        ) as closed:
+            result = runner.validate_completed_attempt(
+                pathlib.Path("/evidence/attempt"), {},
+                comparison_kind="common-lock-normalized", attempt_id=2,
+                probe_manifests={}, tenferro_manifests={},
+            )
+        self.assertEqual(result, 3)
+        self.assertIs(validate.call_args.kwargs["validate_live_sources"], True)
+        closed.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
