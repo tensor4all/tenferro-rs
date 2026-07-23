@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
 use tenferro_runtime::{CacheStats, Result, TracedTensor};
 
+use crate::semantic_extension::{SemanticExtensionRegistryError, SemanticExtensionRuleSet};
 use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits};
 
 /// Stats for caches owned by an [`AdContext`].
@@ -41,6 +42,7 @@ pub struct AdContextCacheStats {
 /// ```
 #[derive(Clone, Debug)]
 pub struct AdContext {
+    semantic_extension_rules: SemanticExtensionRuleSet,
     extension_rules: ExtensionRuleSet,
     ad_transform_cache: Arc<AdTransformCache>,
 }
@@ -71,6 +73,23 @@ impl AdContext {
     /// ```
     pub fn extension_rules(&self) -> &ExtensionRuleSet {
         &self.extension_rules
+    }
+
+    /// Return semantic-program extension AD rules owned by this context.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::AdContext;
+    ///
+    /// let ad = AdContext::builder().build().unwrap();
+    /// assert!(ad
+    ///     .semantic_extension_rules()
+    ///     .lookup_linearize("example.missing.v1")
+    ///     .is_none());
+    /// ```
+    pub fn semantic_extension_rules(&self) -> &SemanticExtensionRuleSet {
+        &self.semantic_extension_rules
     }
 
     pub(crate) fn extension_rule_set(&self) -> ExtensionRuleSet {
@@ -435,6 +454,7 @@ impl AdContext {
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct AdContextBuilder {
+    semantic_extension_rules: SemanticExtensionRuleSet,
     extension_rule_sets: Vec<ExtensionRuleSet>,
 }
 
@@ -469,6 +489,22 @@ impl AdContextBuilder {
         self
     }
 
+    /// Include an owned semantic-program extension AD rule set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticExtensionRegistryError::MalformedFamilyId`] when a
+    /// family identifier is invalid, or
+    /// [`SemanticExtensionRegistryError::DuplicateRule`] when the same family
+    /// and role were already supplied.
+    pub fn with_semantic_extension_rules(
+        mut self,
+        rules: SemanticExtensionRuleSet,
+    ) -> std::result::Result<Self, SemanticExtensionRegistryError> {
+        self.semantic_extension_rules.merge(rules)?;
+        Ok(self)
+    }
+
     /// Build the context.
     ///
     /// Duplicate extension family registrations are rejected.
@@ -493,6 +529,7 @@ impl AdContextBuilder {
             extension_rules.merge(rules)?;
         }
         Ok(AdContext {
+            semantic_extension_rules: self.semantic_extension_rules,
             extension_rules,
             ad_transform_cache: Arc::new(AdTransformCache::new()),
         })

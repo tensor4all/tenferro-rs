@@ -8,6 +8,7 @@ use tenferro_ad::semantic_extension::{
     SemanticLinearizeResult, SemanticLinearizeRule, SemanticPrimalVjpRequest,
     SemanticPrimalVjpRule,
 };
+use tenferro_ad::AdContext;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::{
     ExtensionAliasDeclaration, ExtensionEffect, ExtensionEffectAccess, ExtensionEffectDeclaration,
@@ -270,5 +271,31 @@ fn semantic_dispatch_rejects_effects_before_calling_rules() {
             &mut builder,
         ),
         Err(SemanticAdError::EffectfulExtension { .. })
+    ));
+}
+
+#[test]
+fn ad_context_owns_cloned_semantic_rule_sets_and_rejects_duplicate_inputs_atomically() {
+    let rules = SemanticExtensionRuleSet::new()
+        .with_linearize(Arc::new(IdentityRule))
+        .unwrap();
+    let ad = AdContext::builder()
+        .with_semantic_extension_rules(rules.clone())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(ad
+        .semantic_extension_rules()
+        .lookup_linearize("tenferro-ad.semantic-identity.v1")
+        .is_some());
+
+    let error = AdContext::builder()
+        .with_semantic_extension_rules(rules.clone())
+        .unwrap()
+        .with_semantic_extension_rules(rules)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        SemanticExtensionRegistryError::DuplicateRule { .. }
     ));
 }
