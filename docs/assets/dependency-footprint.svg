@@ -1,111 +1,289 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 760" role="img" aria-labelledby="dep-title dep-desc">
-  <title id="dep-title">tenferro-rs workspace dependency footprint</title>
-  <desc id="dep-desc">A transitive-reduced dependency diagram seeded from scripts/gen_dep_graph.py. Foundation crates feed tensor and backend crates, which feed runtime, autodiff, standard operation extensions, and tutorial code.</desc>
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
-      <path d="M 0 0 L 10 4 L 0 8 z" fill="#334155"/>
-    </marker>
-    <style>
-      .title { font: 700 25px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
-      .subtitle { font: 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
-      .label { font: 700 15px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
-      .small { font: 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
-      .layer { font: 700 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; text-transform: uppercase; }
-      .box { stroke-width: 1.5; rx: 8; }
-      .foundation { fill: #eef2ff; stroke: #6366f1; }
-      .backend { fill: #ecfdf5; stroke: #059669; }
-      .runtime { fill: #fff7ed; stroke: #ea580c; }
-      .ad { fill: #fdf2f8; stroke: #db2777; }
-      .extension { fill: #e0f2fe; stroke: #0284c7; }
-      .tutorial { fill: #fefce8; stroke: #ca8a04; }
-      .line { stroke: #334155; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
-      .line-soft { stroke: #64748b; stroke-width: 1.4; fill: none; marker-end: url(#arrow); }
-    </style>
-  </defs>
-
-  <text x="295" y="44" class="title">tenferro-rs dependency footprint</text>
-  <text x="282" y="66" class="subtitle">Transitive-reduced workspace edges, seeded from scripts/gen_dep_graph.py</text>
-
-  <text x="58" y="120" class="layer">Foundation</text>
-  <rect x="50" y="136" width="210" height="56" class="box foundation"/>
-  <text x="80" y="160" class="label">tenferro-tensor-core</text>
-  <text x="80" y="180" class="small">layout, dtype, host data</text>
-
-  <rect x="300" y="136" width="180" height="56" class="box foundation"/>
-  <text x="332" y="160" class="label">tenferro-core-ops</text>
-  <text x="332" y="180" class="small">operation catalog</text>
-
-  <rect x="520" y="136" width="270" height="56" class="box foundation"/>
-  <text x="545" y="160" class="label">tenferro-internal-extension-macros</text>
-  <text x="545" y="180" class="small">extension registration macros</text>
-
-  <text x="58" y="265" class="layer">Tensor And Backends</text>
-  <rect x="150" y="280" width="170" height="58" class="box backend"/>
-  <text x="178" y="305" class="label">tenferro-tensor</text>
-  <text x="178" y="325" class="small">runtime tensor contracts</text>
-
-  <rect x="50" y="410" width="150" height="58" class="box backend"/>
-  <text x="82" y="435" class="label">tenferro-cpu</text>
-  <text x="82" y="455" class="small">CPU execution</text>
-
-  <rect x="250" y="410" width="150" height="58" class="box backend"/>
-  <text x="282" y="435" class="label">tenferro-gpu</text>
-  <text x="282" y="455" class="small">CUDA / WebGPU</text>
-
-  <rect x="455" y="280" width="210" height="58" class="box backend"/>
-  <text x="482" y="305" class="label">tenferro-internal-ops</text>
-  <text x="482" y="325" class="small">standard op semantics</text>
-
-  <text x="735" y="265" class="layer">Runtime And AD</text>
-  <rect x="735" y="280" width="170" height="58" class="box runtime"/>
-  <text x="765" y="305" class="label">tenferro-runtime</text>
-  <text x="765" y="325" class="small">graph and dispatch</text>
-
-  <rect x="650" y="410" width="140" height="58" class="box runtime"/>
-  <text x="690" y="435" class="label">tenferro-xla</text>
-  <text x="690" y="455" class="small">StableHLO / PJRT</text>
-
-  <rect x="840" y="410" width="140" height="58" class="box ad"/>
-  <text x="878" y="435" class="label">tenferro-ad</text>
-  <text x="878" y="455" class="small">eager and traced AD</text>
-
-  <text x="58" y="555" class="layer">Standard Operation Extensions</text>
-  <rect x="130" y="570" width="155" height="58" class="box extension"/>
-  <text x="160" y="595" class="label">tenferro-einsum</text>
-  <text x="160" y="615" class="small">contractions</text>
-
-  <rect x="355" y="570" width="155" height="58" class="box extension"/>
-  <text x="385" y="595" class="label">tenferro-linalg</text>
-  <text x="385" y="615" class="small">decompositions</text>
-
-  <rect x="580" y="570" width="155" height="58" class="box extension"/>
-  <text x="620" y="595" class="label">tenferro-fft</text>
-  <text x="620" y="615" class="small">Fourier ops</text>
-
-  <rect x="820" y="570" width="180" height="58" class="box tutorial"/>
-  <text x="848" y="595" class="label">tenferro-tutorial-code</text>
-  <text x="848" y="615" class="small">runnable docs examples</text>
-
-  <path d="M 155 192 V 250 H 235 V 280" class="line"/>
-  <path d="M 390 192 V 250 H 235 V 280" class="line"/>
-  <path d="M 235 338 V 410" class="line"/>
-  <path d="M 235 338 V 374 H 325 V 410" class="line"/>
-  <path d="M 320 309 H 455" class="line"/>
-  <path d="M 655 192 V 250 H 560 V 280" class="line"/>
-  <path d="M 665 309 H 735" class="line"/>
-
-  <path d="M 820 338 V 410" class="line"/>
-  <path d="M 820 338 V 374 H 720 V 410" class="line-soft"/>
-  <path d="M 125 468 V 506 H 875 V 410" class="line-soft"/>
-  <path d="M 325 468 V 506 H 895 V 410" class="line-soft"/>
-
-  <path d="M 910 468 V 540 H 208 V 570" class="line"/>
-  <path d="M 910 468 V 540 H 433 V 570" class="line"/>
-  <path d="M 910 468 V 540 H 658 V 570" class="line"/>
-
-  <path d="M 208 628 V 680 H 910 V 628" class="line-soft"/>
-  <path d="M 433 628 V 680 H 910 V 628" class="line-soft"/>
-  <path d="M 720 468 V 680 H 910 V 628" class="line-soft"/>
-
-  <text x="55" y="716" class="subtitle">Only workspace-internal edges are shown. External crates such as faer, CubeCL, tidu, and num-complex are intentionally omitted.</text>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+ "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<!-- Generated by graphviz version 15.0.0 (20260523.1842)
+ -->
+<!-- Title: workspace Pages: 1 -->
+<svg width="868pt" height="566pt"
+ viewBox="0.00 0.00 868.00 566.00" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" role="img" aria-labelledby="dependency-footprint-title dependency-footprint-desc">
+<title id="dependency-footprint-title">tenferro-rs workspace dependency footprint</title>
+<desc id="dependency-footprint-desc">Transitive-reduced workspace dependencies. Arrows point from each dependency to the crate that uses it.</desc>
+<g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(5.76 560.16)">
+<title>workspace</title>
+<polygon fill="#ffffff" stroke="none" points="-5.76,5.76 -5.76,-560.16 861.76,-560.16 861.76,5.76 -5.76,5.76"/>
+<text xml:space="preserve" text-anchor="middle" x="428" y="-534.2" font-family="IBM Plex Sans" font-size="18.00">tenferro&#45;rs dependency footprint</text>
+<g id="clust1" class="cluster">
+<title>cluster_foundation</title>
+<path fill="#f5f7ff" stroke="#6366f1" d="M241,-416C241,-416 655,-416 655,-416 661,-416 667,-422 667,-428 667,-428 667,-504.8 667,-504.8 667,-510.8 661,-516.8 655,-516.8 655,-516.8 241,-516.8 241,-516.8 235,-516.8 229,-510.8 229,-504.8 229,-504.8 229,-428 229,-428 229,-422 235,-416 241,-416"/>
+</g>
+<g id="clust3" class="cluster">
+<title>cluster_tensor_backend</title>
+<path fill="#f3fcf8" stroke="#059669" d="M20,-212C20,-212 217,-212 217,-212 223,-212 229,-218 229,-224 229,-224 229,-446.4 229,-446.4 229,-452.4 223,-458.4 217,-458.4 217,-458.4 20,-458.4 20,-458.4 14,-458.4 8,-452.4 8,-446.4 8,-446.4 8,-224 8,-224 8,-218 14,-212 20,-212"/>
+</g>
+<g id="clust5" class="cluster">
+<title>cluster_runtime_ad</title>
+<path fill="#fffaf5" stroke="#ea580c" d="M241,-144C241,-144 389,-144 389,-144 395,-144 401,-150 401,-156 401,-156 401,-310.4 401,-310.4 401,-316.4 395,-322.4 389,-322.4 389,-322.4 241,-322.4 241,-322.4 235,-322.4 229,-316.4 229,-310.4 229,-310.4 229,-156 229,-156 229,-150 235,-144 241,-144"/>
+</g>
+<g id="clust7" class="cluster">
+<title>cluster_extension</title>
+<path fill="#f0f9ff" stroke="#0284c7" d="M413,-76C413,-76 680,-76 680,-76 686,-76 692,-82 692,-88 692,-88 692,-174.4 692,-174.4 692,-180.4 686,-186.4 680,-186.4 680,-186.4 413,-186.4 413,-186.4 407,-186.4 401,-180.4 401,-174.4 401,-174.4 401,-88 401,-88 401,-82 407,-76 413,-76"/>
+</g>
+<g id="clust9" class="cluster">
+<title>cluster_tutorial</title>
+<path fill="#fffef2" stroke="#ca8a04" d="M704,-8C704,-8 836,-8 836,-8 842,-8 848,-14 848,-20 848,-20 848,-106.4 848,-106.4 848,-112.4 842,-118.4 836,-118.4 836,-118.4 704,-118.4 704,-118.4 698,-118.4 692,-112.4 692,-106.4 692,-106.4 692,-20 692,-20 692,-14 698,-8 704,-8"/>
+</g>
+<!-- tenferro&#45;tensor&#45;core&#45;&gt;tenferro&#45;tensor -->
+<g id="edge1" class="edge">
+<title>tenferro&#45;tensor&#45;core&#45;&gt;tenferro&#45;tensor</title>
+<path fill="none" stroke="#546e7a" d="M236.75,-429C215.04,-429 195.33,-429 195.33,-429 195.33,-429 195.33,-401.83 195.33,-401.83"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="198.13,-401.83 195.33,-393.83 192.53,-401.83 198.13,-401.83"/>
+</g>
+<!-- tenferro&#45;internal&#45;extension&#45;macros&#45;&gt;tenferro&#45;internal&#45;ops -->
+<g id="edge10" class="edge">
+<title>tenferro&#45;internal&#45;extension&#45;macros&#45;&gt;tenferro&#45;internal&#45;ops</title>
+<path fill="none" stroke="#546e7a" d="M552.91,-423.59C552.91,-389.27 552.91,-319 552.91,-319 552.91,-319 230.47,-319 230.47,-319"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="230.47,-316.2 222.47,-319 230.47,-321.8 230.47,-316.2"/>
+</g>
+<!-- tenferro&#45;core&#45;ops&#45;&gt;tenferro&#45;tensor -->
+<g id="edge2" class="edge">
+<title>tenferro&#45;core&#45;ops&#45;&gt;tenferro&#45;tensor</title>
+<path fill="none" stroke="#546e7a" d="M377.7,-423.78C377.7,-403.63 377.7,-374 377.7,-374 377.7,-374 223.56,-374 223.56,-374"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="223.56,-371.2 215.56,-374 223.56,-376.8 223.56,-371.2"/>
+</g>
+<!-- tenferro&#45;tensor&#45;&gt;tenferro&#45;cpu -->
+<g id="edge3" class="edge">
+<title>tenferro&#45;tensor&#45;&gt;tenferro&#45;cpu</title>
+<path fill="none" stroke="#546e7a" d="M125.95,-374C101.2,-374 75.24,-374 75.24,-374 75.24,-374 75.24,-333.74 75.24,-333.74"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="78.04,-333.74 75.24,-325.74 72.44,-333.74 78.04,-333.74"/>
+</g>
+<!-- tenferro&#45;tensor&#45;&gt;tenferro&#45;internal&#45;ops -->
+<g id="edge9" class="edge">
+<title>tenferro&#45;tensor&#45;&gt;tenferro&#45;internal&#45;ops</title>
+<path fill="none" stroke="#546e7a" d="M170,-355.78C170,-355.78 170,-333.79 170,-333.79"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="172.8,-333.79 170,-325.79 167.2,-333.79 172.8,-333.79"/>
+</g>
+<!-- tenferro&#45;cpu&#45;&gt;tenferro&#45;gpu -->
+<g id="edge4" class="edge">
+<title>tenferro&#45;cpu&#45;&gt;tenferro&#45;gpu</title>
+<path fill="none" stroke="#546e7a" d="M85.83,-287.78C85.83,-287.78 85.83,-265.79 85.83,-265.79"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="88.63,-265.79 85.83,-257.79 83.03,-265.79 88.63,-265.79"/>
+</g>
+<!-- tenferro&#45;gpu&#45;&gt;tenferro&#45;ad -->
+<g id="edge8" class="edge">
+<title>tenferro&#45;gpu&#45;&gt;tenferro&#45;ad</title>
+<path fill="none" stroke="#546e7a" d="M118,-219.81C118,-211.72 118,-204 118,-204 118,-204 326.48,-204 326.48,-204 326.48,-204 326.48,-197.71 326.48,-197.71"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="329.28,-197.71 326.48,-189.71 323.68,-197.71 329.28,-197.71"/>
+</g>
+<!-- tenferro&#45;internal&#45;ops&#45;&gt;tenferro&#45;runtime -->
+<g id="edge5" class="edge">
+<title>tenferro&#45;internal&#45;ops&#45;&gt;tenferro&#45;runtime</title>
+<path fill="none" stroke="#546e7a" d="M220.82,-293C237.99,-293 252.3,-293 252.3,-293 252.3,-293 252.3,-265.83 252.3,-265.83"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="255.1,-265.83 252.3,-257.83 249.5,-265.83 255.1,-265.83"/>
+</g>
+<!-- tenferro&#45;runtime&#45;&gt;tenferro&#45;xla -->
+<g id="edge6" class="edge">
+<title>tenferro&#45;runtime&#45;&gt;tenferro&#45;xla</title>
+<path fill="none" stroke="#546e7a" d="M273.33,-219.78C273.33,-219.78 273.33,-197.79 273.33,-197.79"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="276.13,-197.79 273.33,-189.79 270.53,-197.79 276.13,-197.79"/>
+</g>
+<!-- tenferro&#45;runtime&#45;&gt;tenferro&#45;ad -->
+<g id="edge7" class="edge">
+<title>tenferro&#45;runtime&#45;&gt;tenferro&#45;ad</title>
+<path fill="none" stroke="#546e7a" d="M329.52,-219.78C329.52,-219.78 329.52,-197.79 329.52,-197.79"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="332.32,-197.79 329.52,-189.79 326.72,-197.79 332.32,-197.79"/>
+</g>
+<!-- tenferro&#45;xla&#45;&gt;tenferro&#45;tutorial&#45;code -->
+<g id="edge17" class="edge">
+<title>tenferro&#45;xla&#45;&gt;tenferro&#45;tutorial&#45;code</title>
+<path fill="none" stroke="#546e7a" d="M273,-151.68C273,-112.27 273,-23 273,-23 273,-23 690.77,-23 690.77,-23"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="690.77,-25.8 698.77,-23 690.77,-20.2 690.77,-25.8"/>
+</g>
+<!-- tenferro&#45;ad&#45;&gt;tenferro&#45;einsum -->
+<g id="edge11" class="edge">
+<title>tenferro&#45;ad&#45;&gt;tenferro&#45;einsum</title>
+<path fill="none" stroke="#546e7a" d="M392.92,-159C462.34,-159 611.07,-159 611.07,-159 611.07,-159 611.07,-129.86 611.07,-129.86"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="613.87,-129.86 611.07,-121.86 608.27,-129.86 613.87,-129.86"/>
+</g>
+<!-- tenferro&#45;ad&#45;&gt;tenferro&#45;linalg -->
+<g id="edge12" class="edge">
+<title>tenferro&#45;ad&#45;&gt;tenferro&#45;linalg</title>
+<path fill="none" stroke="#546e7a" d="M392.67,-154C413.3,-154 435.5,-154 435.5,-154 435.5,-154 435.5,-129.99 435.5,-129.99"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="438.3,-129.99 435.5,-121.99 432.7,-129.99 438.3,-129.99"/>
+</g>
+<!-- tenferro&#45;ad&#45;&gt;tenferro&#45;fft -->
+<g id="edge13" class="edge">
+<title>tenferro&#45;ad&#45;&gt;tenferro&#45;fft</title>
+<path fill="none" stroke="#546e7a" d="M392.8,-157C446.39,-157 543,-157 543,-157 543,-157 543,-129.83 543,-129.83"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="545.8,-129.83 543,-121.83 540.2,-129.83 545.8,-129.83"/>
+</g>
+<!-- tenferro&#45;einsum&#45;&gt;tenferro&#45;tutorial&#45;code -->
+<g id="edge14" class="edge">
+<title>tenferro&#45;einsum&#45;&gt;tenferro&#45;tutorial&#45;code</title>
+<path fill="none" stroke="#546e7a" d="M638,-83.65C638,-66.99 638,-45 638,-45 638,-45 690.56,-45 690.56,-45"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="690.56,-47.8 698.56,-45 690.56,-42.2 690.56,-47.8"/>
+</g>
+<!-- tenferro&#45;linalg&#45;&gt;tenferro&#45;tutorial&#45;code -->
+<g id="edge16" class="edge">
+<title>tenferro&#45;linalg&#45;&gt;tenferro&#45;tutorial&#45;code</title>
+<path fill="none" stroke="#546e7a" d="M452,-83.83C452,-62.5 452,-30 452,-30 452,-30 690.74,-30 690.74,-30"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="690.74,-32.8 698.74,-30 690.74,-27.2 690.74,-32.8"/>
+</g>
+<!-- tenferro&#45;fft&#45;&gt;tenferro&#45;tutorial&#45;code -->
+<g id="edge15" class="edge">
+<title>tenferro&#45;fft&#45;&gt;tenferro&#45;tutorial&#45;code</title>
+<path fill="none" stroke="#546e7a" d="M543,-83.83C543,-64.91 543,-38 543,-38 543,-38 690.62,-38 690.62,-38"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="690.62,-40.8 698.62,-38 690.62,-35.2 690.62,-40.8"/>
+</g>
+<!-- cluster_title_foundation -->
+<g id="node1" class="node cluster&#45;title">
+<title>cluster_title_foundation</title>
+<text xml:space="preserve" text-anchor="middle" x="448" y="-496.2" font-family="IBM Plex Sans" font-size="14.00">Foundation</text>
+</g>
+<!-- tenferro&#45;tensor&#45;core -->
+<g id="node2" class="node">
+<title>tenferro&#45;tensor&#45;core</title>
+<g id="a_node2"><a xlink:href="index.html#tenferro-tensor-core" xlink:title="tenferro&#45;tensor&#45;core" target="_parent">
+<path fill="#eef2ff" stroke="black" d="M336.89,-460C336.89,-460 249.11,-460 249.11,-460 243.11,-460 237.11,-454 237.11,-448 237.11,-448 237.11,-436 237.11,-436 237.11,-430 243.11,-424 249.11,-424 249.11,-424 336.89,-424 336.89,-424 342.89,-424 348.89,-430 348.89,-436 348.89,-436 348.89,-448 348.89,-448 348.89,-454 342.89,-460 336.89,-460"/>
+<text xml:space="preserve" text-anchor="middle" x="293" y="-438.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;tensor&#45;core</text>
+</a>
+</g>
+</g>
+<!-- tenferro&#45;internal&#45;extension&#45;macros -->
+<g id="node3" class="node">
+<title>tenferro&#45;internal&#45;extension&#45;macros</title>
+<g id="a_node3"><a xlink:href="index.html#tenferro-internal-extension-macros" xlink:title="tenferro&#45;internal&#45;extension&#45;macros" target="_parent">
+<path fill="#eef2ff" stroke="black" d="M646.55,-460C646.55,-460 487.45,-460 487.45,-460 481.45,-460 475.45,-454 475.45,-448 475.45,-448 475.45,-436 475.45,-436 475.45,-430 481.45,-424 487.45,-424 487.45,-424 646.55,-424 646.55,-424 652.55,-424 658.55,-430 658.55,-436 658.55,-436 658.55,-448 658.55,-448 658.55,-454 652.55,-460 646.55,-460"/>
+<text xml:space="preserve" text-anchor="middle" x="567" y="-438.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;internal&#45;extension&#45;macros</text>
+</a>
+</g>
+</g>
+<!-- tenferro&#45;core&#45;ops -->
+<g id="node4" class="node">
+<title>tenferro&#45;core&#45;ops</title>
+<g id="a_node4"><a xlink:href="index.html#tenferro-core-ops" xlink:title="tenferro&#45;core&#45;ops" target="_parent">
+<path fill="#eef2ff" stroke="black" d="M449.56,-460C449.56,-460 374.44,-460 374.44,-460 368.44,-460 362.44,-454 362.44,-448 362.44,-448 362.44,-436 362.44,-436 362.44,-430 368.44,-424 374.44,-424 374.44,-424 449.56,-424 449.56,-424 455.56,-424 461.56,-430 461.56,-436 461.56,-436 461.56,-448 461.56,-448 461.56,-454 455.56,-460 449.56,-460"/>
+<text xml:space="preserve" text-anchor="middle" x="412" y="-438.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;core&#45;ops</text>
+</a>
+</g>
+</g>
+<!-- cluster_title_tensor_backend -->
+<g id="node5" class="node cluster&#45;title">
+<title>cluster_title_tensor_backend</title>
+<text xml:space="preserve" text-anchor="middle" x="118" y="-437.8" font-family="IBM Plex Sans" font-size="14.00">Tensor and backends</text>
+</g>
+<!-- tenferro&#45;tensor -->
+<g id="node6" class="node">
+<title>tenferro&#45;tensor</title>
+<g id="a_node6"><a xlink:href="index.html#tenferro-tensor" xlink:title="tenferro&#45;tensor" target="_parent">
+<path fill="#ecfdf5" stroke="black" d="M201.57,-392C201.57,-392 138.43,-392 138.43,-392 132.43,-392 126.43,-386 126.43,-380 126.43,-380 126.43,-368 126.43,-368 126.43,-362 132.43,-356 138.43,-356 138.43,-356 201.57,-356 201.57,-356 207.57,-356 213.57,-362 213.57,-368 213.57,-368 213.57,-380 213.57,-380 213.57,-386 207.57,-392 201.57,-392"/>
+<text xml:space="preserve" text-anchor="middle" x="170" y="-370.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;tensor</text>
+</a>
+</g>
+</g>
+<!-- tenferro&#45;cpu -->
+<g id="node7" class="node">
+<title>tenferro&#45;cpu</title>
+<g id="a_node7"><a xlink:href="index.html#tenferro-cpu" xlink:title="tenferro&#45;cpu" target="_parent">
+<path fill="#ecfdf5" stroke="black" d="M79.57,-324C79.57,-324 28.43,-324 28.43,-324 22.43,-324 16.43,-318 16.43,-312 16.43,-312 16.43,-300 16.43,-300 16.43,-294 22.43,-288 28.43,-288 28.43,-288 79.57,-288 79.57,-288 85.57,-288 91.57,-294 91.57,-300 91.57,-300 91.57,-312 91.57,-312 91.57,-318 85.57,-324 79.57,-324"/>
+<text xml:space="preserve" text-anchor="middle" x="54" y="-302.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;cpu</text>
+</a>
+</g>
+</g>
+<!-- tenferro&#45;gpu -->
+<g id="node8" class="node">
+<title>tenferro&#45;gpu</title>
+<g id="a_node8"><a xlink:href="index.html#tenferro-gpu" xlink:title="tenferro&#45;gpu" target="_parent">
+<path fill="#ecfdf5" stroke="black" d="M143.91,-256C143.91,-256 92.09,-256 92.09,-256 86.09,-256 80.09,-250 80.09,-244 80.09,-244 80.09,-232 80.09,-232 80.09,-226 86.09,-220 92.09,-220 92.09,-220 143.91,-220 143.91,-220 149.91,-220 155.91,-226 155.91,-232 155.91,-232 155.91,-244 155.91,-244 155.91,-250 149.91,-256 143.91,-256"/>
+<text xml:space="preserve" text-anchor="middle" x="118" y="-234.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;gpu</text>
+</a>
+</g>
+</g>
+<!-- tenferro&#45;internal&#45;ops -->
+<g id="node9" class="node">
+<title>tenferro&#45;internal&#45;ops</title>
+<g id="a_node9"><a xlink:href="index.html#tenferro-internal-ops" xlink:title="tenferro&#45;internal&#45;ops" target="_parent">
+<path fill="#ecfdf5" stroke="black" d="M208.56,-324C208.56,-324 117.44,-324 117.44,-324 111.44,-324 105.44,-318 105.44,-312 105.44,-312 105.44,-300 105.44,-300 105.44,-294 111.44,-288 117.44,-288 117.44,-288 208.56,-288 208.56,-288 214.56,-288 220.56,-294 220.56,-300 220.56,-300 220.56,-312 220.56,-312 220.56,-318 214.56,-324 208.56,-324"/>
+<text xml:space="preserve" text-anchor="middle" x="163" y="-302.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;internal&#45;ops</text>
+</a>
+</g>
+</g>
+<!-- cluster_title_runtime_ad -->
+<g id="node10" class="node cluster&#45;title">
+<title>cluster_title_runtime_ad</title>
+<text xml:space="preserve" text-anchor="middle" x="315" y="-301.8" font-family="IBM Plex Sans" font-size="14.00">Runtime and AD</text>
+</g>
+<!-- tenferro&#45;runtime -->
+<g id="node11" class="node">
+<title>tenferro&#45;runtime</title>
+<g id="a_node11"><a xlink:href="index.html#tenferro-runtime" xlink:title="tenferro&#45;runtime" target="_parent">
+<path fill="#fff7ed" stroke="black" d="M320.57,-256C320.57,-256 249.43,-256 249.43,-256 243.43,-256 237.43,-250 237.43,-244 237.43,-244 237.43,-232 237.43,-232 237.43,-226 243.43,-220 249.43,-220 249.43,-220 320.57,-220 320.57,-220 326.57,-220 332.57,-226 332.57,-232 332.57,-232 332.57,-244 332.57,-244 332.57,-250 326.57,-256 320.57,-256"/>
+<text xml:space="preserve" text-anchor="middle" x="285" y="-234.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;runtime</text>
+</a>
+</g>
+</g>
+<!-- tenferro&#45;xla -->
+<g id="node12" class="node">
+<title>tenferro&#45;xla</title>
+<g id="a_node12"><a xlink:href="index.html#tenferro-xla" xlink:title="tenferro&#45;xla" target="_parent">
+<path fill="#fff7ed" stroke="black" d="M297.24,-188C297.24,-188 248.76,-188 248.76,-188 242.76,-188 236.76,-182 236.76,-176 236.76,-176 236.76,-164 236.76,-164 236.76,-158 242.76,-152 248.76,-152 248.76,-152 297.24,-152 297.24,-152 303.24,-152 309.24,-158 309.24,-164 309.24,-164 309.24,-176 309.24,-176 309.24,-182 303.24,-188 297.24,-188"/>
+<text xml:space="preserve" text-anchor="middle" x="273" y="-166.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;xla</text>
+</a>
+</g>
+</g>
+<!-- tenferro&#45;ad -->
+<g id="node13" class="node">
+<title>tenferro&#45;ad</title>
+<g id="a_node13"><a xlink:href="index.html#tenferro-ad" xlink:title="tenferro&#45;ad" target="_parent">
+<path fill="#fff7ed" stroke="black" d="M380.57,-188C380.57,-188 335.43,-188 335.43,-188 329.43,-188 323.43,-182 323.43,-176 323.43,-176 323.43,-164 323.43,-164 323.43,-158 329.43,-152 335.43,-152 335.43,-152 380.57,-152 380.57,-152 386.57,-152 392.57,-158 392.57,-164 392.57,-164 392.57,-176 392.57,-176 392.57,-182 386.57,-188 380.57,-188"/>
+<text xml:space="preserve" text-anchor="middle" x="358" y="-166.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;ad</text>
+</a>
+</g>
+</g>
+<!-- cluster_title_extension -->
+<g id="node14" class="node cluster&#45;title">
+<title>cluster_title_extension</title>
+<text xml:space="preserve" text-anchor="middle" x="546" y="-165.8" font-family="IBM Plex Sans" font-size="14.00">Standard operation extensions</text>
+</g>
+<!-- tenferro&#45;einsum -->
+<g id="node15" class="node">
+<title>tenferro&#45;einsum</title>
+<g id="a_node15"><a xlink:href="index.html#tenferro-einsum" xlink:title="tenferro&#45;einsum" target="_parent">
+<path fill="#e0f2fe" stroke="black" d="M672.24,-120C672.24,-120 603.76,-120 603.76,-120 597.76,-120 591.76,-114 591.76,-108 591.76,-108 591.76,-96 591.76,-96 591.76,-90 597.76,-84 603.76,-84 603.76,-84 672.24,-84 672.24,-84 678.24,-84 684.24,-90 684.24,-96 684.24,-96 684.24,-108 684.24,-108 684.24,-114 678.24,-120 672.24,-120"/>
+<text xml:space="preserve" text-anchor="middle" x="638" y="-98.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;einsum</text>
+</a>
+</g>
+</g>
+<!-- tenferro&#45;linalg -->
+<g id="node16" class="node">
+<title>tenferro&#45;linalg</title>
+<g id="a_node16"><a xlink:href="index.html#tenferro-linalg" xlink:title="tenferro&#45;linalg" target="_parent">
+<path fill="#e0f2fe" stroke="black" d="M482.57,-120C482.57,-120 421.43,-120 421.43,-120 415.43,-120 409.43,-114 409.43,-108 409.43,-108 409.43,-96 409.43,-96 409.43,-90 415.43,-84 421.43,-84 421.43,-84 482.57,-84 482.57,-84 488.57,-84 494.57,-90 494.57,-96 494.57,-96 494.57,-108 494.57,-108 494.57,-114 488.57,-120 482.57,-120"/>
+<text xml:space="preserve" text-anchor="middle" x="452" y="-98.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;linalg</text>
+</a>
+</g>
+</g>
+<!-- tenferro&#45;fft -->
+<g id="node17" class="node">
+<title>tenferro&#45;fft</title>
+<g id="a_node17"><a xlink:href="index.html#tenferro-fft" xlink:title="tenferro&#45;fft" target="_parent">
+<path fill="#e0f2fe" stroke="black" d="M565.57,-120C565.57,-120 520.43,-120 520.43,-120 514.43,-120 508.43,-114 508.43,-108 508.43,-108 508.43,-96 508.43,-96 508.43,-90 514.43,-84 520.43,-84 520.43,-84 565.57,-84 565.57,-84 571.57,-84 577.57,-90 577.57,-96 577.57,-96 577.57,-108 577.57,-108 577.57,-114 571.57,-120 565.57,-120"/>
+<text xml:space="preserve" text-anchor="middle" x="543" y="-98.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;fft</text>
+</a>
+</g>
+</g>
+<!-- cluster_title_tutorial -->
+<g id="node18" class="node cluster&#45;title">
+<title>cluster_title_tutorial</title>
+<text xml:space="preserve" text-anchor="middle" x="770" y="-97.8" font-family="IBM Plex Sans" font-size="14.00">Runnable docs examples</text>
+</g>
+<!-- tenferro&#45;tutorial&#45;code -->
+<g id="node19" class="node">
+<title>tenferro&#45;tutorial&#45;code</title>
+<g id="a_node19"><a xlink:href="index.html#tenferro-tutorial-code" xlink:title="tenferro&#45;tutorial&#45;code" target="_parent">
+<path fill="#fefce8" stroke="black" d="M807.56,-52C807.56,-52 712.44,-52 712.44,-52 706.44,-52 700.44,-46 700.44,-40 700.44,-40 700.44,-28 700.44,-28 700.44,-22 706.44,-16 712.44,-16 712.44,-16 807.56,-16 807.56,-16 813.56,-16 819.56,-22 819.56,-28 819.56,-28 819.56,-40 819.56,-40 819.56,-46 813.56,-52 807.56,-52"/>
+<text xml:space="preserve" text-anchor="middle" x="760" y="-30.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;tutorial&#45;code</text>
+</a>
+</g>
+</g>
+</g>
 </svg>

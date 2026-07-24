@@ -73,8 +73,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ![tenferro-rs dependency footprint](assets/dependency-footprint.svg)
 
-The diagram is a transitive-reduced view of workspace crates generated from
-the same dependency metadata read by `scripts/gen_dep_graph.py`.
+The checked-in diagram is rendered by Graphviz from the transitive-reduced
+workspace graph produced by `scripts/gen_dep_graph.py`; node positions and
+arrow attachment points are not maintained by hand. Regenerate it with:
+
+```bash
+python3 scripts/gen_dep_graph.py --format svg --output docs/assets/dependency-footprint.svg
+```
+
+Graphviz is needed only for regeneration. The semantic node and edge inventory
+can be checked without rerendering:
+
+```bash
+python3 scripts/gen_dep_graph.py --check-svg docs/assets/dependency-footprint.svg
+```
 
 ## Mental Model
 

@@ -115,7 +115,8 @@ cp -a "$DOC_ROOT/." "$API_DIR/"
 echo "[4/9] Generating optional dependency graph"
 if [[ -x "$ROOT_DIR/scripts/gen_dep_graph.py" || -f "$ROOT_DIR/scripts/gen_dep_graph.py" ]]; then
   if command -v dot >/dev/null 2>&1; then
-    python3 "$ROOT_DIR/scripts/gen_dep_graph.py" --root-dir "$ROOT_DIR" | dot -Tsvg > "$API_DIR/dep_graph.svg"
+    python3 "$ROOT_DIR/scripts/gen_dep_graph.py" --root-dir "$ROOT_DIR" --format svg \
+      --output "$API_DIR/dep_graph.svg"
   else
     echo "  Warning: graphviz (dot) not found; dependency graph skipped."
     if [[ "${CI:-}" == "true" ]]; then
