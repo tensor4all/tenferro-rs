@@ -44,7 +44,8 @@ pub use cubecl::{
 pub use cubecl::{CudaExtensionCache, CudaExtensionCacheGuard};
 #[cfg(feature = "webgpu")]
 pub use webgpu::{
-    download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, AppleContext,
+    download_webgpu_tensor, upload_webgpu_tensor, webgpu_available, webgpu_runtime_engine_id,
+    webgpu_runtime_engine_registration, webgpu_runtime_hardware_class, AppleContext,
     AppleTransferStats, WebGpuBackend, WebGpuRuntime,
 };
 

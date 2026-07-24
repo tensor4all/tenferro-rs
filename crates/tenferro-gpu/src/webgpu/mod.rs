@@ -23,11 +23,15 @@ pub(crate) mod interop;
 mod kernels;
 mod memory;
 mod runtime;
+mod runtime_adapter;
 
 pub use apple::{AppleContext, AppleTransferStats};
 pub(crate) use error::{unsupported_dtype, unsupported_operation};
 pub use memory::{download_webgpu_tensor, upload_webgpu_tensor};
 pub use runtime::{webgpu_available, WebGpuRuntime};
+pub use runtime_adapter::{
+    webgpu_runtime_engine_id, webgpu_runtime_engine_registration, webgpu_runtime_hardware_class,
+};
 
 /// CubeCL-managed WebGPU buffer stored behind tensor backend-buffer trait objects.
 #[derive(Clone)]

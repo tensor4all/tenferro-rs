@@ -32,6 +32,12 @@ separate multi-GPU scheduling phase. The exact-commit cross-phase audit
 described by the restart design runs before integration and is distinct from
 umbrella Phase 9.
 
+The Phase 7 local slice currently implements WebGPU runtime registration for
+the `dot_general` family and the runtime-owned tensor backend execution bridge,
+with `Runtime::run_compiled` evidence for rank-2 F32 matmul. CUDA runtime
+registration remains deferred until its backend can satisfy the common
+execution-bridge ownership contract without widening the Phase 7 slice.
+
 This document refines rather than immediately replaces the current contracts in:
 
 - `docs/spec/backend-contract.md`
@@ -1170,7 +1176,9 @@ per-backend native engines.
    backend-specific resolved planning inputs, which remain explicit in the
    runtime snapshot and cache identity.
 2. **Native engines where eager einsum is supported.** The CPU native engine is
-   part of phase 6, and CUDA/WebGPU native engines are part of phase 7. XLA
+   part of phase 6. The current Phase 7 slice wires WebGPU `dot_general` through
+   the common runtime scheduler and records GPU native einsum as deferred
+   native-engine work rather than guessing a broader provider split. XLA
    consumes core lowering and requires no native einsum engine.
 3. **One prepared operation.** A native engine represents a complete N-ary
    einsum as one `PreparedOperation`. Eager N-ary einsum through a native
@@ -1666,6 +1674,16 @@ The current CUDA runtime, cuTENSOR handle, and extension cache responsibilities
 would migrate into the per-device runtime. A GPU provider receives a resolved
 `GpuExecutionContext` containing the selected device, stream or queue, scratch
 access, and dependency events. It does not create or globally select a stream.
+
+The first concrete Phase 7 step is narrower than the full model: WebGPU exposes
+`webgpu_runtime_engine_registration(&WebGpuBackend)` and registers only
+`DotGeneralPreparation` plus a `TensorBackendExecutor<WebGpuBackend>`. Its
+default storage class is the runtime-generic device projection
+`tenferro.storage.device.v1`, matching tensors whose placement uses
+`MemoryKind::Device`. CUDA is not registered through the common runtime helper
+in this slice because `EngineRegistration::with_tensor_backend_executor`
+requires a cloneable tensor backend, while `CudaBackend` ownership currently
+encapsulates runtime resources without that contract.
 
 ## Asynchronous Execution and Events
 
