@@ -38,6 +38,12 @@ with `Runtime::run_compiled` evidence for rank-2 F32 matmul. CUDA runtime
 registration remains deferred until its backend can satisfy the common
 execution-bridge ownership contract without widening the Phase 7 slice.
 
+The Phase 8 local slice moves XLA's public graph boundary to `CompiledGraph`
+helpers (`lower_compiled_to_stablehlo` and `XlaExecutor::run_compiled_*`) while
+keeping lower-level `SemanticProgram` entry points for operation crates and
+tests. Full runtime-owned `SubgraphCompiler` selection, one-node scheduled XLA
+subgraphs, and PJRT executable caching remain separate follow-up work.
+
 This document refines rather than immediately replaces the current contracts in:
 
 - `docs/spec/backend-contract.md`
@@ -339,6 +345,24 @@ owner, permutation/data-movement provider ownership, compatibility bridge
 removal policy, and GPU native einsum remain deferred unless accepted by a
 later Phase 7 or Phase 8 slice. Phase 8 still owns XLA/subgraph integration
 and retirement of executor-shaped portable artifacts.
+
+### Phase 8 XLA compiled-graph boundary checkpoint (2026-07-25)
+
+Phase 8 lands a narrow public API migration without creating a PR:
+
+- `tenferro_xla::lower_compiled_to_stablehlo(&CompiledGraph)` lowers the
+  compiled graph directly instead of asking callers to expose the underlying
+  semantic program.
+- `XlaExecutor::lower_compiled_to_stablehlo`,
+  `XlaExecutor::run_compiled_many_with_inputs`, and
+  `XlaExecutor::run_compiled_with_inputs` provide matching executor methods.
+- Existing `SemanticProgram` APIs remain available for lower-level callers and
+  tests. They are no longer the preferred graph-user boundary.
+
+This checkpoint does not implement the full `SubgraphCompiler` design. XLA
+still remains a peer crate outside `tenferro-runtime`; runtime-owned
+subgraph selection, one-node scheduled XLA operations, and PJRT executable
+caches are deferred.
 
 ## Compiler and Artifact Boundaries
 

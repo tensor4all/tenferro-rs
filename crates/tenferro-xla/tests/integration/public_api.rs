@@ -44,7 +44,7 @@ fn xla_executor_options_debug_and_lowering_are_stable() {
     let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&x.neg().unwrap()).unwrap();
-    let module = executor.lower_to_stablehlo(program.program()).unwrap();
+    let module = executor.lower_compiled_to_stablehlo(&program).unwrap();
     assert!(module.as_str().contains("stablehlo.negate"));
 }
 
@@ -56,9 +56,32 @@ fn xla_executor_run_with_inputs_requires_pjrt_plugin_boundary() {
     let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
 
     let err = XlaExecutor::default()
-        .run_with_inputs(program.program(), &[&input])
+        .run_compiled_with_inputs(&program, &[&input])
         .unwrap_err();
 
+    assert!(matches!(
+        err,
+        Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded
+    ));
+}
+
+#[test]
+fn xla_accepts_compiled_graph_without_program_peeking() {
+    let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile(&x.neg().unwrap()).unwrap();
+    let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+
+    let module = tenferro_xla::lower_compiled_to_stablehlo(&program).unwrap();
+    assert!(module.as_str().contains("stablehlo.negate"));
+
+    let executor = XlaExecutor::default();
+    let module = executor.lower_compiled_to_stablehlo(&program).unwrap();
+    assert!(module.as_str().contains("stablehlo.negate"));
+
+    let err = executor
+        .run_compiled_with_inputs(&program, &[&input])
+        .unwrap_err();
     assert!(matches!(
         err,
         Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded

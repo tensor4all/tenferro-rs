@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[1520.0, 3500.0, 3904.0, 8980.0],
     );
 
-    let module = XlaExecutor::default().lower_to_stablehlo(program.program())?;
+    let module = XlaExecutor::default().lower_compiled_to_stablehlo(&program)?;
     let stablehlo = module.as_str();
 
     assert!(stablehlo.contains("stablehlo.dot_general"));

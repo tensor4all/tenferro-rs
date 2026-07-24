@@ -1,6 +1,7 @@
 use std::fmt;
 
 use tenferro_runtime::program::SemanticProgram;
+use tenferro_runtime::CompiledGraph;
 use tenferro_tensor::Tensor;
 
 use crate::Error;
@@ -41,7 +42,7 @@ impl fmt::Debug for XlaExecutorOptions {
 /// let y = x.neg().unwrap();
 /// let program = compiler.compile(&y).unwrap();
 /// let module = XlaExecutor::default()
-///     .lower_to_stablehlo(program.program())
+///     .lower_compiled_to_stablehlo(&program)
 ///     .unwrap();
 /// assert!(module.as_str().contains("stablehlo.negate"));
 /// ```
@@ -205,6 +206,37 @@ impl XlaExecutor {
         lower_to_stablehlo(program)
     }
 
+    /// Lower a compiled graph to StableHLO without executing it.
+    ///
+    /// This is the preferred public lowering boundary for graph users. It
+    /// consumes [`CompiledGraph`] directly and does not route through
+    /// `GraphExecutor` or native execution staging.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_xla::XlaExecutor;
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let mut compiler = GraphCompiler::new();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
+    /// let module = XlaExecutor::default()
+    ///     .lower_compiled_to_stablehlo(&program)
+    ///     .unwrap();
+    /// assert!(module.as_str().contains("stablehlo.negate"));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::UnsupportedDType`, `Error::UnsupportedOp`, or
+    /// `Error::NonStaticShape` for unsupported graph content, and
+    /// `Error::InvalidProgram` for inconsistent graph metadata.
+    pub fn lower_compiled_to_stablehlo(&self, program: &CompiledGraph) -> Result<StableHloModule> {
+        crate::lower_compiled_to_stablehlo(program)
+    }
+
     /// Execute a graph program through a loaded PJRT plugin and return all outputs.
     ///
     /// Inputs must match the ordered semantic-program input metadata exactly. This
@@ -254,6 +286,45 @@ impl XlaExecutor {
         }
     }
 
+    /// Execute a compiled graph through a loaded PJRT plugin and return all outputs.
+    ///
+    /// This wrapper accepts the same [`CompiledGraph`] that native runtime
+    /// execution consumes, while preserving the current XLA/PJRT exact-static
+    /// `F32`/`F64` subset. It delegates to the semantic-program PJRT executor
+    /// and does not route through `GraphExecutor`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_tensor::Tensor;
+    /// use tenferro_xla::{Error, XlaExecutor};
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let mut compiler = GraphCompiler::new();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
+    /// let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let err = XlaExecutor::default()
+    ///     .run_compiled_many_with_inputs(&program, &[&input])
+    ///     .unwrap_err();
+    /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::PjrtFeatureDisabled` or `Error::PjrtPluginNotLoaded`
+    /// when no PJRT executor is available, `Error::InvalidProgram` for input
+    /// count/dtype/shape mismatches, and `Error::PjrtCall` for vendor status
+    /// failures.
+    pub fn run_compiled_many_with_inputs(
+        &self,
+        program: &CompiledGraph,
+        inputs: &[&Tensor],
+    ) -> Result<Vec<Tensor>> {
+        self.run_many_with_inputs(program.program(), inputs)
+    }
+
     /// Execute a single-output graph program through a loaded PJRT plugin.
     ///
     /// # Examples
@@ -279,6 +350,38 @@ impl XlaExecutor {
     /// output.
     pub fn run_with_inputs(&self, program: &SemanticProgram, inputs: &[&Tensor]) -> Result<Tensor> {
         single_output_tensor(self.run_many_with_inputs(program, inputs)?)
+    }
+
+    /// Execute a single-output compiled graph through a loaded PJRT plugin.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_runtime::{GraphCompiler, TracedTensor};
+    /// use tenferro_tensor::Tensor;
+    /// use tenferro_xla::{Error, XlaExecutor};
+    ///
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let mut compiler = GraphCompiler::new();
+    /// let y = x.neg().unwrap();
+    /// let program = compiler.compile(&y).unwrap();
+    /// let input = Tensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
+    /// let err = XlaExecutor::default()
+    ///     .run_compiled_with_inputs(&program, &[&input])
+    ///     .unwrap_err();
+    /// assert!(matches!(err, Error::PjrtFeatureDisabled | Error::PjrtPluginNotLoaded));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Propagates the `run_compiled_many_with_inputs` errors and returns
+    /// `Error::InvalidProgram` if the program does not have exactly one output.
+    pub fn run_compiled_with_inputs(
+        &self,
+        program: &CompiledGraph,
+        inputs: &[&Tensor],
+    ) -> Result<Tensor> {
+        single_output_tensor(self.run_compiled_many_with_inputs(program, inputs)?)
     }
 }
 

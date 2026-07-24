@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let graph = trace.finish(&[y])?;
     let program = GraphCompiler::new().compile_traced_graph(&graph)?;
 
-    let module = XlaExecutor::default().lower_to_stablehlo(program.program())?;
+    let module = XlaExecutor::default().lower_compiled_to_stablehlo(&program)?;
     let stablehlo = module.as_str();
     assert!(stablehlo.contains("stablehlo.dot_general"));
     assert!(stablehlo.contains("stablehlo.abs"));
@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rhs_input = Tensor::from_vec_col_major(vec![4, 2], rhs_values.clone())?;
 
     let output = XlaExecutor::from_env()?
-        .run_with_inputs(program.program(), &[&lhs_input, &mid_input, &rhs_input])?;
+        .run_compiled_with_inputs(&program, &[&lhs_input, &mid_input, &rhs_input])?;
     assert_eq!(output.shape(), &[2, 2]);
     assert_close(
         output.as_slice::<f32>().unwrap(),

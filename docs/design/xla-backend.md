@@ -8,13 +8,16 @@ Related issue: https://github.com/tensor4all/tenferro-rs/issues/984
 
 The XLA path is a peer executor over `CompiledGraph` lowering views. It is
 implemented in `tenferro-xla`, not in `tenferro-runtime`, and it does not
-implement `TensorBackend`.
+implement `TensorBackend`. Public graph users should pass `CompiledGraph`
+directly through `lower_compiled_to_stablehlo` or
+`XlaExecutor::run_compiled_*`; the lower-level `SemanticProgram` APIs remain
+available for operation crates and internal lowering tests.
 
 ```text
 CompiledGraph lowering view
   |
   v
-tenferro_xla::lower_to_stablehlo()
+tenferro_xla::lower_compiled_to_stablehlo()
   |
   v
 StableHLO MLIR text
@@ -26,7 +29,7 @@ OpenXLA execution check or runtime-loaded PJRT plugin
 The native path remains:
 
 ```text
-CompiledGraph -> GraphExecutor<B: TensorBackend>
+CompiledGraph -> Runtime::run_compiled or legacy GraphExecutor<B: TensorBackend>
 ```
 
 ## Runtime Dependency Boundary
@@ -44,7 +47,9 @@ The loader contract is:
   explicit errors.
 
 This keeps the XLA boundary out of `tenferro-runtime` and avoids introducing
-XLA as a transitive dependency for users who only need native execution.
+XLA as a transitive dependency for users who only need native execution. The
+Phase 8 `CompiledGraph` wrappers are intentionally thin: they do not add a
+runtime-owned `SubgraphCompiler` implementation or a PJRT executable cache.
 
 ## StableHLO Subset
 

@@ -9,13 +9,13 @@
 //!
 //! ```
 //! use tenferro_runtime::{GraphCompiler, TracedTensor};
-//! use tenferro_xla::lower_to_stablehlo;
+//! use tenferro_xla::lower_compiled_to_stablehlo;
 //!
 //! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 //! let y = (&x + &x).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let module = lower_to_stablehlo(program.program()).unwrap();
+//! let module = lower_compiled_to_stablehlo(&program).unwrap();
 //! assert!(module.as_str().contains("stablehlo.add"));
 //! ```
 
@@ -81,4 +81,36 @@ pub fn lower_to_stablehlo(
     program: &tenferro_runtime::program::SemanticProgram,
 ) -> Result<StableHloModule> {
     lowering::lower_to_stablehlo(program)
+}
+
+/// Lower a compiled graph to StableHLO MLIR text.
+///
+/// This is the preferred public lowering boundary for graph users. It consumes
+/// the backend-neutral [`CompiledGraph`](tenferro_runtime::CompiledGraph) view
+/// directly and does not route through [`GraphExecutor`](tenferro_runtime::GraphExecutor)
+/// or native execution staging.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{GraphCompiler, TracedTensor};
+/// use tenferro_xla::lower_compiled_to_stablehlo;
+///
+/// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
+/// let mut compiler = GraphCompiler::new();
+/// let y = x.neg().unwrap();
+/// let program = compiler.compile(&y).unwrap();
+/// let module = lower_compiled_to_stablehlo(&program).unwrap();
+/// assert!(module.as_str().contains("stablehlo.negate"));
+/// ```
+///
+/// # Errors
+///
+/// Returns `Error::UnsupportedDType`, `Error::UnsupportedOp`, or
+/// `Error::NonStaticShape` for unsupported graph content, and
+/// `Error::InvalidProgram` for inconsistent graph metadata.
+pub fn lower_compiled_to_stablehlo(
+    program: &tenferro_runtime::CompiledGraph,
+) -> Result<StableHloModule> {
+    lowering::lower_to_stablehlo(program.program())
 }

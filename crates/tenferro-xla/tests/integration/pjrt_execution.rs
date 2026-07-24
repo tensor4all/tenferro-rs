@@ -40,7 +40,7 @@ fn pjrt_executes_phase_one_elementwise_from_rust_when_configured() {
     let input_values = vec![-1.0_f32, 0.25, 0.5, 1.25];
     let input = Tensor::from_vec_col_major(vec![4], input_values.clone()).unwrap();
     let output = executor
-        .run_with_inputs(program.program(), &[&input])
+        .run_compiled_with_inputs(&program, &[&input])
         .unwrap();
 
     let expected = input_values
@@ -73,7 +73,7 @@ fn pjrt_executes_nary_einsum_from_rust_when_configured() {
     let rhs_input = Tensor::from_vec_col_major(vec![4, 2], rhs_values.clone()).unwrap();
 
     let output = executor
-        .run_with_inputs(program.program(), &[&lhs_input, &mid_input, &rhs_input])
+        .run_compiled_with_inputs(&program, &[&lhs_input, &mid_input, &rhs_input])
         .unwrap();
     let expected = expected_ij_jk_kl_to_il(&lhs_values, &mid_values, &rhs_values);
     assert_eq!(output.shape(), &[2, 2]);
@@ -98,7 +98,7 @@ fn pjrt_executes_nary_einsum_plus_elementwise_from_rust_when_configured() {
     let rhs_input = Tensor::from_vec_col_major(vec![4, 2], rhs_values.clone()).unwrap();
 
     let output = executor
-        .run_with_inputs(program.program(), &[&lhs_input, &mid_input, &rhs_input])
+        .run_compiled_with_inputs(&program, &[&lhs_input, &mid_input, &rhs_input])
         .unwrap();
     let expected = expected_ij_jk_kl_to_il(&lhs_values, &mid_values, &rhs_values)
         .into_iter()
