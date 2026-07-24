@@ -113,11 +113,13 @@ Internal: tenferro-core-ops
 ## IV. Dependency Direction
 
 The dependency direction is deliberately one-way. Arrows below mean
-"depends on":
+"depends on". The CPU-to-runtime line records the accepted Phase 4 direction;
+it does not claim that Phase 4 is implemented:
 
 ```text
 tenferro-tensor           -> tenferro-tensor-core, tenferro-core-ops
 tenferro-cpu              -> tenferro-tensor
+tenferro-cpu              -> tenferro-runtime
 tenferro-gpu              -> tenferro-tensor, tenferro-core-ops
 tenferro-internal-ops     -> tenferro-tensor, tenferro-core-ops,
                               tenferro-internal-extension-macros
@@ -140,6 +142,9 @@ Additional internal dependencies:
 
 - `tenferro-runtime`, `tenferro-tensor`, `tenferro-gpu`, and
   `tenferro-internal-ops` use `tenferro-core-ops` for primitive metadata.
+- The production `tenferro-cpu` to `tenferro-runtime` edge is approved solely
+  for engine-registration preparation adapters. Any CPU dependency in the
+  opposite direction remains dev/test-only and is not a production edge.
 - `tenferro-einsum`, `tenferro-linalg`, and `tenferro-fft` depend on
   `tenferro-runtime` for extension application and runtime registration.
 - `tenferro-xla` depends on `tenferro-runtime` to read compiled programs and
@@ -158,7 +163,8 @@ Rules:
 - `tenferro-tensor` owns concrete runtime tensor values, arbitrary-stride typed
   views, backend traits, and backend-independent contracts.
 - `tenferro-cpu` owns `CpuBackend`, `CpuContext`, CPU execution sessions,
-  CPU kernels, buffer pools, and CPU provider selection.
+  CPU kernels, buffer pools, CPU provider selection, and its narrow
+  runtime-registration preparation adapters.
 - `tenferro-gpu` owns GPU backend implementation and transfer helpers.
 - `tenferro-runtime` owns graph construction, compilation, execution, extension
   runtime registration, and extension cache ownership.
@@ -196,23 +202,17 @@ See [`../guides/custom-operations.md`](../guides/custom-operations.md) and
 
 ## VI. AD Boundary
 
-`tidu-rs` owns the generic `Primitive` contract and graph transforms such as
-`linearize` and `linear_transpose`. It is not tied to tenferro's concrete
-tensor types.
-
-tenferro supplies one concrete graph vocabulary, `StdTensorOp`, plus
-operation-family extension carriers. Core primitive AD rule implementations
-live in `tenferro-internal-ops/src/ad/`. Extension-family AD rules live with
-the operation family that owns the semantics, for example `tenferro-einsum` or
-`tenferro-linalg`.
+`tenferro-ad` owns the current `SemanticProgram -> SemanticProgram` AD
+transforms. `tenferro-internal-ops` still owns the primitive rule vocabulary
+used to implement those transforms, while operation-family semantic rules live
+with the crate that owns the operation semantics.
 
 This is the current split:
 
 ```text
-tidu-rs                Primitive contract and generic AD graph transforms
-tenferro-internal-ops  StdTensorOp AD rules
-tenferro-ad            public eager/traced AD APIs
-operation crates       optional extension-family AD rules
+tenferro-internal-ops  primitive rule vocabulary
+tenferro-ad            semantic transforms and public eager/traced AD APIs
+operation crates       optional extension-family semantic rules
 ```
 
 ## VII. Documentation Notes

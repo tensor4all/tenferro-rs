@@ -219,8 +219,12 @@ Phase 3 subsequently closed the A1 through A3 boundaries described above:
 - `TraceContext -> TracedGraph -> GraphCompiler -> CompiledGraph` is the
   backend-neutral trace and compile path, with ordered semantic inputs and
   process-local bindings.
-- `ExecProgram` and the semantic-to-execution adapter are private runtime
-  staging. Public execution accepts `CompiledGraph` and ordered tensor inputs.
+- `ExecProgram` remains private runtime staging. Public execution accepts
+  `CompiledGraph` and ordered tensor inputs.
+- `lower_semantic_to_exec_staging` is the sole private forward adapter,
+  remains binding-free through Phase 4, and is owned for deletion by Phase 5.
+  This records the accepted migration boundary; it does not claim Phase 4 is
+  implemented.
 - `AdContext` solely owns copy-on-write `SemanticExtensionRuleSet` values and
   cached whole-program semantic JVP/VJP transforms.
 - FFT, einsum, linalg, sparse, tropical, and in-tree fixture rules use

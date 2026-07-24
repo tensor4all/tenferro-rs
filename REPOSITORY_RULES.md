@@ -339,7 +339,9 @@ umbrella issue or implementation branch is declared ready for integration.
   directly.
 - Users import operation crates directly, bring their extension traits into
   scope, and register runtimes explicitly when graph execution reaches an
-  extension family; for example `tenferro_einsum::GraphCompilerEinsumExt` plus
+  extension family; for example the direct
+  `tenferro_einsum::TraceContextEinsumExt` /
+  `tenferro_einsum::TracedTensorEinsumExt` operation surfaces plus
   `executor.register_extension(tenferro_einsum::register_runtime)`.
 - Extension runtime dispatch must fail explicitly when a runtime owner is
   available but the extension family is not registered. Do not silently fall
@@ -379,15 +381,15 @@ umbrella issue or implementation branch is declared ready for integration.
 
 ## Rule Source Of Truth
 
-- `Primitive::linearize` and `Primitive::transpose_rule` (in `tenferro-internal-ops/src/ad/`)
-  are the semantic source of truth for AD rules.
-- These are graph-level rules that add ops into a `GraphBuilder`.
-  `tidu::linearize` calls `linearize`; `tidu::linear_transpose` calls `transpose_rule`.
-- The canonical tenferro AD model is graph-level `linearize` plus
-  `transpose_rule`. Do not model tensor primitive AD by implementing
+- `SemanticProgram -> SemanticProgram` transforms in `tenferro-ad` are the
+  current semantic AD boundary. `tenferro-internal-ops` still owns the
+  primitive rule vocabulary used to implement those transforms.
+- The semantic transforms use the validation-preserving program builder rather
+  than exposing primitive graph keys or mutating a frozen program.
+- Do not model tensor primitive AD by implementing
   `chainrules_core::ReverseRule<StdTensorOp>` or `ForwardRule<StdTensorOp>`;
   those traits are value/tape-level interfaces and are not the standard
-  primitive-op rule surface in this repository.
+  semantic transform surface in this repository.
 - Avoid introducing ChainRules-style `frule`/`rrule` terminology for new
   tenferro AD APIs. Use `linearize` for JVP graph emission and
   `transpose_rule` for transposed linear graph emission. A future
@@ -1010,9 +1012,10 @@ Tests follow implementation ownership.
 - **Extension families**: extension crates cannot add inherent methods to
   external tensor types, so their canonical tensor-facing surface is extension
   traits (`TracedTensorLinalgExt`, `EagerEinsumExt`,
-  `GraphCompilerEinsumExt`, `TracedTensorFftExt`) re-exported at the crate
-  root. Do not expose public `traced_tensor` / `eager_tensor` module free
-  functions for standard operation families.
+  `TraceContextEinsumExt`, `TracedTensorEinsumExt`,
+  `TracedTensorFftExt`) re-exported at the crate root. Do not expose public
+  `traced_tensor` / `eager_tensor` module free functions for standard
+  operation families.
 - **No compatibility shims for operation-surface style changes**: when API
   compatibility is not explicitly required, remove old module functions instead
   of keeping wrappers beside the canonical method/associated-function or

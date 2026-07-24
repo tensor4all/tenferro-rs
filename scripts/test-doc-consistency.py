@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
 import textwrap
+import tomllib
 import xml.etree.ElementTree as ET
 
 
@@ -15,6 +17,69 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def read_toml(relative: str) -> dict:
+    with (ROOT / relative).open("rb") as file:
+        return tomllib.load(file)
+
+
+def rust_function(source: str, name: str) -> tuple[str, str]:
+    definitions = list(
+        re.finditer(
+            rf"(?m)^[ \t]*(?:(?:pub(?:\([^)\n]*\))?|async|const|unsafe)[ \t]+)*"
+            rf"fn[ \t]+{re.escape(name)}[ \t]*\(",
+            source,
+        )
+    )
+    assert len(definitions) == 1
+    start = definitions[0].start()
+    parameters_start = definitions[0].end() - 1
+    depth = 0
+    parameters_end = None
+    for index in range(parameters_start, len(source)):
+        character = source[index]
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                parameters_end = index
+                break
+    assert parameters_end is not None
+    body_start = source.index("{", parameters_end)
+    return (
+        source[parameters_start + 1 : parameters_end],
+        source[start:body_start],
+    )
+
+
+def dependency_package_name(
+    alias: str,
+    specification: object,
+    workspace_dependencies: dict,
+) -> str:
+    if not isinstance(specification, dict):
+        return alias
+    package = specification.get("package")
+    if isinstance(package, str):
+        return package
+    if specification.get("workspace") is True:
+        workspace_specification = workspace_dependencies.get(alias)
+        if isinstance(workspace_specification, dict):
+            workspace_package = workspace_specification.get("package")
+            if isinstance(workspace_package, str):
+                return workspace_package
+    return alias
+
+
+def normal_and_build_dependency_tables(manifest: dict):
+    for table_name in ("dependencies", "build-dependencies"):
+        yield manifest.get(table_name, {})
+    for target in manifest.get("target", {}).values():
+        if isinstance(target, dict):
+            for table_name in ("dependencies", "build-dependencies"):
+                yield target.get(table_name, {})
 
 
 def load_operation_categories_checker():
@@ -319,6 +384,52 @@ def test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero()
     assert "floating-point and complex zero divisors" not in docs
 
 
+def test_phase4_runtime_ownership_and_dependency_direction_are_canonical() -> None:
+    rules = read("REPOSITORY_RULES.md")
+    crates = read("docs/architecture/tenferro-crates.md")
+    design = read("docs/design/execution-engine-provider-architecture.md")
+    staging = read("crates/tenferro-runtime/src/compiler/semantic_staging.rs")
+    workspace = read_toml("Cargo.toml")
+    runtime_manifest = read_toml("crates/tenferro-runtime/Cargo.toml")
+    workspace_dependencies = workspace["workspace"]["dependencies"]
+    parameters, signature = rust_function(
+        staging,
+        "lower_semantic_to_exec_staging",
+    )
+
+    assert "GraphCompilerEinsumExt" not in rules
+    assert "SemanticProgram -> SemanticProgram" in " ".join(rules.split())
+    assert re.search(r"(?m)^tenferro-cpu\s+->\s+tenferro-runtime$", crates)
+    normalized_crates = " ".join(crates.split())
+    normalized_design = " ".join(design.split())
+    assert (
+        "CPU-to-runtime line records the accepted Phase 4 direction"
+        in normalized_crates
+    )
+    assert "does not claim that Phase 4 is implemented" in normalized_crates
+    assert "opposite direction remains dev/test-only" in normalized_crates
+    assert "lower_semantic_to_exec_staging" in design
+    assert "sole private forward adapter" in design
+    assert "does not claim Phase 4 is implemented" in normalized_design
+    assert re.search(r"\bprogram\s*:\s*&SemanticProgram\b", parameters)
+    assert re.search(r"\boptions\s*:\s*CompilerOptions\b", parameters)
+    assert not re.search(r"\b\w*[Bb]inding\w*\b", signature)
+
+    dependency_names = {
+        dependency_package_name(alias, specification, workspace_dependencies)
+        for table in normal_and_build_dependency_tables(runtime_manifest)
+        for alias, specification in table.items()
+    }
+    assert "tenferro-cpu" not in dependency_names
+
+    dependency_lines = [
+        line
+        for line in crates.splitlines()
+        if re.match(r"^tenferro-[a-z0-9-]+\s+->", line)
+    ]
+    assert len({line.index("->") for line in dependency_lines}) == 1
+
+
 def main() -> int:
     for test in [
         test_architecture_svg_lists_cpu_crate_xla_boundary_and_background,
@@ -336,6 +447,7 @@ def main() -> int:
         test_removed_tensor_module_paths_do_not_compile,
         test_documentation_policy_matches_rendered_internals,
         test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero,
+        test_phase4_runtime_ownership_and_dependency_direction_are_canonical,
     ]:
         test()
     return 0
