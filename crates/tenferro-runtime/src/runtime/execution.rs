@@ -156,6 +156,8 @@ pub(super) fn run_compiled(
     let inputs = resolve_input_tensors(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
+    super::schedule::ScheduledGraph::from_exec_program(prepared.root().staging())
+        .validate_for_runtime()?;
     let executor = execution_engine(runtime, prepared.root().as_ref())?;
     executor.execute(prepared.root().staging(), inputs)
 }
@@ -168,6 +170,8 @@ pub(super) fn run_compiled_values(
     let inputs = resolve_input_tensors(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
+    super::schedule::ScheduledGraph::from_exec_program(prepared.root().staging())
+        .validate_for_runtime()?;
     let executor = execution_engine(runtime, prepared.root().as_ref())?;
     executor.execute_values(prepared.root().staging(), inputs)
 }
