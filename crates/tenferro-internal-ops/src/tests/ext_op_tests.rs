@@ -136,3 +136,23 @@ fn extension_payload_does_not_affect_tensor_input_arity() {
     assert_eq!(payload_op(1, WindowMode::Valid, 2).input_count(), 2);
     assert_eq!(payload_op(2, WindowMode::Same, 2).input_count(), 2);
 }
+
+#[test]
+fn extension_operation_ownership_is_ad_engine_independent() {
+    let source = include_str!("../ext_op.rs");
+    for forbidden in [
+        "ExtensionAdDispatcher",
+        "dispatch_extension_linearize",
+        "dispatch_extension_transpose",
+        "LocalValueId",
+        "OperationRole",
+        "PrimitiveTransposeInput",
+        "ValueKey",
+        "use tidu",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "extension-op ownership must not mention AD-engine surface {forbidden}"
+        );
+    }
+}

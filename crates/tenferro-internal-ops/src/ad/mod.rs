@@ -1,8 +1,9 @@
 //! Automatic differentiation rules for [`StdTensorOp`].
 //!
 //! `linearize` and `transpose_rule` are separate graph-level contracts.
-//! Core ops keep their rules here; extension ops own their own AD support
-//! through the extension trait.
+//! Core ops keep their rules here. Extension semantic rules are owned by
+//! `tenferro-ad`; the private dispatcher below is only the context-owned bridge
+//! used while the core sweep remains graph based.
 
 pub mod context;
 
@@ -44,7 +45,7 @@ use tidu::{
 };
 
 #[cfg(feature = "autodiff")]
-use crate::ext_op::{dispatch_extension_linearize, dispatch_extension_transpose};
+use crate::ext_op::ExtensionOp;
 #[cfg(feature = "autodiff")]
 use crate::std_tensor_op::StdTensorOp;
 
@@ -115,6 +116,70 @@ impl PrimitiveRuleBuilder for GraphBuilder<StdTensorOp> {
     ) -> Vec<LocalValueId> {
         GraphBuilder::add_operation(self, operation, inputs, role)
     }
+}
+
+/// Single context-owned bridge from the core AD sweep to semantic extension
+/// rules.
+///
+/// Family-specific rules must not implement this trait. `tenferro-ad` owns the
+/// sole implementation and dispatches through its `SemanticExtensionRuleSet`.
+#[doc(hidden)]
+#[cfg(feature = "autodiff")]
+pub trait ExtensionAdDispatcher: std::fmt::Debug + Send + Sync + 'static {
+    fn has_primal_vjp(&self, family_id: &str) -> bool;
+
+    fn linearize(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        primal_in: &[ValueKey<StdTensorOp>],
+        primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
+        ctx: &mut context::ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
+
+    fn transpose(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
+        mode: &OperationRole,
+        ctx: &mut context::ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
+}
+
+#[cfg(feature = "autodiff")]
+fn dispatch_extension_linearize(
+    op: &dyn ExtensionOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut context::ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    if let Some(dispatcher) = ctx.extension_ad_dispatcher() {
+        return dispatcher.linearize(op, builder, primal_in, primal_out, tangent_in, ctx);
+    }
+    Err(ADRuleError::unsupported(op.family_id(), ADRuleKind::Jvp))
+}
+
+#[cfg(feature = "autodiff")]
+fn dispatch_extension_transpose(
+    op: &dyn ExtensionOp,
+    builder: &mut dyn PrimitiveRuleBuilder,
+    cotangent_out: &[Option<LocalValueId>],
+    inputs: &[PrimitiveTransposeInput<StdTensorOp>],
+    mode: &OperationRole,
+    ctx: &mut context::ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    if let Some(dispatcher) = ctx.extension_ad_dispatcher() {
+        return dispatcher.transpose(op, builder, cotangent_out, inputs, mode, ctx);
+    }
+    Err(ADRuleError::unsupported(
+        op.family_id(),
+        ADRuleKind::Transpose,
+    ))
 }
 
 /// Forward-mode AD (JVP) for `StdTensorOp`: given the primal op and its

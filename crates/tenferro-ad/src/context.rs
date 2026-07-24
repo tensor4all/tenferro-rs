@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use tenferro_ops::ExtensionAdDispatcher;
+use tenferro_ops::ad::ExtensionAdDispatcher;
 use tenferro_runtime::program::FrozenProgram;
 use tenferro_runtime::{CacheStats, Result, TracedTensor};
 

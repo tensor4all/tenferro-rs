@@ -3,11 +3,12 @@
 use std::collections::{HashMap, HashSet};
 
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+use tenferro_ops::ad::ExtensionAdDispatcher;
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::{ExtensionAdDispatcher, ExtensionOp, ShapeGuardContext};
+use tenferro_ops::{ExtensionOp, ShapeGuardContext};
 use tenferro_runtime::program::{
     FrozenProgram, ProgramInputSpec, ProgramValue, ProgramValueMetadata, SemanticOpRef,
     SemanticProgramBuilder,

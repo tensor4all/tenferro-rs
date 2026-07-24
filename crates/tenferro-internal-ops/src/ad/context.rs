@@ -16,9 +16,9 @@ use computegraph::graph::Graph;
 use computegraph::types::{ValueKey, ValueRef};
 use tenferro_tensor::DType;
 
-use crate::dim_expr::{DimExpr, DimExprEvalError};
 #[cfg(feature = "autodiff")]
-use crate::ext_op::ExtensionAdDispatcher;
+use crate::ad::ExtensionAdDispatcher;
+use crate::dim_expr::{DimExpr, DimExprEvalError};
 use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;

@@ -15,6 +15,11 @@ contracts come from `SemanticProgram`; tensor defaults remain in
 **Tech Stack:** Rust, `tenferro-runtime::program`, computegraph compatibility
 tracing, CPU/GPU graph executors, Cargo tests/clippy/rustdoc.
 
+**Completion status (2026-07-24):** Implemented. The reviewer-facing result is
+recorded in
+[`docs/worklogs/2026-07-24-phase-3-a2-compiled-graph.md`](../../worklogs/2026-07-24-phase-3-a2-compiled-graph.md);
+the remaining semantic-AD serial boundary was subsequently closed in A3.
+
 ---
 
 ### Task 1: Freeze the `CompiledGraph` artifact

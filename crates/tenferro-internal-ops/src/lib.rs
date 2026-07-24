@@ -40,9 +40,6 @@ pub mod sym_dim;
 pub use ad::context::{
     ShapeGuard, ShapeGuardContext, ShapeGuardError, ShapeGuardFailure, ShapeGuardResult, TensorMeta,
 };
-#[cfg(feature = "autodiff")]
-pub use ext_op::{ExtensionAdDispatcher, ExtensionOp, HostReference};
-#[cfg(not(feature = "autodiff"))]
 pub use ext_op::{ExtensionOp, HostReference};
 pub use shape_constraint::{ExtensionShapeContext, ExtensionShapeError, ShapeRelation};
 pub use shape_extent::ShapeExtent;

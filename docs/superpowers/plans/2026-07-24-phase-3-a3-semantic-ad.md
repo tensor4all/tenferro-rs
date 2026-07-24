@@ -17,6 +17,11 @@ represents inactive values without synthetic graph keys.
 **Tech Stack:** Rust, `tenferro-runtime::program`, `tenferro-ad`, extension
 crates, traced/eager AD integration tests, Cargo tests/clippy/rustdoc.
 
+**Completion status (2026-07-24):** Implemented through the Phase 3 closure
+commit `e40bcd3c` and the subsequent completion audit. The audit also moved the
+remaining AD-engine dispatch contract out of `ExtensionOp` ownership and added
+a source-contract regression test.
+
 ---
 
 ### Task 1: Freeze the semantic extension AD contract

@@ -8,6 +8,11 @@
 
 **Tech Stack:** Rust, `tenferro-runtime::program`, `tenferro-runtime::extension_cache`, `tenferro-einsum`, semantic extension ops, Cargo tests/clippy/rustdoc.
 
+**Completion status (2026-07-24):** Implemented. The reviewer-facing result is
+recorded in
+[`docs/worklogs/2026-07-24-phase-3-a2-trace-context-einsum.md`](../../worklogs/2026-07-24-phase-3-a2-trace-context-einsum.md);
+the remaining A3 boundary was subsequently closed in the same Phase 3 branch.
+
 ---
 
 ### Task 1: Add the semantic trace frontier

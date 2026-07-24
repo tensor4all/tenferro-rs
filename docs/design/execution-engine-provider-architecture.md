@@ -204,6 +204,31 @@ for core/FFT/einsum/linalg/sparse/tropical, production wiring of the transform
 cache, and deletion of public `GraphProgram`/`ExecProgram` and old semantic
 rule surfaces.
 
+### Phase 3 closure (2026-07-24)
+
+Phase 3 subsequently closed the A1 through A3 boundaries described above:
+
+- `TraceContext -> TracedGraph -> GraphCompiler -> CompiledGraph` is the
+  backend-neutral trace and compile path, with ordered semantic inputs and
+  process-local bindings.
+- `ExecProgram` and the semantic-to-execution adapter are private runtime
+  staging. Public execution accepts `CompiledGraph` and ordered tensor inputs.
+- `AdContext` solely owns copy-on-write `SemanticExtensionRuleSet` values and
+  cached whole-program semantic JVP/VJP transforms.
+- FFT, einsum, linalg, sparse, tropical, and in-tree fixture rules use
+  semantic program values and builders. The old family-specific
+  computegraph-keyed rule traits and registry are gone.
+- The `ExtensionOp` contract is independent of AD-engine types. The remaining
+  context-owned bridge for the graph-based core sweep lives under the internal
+  AD module, and only `tenferro-ad` implements it from semantic rules.
+- Public `GraphProgram`, `GraphProgramInput`, `ExecProgram`, keyed executor
+  bindings, and compiler-owned einsum tracing surfaces are absent.
+
+The reviewer-facing A2 records are
+[`2026-07-24-phase-3-a2-compiled-graph.md`](../worklogs/2026-07-24-phase-3-a2-compiled-graph.md)
+and
+[`2026-07-24-phase-3-a2-trace-context-einsum.md`](../worklogs/2026-07-24-phase-3-a2-trace-context-einsum.md).
+
 ## Compiler and Artifact Boundaries
 
 ### `GraphCompiler` and `SemanticProgram`

@@ -7,9 +7,10 @@ use computegraph::graph::Graph;
 use computegraph::resolve::resolve;
 use computegraph::resolve::{ResolvedView, ValueDef};
 use computegraph::types::ValueKey;
+use tenferro_ops::ad::ExtensionAdDispatcher;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::{ExtensionAdDispatcher, ShapeGuardContext};
+use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::{
     checkpoint_chain as tensor_checkpoint_chain, checkpoint_tensor,
     extra_roots as tensor_extra_roots, inputs_map as tensor_inputs_map, leaf_input_key,

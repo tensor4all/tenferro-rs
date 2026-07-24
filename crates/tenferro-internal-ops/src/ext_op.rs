@@ -12,9 +12,8 @@
 //!   type-erased `Arc<dyn ExtensionOp>` carrier can satisfy
 //!   `Clone + Hash + Eq + Send + Sync + 'static` (computegraph's
 //!   `GraphOperation` requirements).
-//! - AD rules are owned by the semantic AD registry in `tenferro-ad`. Rules may
-//!   emit core [`StdTensorOp`] values and registered `Extension` values so
-//!   out-of-tree operations remain in the same graph.
+//! - AD rules are owned by the semantic AD registry in `tenferro-ad`; this
+//!   extension-operation contract does not import an AD engine.
 //! - Extension ops themselves do not require process-global registration.
 //!   Frontends carry them directly as `Arc<dyn ExtensionOp>`.
 
@@ -25,18 +24,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use computegraph::graph::GraphBuilder;
-#[cfg(not(feature = "autodiff"))]
 use computegraph::types::ValueRef;
-#[cfg(feature = "autodiff")]
-use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_tensor::{DType, ErrorKind, Tensor, ValidationKind};
-#[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
-#[cfg(feature = "autodiff")]
-use crate::ad::context::ShapeGuardContext;
-#[cfg(feature = "autodiff")]
-use crate::ad::PrimitiveRuleBuilder;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
 use crate::ExtensionShapeContext;
@@ -538,7 +528,7 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
         None
     }
 
-    // AD rules are registered separately; see the role-specific rule traits.
+    // AD rules are registered separately in `tenferro-ad`.
 }
 
 /// Access mode for one extension-declared semantic resource.
@@ -612,72 +602,6 @@ pub enum ExtensionAliasDeclaration<'a> {
     AllFresh,
     /// Complete ordered alias list.
     Declared(&'a [ExtensionAlias]),
-}
-
-/// Single context-owned bridge from the legacy core AD sweep to semantic
-/// extension rules.
-///
-/// Family-specific rules must not implement this trait. `tenferro-ad` owns the
-/// sole bridge and dispatches through its `SemanticExtensionRuleSet`.
-#[doc(hidden)]
-#[cfg(feature = "autodiff")]
-pub trait ExtensionAdDispatcher: Debug + Send + Sync + 'static {
-    fn has_primal_vjp(&self, family_id: &str) -> bool;
-
-    fn linearize(
-        &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        primal_in: &[ValueKey<StdTensorOp>],
-        primal_out: &[ValueKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValueId>],
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
-
-    fn transpose(
-        &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
-        mode: &OperationRole,
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
-}
-
-/// Emit an extension linearization through the context-owned semantic bridge.
-#[cfg(feature = "autodiff")]
-pub(crate) fn dispatch_extension_linearize(
-    op: &dyn ExtensionOp,
-    builder: &mut dyn PrimitiveRuleBuilder,
-    primal_in: &[ValueKey<StdTensorOp>],
-    primal_out: &[ValueKey<StdTensorOp>],
-    tangent_in: &[Option<LocalValueId>],
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    if let Some(dispatcher) = ctx.extension_ad_dispatcher() {
-        return dispatcher.linearize(op, builder, primal_in, primal_out, tangent_in, ctx);
-    }
-    Err(ADRuleError::unsupported(op.family_id(), ADRuleKind::Jvp))
-}
-
-/// Emit an extension transpose through the context-owned semantic bridge.
-#[cfg(feature = "autodiff")]
-pub(crate) fn dispatch_extension_transpose(
-    op: &dyn ExtensionOp,
-    builder: &mut dyn PrimitiveRuleBuilder,
-    cotangent_out: &[Option<LocalValueId>],
-    inputs: &[PrimitiveTransposeInput<StdTensorOp>],
-    mode: &OperationRole,
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    if let Some(dispatcher) = ctx.extension_ad_dispatcher() {
-        return dispatcher.transpose(op, builder, cotangent_out, inputs, mode, ctx);
-    }
-    Err(ADRuleError::unsupported(
-        op.family_id(),
-        ADRuleKind::Transpose,
-    ))
 }
 
 /// Thin adapter that lets a generic `H: Hasher` satisfy the object-safe
