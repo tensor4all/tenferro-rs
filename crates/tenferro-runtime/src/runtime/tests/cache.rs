@@ -202,6 +202,7 @@ fn same_key_has_one_producer_and_shared_result() {
     assert_eq!(cache.limits().unwrap(), limits(8, 4096, 2, 2));
     let calls = Arc::new(AtomicUsize::new(0));
     let producer_barrier = Arc::new(Barrier::new(2));
+    let producer_release = Arc::new(Barrier::new(2));
 
     thread::scope(|scope| {
         let mut handles = Vec::new();
@@ -209,11 +210,13 @@ fn same_key_has_one_producer_and_shared_result() {
             let cache = Arc::clone(&cache);
             let calls = Arc::clone(&calls);
             let barrier = Arc::clone(&producer_barrier);
+            let release = Arc::clone(&producer_release);
             handles.push(scope.spawn(move || {
                 cache
                     .get_or_prepare(TestKey(7), CacheInFlightBehavior::Wait, 0, || {
                         calls.fetch_add(1, Ordering::SeqCst);
                         barrier.wait();
+                        release.wait();
                         CacheProduced::Ready {
                             value: TestValue::new(16),
                             shared: None,
@@ -227,6 +230,7 @@ fn same_key_has_one_producer_and_shared_result() {
         let stats = cache.stats().unwrap();
         assert_eq!(stats.in_flight, 1);
         assert_eq!(stats.queued_distinct_keys, 0);
+        producer_release.wait();
 
         let results = handles
             .into_iter()

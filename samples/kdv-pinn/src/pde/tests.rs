@@ -18,7 +18,8 @@ fn eval(tensor: &TracedTensor, bindings: &[(&TracedTensor, &Tensor)]) -> Tensor 
         .collect();
     let program = compiler.compile_with_input_specs(tensor, &specs).unwrap();
     let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.run_with_inputs(&program, bindings).unwrap()
+    let inputs: Vec<&Tensor> = bindings.iter().map(|(_, tensor)| *tensor).collect();
+    executor.run_with_inputs(&program, &inputs).unwrap()
 }
 
 #[test]

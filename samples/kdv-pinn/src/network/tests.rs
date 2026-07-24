@@ -30,13 +30,9 @@ fn mlp_forward_shape() {
             Tensor::from_vec_col_major(shape.clone(), vec![0.1_f64; len]).unwrap()
         })
         .collect();
-    let mut bind_tensors: Vec<(&TracedTensor, &Tensor)> = net
-        .parameters()
-        .iter()
-        .zip(param_tensors.iter())
-        .map(|(p, t)| (*p, t))
-        .collect();
-    bind_tensors.push((&x, &x_tensor));
+    let mut bind_tensors: Vec<&Tensor> = Vec::with_capacity(param_tensors.len() + 1);
+    bind_tensors.extend(param_tensors.iter());
+    bind_tensors.push(&x_tensor);
 
     let out = executor.run_with_inputs(&program, &bind_tensors).unwrap();
     assert_eq!(out.shape(), &[4, 1]);

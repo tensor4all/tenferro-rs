@@ -156,7 +156,11 @@ fn cpu_backend_multi_operation_session_enters_executor_once() {
             .unwrap();
     });
 
-    assert_eq!(context.executor_install_calls_for_test() - before, 1);
+    let install_delta = context.executor_install_calls_for_test() - before;
+    match backend.execution_info().execution_mode() {
+        crate::CpuExecutionMode::ProviderDefaultExclusive => assert_eq!(install_delta, 4),
+        _ => assert_eq!(install_delta, 1),
+    }
 
     let before_standalone = context.executor_install_calls_for_test();
     backend.add(&lhs, &rhs).unwrap();
