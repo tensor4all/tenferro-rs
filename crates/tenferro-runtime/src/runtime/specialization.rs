@@ -50,10 +50,13 @@ pub enum LayoutSpecialization {
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::InputSpecializationRequirements;
 ///
-/// let requirements = InputSpecializationRequirements::builder().build().unwrap();
+/// let requirements = InputSpecializationRequirements::builder().build()?;
 /// assert!(!requirements.specializes_dtype());
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct InputSpecializationRequirements {
@@ -71,11 +74,14 @@ impl InputSpecializationRequirements {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::InputSpecializationRequirements;
     ///
     /// let mut builder = InputSpecializationRequirements::builder();
     /// builder.dtype(true);
-    /// assert!(builder.build().unwrap().specializes_dtype());
+    /// assert!(builder.build()?.specializes_dtype());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn builder() -> InputSpecializationRequirementsBuilder {
         InputSpecializationRequirementsBuilder::new()
@@ -86,11 +92,14 @@ impl InputSpecializationRequirements {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::InputSpecializationRequirements;
     ///
     /// let mut builder = InputSpecializationRequirements::builder();
     /// builder.dtype(true);
-    /// assert!(builder.build().unwrap().specializes_dtype());
+    /// assert!(builder.build()?.specializes_dtype());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn specializes_dtype(&self) -> bool {
         self.dtype
@@ -101,11 +110,14 @@ impl InputSpecializationRequirements {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::InputSpecializationRequirements;
     ///
     /// let mut builder = InputSpecializationRequirements::builder();
     /// builder.rank(true);
-    /// assert!(builder.build().unwrap().specializes_rank());
+    /// assert!(builder.build()?.specializes_rank());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn specializes_rank(&self) -> bool {
         self.rank
@@ -116,11 +128,14 @@ impl InputSpecializationRequirements {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::InputSpecializationRequirements;
     ///
     /// let mut builder = InputSpecializationRequirements::builder();
     /// builder.rank(true).concrete_dimensions(vec![1]);
-    /// assert_eq!(builder.build().unwrap().concrete_dimensions(), &[1]);
+    /// assert_eq!(builder.build()?.concrete_dimensions(), &[1]);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn concrete_dimensions(&self) -> &[u32] {
         &self.concrete_dimensions
@@ -131,11 +146,14 @@ impl InputSpecializationRequirements {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSpecializationRequirements, PlacementSpecialization};
     ///
     /// let mut builder = InputSpecializationRequirements::builder();
     /// builder.placement(PlacementSpecialization::Device);
-    /// assert_eq!(builder.build().unwrap().placement(), PlacementSpecialization::Device);
+    /// assert_eq!(builder.build()?.placement(), PlacementSpecialization::Device);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn placement(&self) -> PlacementSpecialization {
         self.placement
@@ -146,11 +164,14 @@ impl InputSpecializationRequirements {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSpecializationRequirements, LayoutSpecialization};
     ///
     /// let mut builder = InputSpecializationRequirements::builder();
     /// builder.layout(LayoutSpecialization::Class);
-    /// assert_eq!(builder.build().unwrap().layout(), LayoutSpecialization::Class);
+    /// assert_eq!(builder.build()?.layout(), LayoutSpecialization::Class);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn layout(&self) -> LayoutSpecialization {
         self.layout
@@ -161,11 +182,14 @@ impl InputSpecializationRequirements {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::InputSpecializationRequirements;
     ///
     /// let mut builder = InputSpecializationRequirements::builder();
     /// builder.alignment_log2(Some(2));
-    /// assert_eq!(builder.build().unwrap().alignment_log2(), Some(2));
+    /// assert_eq!(builder.build()?.alignment_log2(), Some(2));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn alignment_log2(&self) -> Option<u8> {
         self.alignment_log2
@@ -177,11 +201,14 @@ impl InputSpecializationRequirements {
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::InputSpecializationRequirementsBuilder;
 ///
 /// let mut builder = InputSpecializationRequirementsBuilder::new();
 /// builder.dtype(true);
-/// assert!(builder.build().unwrap().specializes_dtype());
+/// assert!(builder.build()?.specializes_dtype());
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct InputSpecializationRequirementsBuilder {
@@ -199,12 +226,15 @@ impl InputSpecializationRequirementsBuilder {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::InputSpecializationRequirementsBuilder;
     ///
     /// assert!(!InputSpecializationRequirementsBuilder::new()
     ///     .build()
-    ///     .unwrap()
+    ///     ?
     ///     .specializes_dtype());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn new() -> Self {
         Self::default()
@@ -215,11 +245,14 @@ impl InputSpecializationRequirementsBuilder {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::InputSpecializationRequirementsBuilder;
     ///
     /// let mut builder = InputSpecializationRequirementsBuilder::new();
     /// builder.dtype(true);
-    /// assert!(builder.build().unwrap().specializes_dtype());
+    /// assert!(builder.build()?.specializes_dtype());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn dtype(&mut self, dtype: bool) -> &mut Self {
         self.dtype = dtype;
@@ -231,11 +264,14 @@ impl InputSpecializationRequirementsBuilder {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::InputSpecializationRequirementsBuilder;
     ///
     /// let mut builder = InputSpecializationRequirementsBuilder::new();
     /// builder.rank(true);
-    /// assert!(builder.build().unwrap().specializes_rank());
+    /// assert!(builder.build()?.specializes_rank());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn rank(&mut self, rank: bool) -> &mut Self {
         self.rank = rank;
@@ -247,11 +283,14 @@ impl InputSpecializationRequirementsBuilder {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::InputSpecializationRequirementsBuilder;
     ///
     /// let mut builder = InputSpecializationRequirementsBuilder::new();
     /// builder.rank(true).concrete_dimensions(vec![0]);
-    /// assert_eq!(builder.build().unwrap().concrete_dimensions(), &[0]);
+    /// assert_eq!(builder.build()?.concrete_dimensions(), &[0]);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn concrete_dimensions(&mut self, axes: impl Into<Vec<u32>>) -> &mut Self {
         self.concrete_dimensions = axes.into();
@@ -263,13 +302,16 @@ impl InputSpecializationRequirementsBuilder {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{
     ///     InputSpecializationRequirementsBuilder, PlacementSpecialization,
     /// };
     ///
     /// let mut builder = InputSpecializationRequirementsBuilder::new();
     /// builder.placement(PlacementSpecialization::StorageClass);
-    /// assert_eq!(builder.build().unwrap().placement(), PlacementSpecialization::StorageClass);
+    /// assert_eq!(builder.build()?.placement(), PlacementSpecialization::StorageClass);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn placement(&mut self, placement: PlacementSpecialization) -> &mut Self {
         self.placement = placement;
@@ -281,11 +323,14 @@ impl InputSpecializationRequirementsBuilder {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSpecializationRequirementsBuilder, LayoutSpecialization};
     ///
     /// let mut builder = InputSpecializationRequirementsBuilder::new();
     /// builder.rank(true).layout(LayoutSpecialization::ExactStrides);
-    /// assert_eq!(builder.build().unwrap().layout(), LayoutSpecialization::ExactStrides);
+    /// assert_eq!(builder.build()?.layout(), LayoutSpecialization::ExactStrides);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn layout(&mut self, layout: LayoutSpecialization) -> &mut Self {
         self.layout = layout;
@@ -297,11 +342,14 @@ impl InputSpecializationRequirementsBuilder {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::InputSpecializationRequirementsBuilder;
     ///
     /// let mut builder = InputSpecializationRequirementsBuilder::new();
     /// builder.alignment_log2(Some(1));
-    /// assert_eq!(builder.build().unwrap().alignment_log2(), Some(1));
+    /// assert_eq!(builder.build()?.alignment_log2(), Some(1));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn alignment_log2(&mut self, alignment_log2: Option<u8>) -> &mut Self {
         self.alignment_log2 = alignment_log2;
@@ -313,10 +361,13 @@ impl InputSpecializationRequirementsBuilder {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::InputSpecializationRequirementsBuilder;
     ///
-    /// let requirements = InputSpecializationRequirementsBuilder::new().build().unwrap();
+    /// let requirements = InputSpecializationRequirementsBuilder::new().build()?;
     /// assert!(requirements.concrete_dimensions().is_empty());
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors
@@ -377,10 +428,13 @@ impl SpecializationRequirements {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSpecializationRequirements, SpecializationRequirements};
     ///
-    /// let input = InputSpecializationRequirements::builder().build().unwrap();
+    /// let input = InputSpecializationRequirements::builder().build()?;
     /// assert_eq!(SpecializationRequirements::new(vec![input]).inputs().len(), 1);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn new(inputs: impl Into<Vec<InputSpecializationRequirements>>) -> Self {
         Self {
@@ -429,12 +483,15 @@ impl SpecializationRequirements {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSignature, SpecializationRequirements};
     ///
     /// let projection = SpecializationRequirements::polymorphic(0)
     ///     .project(&InputSignature::new(Vec::new()))
-    ///     .unwrap();
+    ///     ?;
     /// assert!(projection.inputs().is_empty());
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors
@@ -485,15 +542,18 @@ impl SpecializationRequirements {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSpecializationRequirements, SpecializationRequirements};
     ///
     /// let polymorphic = SpecializationRequirements::new(vec![
-    ///     InputSpecializationRequirements::builder().build().unwrap(),
+    ///     InputSpecializationRequirements::builder().build()?,
     /// ]);
     /// let mut builder = InputSpecializationRequirements::builder();
     /// builder.dtype(true);
-    /// let dtype = SpecializationRequirements::new(vec![builder.build().unwrap()]);
+    /// let dtype = SpecializationRequirements::new(vec![builder.build()?]);
     /// assert!(polymorphic.strictly_widens(&dtype));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn strictly_widens(&self, other: &Self) -> bool {
         self.inputs.len() == other.inputs.len()
@@ -513,12 +573,15 @@ impl SpecializationRequirements {
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::{InputSignature, SpecializationRequirements};
 ///
 /// let projection = SpecializationRequirements::polymorphic(0)
 ///     .project(&InputSignature::new(Vec::new()))
-///     .unwrap();
+///     ?;
 /// assert!(projection.inputs().is_empty());
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SpecializationProjection {
@@ -532,11 +595,14 @@ impl SpecializationProjection {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSignature, SpecializationRequirements};
     ///
     /// let requirements = SpecializationRequirements::polymorphic(0);
-    /// let projection = requirements.project(&InputSignature::new(Vec::new())).unwrap();
+    /// let projection = requirements.project(&InputSignature::new(Vec::new()))?;
     /// assert_eq!(projection.requirements(), &requirements);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn requirements(&self) -> &SpecializationRequirements {
         &self.requirements
@@ -547,12 +613,15 @@ impl SpecializationProjection {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSignature, SpecializationRequirements};
     ///
     /// let projection = SpecializationRequirements::polymorphic(0)
     ///     .project(&InputSignature::new(Vec::new()))
-    ///     .unwrap();
+    ///     ?;
     /// assert!(projection.inputs().is_empty());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn inputs(&self) -> &[InputSpecializationProjection] {
         &self.inputs
@@ -564,12 +633,15 @@ impl SpecializationProjection {
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::{InputSignature, SpecializationRequirements};
 ///
 /// let projection = SpecializationRequirements::polymorphic(0)
 ///     .project(&InputSignature::new(Vec::new()))
-///     .unwrap();
+///     ?;
 /// assert!(projection.inputs().is_empty());
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct InputSpecializationProjection {
@@ -587,12 +659,15 @@ impl InputSpecializationProjection {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSignature, SpecializationRequirements};
     ///
     /// let projection = SpecializationRequirements::polymorphic(0)
     ///     .project(&InputSignature::new(Vec::new()))
-    ///     .unwrap();
+    ///     ?;
     /// assert!(projection.inputs().is_empty());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn dtype(&self) -> Option<DType> {
         self.dtype
@@ -603,12 +678,15 @@ impl InputSpecializationProjection {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSignature, SpecializationRequirements};
     ///
     /// let projection = SpecializationRequirements::polymorphic(0)
     ///     .project(&InputSignature::new(Vec::new()))
-    ///     .unwrap();
+    ///     ?;
     /// assert!(projection.inputs().is_empty());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn rank(&self) -> Option<usize> {
         self.rank
@@ -619,12 +697,15 @@ impl InputSpecializationProjection {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSignature, SpecializationRequirements};
     ///
     /// let projection = SpecializationRequirements::polymorphic(0)
     ///     .project(&InputSignature::new(Vec::new()))
-    ///     .unwrap();
+    ///     ?;
     /// assert!(projection.inputs().is_empty());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn concrete_dimensions(&self) -> &[(u32, usize)] {
         &self.concrete_dimensions
@@ -635,12 +716,15 @@ impl InputSpecializationProjection {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSignature, SpecializationRequirements};
     ///
     /// let projection = SpecializationRequirements::polymorphic(0)
     ///     .project(&InputSignature::new(Vec::new()))
-    ///     .unwrap();
+    ///     ?;
     /// assert!(projection.inputs().is_empty());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn placement(&self) -> Option<&PlacementProjection> {
         self.placement.as_ref()
@@ -651,12 +735,15 @@ impl InputSpecializationProjection {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSignature, SpecializationRequirements};
     ///
     /// let projection = SpecializationRequirements::polymorphic(0)
     ///     .project(&InputSignature::new(Vec::new()))
-    ///     .unwrap();
+    ///     ?;
     /// assert!(projection.inputs().is_empty());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn layout(&self) -> Option<&LayoutProjection> {
         self.layout.as_ref()
@@ -667,12 +754,15 @@ impl InputSpecializationProjection {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSignature, SpecializationRequirements};
     ///
     /// let projection = SpecializationRequirements::polymorphic(0)
     ///     .project(&InputSignature::new(Vec::new()))
-    ///     .unwrap();
+    ///     ?;
     /// assert!(projection.inputs().is_empty());
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn alignment_log2(&self) -> Option<u8> {
         self.alignment_log2
@@ -684,11 +774,14 @@ impl InputSpecializationProjection {
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::{PlacementProjection, StorageClass};
 ///
-/// let storage = StorageClass::new("tenferro.storage.host").unwrap();
+/// let storage = StorageClass::new("tenferro.storage.host")?;
 /// let projection = PlacementProjection::StorageClass(storage.clone());
 /// assert_eq!(projection, PlacementProjection::StorageClass(storage));
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum PlacementProjection {
@@ -703,11 +796,14 @@ pub enum PlacementProjection {
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::{LayoutClass, LayoutProjection};
 ///
-/// let layout = LayoutClass::new("tenferro.layout.strided").unwrap();
+/// let layout = LayoutClass::new("tenferro.layout.strided")?;
 /// let projection = LayoutProjection::Class(layout.clone());
 /// assert_eq!(projection, LayoutProjection::Class(layout));
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum LayoutProjection {

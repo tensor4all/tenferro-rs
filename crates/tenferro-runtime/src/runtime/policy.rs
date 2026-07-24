@@ -25,12 +25,15 @@ pub enum Determinism {
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::StorageClass;
 ///
 /// assert_eq!(
-///     StorageClass::new("tenferro.storage.host").unwrap().as_str(),
+///     StorageClass::new("tenferro.storage.host")?.as_str(),
 ///     "tenferro.storage.host"
 /// );
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct StorageClass(Arc<str>);
@@ -59,9 +62,12 @@ impl StorageClass {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::StorageClass;
     ///
-    /// assert_eq!(StorageClass::new("tenferro.storage.host").unwrap().as_str(), "tenferro.storage.host");
+    /// assert_eq!(StorageClass::new("tenferro.storage.host")?.as_str(), "tenferro.storage.host");
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn as_str(&self) -> &str {
         &self.0
@@ -77,12 +83,15 @@ impl StorageClass {
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::LayoutClass;
 ///
 /// assert_eq!(
-///     LayoutClass::new("tenferro.layout.col-major").unwrap().as_str(),
+///     LayoutClass::new("tenferro.layout.col-major")?.as_str(),
 ///     "tenferro.layout.col-major"
 /// );
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct LayoutClass(Arc<str>);
@@ -111,9 +120,12 @@ impl LayoutClass {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::LayoutClass;
     ///
-    /// assert_eq!(LayoutClass::new("tenferro.layout.col-major").unwrap().as_str(), "tenferro.layout.col-major");
+    /// assert_eq!(LayoutClass::new("tenferro.layout.col-major")?.as_str(), "tenferro.layout.col-major");
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn as_str(&self) -> &str {
         &self.0
@@ -165,13 +177,16 @@ impl ProgramPlacementConstraint {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{EngineId, ProgramPlacementConstraint, StorageClass};
     ///
-    /// let engine = EngineId::new("tenferro.cpu").unwrap();
-    /// let storage = StorageClass::new("tenferro.storage.host").unwrap();
-    /// let constraint = ProgramPlacementConstraint::new(vec![engine.clone()], Some(storage.clone())).unwrap();
+    /// let engine = EngineId::new("tenferro.cpu")?;
+    /// let storage = StorageClass::new("tenferro.storage.host")?;
+    /// let constraint = ProgramPlacementConstraint::new(vec![engine.clone()], Some(storage.clone()))?;
     /// assert_eq!(constraint.allowed_engines(), &[engine]);
     /// assert_eq!(constraint.storage_class(), Some(&storage));
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors
@@ -205,11 +220,14 @@ impl ProgramPlacementConstraint {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{EngineId, ProgramPlacementConstraint};
     ///
-    /// let engine = EngineId::new("tenferro.cpu").unwrap();
-    /// let constraint = ProgramPlacementConstraint::new(vec![engine.clone()], None).unwrap();
+    /// let engine = EngineId::new("tenferro.cpu")?;
+    /// let constraint = ProgramPlacementConstraint::new(vec![engine.clone()], None)?;
     /// assert_eq!(constraint.allowed_engines(), &[engine]);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn allowed_engines(&self) -> &[EngineId] {
         &self.allowed_engines
@@ -220,11 +238,14 @@ impl ProgramPlacementConstraint {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{ProgramPlacementConstraint, StorageClass};
     ///
-    /// let storage = StorageClass::new("tenferro.storage.host").unwrap();
-    /// let constraint = ProgramPlacementConstraint::new(Vec::new(), Some(storage.clone())).unwrap();
+    /// let storage = StorageClass::new("tenferro.storage.host")?;
+    /// let constraint = ProgramPlacementConstraint::new(Vec::new(), Some(storage.clone()))?;
     /// assert_eq!(constraint.storage_class(), Some(&storage));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn storage_class(&self) -> Option<&StorageClass> {
         self.storage_class.as_ref()
@@ -646,6 +667,7 @@ impl PrepareOptionsKey {
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::{
 ///     Determinism, ExecutionPolicy, HardwareClassId, PrepareOptions, ResolvedPlanningConfig,
 /// };
@@ -654,9 +676,11 @@ impl PrepareOptionsKey {
 /// let config = ResolvedPlanningConfig::resolve(
 ///     &policy,
 ///     &PrepareOptions::new(),
-///     HardwareClassId::new("tenferro.cpu").unwrap(),
+///     HardwareClassId::new("tenferro.cpu")?,
 /// );
 /// assert_eq!(config.hard_workspace_limit_bytes(), Some(32));
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ResolvedPlanningConfig {
@@ -672,6 +696,7 @@ impl ResolvedPlanningConfig {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{
     ///     Determinism, ExecutionPolicy, HardwareClassId, PrepareOptions, ResolvedPlanningConfig,
     /// };
@@ -681,9 +706,11 @@ impl ResolvedPlanningConfig {
     /// let config = ResolvedPlanningConfig::resolve(
     ///     &policy,
     ///     &options,
-    ///     HardwareClassId::new("tenferro.cpu").unwrap(),
+    ///     HardwareClassId::new("tenferro.cpu")?,
     /// );
     /// assert_eq!(config.hard_workspace_limit_bytes(), Some(0));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn resolve(
         policy: &ExecutionPolicy,
@@ -705,6 +732,7 @@ impl ResolvedPlanningConfig {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{
     ///     Determinism, ExecutionPolicy, HardwareClassId, PrepareOptions, ResolvedPlanningConfig,
     /// };
@@ -712,9 +740,11 @@ impl ResolvedPlanningConfig {
     /// let config = ResolvedPlanningConfig::resolve(
     ///     &ExecutionPolicy::new(Determinism::Reproducible, None, 0),
     ///     &PrepareOptions::new(),
-    ///     HardwareClassId::new("tenferro.cpu").unwrap(),
+    ///     HardwareClassId::new("tenferro.cpu")?,
     /// );
     /// assert_eq!(config.determinism(), Determinism::Reproducible);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn determinism(&self) -> Determinism {
         self.determinism
@@ -725,6 +755,7 @@ impl ResolvedPlanningConfig {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{
     ///     Determinism, ExecutionPolicy, HardwareClassId, PrepareOptions, ResolvedPlanningConfig,
     /// };
@@ -732,9 +763,11 @@ impl ResolvedPlanningConfig {
     /// let config = ResolvedPlanningConfig::resolve(
     ///     &ExecutionPolicy::new(Determinism::Fast, Some(7), 0),
     ///     &PrepareOptions::new(),
-    ///     HardwareClassId::new("tenferro.cpu").unwrap(),
+    ///     HardwareClassId::new("tenferro.cpu")?,
     /// );
     /// assert_eq!(config.hard_workspace_limit_bytes(), Some(7));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn hard_workspace_limit_bytes(&self) -> Option<usize> {
         self.hard_workspace_limit_bytes
@@ -745,6 +778,7 @@ impl ResolvedPlanningConfig {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{
     ///     Determinism, ExecutionPolicy, HardwareClassId, PrepareOptions, ResolvedPlanningConfig,
     /// };
@@ -752,9 +786,11 @@ impl ResolvedPlanningConfig {
     /// let config = ResolvedPlanningConfig::resolve(
     ///     &ExecutionPolicy::new(Determinism::Fast, None, 19),
     ///     &PrepareOptions::new(),
-    ///     HardwareClassId::new("tenferro.cpu").unwrap(),
+    ///     HardwareClassId::new("tenferro.cpu")?,
     /// );
     /// assert_eq!(config.planning_seed(), 19);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn planning_seed(&self) -> u64 {
         self.planning_seed
@@ -765,17 +801,20 @@ impl ResolvedPlanningConfig {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{
     ///     Determinism, ExecutionPolicy, HardwareClassId, PrepareOptions, ResolvedPlanningConfig,
     /// };
     ///
-    /// let hardware = HardwareClassId::new("tenferro.cpu").unwrap();
+    /// let hardware = HardwareClassId::new("tenferro.cpu")?;
     /// let config = ResolvedPlanningConfig::resolve(
     ///     &ExecutionPolicy::new(Determinism::Fast, None, 0),
     ///     &PrepareOptions::new(),
     ///     hardware.clone(),
     /// );
     /// assert_eq!(config.hardware_class(), &hardware);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn hardware_class(&self) -> &HardwareClassId {
         &self.hardware_class

@@ -86,9 +86,12 @@ impl RuntimeEpoch {
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::EngineId;
 ///
-/// assert_eq!(EngineId::new("tenferro.cpu.v1").unwrap().as_str(), "tenferro.cpu.v1");
+/// assert_eq!(EngineId::new("tenferro.cpu.v1")?.as_str(), "tenferro.cpu.v1");
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EngineId(Arc<str>);
@@ -117,9 +120,12 @@ impl EngineId {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::EngineId;
     ///
-    /// assert_eq!(EngineId::new("tenferro.cpu").unwrap().as_str(), "tenferro.cpu");
+    /// assert_eq!(EngineId::new("tenferro.cpu")?.as_str(), "tenferro.cpu");
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn as_str(&self) -> &str {
         &self.0
@@ -131,9 +137,12 @@ impl EngineId {
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::HardwareClassId;
 ///
-/// assert_eq!(HardwareClassId::new("tenferro.cpu.host").unwrap().as_str(), "tenferro.cpu.host");
+/// assert_eq!(HardwareClassId::new("tenferro.cpu.host")?.as_str(), "tenferro.cpu.host");
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct HardwareClassId(Arc<str>);
@@ -162,9 +171,12 @@ impl HardwareClassId {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::HardwareClassId;
     ///
-    /// assert_eq!(HardwareClassId::new("tenferro.cpu").unwrap().as_str(), "tenferro.cpu");
+    /// assert_eq!(HardwareClassId::new("tenferro.cpu")?.as_str(), "tenferro.cpu");
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn as_str(&self) -> &str {
         &self.0

@@ -15,6 +15,7 @@ const STRIDED_LAYOUT: &str = "tenferro.layout.strided.v1";
 /// # Examples
 ///
 /// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use tenferro_runtime::{DType, InputSignatureEntry, LayoutClass};
 /// use tenferro_tensor::Placement;
 ///
@@ -22,12 +23,13 @@ const STRIDED_LAYOUT: &str = "tenferro.layout.strided.v1";
 ///     DType::F64,
 ///     [2_usize].into_iter().collect(),
 ///     Placement::default(),
-///     LayoutClass::new("tenferro.layout.strided").unwrap(),
+///     LayoutClass::new("tenferro.layout.strided")?,
 ///     [1_isize].into_iter().collect(),
 ///     Some(3),
-/// )
-/// .unwrap();
+/// )?;
 /// assert_eq!(entry.dtype(), DType::F64);
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct InputSignatureEntry {
@@ -45,6 +47,7 @@ impl InputSignatureEntry {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{DType, InputSignatureEntry, LayoutClass};
     /// use tenferro_tensor::Placement;
     ///
@@ -52,12 +55,13 @@ impl InputSignatureEntry {
     ///     DType::I32,
     ///     [4_usize].into_iter().collect(),
     ///     Placement::default(),
-    ///     LayoutClass::new("tenferro.layout.compact").unwrap(),
+    ///     LayoutClass::new("tenferro.layout.compact")?,
     ///     [1_isize].into_iter().collect(),
     ///     None,
-    /// )
-    /// .unwrap();
+    /// )?;
     /// assert_eq!(entry.shape(), &[4]);
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors
@@ -107,6 +111,7 @@ impl InputSignatureEntry {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{DType, InputSignatureEntry, LayoutClass};
     /// use tenferro_tensor::Placement;
     ///
@@ -114,12 +119,13 @@ impl InputSignatureEntry {
     ///     DType::Bool,
     ///     [1_usize].into_iter().collect(),
     ///     Placement::default(),
-    ///     LayoutClass::new("tenferro.layout.strided").unwrap(),
+    ///     LayoutClass::new("tenferro.layout.strided")?,
     ///     [1_isize].into_iter().collect(),
     ///     None,
-    /// )
-    /// .unwrap();
+    /// )?;
     /// assert_eq!(entry.dtype(), DType::Bool);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn dtype(&self) -> DType {
         self.dtype
@@ -130,6 +136,7 @@ impl InputSignatureEntry {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{DType, InputSignatureEntry, LayoutClass};
     /// use tenferro_tensor::Placement;
     ///
@@ -137,12 +144,13 @@ impl InputSignatureEntry {
     ///     DType::F64,
     ///     [2_usize, 3].into_iter().collect(),
     ///     Placement::default(),
-    ///     LayoutClass::new("tenferro.layout.strided").unwrap(),
+    ///     LayoutClass::new("tenferro.layout.strided")?,
     ///     [1_isize, 2].into_iter().collect(),
     ///     None,
-    /// )
-    /// .unwrap();
+    /// )?;
     /// assert_eq!(entry.shape(), &[2, 3]);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn shape(&self) -> &[usize] {
         &self.shape
@@ -153,6 +161,7 @@ impl InputSignatureEntry {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{DType, InputSignatureEntry, LayoutClass};
     /// use tenferro_tensor::{MemoryKind, Placement};
     ///
@@ -160,12 +169,13 @@ impl InputSignatureEntry {
     ///     DType::F64,
     ///     [1_usize].into_iter().collect(),
     ///     Placement::default(),
-    ///     LayoutClass::new("tenferro.layout.strided").unwrap(),
+    ///     LayoutClass::new("tenferro.layout.strided")?,
     ///     [1_isize].into_iter().collect(),
     ///     None,
-    /// )
-    /// .unwrap();
+    /// )?;
     /// assert_eq!(entry.placement().memory_kind, MemoryKind::UnpinnedHost);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn placement(&self) -> &Placement {
         &self.placement
@@ -176,10 +186,11 @@ impl InputSignatureEntry {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{DType, InputSignatureEntry, LayoutClass};
     /// use tenferro_tensor::Placement;
     ///
-    /// let layout = LayoutClass::new("tenferro.layout.strided").unwrap();
+    /// let layout = LayoutClass::new("tenferro.layout.strided")?;
     /// let entry = InputSignatureEntry::new(
     ///     DType::F64,
     ///     [1_usize].into_iter().collect(),
@@ -187,9 +198,10 @@ impl InputSignatureEntry {
     ///     layout.clone(),
     ///     [1_isize].into_iter().collect(),
     ///     None,
-    /// )
-    /// .unwrap();
+    /// )?;
     /// assert_eq!(entry.layout_class(), &layout);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn layout_class(&self) -> &LayoutClass {
         &self.layout_class
@@ -200,6 +212,7 @@ impl InputSignatureEntry {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{DType, InputSignatureEntry, LayoutClass};
     /// use tenferro_tensor::Placement;
     ///
@@ -207,12 +220,13 @@ impl InputSignatureEntry {
     ///     DType::F64,
     ///     [2_usize].into_iter().collect(),
     ///     Placement::default(),
-    ///     LayoutClass::new("tenferro.layout.strided").unwrap(),
+    ///     LayoutClass::new("tenferro.layout.strided")?,
     ///     [2_isize].into_iter().collect(),
     ///     None,
-    /// )
-    /// .unwrap();
+    /// )?;
     /// assert_eq!(entry.strides(), &[2]);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn strides(&self) -> &[isize] {
         &self.strides
@@ -223,6 +237,7 @@ impl InputSignatureEntry {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{DType, InputSignatureEntry, LayoutClass};
     /// use tenferro_tensor::Placement;
     ///
@@ -230,12 +245,13 @@ impl InputSignatureEntry {
     ///     DType::F64,
     ///     [1_usize].into_iter().collect(),
     ///     Placement::default(),
-    ///     LayoutClass::new("tenferro.layout.strided").unwrap(),
+    ///     LayoutClass::new("tenferro.layout.strided")?,
     ///     [1_isize].into_iter().collect(),
     ///     Some(3),
-    /// )
-    /// .unwrap();
+    /// )?;
     /// assert_eq!(entry.alignment_log2(), Some(3));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn alignment_log2(&self) -> Option<u8> {
         self.alignment_log2
@@ -277,11 +293,14 @@ impl InputSignature {
     /// # Examples
     ///
     /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use tenferro_runtime::{InputSignature, TensorRead, Tensor};
     ///
-    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    /// let signature = InputSignature::from_reads(&[TensorRead::from_tensor(&tensor)]).unwrap();
+    /// let tensor = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
+    /// let signature = InputSignature::from_reads(&[TensorRead::from_tensor(&tensor)])?;
     /// assert_eq!(signature.entries()[0].shape(), &[2]);
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// # Errors
