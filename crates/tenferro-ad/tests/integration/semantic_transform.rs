@@ -1497,3 +1497,36 @@ fn semantic_core_dynamic_truncate_and_pad_to_match_execute_jvp_vjp() {
         .unwrap();
     assert_eq!(result.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0]);
 }
+
+#[test]
+fn semantic_program_transforms_use_activity_keyed_collision_checked_cache() {
+    let mut builder = SemanticProgramBuilder::new();
+    let lhs = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let rhs = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let output = builder.add_op(CoreSemanticOp::Mul, &[lhs, rhs]).unwrap()[0];
+    let source = builder.finish(&[output]).unwrap();
+    let ad = AdContext::builder().build().unwrap();
+
+    let first = ad.jvp_program(&source, &[true, false]).unwrap();
+    let second = ad.jvp_program(&source, &[true, false]).unwrap();
+    assert!(first
+        .frozen()
+        .program
+        .semantic_eq(second.frozen().program.as_ref()));
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
+
+    ad.jvp_program(&source, &[false, true]).unwrap();
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 2);
+    ad.vjp_program(&source, &[true, false], &[true])
+        .unwrap();
+    ad.vjp_program(&source, &[true, false], &[true])
+        .unwrap();
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 3);
+
+    ad.clear_ad_transform_caches().unwrap();
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
+}

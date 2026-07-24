@@ -11,9 +11,12 @@ use computegraph::{LocalValueId, ValueKey};
 use lru::LruCache;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_runtime::program::{FrozenProgram, SemanticFingerprint, SemanticProgram};
 use tenferro_runtime::{CacheStats, Error, ErrorPhase, Result};
 use tidu::eager::RecordedGraph;
 use tidu::LinearizedGraph;
+
+use crate::semantic_transform::SemanticAdProgram;
 
 const DEFAULT_AD_TRANSFORM_CACHE_ENTRIES: usize = 128;
 const DEFAULT_AD_TRANSFORM_CACHE_RETAINED_BYTES: usize = 64 * 1024 * 1024;
@@ -122,6 +125,50 @@ pub(crate) struct EagerAdTransformCacheKey {
 pub(crate) enum TracedAdTransformKind {
     Jvp,
     Vjp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum SemanticAdTransformKind {
+    Jvp,
+    Vjp,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct SemanticAdTransformCacheKey {
+    kind: SemanticAdTransformKind,
+    input_fingerprint: SemanticFingerprint,
+    active_inputs: Box<[bool]>,
+    active_outputs: Box<[bool]>,
+}
+
+impl SemanticAdTransformCacheKey {
+    pub(crate) fn jvp(input: &FrozenProgram, active_inputs: &[bool]) -> Self {
+        Self {
+            kind: SemanticAdTransformKind::Jvp,
+            input_fingerprint: input.program.semantic_fingerprint(),
+            active_inputs: active_inputs.into(),
+            active_outputs: Box::new([]),
+        }
+    }
+
+    pub(crate) fn vjp(
+        input: &FrozenProgram,
+        active_inputs: &[bool],
+        active_outputs: &[bool],
+    ) -> Self {
+        Self {
+            kind: SemanticAdTransformKind::Vjp,
+            input_fingerprint: input.program.semantic_fingerprint(),
+            active_inputs: active_inputs.into(),
+            active_outputs: active_outputs.into(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CachedSemanticAdTransform {
+    input: Arc<SemanticProgram>,
+    output: Arc<SemanticAdProgram>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -350,6 +397,24 @@ impl AdTransformCache {
         Ok(self.lock_store()?.stats())
     }
 
+    pub(crate) fn get_semantic(
+        &self,
+        key: &SemanticAdTransformCacheKey,
+        input: &FrozenProgram,
+    ) -> Result<Option<Arc<SemanticAdProgram>>> {
+        Ok(self.lock_store()?.get_semantic(key, input))
+    }
+
+    pub(crate) fn put_semantic(
+        &self,
+        key: SemanticAdTransformCacheKey,
+        input: &FrozenProgram,
+        output: Arc<SemanticAdProgram>,
+    ) -> Result<()> {
+        self.lock_store()?.put_semantic(key, input, output);
+        Ok(())
+    }
+
     pub(crate) fn get_eager_linearized(
         &self,
         key: &EagerAdTransformCacheKey,
@@ -425,6 +490,56 @@ impl AdTransformCacheStore {
 
     fn stats(&self) -> CacheStats {
         self.stats
+    }
+
+    fn get_semantic(
+        &mut self,
+        key: &SemanticAdTransformCacheKey,
+        input: &FrozenProgram,
+    ) -> Option<Arc<SemanticAdProgram>> {
+        self.entries
+            .get(&AdTransformCacheKey::Semantic(key.clone()))
+            .and_then(|entry| match &entry.entry {
+                AdTransformCacheEntry::Semantic(bucket) => bucket
+                    .iter()
+                    .find(|cached| cached.input.semantic_eq(input.program.as_ref()))
+                    .map(|cached| Arc::clone(&cached.output)),
+                _ => None,
+            })
+    }
+
+    fn put_semantic(
+        &mut self,
+        key: SemanticAdTransformCacheKey,
+        input: &FrozenProgram,
+        output: Arc<SemanticAdProgram>,
+    ) {
+        let cache_key = AdTransformCacheKey::Semantic(key);
+        let mut bucket = match self.entries.pop(&cache_key) {
+            Some(entry) => {
+                self.stats.retained_bytes = self
+                    .stats
+                    .retained_bytes
+                    .saturating_sub(entry.retained_bytes);
+                match entry.entry {
+                    AdTransformCacheEntry::Semantic(bucket) => bucket,
+                    _ => Vec::new(),
+                }
+            }
+            None => Vec::new(),
+        };
+        if let Some(cached) = bucket
+            .iter_mut()
+            .find(|cached| cached.input.semantic_eq(input.program.as_ref()))
+        {
+            cached.output = output;
+        } else {
+            bucket.push(CachedSemanticAdTransform {
+                input: Arc::clone(&input.program),
+                output,
+            });
+        }
+        self.put_entry(cache_key, AdTransformCacheEntry::Semantic(bucket));
     }
 
     fn get_eager_linearized(
@@ -542,11 +657,13 @@ impl Default for AdTransformCacheStore {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum AdTransformCacheKey {
+    Semantic(SemanticAdTransformCacheKey),
     EagerLinearize(EagerAdTransformCacheKey),
     Traced(TracedAdTransformCacheKey),
 }
 
 enum AdTransformCacheEntry {
+    Semantic(Vec<CachedSemanticAdTransform>),
     EagerLinearized(Arc<LinearizedGraph<StdTensorOp>>),
     TracedLinearized(Arc<CachedOptimizedLinearGraph>),
     TracedVjp(Arc<CachedTracedVjpTransform>),
@@ -555,6 +672,10 @@ enum AdTransformCacheEntry {
 impl fmt::Debug for AdTransformCacheEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Semantic(bucket) => f
+                .debug_tuple("Semantic")
+                .field(&format_args!("{} entries", bucket.len()))
+                .finish(),
             Self::EagerLinearized(_) => f.write_str("EagerLinearized(..)"),
             Self::TracedLinearized(_) => f.write_str("TracedLinearized(..)"),
             Self::TracedVjp(_) => f.write_str("TracedVjp(..)"),
@@ -580,6 +701,10 @@ fn ad_transform_cache_entry_retained_bytes(
 
 fn ad_transform_cache_key_retained_bytes(key: &AdTransformCacheKey) -> usize {
     match key {
+        AdTransformCacheKey::Semantic(key) => {
+            key.active_inputs.len() * size_of::<bool>()
+                + key.active_outputs.len() * size_of::<bool>()
+        }
         AdTransformCacheKey::EagerLinearize(key) => {
             key.output_slots.capacity() * size_of::<usize>()
         }
@@ -589,6 +714,21 @@ fn ad_transform_cache_key_retained_bytes(key: &AdTransformCacheKey) -> usize {
 
 fn ad_transform_cache_value_retained_bytes(entry: &AdTransformCacheEntry) -> usize {
     match entry {
+        AdTransformCacheEntry::Semantic(bucket) => {
+            size_of_val(bucket.as_slice())
+                + bucket
+                    .iter()
+                    .map(|cached| {
+                        size_of::<CachedSemanticAdTransform>()
+                            + semantic_program_retained_bytes(cached.input.as_ref())
+                            + semantic_program_retained_bytes(
+                                cached.output.frozen().program.as_ref(),
+                            )
+                            + size_of_val(cached.output.derivative_input_indices())
+                            + size_of_val(cached.output.derivative_output_indices())
+                    })
+                    .fold(0usize, usize::saturating_add)
+        }
         AdTransformCacheEntry::EagerLinearized(linear) => {
             size_of::<Arc<LinearizedGraph<StdTensorOp>>>()
                 + size_of::<LinearizedGraph<StdTensorOp>>()
@@ -606,6 +746,14 @@ fn ad_transform_cache_value_retained_bytes(entry: &AdTransformCacheEntry) -> usi
                 + cached_traced_vjp_retained_bytes(vjp.as_ref())
         }
     }
+}
+
+fn semantic_program_retained_bytes(program: &SemanticProgram) -> usize {
+    size_of::<SemanticProgram>()
+        + size_of_val(program.inputs())
+        + size_of_val(program.outputs())
+        + program.operations().len() * size_of::<usize>()
+        + program.shape_guards().len() * size_of::<usize>()
 }
 
 fn cached_traced_vjp_retained_bytes(vjp: &CachedTracedVjpTransform) -> usize {

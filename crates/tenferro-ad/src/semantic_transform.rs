@@ -77,6 +77,9 @@ pub enum SemanticAdTransformError {
     /// The transformed program could not be frozen atomically.
     #[error("semantic AD program finalization failed: {0}")]
     Finish(#[from] ProgramFinishError),
+    /// The semantic AD transform cache could not be accessed.
+    #[error("semantic AD transform cache failed: {0}")]
+    Cache(#[source] tenferro_runtime::Error),
 }
 
 /// One frozen derivative program plus ordered derivative input/output maps.
@@ -84,7 +87,7 @@ pub enum SemanticAdTransformError {
 /// Original primal inputs retain their source order. Active derivative seed
 /// inputs are appended in source order. Program outputs contain only active
 /// derivative values, also in source order; `None` records an inactive value.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SemanticAdProgram {
     frozen: FrozenProgram,
     derivative_input_indices: Box<[Option<usize>]>,

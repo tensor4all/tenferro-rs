@@ -10,7 +10,9 @@ use crate::semantic_extension::{SemanticExtensionRegistryError, SemanticExtensio
 use crate::semantic_transform::{
     semantic_jvp, semantic_vjp, SemanticAdProgram, SemanticAdTransformError,
 };
-use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits};
+use crate::transform_cache::{
+    AdTransformCache, AdTransformCacheLimits, SemanticAdTransformCacheKey,
+};
 
 /// Stats for caches owned by an [`AdContext`].
 ///
@@ -110,7 +112,24 @@ impl AdContext {
         input: &FrozenProgram,
         active_inputs: &[bool],
     ) -> std::result::Result<SemanticAdProgram, SemanticAdTransformError> {
-        semantic_jvp(input, active_inputs, &self.semantic_extension_rules)
+        if input.bindings.is_empty() {
+            let key = SemanticAdTransformCacheKey::jvp(input, active_inputs);
+            if let Some(cached) = self
+                .ad_transform_cache
+                .get_semantic(&key, input)
+                .map_err(SemanticAdTransformError::Cache)?
+            {
+                return Ok(cached.as_ref().clone());
+            }
+            let transformed =
+                semantic_jvp(input, active_inputs, &self.semantic_extension_rules)?;
+            self.ad_transform_cache
+                .put_semantic(key, input, Arc::new(transformed.clone()))
+                .map_err(SemanticAdTransformError::Cache)?;
+            Ok(transformed)
+        } else {
+            semantic_jvp(input, active_inputs, &self.semantic_extension_rules)
+        }
     }
 
     /// Transform a frozen semantic program into its reverse-mode derivative.
@@ -128,12 +147,33 @@ impl AdContext {
         active_inputs: &[bool],
         active_outputs: &[bool],
     ) -> std::result::Result<SemanticAdProgram, SemanticAdTransformError> {
-        semantic_vjp(
-            input,
-            active_inputs,
-            active_outputs,
-            &self.semantic_extension_rules,
-        )
+        if input.bindings.is_empty() {
+            let key = SemanticAdTransformCacheKey::vjp(input, active_inputs, active_outputs);
+            if let Some(cached) = self
+                .ad_transform_cache
+                .get_semantic(&key, input)
+                .map_err(SemanticAdTransformError::Cache)?
+            {
+                return Ok(cached.as_ref().clone());
+            }
+            let transformed = semantic_vjp(
+                input,
+                active_inputs,
+                active_outputs,
+                &self.semantic_extension_rules,
+            )?;
+            self.ad_transform_cache
+                .put_semantic(key, input, Arc::new(transformed.clone()))
+                .map_err(SemanticAdTransformError::Cache)?;
+            Ok(transformed)
+        } else {
+            semantic_vjp(
+                input,
+                active_inputs,
+                active_outputs,
+                &self.semantic_extension_rules,
+            )
+        }
     }
 
     pub(crate) fn extension_rule_set(&self) -> ExtensionRuleSet {
