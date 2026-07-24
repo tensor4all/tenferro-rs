@@ -1,3 +1,5 @@
+use super::identity::EngineId;
+
 /// Classifies a malformed runtime identifier without retaining its input.
 ///
 /// # Examples
@@ -53,4 +55,33 @@ pub enum IdentityKind {
     StorageClass,
     /// A layout-class identifier.
     LayoutClass,
+}
+
+/// Reports invalid placement constraints.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{EngineId, PlacementConstraintError, ProgramPlacementConstraint};
+///
+/// let engine = EngineId::new("tenferro.cpu").unwrap();
+/// let error = ProgramPlacementConstraint::new(vec![engine.clone(), engine], None).unwrap_err();
+/// assert!(matches!(error, PlacementConstraintError::DuplicateEngine { .. }));
+/// ```
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum PlacementConstraintError {
+    /// The same engine appears more than once in a preference list.
+    #[error(
+        "engine {engine_id:?} is duplicated at positions \
+         {first_index} and {duplicate_index}"
+    )]
+    DuplicateEngine {
+        /// The duplicated engine identifier.
+        engine_id: EngineId,
+        /// The first position where the engine appeared.
+        first_index: usize,
+        /// The duplicate position that failed validation.
+        duplicate_index: usize,
+    },
 }

@@ -70,8 +70,11 @@ pub use graph::{
     CompiledGraph, GraphCompiler, GraphCompilerCacheStats, GraphExecutor, GraphExecutorCacheStats,
 };
 pub use runtime::{
-    EngineId, ExecutionContextIdentity, HardwareClassId, IdentityError, IdentityKind,
-    RegistrationIdentity, RuntimeEpoch, RuntimeId,
+    CacheInFlightBehavior, Determinism, EngineId, ExecutionContextIdentity, ExecutionPolicy,
+    HardwareClassId, IdentityError, IdentityKind, LayoutClass, PlacementConstraintError,
+    PrepareOptions, PrepareOptionsKey, ProgramPlacementConstraint, RegistrationIdentity,
+    ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement, RuntimeEpoch, RuntimeId,
+    StorageClass,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;
