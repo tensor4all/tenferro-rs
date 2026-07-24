@@ -1017,17 +1017,6 @@ pub enum SpecializationError {
         required_alignment_log2: u8,
     },
 
-    #[error("specialization did not strictly widen")]
-    NonMonotonicSpecialization,
-
-    #[error("specialization retry-edge sum overflowed")]
-    ProjectionOverflow,
-
-    #[error("specialization retry limit {limit} exhausted after {attempts} attempts")]
-    RetryLimit {
-        attempts: usize,
-        limit: usize,
-    },
 }
 
 /// A0-complete declaration. Later nodes extend this non-exhaustive enum only
@@ -1194,15 +1183,12 @@ impl InputSpecializationProjection {
     pub fn alignment_log2(&self) -> Option<u8>;
 }
 
-fn checked_retry_edge_sum(
-    edges: impl IntoIterator<Item = usize>,
-) -> Result<usize, SpecializationError> {
-    edges.into_iter().try_fold(0usize, |sum, edge| {
-        sum.checked_add(edge)
-            .ok_or(SpecializationError::ProjectionOverflow)
-    })
-}
 ```
+
+Finite retry ownership, retry-edge accounting, and their errors do not exist in
+A0. The node that first owns a real retry loop introduces its checked accounting
+and any monotonicity, overflow, or exhausted-limit errors together with that
+reachable behavior.
 
 `InputSignatureEntry::new` validates that shape and stride ranks match and
 that `Some(a)` has `a < usize::BITS`. `None` is valid and means no alignment
@@ -1214,6 +1200,39 @@ have no cross-entry invariant, so aggregate construction is infallible.
 copies dtype, shape, strides, placement, layout class, and the derived
 alignment class. Backend-native storage has no current alignment metadata and
 therefore stores `None`.
+
+Storage and layout classification are exact and runtime-owned. They occur at
+different ownership boundaries: `from_reads` records the layout class, while
+`SpecializationRequirements::project` derives a storage class only when
+building `PlacementProjection::StorageClass` from the entry's retained
+`Placement`. `InputSignatureEntry` gains no redundant storage-class field.
+
+- `MemoryKind::Device`, `PinnedHost`, `UnpinnedHost`, and `Managed` map to
+  `tenferro.storage.device.v1`, `tenferro.storage.pinned-host.v1`,
+  `tenferro.storage.unpinned-host.v1`, and
+  `tenferro.storage.managed.v1`, respectively.
+- `MemoryKind::Other(payload)` must not collapse distinct payloads. Its storage
+  class is `tenferro.storage.other-empty.v1` for an empty payload and
+  `tenferro.storage.other-utf8-<hex>.v1` otherwise, where `<hex>` is the
+  lowercase hexadecimal encoding of the complete UTF-8 byte sequence. The
+  encoding is collision-free and reversible; no payload text is ignored.
+- A read for which `TensorRead::is_col_major_contiguous()` returns `true` uses
+  `tenferro.layout.compact-col-major.v1`. Every other successfully classified
+  read uses `tenferro.layout.strided.v1`. Exact-stride specialization remains
+  the finer layout identity when the general strided class is insufficient.
+- Failure while reading strides or classifying compactness is the reachable
+  `InputSignatureError::TensorMetadata` source for that input. The fixed
+  layout literals satisfy the ID grammar by construction, so `from_reads`
+  constructs them internally and does not add an identity-validation error,
+  `expect`, or fallback branch. The fixed storage literals and generated
+  `Other` encoding likewise satisfy the grammar by construction when
+  specialization projection constructs them.
+
+The reversible `Other` encoding is the one bounded exception to the compact
+named-class convention. Its size is proportional only to existing placement
+metadata already retained by the input signature. It is created only for a
+storage-class projection and never from tensor contents, shape products,
+pointer values, or debug formatting.
 
 For host storage, `from_reads` dispatches by dtype and uses the already
 validated host backing slice and logical offset exposed by the typed view to
@@ -1270,10 +1289,9 @@ The finite order is
 `None < Some(0) < ... < Some(usize::BITS - 1)`. The remaining alignment-edge
 count is `usize::BITS` from `None`, and
 `usize::BITS - 1 - usize::from(a)` from `Some(a)`. Other fields widen
-componentwise through their displayed finite orders. `NeedsSpecialization`
-must strictly increase and never lower or make incomparable any component.
-The whole-signature retry bound uses `checked_retry_edge_sum`; overflow is
-`ProjectionOverflow`, and exhaustion is `RetryLimit`.
+componentwise through their displayed finite orders. A0 exposes only this
+partial-order predicate; the later node that owns a retry loop sets its own
+finite retry bound and reports its own reachable retry failures.
 
 Projections and normalized options keys are runtime-created and exclude
 values, pointers, free memory, scheduler state, diagnostic strings, and
@@ -1855,15 +1873,16 @@ Required red-first coverage:
   input/specialization. Canonical cache-owner construction is reachable only
   through the two finished-ID factories. No semantic API/family migration
   occurs.
-- **Specialization:** validate every reachable lattice and nonmonotonic case,
-  host logical-pointer class derivation, backend-unknown versus known
-  one-byte alignment, capped-min projection, `AlignmentUnavailable`, every
-  valid transition, retry-sum overflow, and retry limit. Builder tests assert
-  the direct index-free duplicate-position, rank-reason, and alignment errors.
-  Projection tests cover only reachable signature-dependent wrong-count,
-  axis-out-of-range, and alignment-unavailable errors. Property chains for
-  ranks 0-64 terminate. Shared initial projections independently re-key after
-  widening; predecessor keys hold no plan.
+- **Specialization:** A0 validates every reachable lattice and partial-order
+  comparison, host logical-pointer class derivation, backend-unknown versus
+  known one-byte alignment, capped-min projection, and `AlignmentUnavailable`.
+  Builder tests assert the direct index-free duplicate-position, rank-reason,
+  and alignment errors. Projection tests cover only reachable
+  signature-dependent wrong-count, axis-out-of-range, and
+  alignment-unavailable errors. Property chains for ranks 0-64 terminate. The
+  later node that owns retries covers its own retry bound, overflow, and limit;
+  shared initial projections independently re-key after widening, and
+  predecessor keys hold no plan.
 - **Cache:** cover same-key single flight, independent top-level keys,
   fingerprint collisions, negative/transient failures, every root identity
   component, LRU/count/byte/oversize behavior, exact root-once accounting, and
