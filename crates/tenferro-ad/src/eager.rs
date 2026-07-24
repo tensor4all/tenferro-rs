@@ -3,6 +3,8 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -23,7 +25,10 @@ use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::ones_tensor;
-use tenferro_runtime::ErrorPhase;
+use tenferro_runtime::{
+    CoreCapabilityBundle, EngineId, ErrorPhase, ExecutionContextIdentity, HardwareClassId,
+    RegistrationIdentity, Runtime, RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch,
+};
 use tenferro_tensor::{BackendSession, BackendSessionHost};
 use tenferro_tensor::{
     CacheStats, DType, IntoShapeVec, Tensor, TensorBackend, TensorElementwise, TensorRead,
@@ -34,7 +39,10 @@ use tidu::{ADRuleError, ADRuleKind, LinearizedGraph};
 
 use self::backward::TenferroBackwardCallbacks;
 use self::functional::{functional_jvp, functional_vjp_optional};
-use crate::eager_backend::EagerBackend;
+use crate::eager_backend::{
+    cpu_runtime_engine_id, cpu_runtime_engine_registration, cpu_runtime_hardware_class,
+    eager_runtime_for_backend, EagerBackend,
+};
 #[cfg(test)]
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
 use crate::eager_exec::{
@@ -57,6 +65,17 @@ mod functional;
 
 pub(crate) type GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>;
 pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<Tensor>>>>;
+
+#[cfg(test)]
+pub(crate) static CPU_RUNTIME_SELECTION_REFRESHES: AtomicUsize = AtomicUsize::new(0);
+
+struct CpuRuntimeSelection {
+    snapshot: Arc<RuntimeConfigSnapshot>,
+    epoch: RuntimeEpoch,
+    engine_id: EngineId,
+    registration_identity: RegistrationIdentity,
+    capabilities: CoreCapabilityBundle,
+}
 
 #[derive(Debug, Default, Clone)]
 struct EagerOpProfileEntry {
@@ -217,6 +236,111 @@ fn eager_op_profile_per_call_us(entry: &EagerOpProfileEntry) -> Option<f64> {
     (entry.calls != 0).then(|| entry.total_time.as_secs_f64() * 1.0e6 / entry.calls as f64)
 }
 
+fn build_eager_runtime_for_backend(backend: &EagerBackend) -> Runtime {
+    match eager_runtime_for_backend(backend) {
+        Ok(runtime) => runtime,
+        Err(source) => {
+            // INVARIANT: eager runtime construction uses fixed, private CPU
+            // identifiers and one storage class; failing here means the
+            // hard-coded registration contract has been broken.
+            panic!("fixed eager runtime configuration failed: {source}");
+        }
+    }
+}
+
+fn runtime_config_error(op: &'static str, source: RuntimeConfigError) -> Error {
+    Error::runtime_state_source(op, ErrorPhase::Execution, source)
+}
+
+fn runtime_state_source<E>(op: &'static str, source: E) -> Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    Error::runtime_state_source(op, ErrorPhase::Execution, source)
+}
+
+fn cpu_runtime_bridge_unsupported(message: impl Into<String>) -> Error {
+    Error::unsupported(
+        "CpuPlacementBoundEager::refresh_runtime_selection",
+        ErrorPhase::Execution,
+        message,
+    )
+}
+
+fn select_cpu_runtime(runtime: &Runtime) -> Result<CpuRuntimeSelection> {
+    let snapshot = runtime
+        .snapshot()
+        .map_err(|source| runtime_state_source("EagerRuntime::runtime_snapshot", source))?;
+    let engine_id = cpu_runtime_engine_id()
+        .map_err(|source| runtime_config_error("EagerRuntime::cpu_runtime_engine_id", source))?;
+    let expected_hardware = cpu_runtime_hardware_class().map_err(|source| {
+        runtime_config_error("EagerRuntime::cpu_runtime_hardware_class", source)
+    })?;
+    let engine = snapshot
+        .engine(&engine_id)
+        .ok_or_else(|| cpu_runtime_bridge_unsupported("missing CPU runtime engine"))?;
+    validate_cpu_runtime_engine(
+        engine.context_identity(),
+        engine.hardware_class(),
+        engine.capabilities(),
+        &expected_hardware,
+    )?;
+    let epoch = snapshot.epoch();
+    let registration_identity = engine.registration_identity();
+    let capabilities = engine.capabilities().clone();
+    Ok(CpuRuntimeSelection {
+        snapshot,
+        epoch,
+        engine_id,
+        registration_identity,
+        capabilities,
+    })
+}
+
+fn validate_cpu_runtime_engine(
+    context_identity: ExecutionContextIdentity,
+    hardware_class: &HardwareClassId,
+    capabilities: &CoreCapabilityBundle,
+    expected_hardware: &HardwareClassId,
+) -> Result<()> {
+    if context_identity != ExecutionContextIdentity::of::<CpuBackend>() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "CPU runtime context mismatch",
+        ));
+    }
+    if hardware_class != expected_hardware {
+        return Err(cpu_runtime_bridge_unsupported(
+            "CPU runtime hardware mismatch",
+        ));
+    }
+    if capabilities.elementwise().is_none() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "missing CPU runtime capability: elementwise",
+        ));
+    }
+    if capabilities.reduction().is_none() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "missing CPU runtime capability: reduction",
+        ));
+    }
+    if capabilities.indexing().is_none() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "missing CPU runtime capability: indexing",
+        ));
+    }
+    if capabilities.dot_general().is_none() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "missing CPU runtime capability: dot_general",
+        ));
+    }
+    if capabilities.layout().is_none() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "missing CPU runtime capability: layout",
+        ));
+    }
+    Ok(())
+}
+
 /// Stats for caches owned by an [`EagerRuntime`].
 ///
 /// `retained_bytes` fields are logical payload estimates, not process RSS.
@@ -236,12 +360,13 @@ pub(crate) struct EagerGraphExecution {
 
 /// Placement-selected CPU view of one [`EagerRuntime`].
 ///
-/// The view snapshots the runtime's CPU coordinator and provider bundle when
-/// [`EagerRuntime::on_cpu`] is called. It holds no resource permit while idle
-/// and enters one backend session only while [`Self::with_eager_session`] runs.
-/// The session exposes core [`BackendSession`] operations on concrete
-/// [`Tensor`] values. Phase 2 deliberately does not expose the eager runtime's
-/// linalg, FFT, einsum, or extension-runtime registries through this bridge.
+/// The view snapshots the runtime's CPU coordinator/provider bundle and the
+/// immutable runtime registration metadata when [`EagerRuntime::on_cpu`] is
+/// called. It holds no resource permit while idle and enters one backend
+/// session only while [`Self::with_eager_session`] runs. The session exposes
+/// core [`BackendSession`] operations on concrete [`Tensor`] values. This
+/// bridge deliberately does not expose the eager runtime's linalg, FFT, einsum,
+/// or extension-runtime registries.
 ///
 /// The value is intentionally not `Clone`: mutable use makes concurrent
 /// session ownership explicit without adding another backend mutex.
@@ -260,6 +385,11 @@ pub(crate) struct EagerGraphExecution {
 pub struct CpuPlacementBoundEager {
     runtime: Arc<EagerRuntime>,
     backend: CpuBackend,
+    snapshot: Arc<RuntimeConfigSnapshot>,
+    epoch: RuntimeEpoch,
+    engine_id: EngineId,
+    registration_identity: RegistrationIdentity,
+    capabilities: CoreCapabilityBundle,
 }
 
 impl fmt::Debug for CpuPlacementBoundEager {
@@ -267,11 +397,34 @@ impl fmt::Debug for CpuPlacementBoundEager {
         f.debug_struct("CpuPlacementBoundEager")
             .field("runtime_id", &self.runtime.id())
             .field("placement", &self.backend.placement())
+            .field("runtime_epoch", &self.epoch)
+            .field("engine_id", &self.engine_id)
+            .field("registration_identity", &self.registration_identity)
             .finish_non_exhaustive()
     }
 }
 
 impl CpuPlacementBoundEager {
+    fn refresh_runtime_selection(&mut self) -> Result<()> {
+        let current_epoch = self.runtime.runtime.epoch().map_err(|source| {
+            runtime_state_source("CpuPlacementBoundEager::refresh_runtime_selection", source)
+        })?;
+        if current_epoch == self.epoch {
+            return Ok(());
+        }
+
+        #[cfg(test)]
+        CPU_RUNTIME_SELECTION_REFRESHES.fetch_add(1, Ordering::SeqCst);
+
+        let selection = select_cpu_runtime(&self.runtime.runtime)?;
+        self.snapshot = selection.snapshot;
+        self.epoch = selection.epoch;
+        self.engine_id = selection.engine_id;
+        self.registration_identity = selection.registration_identity;
+        self.capabilities = selection.capabilities;
+        Ok(())
+    }
+
     /// Return the identity of the original eager runtime.
     ///
     /// # Examples
@@ -350,6 +503,7 @@ impl CpuPlacementBoundEager {
         &mut self,
         f: impl FnOnce(&mut dyn BackendSession) -> Result<R> + Send,
     ) -> Result<R> {
+        self.refresh_runtime_selection()?;
         self.backend.with_backend_session(f)
     }
 }
@@ -374,6 +528,7 @@ impl CpuPlacementBoundEager {
 /// ```
 pub struct EagerRuntime {
     id: ContextId,
+    runtime: Runtime,
     pub(crate) backend: Mutex<EagerBackend>,
     pub(crate) extension_executor: Mutex<ExtensionExecutor<EagerBackend>>,
     extension_ad_dispatcher: Option<Arc<dyn ExtensionAdDispatcher>>,
@@ -387,6 +542,8 @@ impl fmt::Debug for EagerRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug = f.debug_struct("EagerRuntime");
         debug.field("id", &self.id);
+        debug.field("runtime_id", &self.runtime.id());
+        debug.field("runtime_epoch", &self.runtime.epoch().ok());
         match self.backend.try_lock() {
             Ok(backend) => {
                 debug.field("backend", &*backend);
@@ -496,6 +653,48 @@ impl EagerRuntime {
         })
     }
 
+    fn synchronize_runtime_registration_for_backend(&self, backend: &EagerBackend) -> Result<()> {
+        let engine_id = cpu_runtime_engine_id().map_err(|source| {
+            runtime_config_error("EagerRuntime::cpu_runtime_engine_id", source)
+        })?;
+        let snapshot = self
+            .runtime
+            .snapshot()
+            .map_err(|source| runtime_state_source("EagerRuntime::runtime_snapshot", source))?;
+        let has_cpu_engine = snapshot.engine(&engine_id).is_some();
+        match backend.cpu_snapshot() {
+            Some(backend) => {
+                let registration = cpu_runtime_engine_registration(&backend).map_err(|source| {
+                    runtime_config_error("EagerRuntime::cpu_runtime_engine_registration", source)
+                })?;
+                self.runtime
+                    .reconfigure(|edit| {
+                        if has_cpu_engine {
+                            edit.replace_engine(registration)?;
+                        } else {
+                            edit.register_engine(registration)?;
+                        }
+                        Ok(())
+                    })
+                    .map(|_| ())
+                    .map_err(|source| {
+                        runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
+                    })
+            }
+            None if has_cpu_engine => self
+                .runtime
+                .reconfigure(|edit| {
+                    edit.remove_engine(&engine_id)?;
+                    Ok(())
+                })
+                .map(|_| ())
+                .map_err(|source| {
+                    runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
+                }),
+            None => Ok(()),
+        }
+    }
+
     fn from_backend(backend: EagerBackend) -> Self {
         Self::from_backend_with_extension_ad_dispatcher(backend, None)
     }
@@ -516,8 +715,10 @@ impl EagerRuntime {
         extension_ad_dispatcher: Option<Arc<dyn ExtensionAdDispatcher>>,
         ad_transform_cache: Arc<AdTransformCache>,
     ) -> Self {
+        let runtime = build_eager_runtime_for_backend(&backend);
         Self {
             id: ContextId::fresh(),
+            runtime,
             backend: Mutex::new(backend),
             extension_executor: Mutex::new(ExtensionExecutor::new()),
             extension_ad_dispatcher,
@@ -593,6 +794,7 @@ impl EagerRuntime {
                 )
             })?
         };
+        let selection = select_cpu_runtime(&self.runtime)?;
         let backend = backend.for_placement(placement).map_err(|source| {
             let error: tenferro_tensor::Error = CpuBackendError::Placement {
                 op: "EagerRuntime::on_cpu",
@@ -604,6 +806,11 @@ impl EagerRuntime {
         Ok(CpuPlacementBoundEager {
             runtime: Arc::clone(self),
             backend,
+            snapshot: selection.snapshot,
+            epoch: selection.epoch,
+            engine_id: selection.engine_id,
+            registration_identity: selection.registration_identity,
+            capabilities: selection.capabilities,
         })
     }
 
@@ -988,7 +1195,9 @@ impl EagerRuntime {
     /// lock is poisoned before the closure can run.
     pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> Result<R> {
         let mut backend = self.lock_backend()?;
-        Ok(f(&mut backend))
+        let result = f(&mut backend);
+        self.synchronize_runtime_registration_for_backend(&backend)?;
+        Ok(result)
     }
 
     pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {

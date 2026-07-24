@@ -33,6 +33,7 @@ use crate::eager_exec::exec_op_on_tensor_reads_with_extension_executor;
 use crate::metadata::{register_scoped_metadata_batch, tensor_meta_from_tensor};
 
 mod placement_bound;
+mod runtime_snapshot;
 
 use super::backward::{
     eager_forward_input_metadata, eager_forward_value, eager_residual_value,

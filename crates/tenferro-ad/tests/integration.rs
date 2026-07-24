@@ -59,6 +59,8 @@ mod numpy_api;
 mod placement_bound_eager;
 #[path = "integration/primitive_ops.rs"]
 mod primitive_ops;
+#[path = "integration/runtime_snapshot_bridge.rs"]
+mod runtime_snapshot_bridge;
 #[path = "integration/semantic_extension.rs"]
 mod semantic_extension;
 #[path = "integration/semantic_transform.rs"]
