@@ -55,6 +55,8 @@ issues or bug-fix PRs:
 - `ai/contribution-workflows/release-publish.md` for maintainer releases:
   workspace version bumps, tagging, dependency-order crates.io publication,
   and post-publish provenance verification.
+- `ai/agent-workflow-lessons.md` for model-independent process self-audits
+  during long-running, multi-phase implementation work.
 
 Do not open a new-feature implementation PR before maintainers accept the
 corresponding issue. If a proposed bug-fix PR needs a new public API, operation
