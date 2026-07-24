@@ -120,6 +120,11 @@ rules from `tensor4all-agent-rules`.
   because of an explicitly approved compatibility or trait constraint, document
   that reason near the wrapper and make failures visible rather than fabricating
   success.
+- Do not add public errors, helpers, validation branches, or synthetic test
+  seams for states unreachable through current supported APIs. Validate real
+  user and backend inputs, rely on proven internal invariants, and add future
+  failure contracts only when the corresponding input or state is introduced.
+  This does not permit panics or unchecked handling of reachable failures.
 - Public traced/eager helpers must validate rank and axis counts before
   computing output ranks or indexing shape arrays. Symbolic-shape traced values
   must not be forced through concrete-shape helpers unless the API explicitly

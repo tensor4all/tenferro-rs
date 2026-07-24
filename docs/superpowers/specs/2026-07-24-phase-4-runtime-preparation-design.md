@@ -2,23 +2,32 @@
 
 ## Status and provenance
 
-**Proposed child of [#1433](https://github.com/tensor4all/tenferro-rs/issues/1433);
-requires review with no Critical or Important gap.**
+**Revised Phase 4 design, child of
+[#1451](https://github.com/tensor4all/tenferro-rs/issues/1451). The
+implementation has not landed. Exact-commit acceptance must be recorded on
+#1451 before implementation begins.**
 
-Authority: reconciled rules, #1433/`e2bfdde4`, Phase 3 #1449 v2.4, then this
-design/plan/worklog. Amendment:
-[comment 5066178110](https://github.com/tensor4all/tenferro-rs/issues/1433#issuecomment-5066178110).
-[Maintainer direction](https://github.com/tensor4all/tenferro-rs/issues/1433#issuecomment-5066159995)
+Authority: reconciled rules, umbrella #1433/`e2bfdde4`, Phase 3 #1449 v2.4,
+then Phase 4 issue #1451 and this design/plan/worklog.
+[The A0 proposal comments
+5068331740](https://github.com/tensor4all/tenferro-rs/issues/1451#issuecomment-5068331740),
+[5068343174](https://github.com/tensor4all/tenferro-rs/issues/1451#issuecomment-5068343174),
+and [conditional review
+5068396967](https://github.com/tensor4all/tenferro-rs/issues/1451#issuecomment-5068396967)
+are integrated here; they do not by themselves record exact-commit
+acceptance. [Maintainer scope
+direction](https://github.com/tensor4all/tenferro-rs/issues/1433#issuecomment-5066159995)
 limits work to Phases 4-6 and moves audit to Phase 6. Baselines: `b5a3dcd2`,
 `bb98ee28`, and one private forward adapter.
 
 ## Goal
 
 Add immutable runtime snapshots/epochs, transactional reconfiguration, direct
-core and resolved extension slots, object-safe immutable plans/context
-identity, finite specialization, and bounded single-flight/negative/cycle-safe
-preparation caches. Preserve current execution and the one private Phase 3
-adapter. Phase 4 prepares plans; it does not schedule or execute a new graph.
+core and resolved extension slots, object-safe plan/context-identity contracts
+with immutable execution semantics, finite specialization, and bounded
+single-flight/negative/cycle-safe preparation caches. Preserve current
+execution and the one private Phase 3 adapter. Phase 4 prepares plans; it does
+not schedule or execute a new graph.
 
 ## Non-goals
 
@@ -31,8 +40,10 @@ feature/external dependency; or AD semantic change.
 ## Chosen boundary
 
 Provider preparation is public; the aggregate remains crate-private to avoid
-freezing Phase 5 execution contracts. `PreparedOperation` is immutable and
-identity/specialization-bound with no execution method.
+freezing Phase 5 execution contracts. `PreparedOperation` has immutable
+execution-visible semantics, is identity/specialization-bound, and has no
+execution method; a bounded derived-plan cache may mutate only behind the
+owner/accounting contract below.
 
 ## Ownership and dependency constraints
 
@@ -52,11 +63,68 @@ The new API lives under `tenferro_runtime::runtime` and is re-exported from the
 crate root.
 
 ```rust
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct RuntimeId { /* opaque nonzero identity */ }
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum IdentityKind {
+    Engine,
+    HardwareClass,
+    StorageClass,
+    LayoutClass,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("malformed {kind:?} identifier")]
+pub struct IdentityError {
+    kind: IdentityKind,
+}
+
+impl IdentityError {
+    pub fn kind(&self) -> IdentityKind {
+        self.kind
+    }
+
+    fn malformed(kind: IdentityKind) -> Self {
+        Self { kind }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct RuntimeEpoch { /* opaque nonzero generation */ }
+pub struct RuntimeId(NonZeroU64);
+
+impl RuntimeId {
+    pub(crate) const fn from_nonzero(value: NonZeroU64) -> Self {
+        Self(value)
+    }
+
+    pub(crate) const fn get(self) -> NonZeroU64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct RuntimeEpoch(NonZeroU64);
+
+impl RuntimeEpoch {
+    pub(crate) const fn one() -> Self {
+        Self(NonZeroU64::MIN)
+    }
+
+    pub(crate) const fn from_nonzero(value: NonZeroU64) -> Self {
+        Self(value)
+    }
+
+    pub(crate) const fn get(self) -> NonZeroU64 {
+        self.0
+    }
+
+    pub(crate) fn checked_next(self) -> Option<Self> {
+        self.0
+            .get()
+            .checked_add(1)
+            .and_then(NonZeroU64::new)
+            .map(Self)
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EngineId { /* validated namespaced Arc<str> */ }
@@ -74,13 +142,35 @@ impl HardwareClassId {
     pub fn as_str(&self) -> &str;
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct RegistrationIdentity {
-    /* private issuer tag plus nonzero ordinal */
+    issuer: NonZeroU64,
+    ordinal: NonZeroU64,
 }
 
 impl RegistrationIdentity {
-    pub fn ordinal(self) -> NonZeroU64;
+    pub(crate) const fn new(
+        issuer: NonZeroU64,
+        ordinal: NonZeroU64,
+    ) -> Self {
+        Self { issuer, ordinal }
+    }
+
+    pub fn ordinal(self) -> NonZeroU64 {
+        self.ordinal
+    }
+}
+
+impl std::fmt::Debug for RegistrationIdentity {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        formatter
+            .debug_struct("RegistrationIdentity")
+            .field("ordinal", &self.ordinal)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -95,7 +185,7 @@ impl ExecutionContextIdentity {
 pub struct Runtime { /* Arc<RuntimeState> */ }
 
 impl Runtime {
-    pub fn builder() -> Result<RuntimeConfigBuilder, RuntimeConfigError>;
+    pub fn builder() -> RuntimeConfigBuilder;
     pub fn id(&self) -> RuntimeId;
     pub fn snapshot(&self) -> Result<Arc<RuntimeConfigSnapshot>, RuntimeStateError>;
     pub fn epoch(&self) -> Result<RuntimeEpoch, RuntimeStateError>;
@@ -135,7 +225,7 @@ impl RuntimeConfigSnapshot {
 pub struct RuntimeConfigBuilder { /* private candidate registrations */ }
 
 impl RuntimeConfigBuilder {
-    pub fn new() -> Result<Self, RuntimeConfigError>;
+    pub fn new() -> Self;
     pub fn execution_policy(&mut self, value: ExecutionPolicy) -> &mut Self;
     pub fn register_engine(&mut self, value: EngineRegistration)
         -> Result<&mut Self, RuntimeConfigError>;
@@ -187,21 +277,62 @@ builder, registration, request, registrar, and trait-object containers use
 manual bounded output with IDs/counts only—never providers, tensors, or plan
 payloads.
 
-`EngineId` and `ExtensionModuleId` validate ASCII namespaced identifiers.
-`RegistrationIdentity` has no public issuer. Consuming a fresh, non-`Clone`
-builder allocates a fresh `RuntimeId`, epoch one, and private registration
-issuer, then assigns identities while freezing registrations. `RuntimeState`
-alone owns its checked atomic next ordinal. A reconfiguration candidate cannot
-escape and has no `build`; unchanged records retain identities, while
-new/replaced records receive identities only inside successful publication.
-Failure allocates none. Ordinals never wrap/recycle, and no public path can
-fork a runtime ID or issuer.
+`IdentityError` has no source and does not retain or print the rejected string.
+This bounds error retention and prevents arbitrary caller data from appearing
+through `Debug`, logs, or reports. All four A0 string IDs use one
+crate-private validator with the exact grammar:
+
+```text
+identifier = component "." component ("." component)*
+component  = alnum | alnum *(alnum | "-" | "_") alnum
+alnum      = "a".."z" | "0".."9"
+```
+
+The complete string is nonempty ASCII, has at least two dot-separated
+components, and each component begins and ends with lowercase ASCII
+alphanumeric. Interior bytes may additionally be `-` or `_`. Uppercase,
+whitespace, non-ASCII, empty components, leading/trailing/consecutive dots,
+and all other punctuation are rejected. The validator returns the original
+`Arc<str>` on success.
+
+Raw strings enter only the ID constructors, which return `IdentityError`
+directly. Runtime builders and registrations accept already-valid ID values
+and do not remap identity syntax failures into `RuntimeConfigError`.
+
+The extension-module node later adds `IdentityKind::ExtensionModule`; the
+cache-owner node later adds `IdentityKind::CacheOwner`. Each owning node adds
+its constructor and validator call in the same commit. `#[non_exhaustive]`
+supports this serial extension. Phase 4 promises no numeric discriminant,
+serde representation, or stable wire encoding; a later wire format must use
+explicit stable string tags.
+
+A0 contains no global atomic, issuer, allocator, exhaustion simulation, or
+public raw-integer constructor. It defines only the nonzero opaque
+representations and crate-private construction used by focused tests. The
+manual `RegistrationIdentity` `Debug` exposes its useful ordinal but not its
+private issuer.
+
+`Runtime::builder()` is exactly `RuntimeConfigBuilder::new()`. Both are
+infallible and allocate no identity. Consuming
+`RuntimeConfigBuilder::build(self)` is the sole owner of configuration
+validation, fresh nonzero `RuntimeId` and registration issuer allocation,
+epoch-one creation, and checked exhaustion. Exhaustion returns
+`RuntimeConfigError::IdentityExhausted`; a failed build returns no `Runtime`
+and never wraps or reuses an identity.
+
+After construction, `RuntimeState` alone owns its checked next registration
+ordinal. A reconfiguration candidate cannot escape and has no `build`;
+unchanged records retain identities, while new/replaced records receive
+identities only inside successful publication. Failure allocates none.
+Ordinals never wrap/recycle, and no public path can fork a runtime ID or
+issuer. `RuntimeEpoch::checked_next() == None` maps to
+`RuntimeReconfigureError::EpochExhausted`.
 
 Before runtime identity issuance, engine equality is `(EngineId,
 Arc::ptr_eq(candidate_token))`; modules/extension engines use their stable keys
 plus `Arc::ptr_eq`, and planning configs use `payload_eq`. Identical repeats
 are no-ops that preserve identity and skip reconfiguration; same-key unequal
-values conflict; explicit replacement receives a new runtime identity.
+values conflict; explicit replacement receives a new registration identity.
 
 ## Execution and planning policy
 
@@ -254,7 +385,7 @@ impl ResolvedProgramPlacement {
     pub fn storage_class(&self) -> &StorageClass;
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CacheInFlightBehavior {
     Wait,
     Refuse,
@@ -276,13 +407,13 @@ impl ExecutionPolicy {
         determinism: Determinism,
         hard_workspace_limit_bytes: Option<usize>,
         planning_seed: u64,
-    ) -> Result<Self, ExecutionPolicyError>;
+    ) -> Self;
     pub fn determinism(&self) -> Determinism;
     pub fn hard_workspace_limit_bytes(&self) -> Option<usize>;
     pub fn planning_seed(&self) -> u64;
 }
 
-#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PrepareOptions {
     placement: Option<ProgramPlacementConstraint>,
     hard_workspace_limit_bytes: Option<usize>,
@@ -312,13 +443,16 @@ impl PrepareOptions {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct PrepareOptionsKey { /* runtime-created exact option identity */ }
+pub struct PrepareOptionsKey {
+    resolved_placement: ResolvedProgramPlacement,
+    hard_workspace_limit_bytes: Option<usize>,
+    planning_seed: u64,
+}
 
 impl PrepareOptionsKey {
-    pub fn placement(&self) -> Option<&ProgramPlacementConstraint>;
+    pub fn resolved_placement(&self) -> &ResolvedProgramPlacement;
     pub fn hard_workspace_limit_bytes(&self) -> Option<usize>;
-    pub fn planning_seed(&self) -> Option<u64>;
-    pub fn cache_in_flight(&self) -> CacheInFlightBehavior;
+    pub fn planning_seed(&self) -> u64;
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -334,7 +468,7 @@ impl ResolvedPlanningConfig {
         policy: &ExecutionPolicy,
         options: &PrepareOptions,
         hardware_class: HardwareClassId,
-    ) -> Result<Self, PrepareError>;
+    ) -> Self;
     pub fn determinism(&self) -> Determinism;
     pub fn hard_workspace_limit_bytes(&self) -> Option<usize>;
     pub fn planning_seed(&self) -> u64;
@@ -355,7 +489,34 @@ impl ResolvedPlanningKey {
 Resolution happens once before capability preparation. `PrepareOptions`
 overrides only fields represented as `Option`; all inherited values become
 concrete in `ResolvedPlanningConfig`. A hard limit of zero is valid and means
-that no workspace bytes may be planned.
+that no workspace bytes may be planned. Every accepted determinism value,
+workspace limit, and seed is valid, so `ExecutionPolicy::new` and
+`ResolvedPlanningConfig::resolve` are infallible and Phase 4 defines no
+`ExecutionPolicyError`.
+
+For the per-call workspace field, `None` means inherit the policy. `Some(0)`
+overrides the policy with a zero byte limit, and `Some(n)` overrides it with
+`n`. Calling `with_hard_workspace_limit_bytes(None)` resets the option to
+inheritance. Phase 4 intentionally has no per-call override from a finite
+policy limit to unlimited; unlimited resolution requires both the policy and
+per-call option to be `None`. Resolution is exactly:
+
+```rust
+let hard_workspace_limit_bytes = options
+    .hard_workspace_limit_bytes()
+    .or(policy.hard_workspace_limit_bytes());
+```
+
+`PrepareOptions` remains the raw request-behavior object.
+`PrepareOptionsKey` is normalized and created only after placement and
+planning resolution. It stores the resolved placement, resolved hard
+workspace, and resolved seed, with the displayed accessors; it never stores
+the raw placement constraint or raw overrides. Raw `PrepareOptions` does not
+implement `Hash`. `cache_in_flight` controls how the current caller reacts to
+an in-flight entry and is not semantic plan identity: cache_in_flight appears
+in no cache, hash, or identity key. The runtime consumes raw request behavior;
+provider preparation receives only resolved planning/placement and the
+normalized key, never raw `PrepareOptions`.
 
 Extension-specific inherited planning defaults use
 `ExtensionPlanningConfig`, registered transactionally with the extension
@@ -435,7 +596,7 @@ impl CoreCapabilityBundle {
     pub fn elementwise(&self) -> Option<&Arc<dyn ElementwiseRuntime>>;
     pub fn reduction(&self) -> Option<&Arc<dyn ReductionRuntime>>;
     pub fn indexing(&self) -> Option<&Arc<dyn IndexingRuntime>>;
-    pub fn dot_general(&self) -> Option<&Arc<dyn DotGeneralRuntime>>;
+    pub fn dot_general(&self) -> Option<&Arc<dyn DotGeneralPreparation>>;
     pub fn layout(&self) -> Option<&Arc<dyn LayoutRuntime>>;
 }
 
@@ -446,24 +607,24 @@ impl CoreCapabilityBundleBuilder {
     pub fn elementwise(
         &mut self,
         capability: Arc<dyn ElementwiseRuntime>,
-    ) -> Result<&mut Self, RuntimeConfigError>;
+    ) -> &mut Self;
     pub fn reduction(
         &mut self,
         capability: Arc<dyn ReductionRuntime>,
-    ) -> Result<&mut Self, RuntimeConfigError>;
+    ) -> &mut Self;
     pub fn indexing(
         &mut self,
         capability: Arc<dyn IndexingRuntime>,
-    ) -> Result<&mut Self, RuntimeConfigError>;
+    ) -> &mut Self;
     pub fn dot_general(
         &mut self,
-        capability: Arc<dyn DotGeneralRuntime>,
-    ) -> Result<&mut Self, RuntimeConfigError>;
+        capability: Arc<dyn DotGeneralPreparation>,
+    ) -> &mut Self;
     pub fn layout(
         &mut self,
         capability: Arc<dyn LayoutRuntime>,
-    ) -> Result<&mut Self, RuntimeConfigError>;
-    pub fn build(self) -> Result<CoreCapabilityBundle, RuntimeConfigError>;
+    ) -> &mut Self;
+    pub fn build(self) -> CoreCapabilityBundle;
 }
 
 pub trait ElementwiseRuntime: Debug + Send + Sync + 'static {
@@ -487,7 +648,7 @@ pub trait IndexingRuntime: Debug + Send + Sync + 'static {
     ) -> Result<PrepareCapability, PrepareError>;
 }
 
-pub trait DotGeneralRuntime: Debug + Send + Sync + 'static {
+pub trait DotGeneralPreparation: Debug + Send + Sync + 'static {
     fn prepare(
         &self,
         request: DotGeneralPrepareRequest<'_>,
@@ -514,7 +675,6 @@ impl<'a> CorePrepareContext<'a> {
     pub fn inputs(&self) -> &'a InputSignature;
     pub fn resolved_placement(&self) -> &'a ResolvedProgramPlacement;
     pub fn planning(&self) -> &'a ResolvedPlanningConfig;
-    pub fn prepare_options(&self) -> &'a PrepareOptions;
     pub fn prepare_options_key(&self) -> &'a PrepareOptionsKey;
     pub fn specialization(&self) -> &'a SpecializationProjection;
 }
@@ -543,6 +703,13 @@ impl<'a> LayoutPrepareRequest<'a> {
 
 Constructors remain crate-private. The runtime rejects
 family/metadata/shape/placement/determinism errors before dispatch.
+Each capability setter replaces the previous value for that slot. The builder
+has no invalid state, so setters and `build` are infallible.
+
+`DotGeneralPreparation` is deliberately preparation-only. It avoids collision
+with the existing CPU composite execution vocabulary. Phase 5 must migrate and
+resolve this preparation-only name when it defines the execution-facing common
+graph/provider boundary; Phase 4 does not pre-accept that later API.
 
 The bundle contains a crate-private reserved subgraph-slot marker, but Phase 4
 exports no `SubgraphCompiler`, request, accessor, or provider registration
@@ -607,11 +774,32 @@ impl<'a> ErasedExecutionContext<'a> {
 }
 ```
 
-The traits are object-safe. A prepared object is immutable and contains no
-mutable scratch, input/output tensor, runtime handle, resource lease,
-scheduler state, or public tensor wrapper. `retained_bytes` reports logical
-heap payload owned exclusively by the plan. It excludes shared engine state,
-cache metadata, caller tensors, and inline object size.
+The traits are object-safe. A prepared operation's execution-visible semantics
+are immutable. It contains no mutable scratch, input/output tensor, runtime
+handle, resource lease, scheduler state, or public tensor wrapper.
+
+A prepared operation may reference an engine-owned derived-plan cache or own an
+interior-mutable bounded derived-plan cache. Such a cache has a bounded
+default, deterministic semantics, and stats/clear through its registered
+`RuntimeCacheOwner` path. An engine that permits prepared-operation-owned
+derived caches registers one owner that aggregates and clears those caches;
+the prepared operation does not register a new snapshot owner after freeze.
+The owning engine or prepared operation uses owner-specific bounded defaults
+and configuration. An engine-owned cache lives with the registered engine
+owner. A prepared-operation-owned cache lives no longer than its operation
+handle, and the aggregate owner tracks it without extending that lifetime.
+Neither kind may contain scratch buffers or tensors.
+Cache mutation may affect reuse and performance only; it cannot change the
+operation's binding, specialization, chosen algorithm semantics, determinism,
+workspace contract, or results. `retained_bytes` reports logical heap payload
+owned exclusively by the prepared operation. Derived-cache retained bytes are
+charged exactly once by the registered owner and excluded from the prepared
+operation's `retained_bytes`; shared engine state, cache metadata, caller
+tensors, and inline object size are also excluded. Phase 4 adds no generic
+derived-cache limits or capacity API. Phase 6 owns the concrete einsum cache
+limits/type; any other owning phase must define its provider-specific bound
+before enabling such a cache. Phase 4 does not instantiate a derived cache or
+add a synthetic cache type/test seam solely to prove this future permission.
 
 The returned plan must retain the request's runtime-created binding and match
 runtime/epoch/engine/registration/context/hardware; mismatch is an uncacheable
@@ -662,7 +850,6 @@ impl<'a> ExtensionPrepareRequest<'a> {
     pub fn planning(&self) -> &'a ResolvedPlanningConfig;
     pub fn extension_config(&self) -> &'a dyn ExtensionPlanningConfig;
     pub fn inputs(&self) -> &'a InputSignature;
-    pub fn prepare_options(&self) -> &'a PrepareOptions;
     pub fn prepare_options_key(&self) -> &'a PrepareOptionsKey;
     pub fn specialization(&self) -> &'a SpecializationProjection;
 }
@@ -699,11 +886,19 @@ cannot escape `configure`, and drops engines/configs/cache owners together on
 failure. Production lowering stays unchanged; Phase 6 P6-MIGRATE-FAMILIES
 deletes temporary `register_extension` staging without promising support.
 
+Phase 6 native einsum composes GEMM and layout plans through direct
+engine-internal provider calls. It never re-enters `Runtime::prepare_for`
+during preparation. If a later lowering needs distinct preparation
+dependencies, that phase must first accept an explicit dependency model; it
+must not create recursive cache entry through the Phase 4 API.
+
 ## Runtime snapshot and reconfiguration semantics
 
-Fresh `build` consumes its builder, allocates a new nonzero `RuntimeId`,
-validates all records/policy, creates the unique issuer, assigns registration
-identities, freezes slots, creates epoch one/caches, and publishes once.
+Fresh `build` consumes its builder, validates all records and policy, then
+allocates a new nonzero `RuntimeId`, creates the unique issuer, assigns
+registration identities, freezes slots, creates epoch one/caches, and
+publishes once. Failed validation consumes no identity or registration
+ordinal.
 
 Reconfiguration snapshots the active `Arc`, edits/validates a non-escapable
 candidate off-lock, checks the next epoch, then publishes under a short lock
@@ -712,6 +907,9 @@ only if the base pointer is still current; otherwise it returns
 nothing. Successful publication assigns identities to new/replaced records,
 advances once, and clears retained cache state; running old-generation work
 may finish but cannot reinsert. Preparation pins its snapshot, ID, and epoch.
+This full clear on successful reconfiguration is deliberate. Epoch-scoped
+retention is a deferred optimization and is not part of the Phase 4 cache
+contract.
 
 A placement-bound eager context caches runtime, placement, epoch, engine slot,
 and capability slots. One epoch comparison uses them or refreshes from one new
@@ -722,6 +920,134 @@ no second runtime identity/backend mutex is added.
 ## Input signatures and finite specialization
 
 ```rust
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum InputSignatureError {
+    #[error(
+        "input signature shape rank {rank} does not match stride count {stride_count}"
+    )]
+    ShapeStrideRankMismatch {
+        rank: usize,
+        stride_count: usize,
+    },
+
+    #[error("input signature alignment class {alignment_log2} is invalid")]
+    InvalidAlignmentClass {
+        alignment_log2: u8,
+    },
+
+    #[error("failed to read metadata for input {input}: {source}")]
+    TensorMetadata {
+        input: usize,
+        #[source]
+        source: tenferro_tensor::Error,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[non_exhaustive]
+pub enum RankRequirement {
+    ConcreteAxis {
+        axis: u32,
+    },
+
+    ExactStrides,
+}
+
+impl std::fmt::Display for RankRequirement {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        match self {
+            Self::ConcreteAxis { axis } => {
+                write!(formatter, "concrete axis {axis}")
+            }
+            Self::ExactStrides => formatter.write_str("exact strides"),
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum InputSpecializationRequirementsError {
+    #[error(
+        "specialization axis {axis} is duplicated at positions \
+         {first_index} and {duplicate_index}"
+    )]
+    DuplicateAxis {
+        axis: u32,
+        first_index: usize,
+        duplicate_index: usize,
+    },
+
+    #[error("rank specialization is required by {reason}")]
+    RankRequired {
+        reason: RankRequirement,
+    },
+
+    #[error("specialization alignment class {alignment_log2} is invalid")]
+    InvalidAlignmentClass {
+        alignment_log2: u8,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum SpecializationError {
+    #[error("expected {expected} inputs, got {actual}")]
+    WrongInputCount {
+        expected: usize,
+        actual: usize,
+    },
+
+    #[error("input {input} axis {axis} is outside rank {rank}")]
+    AxisOutOfRange {
+        input: usize,
+        axis: u32,
+        rank: usize,
+    },
+
+    #[error(
+        "input {input} requires alignment class {required_alignment_log2}, \
+         but alignment metadata is unavailable"
+    )]
+    AlignmentUnavailable {
+        input: usize,
+        required_alignment_log2: u8,
+    },
+
+    #[error("specialization did not strictly widen")]
+    NonMonotonicSpecialization,
+
+    #[error("specialization retry-edge sum overflowed")]
+    ProjectionOverflow,
+
+    #[error("specialization retry limit {limit} exhausted after {attempts} attempts")]
+    RetryLimit {
+        attempts: usize,
+        limit: usize,
+    },
+}
+
+/// A0-complete declaration. Later nodes extend this non-exhaustive enum only
+/// after their referenced types exist.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum PrepareError {
+    #[error("invalid input signature: {source}")]
+    InputSignature {
+        #[source]
+        source: InputSignatureError,
+    },
+
+    #[error("invalid specialization: {source}")]
+    Specialization {
+        #[source]
+        source: SpecializationError,
+    },
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct InputSignature { entries: Arc<[InputSignatureEntry]> }
 
@@ -732,14 +1058,14 @@ pub struct InputSignatureEntry {
     placement: Placement,
     layout_class: LayoutClass,
     strides: StrideVec,
-    alignment_log2: u8,
+    alignment_log2: Option<u8>,
 }
 
 impl InputSignature {
     pub fn from_reads(inputs: &[TensorRead<'_>]) -> Result<Self, PrepareError>;
     pub fn new(
         entries: impl Into<Arc<[InputSignatureEntry]>>,
-    ) -> Result<Self, InputSignatureError>;
+    ) -> Self;
     pub fn entries(&self) -> &[InputSignatureEntry];
 }
 
@@ -750,14 +1076,14 @@ impl InputSignatureEntry {
         placement: Placement,
         layout_class: LayoutClass,
         strides: StrideVec,
-        alignment_log2: u8,
+        alignment_log2: Option<u8>,
     ) -> Result<Self, InputSignatureError>;
     pub fn dtype(&self) -> DType;
     pub fn shape(&self) -> &[usize];
     pub fn placement(&self) -> &Placement;
     pub fn layout_class(&self) -> &LayoutClass;
     pub fn strides(&self) -> &[isize];
-    pub fn alignment_log2(&self) -> u8;
+    pub fn alignment_log2(&self) -> Option<u8>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -835,14 +1161,17 @@ impl InputSpecializationRequirementsBuilder {
     pub fn alignment_log2(&mut self, value: Option<u8>) -> &mut Self;
     pub fn build(
         self,
-    ) -> Result<InputSpecializationRequirements, SpecializationError>;
+    ) -> Result<
+        InputSpecializationRequirements,
+        InputSpecializationRequirementsError,
+    >;
 }
 
 impl SpecializationRequirements {
     pub fn polymorphic(input_count: usize) -> Self;
     pub fn new(
         inputs: impl Into<Box<[InputSpecializationRequirements]>>,
-    ) -> Result<Self, SpecializationError>;
+    ) -> Self;
     pub fn inputs(&self) -> &[InputSpecializationRequirements];
     pub fn strictly_widens(&self, previous: &Self) -> bool;
     pub fn project(
@@ -864,32 +1193,91 @@ impl InputSpecializationProjection {
     pub fn layout(&self) -> Option<&LayoutProjection>;
     pub fn alignment_log2(&self) -> Option<u8>;
 }
+
+fn checked_retry_edge_sum(
+    edges: impl IntoIterator<Item = usize>,
+) -> Result<usize, SpecializationError> {
+    edges.into_iter().try_fold(0usize, |sum, edge| {
+        sum.checked_add(edge)
+            .ok_or(SpecializationError::ProjectionOverflow)
+    })
+}
 ```
 
-`InputSignatureEntry::alignment_log2` is the minimum guaranteed power-of-two
-alignment class: class `a` guarantees the first logical byte is divisible by
-`2^a`. `from_reads` checked-adds base address and byte offset; for allocated
-storage it uses `min(address.trailing_zeros(), declared_alignment.trailing_zeros())`,
-capped at `usize::BITS - 1`. Empty/unallocated storage uses its declared
-nonzero power-of-two guarantee. Zero/non-power-of-two declarations,
-address overflow, contradiction between pointer and declaration, or a class
-above `usize::BITS - 1` is typed invalid metadata.
-`from_reads` and projection wrap these cases as
+`InputSignatureEntry::new` validates that shape and stride ranks match and
+that `Some(a)` has `a < usize::BITS`. `None` is valid and means no alignment
+guarantee is known. `Some(0)` is a known one-byte guarantee and is distinct
+from `None`. `InputSignature::new` accepts only already-valid entries. Entries
+have no cross-entry invariant, so aggregate construction is infallible.
+
+`InputSignature::from_reads` retains no tensor, buffer, pointer, or value. It
+copies dtype, shape, strides, placement, layout class, and the derived
+alignment class. Backend-native storage has no current alignment metadata and
+therefore stores `None`.
+
+For host storage, `from_reads` dispatches by dtype and uses the already
+validated host backing slice and logical offset exposed by the typed view to
+obtain the actual logical pointer. A nonempty host input stores
+`Some(min(address.trailing_zeros(), align_of::<T>().trailing_zeros(),
+usize::BITS - 1) as u8)`. Empty host storage uses `align_of::<T>()` and stores
+its bounded class without reading a logical element. View construction already
+validates bounds and offset arithmetic, so Phase 4 adds no hypothetical
+declaration validator, address-overflow error, or synthetic-only production
+helper.
+
+This pointer-derived alignment class is a bounded, intentional exception to
+the “no pointer-derived keys” rule: keys retain only the derived alignment
+class, never a pointer or address. Mutating or dropping the tensor after
+signature construction cannot change the signature or retain its allocation.
+
+Metadata-access failures are
+`PrepareError::InputSignature { source:
+InputSignatureError::TensorMetadata { input, source } }` and preserve the
+concrete `tenferro_tensor::Error`. A manually constructed out-of-lattice
+`Some(a)` returns `InputSignatureError::InvalidAlignmentClass`. Unknown
+backend alignment is not an error during signature construction.
+
+The per-input specialization builder is deliberately index-free and is the
+only layer that validates duplicate axes, rank implications, and requested
+alignment classes. It validates once, in this order:
+
+1. The first duplicate concrete axis, reporting its first and duplicate
+   positions.
+2. The first concrete axis that requires disabled rank specialization, using
+   `RankRequirement::ConcreteAxis`.
+3. Exact-strides specialization with disabled rank specialization, using
+   `RankRequirement::ExactStrides`.
+4. An alignment class outside the finite lattice.
+
+`SpecializationRequirements::new` accepts already-valid per-input
+requirements and is infallible. Projection trusts those construction
+invariants. It checks only signature-dependent facts: aggregate/signature
+input count, concrete axes against actual ranks, and required alignment
+against available alignment metadata. Those failures are
+`WrongInputCount`, `AxisOutOfRange`, and `AlignmentUnavailable`, wrapped in
 `PrepareError::Specialization`.
 
-A requirement `Some(k)` projects `min(actual_class, k)`; thus all inputs
-guaranteeing at least `2^k` share key `k`, while weaker inputs remain distinct.
-Alignment widens only
-`None < Some(0) < ... < Some(usize::BITS - 1)`. Other fields widen
+Alignment projection is exact:
+
+| Requirement | Actual signature | Projection |
+|---|---|---|
+| `None` | `None` | `None` |
+| `None` | `Some(a)` | `None` |
+| `Some(k)` | `None` | `SpecializationError::AlignmentUnavailable` |
+| `Some(k)` | `Some(a)` | `Some(min(k, a))` |
+
+The finite order is
+`None < Some(0) < ... < Some(usize::BITS - 1)`. The remaining alignment-edge
+count is `usize::BITS` from `None`, and
+`usize::BITS - 1 - usize::from(a)` from `Some(a)`. Other fields widen
 componentwise through their displayed finite orders. `NeedsSpecialization`
-must strictly increase and never lower/incompare any component. The checked
-retry bound is the sum of remaining component edges, including
-`usize::BITS` alignment edges per still-polymorphic input; sum overflow is
+must strictly increase and never lower or make incomparable any component.
+The whole-signature retry bound uses `checked_retry_edge_sum`; overflow is
 `ProjectionOverflow`, and exhaustion is `RetryLimit`.
 
-Construction also checks arity, axes, and rank/stride implications.
-Projections/options keys are runtime-created and exclude values, pointers,
-free memory, scheduler state, diagnostic strings, and private provider keys.
+Projections and normalized options keys are runtime-created and exclude
+values, pointers, free memory, scheduler state, diagnostic strings, and
+private provider keys.
 
 ## Crate-private preparation aggregate
 
@@ -964,12 +1352,17 @@ pub struct PreparedPlanCacheStats {
     pub capacity_refusals: u64,
 }
 
+struct CanonicalCacheOwnerId(Arc<str>);
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CacheOwnerId(Arc<str>);
 
 impl CacheOwnerId {
     pub fn new(value: impl Into<Arc<str>>) -> Result<Self, IdentityError>;
     pub fn as_str(&self) -> &str;
+    fn from_canonical_owner_id(value: CanonicalCacheOwnerId) -> Self {
+        Self(value.0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1037,6 +1430,57 @@ canonical IDs are unambiguous: engine owners format
 `engine[<id-bytes>]:<EngineId>`; extension owners format
 `extension[<module-bytes>]:<ModuleId>[<local-bytes>]:<local>`.
 Equality/order is the canonical byte string, and failures carry that typed ID.
+These accepted canonical strings intentionally contain `[` and `:` and do not
+weaken the public namespaced grammar. `cache_owner.rs` owns the only raw
+construction path:
+
+```rust
+fn canonical_engine_owner_id(
+    engine_id: &EngineId,
+) -> CanonicalCacheOwnerId {
+    let id = engine_id.as_str();
+    CanonicalCacheOwnerId(
+        Arc::<str>::from(format!("engine[{}]:{id}", id.len())),
+    )
+}
+
+fn canonical_extension_owner_id(
+    module_id: &ExtensionModuleId,
+    local: &CacheOwnerId,
+) -> CanonicalCacheOwnerId {
+    let module = module_id.as_str();
+    let local = local.as_str();
+    CanonicalCacheOwnerId(Arc::<str>::from(format!(
+        "extension[{}]:{module}[{}]:{local}",
+        module.len(),
+        local.len(),
+    )))
+}
+
+pub(crate) fn engine_cache_owner_id(
+    engine_id: &EngineId,
+) -> CacheOwnerId {
+    CacheOwnerId::from_canonical_owner_id(
+        canonical_engine_owner_id(engine_id),
+    )
+}
+
+pub(crate) fn extension_cache_owner_id(
+    module_id: &ExtensionModuleId,
+    local: &CacheOwnerId,
+) -> CacheOwnerId {
+    CacheOwnerId::from_canonical_owner_id(
+        canonical_extension_owner_id(module_id, local),
+    )
+}
+```
+
+`CanonicalCacheOwnerId`, its tuple field, both raw formatters, and the bypass
+constructor are module-private. Only the two high-level functions returning a
+finished `CacheOwnerId` are crate-private. Sibling snapshot modules cannot
+receive raw tokens or arbitrary `Arc<str>` and call only those finished-ID
+factories. Lengths are UTF-8 byte lengths; validated constituent IDs are
+ASCII.
 
 The private keys are:
 
@@ -1051,7 +1495,6 @@ struct PreparedRootKey {
     context_identity: ExecutionContextIdentity,
     hardware_class: HardwareClassId,
     resolved_planning: ResolvedPlanningKey,
-    prepare_options: PrepareOptionsKey,
     operation_bindings: OperationBindingKeySet,
     extension_planning: ExtensionPlanningKeySet,
 }
@@ -1071,6 +1514,18 @@ engine, registration, execution-context identity, hardware class, common
 planning key, every operation's binding identity, extension planning objects,
 and the semantic program's exact `ExtensionOp` payloads are all part of root
 identity; no plan crosses any of those domains.
+
+`PreparedRootKey` does not retain `PrepareOptionsKey`; its existing
+`resolved_placement` and `resolved_planning` fields are the canonical cache
+identity and avoid duplicated resolved state. The runtime-created
+`PrepareOptionsKey` passed to provider preparation contains the same normalized
+resolved placement, hard workspace limit, and seed, and contains no raw
+placement constraint or override. If a later design retains that normalized
+key beside the existing resolved fields, it must first define an explicit
+consistency check. The separate `cache_in_flight` request behavior appears
+nowhere in `PreparedRootKey`, `PreparedEntryKey`, any hash input, or any other
+cache/identity key, so caller wait/refuse preference cannot fragment
+semantically identical plans.
 
 The entry state machine is:
 
@@ -1143,8 +1598,13 @@ runtime drop once external plan handles and running attempts are gone.
 All public failures are typed and preserve sources.
 
 ```rust
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
 pub enum PlacementConstraintError {
+    #[error(
+        "engine {engine_id:?} is duplicated at positions \
+         {first_index} and {duplicate_index}"
+    )]
     DuplicateEngine {
         engine_id: EngineId,
         first_index: usize,
@@ -1152,82 +1612,189 @@ pub enum PlacementConstraintError {
     },
 }
 
-#[derive(Debug)]
-pub enum SpecializationError {
-    WrongInputCount { expected: usize, actual: usize },
-    DuplicateAxis { input: usize, axis: u32 },
-    AxisOutOfRange { input: usize, axis: u32, rank: usize },
-    RankRequired { input: usize },
-    InvalidAlignmentClass { input: usize, alignment_log2: u8 },
-    InvalidAlignmentMetadata { input: usize, declared_bytes: usize },
-    AddressOverflow { input: usize },
-    NonMonotonicSpecialization,
-    ProjectionOverflow,
-    RetryLimit { attempts: usize, limit: usize },
-}
-
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum RuntimeConfigError {
+    #[error("runtime identity space is exhausted")]
     IdentityExhausted,
-    MalformedIdentity { kind: IdentityKind, value: Arc<str> },
+
+    #[error("engine {engine_id:?} is already registered")]
     DuplicateEngine { engine_id: EngineId },
+
+    #[error("registration conflicts for {key:?}")]
     ConflictingRegistration { key: RegistrationKey },
+
+    #[error("engine {engine_id:?} is not registered")]
     MissingEngine { engine_id: EngineId },
+
+    #[error("engine {engine_id:?} has no storage classes")]
     EmptyStorageClasses { engine_id: EngineId },
+
+    #[error(
+        "engine {engine_id:?} storage class {storage_class:?} is duplicated at \
+         positions {first_index} and {duplicate_index}"
+    )]
     DuplicateStorageClass {
         engine_id: EngineId,
         storage_class: StorageClass,
         first_index: usize,
         duplicate_index: usize,
     },
+
+    #[error(
+        "engine {engine_id:?} default storage class \
+         {default_storage_class:?} is not registered"
+    )]
     DefaultStorageClassNotListed {
         engine_id: EngineId,
         default_storage_class: StorageClass,
     },
-    ContextIdentityMismatch { engine_id: EngineId },
-    InvalidExecutionPolicy { reason: ExecutionPolicyError },
-    ExtensionModule { source: ExtensionModuleError },
+
+    #[error("extension module configuration failed: {source}")]
+    ExtensionModule {
+        #[source]
+        source: ExtensionModuleError,
+    },
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum RuntimeReconfigureError {
-    State { source: RuntimeStateError },
-    Edit { source: RuntimeConfigError },
+    #[error("runtime state unavailable: {source}")]
+    State {
+        #[source]
+        source: RuntimeStateError,
+    },
+
+    #[error("runtime reconfiguration edit failed: {source}")]
+    Edit {
+        #[source]
+        source: RuntimeConfigError,
+    },
+
+    #[error(
+        "concurrent reconfiguration changed epoch from {base:?} to {current:?}"
+    )]
     ConcurrentReconfiguration {
         base: RuntimeEpoch,
         current: RuntimeEpoch,
     },
+
+    #[error("runtime epoch exhausted at {current:?}")]
     EpochExhausted { current: RuntimeEpoch },
 }
+```
 
-#[derive(Debug)]
+The A0 `PrepareError` declaration appears before its first use in the input
+signature block and contains exactly `InputSignature` and `Specialization`.
+Later owning nodes extend that same non-exhaustive enum. The final post-C1
+declaration, replacing the A0 milestone declaration rather than defining a
+second Rust type, is:
+
+```rust
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum PrepareError {
+    #[error("prepared runtime {actual:?} does not match expected {expected:?}")]
     RuntimeMismatch { expected: RuntimeId, actual: RuntimeId },
+
+    #[error("prepared epoch {prepared:?} is stale relative to {current:?}")]
     StaleEpoch { prepared: RuntimeEpoch, current: RuntimeEpoch },
-    InputSignature { source: InputSignatureError },
-    ShapeGuard { source: ShapeGuardError },
-    Specialization { source: SpecializationError },
+
+    #[error("invalid input signature: {source}")]
+    InputSignature {
+        #[source]
+        source: InputSignatureError,
+    },
+
+    #[error("shape guard failed: {source}")]
+    ShapeGuard {
+        #[source]
+        source: ShapeGuardError,
+    },
+
+    #[error("invalid specialization: {source}")]
+    Specialization {
+        #[source]
+        source: SpecializationError,
+    },
+
+    #[error("no engine satisfies placement {constraint:?}")]
     NoEligibleEngine { constraint: ProgramPlacementConstraint },
+
+    #[error("operation is unsupported: {reason}")]
     Unsupported { reason: UnsupportedReason },
+
+    #[error("engine {engine_id:?} does not support requested determinism")]
     DeterminismUnsupported { engine_id: EngineId },
-    ProviderContract { source: ProviderContractError },
+
+    #[error("provider contract violation: {source}")]
+    ProviderContract {
+        #[source]
+        source: ProviderContractError,
+    },
+
+    #[error("preparation cycle at {key:?}")]
     PreparationCycle { key: PreparationKeySummary },
+
+    #[error("nested preparation from {parent:?} to {requested:?} is unsupported")]
     NestedPreparationUnsupported {
         parent: PreparationKeySummary,
         requested: PreparationKeySummary,
     },
+
+    #[error(
+        "preparation cache is at capacity: {in_flight} in flight and \
+         {queued_distinct_keys} distinct keys queued"
+    )]
     CacheInFlightCapacityExceeded {
         in_flight: usize,
         queued_distinct_keys: usize,
     },
-    CacheState { source: RuntimeStateError },
-    Engine { source: Arc<dyn Error + Send + Sync> },
+
+    #[error("preparation cache state unavailable: {source}")]
+    CacheState {
+        #[source]
+        source: RuntimeStateError,
+    },
+
+    #[error("engine preparation failed: {source}")]
+    Engine {
+        #[source]
+        source: Arc<dyn Error + Send + Sync>,
+    },
 }
 ```
 
 Caller misuse, foreign identities, wrong arity, invalid ranks/axes, context
 mismatch, stale plans, and duplicate registration never panic. Poisoned locks
 return `RuntimeStateError`; they do not fabricate empty/default state.
+
+## Standalone A0 boundary
+
+The A0 implementation must compile without later-node types. At its commit:
+
+- `IdentityKind` contains exactly `Engine`, `HardwareClass`, `StorageClass`,
+  and `LayoutClass`;
+- `PrepareError` contains exactly the source-bearing `InputSignature` and
+  `Specialization` arms;
+- `IdentityError`, `InputSignatureError`, `RankRequirement`,
+  `InputSpecializationRequirementsError`, and `SpecializationError` are
+  defined before use;
+- A0 contains no identity allocator, exhaustion fixture, runtime builder,
+  registration key, capability/provider request, snapshot, cache owner,
+  scheduling, execution, resource, buffer, transfer, collective, or event
+  contract; and
+- A0 public API exposes no raw numeric identity constructor/accessor, tensor or
+  value owner, pointer/address, or manual cache key.
+
+B0 owns the first `RuntimeConfigError` and `RuntimeReconfigureError`
+definitions. Both builder constructors remain plain values and contain no
+identity allocation; only consuming `RuntimeConfigBuilder::build` returns
+`Result<Runtime, RuntimeConfigError>` and invokes checked allocation. The
+cache-owner node later adds only its two high-level crate-private finished-ID
+factories; sibling modules never gain access to the raw canonical token or
+formatter.
 
 ## Migration DAG
 
@@ -1254,22 +1821,47 @@ artifact/family migration, or steady registry lookup.
 Required red-first coverage:
 
 - **Identity/config:** fresh builds have distinct runtime/issuer IDs and epoch
-  one; ordinals never fork/reuse; no snapshot-to-runtime build path compiles.
-  Identical/conflict/replacement identity, freeze, failed/concurrent edits,
-  overflow, old snapshot, stale ID, and poison contracts are covered.
+  one; builder creation touches no allocator; consuming build alone reports
+  exhaustion; ordinals never fork/reuse; `RegistrationIdentity` diagnostics
+  never expose the issuer; no snapshot-to-runtime build path compiles. The
+  exact ASCII grammar is shared by all four A0 IDs and invalid input is absent
+  from `IdentityError` display, debug, retention, and source. Identical/
+  conflict/replacement identity, freeze, failed/concurrent edits, overflow,
+  old snapshot, stale ID, and poison contracts are covered.
+- **Policy/key normalization:** every determinism, `u64` seed, and `None`/
+  zero/maximum workspace combination constructs and resolves infallibly.
+  `None` inherits and `Some(0)` overrides. Runtime-created option/planning keys
+  compare every displayed resolved field; raw constraints/overrides and
+  `cache_in_flight` are absent from cache identity. `PreparedRootKey` uses its
+  existing resolved fields rather than duplicating `PrepareOptionsKey`.
 - **SPI/preparation:** downstream compile fixtures construct every public
   provider type/use every accessor and run `assert_debug::<T>()` for all IDs,
-  values, and manual-Debug containers. Traits are object-safe; plans are
-  immutable, exact-sized, binding/resource-free. Constructors cover duplicate
-  engine/storage, empty storage, and missing default. Valid placement is stable
-  and unsatisfied placement returns `NoEligibleEngine` before lookup.
+  values, and manual-Debug containers. Traits are object-safe; plans have
+  immutable execution-visible semantics, exact retained-byte accounting, and
+  no call bindings or resource leases. Constructors cover duplicate engine/
+  storage, empty storage, and missing default. Valid placement is stable and
+  unsatisfied placement returns `NoEligibleEngine` before lookup.
+  Core-capability setters prove last-write replacement and infallible build.
+  Existing owner fixtures verify `RuntimeCacheOwner` aggregation/clear and,
+  where naturally covered, that `PreparedOperation::retained_bytes` excludes
+  bytes already reported by an owner. Phase 4 adds no concrete derived cache
+  or synthetic future-cache fixture. The owning Phase 6 einsum implementation
+  must test its concrete bounded default/configuration, stats/clear, lifetime,
+  deterministic semantics, no tensor/scratch retention, and exactly-once byte
+  accounting.
 - **Extensions:** install/replace/remove is failure-atomic and slot order is
   deterministic; dispatch has no string/hash/lock/downcast lookup. Mocks
-  receive exact op/config/placement/hardware/planning/options/input/
-  specialization. No semantic API/family migration occurs.
-- **Specialization:** validate every lattice field and malformed/nonmonotonic
-  case, alignment pointer/metadata derivation, capped-min projection, every
-  valid transition, address/sum overflow, and retry limit. Property chains for
+  receive exact op/config/placement/hardware/planning/normalized-options-key/
+  input/specialization. Canonical cache-owner construction is reachable only
+  through the two finished-ID factories. No semantic API/family migration
+  occurs.
+- **Specialization:** validate every reachable lattice and nonmonotonic case,
+  host logical-pointer class derivation, backend-unknown versus known
+  one-byte alignment, capped-min projection, `AlignmentUnavailable`, every
+  valid transition, retry-sum overflow, and retry limit. Builder tests assert
+  the direct index-free duplicate-position, rank-reason, and alignment errors.
+  Projection tests cover only reachable signature-dependent wrong-count,
+  axis-out-of-range, and alignment-unavailable errors. Property chains for
   ranks 0-64 terminate. Shared initial projections independently re-key after
   widening; predecessor keys hold no plan.
 - **Cache:** cover same-key single flight, independent top-level keys,
@@ -1307,7 +1899,8 @@ audits, fast PR gate, and hosted matrices.
 
 Stop for unapproved dependency/backend/family/AD change; loss of the one
 binding-free private adapter; Phase 5 contract leakage; Phase 6 migration;
-value/pointer/load specialization; failed convergence; global cache/steady
+value/load specialization or raw pointer/address identity outside the bounded
+derived alignment-class exception; failed convergence; global cache/steady
 registry locking; repeated failed fix; or reproduced blocking regression.
 Rollback retains the old snapshot/path and Phase 2/3 artifacts.
 
