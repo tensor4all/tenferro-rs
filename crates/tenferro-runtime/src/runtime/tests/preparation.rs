@@ -460,3 +460,26 @@ fn runtime_prepared_cache_controls_are_public_and_affect_runtime_owned_cache() {
         Default::default()
     );
 }
+
+#[test]
+fn phase5_deletes_phase4_only_staging_adapter_name() {
+    let source = repo_file("crates/tenferro-runtime/src/compiler/semantic_staging.rs");
+
+    assert!(!source.contains("lower_semantic_to_exec_staging"));
+    assert_eq!(
+        source
+            .matches("pub(crate) fn stage_semantic_program")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn phase5_runtime_execution_module_is_the_only_new_execution_owner() {
+    let runtime_mod = repo_file("crates/tenferro-runtime/src/runtime/mod.rs");
+    let graph_executor = repo_file("crates/tenferro-runtime/src/graph/executor.rs");
+
+    assert!(runtime_mod.contains("mod execution;"));
+    assert!(runtime_mod.contains("mod schedule;"));
+    assert!(graph_executor.contains("legacy"));
+}

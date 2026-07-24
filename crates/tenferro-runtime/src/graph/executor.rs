@@ -573,8 +573,9 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &CompiledGraph,
         inputs: &[&Tensor],
     ) -> Result<Vec<Tensor>> {
-        let input_tensors = resolve_ordered_inputs(program, inputs, &mut self.backend)?;
-        self.eval_exec_ir(&program.staging, input_tensors)
+        let staging = legacy_stage_compiled_graph(program)?;
+        let input_tensors = resolve_ordered_inputs(program, &staging, inputs, &mut self.backend)?;
+        self.eval_exec_ir(&staging, input_tensors)
     }
 
     /// Run a program with ordered inputs and preserve lazy output views.
@@ -616,8 +617,9 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &CompiledGraph,
         inputs: &[&Tensor],
     ) -> Result<Vec<TensorValue>> {
-        let input_tensors = resolve_ordered_inputs(program, inputs, &mut self.backend)?;
-        self.eval_exec_ir_values(&program.staging, input_tensors)
+        let staging = legacy_stage_compiled_graph(program)?;
+        let input_tensors = resolve_ordered_inputs(program, &staging, inputs, &mut self.backend)?;
+        self.eval_exec_ir_values(&staging, input_tensors)
     }
 
     /// Run a program with ordered borrowed runtime inputs.
@@ -663,8 +665,9 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &'a CompiledGraph,
         inputs: &[TensorRead<'a>],
     ) -> Result<Vec<Tensor>> {
-        let inputs = resolve_ordered_input_reads(program, inputs, &mut self.backend)?;
-        self.eval_exec_ir_slots(&program.staging, inputs)
+        let staging = legacy_stage_compiled_graph(program)?;
+        let inputs = resolve_ordered_input_reads(program, &staging, inputs, &mut self.backend)?;
+        self.eval_exec_ir_slots(&staging, inputs)
     }
 
     /// Run a program with borrowed bindings and preserve lazy output views.
@@ -711,8 +714,9 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &'a CompiledGraph,
         inputs: &[TensorRead<'a>],
     ) -> Result<Vec<TensorValue>> {
-        let inputs = resolve_ordered_input_reads(program, inputs, &mut self.backend)?;
-        self.eval_exec_ir_slot_values(&program.staging, inputs)
+        let staging = legacy_stage_compiled_graph(program)?;
+        let inputs = resolve_ordered_input_reads(program, &staging, inputs, &mut self.backend)?;
+        self.eval_exec_ir_slot_values(&staging, inputs)
     }
 
     /// Evaluate an execution program through this executor's backend state.
@@ -1011,6 +1015,28 @@ fn validate_exec_input_count(program: &ExecProgram, actual: usize) -> Result<()>
     Ok(())
 }
 
+// INVARIANT: `GraphExecutor<B>` is the Phase 5 legacy compatibility facade.
+// Runtime-owned execution reaches staging through runtime preparation; Phase 8
+// owns this facade's retirement.
+pub(crate) fn legacy_stage_compiled_graph(program: &CompiledGraph) -> Result<ExecProgram> {
+    let staging = crate::compiler::semantic_staging::stage_semantic_program(
+        program.program(),
+        program.compiler_options(),
+    )?;
+    #[cfg(test)]
+    {
+        let mut staging = staging;
+        staging
+            .shape_guards
+            .extend_from_slice(program.test_shape_guards());
+        Ok(staging)
+    }
+    #[cfg(not(test))]
+    {
+        Ok(staging)
+    }
+}
+
 fn expect_single_output(outputs: &mut Vec<Tensor>) -> Result<Tensor> {
     if outputs.len() != 1 {
         return Err(Error::Internal(format!(
@@ -1037,29 +1063,31 @@ fn expect_single_value(outputs: &mut Vec<TensorValue>) -> Result<TensorValue> {
 
 fn resolve_ordered_inputs(
     program: &CompiledGraph,
+    staging: &ExecProgram,
     inputs: &[&Tensor],
     backend: &mut impl TensorBackend,
 ) -> Result<Vec<Tensor>> {
     if inputs.is_empty() {
-        return resolve_default_inputs(program, backend);
+        return resolve_default_inputs(program, staging, backend);
     }
     validate_ordered_input_metadata(program, inputs)?;
     let input_shapes: Vec<_> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    crate::exec::validate_shape_guards(&program.staging, &input_shapes)?;
+    crate::exec::validate_shape_guards(staging, &input_shapes)?;
     Ok(inputs.iter().map(|tensor| (*tensor).clone()).collect())
 }
 
 fn resolve_ordered_input_reads<'a>(
     program: &'a CompiledGraph,
+    staging: &ExecProgram,
     inputs: &[TensorRead<'a>],
     backend: &mut impl TensorBackend,
 ) -> Result<Vec<ExecSlot<'a>>> {
     if inputs.is_empty() {
-        return resolve_default_input_reads(program, backend);
+        return resolve_default_input_reads(program, staging, backend);
     }
     validate_ordered_input_metadata(program, inputs)?;
     let input_shapes: Vec<_> = inputs.iter().map(TensorRead::shape).collect();
-    crate::exec::validate_shape_guards(&program.staging, &input_shapes)?;
+    crate::exec::validate_shape_guards(staging, &input_shapes)?;
     Ok(inputs
         .iter()
         .cloned()
@@ -1087,12 +1115,13 @@ fn semantic_default_inputs(program: &CompiledGraph) -> Result<Vec<&Tensor>> {
 
 fn resolve_default_inputs(
     program: &CompiledGraph,
+    staging: &ExecProgram,
     backend: &mut impl TensorBackend,
 ) -> Result<Vec<Tensor>> {
     let defaults = semantic_default_inputs(program)?;
     validate_ordered_input_metadata(program, &defaults)?;
     let input_shapes: Vec<_> = defaults.iter().map(|tensor| tensor.shape()).collect();
-    crate::exec::validate_shape_guards(&program.staging, &input_shapes)?;
+    crate::exec::validate_shape_guards(staging, &input_shapes)?;
     defaults
         .into_iter()
         .map(|default| resolve_default_tensor(default, backend))
@@ -1101,12 +1130,13 @@ fn resolve_default_inputs(
 
 fn resolve_default_input_reads<'a>(
     program: &'a CompiledGraph,
+    staging: &ExecProgram,
     backend: &mut impl TensorBackend,
 ) -> Result<Vec<ExecSlot<'a>>> {
     let defaults = semantic_default_inputs(program)?;
     validate_ordered_input_metadata(program, &defaults)?;
     let input_shapes: Vec<_> = defaults.iter().map(|tensor| tensor.shape()).collect();
-    crate::exec::validate_shape_guards(&program.staging, &input_shapes)?;
+    crate::exec::validate_shape_guards(staging, &input_shapes)?;
     defaults
         .into_iter()
         .map(|default| {

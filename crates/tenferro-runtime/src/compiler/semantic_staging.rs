@@ -18,16 +18,13 @@ pub(crate) fn stage_semantic_program(
     program: &SemanticProgram,
     options: CompilerOptions,
 ) -> Result<ExecProgram> {
-    lower_semantic_to_exec_staging(program, options)
+    build_exec_staging(program, options)
 }
 
 /// Lower one frozen semantic artifact into the temporary execution staging IR.
 ///
 /// This remains private to force all callers through [`stage_semantic_program`].
-fn lower_semantic_to_exec_staging(
-    program: &SemanticProgram,
-    options: CompilerOptions,
-) -> Result<ExecProgram> {
+fn build_exec_staging(program: &SemanticProgram, options: CompilerOptions) -> Result<ExecProgram> {
     let mut slots = HashMap::with_capacity(program.inputs().len());
     let mut input_slots = Vec::with_capacity(program.inputs().len());
     let mut input_dtypes = Vec::with_capacity(program.inputs().len());

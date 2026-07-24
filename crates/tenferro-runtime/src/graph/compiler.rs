@@ -201,8 +201,8 @@ impl GraphCompiler {
 
     fn compile_frozen(&mut self, frozen: &FrozenProgram) -> Result<CompiledGraph> {
         let staging = stage_semantic_program(&frozen.program, self.compiler_options)?;
-        let staging = self.get_or_compile(staging);
-        Ok(CompiledGraph::new(frozen.clone(), staging))
+        let _ = self.get_or_compile(staging);
+        Ok(CompiledGraph::new(frozen.clone(), self.compiler_options))
     }
 
     /// Compile multiple traced outputs into one graph program.
@@ -614,8 +614,8 @@ impl GraphCompiler {
         let semantic =
             compile_materialized_semantic_program(&compiled, &descriptors, &scoped_constraints)?;
         let exec = stage_semantic_program(&semantic.program, self.compiler_options)?;
-        let exec = self.get_or_compile(exec);
-        Ok(CompiledGraph::new(semantic, exec))
+        let _ = self.get_or_compile(exec);
+        Ok(CompiledGraph::new(semantic, self.compiler_options))
     }
 
     fn get_or_compile(&mut self, exec: ExecProgram) -> ExecProgram {
@@ -1190,8 +1190,9 @@ mod tests {
             crate::extension::apply(Arc::new(PrunableTestOp { pruned: false }), &[&input]).unwrap();
 
         let program = GraphCompiler::new().compile(&outputs[1]).unwrap();
-        let pruned_instruction = program
-            .staging
+        let staging =
+            stage_semantic_program(program.program(), program.compiler_options()).unwrap();
+        let pruned_instruction = staging
             .instructions
             .iter()
             .find_map(|inst| match &inst.op {

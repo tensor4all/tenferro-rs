@@ -84,6 +84,14 @@ fn constrained_shapes(outputs: usize, lhs_dim: usize, rhs_dim: usize) -> Vec<Tra
     .unwrap()
 }
 
+fn stage(program: &crate::CompiledGraph) -> crate::exec::ExecProgram {
+    crate::compiler::semantic_staging::stage_semantic_program(
+        program.program(),
+        program.compiler_options(),
+    )
+    .unwrap()
+}
+
 #[test]
 fn graph_compiler_rejects_concrete_scoped_constraint_contradiction() {
     let output = constrained_shapes(1, 7, 3).remove(0);
@@ -108,7 +116,7 @@ fn graph_compiler_discharges_equal_concrete_scope_without_guard() {
 
     let program = GraphCompiler::new().compile(&output).unwrap();
 
-    assert!(program.staging.shape_guards.is_empty());
+    assert!(stage(&program).shape_guards.is_empty());
 }
 
 #[test]
@@ -118,7 +126,7 @@ fn constraint_scope_survives_unary_and_reshape_and_discharges_concretely() {
 
     assert_eq!(output.constraint_scopes.materialize().len(), 1);
     let program = GraphCompiler::new().compile(&output).unwrap();
-    assert!(program.staging.shape_guards.is_empty());
+    assert!(stage(&program).shape_guards.is_empty());
 }
 
 #[test]
@@ -130,7 +138,7 @@ fn constraint_scope_shared_unary_branches_merge_and_discharge_without_duplicatio
 
     assert_eq!(output.constraint_scopes.materialize().len(), 1);
     let program = GraphCompiler::new().compile(&output).unwrap();
-    assert!(program.staging.shape_guards.is_empty());
+    assert!(stage(&program).shape_guards.is_empty());
 }
 
 #[test]
@@ -163,7 +171,7 @@ fn constraint_scope_multi_output_keeps_other_live_and_prunes_all_dead() {
     unrelated.constraint_scopes =
         ConstraintScopeChain::merge([&unrelated.constraint_scopes, &outputs[0].constraint_scopes]);
     let dead_program = GraphCompiler::new().compile(&unrelated).unwrap();
-    assert!(dead_program.staging.shape_guards.is_empty());
+    assert!(stage(&dead_program).shape_guards.is_empty());
 }
 
 #[test]

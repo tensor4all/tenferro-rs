@@ -450,14 +450,15 @@ fn borrowed_input_execution_retains_executor_slot_workspace_capacity() {
     let outputs = executor
         .run_many_with_input_reads(&program, &[TensorRead::from_tensor(&input)])
         .unwrap();
+    let staged = super::legacy_stage_compiled_graph(&program).unwrap();
 
     assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
     assert_eq!(input.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     assert!(
-        executor.borrowed_slot_workspace_capacity >= program.staging.n_slots,
+        executor.borrowed_slot_workspace_capacity >= staged.n_slots,
         "borrowed execution should retain reusable slot capacity; capacity={}, n_slots={}",
         executor.borrowed_slot_workspace_capacity,
-        program.staging.n_slots
+        staged.n_slots
     );
 }
 
@@ -476,14 +477,15 @@ fn borrowed_input_value_execution_retains_workspace_and_lazy_output() {
     let outputs = executor
         .run_many_values_with_input_reads(&program, &[TensorRead::from_tensor(&input)])
         .unwrap();
+    let staged = super::legacy_stage_compiled_graph(&program).unwrap();
 
     assert!(matches!(outputs[0], TensorValue::View(_)));
     assert_eq!(input.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
     assert!(
-        executor.borrowed_slot_workspace_capacity >= program.staging.n_slots,
+        executor.borrowed_slot_workspace_capacity >= staged.n_slots,
         "borrowed value execution should retain reusable slot capacity; capacity={}, n_slots={}",
         executor.borrowed_slot_workspace_capacity,
-        program.staging.n_slots
+        staged.n_slots
     );
 }
 
@@ -551,4 +553,42 @@ fn compile_with_input_specs_rejects_computed_placeholder_specs() {
         .unwrap_err();
 
     assert!(matches!(err, Error::UnexpectedBinding { binding_index: 0 }));
+}
+
+mod phase5_source_contracts {
+    fn repo_file(path: &str) -> String {
+        let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        root.push("../..");
+        root.push(path);
+        std::fs::read_to_string(root).expect("source file must be readable")
+    }
+
+    #[test]
+    fn compiled_graph_no_longer_retains_execution_staging() {
+        let source = repo_file("crates/tenferro-runtime/src/graph/program.rs");
+        let body = source
+            .split_once("pub struct CompiledGraph")
+            .and_then(|(_, rest)| rest.split_once("impl CompiledGraph"))
+            .map(|(body, _)| body)
+            .expect("CompiledGraph struct body");
+
+        assert!(body.contains("CompilerOptions"));
+        assert!(!body.contains("ExecProgram"));
+        assert!(!body.contains("staging"));
+    }
+
+    #[test]
+    fn graph_compiler_returns_compiler_options_not_staging() {
+        let source = repo_file("crates/tenferro-runtime/src/graph/compiler.rs");
+        let compile_frozen = source
+            .split_once("fn compile_frozen")
+            .and_then(|(_, rest)| rest.split_once("/// Compile multiple traced outputs"))
+            .map(|(body, _)| body)
+            .expect("compile_frozen body");
+
+        assert!(
+            compile_frozen.contains("CompiledGraph::new(frozen.clone(), self.compiler_options)")
+        );
+        assert!(!compile_frozen.contains("CompiledGraph::new(frozen.clone(), staging"));
+    }
 }
