@@ -11,12 +11,12 @@ use tenferro_cpu::provider::{
     CpuGemmProvider, CpuGemmRequest, CpuGroupedGemmRequest, CpuProviderOutcome,
 };
 use tenferro_cpu::{
-    discover_cpu_topology, CpuBackend, CpuDomainExecutor, CpuDomainExecutorCapabilities,
-    CpuDomainExecutorError, CpuExecutorAffinity, CpuExecutorReentrancy, CpuExecutorShutdown,
-    CpuInnerParallelism, CpuPlacement, CpuPlacementControl, CpuPlacementError,
-    CpuPlacementGuarantee, CpuProviderBundle, CpuProviderExecutionCapabilities,
-    CpuThreadCountControl, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement, ScopedCpuJob,
-    ScopedCpuJobs,
+    discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
+    CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacement,
+    CpuPlacementControl, CpuPlacementError, CpuPlacementGuarantee, CpuProviderBundle,
+    CpuProviderExecutionCapabilities, CpuThreadCountControl, ExternalCpuDomain, NumaNodeId,
+    ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_runtime::{
     Error as RuntimeError, ErrorPhase, GraphCompiler, GraphExecutor, TracedTensor,
@@ -133,6 +133,17 @@ fn placement() -> CpuPlacement {
     CpuPlacement::NumaNode(NumaNodeId::new(0))
 }
 
+fn marker_provider_bundle(
+    kind: CpuBackendKind,
+    marker: &'static str,
+    calls: Arc<AtomicUsize>,
+) -> CpuProviderBundle {
+    CpuProviderBundle::builder(kind)
+        .gemm_provider(Arc::new(MarkerGemmProvider { marker, calls }))
+        .build()
+        .unwrap()
+}
+
 fn external_backend(counters: Arc<ExecutorCounters>) -> CpuBackend {
     let allowed = discover_cpu_topology().unwrap().allowed_cpus().clone();
     let domain = ExternalCpuDomain::new(
@@ -146,7 +157,17 @@ fn external_backend(counters: Arc<ExecutorCounters>) -> CpuBackend {
         CpuPlacementGuarantee::AdvisoryDeclared,
     )
     .unwrap();
-    CpuBackend::from_external_managed_domains(CpuDomainId::new(41), [domain]).unwrap()
+    let bundle = marker_provider_bundle(
+        CpuBackendKind::default_compiled(),
+        "external_backend default provider",
+        Arc::new(AtomicUsize::new(0)),
+    );
+    CpuBackend::from_external_managed_domains_with_provider_bundle(
+        CpuDomainId::new(41),
+        [domain],
+        bundle,
+    )
+    .unwrap()
 }
 
 fn with_marker_provider(
@@ -154,10 +175,7 @@ fn with_marker_provider(
     marker: &'static str,
     calls: Arc<AtomicUsize>,
 ) -> CpuBackend {
-    let bundle = CpuProviderBundle::builder(backend.kind())
-        .gemm_provider(Arc::new(MarkerGemmProvider { marker, calls }))
-        .build()
-        .unwrap();
+    let bundle = marker_provider_bundle(backend.kind(), marker, calls);
     backend.with_provider_bundle(bundle).unwrap()
 }
 

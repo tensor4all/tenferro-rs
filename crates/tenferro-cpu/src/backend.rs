@@ -1962,6 +1962,12 @@ impl CpuBackend {
     /// );
     /// let _ = backend.provider_bundle();
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the standard CPU provider bundle builder is missing a
+    /// mandatory built-in provider slot, which indicates an internal provider
+    /// registration bug.
     pub fn with_dot_general_provider(mut self, provider: DotGeneralProvider) -> Self {
         let builder = CpuProviderBundle::builder(self.kind());
         let builder = if self.resolved == ResolvedCpuExecution::ProviderDefaultExclusive {
@@ -3000,6 +3006,11 @@ impl CpuBackend {
         let owner = inherited_or_new_execution_owner();
         let permit = self.acquire_execution_permit(owner);
         let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let enter_managed_session = entry.supports_infallible_session_entry()
+            && !matches!(
+                &self.resolved,
+                ResolvedCpuExecution::ProviderDefaultExclusive
+            );
         let run = |entered| {
             self.with_execution_resources(&permit, |resources| {
                 let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
@@ -3025,7 +3036,7 @@ impl CpuBackend {
                 result
             })
         };
-        if entry.supports_infallible_session_entry() {
+        if enter_managed_session {
             entry.enter_managed_session(|context| run(Some(context)))
         } else {
             with_execution_owner(owner, || run(None))

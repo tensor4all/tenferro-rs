@@ -435,6 +435,10 @@ impl HostReference for TropicalEinsumVjpOp {
 struct TropicalEinsumAdRule;
 
 #[cfg(feature = "autodiff")]
+#[derive(Debug)]
+struct TropicalEinsumJvpTransposeRule;
+
+#[cfg(feature = "autodiff")]
 impl SemanticLinearizeRule for TropicalEinsumAdRule {
     fn family_id(&self) -> &'static str {
         TROPICAL_EINSUM_FAMILY_ID
@@ -502,6 +506,50 @@ impl SemanticLinearTransposeRule for TropicalEinsumAdRule {
 }
 
 #[cfg(feature = "autodiff")]
+impl SemanticLinearTransposeRule for TropicalEinsumJvpTransposeRule {
+    fn family_id(&self) -> &'static str {
+        TROPICAL_EINSUM_JVP_FAMILY_ID
+    }
+
+    fn linear_transpose(
+        &self,
+        request: SemanticLinearTransposeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_tropical_jvp_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.cotangent_outputs()[0],
+            request.active_inputs(),
+            builder,
+            SemanticAdRuleRole::LinearTranspose,
+        )
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl SemanticPrimalVjpRule for TropicalEinsumJvpTransposeRule {
+    fn family_id(&self) -> &'static str {
+        TROPICAL_EINSUM_JVP_FAMILY_ID
+    }
+
+    fn primal_vjp(
+        &self,
+        request: SemanticPrimalVjpRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_tropical_jvp_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.cotangent_outputs()[0],
+            request.active_inputs(),
+            builder,
+            SemanticAdRuleRole::PrimalVjp,
+        )
+    }
+}
+
+#[cfg(feature = "autodiff")]
 impl SemanticPrimalVjpRule for TropicalEinsumAdRule {
     fn family_id(&self) -> &'static str {
         TROPICAL_EINSUM_FAMILY_ID
@@ -543,6 +591,12 @@ impl SemanticPrimalVjpRule for TropicalEinsumAdRule {
 ///     .lookup_linear_transpose("tenferro-ext-tropical.einsum.v1")
 ///     .is_some());
 /// assert!(rules
+///     .lookup_linear_transpose("tenferro-ext-tropical.einsum_jvp.v1")
+///     .is_some());
+/// assert!(rules
+///     .lookup_primal_vjp("tenferro-ext-tropical.einsum_jvp.v1")
+///     .is_some());
+/// assert!(rules
 ///     .lookup_primal_vjp("tenferro-ext-tropical.einsum.v1")
 ///     .is_some());
 /// ```
@@ -552,6 +606,8 @@ pub fn tropical_semantic_ad_rules(
     SemanticExtensionRuleSet::new()
         .with_linearize(Arc::new(TropicalEinsumAdRule))?
         .with_linear_transpose(Arc::new(TropicalEinsumAdRule))?
+        .with_linear_transpose(Arc::new(TropicalEinsumJvpTransposeRule))?
+        .with_primal_vjp(Arc::new(TropicalEinsumJvpTransposeRule))?
         .with_primal_vjp(Arc::new(TropicalEinsumAdRule))
 }
 
@@ -603,6 +659,63 @@ fn semantic_primal_op(
             family_id: TROPICAL_EINSUM_FAMILY_ID,
             role,
             message: "tropical einsum semantic AD received an incompatible payload".into(),
+        })
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_tropical_jvp_vjp(
+    op: &dyn ExtensionOp,
+    primal_inputs: &[ProgramValue],
+    cotangent: AdValue,
+    active_inputs: &[bool],
+    builder: &mut SemanticProgramBuilder,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+    let op = semantic_jvp_op(op, role)?;
+    validate_semantic_ad_supported(&op.subscripts, role)?;
+    if active_inputs.iter().take(2).any(|active| *active) {
+        return Err(SemanticAdError::Unsupported {
+            family_id: TROPICAL_EINSUM_JVP_FAMILY_ID,
+            role,
+            message: "tropical einsum JVP semantic AD supports transpose only for tangent inputs"
+                .into(),
+        });
+    }
+    let mut cotangent_inputs = vec![AdValue::Absent; op.input_count()];
+    let AdValue::Value(cotangent) = cotangent else {
+        return Ok(cotangent_inputs.into_boxed_slice());
+    };
+    for (active_pos, &active_input) in op.active_inputs.iter().enumerate() {
+        let tangent_input = 2 + active_pos;
+        if !active_inputs[tangent_input] {
+            continue;
+        }
+        let mut inputs = primal_inputs[..2].to_vec();
+        inputs.push(cotangent);
+        let value = builder.add_extension(
+            Arc::new(TropicalEinsumVjpOp::new(
+                op.kind,
+                op.subscripts.clone(),
+                active_input,
+            )),
+            &inputs,
+        )?[0];
+        cotangent_inputs[tangent_input] = AdValue::Value(value);
+    }
+    Ok(cotangent_inputs.into_boxed_slice())
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_jvp_op(
+    op: &dyn ExtensionOp,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<&TropicalEinsumJvpOp, SemanticAdError> {
+    op.as_any()
+        .downcast_ref::<TropicalEinsumJvpOp>()
+        .ok_or_else(|| SemanticAdError::Unsupported {
+            family_id: TROPICAL_EINSUM_JVP_FAMILY_ID,
+            role,
+            message: "tropical einsum JVP semantic AD received an incompatible payload".into(),
         })
 }
 

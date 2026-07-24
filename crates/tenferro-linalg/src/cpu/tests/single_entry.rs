@@ -5,11 +5,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use tenferro_cpu::linalg_interop::PoolScalar;
+use tenferro_cpu::provider::{
+    CpuGemmProvider, CpuGemmRequest, CpuGroupedGemmRequest, CpuProviderOutcome,
+};
 use tenferro_cpu::{
-    discover_cpu_topology, CpuBackend, CpuDomainExecutor, CpuDomainExecutorCapabilities,
-    CpuDomainExecutorError, CpuExecutorAffinity, CpuExecutorReentrancy, CpuExecutorShutdown,
-    CpuInnerParallelism, CpuPlacementGuarantee, ExternalCpuDomain, ResolvedCpuPlacement,
-    ScopedCpuJob, ScopedCpuJobs,
+    discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
+    CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, CpuPlacementControl,
+    CpuPlacementGuarantee, CpuProviderBundle, CpuProviderExecutionCapabilities,
+    CpuThreadCountControl, ExternalCpuDomain, ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
 use tenferro_tensor::{
     Buffer, BufferHandle, CpuDomainId, ErrorKind, MemoryKind, Placement,
@@ -52,6 +56,55 @@ impl CpuDomainExecutor for CountingNoInnerExecutor {
     }
 }
 
+#[derive(Debug)]
+struct ConstructionOnlyGemmProvider;
+
+impl ConstructionOnlyGemmProvider {
+    fn unexpected_call(&self) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        Err(tenferro_tensor::Error::backend_failure(
+            "single_entry_external_backend",
+            "construction-only GEMM provider should not execute",
+        ))
+    }
+}
+
+impl CpuGemmProvider for ConstructionOnlyGemmProvider {
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities {
+        CpuProviderExecutionCapabilities {
+            thread_count: CpuThreadCountControl::Sequential,
+            placement: CpuPlacementControl::CallingThread,
+            worker_local_sequential: true,
+            accepts_sequential: true,
+            accepts_outer: true,
+            accepts_inner: true,
+        }
+    }
+
+    fn gemm(
+        &self,
+        _context: &tenferro_cpu::CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.unexpected_call()
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &tenferro_cpu::CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.unexpected_call()
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &tenferro_cpu::CpuExecutionContext<'_>,
+        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.unexpected_call()
+    }
+}
+
 fn external_no_inner_backend() -> (CpuBackend, Arc<AtomicUsize>, Arc<AtomicUsize>) {
     let installs = Arc::new(AtomicUsize::new(0));
     let submits = Arc::new(AtomicUsize::new(0));
@@ -81,7 +134,11 @@ fn external_backend(executor: Arc<dyn CpuDomainExecutor>) -> CpuBackend {
         CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
-    CpuBackend::from_external_managed_domains(id, [domain]).unwrap()
+    let bundle = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+        .gemm_provider(Arc::new(ConstructionOnlyGemmProvider))
+        .build()
+        .unwrap();
+    CpuBackend::from_external_managed_domains_with_provider_bundle(id, [domain], bundle).unwrap()
 }
 
 #[test]

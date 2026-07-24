@@ -274,7 +274,12 @@ fn typed_lowering_wraps_standard_outputs() {
     let (mut builder, input, dtypes, shape) = lowering_fixture();
 
     let lowered = op
-        .lower_to_standard_ops_typed(&mut builder, &[input.clone()], &dtypes, &[shape.as_slice()])
+        .lower_to_standard_ops_typed(
+            &mut builder,
+            std::slice::from_ref(&input),
+            &dtypes,
+            &[shape.as_slice()],
+        )
         .unwrap();
 
     assert_eq!(lowered, ExtensionStandardLowering::Lowered(vec![input]));

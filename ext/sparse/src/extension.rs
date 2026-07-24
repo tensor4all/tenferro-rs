@@ -491,6 +491,10 @@ impl HostReference for SparseMatmulVjpOp {
 struct SparseMatmulAdRule;
 
 #[cfg(feature = "autodiff")]
+#[derive(Debug)]
+struct SparseMatmulJvpTransposeRule;
+
+#[cfg(feature = "autodiff")]
 impl SemanticLinearizeRule for SparseMatmulAdRule {
     fn family_id(&self) -> &'static str {
         FAMILY_ID
@@ -556,6 +560,50 @@ impl SemanticLinearTransposeRule for SparseMatmulAdRule {
 }
 
 #[cfg(feature = "autodiff")]
+impl SemanticLinearTransposeRule for SparseMatmulJvpTransposeRule {
+    fn family_id(&self) -> &'static str {
+        JVP_FAMILY_ID
+    }
+
+    fn linear_transpose(
+        &self,
+        request: SemanticLinearTransposeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_sparse_jvp_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.cotangent_outputs()[0],
+            request.active_inputs(),
+            builder,
+            SemanticAdRuleRole::LinearTranspose,
+        )
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl SemanticPrimalVjpRule for SparseMatmulJvpTransposeRule {
+    fn family_id(&self) -> &'static str {
+        JVP_FAMILY_ID
+    }
+
+    fn primal_vjp(
+        &self,
+        request: SemanticPrimalVjpRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_sparse_jvp_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.cotangent_outputs()[0],
+            request.active_inputs(),
+            builder,
+            SemanticAdRuleRole::PrimalVjp,
+        )
+    }
+}
+
+#[cfg(feature = "autodiff")]
 impl SemanticPrimalVjpRule for SparseMatmulAdRule {
     fn family_id(&self) -> &'static str {
         FAMILY_ID
@@ -597,6 +645,12 @@ impl SemanticPrimalVjpRule for SparseMatmulAdRule {
 ///     .lookup_linear_transpose("tenferro-ext-sparse.matmul.v1")
 ///     .is_some());
 /// assert!(rules
+///     .lookup_linear_transpose("tenferro-ext-sparse.matmul_jvp.v1")
+///     .is_some());
+/// assert!(rules
+///     .lookup_primal_vjp("tenferro-ext-sparse.matmul_jvp.v1")
+///     .is_some());
+/// assert!(rules
 ///     .lookup_primal_vjp("tenferro-ext-sparse.matmul.v1")
 ///     .is_some());
 /// ```
@@ -606,6 +660,8 @@ pub fn sparse_semantic_ad_rules(
     SemanticExtensionRuleSet::new()
         .with_linearize(Arc::new(SparseMatmulAdRule))?
         .with_linear_transpose(Arc::new(SparseMatmulAdRule))?
+        .with_linear_transpose(Arc::new(SparseMatmulJvpTransposeRule))?
+        .with_primal_vjp(Arc::new(SparseMatmulJvpTransposeRule))?
         .with_primal_vjp(Arc::new(SparseMatmulAdRule))
 }
 
@@ -655,6 +711,61 @@ fn semantic_matmul_op(
             family_id: FAMILY_ID,
             role,
             message: "sparse matmul semantic AD received an incompatible payload".into(),
+        })
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_sparse_jvp_vjp(
+    op: &dyn ExtensionOp,
+    primal_inputs: &[ProgramValue],
+    cotangent: AdValue,
+    active_inputs: &[bool],
+    builder: &mut SemanticProgramBuilder,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+    let op = semantic_jvp_op(op, role)?;
+    if active_inputs.iter().take(2).any(|active| *active) {
+        return Err(SemanticAdError::Unsupported {
+            family_id: JVP_FAMILY_ID,
+            role,
+            message: "sparse matmul JVP semantic AD supports transpose only for tangent inputs"
+                .into(),
+        });
+    }
+    let mut cotangent_inputs = vec![AdValue::Absent; op.input_count()];
+    let AdValue::Value(cotangent) = cotangent else {
+        return Ok(cotangent_inputs.into_boxed_slice());
+    };
+    for (active_pos, &active_input) in op.active_inputs.iter().enumerate() {
+        let tangent_input = 2 + active_pos;
+        if !active_inputs[tangent_input] {
+            continue;
+        }
+        let mut inputs = primal_inputs[..2].to_vec();
+        inputs.push(cotangent);
+        let value = builder.add_extension(
+            Arc::new(SparseMatmulVjpOp {
+                plan: op.plan.clone(),
+                active_input,
+            }),
+            &inputs,
+        )?[0];
+        cotangent_inputs[tangent_input] = AdValue::Value(value);
+    }
+    Ok(cotangent_inputs.into_boxed_slice())
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_jvp_op(
+    op: &dyn ExtensionOp,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<&SparseMatmulJvpOp, SemanticAdError> {
+    op.as_any()
+        .downcast_ref::<SparseMatmulJvpOp>()
+        .ok_or_else(|| SemanticAdError::Unsupported {
+            family_id: JVP_FAMILY_ID,
+            role,
+            message: "sparse matmul JVP semantic AD received an incompatible payload".into(),
         })
 }
 

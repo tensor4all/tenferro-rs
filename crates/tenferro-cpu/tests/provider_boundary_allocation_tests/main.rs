@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use tenferro_cpu::provider::{
-    CpuDotGeneralRequest, CpuExecutionContext, CpuGeneralContractionProvider, CpuProviderOutcome,
+    CpuDotGeneralRequest, CpuExecutionContext, CpuGemmProvider, CpuGemmRequest,
+    CpuGeneralContractionProvider, CpuGroupedGemmRequest, CpuProviderOutcome,
 };
 use tenferro_cpu::{
     discover_cpu_topology, CpuBackend, CpuBackendKind, CpuDomainExecutor,
@@ -89,6 +90,9 @@ struct ValueWritingGeneralProvider {
 }
 
 #[derive(Debug)]
+struct ConstructionOnlyGemmProvider;
+
+#[derive(Debug)]
 struct InlineExecutor;
 
 impl CpuDomainExecutor for InlineExecutor {
@@ -112,6 +116,52 @@ impl CpuDomainExecutor for InlineExecutor {
 
     fn install(&self, job: &mut dyn ScopedCpuJob) -> Result<(), CpuDomainExecutorError> {
         job.run()
+    }
+}
+
+impl ConstructionOnlyGemmProvider {
+    fn unexpected_call(&self) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        Err(tenferro_tensor::Error::backend_failure(
+            "provider_boundary_allocation_probe",
+            "construction-only GEMM provider should not execute",
+        ))
+    }
+}
+
+impl CpuGemmProvider for ConstructionOnlyGemmProvider {
+    fn execution_capabilities(&self) -> CpuProviderExecutionCapabilities {
+        CpuProviderExecutionCapabilities {
+            thread_count: CpuThreadCountControl::Sequential,
+            placement: CpuPlacementControl::CallingThread,
+            worker_local_sequential: true,
+            accepts_sequential: true,
+            accepts_outer: true,
+            accepts_inner: true,
+        }
+    }
+
+    fn gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.unexpected_call()
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.unexpected_call()
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &CpuExecutionContext<'_>,
+        _request: CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<CpuProviderOutcome> {
+        self.unexpected_call()
     }
 }
 
@@ -173,6 +223,7 @@ fn warmed_public_session_request_provider_dispatch_does_not_allocate() {
     const ITERATIONS: usize = 10_000;
     let calls = Arc::new(AtomicUsize::new(0));
     let providers = CpuProviderBundle::builder(CpuBackendKind::default_compiled())
+        .gemm_provider(Arc::new(ConstructionOnlyGemmProvider))
         .require_general_contraction_provider(Arc::new(ValueWritingGeneralProvider {
             calls: Arc::clone(&calls),
         }))
@@ -188,10 +239,12 @@ fn warmed_public_session_request_provider_dispatch_does_not_allocate() {
         CpuPlacementGuarantee::ExactDeclared,
     )
     .unwrap();
-    let mut backend = CpuBackend::from_external_managed_domains(domain_id, [domain])
-        .unwrap()
-        .with_provider_bundle(providers)
-        .unwrap();
+    let mut backend = CpuBackend::from_external_managed_domains_with_provider_bundle(
+        domain_id,
+        [domain],
+        providers,
+    )
+    .unwrap();
     let lhs = Tensor::from_vec_col_major(vec![1, 1], vec![black_box(2.0_f64)]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![1, 1], vec![black_box(3.0_f64)]).unwrap();
     let mut output = Tensor::from_vec_col_major(vec![1, 1], vec![0.0_f64]).unwrap();

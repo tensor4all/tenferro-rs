@@ -44,6 +44,57 @@ impl tenferro_cpu::provider::CpuGeneralContractionProvider for GraphGeneralProvi
 }
 
 #[derive(Debug)]
+struct GraphConstructionOnlyGemmProvider;
+
+impl GraphConstructionOnlyGemmProvider {
+    fn unexpected_call(
+        &self,
+    ) -> tenferro_tensor::Result<tenferro_cpu::provider::CpuProviderOutcome> {
+        Err(tenferro_tensor::Error::backend_failure(
+            "compiled_graph_dot_provider_preflight",
+            "construction-only GEMM provider should not execute",
+        ))
+    }
+}
+
+impl tenferro_cpu::provider::CpuGemmProvider for GraphConstructionOnlyGemmProvider {
+    fn execution_capabilities(&self) -> tenferro_cpu::CpuProviderExecutionCapabilities {
+        tenferro_cpu::CpuProviderExecutionCapabilities {
+            thread_count: tenferro_cpu::CpuThreadCountControl::Sequential,
+            placement: tenferro_cpu::CpuPlacementControl::CallingThread,
+            worker_local_sequential: true,
+            accepts_sequential: true,
+            accepts_outer: true,
+            accepts_inner: true,
+        }
+    }
+
+    fn gemm(
+        &self,
+        _context: &tenferro_cpu::provider::CpuExecutionContext<'_>,
+        _request: tenferro_cpu::provider::CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<tenferro_cpu::provider::CpuProviderOutcome> {
+        self.unexpected_call()
+    }
+
+    fn strided_batched_gemm(
+        &self,
+        _context: &tenferro_cpu::provider::CpuExecutionContext<'_>,
+        _request: tenferro_cpu::provider::CpuGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<tenferro_cpu::provider::CpuProviderOutcome> {
+        self.unexpected_call()
+    }
+
+    fn grouped_gemm(
+        &self,
+        _context: &tenferro_cpu::provider::CpuExecutionContext<'_>,
+        _request: tenferro_cpu::provider::CpuGroupedGemmRequest<'_, '_, '_>,
+    ) -> tenferro_tensor::Result<tenferro_cpu::provider::CpuProviderOutcome> {
+        self.unexpected_call()
+    }
+}
+
+#[derive(Debug)]
 struct CountingBackend {
     uploads: Arc<AtomicUsize>,
     uploads_in_session: Arc<AtomicUsize>,
@@ -254,6 +305,7 @@ fn compiled_graph_dot_uses_the_installed_cpu_provider_slot_once() {
     let calls = Arc::new(AtomicUsize::new(0));
     let bundle =
         tenferro_cpu::CpuProviderBundle::builder(tenferro_cpu::CpuBackendKind::default_compiled())
+            .gemm_provider(Arc::new(GraphConstructionOnlyGemmProvider))
             .prefer_general_contraction_provider(Arc::new(GraphGeneralProviderSpy {
                 calls: Arc::clone(&calls),
             }))

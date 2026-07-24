@@ -115,3 +115,44 @@ CUDA tests, and 15 ignored `tenferro-linalg` CUDA linalg tests.
 After the PR is opened, babysit the required hosted checks, especially
 `CI GPU gate`. The hosted RunPod path is still required to prove the repository
 archive and PJRT flow on the workflow-selected CUDA runtime tier.
+
+## Post-PR CI repair notes
+
+PR CI at head `771b1b99` exposed integration issues that were not caught by
+the Phase 8 local pre-PR checks:
+
+- Extension AD bridge transpose reached the JVP operation families emitted by
+  tropical and sparse linearization. The repair registers direct JVP-family
+  semantic VJP/linear-transpose rules for the tangent inputs while preserving
+  unsupported active-primal diagnostics.
+- `ExtensionCacheStore::clear()` intentionally clears retained entries while
+  preserving cumulative hit/miss/eviction/clear counters. The FFT cache test
+  now asserts those two parts of the contract separately.
+- The generated dependency SVG had drifted from the source DOT inventory and
+  was regenerated.
+- `cpu-blas` classifies the built-in BLAS provider as
+  `GlobalOrUncontrolled`, so strict external-managed domain tests must install
+  controlled test provider bundles at construction time. The production
+  validation remains strict. Separately, provider-default-exclusive backend
+  sessions now keep the public session callback outside the Tenferro-managed
+  Rayon entry.
+
+Fresh local verification after these repairs:
+
+```console
+bash scripts/check-pr-fast.sh --coverage-reviewed \
+  --test 'cargo test -p tenferro-ad --test integration placement_bound_eager -- --nocapture' \
+  --test 'cargo test -p tenferro-linalg cpu::tests::single_entry:: -- --nocapture' \
+  --test 'cargo test -p tenferro-runtime graph::executor::tests::preflight::compiled_graph_dot_uses_the_installed_cpu_provider_slot_once -- --nocapture' \
+  --test 'cargo test -p tenferro-cpu --test provider_boundary_allocation_tests warmed_public_session_request_provider_dispatch_does_not_allocate -- --nocapture' \
+  --test 'cargo test -p tenferro-fft fft_plan_cache_is_bounded_lru_and_reports_known_retention -- --nocapture' \
+  --test 'cargo test --manifest-path ext/tropical/Cargo.toml --features autodiff --test tropical_ad' \
+  --test 'cargo test --manifest-path ext/sparse/Cargo.toml --features autodiff --test sparse_ad' \
+  --test 'cargo check -p tenferro-cpu --tests --no-default-features --features cpu-blas' \
+  --test 'cargo check -p tenferro-ad --test integration --no-default-features --features cpu-blas' \
+  --test 'cargo check -p tenferro-linalg --lib --tests --no-default-features --features cpu-blas' \
+  --test 'cargo check -p tenferro-runtime --lib --tests --no-default-features --features cpu-blas'
+```
+
+The command completed with `fast PR checks passed`. Full linked `cpu-blas`
+execution remains CI-owned on hosts with BLAS libraries available.
