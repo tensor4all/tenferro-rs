@@ -1,6 +1,8 @@
 mod cache_owner;
 mod capability;
+mod engine_registration;
 mod error;
+mod extension;
 mod extension_provider;
 mod identity;
 mod policy;
@@ -20,12 +22,14 @@ pub use capability::{
     PreparedOperationBinding, PreparedOperationHandle, ReductionPrepareRequest, ReductionRuntime,
     UnsupportedReason,
 };
+pub use engine_registration::EngineRegistration;
 pub use error::{
-    ExecutionContextMismatch, ExecutionPolicyError, IdentityError, IdentityKind,
-    InputSignatureError, InputSpecializationRequirementsError, PlacementConstraintError,
-    PrepareError, ProviderContractError, RankRequirement, RegistrationKey, RuntimeConfigError,
-    RuntimeReconfigureError, SpecializationError,
+    ExecutionContextMismatch, ExecutionPolicyError, ExtensionModuleError, IdentityError,
+    IdentityKind, InputSignatureError, InputSpecializationRequirementsError,
+    PlacementConstraintError, PrepareError, ProviderContractError, RankRequirement,
+    RegistrationKey, RuntimeConfigError, RuntimeReconfigureError, SpecializationError,
 };
+pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};
 pub use identity::{
     EngineId, ExecutionContextIdentity, HardwareClassId, RegistrationIdentity, RuntimeEpoch,
@@ -38,7 +42,7 @@ pub use policy::{
 };
 pub use signature::{InputSignature, InputSignatureEntry};
 pub use snapshot::{
-    EngineRegistration, EngineSnapshotView, Runtime, RuntimeConfigBuilder, RuntimeConfigSnapshot,
+    EngineSnapshotView, Runtime, RuntimeConfigBuilder, RuntimeConfigSnapshot,
     RuntimeReconfiguration,
 };
 pub use specialization::{

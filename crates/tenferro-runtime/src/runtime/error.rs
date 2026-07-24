@@ -6,6 +6,7 @@ use super::capability::{
 use super::identity::{EngineId, RuntimeEpoch};
 use super::policy::StorageClass;
 use super::specialization::SpecializationProjection;
+use super::{CacheOwnerId, ExtensionModuleId};
 use tenferro_tensor::Error as TensorError;
 
 /// Classifies a malformed runtime identifier without retaining its input.
@@ -65,6 +66,8 @@ pub enum IdentityKind {
     LayoutClass,
     /// A runtime cache-owner identifier.
     CacheOwner,
+    /// An extension module identifier.
+    ExtensionModule,
 }
 
 /// Reports invalid placement constraints.
@@ -114,6 +117,27 @@ pub enum PlacementConstraintError {
 pub enum RegistrationKey {
     /// A direct engine registration.
     Engine(EngineId),
+    /// An extension engine registration.
+    ExtensionEngine {
+        /// Extension family.
+        family: &'static str,
+        /// Runtime engine.
+        engine: EngineId,
+    },
+    /// An extension planning config registration.
+    ExtensionPlanning {
+        /// Extension module.
+        module: ExtensionModuleId,
+        /// Runtime engine.
+        engine: EngineId,
+    },
+    /// An extension cache-owner registration.
+    ExtensionCacheOwner {
+        /// Extension module.
+        module: ExtensionModuleId,
+        /// Local cache owner.
+        owner: CacheOwnerId,
+    },
 }
 
 /// Reports invalid execution-policy configuration.
@@ -235,6 +259,13 @@ pub enum RuntimeConfigError {
         /// Typed policy validation reason.
         reason: ExecutionPolicyError,
     },
+    /// Extension module transaction failed.
+    #[error("extension module registration failed")]
+    ExtensionModule {
+        /// Typed extension module source.
+        #[source]
+        source: ExtensionModuleError,
+    },
 }
 
 impl From<IdentityError> for RuntimeConfigError {
@@ -287,6 +318,93 @@ pub enum RuntimeReconfigureError {
     EpochExhausted {
         /// Current maximum epoch.
         current: RuntimeEpoch,
+    },
+}
+
+/// Reports invalid extension module registration transactions.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use tenferro_runtime::{EngineId, ExtensionModuleError, ExtensionModuleId};
+///
+/// let error = ExtensionModuleError::MissingPlanningConfig {
+///     module_id: ExtensionModuleId::new("tenferro.module.test")?,
+///     engine_id: EngineId::new("tenferro.engine.test")?,
+/// };
+/// assert!(error.to_string().contains("planning config"));
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ExtensionModuleError {
+    /// A distinct module is already installed at the same module ID.
+    #[error("extension module {module_id:?} is already installed")]
+    ConflictingModule {
+        /// Conflicting module ID.
+        module_id: ExtensionModuleId,
+    },
+    /// A distinct extension engine is already registered for the same
+    /// `(family, engine)` key.
+    #[error("extension module {module_id:?} has conflicting engine {family_id:?}/{engine_id:?}")]
+    ConflictingEngine {
+        /// Extension module ID.
+        module_id: ExtensionModuleId,
+        /// Extension family ID.
+        family_id: &'static str,
+        /// Runtime engine ID.
+        engine_id: EngineId,
+    },
+    /// A planning config was registered without exactly one matching engine.
+    #[error(
+        "extension module {module_id:?} registered planning config without engine {engine_id:?}"
+    )]
+    PlanningConfigWithoutEngine {
+        /// Extension module ID.
+        module_id: ExtensionModuleId,
+        /// Runtime engine ID.
+        engine_id: EngineId,
+    },
+    /// Planning config family did not match the registered engine family.
+    #[error(
+        "extension module {module_id:?} config for engine {engine_id:?} has family \
+         {actual:?}, expected {expected:?}"
+    )]
+    PlanningConfigFamilyMismatch {
+        /// Extension module ID.
+        module_id: ExtensionModuleId,
+        /// Runtime engine ID.
+        engine_id: EngineId,
+        /// Expected extension family ID.
+        expected: &'static str,
+        /// Actual extension family ID.
+        actual: &'static str,
+    },
+    /// An engine was registered without its required planning config.
+    #[error("extension module {module_id:?} engine {engine_id:?} has no planning config")]
+    MissingPlanningConfig {
+        /// Extension module ID.
+        module_id: ExtensionModuleId,
+        /// Runtime engine ID.
+        engine_id: EngineId,
+    },
+    /// A distinct planning config is already registered for the same engine.
+    #[error("extension module {module_id:?} has conflicting planning config for {engine_id:?}")]
+    ConflictingPlanningConfig {
+        /// Extension module ID.
+        module_id: ExtensionModuleId,
+        /// Runtime engine ID.
+        engine_id: EngineId,
+    },
+    /// A distinct cache owner is already registered for the same local owner ID.
+    #[error("extension module {module_id:?} has conflicting cache owner {owner:?}")]
+    ConflictingCacheOwner {
+        /// Extension module ID.
+        module_id: ExtensionModuleId,
+        /// Local cache owner ID.
+        owner: CacheOwnerId,
     },
 }
 

@@ -6,147 +6,22 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use super::cache_owner::{FrozenCacheOwner, FrozenCacheOwnerKind};
+#[cfg(test)]
+use super::extension::ExtensionSlotFullForTest;
+use super::extension::{
+    configure_module, freeze_extension_slots, CandidateModuleRecord, ExtensionFamilyId,
+    FrozenExtensionSlots,
+};
 use super::{
-    CacheOwnerId, CoreCapabilityBundle, EngineId, ExecutionContextIdentity, ExecutionPolicy,
-    HardwareClassId, RegistrationIdentity, RuntimeCacheOwner, RuntimeConfigError, RuntimeEpoch,
-    RuntimeId, RuntimeReconfigureError, RuntimeStateError, StorageClass,
+    CacheOwnerId, CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
+    ExecutionPolicy, ExtensionModule, ExtensionModuleError, ExtensionModuleId, HardwareClassId,
+    RegistrationIdentity, RegistrationKey, RuntimeConfigError, RuntimeEpoch, RuntimeId,
+    RuntimeReconfigureError, RuntimeStateError,
 };
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_REGISTRATION_ISSUER: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Debug)]
-struct CandidateRegistrationToken;
-
-/// Immutable direct engine registration candidate.
-///
-/// `EngineRegistration` values can be cloned and registered repeatedly. Before
-/// publication, candidate identity is the pair of engine ID and an internal
-/// pointer token, so reusing the same cloned candidate is idempotent while a
-/// distinct value for the same engine ID is a conflict unless explicitly
-/// replaced.
-///
-/// # Examples
-///
-/// ```
-/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// use std::sync::Arc;
-/// use tenferro_runtime::{
-///     CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
-///     HardwareClassId, StorageClass,
-/// };
-///
-/// let storage = StorageClass::new("tenferro.storage.host")?;
-/// let registration = EngineRegistration::new(
-///     EngineId::new("tenferro.cpu")?,
-///     ExecutionContextIdentity::of::<()>(),
-///     HardwareClassId::new("tenferro.cpu.host")?,
-///     Arc::from(vec![storage.clone()]),
-///     storage,
-///     CoreCapabilityBundle::builder().build(),
-/// )?;
-/// assert_eq!(registration.engine_id().as_str(), "tenferro.cpu");
-/// # Ok(())
-/// # }
-/// ```
-#[derive(Clone)]
-pub struct EngineRegistration {
-    engine_id: EngineId,
-    context_identity: ExecutionContextIdentity,
-    hardware_class: HardwareClassId,
-    storage_classes: Arc<[StorageClass]>,
-    default_storage_class: StorageClass,
-    capabilities: CoreCapabilityBundle,
-    cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
-    candidate_token: Arc<CandidateRegistrationToken>,
-}
-
-impl EngineRegistration {
-    /// Build an immutable engine registration candidate.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RuntimeConfigError::EmptyStorageClasses`] for an empty storage
-    /// list, [`RuntimeConfigError::DuplicateStorageClass`] for duplicate storage
-    /// classes, or [`RuntimeConfigError::DefaultStorageClassNotListed`] when the
-    /// default storage class is not supported by this engine.
-    pub fn new(
-        engine_id: EngineId,
-        context_identity: ExecutionContextIdentity,
-        hardware_class: HardwareClassId,
-        storage_classes: Arc<[StorageClass]>,
-        default_storage_class: StorageClass,
-        capabilities: CoreCapabilityBundle,
-    ) -> Result<Self, RuntimeConfigError> {
-        validate_storage_classes(&engine_id, &storage_classes, &default_storage_class)?;
-        Ok(Self {
-            engine_id,
-            context_identity,
-            hardware_class,
-            storage_classes,
-            default_storage_class,
-            capabilities,
-            cache_owner: None,
-            candidate_token: Arc::new(CandidateRegistrationToken),
-        })
-    }
-
-    /// Return the engine identifier.
-    pub fn engine_id(&self) -> &EngineId {
-        &self.engine_id
-    }
-
-    /// Return the execution-context type identity accepted by the engine.
-    pub fn context_identity(&self) -> ExecutionContextIdentity {
-        self.context_identity
-    }
-
-    /// Return the hardware class exposed by this engine.
-    pub fn hardware_class(&self) -> &HardwareClassId {
-        &self.hardware_class
-    }
-
-    /// Return the supported storage classes in registration order.
-    pub fn storage_classes(&self) -> &[StorageClass] {
-        &self.storage_classes
-    }
-
-    /// Return the default storage class.
-    pub fn default_storage_class(&self) -> &StorageClass {
-        &self.default_storage_class
-    }
-
-    /// Return direct core capability slots.
-    pub fn capabilities(&self) -> &CoreCapabilityBundle {
-        &self.capabilities
-    }
-
-    /// Attach a runtime cache owner to this registration.
-    pub fn with_cache_owner(mut self, owner: Arc<dyn RuntimeCacheOwner>) -> Self {
-        self.cache_owner = Some(owner);
-        self
-    }
-
-    fn candidate_identical(&self, other: &Self) -> bool {
-        self.engine_id == other.engine_id
-            && Arc::ptr_eq(&self.candidate_token, &other.candidate_token)
-    }
-}
-
-impl fmt::Debug for EngineRegistration {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("EngineRegistration")
-            .field("engine_id", &self.engine_id)
-            .field("context_identity", &self.context_identity)
-            .field("hardware_class", &self.hardware_class)
-            .field("storage_class_count", &self.storage_classes.len())
-            .field("default_storage_class", &self.default_storage_class)
-            .field("capabilities", &self.capabilities)
-            .field("cache_owner", &self.cache_owner.is_some())
-            .finish_non_exhaustive()
-    }
-}
 
 #[derive(Clone, Debug)]
 struct CandidateEngineRecord {
@@ -158,6 +33,7 @@ struct CandidateEngineRecord {
 struct CandidateConfig {
     policy: ExecutionPolicy,
     engines: BTreeMap<EngineId, CandidateEngineRecord>,
+    modules: BTreeMap<ExtensionModuleId, CandidateModuleRecord>,
 }
 
 impl CandidateConfig {
@@ -165,6 +41,7 @@ impl CandidateConfig {
         Self {
             policy: default_execution_policy(),
             engines: BTreeMap::new(),
+            modules: BTreeMap::new(),
         }
     }
 
@@ -185,6 +62,7 @@ impl CandidateConfig {
         Self {
             policy: snapshot.policy.clone(),
             engines,
+            modules: snapshot.extensions.to_candidate_modules(),
         }
     }
 }
@@ -204,44 +82,6 @@ impl fmt::Debug for FrozenEngineSlot {
             .field("context_identity", &self.registration.context_identity())
             .field("hardware_class", self.registration.hardware_class())
             .finish_non_exhaustive()
-    }
-}
-
-#[derive(Clone, Debug)]
-struct FrozenExtensionSlots {
-    module_count: usize,
-    engine_count: usize,
-}
-
-impl FrozenExtensionSlots {
-    fn empty() -> Self {
-        Self {
-            module_count: 0,
-            engine_count: 0,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum FrozenCacheOwnerKind {
-    Engine,
-}
-
-#[derive(Clone)]
-struct FrozenCacheOwner {
-    id: CacheOwnerId,
-    kind: FrozenCacheOwnerKind,
-    owner: Arc<dyn RuntimeCacheOwner>,
-}
-
-impl fmt::Debug for FrozenCacheOwner {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("FrozenCacheOwner")
-            .field("id", &self.id)
-            .field("kind", &self.kind)
-            .field("owner_strong_count", &Arc::strong_count(&self.owner))
-            .finish()
     }
 }
 
@@ -296,7 +136,7 @@ impl RuntimeConfigSnapshot {
 
     /// Return the number of installed extension modules.
     pub fn extension_module_count(&self) -> usize {
-        self.extensions.module_count
+        self.extensions.module_count()
     }
 
     /// Return an immutable view of a registered engine slot.
@@ -314,6 +154,38 @@ impl RuntimeConfigSnapshot {
             .iter()
             .map(|slot| slot.registration.engine_id())
     }
+
+    #[cfg(test)]
+    pub(crate) fn extension_slots_for_test(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &ExtensionModuleId,
+            ExtensionFamilyId,
+            &EngineId,
+            RegistrationIdentity,
+        ),
+    > {
+        self.extensions.slots_for_test()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn extension_slot_identity_for_test(
+        &self,
+        family_id: ExtensionFamilyId,
+        engine_id: &EngineId,
+    ) -> Option<RegistrationIdentity> {
+        self.extensions.slot_identity_for_test(family_id, engine_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn extension_slot_full_for_test(
+        &self,
+        family_id: ExtensionFamilyId,
+        engine_id: &EngineId,
+    ) -> Option<ExtensionSlotFullForTest<'_>> {
+        self.extensions.slot_full_for_test(family_id, engine_id)
+    }
 }
 
 impl fmt::Debug for RuntimeConfigSnapshot {
@@ -324,8 +196,8 @@ impl fmt::Debug for RuntimeConfigSnapshot {
             .field("epoch", &self.epoch)
             .field("execution_policy", &self.policy)
             .field("engine_count", &self.engines.len())
-            .field("extension_module_count", &self.extensions.module_count)
-            .field("extension_engine_count", &self.extensions.engine_count)
+            .field("extension_module_count", &self.extensions.module_count())
+            .field("extension_engine_count", &self.extensions.engine_count())
             .field("cache_owner_count", &self.cache_owners.len())
             .finish_non_exhaustive()
     }
@@ -434,6 +306,8 @@ impl Runtime {
         if !changed {
             return Ok(base.epoch());
         }
+        validate_candidate(&candidate)
+            .map_err(|source| RuntimeReconfigureError::Edit { source })?;
 
         let next_epoch =
             base.epoch()
@@ -462,19 +336,20 @@ impl Runtime {
             .engines
             .values()
             .filter(|record| record.identity.is_none())
-            .count();
+            .count()
+            + candidate
+                .modules
+                .values()
+                .flat_map(|module| module.engines.values())
+                .filter(|record| record.identity.is_none())
+                .count();
         let (new_identities, next_ordinal) = self
             .plan_registration_identities(missing_identities)
             .map_err(|source| RuntimeReconfigureError::Edit { source })?;
         assign_new_identities(&mut candidate, new_identities);
         let next_snapshot = Arc::new(
-            freeze_candidate(
-                self.0.runtime_id,
-                next_epoch,
-                candidate,
-                base.extensions.clone(),
-            )
-            .map_err(|source| RuntimeReconfigureError::Edit { source })?,
+            freeze_candidate(self.0.runtime_id, next_epoch, candidate)
+                .map_err(|source| RuntimeReconfigureError::Edit { source })?,
         );
 
         self.0
@@ -623,6 +498,51 @@ impl RuntimeConfigBuilder {
         Ok(self)
     }
 
+    /// Install an extension module transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::ExtensionModule`] when module configuration
+    /// fails or a distinct module already uses the same module ID.
+    pub fn install_extension_module(
+        &mut self,
+        value: Arc<dyn ExtensionModule>,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        let mut changed = false;
+        install_extension_module_candidate(&mut self.candidate, value, &mut changed)?;
+        Ok(self)
+    }
+
+    /// Replace an extension module transaction, installing it when absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::ExtensionModule`] when module configuration
+    /// fails.
+    pub fn replace_extension_module(
+        &mut self,
+        value: Arc<dyn ExtensionModule>,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        let mut changed = false;
+        replace_extension_module_candidate(&mut self.candidate, value, &mut changed)?;
+        Ok(self)
+    }
+
+    /// Remove an extension module candidate if present.
+    ///
+    /// # Errors
+    ///
+    /// This method currently has no failing absent-module path; it returns
+    /// [`RuntimeConfigError`] only for future validated module removal failures.
+    pub fn remove_extension_module(
+        &mut self,
+        id: &ExtensionModuleId,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        let mut changed = false;
+        remove_extension_module_candidate(&mut self.candidate, id, &mut changed)?;
+        Ok(self)
+    }
+
     /// Build and publish the initial runtime snapshot.
     ///
     /// # Errors
@@ -630,16 +550,12 @@ impl RuntimeConfigBuilder {
     /// Returns [`RuntimeConfigError::IdentityExhausted`] if runtime or
     /// registration identity allocation would wrap.
     pub fn build(mut self) -> Result<Runtime, RuntimeConfigError> {
+        validate_candidate(&self.candidate)?;
         let runtime_id = RuntimeId::from_nonzero(allocate_nonzero(&NEXT_RUNTIME_ID)?);
         let issuer = allocate_nonzero(&NEXT_REGISTRATION_ISSUER)?;
         let post_ordinal = assign_initial_identities(&mut self.candidate, issuer)?;
         let epoch = RuntimeEpoch::one();
-        let snapshot = Arc::new(freeze_candidate(
-            runtime_id,
-            epoch,
-            self.candidate,
-            FrozenExtensionSlots::empty(),
-        )?);
+        let snapshot = Arc::new(freeze_candidate(runtime_id, epoch, self.candidate)?);
         let state = RuntimeState {
             runtime_id,
             issuer,
@@ -665,6 +581,7 @@ impl fmt::Debug for RuntimeConfigBuilder {
             .debug_struct("RuntimeConfigBuilder")
             .field("execution_policy", &self.candidate.policy)
             .field("engine_count", &self.candidate.engines.len())
+            .field("extension_module_count", &self.candidate.modules.len())
             .finish_non_exhaustive()
     }
 }
@@ -721,6 +638,49 @@ impl RuntimeReconfiguration<'_> {
         remove_engine_candidate(self.candidate, id, self.changed)?;
         Ok(self)
     }
+
+    /// Install an extension module in this reconfiguration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::ExtensionModule`] when module configuration
+    /// fails or a distinct module already uses the same module ID.
+    pub fn install_extension_module(
+        &mut self,
+        value: Arc<dyn ExtensionModule>,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        install_extension_module_candidate(self.candidate, value, self.changed)?;
+        Ok(self)
+    }
+
+    /// Replace an extension module in this reconfiguration, installing when
+    /// absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::ExtensionModule`] when module configuration
+    /// fails.
+    pub fn replace_extension_module(
+        &mut self,
+        value: Arc<dyn ExtensionModule>,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        replace_extension_module_candidate(self.candidate, value, self.changed)?;
+        Ok(self)
+    }
+
+    /// Remove an extension module if present.
+    ///
+    /// # Errors
+    ///
+    /// This method currently has no failing absent-module path; it returns
+    /// [`RuntimeConfigError`] only for future validated module removal failures.
+    pub fn remove_extension_module(
+        &mut self,
+        id: &ExtensionModuleId,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        remove_extension_module_candidate(self.candidate, id, self.changed)?;
+        Ok(self)
+    }
 }
 
 impl fmt::Debug for RuntimeReconfiguration<'_> {
@@ -728,6 +688,7 @@ impl fmt::Debug for RuntimeReconfiguration<'_> {
         formatter
             .debug_struct("RuntimeReconfiguration")
             .field("engine_count", &self.candidate.engines.len())
+            .field("extension_module_count", &self.candidate.modules.len())
             .field("changed", &*self.changed)
             .finish_non_exhaustive()
     }
@@ -792,40 +753,6 @@ fn default_execution_policy() -> ExecutionPolicy {
     ExecutionPolicy::new(super::Determinism::Fast, None, 0)
 }
 
-fn validate_storage_classes(
-    engine_id: &EngineId,
-    storage_classes: &[StorageClass],
-    default_storage_class: &StorageClass,
-) -> Result<(), RuntimeConfigError> {
-    if storage_classes.is_empty() {
-        return Err(RuntimeConfigError::EmptyStorageClasses {
-            engine_id: engine_id.clone(),
-        });
-    }
-    for duplicate_index in 0..storage_classes.len() {
-        if let Some(first_index) = (0..duplicate_index)
-            .find(|&first| storage_classes[first] == storage_classes[duplicate_index])
-        {
-            return Err(RuntimeConfigError::DuplicateStorageClass {
-                engine_id: engine_id.clone(),
-                storage_class: storage_classes[duplicate_index].clone(),
-                first_index,
-                duplicate_index,
-            });
-        }
-    }
-    if !storage_classes
-        .iter()
-        .any(|storage_class| storage_class == default_storage_class)
-    {
-        return Err(RuntimeConfigError::DefaultStorageClassNotListed {
-            engine_id: engine_id.clone(),
-            default_storage_class: default_storage_class.clone(),
-        });
-    }
-    Ok(())
-}
-
 fn register_engine_candidate(
     candidate: &mut CandidateConfig,
     registration: EngineRegistration,
@@ -885,6 +812,79 @@ fn remove_engine_candidate(
     }
 }
 
+fn install_extension_module_candidate(
+    candidate: &mut CandidateConfig,
+    module: Arc<dyn ExtensionModule>,
+    changed: &mut bool,
+) -> Result<(), RuntimeConfigError> {
+    let module_id = module.module_id().clone();
+    match candidate.modules.get(&module_id) {
+        Some(existing) if existing.module_identical(&module) => Ok(()),
+        Some(_) => Err(RuntimeConfigError::ExtensionModule {
+            source: ExtensionModuleError::ConflictingModule { module_id },
+        }),
+        None => {
+            let record = configure_module(module)
+                .map_err(|source| RuntimeConfigError::ExtensionModule { source })?;
+            candidate.modules.insert(module_id, record);
+            *changed = true;
+            Ok(())
+        }
+    }
+}
+
+fn replace_extension_module_candidate(
+    candidate: &mut CandidateConfig,
+    module: Arc<dyn ExtensionModule>,
+    changed: &mut bool,
+) -> Result<(), RuntimeConfigError> {
+    let module_id = module.module_id().clone();
+    match candidate.modules.get(&module_id) {
+        Some(existing) if existing.module_identical(&module) => Ok(()),
+        _ => {
+            let record = configure_module(module)
+                .map_err(|source| RuntimeConfigError::ExtensionModule { source })?;
+            candidate.modules.insert(module_id, record);
+            *changed = true;
+            Ok(())
+        }
+    }
+}
+
+fn remove_extension_module_candidate(
+    candidate: &mut CandidateConfig,
+    id: &ExtensionModuleId,
+    changed: &mut bool,
+) -> Result<(), RuntimeConfigError> {
+    if candidate.modules.remove(id).is_some() {
+        *changed = true;
+    }
+    Ok(())
+}
+
+fn validate_candidate(candidate: &CandidateConfig) -> Result<(), RuntimeConfigError> {
+    let mut seen = BTreeMap::<(ExtensionFamilyId, EngineId), ExtensionModuleId>::new();
+    for (module_id, module) in &candidate.modules {
+        for family_engine in module.engines.keys() {
+            if seen
+                .insert(
+                    (family_engine.0, family_engine.1.clone()),
+                    module_id.clone(),
+                )
+                .is_some()
+            {
+                return Err(RuntimeConfigError::ConflictingRegistration {
+                    key: RegistrationKey::ExtensionEngine {
+                        family: family_engine.0,
+                        engine: family_engine.1.clone(),
+                    },
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 fn assign_initial_identities(
     candidate: &mut CandidateConfig,
     issuer: NonZeroU64,
@@ -896,6 +896,15 @@ fn assign_initial_identities(
         next = next
             .checked_add(1)
             .ok_or(RuntimeConfigError::IdentityExhausted)?;
+    }
+    for module in candidate.modules.values_mut() {
+        for record in module.engines.values_mut() {
+            let ordinal = NonZeroU64::new(next).ok_or(RuntimeConfigError::IdentityExhausted)?;
+            record.identity = Some(RegistrationIdentity::new(issuer, ordinal));
+            next = next
+                .checked_add(1)
+                .ok_or(RuntimeConfigError::IdentityExhausted)?;
+        }
     }
     NonZeroU64::new(next).ok_or(RuntimeConfigError::IdentityExhausted)
 }
@@ -910,13 +919,19 @@ fn assign_new_identities(
             record.identity = identities.pop();
         }
     }
+    for module in candidate.modules.values_mut() {
+        for record in module.engines.values_mut() {
+            if record.identity.is_none() {
+                record.identity = identities.pop();
+            }
+        }
+    }
 }
 
 fn freeze_candidate(
     runtime_id: RuntimeId,
     epoch: RuntimeEpoch,
     candidate: CandidateConfig,
-    extensions: FrozenExtensionSlots,
 ) -> Result<RuntimeConfigSnapshot, RuntimeConfigError> {
     let mut engines = Vec::with_capacity(candidate.engines.len());
     let mut engine_indices = BTreeMap::new();
@@ -927,7 +942,7 @@ fn freeze_candidate(
             .ok_or(RuntimeConfigError::IdentityExhausted)?;
         if let Some(owner) = record.registration.cache_owner.clone() {
             cache_owners.push(FrozenCacheOwner {
-                id: engine_cache_owner_id(&engine_id)?,
+                id: engine_cache_owner_id(&engine_id),
                 kind: FrozenCacheOwnerKind::Engine,
                 owner,
             });
@@ -936,6 +951,14 @@ fn freeze_candidate(
         engines.push(FrozenEngineSlot {
             registration: record.registration,
             identity,
+        });
+    }
+    let extensions = freeze_extension_slots(candidate.modules)?;
+    for (id, owner) in extensions.cache_owner_records() {
+        cache_owners.push(FrozenCacheOwner {
+            id,
+            kind: FrozenCacheOwnerKind::Extension,
+            owner,
         });
     }
     Ok(RuntimeConfigSnapshot {
@@ -949,9 +972,9 @@ fn freeze_candidate(
     })
 }
 
-fn engine_cache_owner_id(engine_id: &EngineId) -> Result<CacheOwnerId, RuntimeConfigError> {
-    CacheOwnerId::new(format!("{}.cache-owner", engine_id.as_str()))
-        .map_err(RuntimeConfigError::from)
+fn engine_cache_owner_id(engine_id: &EngineId) -> CacheOwnerId {
+    let id = engine_id.as_str();
+    CacheOwnerId::from_canonical_owner_id(Arc::<str>::from(format!("engine[{}]:{id}", id.len())))
 }
 
 fn allocate_nonzero(counter: &AtomicU64) -> Result<NonZeroU64, RuntimeConfigError> {

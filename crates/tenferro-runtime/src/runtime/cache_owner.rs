@@ -35,6 +35,10 @@ impl CacheOwnerId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub(super) fn from_canonical_owner_id(value: Arc<str>) -> Self {
+        Self(value)
+    }
 }
 
 /// Aggregate cache statistics reported by one runtime cache owner.
@@ -125,6 +129,30 @@ pub struct CacheOwnerFailure {
     pub owner: CacheOwnerId,
     /// Typed owner source.
     pub source: CacheOwnerError,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum FrozenCacheOwnerKind {
+    Engine,
+    Extension,
+}
+
+#[derive(Clone)]
+pub(super) struct FrozenCacheOwner {
+    pub(super) id: CacheOwnerId,
+    pub(super) kind: FrozenCacheOwnerKind,
+    pub(super) owner: Arc<dyn RuntimeCacheOwner>,
+}
+
+impl fmt::Debug for FrozenCacheOwner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FrozenCacheOwner")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("owner_strong_count", &Arc::strong_count(&self.owner))
+            .finish()
+    }
 }
 
 /// Runtime state failure shared by preparation and cache management.

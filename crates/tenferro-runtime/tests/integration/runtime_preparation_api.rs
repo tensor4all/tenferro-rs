@@ -2,9 +2,11 @@ use std::path::PathBuf;
 
 use tenferro_runtime::{
     CoreCapabilityBundle, CoreCapabilityKind, DotGeneralPreparation, ElementwiseRuntime,
-    EngineRegistration, EngineSnapshotView, IndexingRuntime, LayoutRuntime, PreparedOperation,
-    PreparedOperationHandle, ReductionRuntime, Runtime, RuntimeConfigBuilder,
-    RuntimeConfigSnapshot, RuntimeReconfiguration, UnsupportedReason,
+    EngineRegistration, EngineSnapshotView, ExtensionEngine, ExtensionModule, ExtensionModuleError,
+    ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest,
+    IndexingRuntime, LayoutRuntime, PreparedOperation, PreparedOperationHandle, ReductionRuntime,
+    Runtime, RuntimeConfigBuilder, RuntimeConfigSnapshot, RuntimeReconfiguration,
+    UnsupportedReason,
 };
 
 fn repo_file(path: &str) -> String {
@@ -50,6 +52,42 @@ fn runtime_snapshot_api_is_public_debug_and_metadata_only() {
         assert!(
             !snapshot_body.contains(forbidden),
             "RuntimeConfigSnapshot must not expose {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn runtime_extension_module_api_is_public_debug_and_transactional() {
+    fn takes_module_id(_: Option<&ExtensionModuleId>) {}
+    fn takes_module(_: Option<&dyn ExtensionModule>) {}
+    fn takes_registrar(_: Option<&mut ExtensionModuleRegistrar<'_>>) {}
+    fn takes_module_error(_: Option<&ExtensionModuleError>) {}
+    fn takes_extension_engine(_: Option<&dyn ExtensionEngine>) {}
+    fn takes_extension_config(_: Option<&dyn ExtensionPlanningConfig>) {}
+    fn takes_extension_request(_: Option<&ExtensionPrepareRequest<'_>>) {}
+
+    let _ = (
+        takes_module_id,
+        takes_module,
+        takes_registrar,
+        takes_module_error,
+        takes_extension_engine,
+        takes_extension_config,
+        takes_extension_request,
+    );
+    assert!(ExtensionModuleId::new("tenferro.module.api").is_ok());
+
+    let source = repo_file("crates/tenferro-runtime/src/runtime/extension.rs");
+    let registrar_body = source
+        .split_once("pub struct ExtensionModuleRegistrar")
+        .and_then(|(_, rest)| rest.split_once("impl fmt::Debug for ExtensionModuleRegistrar"))
+        .map(|(body, _)| body)
+        .expect("registrar should have bounded Debug impl");
+
+    for forbidden in ["static mut", "thread_local!", "execute(", "PreparedGraph"] {
+        assert!(
+            !registrar_body.contains(forbidden),
+            "extension registrar must not expose {forbidden}"
         );
     }
 }
