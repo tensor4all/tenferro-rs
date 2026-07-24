@@ -569,6 +569,15 @@ pub enum SpecializationError {
         /// Required base-2 logarithm alignment class.
         required_alignment_log2: u8,
     },
+    /// A specialization projection could not encode every requested axis in
+    /// the finite public axis type.
+    #[error("input {input} rank {rank} is too large to project into u32 axes")]
+    ProjectionOverflow {
+        /// Input position in the signature.
+        input: usize,
+        /// Rank that could not be encoded.
+        rank: usize,
+    },
 }
 
 /// A typed execution-context mismatch from erased runtime dispatch.

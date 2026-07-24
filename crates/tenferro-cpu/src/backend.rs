@@ -2179,6 +2179,30 @@ impl CpuBackend {
         Ok(())
     }
 
+    pub(crate) fn runtime_cache_stats(
+        &self,
+    ) -> crate::Result<tenferro_runtime::runtime::CacheStats> {
+        let resources = lock_engine_resources(&self.engine, "CpuBackend::runtime_cache_stats")?;
+        let buffers = resources.buffers.cache_stats();
+        let gemm = tenferro_tensor::RuntimeCacheControl::stats(&resources.gemm_analysis_cache);
+        Ok(tenferro_runtime::runtime::CacheStats {
+            entries: buffers.entries.saturating_add(gemm.entries),
+            retained_bytes: buffers.retained_bytes.saturating_add(gemm.retained_bytes),
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            clears: 0,
+        })
+    }
+
+    pub(crate) fn clear_runtime_caches(&self) -> crate::Result<()> {
+        let mut resources =
+            lock_engine_resources(&self.engine, "CpuBackend::clear_runtime_caches")?;
+        resources.buffers.clear();
+        tenferro_tensor::RuntimeCacheControl::clear(&mut resources.gemm_analysis_cache);
+        Ok(())
+    }
+
     /// Run a closure in this backend's CPU execution scope.
     ///
     /// # Examples

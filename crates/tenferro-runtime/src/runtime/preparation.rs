@@ -616,7 +616,13 @@ fn required_core_capability(op: &CoreSemanticOp) -> CoreCapabilityKind {
         CoreSemanticOp::DotGeneral { .. } => CoreCapabilityKind::DotGeneral,
         CoreSemanticOp::Transpose { .. }
         | CoreSemanticOp::Reshape { .. }
-        | CoreSemanticOp::BroadcastInDim { .. } => CoreCapabilityKind::Layout,
+        | CoreSemanticOp::BroadcastInDim { .. }
+        | CoreSemanticOp::Convert { .. }
+        | CoreSemanticOp::Constant { .. }
+        | CoreSemanticOp::ExtractDiag { .. }
+        | CoreSemanticOp::EmbedDiag { .. }
+        | CoreSemanticOp::Tril { .. }
+        | CoreSemanticOp::Triu { .. } => CoreCapabilityKind::Layout,
         CoreSemanticOp::ReduceSum { .. }
         | CoreSemanticOp::ReduceProd { .. }
         | CoreSemanticOp::ReduceMax { .. }
@@ -630,10 +636,6 @@ fn required_core_capability(op: &CoreSemanticOp) -> CoreCapabilityKind {
         | CoreSemanticOp::Pad(_)
         | CoreSemanticOp::Concatenate { .. }
         | CoreSemanticOp::Reverse { .. }
-        | CoreSemanticOp::ExtractDiag { .. }
-        | CoreSemanticOp::EmbedDiag { .. }
-        | CoreSemanticOp::Tril { .. }
-        | CoreSemanticOp::Triu { .. }
         | CoreSemanticOp::ShapeOf { .. }
         | CoreSemanticOp::DynamicTruncate { .. }
         | CoreSemanticOp::PadToMatch { .. } => CoreCapabilityKind::Indexing,
@@ -642,8 +644,6 @@ fn required_core_capability(op: &CoreSemanticOp) -> CoreCapabilityKind {
         | CoreSemanticOp::Mul
         | CoreSemanticOp::Neg
         | CoreSemanticOp::Conj
-        | CoreSemanticOp::Convert { .. }
-        | CoreSemanticOp::Constant { .. }
         | CoreSemanticOp::Div
         | CoreSemanticOp::Rem
         | CoreSemanticOp::Abs

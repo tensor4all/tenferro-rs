@@ -86,6 +86,7 @@ pub mod provider;
 mod provider_capability;
 mod reduction;
 mod resource_domain;
+mod runtime_adapter;
 mod structural;
 mod topology;
 
