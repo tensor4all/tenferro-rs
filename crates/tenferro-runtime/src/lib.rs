@@ -44,6 +44,7 @@ pub mod extension_runtime;
 pub mod graph;
 mod metadata;
 pub mod program;
+pub mod runtime;
 #[doc(hidden)]
 pub mod scalar_semantics;
 mod segment;
@@ -67,6 +68,10 @@ pub use extension_runtime::{
 };
 pub use graph::{
     CompiledGraph, GraphCompiler, GraphCompilerCacheStats, GraphExecutor, GraphExecutorCacheStats,
+};
+pub use runtime::{
+    EngineId, ExecutionContextIdentity, HardwareClassId, IdentityError, IdentityKind,
+    RegistrationIdentity, RuntimeEpoch, RuntimeId,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;
