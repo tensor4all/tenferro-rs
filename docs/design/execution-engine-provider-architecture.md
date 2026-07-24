@@ -309,6 +309,31 @@ Phase 5 does not migrate extension-family derived caches, native einsum engine
 planning, CUDA/WebGPU native engines, or XLA subgraph execution. Those remain
 Phase 6 through Phase 8 work.
 
+### Phase 6 extension resolution and CPU einsum checkpoint (2026-07-25)
+
+Phase 6 lands the first operation-family migration slice without creating a PR:
+
+- `ExtensionStandardLowering` separates successful standard-op lowering from
+  explicit unsupported capability. The legacy `Ok(None)` hook remains as a
+  compatibility entry point, but XLA now consumes the typed outcome instead of
+  treating `Option` as the protocol boundary.
+- `ExtensionCacheStore` reports bounded-cache events (`hits`, `misses`,
+  `evictions`, and `clears`) in the shared `CacheStats` shape. Extension cache
+  selectors scope entries, retained bytes, and event counters to `All`,
+  `Family`, or `Cache`.
+- The CPU einsum runtime path is covered through the registered
+  `EinsumRuntime` and `ExtensionExecutor<CpuBackend>` on a changing concrete
+  shape sequence. Distinct concrete shapes populate distinct native plan-cache
+  entries, and a repeated shape records a cache hit while preserving the
+  current matmul-chain semantics.
+
+This checkpoint deliberately does not guess unresolved ownership decisions.
+The linalg #1377 lifecycle mapping, FFT migration inventory, sparse operation
+owner, permutation/data-movement provider ownership, compatibility bridge
+removal policy, and GPU native einsum remain deferred unless accepted by a
+later Phase 7 or Phase 8 slice. Phase 8 still owns XLA/subgraph integration
+and retirement of executor-shaped portable artifacts.
+
 ## Compiler and Artifact Boundaries
 
 ### `GraphCompiler` and `SemanticProgram`

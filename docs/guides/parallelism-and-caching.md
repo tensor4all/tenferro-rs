@@ -315,6 +315,12 @@ executor.clear_all_caches();
 estimate. It is not operating-system RSS and does not include allocator arena
 slack, thread stacks, or provider-owned memory.
 
+`CacheStats` also reports cache events when the owner can observe them:
+`hits`, `misses`, `evictions`, and explicit `clears`. Extension cache
+selectors scope event counters the same way they scope `entries` and
+`retained_bytes`, so `ExtensionCacheSelector::Family` and
+`ExtensionCacheSelector::Cache` report only the selected family or cache.
+
 ## CUDA Transfer Boundaries
 
 CUDA transfers are explicit. Upload once near the boundary of a CUDA workload,

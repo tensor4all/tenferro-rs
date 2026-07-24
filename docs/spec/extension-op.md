@@ -117,6 +117,21 @@ pub trait HostReference: std::fmt::Debug + Send + Sync + 'static {
     ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>>;
 }
 
+/// Result of attempting to express an extension as standard tensor ops.
+pub enum ExtensionStandardLowering {
+    Lowered(Vec<ValueRef<StdTensorOp>>),
+    Unsupported,
+}
+
+impl ExtensionStandardLowering {
+    pub fn from_legacy(value: Option<Vec<ValueRef<StdTensorOp>>>) -> Self {
+        match value {
+            Some(outputs) => Self::Lowered(outputs),
+            None => Self::Unsupported,
+        }
+    }
+}
+
 /// An out-of-tree operation that participates in the `StdTensorOp` graph
 /// via the `StdTensorOp::Extension(Arc<dyn ExtensionOp>)` carrier.
 ///
@@ -195,7 +210,7 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
         None
     }
 
-    /// Optionally expand this extension into standard tensor graph operations.
+    /// Legacy compatibility hook for standard tensor graph lowering.
     ///
     /// This is a provided method. Return `Ok(Some(outputs))` after adding only
     /// standard `StdTensorOp` operations to `builder`. Return `Ok(None)` when
@@ -210,6 +225,21 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
         input_shapes: &[&[SymDim]],
     ) -> ExtensionLoweringResult {
         Ok(None)
+    }
+
+    /// Typed standard-op lowering outcome.
+    ///
+    /// New lowerers should call this method so unsupported capability is not
+    /// encoded as a raw `Option`.
+    fn lower_to_standard_ops_typed(
+        &self,
+        builder: &mut GraphBuilder<StdTensorOp>,
+        inputs: &[ValueRef<StdTensorOp>],
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Result<ExtensionStandardLowering, ExtensionLoweringError> {
+        self.lower_to_standard_ops(builder, inputs, input_dtypes, input_shapes)
+            .map(ExtensionStandardLowering::from_legacy)
     }
 
     // AD rules are registered separately; see Section 10.
@@ -750,20 +780,29 @@ The compiled path runs through
 
 ### Standard-op lowering hook
 
-`ExtensionOp::lower_to_standard_ops` is an optional owner-provided hook for
-peer lowerers that cannot execute extension runtimes, such as StableHLO/XLA
-lowering. The hook receives fixed input metadata and `ValueRef` handles in a
-fresh `GraphBuilder<StdTensorOp>`. If the extension can express the payload as
-standard tensor ops for those inputs, it adds those ops and returns their
-outputs.
+`ExtensionOp::lower_to_standard_ops_typed` is the current optional
+owner-provided hook for peer lowerers that cannot execute extension runtimes,
+such as StableHLO/XLA lowering. It returns
+`ExtensionStandardLowering::Lowered(outputs)` or
+`ExtensionStandardLowering::Unsupported`, keeping unsupported capability
+separate from malformed-payload errors. The hook receives fixed input metadata
+and `ValueRef` handles in a fresh `GraphBuilder<StdTensorOp>`. If the
+extension can express the payload as standard tensor ops for those inputs, it
+adds those ops and returns their outputs.
+
+`lower_to_standard_ops` remains a compatibility method for existing extension
+implementations. New peer lowerers MUST consume the typed method. New
+extension implementations MAY continue overriding the legacy method during the
+compatibility period because the provided typed method maps `Ok(Some(outputs))`
+to `Lowered(outputs)` and `Ok(None)` to `Unsupported`.
 
 The hook MUST NOT call backend kernels, inspect tensor values, or fall back to
 `ExtensionOp::host_reference`. It is a graph rewrite hook, not an execution
-hook. Returning `Ok(None)` means "this extension cannot lower to standard ops
-for this metadata"; strict lowerers MUST report that as an error instead of
-silently switching to the native extension runtime or host-reference execution.
-Returning `ExtensionLoweringError` is reserved for malformed payloads or invalid
-metadata detected while constructing the standard graph.
+hook. Returning `Unsupported` means "this extension cannot lower to standard
+ops for this metadata"; strict lowerers MUST report that as an error instead
+of silently switching to the native extension runtime or host-reference
+execution. Returning `ExtensionLoweringError` is reserved for malformed
+payloads or invalid metadata detected while constructing the standard graph.
 
 ### Responsibility split (normative)
 
@@ -772,9 +811,9 @@ metadata detected while constructing the standard graph.
   extension metadata inference, and assigning
   `last_use` markers. It does not invoke backend kernels.
 - **Peer lowerers** are responsible for: calling
-  `ExtensionOp::lower_to_standard_ops` only when they require a standard-op
-  program and have fixed metadata. If the hook returns `Ok(None)`, lowering is
-  an explicit unsupported-extension error.
+  `ExtensionOp::lower_to_standard_ops_typed` only when they require a
+  standard-op program and have fixed metadata. If the hook returns
+  `Unsupported`, lowering is an explicit unsupported-extension error.
 - **`eager_exec` / `eager_builder`** are responsible for: resolving
   inputs from the builder's tensor cache and calling the runtime-owned
   extension executor for extension ops. If no extension executor is available,
