@@ -555,6 +555,43 @@ fn compile_with_input_specs_rejects_computed_placeholder_specs() {
     assert!(matches!(err, Error::UnexpectedBinding { binding_index: 0 }));
 }
 
+#[test]
+fn legacy_graph_executor_reuses_staging_after_first_run() {
+    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+    let y = (&x + &x).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[4])])
+        .unwrap();
+    crate::compiler::semantic_staging::take_stage_semantic_program_calls_for_test();
+
+    let input = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
+    let bindings = [TensorRead::from_tensor(&input)];
+    let mut executor = GraphExecutor::new(CpuBackend::new());
+
+    let first = executor
+        .run_many_with_input_reads(&program, &bindings)
+        .unwrap();
+    assert_eq!(first[0].as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
+    assert_eq!(
+        crate::compiler::semantic_staging::take_stage_semantic_program_calls_for_test(),
+        1
+    );
+
+    let second = executor
+        .run_many_with_input_reads(&program, &bindings)
+        .unwrap();
+    assert_eq!(second[0].as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0, 8.0]);
+    assert_eq!(
+        crate::compiler::semantic_staging::take_stage_semantic_program_calls_for_test(),
+        0
+    );
+    let stats = executor.cache_stats().staging;
+    assert_eq!(stats.entries, 1);
+    assert_eq!(stats.hits, 1);
+    assert_eq!(stats.misses, 1);
+}
+
 mod phase5_source_contracts {
     fn repo_file(path: &str) -> String {
         let mut root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));

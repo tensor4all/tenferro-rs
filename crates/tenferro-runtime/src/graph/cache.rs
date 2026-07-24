@@ -1,13 +1,21 @@
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::mem::{size_of, size_of_val};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use lru::LruCache;
 use tenferro_ops::{dim_expr::DimExpr, ext_op::ExtensionOp, ShapeRelation};
 use tenferro_tensor::CacheStats;
 
+use crate::compiler::semantic_staging::stage_semantic_program;
+use crate::compiler::CompilerOptions;
 use crate::exec::{ExecInstruction, ExecOp, ExecOutputExtents, ExecOutputShapes, ExecProgram};
+use crate::program::SemanticProgram;
+use crate::Result;
 use crate::ShapeGuard;
+
+use super::program::CompiledGraph;
 
 /// Default capacity for compiled graph programs retained by a [`GraphCompiler`](super::GraphCompiler).
 // Public constant kept as the documented default; the crate-local alias below
@@ -17,6 +25,8 @@ pub const DEFAULT_GRAPH_COMPILE_CACHE_CAPACITY: usize = 256;
 
 /// Internal alias matching the existing engine cache helper name.
 pub(crate) const DEFAULT_COMPILE_CACHE_CAPACITY: usize = DEFAULT_GRAPH_COMPILE_CACHE_CAPACITY;
+
+pub(crate) const DEFAULT_LEGACY_STAGING_CACHE_CAPACITY: usize = 16;
 
 /// Stats for caches owned by a [`GraphCompiler`](super::GraphCompiler).
 ///
@@ -51,17 +61,131 @@ pub struct GraphCompilerCacheStats {
 /// use tenferro_runtime::{CacheStats, GraphExecutorCacheStats};
 ///
 /// let stats = GraphExecutorCacheStats {
+///     staging: CacheStats::empty(),
 ///     extensions: CacheStats::empty(),
 ///     backend: CacheStats::empty(),
 /// };
-/// assert_eq!(stats.extensions.entries, 0);
+/// assert_eq!(stats.staging.entries, 0);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GraphExecutorCacheStats {
+    /// Legacy semantic-to-execution staging cache.
+    pub staging: CacheStats,
     /// Generic extension runtime caches.
     pub extensions: CacheStats,
     /// Backend-specific runtime analysis cache.
     pub backend: CacheStats,
+}
+
+#[derive(Debug)]
+pub(crate) struct LegacyStagingCache {
+    entries: VecDeque<LegacyStagingCacheEntry>,
+    capacity: NonZeroUsize,
+    hits: u64,
+    misses: u64,
+    evictions: u64,
+    clears: u64,
+}
+
+#[derive(Debug)]
+struct LegacyStagingCacheEntry {
+    compiler_options: CompilerOptions,
+    semantic: Arc<SemanticProgram>,
+    staging: Arc<ExecProgram>,
+}
+
+impl Default for LegacyStagingCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LegacyStagingCache {
+    pub(crate) fn new() -> Self {
+        Self {
+            entries: VecDeque::new(),
+            capacity: NonZeroUsize::new(DEFAULT_LEGACY_STAGING_CACHE_CAPACITY)
+                .unwrap_or(NonZeroUsize::MIN),
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            clears: 0,
+        }
+    }
+
+    pub(crate) fn capacity(&self) -> NonZeroUsize {
+        self.capacity
+    }
+
+    pub(crate) fn set_capacity(&mut self, capacity: NonZeroUsize) {
+        self.capacity = capacity;
+        self.evict_to_capacity();
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.clears = self.clears.saturating_add(1);
+    }
+
+    pub(crate) fn stats(&self) -> CacheStats {
+        CacheStats {
+            entries: self.entries.len(),
+            retained_bytes: self
+                .entries
+                .iter()
+                .map(legacy_staging_cache_entry_retained_bytes)
+                .fold(0usize, usize::saturating_add),
+            hits: self.hits,
+            misses: self.misses,
+            evictions: self.evictions,
+            clears: self.clears,
+        }
+    }
+
+    pub(crate) fn get_or_stage(&mut self, program: &CompiledGraph) -> Result<Arc<ExecProgram>> {
+        // INVARIANT: legacy GraphExecutor staging cache capacity defaults to 16
+        // and is user-bounded through `set_staging_cache_capacity`, so this
+        // exact-equality scan cannot grow with the number of executed graphs.
+        if let Some(position) = self
+            .entries
+            .iter()
+            .position(|entry| legacy_staging_cache_hit(entry, program))
+        {
+            self.hits = self.hits.saturating_add(1);
+            let entry = self
+                .entries
+                .remove(position)
+                .expect("position came from VecDeque::iter");
+            let staging = Arc::clone(&entry.staging);
+            self.entries.push_front(entry);
+            return Ok(staging);
+        }
+
+        self.misses = self.misses.saturating_add(1);
+        let staging = Arc::new(stage_semantic_program(
+            program.program(),
+            program.compiler_options(),
+        )?);
+        self.entries.push_front(LegacyStagingCacheEntry {
+            compiler_options: program.compiler_options(),
+            semantic: Arc::clone(&program.frozen.program),
+            staging: Arc::clone(&staging),
+        });
+        self.evict_to_capacity();
+        Ok(staging)
+    }
+
+    fn evict_to_capacity(&mut self) {
+        while self.entries.len() > self.capacity.get() {
+            self.entries.pop_back();
+            self.evictions = self.evictions.saturating_add(1);
+        }
+    }
+}
+
+fn legacy_staging_cache_hit(entry: &LegacyStagingCacheEntry, program: &CompiledGraph) -> bool {
+    entry.compiler_options == program.compiler_options()
+        && entry.semantic.semantic_eq(program.program())
 }
 
 /// Cache key derived from compiled graph topology and execution metadata.
@@ -642,6 +766,13 @@ fn shape_guard_heap_retained_bytes(guard: &ShapeGuard) -> usize {
     saturating_sum([
         dim_expr_heap_retained_bytes(&guard.lhs),
         dim_expr_heap_retained_bytes(&guard.rhs),
+    ])
+}
+
+fn legacy_staging_cache_entry_retained_bytes(entry: &LegacyStagingCacheEntry) -> usize {
+    saturating_sum([
+        size_of::<LegacyStagingCacheEntry>(),
+        exec_program_retained_bytes(&entry.staging),
     ])
 }
 

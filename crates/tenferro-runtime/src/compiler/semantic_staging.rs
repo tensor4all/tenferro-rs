@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use computegraph::compile::{CompiledProgram, Instruction};
@@ -11,6 +13,11 @@ use crate::program::{ProgramShapeRelation, SemanticOpRef, SemanticProgram};
 use crate::shape_constraint::{ConstraintSource, LocalShapeConstraint, SlotScopedShapeConstraint};
 use crate::{Error, ErrorPhase, Result};
 
+#[cfg(test)]
+thread_local! {
+    static STAGE_SEMANTIC_PROGRAM_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
 /// Stage one frozen semantic artifact through the temporary execution IR.
 ///
 /// This is the single owner of the private semantic-to-staging lowering path.
@@ -18,7 +25,14 @@ pub(crate) fn stage_semantic_program(
     program: &SemanticProgram,
     options: CompilerOptions,
 ) -> Result<ExecProgram> {
+    #[cfg(test)]
+    STAGE_SEMANTIC_PROGRAM_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     build_exec_staging(program, options)
+}
+
+#[cfg(test)]
+pub(crate) fn take_stage_semantic_program_calls_for_test() -> usize {
+    STAGE_SEMANTIC_PROGRAM_CALLS.with(|calls| calls.replace(0))
 }
 
 /// Lower one frozen semantic artifact into the temporary execution staging IR.

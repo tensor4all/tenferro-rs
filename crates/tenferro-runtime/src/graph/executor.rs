@@ -1,10 +1,11 @@
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::{DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead, TensorValue};
 
-use super::cache::GraphExecutorCacheStats;
+use super::cache::{GraphExecutorCacheStats, LegacyStagingCache};
 use super::program::CompiledGraph;
 use crate::error::{Error, Result};
 use crate::exec::{ExecProgram, ExecSlot};
@@ -39,6 +40,7 @@ pub struct GraphExecutor<B: TensorBackend + 'static> {
     backend: B,
     backend_cache: B::RuntimeCache,
     extension_executor: ExtensionExecutor<B>,
+    legacy_staging_cache: LegacyStagingCache,
     slot_workspace: Vec<Option<ExecSlot<'static>>>,
     borrowed_slot_workspace_capacity: usize,
 }
@@ -74,6 +76,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
             backend,
             backend_cache: B::RuntimeCache::default(),
             extension_executor: ExtensionExecutor::new(),
+            legacy_staging_cache: LegacyStagingCache::new(),
             slot_workspace: Vec::new(),
             borrowed_slot_workspace_capacity: 0,
         }
@@ -210,6 +213,57 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// ```
     pub fn extension_executor_mut(&mut self) -> &mut ExtensionExecutor<B> {
         &mut self.extension_executor
+    }
+
+    /// Return the legacy semantic staging cache capacity.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::GraphExecutor;
+    ///
+    /// let executor = GraphExecutor::new(CpuBackend::new());
+    /// assert!(executor.staging_cache_capacity().get() > 0);
+    /// ```
+    pub fn staging_cache_capacity(&self) -> NonZeroUsize {
+        self.legacy_staging_cache.capacity()
+    }
+
+    /// Set the legacy semantic staging cache capacity.
+    ///
+    /// Existing cached staging entries are evicted until the new bound is
+    /// satisfied.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::num::NonZeroUsize;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::GraphExecutor;
+    ///
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    /// executor.set_staging_cache_capacity(NonZeroUsize::new(1).unwrap());
+    /// assert_eq!(executor.staging_cache_capacity().get(), 1);
+    /// ```
+    pub fn set_staging_cache_capacity(&mut self, capacity: NonZeroUsize) {
+        self.legacy_staging_cache.set_capacity(capacity);
+    }
+
+    /// Clear legacy semantic staging entries retained by this executor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::GraphExecutor;
+    ///
+    /// let mut executor = GraphExecutor::new(CpuBackend::new());
+    /// executor.clear_staging_cache();
+    /// assert_eq!(executor.cache_stats().staging.entries, 0);
+    /// ```
+    pub fn clear_staging_cache(&mut self) {
+        self.legacy_staging_cache.clear();
     }
 
     /// Register one extension runtime on this executor.
@@ -573,9 +627,10 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &CompiledGraph,
         inputs: &[&Tensor],
     ) -> Result<Vec<Tensor>> {
-        let staging = legacy_stage_compiled_graph(program)?;
-        let input_tensors = resolve_ordered_inputs(program, &staging, inputs, &mut self.backend)?;
-        self.eval_exec_ir(&staging, input_tensors)
+        let staging = self.legacy_staging_for(program)?;
+        let input_tensors =
+            resolve_ordered_inputs(program, staging.as_ref(), inputs, &mut self.backend)?;
+        self.eval_exec_ir(staging.as_ref(), input_tensors)
     }
 
     /// Run a program with ordered inputs and preserve lazy output views.
@@ -617,9 +672,10 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &CompiledGraph,
         inputs: &[&Tensor],
     ) -> Result<Vec<TensorValue>> {
-        let staging = legacy_stage_compiled_graph(program)?;
-        let input_tensors = resolve_ordered_inputs(program, &staging, inputs, &mut self.backend)?;
-        self.eval_exec_ir_values(&staging, input_tensors)
+        let staging = self.legacy_staging_for(program)?;
+        let input_tensors =
+            resolve_ordered_inputs(program, staging.as_ref(), inputs, &mut self.backend)?;
+        self.eval_exec_ir_values(staging.as_ref(), input_tensors)
     }
 
     /// Run a program with ordered borrowed runtime inputs.
@@ -665,9 +721,10 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &'a CompiledGraph,
         inputs: &[TensorRead<'a>],
     ) -> Result<Vec<Tensor>> {
-        let staging = legacy_stage_compiled_graph(program)?;
-        let inputs = resolve_ordered_input_reads(program, &staging, inputs, &mut self.backend)?;
-        self.eval_exec_ir_slots(&staging, inputs)
+        let staging = self.legacy_staging_for(program)?;
+        let inputs =
+            resolve_ordered_input_reads(program, staging.as_ref(), inputs, &mut self.backend)?;
+        self.eval_exec_ir_slots(staging.as_ref(), inputs)
     }
 
     /// Run a program with borrowed bindings and preserve lazy output views.
@@ -714,9 +771,10 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         program: &'a CompiledGraph,
         inputs: &[TensorRead<'a>],
     ) -> Result<Vec<TensorValue>> {
-        let staging = legacy_stage_compiled_graph(program)?;
-        let inputs = resolve_ordered_input_reads(program, &staging, inputs, &mut self.backend)?;
-        self.eval_exec_ir_slot_values(&staging, inputs)
+        let staging = self.legacy_staging_for(program)?;
+        let inputs =
+            resolve_ordered_input_reads(program, staging.as_ref(), inputs, &mut self.backend)?;
+        self.eval_exec_ir_slot_values(staging.as_ref(), inputs)
     }
 
     /// Evaluate an execution program through this executor's backend state.
@@ -972,6 +1030,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// assert_eq!(executor.cache_stats().backend.entries, 0);
     /// ```
     pub fn clear_caches(&mut self) {
+        self.clear_staging_cache();
         self.clear_extension_caches();
         self.clear_backend_cache();
     }
@@ -990,9 +1049,20 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// ```
     pub fn cache_stats(&self) -> GraphExecutorCacheStats {
         GraphExecutorCacheStats {
+            staging: self.legacy_staging_cache.stats(),
             extensions: self.extension_executor.cache_stats(),
             backend: self.backend_cache.stats(),
         }
+    }
+
+    fn legacy_staging_for(&mut self, program: &CompiledGraph) -> Result<Arc<ExecProgram>> {
+        #[cfg(test)]
+        {
+            if !program.test_shape_guards().is_empty() {
+                return legacy_stage_compiled_graph(program).map(Arc::new);
+            }
+        }
+        self.legacy_staging_cache.get_or_stage(program)
     }
 }
 
@@ -1018,6 +1088,7 @@ fn validate_exec_input_count(program: &ExecProgram, actual: usize) -> Result<()>
 // INVARIANT: `GraphExecutor<B>` is the Phase 5 legacy compatibility facade.
 // Runtime-owned execution reaches staging through runtime preparation; Phase 8
 // owns this facade's retirement.
+#[cfg(test)]
 pub(crate) fn legacy_stage_compiled_graph(program: &CompiledGraph) -> Result<ExecProgram> {
     let staging = crate::compiler::semantic_staging::stage_semantic_program(
         program.program(),
