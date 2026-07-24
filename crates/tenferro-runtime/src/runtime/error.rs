@@ -1,7 +1,10 @@
+use std::fmt;
+
 use super::capability::{
     CoreCapabilityKind, PreparationKeySummary, PreparedOperationBinding, UnsupportedReason,
 };
-use super::identity::EngineId;
+use super::identity::{EngineId, RuntimeEpoch};
+use super::policy::StorageClass;
 use super::specialization::SpecializationProjection;
 use tenferro_tensor::Error as TensorError;
 
@@ -90,6 +93,200 @@ pub enum PlacementConstraintError {
         first_index: usize,
         /// The duplicate position that failed validation.
         duplicate_index: usize,
+    },
+}
+
+/// Identifies a runtime registration slot involved in a configuration conflict.
+///
+/// # Examples
+///
+/// ```
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use tenferro_runtime::{EngineId, RegistrationKey};
+///
+/// let key = RegistrationKey::Engine(EngineId::new("tenferro.cpu")?);
+/// assert!(format!("{key:?}").contains("tenferro.cpu"));
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum RegistrationKey {
+    /// A direct engine registration.
+    Engine(EngineId),
+}
+
+/// Reports invalid execution-policy configuration.
+///
+/// Phase 4 currently has no invalid public execution policy state, but the
+/// error type is part of the accepted runtime configuration contract.
+///
+/// # Examples
+///
+/// ```
+/// use std::fmt::Debug;
+/// use tenferro_runtime::ExecutionPolicyError;
+///
+/// fn requires_debug<T: Debug>() {}
+/// requires_debug::<ExecutionPolicyError>();
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ExecutionPolicyError {}
+
+impl fmt::Display for ExecutionPolicyError {
+    fn fmt(&self, _formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {}
+    }
+}
+
+impl std::error::Error for ExecutionPolicyError {}
+
+/// Reports invalid runtime configuration.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{EngineId, RuntimeConfigError};
+///
+/// let error = RuntimeConfigError::DuplicateEngine {
+///     engine_id: EngineId::new("tenferro.cpu").unwrap(),
+/// };
+/// assert!(error.to_string().contains("already registered"));
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum RuntimeConfigError {
+    /// Runtime identity or registration identity allocation exhausted.
+    #[error("runtime identity space exhausted")]
+    IdentityExhausted,
+    /// A namespaced runtime identifier was malformed.
+    #[error("malformed {kind:?} identifier")]
+    MalformedIdentity {
+        /// Identifier class that failed validation.
+        kind: IdentityKind,
+    },
+    /// An engine registration tried to insert a different value for an
+    /// already-registered engine ID.
+    #[error("engine {engine_id:?} is already registered")]
+    DuplicateEngine {
+        /// Duplicated engine identifier.
+        engine_id: EngineId,
+    },
+    /// A direct capability slot was registered twice where replacement is not
+    /// accepted.
+    #[error("duplicate {capability:?} capability")]
+    DuplicateCapability {
+        /// Duplicated capability kind.
+        capability: CoreCapabilityKind,
+    },
+    /// A registration key conflicted across transactional registration input.
+    #[error("conflicting registration {key:?}")]
+    ConflictingRegistration {
+        /// Conflicting registration key.
+        key: RegistrationKey,
+    },
+    /// A requested engine replacement or removal had no existing record.
+    #[error("engine {engine_id:?} is not registered")]
+    MissingEngine {
+        /// Missing engine identifier.
+        engine_id: EngineId,
+    },
+    /// Engine registration provided no supported storage classes.
+    #[error("engine {engine_id:?} has no storage classes")]
+    EmptyStorageClasses {
+        /// Engine being registered.
+        engine_id: EngineId,
+    },
+    /// Engine registration repeated a storage class.
+    #[error(
+        "engine {engine_id:?} storage class {storage_class:?} is duplicated at \
+         positions {first_index} and {duplicate_index}"
+    )]
+    DuplicateStorageClass {
+        /// Engine being registered.
+        engine_id: EngineId,
+        /// Duplicated storage class.
+        storage_class: StorageClass,
+        /// First position where the storage class appeared.
+        first_index: usize,
+        /// Duplicate position that failed validation.
+        duplicate_index: usize,
+    },
+    /// Engine registration selected a default storage class that is not in its
+    /// supported list.
+    #[error("engine {engine_id:?} default storage class {default_storage_class:?} is not listed")]
+    DefaultStorageClassNotListed {
+        /// Engine being registered.
+        engine_id: EngineId,
+        /// Missing default storage class.
+        default_storage_class: StorageClass,
+    },
+    /// A replacement attempted to reuse an engine ID with a different execution
+    /// context identity in a context where that is invalid.
+    #[error("engine {engine_id:?} context identity mismatch")]
+    ContextIdentityMismatch {
+        /// Engine with the mismatched context identity.
+        engine_id: EngineId,
+    },
+    /// Execution policy failed validation.
+    #[error("invalid execution policy: {reason}")]
+    InvalidExecutionPolicy {
+        /// Typed policy validation reason.
+        reason: ExecutionPolicyError,
+    },
+}
+
+impl From<IdentityError> for RuntimeConfigError {
+    fn from(source: IdentityError) -> Self {
+        Self::MalformedIdentity {
+            kind: source.kind(),
+        }
+    }
+}
+
+/// Reports failure to publish a runtime reconfiguration.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{RuntimeConfigError, RuntimeReconfigureError};
+///
+/// let error = RuntimeReconfigureError::Edit {
+///     source: RuntimeConfigError::IdentityExhausted,
+/// };
+/// assert!(std::error::Error::source(&error).is_some());
+/// ```
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum RuntimeReconfigureError {
+    /// Runtime state could not be read or published.
+    #[error("runtime state failed")]
+    State {
+        /// Typed state source.
+        #[source]
+        source: super::RuntimeStateError,
+    },
+    /// The edit closure or publication validation rejected the candidate.
+    #[error("runtime reconfiguration edit failed")]
+    Edit {
+        /// Typed configuration source.
+        #[source]
+        source: RuntimeConfigError,
+    },
+    /// Another writer published over the snapshot this edit was based on.
+    #[error("runtime was concurrently reconfigured from {base:?} to {current:?}")]
+    ConcurrentReconfiguration {
+        /// Epoch captured before the edit closure ran.
+        base: RuntimeEpoch,
+        /// Epoch observed at publication time.
+        current: RuntimeEpoch,
+    },
+    /// Runtime epoch cannot advance without wrapping.
+    #[error("runtime epoch exhausted at {current:?}")]
+    EpochExhausted {
+        /// Current maximum epoch.
+        current: RuntimeEpoch,
     },
 }
 

@@ -3,4 +3,5 @@ mod capability;
 mod identity;
 mod policy;
 mod signature;
+mod snapshot;
 mod specialization;

@@ -5,6 +5,7 @@ mod extension_provider;
 mod identity;
 mod policy;
 mod signature;
+mod snapshot;
 mod specialization;
 
 pub use cache_owner::{
@@ -20,9 +21,10 @@ pub use capability::{
     UnsupportedReason,
 };
 pub use error::{
-    ExecutionContextMismatch, IdentityError, IdentityKind, InputSignatureError,
-    InputSpecializationRequirementsError, PlacementConstraintError, PrepareError,
-    ProviderContractError, RankRequirement, SpecializationError,
+    ExecutionContextMismatch, ExecutionPolicyError, IdentityError, IdentityKind,
+    InputSignatureError, InputSpecializationRequirementsError, PlacementConstraintError,
+    PrepareError, ProviderContractError, RankRequirement, RegistrationKey, RuntimeConfigError,
+    RuntimeReconfigureError, SpecializationError,
 };
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};
 pub use identity::{
@@ -35,6 +37,10 @@ pub use policy::{
     ResolvedProgramPlacement, StorageClass,
 };
 pub use signature::{InputSignature, InputSignatureEntry};
+pub use snapshot::{
+    EngineRegistration, EngineSnapshotView, Runtime, RuntimeConfigBuilder, RuntimeConfigSnapshot,
+    RuntimeReconfiguration,
+};
 pub use specialization::{
     InputSpecializationProjection, InputSpecializationRequirements,
     InputSpecializationRequirementsBuilder, LayoutProjection, LayoutSpecialization,

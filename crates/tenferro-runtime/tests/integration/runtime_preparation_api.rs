@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use tenferro_runtime::{
     CoreCapabilityBundle, CoreCapabilityKind, DotGeneralPreparation, ElementwiseRuntime,
-    IndexingRuntime, LayoutRuntime, PreparedOperation, PreparedOperationHandle, ReductionRuntime,
-    UnsupportedReason,
+    EngineRegistration, EngineSnapshotView, IndexingRuntime, LayoutRuntime, PreparedOperation,
+    PreparedOperationHandle, ReductionRuntime, Runtime, RuntimeConfigBuilder,
+    RuntimeConfigSnapshot, RuntimeReconfiguration, UnsupportedReason,
 };
 
 fn repo_file(path: &str) -> String {
@@ -11,6 +12,46 @@ fn repo_file(path: &str) -> String {
     root.push("../..");
     root.push(path);
     std::fs::read_to_string(root).expect("source file must be readable")
+}
+
+#[test]
+fn runtime_snapshot_api_is_public_debug_and_metadata_only() {
+    fn takes_runtime(_: Option<&Runtime>) {}
+    fn takes_builder(_: Option<&RuntimeConfigBuilder>) {}
+    fn takes_snapshot(_: Option<&RuntimeConfigSnapshot>) {}
+    fn takes_reconfigure(_: Option<&mut RuntimeReconfiguration<'_>>) {}
+    fn takes_registration(_: Option<&EngineRegistration>) {}
+    fn takes_view(_: Option<&EngineSnapshotView<'_>>) {}
+
+    let _ = (
+        takes_runtime,
+        takes_builder,
+        takes_snapshot,
+        takes_reconfigure,
+        takes_registration,
+        takes_view,
+        Runtime::builder,
+        RuntimeConfigBuilder::new,
+    );
+
+    let source = repo_file("crates/tenferro-runtime/src/runtime/snapshot.rs");
+    let snapshot_body = source
+        .split_once("impl RuntimeConfigSnapshot")
+        .and_then(|(_, rest)| rest.split_once("impl fmt::Debug for RuntimeConfigSnapshot"))
+        .map(|(body, _)| body)
+        .expect("RuntimeConfigSnapshot impl should precede its Debug impl");
+
+    for forbidden in [
+        "pub fn builder",
+        "pub fn build",
+        "issuer(",
+        "registration_identity(",
+    ] {
+        assert!(
+            !snapshot_body.contains(forbidden),
+            "RuntimeConfigSnapshot must not expose {forbidden}"
+        );
+    }
 }
 
 #[test]
