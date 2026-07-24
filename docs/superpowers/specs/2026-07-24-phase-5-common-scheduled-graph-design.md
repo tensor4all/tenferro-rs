@@ -31,8 +31,8 @@ phases consume.
 
 - No Phase 5 production code starts from the umbrella alone; this child design
   is the Phase 5 authority once accepted.
-- `Runtime::prepare_for` remains the only preparation entry used by new
-  runtime-owned execution.
+- `Runtime::prepare_for` and its options-aware crate-private companion remain
+  the only preparation entries used by new runtime-owned execution.
 - `PreparedProgram` remains binding-free. Phase 5 execution may borrow
   `(&Arc<PreparedProgram>, &ProgramBindings)` for one call after fresh input
   signature validation and exact specialization-projection equality; it must
@@ -72,8 +72,9 @@ impl Runtime {
 
 These methods are blocking convenience paths. They derive an `InputSignature`
 from supplied tensors or semantic defaults, call crate-private
-`Runtime::prepare_for`, validate that the per-call signature projects exactly
-to the prepared specialization, then execute the prepared scheduled graph.
+options-aware runtime preparation, validate that the per-call signature projects
+exactly to the prepared specialization, then execute the prepared scheduled
+graph.
 
 Phase 5 also extends engine registration with one runtime-owned execution
 bridge:
@@ -118,6 +119,12 @@ through Phase 5. Documentation must identify it as legacy staging while
 `Runtime::run_compiled` is the new runtime-owned path. Phase 8 owns its
 retirement after XLA and GPU migration no longer require executor-shaped
 artifacts.
+
+`CompiledGraph` remains the carrier for the immutable frozen semantic program,
+bindings, and the `CompilerOptions` used to lower it. It must not retain
+`ExecProgram` or any execution staging. Preserving `CompilerOptions` is required
+so `GraphCompiler::with_compiler_options` keeps the same observable execution
+semantics after staging moves behind runtime/legacy execution boundaries.
 
 ### Scheduled representation
 
@@ -203,6 +210,12 @@ tensor-backend execution bridge. If the selected engine can prepare but has no
 execution bridge, `Runtime::run_compiled` returns a typed runtime-state error
 before admission or node execution.
 
+Runtime-owned preparation for a `CompiledGraph` uses the graph's stored
+`CompilerOptions` when constructing the private transitional staging root.
+The older crate-private `Runtime::prepare_for(&FrozenProgram, ...)` test seam
+may remain with default options, but Phase 5 execution must call an options-aware
+crate-private preparation helper so non-default compiler options are preserved.
+
 ### Transfer test required by the updated Phase 8 direction
 
 Phase 5 includes a mock-engine schedule test with two engines and one explicit
@@ -230,9 +243,13 @@ behind the new schedule module for the CPU compatibility path, but only if:
 
 - no public `CompiledGraph` field or public method exposes them;
 - `GraphCompiler` no longer constructs execution staging as its compile
-  output;
+  output, though it may transiently stage during compilation to preserve
+  existing compile-cache validation/statistics until Phase 8 removes those
+  executor-shaped artifacts;
+- `CompiledGraph` records the compiler options used by `GraphCompiler`, and
+  temporary legacy execution restages with those exact options;
 - new runtime-owned execution reaches them only through
-  `Runtime::prepare_for -> PreparedProgram -> ScheduledGraph`;
+  options-aware runtime preparation -> `PreparedProgram` -> `ScheduledGraph`;
 - source tests record that Phase 8 owns final removal of executor-shaped
   compatibility artifacts.
 
@@ -240,12 +257,12 @@ behind the new schedule module for the CPU compatibility path, but only if:
 
 Red-first tests must cover:
 
-1. `GraphCompiler` preserves only `FrozenProgram` and bindings in
-   `CompiledGraph`; it does not call `stage_semantic_program`.
-2. `Runtime::run_compiled` prepares via `Runtime::prepare_for`, increments
-   prepared-plan cache miss/hit statistics, and returns the same tensor results
-   as the legacy `GraphExecutor<CpuBackend>` on representative add, reduction,
-   indexing, and `dot_general` programs.
+1. `GraphCompiler` preserves only `FrozenProgram`, bindings, and
+   `CompilerOptions` in `CompiledGraph`; it does not retain execution staging.
+2. `Runtime::run_compiled` prepares via options-aware runtime preparation,
+   increments prepared-plan cache miss/hit statistics, and returns the same
+   tensor results as the legacy `GraphExecutor<CpuBackend>` on representative
+   add, reduction, indexing, and `dot_general` programs.
 3. A stale prepared entry caused by runtime reconfiguration is not executed by
    an explicit prepared execution helper; the convenience path re-prepares.
 4. Input dtype, rank, shape, shape-guard, and missing-default failures happen

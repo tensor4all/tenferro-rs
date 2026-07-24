@@ -12,15 +12,15 @@
 
 ## File map
 
-- Modify `crates/tenferro-runtime/src/graph/program.rs`: remove direct `ExecProgram` storage from `CompiledGraph`; expose only `FrozenProgram`, semantic program, bindings, input/output counts.
-- Modify `crates/tenferro-runtime/src/graph/compiler.rs`: compile/freeze semantic graphs without creating execution staging; adjust compile-cache behavior and source contracts.
-- Modify `crates/tenferro-runtime/src/graph/executor.rs`: keep legacy `GraphExecutor<B>` working by staging at the legacy execution boundary; mark this as transitional.
+- Modify `crates/tenferro-runtime/src/graph/program.rs`: remove direct `ExecProgram` storage from `CompiledGraph`; expose only `FrozenProgram`, compiler options, semantic program, bindings, input/output counts.
+- Modify `crates/tenferro-runtime/src/graph/compiler.rs`: return compiled graphs without retaining execution staging; keep transient staging for validation/cache stats until Phase 8 removes the old compiler cache surface.
+- Modify `crates/tenferro-runtime/src/graph/executor.rs`: keep legacy `GraphExecutor<B>` working by staging with the compiled graph's stored compiler options at the legacy execution boundary; mark this as transitional.
 - Modify `crates/tenferro-runtime/src/compiler/semantic_staging.rs`: rename/delete the Phase-4-only private adapter name `lower_semantic_to_exec_staging`; keep `stage_semantic_program` as the only private staging builder until Phase 8.
 - Modify `crates/tenferro-runtime/src/runtime/engine_registration.rs`: add runtime-owned tensor-backend execution bridge fields and public builder/accessor methods.
 - Create `crates/tenferro-runtime/src/runtime/execution.rs`: private erased execution bridge, `Runtime::run_compiled*` implementation helpers, input resolution, prepared projection validation, and execution through the bridge.
 - Create `crates/tenferro-runtime/src/runtime/schedule.rs`: crate-private `ScheduledGraph`, node families, event-domain IDs, buffer/admission summaries, and validation helpers.
 - Modify `crates/tenferro-runtime/src/runtime/mod.rs`: wire `execution` and `schedule` modules and re-export only deliberate public Phase 5 items.
-- Modify `crates/tenferro-runtime/src/runtime/preparation.rs`: expose crate-private prepared root/staging/identity accessors for runtime execution, not public API.
+- Modify `crates/tenferro-runtime/src/runtime/preparation.rs`: expose crate-private prepared root/staging/identity accessors for runtime execution, and add an options-aware `CompiledGraph` preparation helper; no new public API.
 - Modify `crates/tenferro-runtime/src/error.rs`: add a typed runtime execution/preparation conversion only if existing `RuntimeStateSource` cannot preserve the source. Prefer existing variants.
 - Modify `crates/tenferro-cpu/src/runtime_adapter.rs` and `crates/tenferro-cpu/src/lib.rs`: add public `runtime_engine_registration(&CpuBackend)` that includes preparation slots, cache owner, and tensor-backend execution bridge.
 - Modify `crates/tenferro-ad/src/eager_backend.rs`: replace duplicate private CPU registration construction with `tenferro_cpu::runtime_engine_registration`.
@@ -57,6 +57,7 @@ mod phase5_source_contracts {
             .map(|(body, _)| body)
             .expect("CompiledGraph struct body");
 
+        assert!(body.contains("CompilerOptions"));
         assert!(!body.contains("ExecProgram"));
         assert!(!body.contains("staging"));
     }
@@ -70,9 +71,9 @@ mod phase5_source_contracts {
             .map(|(body, _)| body)
             .expect("compile_frozen body");
 
-        assert!(!compile_frozen.contains("stage_semantic_program"));
-        assert!(!compile_frozen.contains("ExecProgram"));
-        assert!(!compile_frozen.contains("get_or_compile"));
+        assert!(compile_frozen.contains("CompiledGraph::new"));
+        assert!(compile_frozen.contains("self.compiler_options"));
+        assert!(!compile_frozen.contains("staging,"));
     }
 }
 ```
@@ -110,7 +111,7 @@ cargo test -p tenferro-runtime graph::executor::tests::phase5_source_contracts -
 cargo test -p tenferro-runtime runtime::tests::preparation::phase5 --lib
 ```
 
-Expected: fail because `CompiledGraph` still stores `staging`, `GraphCompiler` still stages on compile, `lower_semantic_to_exec_staging` still exists, and runtime modules are absent.
+Expected: fail because `CompiledGraph` still stores `staging`, `CompiledGraph` does not store compiler options, `lower_semantic_to_exec_staging` still exists, and runtime modules are absent.
 
 ## Task 2: Move staging out of `CompiledGraph`
 
@@ -143,27 +144,39 @@ Do not keep the old function name in comments or tests.
 Change `CompiledGraph` to:
 
 ```rust
+use crate::compiler::CompilerOptions;
+
 #[derive(Clone)]
 pub struct CompiledGraph {
     pub(crate) frozen: FrozenProgram,
+    pub(crate) compiler_options: CompilerOptions,
 }
 
 impl CompiledGraph {
-    pub(crate) fn new(frozen: FrozenProgram) -> Self {
-        Self { frozen }
+    pub(crate) fn new(frozen: FrozenProgram, compiler_options: CompilerOptions) -> Self {
+        Self {
+            frozen,
+            compiler_options,
+        }
     }
 
     pub(crate) fn frozen(&self) -> &FrozenProgram {
         &self.frozen
+    }
+
+    pub(crate) fn compiler_options(&self) -> CompilerOptions {
+        self.compiler_options
     }
 }
 ```
 
 Keep the existing public `program`, `bindings`, `input_count`, `output_count`, and `Debug` behavior.
 
-- [ ] **Step 3: Make `GraphCompiler` freeze only**
+- [ ] **Step 3: Make `GraphCompiler` stop retaining staging in the returned graph**
 
-Change `compile_frozen` to return `CompiledGraph::new(frozen.clone())`. Leave compile-cache APIs in place but no-op for this transitional task, or migrate them to semantic/frozen identity only if existing tests require stats semantics. Do not stage here.
+Change `compile_frozen` to transiently stage with `self.compiler_options` for validation/cache stats, call `get_or_compile`, and then return `CompiledGraph::new(frozen.clone(), self.compiler_options)`. Do not store the returned `ExecProgram` in `CompiledGraph`.
+
+Change `compile_many_with_descriptors` similarly: keep transient staging and `get_or_compile` so existing compile-cache behavior remains observable, but return `CompiledGraph::new(semantic, self.compiler_options)`.
 
 - [ ] **Step 4: Keep legacy `GraphExecutor<B>` functional by restaging at execution boundary**
 
@@ -173,7 +186,7 @@ Add a private helper in `graph/executor.rs`:
 fn legacy_stage_compiled_graph(program: &CompiledGraph) -> Result<ExecProgram> {
     crate::compiler::semantic_staging::stage_semantic_program(
         program.program(),
-        crate::compiler::CompilerOptions::default(),
+        program.compiler_options(),
     )
 }
 ```
@@ -421,7 +434,7 @@ fn runtime_run_compiled_uses_prepared_cache_on_second_call() {
 }
 ```
 
-- [ ] **Step 2: Add prepared accessors**
+- [ ] **Step 2: Add prepared accessors and options-aware preparation**
 
 In `runtime/preparation.rs`, add crate-private accessors:
 
@@ -450,6 +463,33 @@ impl PreparedProgram {
     }
 }
 ```
+
+Also add an options-aware preparation path used only by Phase 5 runtime
+execution:
+
+```rust
+pub(crate) fn prepare_compiled_for(
+    runtime: &Runtime,
+    caches: &RuntimeCacheSet<PreparedEntryKey, PreparedProgram>,
+    program: &CompiledGraph,
+    signature: &InputSignature,
+    options: &PrepareOptions,
+) -> PreparedProgramResult<Arc<PreparedProgram>> {
+    prepare_for_with_compiler_options(
+        runtime,
+        caches,
+        program.frozen(),
+        program.compiler_options(),
+        signature,
+        options,
+    )
+}
+```
+
+Refactor the existing `prepare_for` implementation so default-options callers
+delegate to `prepare_for_with_compiler_options(..., CompilerOptions::default(),
+...)`, while `PreparationContext`/`PreparedProgramRoot` construction stages
+with the supplied options instead of hard-coded defaults.
 
 - [ ] **Step 3: Implement input resolution and signature derivation**
 
@@ -489,7 +529,7 @@ Implementation flow:
 
 1. Resolve input tensors and reads.
 2. Derive `InputSignature`.
-3. Call `self.prepare_for(program.frozen(), &signature, &PrepareOptions::new())`.
+3. Call the crate-private options-aware preparation helper for `CompiledGraph`.
 4. Re-project `prepared.specialization().requirements().project(&signature)` and require equality with `prepared.specialization()`.
 5. Look up the selected engine in the current snapshot.
 6. Require `execution_engine.is_some()`.
