@@ -205,6 +205,27 @@ fn engine_registration_validates_storage_classes_before_candidate_token() {
 }
 
 #[test]
+fn engine_registration_records_tensor_backend_execution_bridge() -> Result<(), Box<dyn StdError>> {
+    let registration = registration("tenferro.engine.bridge", 1)?;
+    assert!(!registration.has_execution_engine());
+
+    let registration = registration.with_tensor_backend_executor(tenferro_cpu::CpuBackend::new());
+    assert!(registration.has_execution_engine());
+
+    let mut builder = Runtime::builder();
+    builder.register_engine(registration)?;
+    let runtime = builder.build()?;
+    let snapshot = runtime.snapshot()?;
+    let engine = snapshot
+        .engine(&engine_id("tenferro.engine.bridge"))
+        .expect("engine with bridge");
+
+    assert!(engine.has_execution_engine_for_test());
+
+    Ok(())
+}
+
+#[test]
 fn identical_registration_is_noop_and_preserves_epoch_and_identity() -> Result<(), Box<dyn StdError>>
 {
     let registration = registration("tenferro.engine.noop", 1)?;

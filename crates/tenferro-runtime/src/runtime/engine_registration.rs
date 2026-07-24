@@ -2,9 +2,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::{
-    CoreCapabilityBundle, EngineId, ExecutionContextIdentity, HardwareClassId, RuntimeCacheOwner,
-    RuntimeConfigError, StorageClass,
+    execution, CoreCapabilityBundle, EngineId, ExecutionContextIdentity, HardwareClassId,
+    RuntimeCacheOwner, RuntimeConfigError, StorageClass,
 };
+use tenferro_tensor::TensorBackend;
 
 #[derive(Debug)]
 struct CandidateRegistrationToken;
@@ -49,6 +50,7 @@ pub struct EngineRegistration {
     default_storage_class: StorageClass,
     capabilities: CoreCapabilityBundle,
     pub(super) cache_owner: Option<Arc<dyn RuntimeCacheOwner>>,
+    pub(super) execution_engine: Option<Arc<dyn execution::ErasedTensorBackendExecutor>>,
     candidate_token: Arc<CandidateRegistrationToken>,
 }
 
@@ -78,6 +80,7 @@ impl EngineRegistration {
             default_storage_class,
             capabilities,
             cache_owner: None,
+            execution_engine: None,
             candidate_token: Arc::new(CandidateRegistrationToken),
         })
     }
@@ -118,6 +121,72 @@ impl EngineRegistration {
         self
     }
 
+    /// Attach a runtime-owned tensor backend execution bridge to this
+    /// registration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::CpuBackend;
+    /// use tenferro_runtime::{
+    ///     CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
+    ///     HardwareClassId, StorageClass,
+    /// };
+    ///
+    /// let storage = StorageClass::new("tenferro.storage.host")?;
+    /// let registration = EngineRegistration::new(
+    ///     EngineId::new("tenferro.cpu")?,
+    ///     ExecutionContextIdentity::of::<CpuBackend>(),
+    ///     HardwareClassId::new("tenferro.cpu.host")?,
+    ///     Arc::from(vec![storage.clone()]),
+    ///     storage,
+    ///     CoreCapabilityBundle::builder().build(),
+    /// )?
+    /// .with_tensor_backend_executor(CpuBackend::new());
+    /// assert!(registration.has_execution_engine());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_tensor_backend_executor<B>(mut self, backend: B) -> Self
+    where
+        B: TensorBackend + Clone + Send + Sync + 'static,
+    {
+        self.execution_engine = Some(execution::erased_tensor_backend_executor(backend));
+        self
+    }
+
+    /// Return whether this registration carries a runtime-owned execution
+    /// bridge.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::sync::Arc;
+    /// use tenferro_runtime::{
+    ///     CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
+    ///     HardwareClassId, StorageClass,
+    /// };
+    ///
+    /// let storage = StorageClass::new("tenferro.storage.host")?;
+    /// let registration = EngineRegistration::new(
+    ///     EngineId::new("tenferro.cpu")?,
+    ///     ExecutionContextIdentity::of::<()>(),
+    ///     HardwareClassId::new("tenferro.cpu.host")?,
+    ///     Arc::from(vec![storage.clone()]),
+    ///     storage,
+    ///     CoreCapabilityBundle::builder().build(),
+    /// )?;
+    /// assert!(!registration.has_execution_engine());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn has_execution_engine(&self) -> bool {
+        self.execution_engine.is_some()
+    }
+
     pub(super) fn candidate_identical(&self, other: &Self) -> bool {
         self.engine_id == other.engine_id
             && Arc::ptr_eq(&self.candidate_token, &other.candidate_token)
@@ -135,6 +204,7 @@ impl fmt::Debug for EngineRegistration {
             .field("default_storage_class", &self.default_storage_class)
             .field("capabilities", &self.capabilities)
             .field("cache_owner", &self.cache_owner.is_some())
+            .field("execution_engine", &self.has_execution_engine())
             .finish_non_exhaustive()
     }
 }

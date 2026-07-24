@@ -908,6 +908,11 @@ impl<'a> EngineSnapshotView<'a> {
     pub(super) fn default_storage_class(&self) -> &'a StorageClass {
         self.slot.registration.default_storage_class()
     }
+
+    #[cfg(test)]
+    pub(crate) fn has_execution_engine_for_test(&self) -> bool {
+        self.slot.registration.has_execution_engine()
+    }
 }
 
 impl fmt::Debug for EngineSnapshotView<'_> {
