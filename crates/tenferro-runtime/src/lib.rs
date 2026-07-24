@@ -71,10 +71,14 @@ pub use graph::{
 };
 pub use runtime::{
     CacheInFlightBehavior, Determinism, EngineId, ExecutionContextIdentity, ExecutionPolicy,
-    HardwareClassId, IdentityError, IdentityKind, LayoutClass, PlacementConstraintError,
-    PrepareOptions, PrepareOptionsKey, ProgramPlacementConstraint, RegistrationIdentity,
-    ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement, RuntimeEpoch, RuntimeId,
-    StorageClass,
+    HardwareClassId, IdentityError, IdentityKind, InputSignature, InputSignatureEntry,
+    InputSignatureError, InputSpecializationProjection, InputSpecializationRequirements,
+    InputSpecializationRequirementsBuilder, InputSpecializationRequirementsError, LayoutClass,
+    LayoutProjection, LayoutSpecialization, PlacementConstraintError, PlacementProjection,
+    PlacementSpecialization, PrepareError, PrepareOptions, PrepareOptionsKey,
+    ProgramPlacementConstraint, RankRequirement, RegistrationIdentity, ResolvedPlanningConfig,
+    ResolvedPlanningKey, ResolvedProgramPlacement, RuntimeEpoch, RuntimeId, SpecializationError,
+    SpecializationProjection, SpecializationRequirements, StorageClass,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;

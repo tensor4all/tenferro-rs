@@ -66,6 +66,10 @@ impl StorageClass {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    pub(crate) fn runtime_created(value: impl Into<Arc<str>>) -> Self {
+        Self(value.into())
+    }
 }
 
 /// Validated namespaced layout-class identity.
@@ -113,6 +117,10 @@ impl LayoutClass {
     /// ```
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub(crate) fn runtime_created(value: impl Into<Arc<str>>) -> Self {
+        Self(value.into())
     }
 }
 
