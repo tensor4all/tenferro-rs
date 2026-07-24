@@ -93,10 +93,11 @@ pub enum LinalgAdOpKind {
     Eig,
     EigVals,
     TriangularSolve,
+    SvdFull,
 }
 
 impl LinalgAdOpKind {
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 15;
 
     /// Return the manifest index for this operation kind.
     ///
@@ -123,6 +124,7 @@ impl LinalgAdOpKind {
             Self::Eig => 11,
             Self::EigVals => 12,
             Self::TriangularSolve => 13,
+            Self::SvdFull => 14,
         }
     }
 
@@ -136,6 +138,7 @@ impl LinalgAdOpKind {
             LinalgOp::FullPivLu => Self::FullPivLu,
             LinalgOp::FullPivLuSolve { .. } => Self::FullPivLuSolve,
             LinalgOp::Svd { .. } => Self::Svd,
+            LinalgOp::SvdFull => Self::SvdFull,
             LinalgOp::SvdVals { .. } => Self::SvdVals,
             LinalgOp::Qr { .. } => Self::Qr,
             LinalgOp::Eigh { .. } => Self::Eigh,
@@ -299,6 +302,11 @@ static SVD_VALS_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
     "singular_values",
     LinalgAdRuleSupport::SupportedViaLinearize,
 )];
+static SVD_FULL_OUTPUTS: [LinalgAdOutputSupport; 3] = [
+    output(0, "u", LinalgAdRuleSupport::Unsupported),
+    output(1, "singular_values", LinalgAdRuleSupport::Unsupported),
+    output(2, "vt", LinalgAdRuleSupport::Unsupported),
+];
 static QR_OUTPUTS: [LinalgAdOutputSupport; 2] = [
     output(0, "q", LinalgAdRuleSupport::SupportedViaLinearize),
     output(1, "r", LinalgAdRuleSupport::SupportedViaLinearize),
@@ -494,6 +502,18 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
         ),
         LinalgAdRuleSupport::Supported,
         &SOLUTION_OUTPUTS,
+        &[],
+    ),
+    // Full-matrices SVD is a value-only route: nullspace/kernel extraction does
+    // not require derivatives, and the thin-SVD linearize rule does not extend
+    // to the square factors. AD is intentionally unsupported for every output.
+    support_entry(
+        LinalgAdOpKind::SvdFull,
+        LinalgAdRuleSupport::Unsupported,
+        LinalgAdRuleSupport::Unsupported,
+        mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
+        LinalgAdRuleSupport::Unsupported,
+        &SVD_FULL_OUTPUTS,
         &[],
     ),
 ];

@@ -2,7 +2,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_ad::{CompareDir, DType, DotGeneralConfig, EagerTensor, Error, Result, Tensor};
 use tenferro_runtime::ErrorPhase;
 
-use crate::eager_ext::{eig, eigh, lu, solve, svd};
+use crate::eager_ext::{eig, eigh, lu, qr, solve, svd, triangular_solve};
 
 pub(crate) fn slogdet(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor)> {
     let (_p, _l, u, parity) = lu(a)?;
@@ -22,6 +22,32 @@ pub(crate) fn inv(a: &EagerTensor) -> Result<EagerTensor> {
     ensure_min_rank("inv", a.shape().len(), 2)?;
     let eye = eye_like(a, a.shape()[0])?;
     solve(a, &eye)
+}
+
+pub(crate) fn lstsq(a: &EagerTensor, b: &EagerTensor) -> Result<EagerTensor> {
+    ensure_float_or_complex("lstsq", a.dtype())?;
+    ensure_min_rank("lstsq", a.shape().len(), 2)?;
+    ensure_min_rank("lstsq", b.shape().len(), 2)?;
+    let (m, n) = (a.shape()[0], a.shape()[1]);
+    if m < n {
+        return Err(Error::invalid_argument(
+            "lstsq",
+            ErrorPhase::GraphBuild,
+            "shape",
+            format!(
+                "lstsq requires a tall or square matrix (rows {m} >= cols {n}); \
+                 underdetermined (wide) systems are not supported"
+            ),
+        ));
+    }
+    // Least squares via thin QR: A = Q R (full column rank), so
+    // argmin_x |A x - b| solves R x = Qᴴ b.
+    let (q, r) = qr(a)?;
+    let qh = q
+        .conj()?
+        .transpose(&matrix_transpose_perm(q.shape().len()))?;
+    let qh_b = matmul_preserve_trailing_batch(&qh, b)?;
+    triangular_solve(&r, &qh_b, true, false, false, false)
 }
 
 pub(crate) fn eigvalsh(a: &EagerTensor) -> Result<EagerTensor> {

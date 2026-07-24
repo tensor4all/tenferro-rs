@@ -30,6 +30,19 @@ pub trait EagerTensorLinalgExt {
         &self,
         options: SvdOptions,
     ) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
+    /// Full-matrices SVD returning square `U (m x m)` and `Vh (n x n)`, whose
+    /// trailing `n - rank` rows span the input's right nullspace.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` for an invalid rank, and `Error::Extension`
+    /// with an unsupported-operation source when the active backend does not
+    /// implement full-matrices SVD (the CPU faer provider supports it; the
+    /// LAPACK provider and GPU backends return an unsupported error in this
+    /// slice). Automatic differentiation through the full variant is
+    /// unsupported and surfaces a typed error rather than a silent thin
+    /// fallback.
+    fn svd_full(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor)>;
     /// # Errors
     ///
     /// Returns `Error::Validation` for invalid matrix rank or shape,
@@ -77,6 +90,18 @@ pub trait EagerTensorLinalgExt {
     /// metadata, `Error::Extension` for an unsupported dtype or singular
     /// system, and `Error::RuntimeState` when the backend is unavailable.
     fn solve(&self, b: &EagerTensor) -> Result<EagerTensor>;
+    /// Least-squares solve `argmin_x ||A x - b||_2` for a tall or square,
+    /// full-column-rank `A`, via the thin QR factorization.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::Validation` when `A` or `b` is not a matrix (rank
+    /// `>= 2`), when `A` is wide (`rows < cols`; underdetermined), or when the
+    /// dtype is not floating-point or complex; `Error::Extension` for backend
+    /// QR or triangular-solve failures; and `Error::RuntimeState` when the
+    /// backend is unavailable. Rank-deficient `A` is not detected and yields an
+    /// ill-defined result.
+    fn lstsq(&self, b: &EagerTensor) -> Result<EagerTensor>;
     /// # Errors
     ///
     /// Returns `Error::Validation` for a non-square or invalid-rank input,
@@ -188,6 +213,10 @@ impl EagerTensorLinalgExt for EagerTensor {
         svd_with_options(self, options)
     }
 
+    fn svd_full(&self) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
+        svd_full(self)
+    }
+
     fn qr(&self) -> Result<(EagerTensor, EagerTensor)> {
         qr(self)
     }
@@ -218,6 +247,10 @@ impl EagerTensorLinalgExt for EagerTensor {
 
     fn solve(&self, b: &EagerTensor) -> Result<EagerTensor> {
         solve(self, b)
+    }
+
+    fn lstsq(&self, b: &EagerTensor) -> Result<EagerTensor> {
+        eager_composites::lstsq(self, b)
     }
 
     fn cholesky(&self) -> Result<EagerTensor> {
@@ -372,6 +405,55 @@ pub fn svd_with_options(
         (Some(u), Some(s), Some(vt), None) => Ok((u, s, vt)),
         _ => Err(Error::Internal(
             "svd eager op returned an unexpected number of outputs".to_string(),
+        )),
+    }
+}
+
+/// Full-matrices singular value decomposition for eager tensors.
+///
+/// Returns `(U, S, Vh)` with square `U` (`m x m`) and `Vh` (`n x n`); `S` holds
+/// `min(m, n)` singular values. The trailing `n - rank` rows of `Vh` span the
+/// input's right nullspace, which the thin [`svd`] cannot represent.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::{EagerRuntime, EagerTensor, Tensor};
+/// use tenferro_linalg::EagerTensorLinalgExt;
+///
+/// let ctx = EagerRuntime::new();
+/// let a = EagerTensor::from_tensor_in(
+///     Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 1.0]).unwrap(),
+///     ctx,
+/// ).unwrap();
+/// // Full SVD is provided by the CPU faer backend; other providers (e.g. the
+/// // LAPACK provider) report it as unsupported, so guard on the result.
+/// if let Ok((u, s, vh)) = a.svd_full() {
+///     assert_eq!(u.shape(), &[1, 1]);
+///     assert_eq!(s.shape(), &[1]);
+///     assert_eq!(vh.shape(), &[2, 2]);
+/// }
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// Returns `Error::Validation` for an invalid rank and `Error::Extension` with
+/// an unsupported-operation source when the active backend does not implement
+/// full-matrices SVD (the CPU faer provider supports it; the LAPACK provider
+/// and GPU backends are unsupported in this slice). AD through the full variant
+/// is unsupported and surfaces a typed error, not a silent thin fallback.
+pub fn svd_full(a: &EagerTensor) -> Result<(EagerTensor, EagerTensor, EagerTensor)> {
+    let mut outputs = apply_linalg_eager(LinalgOp::SvdFull, &[a])?.into_iter();
+    match (
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+        outputs.next(),
+    ) {
+        (Some(u), Some(s), Some(vh), None) => Ok((u, s, vh)),
+        _ => Err(Error::Internal(
+            "svd_full eager op returned an unexpected number of outputs".to_string(),
         )),
     }
 }
