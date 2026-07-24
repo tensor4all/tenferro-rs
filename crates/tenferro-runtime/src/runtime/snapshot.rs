@@ -6,18 +6,23 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::program::FrozenProgram;
+
+use super::cache::{PreparedPlanCacheLimits, RuntimeCacheSet};
 use super::cache_owner::{FrozenCacheOwner, FrozenCacheOwnerKind};
 #[cfg(test)]
 use super::extension::ExtensionSlotFullForTest;
 use super::extension::{
-    configure_module, freeze_extension_slots, CandidateModuleRecord, ExtensionFamilyId,
-    FrozenExtensionSlots,
+    configure_module, freeze_extension_slots, CandidateModuleRecord, ExtensionEngineSnapshotView,
+    ExtensionFamilyId, FrozenExtensionSlots,
 };
+use super::preparation::{PreparedEntryKey, PreparedProgram, PreparedProgramResult};
 use super::{
     CacheOwnerId, CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
     ExecutionPolicy, ExtensionModule, ExtensionModuleError, ExtensionModuleId, HardwareClassId,
-    RegistrationIdentity, RegistrationKey, RuntimeConfigError, RuntimeEpoch, RuntimeId,
-    RuntimeReconfigureError, RuntimeStateError,
+    InputSignature, PrepareOptions, RegistrationIdentity, RegistrationKey, RuntimeCacheError,
+    RuntimeCacheStats, RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeReconfigureError,
+    RuntimeStateError, StorageClass,
 };
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
@@ -155,6 +160,20 @@ impl RuntimeConfigSnapshot {
             .map(|slot| slot.registration.engine_id())
     }
 
+    pub(super) fn engine_views_for_preparation(
+        &self,
+    ) -> impl Iterator<Item = EngineSnapshotView<'_>> + '_ {
+        self.engines.iter().map(|slot| EngineSnapshotView { slot })
+    }
+
+    pub(super) fn extension_slot_for_preparation(
+        &self,
+        family_id: ExtensionFamilyId,
+        engine_id: &EngineId,
+    ) -> Option<ExtensionEngineSnapshotView<'_>> {
+        self.extensions.slot_for_preparation(family_id, engine_id)
+    }
+
     #[cfg(test)]
     pub(crate) fn extension_slots_for_test(
         &self,
@@ -191,6 +210,10 @@ impl RuntimeConfigSnapshot {
     pub(super) fn cache_owners_for_test(&self) -> &[FrozenCacheOwner] {
         &self.cache_owners
     }
+
+    pub(super) fn cache_owners_for_runtime(&self) -> &[FrozenCacheOwner] {
+        &self.cache_owners
+    }
 }
 
 impl fmt::Debug for RuntimeConfigSnapshot {
@@ -214,6 +237,7 @@ struct RuntimeState {
     next_registration_ordinal: AtomicU64,
     active: Mutex<Arc<RuntimeConfigSnapshot>>,
     published_epoch: AtomicU64,
+    caches: RuntimeCacheSet<PreparedEntryKey, PreparedProgram>,
     #[cfg(test)]
     snapshot_lock_calls: AtomicUsize,
 }
@@ -277,6 +301,142 @@ impl Runtime {
                 lock: "runtime.published_epoch",
             }),
         }
+    }
+
+    /// Return current prepared-plan cache limits.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use tenferro_runtime::Runtime;
+    ///
+    /// let runtime = Runtime::builder().build()?;
+    /// assert_eq!(runtime.prepared_cache_limits()?, Default::default());
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeStateError`] when the runtime-owned prepared cache state
+    /// cannot be accessed.
+    pub fn prepared_cache_limits(&self) -> Result<PreparedPlanCacheLimits, RuntimeStateError> {
+        self.0.caches.prepared().limits()
+    }
+
+    /// Replace current prepared-plan cache limits and evict retained entries
+    /// until the new limits are satisfied.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::num::NonZeroUsize;
+    /// use tenferro_runtime::{PreparedPlanCacheLimits, Runtime};
+    ///
+    /// let runtime = Runtime::builder().build()?;
+    /// runtime.set_prepared_cache_limits(PreparedPlanCacheLimits {
+    ///     max_entries: NonZeroUsize::new(1).unwrap(),
+    ///     max_retained_bytes: NonZeroUsize::new(1024).unwrap(),
+    ///     max_in_flight_entries: NonZeroUsize::new(1).unwrap(),
+    ///     max_queued_distinct_keys: NonZeroUsize::new(1).unwrap(),
+    /// })?;
+    /// assert_eq!(runtime.prepared_cache_limits()?.max_entries.get(), 1);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeStateError`] when the runtime-owned prepared cache state
+    /// cannot be accessed.
+    pub fn set_prepared_cache_limits(
+        &self,
+        limits: PreparedPlanCacheLimits,
+    ) -> Result<(), RuntimeStateError> {
+        self.0.caches.prepared().set_limits(limits)
+    }
+
+    /// Clear the runtime-owned prepared-plan cache.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use tenferro_runtime::Runtime;
+    ///
+    /// let runtime = Runtime::builder().build()?;
+    /// runtime.clear_prepared_cache()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeStateError`] when the runtime-owned prepared cache state
+    /// cannot be accessed.
+    pub fn clear_prepared_cache(&self) -> Result<(), RuntimeStateError> {
+        self.0.caches.prepared().clear()
+    }
+
+    /// Return aggregate cache statistics for the runtime and registered cache
+    /// owners.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use tenferro_runtime::Runtime;
+    ///
+    /// let runtime = Runtime::builder().build()?;
+    /// assert_eq!(runtime.cache_stats()?.prepared_plans.entries, 0);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeCacheError`] when the runtime cache or a registered
+    /// cache owner cannot report statistics.
+    pub fn cache_stats(&self) -> Result<RuntimeCacheStats, RuntimeCacheError> {
+        super::preparation::cache_stats(self, &self.0.caches)
+    }
+
+    /// Clear runtime-owned prepared plans and all registered engine/extension
+    /// cache owners.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use tenferro_runtime::Runtime;
+    ///
+    /// let runtime = Runtime::builder().build()?;
+    /// runtime.clear_caches()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeCacheError`] when the runtime cache or a registered
+    /// cache owner cannot be cleared.
+    pub fn clear_caches(&self) -> Result<(), RuntimeCacheError> {
+        super::preparation::clear_caches(self, &self.0.caches)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "Phase 5 graph execution consumes crate-private prepared programs"
+    )]
+    pub(crate) fn prepare_for(
+        &self,
+        frozen: &FrozenProgram,
+        signature: &InputSignature,
+        options: &PrepareOptions,
+    ) -> PreparedProgramResult<Arc<PreparedProgram>> {
+        super::preparation::prepare_for(self, &self.0.caches, frozen, signature, options)
     }
 
     /// Transactionally edit and publish runtime configuration.
@@ -567,6 +727,7 @@ impl RuntimeConfigBuilder {
             next_registration_ordinal: AtomicU64::new(post_ordinal.get()),
             active: Mutex::new(snapshot),
             published_epoch: AtomicU64::new(epoch.get().get()),
+            caches: RuntimeCacheSet::new(PreparedPlanCacheLimits::default()),
             #[cfg(test)]
             snapshot_lock_calls: AtomicUsize::new(0),
         };
@@ -738,6 +899,14 @@ impl<'a> EngineSnapshotView<'a> {
     /// Return direct core capability slots for this engine.
     pub fn capabilities(&self) -> &'a CoreCapabilityBundle {
         self.slot.registration.capabilities()
+    }
+
+    pub(super) fn storage_classes(&self) -> &'a [StorageClass] {
+        self.slot.registration.storage_classes()
+    }
+
+    pub(super) fn default_storage_class(&self) -> &'a StorageClass {
+        self.slot.registration.default_storage_class()
     }
 }
 

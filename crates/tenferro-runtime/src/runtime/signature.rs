@@ -1,4 +1,5 @@
 use std::mem::align_of;
+use std::mem::size_of;
 
 use tenferro_tensor::{
     DType, Placement, ShapeVec, StrideVec, Tensor, TensorRead, TensorScalar, TensorView,
@@ -256,6 +257,13 @@ impl InputSignatureEntry {
     pub fn alignment_log2(&self) -> Option<u8> {
         self.alignment_log2
     }
+
+    pub(crate) fn logical_retained_bytes(&self) -> Option<usize> {
+        checked_sum([
+            spilled_bytes::<usize>(self.shape.spilled(), self.shape.len())?,
+            spilled_bytes::<isize>(self.strides.spilled(), self.strides.len())?,
+        ])
+    }
 }
 
 /// Value-free signature of all tensor inputs for one prepare request.
@@ -345,6 +353,39 @@ impl InputSignature {
     pub fn entries(&self) -> &[InputSignatureEntry] {
         &self.entries
     }
+
+    pub(crate) fn logical_retained_bytes(&self) -> Option<usize> {
+        checked_sum([
+            self.entries
+                .len()
+                .checked_mul(size_of::<InputSignatureEntry>())?,
+            checked_sum_options(
+                self.entries
+                    .iter()
+                    .map(InputSignatureEntry::logical_retained_bytes),
+            )?,
+        ])
+    }
+}
+
+fn spilled_bytes<T>(spilled: bool, len: usize) -> Option<usize> {
+    if spilled {
+        len.checked_mul(size_of::<T>())
+    } else {
+        Some(0)
+    }
+}
+
+fn checked_sum(values: impl IntoIterator<Item = usize>) -> Option<usize> {
+    values
+        .into_iter()
+        .try_fold(0usize, |sum, value| sum.checked_add(value))
+}
+
+fn checked_sum_options(values: impl IntoIterator<Item = Option<usize>>) -> Option<usize> {
+    values
+        .into_iter()
+        .try_fold(0usize, |sum, value| sum.checked_add(value?))
 }
 
 fn validate_entry(

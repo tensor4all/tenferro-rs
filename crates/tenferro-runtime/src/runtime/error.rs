@@ -639,6 +639,23 @@ pub enum ProviderContractError {
         #[source]
         source: SpecializationError,
     },
+    /// A provider requested specialization that did not strictly widen the
+    /// current requirements.
+    #[error("specialization did not strictly widen the current requirements")]
+    NonWideningSpecialization {
+        /// Previous specialization requirements.
+        previous: Box<super::SpecializationRequirements>,
+        /// Provider-requested specialization requirements.
+        next: Box<super::SpecializationRequirements>,
+    },
+    /// A provider exceeded the finite specialization retry bound.
+    #[error("specialization retry limit exceeded after {attempts} attempts; limit was {limit}")]
+    SpecializationRetryLimitExceeded {
+        /// Number of redirect attempts observed.
+        attempts: usize,
+        /// Computed finite retry bound.
+        limit: usize,
+    },
 }
 
 /// Reports failures while preparing runtime execution artifacts.

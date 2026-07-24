@@ -103,6 +103,15 @@ impl ProgramValueMetadata {
     pub fn shape(&self) -> &[ShapeExtent<DimExpr>] {
         &self.shape
     }
+
+    pub(crate) fn logical_retained_bytes(&self) -> Option<usize> {
+        checked_sum([
+            self.shape
+                .len()
+                .checked_mul(std::mem::size_of::<ShapeExtent<DimExpr>>())?,
+            checked_sum_options(self.shape.iter().map(shape_extent_logical_retained_bytes))?,
+        ])
+    }
 }
 
 /// Metadata for one externally supplied semantic-program input.
@@ -189,6 +198,13 @@ impl ShapeGuard {
     pub const fn source_family(&self) -> Option<&'static str> {
         self.source_family
     }
+
+    pub(crate) fn logical_retained_bytes(&self) -> Option<usize> {
+        checked_sum([
+            dim_expr_logical_retained_bytes(&self.lhs)?,
+            dim_expr_logical_retained_bytes(&self.rhs)?,
+        ])
+    }
 }
 
 impl PartialEq for ShapeGuard {
@@ -205,6 +221,43 @@ impl std::hash::Hash for ShapeGuard {
         self.lhs.hash(state);
         self.rhs.hash(state);
     }
+}
+
+fn shape_extent_logical_retained_bytes(extent: &ShapeExtent<DimExpr>) -> Option<usize> {
+    match extent {
+        ShapeExtent::Exact(expression) | ShapeExtent::UpperBound(expression) => {
+            dim_expr_logical_retained_bytes(expression)
+        }
+        ShapeExtent::Unknown => Some(0),
+    }
+}
+
+fn dim_expr_logical_retained_bytes(expression: &DimExpr) -> Option<usize> {
+    match expression {
+        DimExpr::Const(_) | DimExpr::InputDim { .. } => Some(0),
+        DimExpr::Add(left, right)
+        | DimExpr::Sub(left, right)
+        | DimExpr::Mul(left, right)
+        | DimExpr::FloorDiv(left, right)
+        | DimExpr::Min(left, right)
+        | DimExpr::Max(left, right) => checked_sum([
+            2usize.checked_mul(std::mem::size_of::<DimExpr>())?,
+            dim_expr_logical_retained_bytes(left)?,
+            dim_expr_logical_retained_bytes(right)?,
+        ]),
+    }
+}
+
+fn checked_sum(values: impl IntoIterator<Item = usize>) -> Option<usize> {
+    values
+        .into_iter()
+        .try_fold(0usize, |sum, value| sum.checked_add(value))
+}
+
+fn checked_sum_options(values: impl IntoIterator<Item = Option<usize>>) -> Option<usize> {
+    values
+        .into_iter()
+        .try_fold(0usize, |sum, value| sum.checked_add(value?))
 }
 
 /// Typed identity of an observable state resource.

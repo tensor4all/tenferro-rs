@@ -1,6 +1,7 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashSet},
+    mem::size_of,
 };
 
 use tenferro_ops::{dim_expr::DimExpr, dim_expr::DimExprEvalError, ShapeRelation};
@@ -66,6 +67,35 @@ impl ShapeGuard {
                 cause: map_eval_error(cause),
             })
     }
+
+    pub(crate) fn logical_retained_bytes(&self) -> Option<usize> {
+        checked_sum([
+            dim_expr_logical_retained_bytes(&self.lhs)?,
+            dim_expr_logical_retained_bytes(&self.rhs)?,
+        ])
+    }
+}
+
+fn dim_expr_logical_retained_bytes(expression: &DimExpr) -> Option<usize> {
+    match expression {
+        DimExpr::Const(_) | DimExpr::InputDim { .. } => Some(0),
+        DimExpr::Add(left, right)
+        | DimExpr::Sub(left, right)
+        | DimExpr::Mul(left, right)
+        | DimExpr::FloorDiv(left, right)
+        | DimExpr::Min(left, right)
+        | DimExpr::Max(left, right) => checked_sum([
+            2usize.checked_mul(size_of::<DimExpr>())?,
+            dim_expr_logical_retained_bytes(left)?,
+            dim_expr_logical_retained_bytes(right)?,
+        ]),
+    }
+}
+
+fn checked_sum(values: impl IntoIterator<Item = usize>) -> Option<usize> {
+    values
+        .into_iter()
+        .try_fold(0usize, |sum, value| sum.checked_add(value))
 }
 
 #[derive(Default)]

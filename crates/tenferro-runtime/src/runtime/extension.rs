@@ -159,6 +159,40 @@ pub(super) struct FrozenExtensionSlots {
     owners: BTreeMap<(ExtensionModuleId, CacheOwnerId), Arc<dyn RuntimeCacheOwner>>,
 }
 
+pub(super) struct ExtensionEngineSnapshotView<'a> {
+    slot: &'a FrozenExtensionEngineSlot,
+}
+
+impl<'a> ExtensionEngineSnapshotView<'a> {
+    pub(super) fn module_id(&self) -> &'a ExtensionModuleId {
+        &self.slot.module_id
+    }
+
+    pub(super) fn family_id(&self) -> ExtensionFamilyId {
+        self.slot.family_id
+    }
+
+    pub(super) fn engine_id(&self) -> &'a EngineId {
+        &self.slot.engine_id
+    }
+
+    pub(super) fn context_identity(&self) -> ExecutionContextIdentity {
+        self.slot.context_identity
+    }
+
+    pub(super) fn registration_identity(&self) -> RegistrationIdentity {
+        self.slot.registration_identity
+    }
+
+    pub(super) fn engine(&self) -> &'a Arc<dyn ExtensionEngine> {
+        &self.slot.engine
+    }
+
+    pub(super) fn config(&self) -> &'a Arc<dyn ExtensionPlanningConfig> {
+        &self.slot.config
+    }
+}
+
 #[cfg(test)]
 pub(super) type ExtensionSlotFullForTest<'a> = (
     &'a ExtensionModuleId,
@@ -276,7 +310,15 @@ impl FrozenExtensionSlots {
             })
     }
 
-    #[cfg(test)]
+    pub(super) fn slot_for_preparation(
+        &self,
+        family_id: ExtensionFamilyId,
+        engine_id: &EngineId,
+    ) -> Option<ExtensionEngineSnapshotView<'_>> {
+        self.extension_engine_slot(family_id, engine_id)
+            .map(|slot| ExtensionEngineSnapshotView { slot })
+    }
+
     fn extension_engine_slot(
         &self,
         family_id: ExtensionFamilyId,

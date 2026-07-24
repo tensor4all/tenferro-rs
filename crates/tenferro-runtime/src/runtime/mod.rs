@@ -7,6 +7,7 @@ mod extension;
 mod extension_provider;
 mod identity;
 mod policy;
+mod preparation;
 mod signature;
 mod snapshot;
 mod specialization;
