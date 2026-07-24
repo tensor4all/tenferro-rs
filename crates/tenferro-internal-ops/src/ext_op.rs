@@ -281,6 +281,49 @@ impl ExtensionLoweringError {
 pub type ExtensionLoweringResult =
     std::result::Result<Option<Vec<ValueRef<StdTensorOp>>>, ExtensionLoweringError>;
 
+/// Typed result of trying to lower an extension into standard tensor ops.
+///
+/// This is the Phase 6 compatibility boundary for the legacy
+/// [`ExtensionOp::lower_to_standard_ops`] hook. New callers should branch on
+/// this enum instead of treating `Ok(None)` as a capability protocol.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_ops::ext_op::ExtensionStandardLowering;
+///
+/// let outcome = ExtensionStandardLowering::Unsupported;
+/// assert!(matches!(outcome, ExtensionStandardLowering::Unsupported));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExtensionStandardLowering {
+    /// The extension emitted standard tensor graph outputs.
+    Lowered(Vec<ValueRef<StdTensorOp>>),
+    /// The extension has no standard-op lowering for the supplied metadata.
+    Unsupported,
+}
+
+impl ExtensionStandardLowering {
+    /// Convert the legacy optional lowering result into an explicit outcome.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_ops::ext_op::ExtensionStandardLowering;
+    ///
+    /// assert_eq!(
+    ///     ExtensionStandardLowering::from_legacy(None),
+    ///     ExtensionStandardLowering::Unsupported,
+    /// );
+    /// ```
+    pub fn from_legacy(value: Option<Vec<ValueRef<StdTensorOp>>>) -> Self {
+        match value {
+            Some(outputs) => Self::Lowered(outputs),
+            None => Self::Unsupported,
+        }
+    }
+}
+
 /// Host/reference implementation for an extension family.
 ///
 /// This capability is optional. Backend-only extension families can omit it
@@ -491,13 +534,13 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
 
     /// Optionally expand this extension into standard tensor graph operations.
     ///
-    /// Peer lowerers call this when all input metadata is known and extension
-    /// runtime dispatch is not available. Return `Ok(Some(outputs))` after
-    /// adding only standard [`StdTensorOp`] operations to `builder`. Return
-    /// `Ok(None)` when this extension family has no standard-op lowering for
-    /// the supplied metadata; strict lowerers should surface that as an
-    /// explicit unsupported-extension error. Return [`ExtensionLoweringError`]
-    /// when the payload is malformed or the lowering detects invalid metadata.
+    /// This is the legacy compatibility hook. New lowering callers should call
+    /// [`Self::lower_to_standard_ops_typed`] so the unsupported case is explicit.
+    /// Return `Ok(Some(outputs))` after adding only standard [`StdTensorOp`]
+    /// operations to `builder`. Return `Ok(None)` when this extension family has
+    /// no standard-op lowering for the supplied metadata. Return
+    /// [`ExtensionLoweringError`] when the payload is malformed or the lowering
+    /// detects invalid metadata.
     ///
     /// The default implementation returns `Ok(None)` so existing extension
     /// runtimes keep their native dispatch behavior until their owning crate
@@ -515,6 +558,29 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
         _input_shapes: &[&[SymDim]],
     ) -> ExtensionLoweringResult {
         Ok(None)
+    }
+
+    /// Try to expand this extension into standard tensor graph operations.
+    ///
+    /// This method preserves existing extension implementations while removing
+    /// `Ok(None)` from new call sites. [`ExtensionStandardLowering::Unsupported`]
+    /// means a lowerer may try a configured fallback; an
+    /// [`ExtensionLoweringError`] remains a real lowering failure and must not be
+    /// converted into a capability miss.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExtensionLoweringError`] when the extension payload or input
+    /// metadata cannot be lowered safely.
+    fn lower_to_standard_ops_typed(
+        &self,
+        builder: &mut GraphBuilder<StdTensorOp>,
+        inputs: &[ValueRef<StdTensorOp>],
+        input_dtypes: &[DType],
+        input_shapes: &[&[SymDim]],
+    ) -> Result<ExtensionStandardLowering, ExtensionLoweringError> {
+        self.lower_to_standard_ops(builder, inputs, input_dtypes, input_shapes)
+            .map(ExtensionStandardLowering::from_legacy)
     }
 
     /// Optionally return an equivalent op that produces only live outputs.

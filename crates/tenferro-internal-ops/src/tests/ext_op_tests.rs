@@ -5,12 +5,17 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use computegraph::graph::GraphBuilder;
+use computegraph::types::ValueRef;
 use computegraph::GraphOperation;
 
-use crate::ext_op::ExtensionOp;
+use crate::ext_op::{
+    ExtensionLoweringError, ExtensionLoweringResult, ExtensionOp, ExtensionStandardLowering,
+};
+use crate::input_key::TensorInputKey;
 use crate::std_tensor_op::StdTensorOp;
 use crate::{ExtensionFamilyId, SymDim};
-use tenferro_tensor::DType;
+use tenferro_tensor::{DType, ErrorKind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum WindowMode {
@@ -74,6 +79,105 @@ impl ExtensionOp for PayloadOp {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct LoweringOp;
+
+impl ExtensionOp for LoweringOp {
+    fn family_id(&self) -> &'static str {
+        "covtest.lowering.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut crate::ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+    }
+
+    fn lower_to_standard_ops(
+        &self,
+        _builder: &mut GraphBuilder<StdTensorOp>,
+        inputs: &[ValueRef<StdTensorOp>],
+        _input_dtypes: &[DType],
+        _input_shapes: &[&[SymDim]],
+    ) -> ExtensionLoweringResult {
+        Ok(Some(vec![inputs[0].clone()]))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct FailingLoweringOp;
+
+impl ExtensionOp for FailingLoweringOp {
+    fn family_id(&self) -> &'static str {
+        "covtest.lowering_fail.v1"
+    }
+
+    fn payload_hash(&self, _hasher: &mut dyn Hasher) {}
+
+    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
+        other.as_any().downcast_ref::<Self>().is_some()
+    }
+
+    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
+        Arc::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn input_count(&self) -> usize {
+        1
+    }
+
+    fn output_count(&self) -> usize {
+        1
+    }
+
+    fn infer_output_meta(
+        &self,
+        ctx: &mut crate::ExtensionShapeContext<'_>,
+    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
+        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
+    }
+
+    fn lower_to_standard_ops(
+        &self,
+        _builder: &mut GraphBuilder<StdTensorOp>,
+        _inputs: &[ValueRef<StdTensorOp>],
+        _input_dtypes: &[DType],
+        _input_shapes: &[&[SymDim]],
+    ) -> ExtensionLoweringResult {
+        Err(ExtensionLoweringError::new_with_kind(
+            ErrorKind::Unsupported,
+            "no standard lowering",
+        ))
+    }
+}
+
 fn payload_op(axis: usize, mode: WindowMode, tensor_inputs: usize) -> StdTensorOp {
     StdTensorOp::Extension(Arc::new(PayloadOp {
         axis,
@@ -86,6 +190,17 @@ fn hash_std_tensor_op(op: &StdTensorOp) -> u64 {
     let mut hasher = DefaultHasher::new();
     op.hash(&mut hasher);
     hasher.finish()
+}
+
+fn lowering_fixture() -> (
+    GraphBuilder<StdTensorOp>,
+    ValueRef<StdTensorOp>,
+    [DType; 1],
+    [SymDim; 1],
+) {
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    let input = ValueRef::Local(builder.add_input(TensorInputKey::User { id: 0 }));
+    (builder, input, [DType::F64], [SymDim::from(2usize)])
 }
 
 #[test]
@@ -135,6 +250,46 @@ fn extension_payload_hash_changes_for_distinct_payloads() {
 fn extension_payload_does_not_affect_tensor_input_arity() {
     assert_eq!(payload_op(1, WindowMode::Valid, 2).input_count(), 2);
     assert_eq!(payload_op(2, WindowMode::Same, 2).input_count(), 2);
+}
+
+#[test]
+fn typed_lowering_reports_default_unsupported_without_error() {
+    let op = PayloadOp {
+        axis: 0,
+        mode: WindowMode::Valid,
+        tensor_inputs: 1,
+    };
+    let (mut builder, input, dtypes, shape) = lowering_fixture();
+
+    let lowered = op
+        .lower_to_standard_ops_typed(&mut builder, &[input], &dtypes, &[shape.as_slice()])
+        .unwrap();
+
+    assert_eq!(lowered, ExtensionStandardLowering::Unsupported);
+}
+
+#[test]
+fn typed_lowering_wraps_standard_outputs() {
+    let op = LoweringOp;
+    let (mut builder, input, dtypes, shape) = lowering_fixture();
+
+    let lowered = op
+        .lower_to_standard_ops_typed(&mut builder, &[input.clone()], &dtypes, &[shape.as_slice()])
+        .unwrap();
+
+    assert_eq!(lowered, ExtensionStandardLowering::Lowered(vec![input]));
+}
+
+#[test]
+fn typed_lowering_preserves_lowering_error_kind() {
+    let op = FailingLoweringOp;
+    let (mut builder, input, dtypes, shape) = lowering_fixture();
+
+    let error = op
+        .lower_to_standard_ops_typed(&mut builder, &[input], &dtypes, &[shape.as_slice()])
+        .unwrap_err();
+
+    assert_eq!(error.kind(), ErrorKind::Unsupported);
 }
 
 #[test]
