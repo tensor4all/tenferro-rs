@@ -110,6 +110,36 @@ fn store_stats_saturate_retained_bytes() {
 }
 
 #[test]
+fn store_stats_track_hits_misses_evictions_and_clears() {
+    let mut store = ExtensionCacheStore::with_limits(limits(2));
+    let first = key(FAMILY_A, PLANS, 1);
+    let second = key(FAMILY_A, PLANS, 2);
+    let third = key(FAMILY_A, PLANS, 3);
+
+    assert!(store.get::<u64>(&first).is_none());
+    store.put(first, 1_u64, 8);
+    store.put(second, 2_u64, 8);
+    assert_eq!(store.get::<u64>(&first), Some(&1));
+    assert!(store.get::<String>(&first).is_none());
+    store.put(third, 3_u64, 8);
+
+    let stats = store.stats(ExtensionCacheSelector::All);
+    assert_eq!(stats.entries, 2);
+    assert_eq!(stats.hits, 1);
+    assert_eq!(stats.misses, 2);
+    assert_eq!(stats.evictions, 1);
+    assert_eq!(stats.clears, 0);
+
+    store.clear();
+    let stats = store.stats(ExtensionCacheSelector::All);
+    assert_eq!(stats.entries, 0);
+    assert_eq!(stats.hits, 1);
+    assert_eq!(stats.misses, 2);
+    assert_eq!(stats.evictions, 1);
+    assert_eq!(stats.clears, 1);
+}
+
+#[test]
 fn clear_selected_removes_only_matching_entries() {
     let mut store = ExtensionCacheStore::new();
     let a_plan = key(FAMILY_A, PLANS, 1);

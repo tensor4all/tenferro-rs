@@ -1,6 +1,6 @@
 //! Cache accounting primitives shared by tensor backends and facade runtimes.
 
-/// Entry and retained-byte accounting for one cache.
+/// Entry, retained-byte, and event accounting for one cache.
 ///
 /// `retained_bytes` reports the cache-owned logical payload estimate. It does
 /// not include allocator arena slack, operating-system RSS, or memory retained
@@ -14,9 +14,14 @@
 /// let stats = CacheStats {
 ///     entries: 2,
 ///     retained_bytes: 128,
+///     hits: 3,
+///     misses: 4,
+///     evictions: 0,
+///     clears: 0,
 /// };
 /// assert_eq!(stats.entries, 2);
 /// assert_eq!(stats.retained_bytes, 128);
+/// assert_eq!(stats.hits, 3);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheStats {
@@ -24,6 +29,14 @@ pub struct CacheStats {
     pub entries: usize,
     /// Cache-owned retained payload estimate in bytes.
     pub retained_bytes: usize,
+    /// Successful cache lookups.
+    pub hits: u64,
+    /// Failed cache lookups or typed lookup mismatches.
+    pub misses: u64,
+    /// Entries evicted by cache retention limits.
+    pub evictions: u64,
+    /// Explicit cache clear operations.
+    pub clears: u64,
 }
 
 impl CacheStats {

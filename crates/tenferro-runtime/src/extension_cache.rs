@@ -188,6 +188,10 @@ struct ExtensionCacheEntry {
 pub struct ExtensionCacheStore {
     limits: ExtensionCacheLimits,
     entries: LruCache<ExtensionCacheKey, ExtensionCacheEntry>,
+    hits: u64,
+    misses: u64,
+    evictions: u64,
+    clears: u64,
 }
 
 impl fmt::Debug for ExtensionCacheStore {
@@ -219,6 +223,10 @@ impl ExtensionCacheStore {
         Self {
             entries: LruCache::new(limits.max_entries()),
             limits,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            clears: 0,
         }
     }
 
@@ -229,7 +237,11 @@ impl ExtensionCacheStore {
 
     /// Resize the store and evict least-recently-used entries if needed.
     pub fn set_limits(&mut self, limits: ExtensionCacheLimits) {
+        let previous_len = self.entries.len();
         self.entries.resize(limits.max_entries());
+        self.evictions = self
+            .evictions
+            .saturating_add(previous_len.saturating_sub(self.entries.len()) as u64);
         self.limits = limits;
     }
 
@@ -248,7 +260,7 @@ impl ExtensionCacheStore {
     where
         T: Any + Send + Sync + 'static,
     {
-        self.entries.put(
+        self.put_entry(
             key,
             ExtensionCacheEntry {
                 value: Box::new(FixedRetainedBytes {
@@ -293,7 +305,7 @@ impl ExtensionCacheStore {
         T: Any + Send + Sync + 'static,
         F: Fn(&T) -> usize + Send + Sync + 'static,
     {
-        self.entries.put(
+        self.put_entry(
             key,
             ExtensionCacheEntry {
                 value: Box::new(DynamicRetainedBytes {
@@ -309,9 +321,16 @@ impl ExtensionCacheStore {
     where
         T: Any + Send + Sync + 'static,
     {
-        self.entries
+        let value = self
+            .entries
             .get(key)
-            .and_then(|entry| entry.value.as_any().downcast_ref::<T>())
+            .and_then(|entry| entry.value.as_any().downcast_ref::<T>());
+        if value.is_some() {
+            self.hits = self.hits.saturating_add(1);
+        } else {
+            self.misses = self.misses.saturating_add(1);
+        }
+        value
     }
 
     /// Get a mutable typed cache entry, updating its LRU position.
@@ -319,13 +338,21 @@ impl ExtensionCacheStore {
     where
         T: Any + Send + Sync + 'static,
     {
-        self.entries
+        let value = self
+            .entries
             .get_mut(key)
-            .and_then(|entry| entry.value.as_any_mut().downcast_mut::<T>())
+            .and_then(|entry| entry.value.as_any_mut().downcast_mut::<T>());
+        if value.is_some() {
+            self.hits = self.hits.saturating_add(1);
+        } else {
+            self.misses = self.misses.saturating_add(1);
+        }
+        value
     }
 
     /// Clear entries selected by `selector`.
     pub fn clear_selected(&mut self, selector: ExtensionCacheSelector) {
+        self.clears = self.clears.saturating_add(1);
         if selector == ExtensionCacheSelector::All {
             self.entries.clear();
             return;
@@ -344,6 +371,7 @@ impl ExtensionCacheStore {
 
     /// Clear every extension cache entry.
     pub fn clear(&mut self) {
+        self.clears = self.clears.saturating_add(1);
         self.entries.clear();
     }
 
@@ -361,6 +389,19 @@ impl ExtensionCacheStore {
                 .filter(|(key, _)| selector.matches(key))
                 .map(|(_, entry)| entry.value.retained_bytes())
                 .fold(0usize, usize::saturating_add),
+            hits: self.hits,
+            misses: self.misses,
+            evictions: self.evictions,
+            clears: self.clears,
+        }
+    }
+
+    fn put_entry(&mut self, key: ExtensionCacheKey, entry: ExtensionCacheEntry) {
+        let will_evict =
+            !self.entries.contains(&key) && self.entries.len() == self.limits.max_entries().get();
+        self.entries.put(key, entry);
+        if will_evict {
+            self.evictions = self.evictions.saturating_add(1);
         }
     }
 }

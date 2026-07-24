@@ -6,7 +6,11 @@ fn cache_stats_empty_reports_zeroes() {
         CacheStats::empty(),
         CacheStats {
             entries: 0,
-            retained_bytes: 0
+            retained_bytes: 0,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            clears: 0,
         }
     );
 }

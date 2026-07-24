@@ -344,6 +344,10 @@ impl RuntimeCacheControl for GemmAnalysisCache {
         CacheStats {
             entries,
             retained_bytes,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            clears: 0,
         }
     }
 }

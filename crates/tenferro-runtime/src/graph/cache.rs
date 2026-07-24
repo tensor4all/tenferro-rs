@@ -657,6 +657,10 @@ pub(crate) fn compile_cache_stats(cache: &LruCache<CacheKey, ExecProgram>) -> Ca
                 ])
             })
             .fold(0usize, usize::saturating_add),
+        hits: 0,
+        misses: 0,
+        evictions: 0,
+        clears: 0,
     }
 }
 

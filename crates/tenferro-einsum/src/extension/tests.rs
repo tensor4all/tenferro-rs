@@ -5,7 +5,7 @@ use super::*;
 use crate::optimize::EinsumPlanSpec;
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::ext_op::invoke_extension_shape_inference;
-use tenferro_runtime::ExtensionCacheStore;
+use tenferro_runtime::{ExtensionCacheStore, ExtensionExecutor};
 use tenferro_tensor::{TensorOwnedView, TensorRead};
 
 #[cfg(feature = "autodiff")]
@@ -236,6 +236,46 @@ fn execute_einsum_extension_reads_consumes_strided_view_inputs() {
         outputs[0].as_slice::<f64>().unwrap(),
         &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
     );
+}
+
+#[test]
+fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
+    let mut backend = CpuBackend::new();
+    let mut executor = ExtensionExecutor::<CpuBackend>::new();
+    register_runtime(&mut executor).unwrap();
+    let op = EinsumExtensionOp::with_plan_spec(
+        EinsumSubscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]),
+        EinsumPlanSpec::LeftToRight,
+    );
+    let cases = [(2, 3, 4, 5), (3, 2, 5, 4), (4, 3, 2, 6)];
+
+    for &(m, k, n, p) in &cases {
+        let lhs = Tensor::from_vec_col_major(vec![m, k], sequential_f64(m * k, 1.0)).unwrap();
+        let mid = Tensor::from_vec_col_major(vec![k, n], sequential_f64(k * n, 10.0)).unwrap();
+        let rhs = Tensor::from_vec_col_major(vec![n, p], sequential_f64(n * p, 100.0)).unwrap();
+
+        let outputs = executor
+            .execute(&mut backend, &op, &[&lhs, &mid, &rhs])
+            .unwrap();
+
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].shape(), &[m, p]);
+        assert_einsum_matches_matmul_chain(&outputs[0], &lhs, &mid, &rhs);
+    }
+
+    let (m, k, n, p) = cases[0];
+    let lhs = Tensor::from_vec_col_major(vec![m, k], sequential_f64(m * k, 1.0)).unwrap();
+    let mid = Tensor::from_vec_col_major(vec![k, n], sequential_f64(k * n, 10.0)).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![n, p], sequential_f64(n * p, 100.0)).unwrap();
+    let outputs = executor
+        .execute(&mut backend, &op, &[&lhs, &mid, &rhs])
+        .unwrap();
+    assert_einsum_matches_matmul_chain(&outputs[0], &lhs, &mid, &rhs);
+
+    let stats = executor.cache_stats();
+    assert_eq!(stats.entries, cases.len());
+    assert_eq!(stats.misses, cases.len() as u64);
+    assert_eq!(stats.hits, 1);
 }
 
 #[test]
@@ -472,4 +512,52 @@ fn payload_hash(op: &EinsumExtensionOp) -> u64 {
     let mut hasher = DefaultHasher::new();
     op.payload_hash(&mut hasher);
     hasher.finish()
+}
+
+fn sequential_f64(len: usize, offset: f64) -> Vec<f64> {
+    (0..len).map(|index| offset + index as f64).collect()
+}
+
+fn assert_einsum_matches_matmul_chain(output: &Tensor, lhs: &Tensor, mid: &Tensor, rhs: &Tensor) {
+    let &[m, k] = lhs.shape() else {
+        panic!("lhs must be rank-2");
+    };
+    let &[mid_k, n] = mid.shape() else {
+        panic!("mid must be rank-2");
+    };
+    let &[rhs_n, p] = rhs.shape() else {
+        panic!("rhs must be rank-2");
+    };
+    assert_eq!(mid_k, k);
+    assert_eq!(rhs_n, n);
+    assert_eq!(output.shape(), &[m, p]);
+    let lhs = lhs.as_slice::<f64>().unwrap();
+    let mid = mid.as_slice::<f64>().unwrap();
+    let rhs = rhs.as_slice::<f64>().unwrap();
+    let output = output.as_slice::<f64>().unwrap();
+
+    let mut expected = vec![0.0; m * p];
+    for row in 0..m {
+        for col in 0..p {
+            let mut total = 0.0;
+            for inner_n in 0..n {
+                let mut lhs_mid = 0.0;
+                for inner_k in 0..k {
+                    lhs_mid += lhs[row + inner_k * m] * mid[inner_k + inner_n * k];
+                }
+                total += lhs_mid * rhs[inner_n + col * n];
+            }
+            expected[row + col * m] = total;
+        }
+    }
+
+    let max_abs = output
+        .iter()
+        .zip(expected.iter())
+        .map(|(actual, expected)| (actual - expected).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_abs <= 1.0e-8,
+        "max_abs={max_abs}, actual={output:?}, expected={expected:?}"
+    );
 }

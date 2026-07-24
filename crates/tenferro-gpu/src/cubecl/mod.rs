@@ -403,6 +403,10 @@ impl CudaExtensionCache {
         Ok(CacheStats {
             entries: inner.entries.len(),
             retained_bytes: inner.retained_bytes,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            clears: 0,
         })
     }
 
