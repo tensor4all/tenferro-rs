@@ -15,8 +15,8 @@ occur in bounded phase children, beginning with issue #1434.
 This revision incorporates all contracts added to issue #1433 after
 `f777b52e`: separate CPU thread-count and placement capabilities, ArmPL/NVPL
 classification, the PyTorch-aligned batched-contraction target policy,
-MPI-compatible process boundaries, the DMRG-class driving workload, and the
-consolidated requirements retained from closed issues #1432, #1417, and #1422.
+MPI-compatible process boundaries, and the consolidated requirements retained
+from closed issues #1432, #1417, and #1422.
 
 The proposal returns tenferro to a prism-like dependency direction: operation
 semantics are expressed in a backend-neutral IR and pure schemas, execution
@@ -24,6 +24,14 @@ capabilities are expressed as small operation-family traits, and tenferro's
 eager and compiled surfaces call the selected engine. Backend libraries remain
 replaceable behind smaller provider traits, while resource ownership stays
 with the engine.
+
+The active implementation directive after the 2026-07-24 amendment covers
+phases 4 through 6 and stops at the phase 6 boundary. Phases 7 through 9 are
+deferred. The exact-commit cross-phase audit described by the restart design
+runs at that boundary over phases 1 through 6; it is distinct from umbrella
+phase 9, which denotes multi-GPU scheduling. The mandatory CPU native einsum
+engine remains phase 6 work, while the CUDA/WebGPU native engine defers with
+phase 7.
 
 This document refines rather than immediately replaces the current contracts in:
 
@@ -786,7 +794,8 @@ eager latency must provide either a native engine or a guaranteed single-core-
 operation lowering; providing generic `lower_to_core` alone does not guarantee
 the eager fast path. N-ary einsum and decompositions lowered to multiple core
 ops intentionally pay preparation and scheduling unless a native engine
-represents them as one prepared operation.
+represents them as one prepared operation, as specified by
+[Einsum execution identity](#einsum-execution-identity).
 
 Eager remains a first-class supported API. The architecture acceptance promise
 is current-main non-inferiority, not a positive reduction of the measured
@@ -985,6 +994,18 @@ avoids cyclic extension-to-extension legalization. A native extension engine
 may depend explicitly on another extension provider, but that dependency is
 part of runtime configuration rather than an implicit lowering chain.
 
+Core lowering is a portability contract, not a latency contract. Its consumers
+are engines that cannot execute native extension engines: XLA/StableHLO
+lowering, AD transforms that need a core-operation fragment, and last-resort
+execution when no native engine is configured for a family. No latency
+requirement attaches to the lowered execution path. An extension whose eager
+latency is a supported, performance-gated surface must provide a native engine
+for the relevant backends. A `lower_to_core` implementation that emits two or
+more executable core operations promotes the call to prepared-graph execution
+and pays its preparation cost; native execution and a lowering that emits
+exactly one executable core operation retain the existing eager fast-path
+rule.
+
 The same contract supports shape-dependent einsum paths, FFT radix plans,
 shape- and dtype-dependent linalg algorithms, sparse formats, specialized
 permutation kernels, and topology-dependent collectives. Runtime code dispatches
@@ -1031,6 +1052,57 @@ policy when explicitly supplied. A runtime default is represented as
 `InheritRuntimeDefault`, not copied into every payload. A hard byte limit is a
 runtime resource constraint, not merely a space-complexity score; infeasible
 candidate paths are rejected during preparation.
+
+### Einsum execution identity
+
+The einsum extension consists of one backend-neutral planning core and thin
+per-backend native engines.
+
+1. **Planning core.** `tenferro-einsum` owns subscript parsing,
+   contraction-path search including TreeSA and explicit-path policies,
+   `ContractionTree` construction, and logical intermediate-shape and workspace
+   estimation. Planning is a pure function of the subscripts, dtypes, concrete
+   shapes, operation-local policy, and the resolved runtime planning
+   configuration. The resolved inputs include inherited defaults, planning
+   budgets, hard workspace limits, and any determinism seed. Every engine
+   consumes this planning core.
+
+   `ExecutionPolicy::Reproducible` selects the same contraction path for the
+   same resolved runtime snapshot, inputs, and hardware class. This is not a
+   cross-backend path-identity requirement for `Fast`; a fast engine may use
+   backend-specific resolved planning inputs, which remain explicit in the
+   runtime snapshot and cache identity.
+2. **Native engines where eager einsum is supported.** The CPU native engine is
+   part of phase 6, and CUDA/WebGPU native engines are part of phase 7. XLA
+   consumes core lowering and requires no native einsum engine.
+3. **One prepared operation.** A native engine represents a complete N-ary
+   einsum as one `PreparedOperation`. Eager N-ary einsum through a native
+   engine therefore satisfies the existing single-executable-operation
+   fast-path rule and constructs no program, fingerprint, schedule, or run
+   admission request.
+4. **Plan caching and the planning boundary.** Concrete-shape contraction
+   plans live in a provider-local bounded cache owned by the native engine or
+   its prepared operations, with bounded defaults, entry and retained-byte
+   statistics, configuration, and clear APIs. Cache identity includes the
+   semantic planning policy or explicit path, runtime epoch, resolved planning
+   inputs, and prepare options in addition to the specialization projection.
+   The runtime-level projection normally uses subscript structure, dtype, and
+   rank so that the prepared operation can remain polymorphic; an engine that
+   cannot remain polymorphic may return `NeedsSpecialization` with concrete
+   dimensions.
+
+   Concrete-shape cache lookup and cache-miss planning complete before
+   executor or resource admission. Steady-state execution receives a resolved
+   concrete plan and never performs path planning inside the executor.
+5. **Graph path.** A prepared graph schedules the same native engine as one
+   operation. Core `dot_general` lowering remains the canonical semantic
+   expansion for XLA, AD transforms, and engines without native einsum
+   capability.
+
+The current `main` eager implementation is the behavioral reference: it plans
+per call, uses one backend session for the whole contraction tree, and caches
+binary contractions within that session. The CPU native engine re-hosts that
+behavior, and the phase 6 changing-shape gate exercises this native eager path.
 
 ## Layout and Permutation
 
@@ -1187,6 +1259,31 @@ outer child. Consequently every public `CpuExecutionContext` is already
 entered. It exposes immutable domain facts and logical policy, but has no
 install, submit, mode-mutation, child-construction, permit, or scheduling-error
 surface.
+
+### Executor-entry amortization
+
+Executor entry (`CpuDomainExecutor::install` and the underlying worker-pool
+entry) is amortized across a compatible backend session or a prepared-graph
+segment on one CPU domain rather than paid per operation.
+
+- A Tenferro-managed eager backend session enters the selected executor once.
+  Each operation derives its own `ParallelMode` context inside that entered
+  scope without another install.
+- A graph executor enters once per contiguous schedule segment placed on one
+  CPU domain. Crossing to another domain or device ends the segment.
+- A standalone eager operation enters once for that operation.
+- A fallible `ExternalManaged` executor retains operation-level entry under the
+  current `BackendSessionHost` callback API, which cannot return a typed
+  pre-callback admission failure. Session-wide entry for such executors
+  requires a separately accepted fallible session API; it must not be emulated
+  with a panic, hidden fallback, or untyped side channel.
+
+Focused tests require exactly one install for any number of operations in a
+Tenferro-managed session or one same-domain graph segment, and separately
+preserve the typed fallible-external behavior. Commit `b5a3dcd2` is the managed
+Phase 2 baseline; this amendment does not authorize another blanket Phase 2
+rewrite. The phase 5 child defines precise segment formation but may not
+reintroduce per-operation entry for compatible managed segments.
 
 Providers consume the already-entered context. They do not choose a NUMA node,
 query ambient Rayon state, acquire a second resource permit, or re-enter the
@@ -1621,23 +1718,6 @@ runtime snapshot, input signatures, and hardware class. This planning
 guarantee does not claim bitwise cross-rank equality for providers that do not
 declare it.
 
-## Driving Workload: DMRG-Class Sweeps
-
-DMRG-class workloads are a design driver rather than an application-specific
-core API. Block-sparse semantics enter through an extension family and
-block-sparse providers. During a sweep, matrix shapes and block structure
-change often enough that common cache misses must keep preparation cheap; a
-child must bound planning cost and cache footprint or define an explicit
-polymorphic plan rather than assuming shape-stable reuse.
-
-Prepared Davidson operations must support deliberate reuse of subspace,
-workspace, and provider plans while preserving effects and invalidation rules.
-At each user-managed MPI iteration boundary, tenferro adds no extra
-synchronization, allocation, or admission beyond the applicable eager
-single-operation contract. The application remains responsible for the MPI
-collective and for making the resulting host mutation visible before the next
-tenferro call.
-
 ## Capability and Fallback Contract
 
 Capability resolution happens before steady-state execution. A prepared
@@ -1822,10 +1902,13 @@ Required focused tests include:
   extension's concrete Rust type;
 - different concrete einsum shapes select distinct cached plans when their
   resolved contraction plans differ;
-- phase 6 eager N-ary einsum over a predeclared TCI/DMRG-representative shape
+- phase 6 eager N-ary einsum over a predeclared TCI-representative shape
   sequence that changes every call and misses exact-shape specializations does
   not regress against current `main` for the complete lower-prepare-execute
   boundary; a same-shape cache-hit case cannot satisfy this requirement;
+- eager N-ary einsum through the native engine takes the single-operation fast
+  path, while removing that engine demonstrates promotion to prepared-graph
+  execution;
 - a runtime epoch change invalidates old prepared plans;
 - CPU and GPU graphs use the same dependency, buffer lifetime, transfer, and
   barrier rules;
@@ -1848,10 +1931,6 @@ Required focused tests include:
   `MPI_Allreduce` integration test;
 - separate rank-like runtimes require no process-global mutable state, and
   `Reproducible` produces identical planning decisions for identical snapshots;
-- DMRG-like changing shapes and block structures meet a predeclared common-miss
-  prepare budget, Davidson state reuse invalidates correctly, and the
-  user-managed MPI boundary adds no synchronization, allocation, or admission
-  beyond the eager single-operation contract;
 - builder tokens reject cross-builder use, graph import and finish are atomic
   across values, roots, bindings, checkpoints, and metadata scopes, and
   extension construction passes the public source-contract check without raw
