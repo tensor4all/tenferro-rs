@@ -84,13 +84,14 @@ pub use runtime::{
     LayoutRuntime, LayoutSpecialization, PlacementConstraintError, PlacementProjection,
     PlacementSpecialization, PreparationKeySummary, PrepareCapability, PrepareError,
     PrepareOptions, PrepareOptionsKey, PreparedOperation, PreparedOperationBinding,
-    PreparedOperationHandle, ProgramPlacementConstraint, ProviderContractError, RankRequirement,
-    ReductionPrepareRequest, ReductionRuntime, RegistrationIdentity, RegistrationKey,
-    ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement, Runtime,
-    RuntimeCacheError, RuntimeCacheOwner, RuntimeConfigBuilder, RuntimeConfigError,
-    RuntimeConfigSnapshot, RuntimeEpoch, RuntimeId, RuntimeReconfiguration,
-    RuntimeReconfigureError, RuntimeStateError, SpecializationError, SpecializationProjection,
-    SpecializationRequirements, StorageClass, UnsupportedReason,
+    PreparedOperationHandle, PreparedPlanCacheLimits, PreparedPlanCacheStats,
+    ProgramPlacementConstraint, ProviderContractError, RankRequirement, ReductionPrepareRequest,
+    ReductionRuntime, RegistrationIdentity, RegistrationKey, ResolvedPlanningConfig,
+    ResolvedPlanningKey, ResolvedProgramPlacement, Runtime, RuntimeCacheError, RuntimeCacheOwner,
+    RuntimeCacheStats, RuntimeConfigBuilder, RuntimeConfigError, RuntimeConfigSnapshot,
+    RuntimeEpoch, RuntimeId, RuntimeReconfiguration, RuntimeReconfigureError, RuntimeStateError,
+    SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
+    UnsupportedReason,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;

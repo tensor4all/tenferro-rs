@@ -1,12 +1,15 @@
+use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 use super::capability::{
     CoreCapabilityKind, PreparationKeySummary, PreparedOperationBinding, UnsupportedReason,
 };
-use super::identity::{EngineId, RuntimeEpoch};
-use super::policy::StorageClass;
+use super::identity::{EngineId, RuntimeEpoch, RuntimeId};
+use super::policy::{ProgramPlacementConstraint, StorageClass};
 use super::specialization::SpecializationProjection;
 use super::{CacheOwnerId, ExtensionModuleId};
+use tenferro_ops::ShapeGuardError;
 use tenferro_tensor::Error as TensorError;
 
 /// Classifies a malformed runtime identifier without retaining its input.
@@ -652,11 +655,34 @@ pub enum ProviderContractError {
 /// ```
 #[derive(Debug, thiserror::Error)]
 pub enum PrepareError {
+    /// Prepared artifact belongs to a different runtime.
+    #[error("runtime mismatch: expected {expected:?}, actual {actual:?}")]
+    RuntimeMismatch {
+        /// Runtime expected by the prepared artifact.
+        expected: RuntimeId,
+        /// Runtime currently executing.
+        actual: RuntimeId,
+    },
+    /// Prepared artifact was created for a stale runtime epoch.
+    #[error("stale runtime epoch: prepared {prepared:?}, current {current:?}")]
+    StaleEpoch {
+        /// Epoch captured by the prepared artifact.
+        prepared: RuntimeEpoch,
+        /// Runtime's current epoch.
+        current: RuntimeEpoch,
+    },
     /// Input signature construction failed.
     #[error("input signature failed")]
     InputSignature {
         /// Typed source error.
         source: InputSignatureError,
+    },
+    /// Semantic shape guards failed.
+    #[error("shape guard failed")]
+    ShapeGuard {
+        /// Typed source error.
+        #[source]
+        source: ShapeGuardError,
     },
     /// Signature projection through specialization requirements failed.
     #[error("specialization failed")]
@@ -664,11 +690,23 @@ pub enum PrepareError {
         /// Typed source error.
         source: SpecializationError,
     },
+    /// No eligible engine matched the placement and capability constraints.
+    #[error("no eligible engine for {constraint:?}")]
+    NoEligibleEngine {
+        /// Placement constraint that could not be satisfied.
+        constraint: ProgramPlacementConstraint,
+    },
     /// No provider supports this operation under the requested constraints.
     #[error("operation is unsupported: {reason}")]
     Unsupported {
         /// Deterministic unsupported reason.
         reason: UnsupportedReason,
+    },
+    /// Deterministic execution was requested from an engine that cannot provide it.
+    #[error("determinism unsupported by engine {engine_id:?}")]
+    DeterminismUnsupported {
+        /// Engine that cannot satisfy deterministic preparation.
+        engine_id: EngineId,
     },
     /// Provider returned a value that violates the runtime preparation contract.
     #[error("provider contract violation: {source}")]
@@ -682,5 +720,38 @@ pub enum PrepareError {
     PreparationCycle {
         /// Bounded summary of the recursive key.
         key: PreparationKeySummary,
+    },
+    /// Preparation recursively requested a different key.
+    #[error("nested preparation unsupported: parent {parent:?}, requested {requested:?}")]
+    NestedPreparationUnsupported {
+        /// Parent key currently preparing on this thread.
+        parent: PreparationKeySummary,
+        /// Nested key requested by the producer.
+        requested: PreparationKeySummary,
+    },
+    /// The preparation cache is full of active/queued distinct keys.
+    #[error(
+        "preparation cache is at capacity: {in_flight} in flight and \
+         {queued_distinct_keys} queued distinct keys"
+    )]
+    CacheInFlightCapacityExceeded {
+        /// Active distinct preparations.
+        in_flight: usize,
+        /// Queued distinct keys.
+        queued_distinct_keys: usize,
+    },
+    /// Runtime cache state could not be accessed.
+    #[error("preparation cache state unavailable: {source}")]
+    CacheState {
+        /// Runtime state source.
+        #[source]
+        source: super::RuntimeStateError,
+    },
+    /// Engine or internal preparation source failed.
+    #[error("engine preparation failed: {source}")]
+    Engine {
+        /// Shared typed source.
+        #[source]
+        source: Arc<dyn Error + Send + Sync>,
     },
 }

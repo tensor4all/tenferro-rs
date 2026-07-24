@@ -186,6 +186,11 @@ impl RuntimeConfigSnapshot {
     ) -> Option<ExtensionSlotFullForTest<'_>> {
         self.extensions.slot_full_for_test(family_id, engine_id)
     }
+
+    #[cfg(test)]
+    pub(super) fn cache_owners_for_test(&self) -> &[FrozenCacheOwner] {
+        &self.cache_owners
+    }
 }
 
 impl fmt::Debug for RuntimeConfigSnapshot {

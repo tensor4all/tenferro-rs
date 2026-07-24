@@ -1,3 +1,4 @@
+mod cache;
 mod cache_owner;
 mod capability;
 mod engine_registration;
@@ -10,6 +11,7 @@ mod signature;
 mod snapshot;
 mod specialization;
 
+pub use cache::{PreparedPlanCacheLimits, PreparedPlanCacheStats, RuntimeCacheStats};
 pub use cache_owner::{
     CacheOwnerError, CacheOwnerFailure, CacheOwnerId, CacheStats, RuntimeCacheError,
     RuntimeCacheOwner, RuntimeStateError,
