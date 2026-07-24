@@ -222,9 +222,10 @@ Phase 3 subsequently closed the A1 through A3 boundaries described above:
 - `ExecProgram` remains private runtime staging. Public execution accepts
   `CompiledGraph` and ordered tensor inputs.
 - `lower_semantic_to_exec_staging` is the sole private forward adapter,
-  remains binding-free through Phase 4, and is owned for deletion by Phase 5.
-  This records the accepted migration boundary; it does not claim Phase 4 is
-  implemented.
+  remained binding-free through Phase 4, and is owned for deletion by Phase 5.
+  Phase 4 now provides the immutable runtime snapshot and preparation
+  substrate around that adapter; execution still uses private staging until
+  Phase 5 deletes it.
 - `AdContext` solely owns copy-on-write `SemanticExtensionRuleSet` values and
   cached whole-program semantic JVP/VJP transforms.
 - FFT, einsum, linalg, sparse, tropical, and in-tree fixture rules use
@@ -240,6 +241,40 @@ The reviewer-facing A2 records are
 [`2026-07-24-phase-3-a2-compiled-graph.md`](../worklogs/2026-07-24-phase-3-a2-compiled-graph.md)
 and
 [`2026-07-24-phase-3-a2-trace-context-einsum.md`](../worklogs/2026-07-24-phase-3-a2-trace-context-einsum.md).
+
+### Phase 4 runtime preparation checkpoint (2026-07-24)
+
+Phase 4 implements the runtime preparation substrate without migrating
+operation-family execution to it yet:
+
+- `Runtime` owns immutable configuration snapshots, runtime/configuration
+  epochs, transactional engine and extension-module registration, direct core
+  capability slots, and runtime-owned cache owners.
+- Preparation receives value-free `InputSignature` metadata, normalized
+  `PrepareOptions`, resolved placement, finite specialization requirements,
+  and runtime-created operation bindings/projections.
+- `Runtime::prepare_for` builds a crate-private `PreparedProgram` through the
+  existing binding-free semantic-staging adapter. It validates stale epoch,
+  specialization, provider contract, recursion, capacity, and cache-state
+  failures without exposing a public prepared execution API.
+- The runtime prepared-plan cache is bounded, single-flight, negative-caches
+  deterministic failures within one epoch, rejects recursive distinct-key
+  preparation before capacity waits, and reports exact logical retained bytes
+  for runtime-owned roots without double-counting registered cache owners.
+- `tenferro-cpu` implements the CPU direct core preparation adapter through the
+  approved CPU-to-runtime dependency edge. The adapter is metadata-only and
+  attaches the CPU backend as the runtime cache owner; `tenferro-runtime`
+  still has no production CPU dependency.
+- `EagerRuntime` builds one private runtime snapshot for CPU-backed eager
+  contexts. `CpuPlacementBoundEager` keeps its Phase 2 CPU
+  coordinator/provider snapshot while refreshing private runtime registration
+  metadata by epoch comparison.
+
+Phase 4 deliberately does not add a public `PreparedProgram`, public prepared
+execution, extension-family execution migration, XLA/subgraph compilation, or
+Phase 6 operation-family derived caches. Those are owned by later phases. The
+sole private forward adapter remains `lower_semantic_to_exec_staging`, with
+Phase 5 as the deletion owner.
 
 ## Compiler and Artifact Boundaries
 

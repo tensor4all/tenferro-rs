@@ -93,6 +93,14 @@ host/reference implementation, expose it with `ExtensionOp::host_reference`
 and register `HostReferenceRuntime`; otherwise register a backend-specific
 runtime owned by the extension crate.
 
+Phase 4 also exposes runtime preparation registration for extension authors
+who are integrating with the lower-level `Runtime::prepare_for` pipeline:
+`ExtensionModule` registers one or more extension preparation engines and their
+planning configs against an immutable runtime snapshot. This is separate from
+the eager/graph `ExtensionRuntime` execution path above. Use it for
+runtime-owned preparation metadata and bounded cache owners, not for hidden
+process-global provider state.
+
 For AD, implement the role-specific traits the operation needs:
 `tenferro_ad::semantic_extension::SemanticLinearizeRule`,
 `SemanticLinearTransposeRule`, and optionally `SemanticPrimalVjpRule`. Put

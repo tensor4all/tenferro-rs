@@ -403,14 +403,14 @@ def test_phase4_runtime_ownership_and_dependency_direction_are_canonical() -> No
     normalized_crates = " ".join(crates.split())
     normalized_design = " ".join(design.split())
     assert (
-        "CPU-to-runtime line records the accepted Phase 4 direction"
+        "CPU-to-runtime line records the implemented Phase 4 registration adapter"
         in normalized_crates
     )
-    assert "does not claim that Phase 4 is implemented" in normalized_crates
+    assert "Phase 4 runtime preparation substrate is implemented" in normalized_crates
     assert "opposite direction remains dev/test-only" in normalized_crates
     assert "lower_semantic_to_exec_staging" in design
     assert "sole private forward adapter" in design
-    assert "does not claim Phase 4 is implemented" in normalized_design
+    assert "Phase 4 now provides the immutable runtime snapshot and preparation substrate" in normalized_design
     assert re.search(r"\bprogram\s*:\s*&SemanticProgram\b", parameters)
     assert re.search(r"\boptions\s*:\s*CompilerOptions\b", parameters)
     assert not re.search(r"\b\w*[Bb]inding\w*\b", signature)

@@ -206,8 +206,13 @@ the result.
 
 Reuse execution objects when you repeat related work:
 
+- `tenferro_runtime::Runtime` retains immutable engine/extension registration
+  snapshots, prepared-plan cache entries, and registered runtime cache owners
+  for the `Runtime::prepare_for` pipeline.
 - `EagerRuntime` retains eager extension plans and compiled inner extension
-  programs across immediate operations.
+  programs across immediate operations. CPU-backed eager runtimes also keep a
+  private `Runtime` snapshot so placement-bound CPU views can refresh runtime
+  registration metadata by epoch comparison without holding idle resources.
 - `GraphCompiler` retains graph lowering and static extension planning caches.
 - `GraphExecutor<B>` retains runtime extension plans, compiled inner extension
   programs, backend analysis, and reusable backend buffers.
@@ -225,7 +230,7 @@ benchmark harnesses should treat caches as part of runtime resource management.
 
 ## Cache Limits
 
-Compiler, executor, and eager caches are bounded by default and can be
+Runtime, compiler, executor, and eager caches are bounded by default and can be
 configured independently.
 
 ```rust
@@ -233,10 +238,15 @@ use std::num::NonZeroUsize;
 use tenferro_ad::EagerRuntime;
 use tenferro_runtime::extension::ExtensionCacheLimits;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor};
+use tenferro_runtime::{GraphCompiler, GraphExecutor, PreparedPlanCacheLimits, Runtime};
 
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(
+    NonZeroUsize::new(128).unwrap(),
+)).unwrap();
+
+let runtime = Runtime::builder().build().unwrap();
+runtime.set_prepared_cache_limits(PreparedPlanCacheLimits::new(
     NonZeroUsize::new(128).unwrap(),
 )).unwrap();
 
@@ -272,12 +282,14 @@ than reusing old plans and buffers.
 ```rust
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor};
+use tenferro_runtime::{GraphCompiler, GraphExecutor, Runtime};
 
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let runtime = Runtime::builder().build().unwrap();
 let mut compiler = GraphCompiler::new();
 let mut executor = GraphExecutor::new(CpuBackend::new());
 
+runtime.clear_prepared_cache().unwrap();
 compiler.clear_caches();
 executor.clear_caches();
 eager.clear_caches().unwrap();
