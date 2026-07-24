@@ -470,8 +470,20 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error`] when input validation, runtime preparation, or
-    /// backend execution fails.
+    /// Returns [`crate::Error::UnboundPlaceholder`] when no explicit inputs are
+    /// supplied and a semantic input has no bound default tensor.
+    /// Returns [`crate::Error::GraphInputCountMismatch`],
+    /// [`crate::Error::PlaceholderDtypeMismatch`],
+    /// [`crate::Error::PlaceholderRankMismatch`],
+    /// [`crate::Error::PlaceholderShapeMismatch`], or
+    /// [`crate::Error::PlaceholderShapeBoundExceeded`] when ordered runtime
+    /// inputs do not match the compiled graph metadata.
+    /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
+    /// validation, snapshot access, stale epoch checks, or execution-bridge
+    /// resolution fails, including a runtime with no eligible engine or no
+    /// execution bridge for the prepared engine. Backend execution may also
+    /// return concrete backend variants such as [`crate::Error::Unsupported`],
+    /// [`crate::Error::Validation`], or [`crate::Error::Extension`].
     pub fn run_compiled(
         &self,
         program: &CompiledGraph,
@@ -499,8 +511,20 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error`] when input validation, runtime preparation, or
-    /// backend execution fails.
+    /// Returns [`crate::Error::UnboundPlaceholder`] when no explicit inputs are
+    /// supplied and a semantic input has no bound default tensor.
+    /// Returns [`crate::Error::GraphInputCountMismatch`],
+    /// [`crate::Error::PlaceholderDtypeMismatch`],
+    /// [`crate::Error::PlaceholderRankMismatch`],
+    /// [`crate::Error::PlaceholderShapeMismatch`], or
+    /// [`crate::Error::PlaceholderShapeBoundExceeded`] when ordered runtime
+    /// inputs do not match the compiled graph metadata.
+    /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
+    /// validation, snapshot access, stale epoch checks, or execution-bridge
+    /// resolution fails, including a runtime with no eligible engine or no
+    /// execution bridge for the prepared engine. Backend execution may also
+    /// return concrete backend variants such as [`crate::Error::Unsupported`],
+    /// [`crate::Error::Validation`], or [`crate::Error::Extension`].
     pub fn run_compiled_values(
         &self,
         program: &CompiledGraph,

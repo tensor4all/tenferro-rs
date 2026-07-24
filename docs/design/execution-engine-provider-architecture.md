@@ -25,13 +25,12 @@ eager and compiled surfaces call the selected engine. Backend libraries remain
 replaceable behind smaller provider traits, while resource ownership stays
 with the engine.
 
-The active implementation directive after the 2026-07-24 amendment covers
-phases 4 through 6 and stops at the phase 6 boundary. Phases 7 through 9 are
-deferred. The exact-commit cross-phase audit described by the restart design
-runs at that boundary over phases 1 through 6; it is distinct from umbrella
-phase 9, which denotes multi-GPU scheduling. The mandatory CPU native einsum
-engine remains phase 6 work, while the CUDA/WebGPU native engine defers with
-phase 7.
+The active implementation directive after the 2026-07-25 restart continues
+through Phase 8 before opening a PR. The PR/CI/merge babysit starts only after
+Phase 8 and the AMD CPU/CUDA benchmark gate. Umbrella Phase 9 remains the
+separate multi-GPU scheduling phase. The exact-commit cross-phase audit
+described by the restart design runs before integration and is distinct from
+umbrella Phase 9.
 
 This document refines rather than immediately replaces the current contracts in:
 
@@ -275,6 +274,40 @@ execution, extension-family execution migration, XLA/subgraph compilation, or
 Phase 6 operation-family derived caches. Those are owned by later phases. The
 sole private forward adapter remains `lower_semantic_to_exec_staging`, with
 Phase 5 as the deletion owner.
+
+### Phase 5 common scheduled-graph checkpoint (2026-07-25)
+
+Phase 5 moves compiled graph execution behind the runtime boundary while
+keeping the compiler artifact backend-neutral:
+
+- `CompiledGraph` retains the frozen semantic program and the
+  `CompilerOptions` used to create it. It no longer stores `ExecProgram`,
+  compiler-owned staging, backend bindings, or prepared runtime state.
+- `GraphCompiler` may transiently build private execution staging to preserve
+  compile-cache validation and statistics, but that staging is not part of the
+  compiled artifact.
+- `Runtime::run_compiled` and `Runtime::run_compiled_values` are the current
+  synchronous runtime-owned execution path. They derive input signatures,
+  prepare through the runtime cache using the compiled graph's compiler
+  options, validate shape guards and specialization projection, build the
+  common schedule, and execute through the engine registration's erased tensor
+  backend bridge.
+- `EngineRegistration::with_tensor_backend_executor` attaches that bridge to
+  an engine registration. `tenferro-cpu::runtime_engine_registration` provides
+  the CPU registration with direct core preparation capabilities, cache-owner
+  hooks, and the bridge. `tenferro-runtime` still has no production dependency
+  on `tenferro-cpu`.
+- `ScheduledGraph` is now the crate-private executable boundary for core
+  operations, transfers, collectives, and barriers. Transfers have explicit
+  source and destination event domains. Collectives are representable for
+  later phases but rejected by current runtime execution validation.
+- `GraphExecutor<B>` remains a legacy compatibility executor through Phase 5.
+  It restages from `CompiledGraph` using stored compiler options and must not
+  be treated as the final runtime-owned execution path.
+
+Phase 5 does not migrate extension-family derived caches, native einsum engine
+planning, CUDA/WebGPU native engines, or XLA subgraph execution. Those remain
+Phase 6 through Phase 8 work.
 
 ## Compiler and Artifact Boundaries
 

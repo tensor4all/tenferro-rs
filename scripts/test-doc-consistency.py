@@ -384,7 +384,7 @@ def test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero()
     assert "floating-point and complex zero divisors" not in docs
 
 
-def test_phase4_runtime_ownership_and_dependency_direction_are_canonical() -> None:
+def test_phase4_and_phase5_runtime_ownership_and_dependency_direction_are_canonical() -> None:
     rules = read("REPOSITORY_RULES.md")
     crates = read("docs/architecture/tenferro-crates.md")
     design = read("docs/design/execution-engine-provider-architecture.md")
@@ -394,8 +394,9 @@ def test_phase4_runtime_ownership_and_dependency_direction_are_canonical() -> No
     workspace_dependencies = workspace["workspace"]["dependencies"]
     parameters, signature = rust_function(
         staging,
-        "lower_semantic_to_exec_staging",
+        "stage_semantic_program",
     )
+    _, private_signature = rust_function(staging, "build_exec_staging")
 
     assert "GraphCompilerEinsumExt" not in rules
     assert "SemanticProgram -> SemanticProgram" in " ".join(rules.split())
@@ -403,16 +404,20 @@ def test_phase4_runtime_ownership_and_dependency_direction_are_canonical() -> No
     normalized_crates = " ".join(crates.split())
     normalized_design = " ".join(design.split())
     assert (
-        "CPU-to-runtime line records the implemented Phase 4 registration adapter"
+        "CPU-to-runtime line records the implemented runtime registration adapters"
         in normalized_crates
     )
-    assert "Phase 4 runtime preparation substrate is implemented" in normalized_crates
+    assert "preparation/execution substrate is implemented" in normalized_crates
     assert "opposite direction remains dev/test-only" in normalized_crates
-    assert "lower_semantic_to_exec_staging" in design
-    assert "sole private forward adapter" in design
+    assert "Phase 5 common scheduled-graph checkpoint" in design
+    assert "EngineRegistration::with_tensor_backend_executor" in design
+    assert "tenferro-cpu::runtime_engine_registration" in design
+    assert "GraphExecutor<B>` remains a legacy compatibility executor" in design
     assert "Phase 4 now provides the immutable runtime snapshot and preparation substrate" in normalized_design
     assert re.search(r"\bprogram\s*:\s*&SemanticProgram\b", parameters)
     assert re.search(r"\boptions\s*:\s*CompilerOptions\b", parameters)
+    assert "pub(crate) fn stage_semantic_program" in signature
+    assert "fn build_exec_staging" in private_signature
     assert not re.search(r"\b\w*[Bb]inding\w*\b", signature)
 
     dependency_names = {
@@ -447,7 +452,7 @@ def main() -> int:
         test_removed_tensor_module_paths_do_not_compile,
         test_documentation_policy_matches_rendered_internals,
         test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero,
-        test_phase4_runtime_ownership_and_dependency_direction_are_canonical,
+        test_phase4_and_phase5_runtime_ownership_and_dependency_direction_are_canonical,
     ]:
         test()
     return 0

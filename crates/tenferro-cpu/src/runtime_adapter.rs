@@ -4,21 +4,92 @@ use std::sync::Arc;
 
 use tenferro_runtime::program::{CoreSemanticOp, SemanticOpRef, SemanticOperationView};
 use tenferro_runtime::{
-    CacheOwnerError, CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation,
-    DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
-    ExecutionContextIdentity, IndexingPrepareRequest, IndexingRuntime, InputSignature,
-    InputSpecializationProjection, InputSpecializationRequirements, LayoutPrepareRequest,
-    LayoutProjection, LayoutRuntime, LayoutSpecialization, PrepareCapability, PrepareError,
-    PreparedOperation, PreparedOperationBinding, ProviderContractError, ReductionPrepareRequest,
-    ReductionRuntime, RuntimeCacheOwner, SpecializationError, SpecializationProjection,
-    SpecializationRequirements, UnsupportedReason,
+    CacheOwnerError, CoreCapabilityBundle, CoreCapabilityKind, CorePrepareContext,
+    DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
+    EngineId, EngineRegistration, ExecutionContextIdentity, HardwareClassId,
+    IndexingPrepareRequest, IndexingRuntime, InputSignature, InputSpecializationProjection,
+    InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
+    LayoutSpecialization, PrepareCapability, PrepareError, PreparedOperation,
+    PreparedOperationBinding, ProviderContractError, ReductionPrepareRequest, ReductionRuntime,
+    RuntimeCacheOwner, RuntimeConfigError, SpecializationError, SpecializationProjection,
+    SpecializationRequirements, StorageClass, UnsupportedReason,
 };
 
 use crate::CpuBackend;
 
+const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
 const CPU_HARDWARE_CLASS_ID: &str = "tenferro-cpu.host.v1";
 const CPU_STORAGE_CLASS_ID: &str = "tenferro-cpu.host.v1";
 const UNKNOWN_CORE_OPERATION: &str = "unknown-core-operation";
+
+/// Return the canonical CPU runtime engine identifier.
+///
+/// # Errors
+///
+/// Returns [`RuntimeConfigError`] if the built-in CPU engine identifier violates
+/// runtime identifier validation.
+pub fn runtime_engine_id() -> Result<EngineId, RuntimeConfigError> {
+    EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)
+}
+
+/// Return the canonical CPU runtime hardware class.
+///
+/// # Errors
+///
+/// Returns [`RuntimeConfigError`] if the built-in CPU hardware class violates
+/// runtime identifier validation.
+pub fn runtime_hardware_class() -> Result<HardwareClassId, RuntimeConfigError> {
+    HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)
+}
+
+/// Build a runtime engine registration for a [`CpuBackend`].
+///
+/// The registration exposes CPU direct core preparation capabilities, CPU cache
+/// ownership hooks, and the runtime-owned tensor backend execution bridge.
+///
+/// # Errors
+///
+/// Returns [`RuntimeConfigError`] if one of the built-in CPU runtime identifiers
+/// violates runtime validation or if the registration is internally invalid.
+pub fn runtime_engine_registration(
+    backend: &CpuBackend,
+) -> Result<EngineRegistration, RuntimeConfigError> {
+    let backend = Arc::new(backend.clone());
+    let elementwise: Arc<dyn ElementwiseRuntime> = backend.clone();
+    let reduction: Arc<dyn ReductionRuntime> = backend.clone();
+    let indexing: Arc<dyn IndexingRuntime> = backend.clone();
+    let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
+    let layout: Arc<dyn LayoutRuntime> = backend.clone();
+    let cache_owner: Arc<dyn RuntimeCacheOwner> = backend.clone();
+    let execution_backend = backend.as_ref().clone();
+
+    let mut capabilities = CoreCapabilityBundle::builder();
+    capabilities
+        .elementwise(elementwise)
+        .reduction(reduction)
+        .indexing(indexing)
+        .dot_general(dot_general)
+        .layout(layout);
+
+    let storage = runtime_storage_class()?;
+    EngineRegistration::new(
+        runtime_engine_id()?,
+        ExecutionContextIdentity::of::<CpuBackend>(),
+        runtime_hardware_class()?,
+        Arc::from(vec![storage.clone()]),
+        storage,
+        capabilities.build(),
+    )
+    .map(|registration| {
+        registration
+            .with_cache_owner(cache_owner)
+            .with_tensor_backend_executor(execution_backend)
+    })
+}
+
+fn runtime_storage_class() -> Result<StorageClass, RuntimeConfigError> {
+    StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CpuPreparedKind {

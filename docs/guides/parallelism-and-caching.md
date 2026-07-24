@@ -208,14 +208,20 @@ Reuse execution objects when you repeat related work:
 
 - `tenferro_runtime::Runtime` retains immutable engine/extension registration
   snapshots, prepared-plan cache entries, and registered runtime cache owners
-  for the `Runtime::prepare_for` pipeline.
+  for the `Runtime::prepare_for` and `Runtime::run_compiled*` pipelines.
 - `EagerRuntime` retains eager extension plans and compiled inner extension
   programs across immediate operations. CPU-backed eager runtimes also keep a
   private `Runtime` snapshot so placement-bound CPU views can refresh runtime
   registration metadata by epoch comparison without holding idle resources.
+  The CPU registration is built by `tenferro-cpu` and includes the runtime
+  execution bridge.
 - `GraphCompiler` retains graph lowering and static extension planning caches.
+  Its compiled artifact keeps semantic program plus compiler options, not
+  backend staging.
 - `GraphExecutor<B>` retains runtime extension plans, compiled inner extension
-  programs, backend analysis, and reusable backend buffers.
+  programs, backend analysis, and reusable backend buffers. It is the legacy
+  executor path; prefer runtime-owned `Runtime::run_compiled*` for new compiled
+  execution work.
 
 ```rust
 use tenferro_cpu::CpuBackend;

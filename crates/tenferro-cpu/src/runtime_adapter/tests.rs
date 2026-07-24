@@ -32,6 +32,16 @@ fn cpu_backend_coerces_to_all_runtime_traits() {
 }
 
 #[test]
+fn public_cpu_runtime_registration_includes_execution_bridge() {
+    let backend = CpuBackend::new();
+
+    let registration = crate::runtime_engine_registration(&backend).expect("CPU registration");
+
+    assert_eq!(registration.engine_id().as_str(), "tenferro-cpu.default.v1");
+    assert!(registration.has_execution_engine());
+}
+
+#[test]
 fn cpu_family_minimum_specialization_matches_adapter_contract() {
     let signature = two_input_signature();
 

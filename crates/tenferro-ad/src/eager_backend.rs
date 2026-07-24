@@ -1,5 +1,6 @@
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
 use std::sync::Arc;
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
@@ -7,9 +8,7 @@ use tenferro_gpu::CudaBackend;
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::WebGpuBackend;
 use tenferro_runtime::{
-    CoreCapabilityBundle, DotGeneralPreparation, ElementwiseRuntime, EngineId, EngineRegistration,
-    ExecutionContextIdentity, HardwareClassId, IndexingRuntime, LayoutRuntime, ReductionRuntime,
-    Runtime, RuntimeCacheOwner, RuntimeConfigError, StorageClass,
+    EngineId, EngineRegistration, HardwareClassId, Runtime, RuntimeConfigError,
 };
 use tenferro_tensor::backend::ElementwiseFusionPlan;
 use tenferro_tensor::{
@@ -19,10 +18,6 @@ use tenferro_tensor::{
     TensorElementwise, TensorFusion, TensorIndexing, TensorRead, TensorReduction, TensorStructural,
     TensorValue, TensorWrite,
 };
-
-const CPU_ENGINE_ID: &str = "tenferro-cpu.default.v1";
-const CPU_HARDWARE_CLASS_ID: &str = "tenferro-cpu.host.v1";
-const CPU_STORAGE_CLASS_ID: &str = "tenferro-cpu.host.v1";
 
 pub enum EagerBackend {
     Cpu(CpuBackend),
@@ -107,42 +102,17 @@ pub(crate) fn eager_runtime_for_backend(
 }
 
 pub(crate) fn cpu_runtime_engine_id() -> Result<EngineId, RuntimeConfigError> {
-    EngineId::new(CPU_ENGINE_ID).map_err(RuntimeConfigError::from)
+    tenferro_cpu::runtime_engine_id()
 }
 
 pub(crate) fn cpu_runtime_hardware_class() -> Result<HardwareClassId, RuntimeConfigError> {
-    HardwareClassId::new(CPU_HARDWARE_CLASS_ID).map_err(RuntimeConfigError::from)
+    tenferro_cpu::runtime_hardware_class()
 }
 
 pub(crate) fn cpu_runtime_engine_registration(
     backend: &CpuBackend,
 ) -> Result<EngineRegistration, RuntimeConfigError> {
-    let backend = Arc::new(backend.clone());
-    let elementwise: Arc<dyn ElementwiseRuntime> = backend.clone();
-    let reduction: Arc<dyn ReductionRuntime> = backend.clone();
-    let indexing: Arc<dyn IndexingRuntime> = backend.clone();
-    let dot_general: Arc<dyn DotGeneralPreparation> = backend.clone();
-    let layout: Arc<dyn LayoutRuntime> = backend.clone();
-    let cache_owner: Arc<dyn RuntimeCacheOwner> = backend.clone();
-
-    let mut capabilities = CoreCapabilityBundle::builder();
-    capabilities
-        .elementwise(elementwise)
-        .reduction(reduction)
-        .indexing(indexing)
-        .dot_general(dot_general)
-        .layout(layout);
-
-    let storage = StorageClass::new(CPU_STORAGE_CLASS_ID).map_err(RuntimeConfigError::from)?;
-    EngineRegistration::new(
-        cpu_runtime_engine_id()?,
-        ExecutionContextIdentity::of::<CpuBackend>(),
-        cpu_runtime_hardware_class()?,
-        Arc::from(vec![storage.clone()]),
-        storage,
-        capabilities.build(),
-    )
-    .map(|registration| registration.with_cache_owner(cache_owner))
+    tenferro_cpu::runtime_engine_registration(backend)
 }
 
 macro_rules! dispatch {
