@@ -109,6 +109,17 @@ impl SemanticIdentity {
                 self.ordinals[left_value.slot as usize] == other.ordinals[right_value.slot as usize]
             })
     }
+
+    // INVARIANT: this helper is introduced ahead of the P4-C1 cache owner
+    // wiring so retained-byte accounting can use the exact semantic identity
+    // payload size without duplicating ordinal internals.
+    #[allow(
+        dead_code,
+        reason = "P4-C1 preparation accounting consumes this helper"
+    )]
+    pub(crate) fn ordinals_retained_bytes(&self) -> Option<usize> {
+        self.ordinals.len().checked_mul(std::mem::size_of::<u32>())
+    }
 }
 
 fn normalized_ordinals(

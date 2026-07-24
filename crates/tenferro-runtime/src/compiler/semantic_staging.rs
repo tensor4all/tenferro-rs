@@ -11,11 +11,20 @@ use crate::program::{ProgramShapeRelation, SemanticOpRef, SemanticProgram};
 use crate::shape_constraint::{ConstraintSource, LocalShapeConstraint, SlotScopedShapeConstraint};
 use crate::{Error, ErrorPhase, Result};
 
+/// Stage one frozen semantic artifact through the temporary execution IR.
+///
+/// This is the single owner of the private semantic-to-staging lowering path.
+pub(crate) fn stage_semantic_program(
+    program: &SemanticProgram,
+    options: CompilerOptions,
+) -> Result<ExecProgram> {
+    lower_semantic_to_exec_staging(program, options)
+}
+
 /// Lower one frozen semantic artifact into the temporary execution staging IR.
 ///
-/// This is the sole forward semantic-to-staging adapter. It remains
-/// crate-private and is deleted with execution staging in Phase 5.
-pub(crate) fn lower_semantic_to_exec_staging(
+/// This remains private to force all callers through [`stage_semantic_program`].
+fn lower_semantic_to_exec_staging(
     program: &SemanticProgram,
     options: CompilerOptions,
 ) -> Result<ExecProgram> {
@@ -164,7 +173,7 @@ mod tests {
         CoreSemanticOp, ProgramInputSpec, ProgramValueMetadata, SemanticProgramBuilder,
     };
 
-    use super::lower_semantic_to_exec_staging;
+    use super::stage_semantic_program;
 
     #[derive(Clone, Debug)]
     struct PairWithGuard;
@@ -230,8 +239,7 @@ mod tests {
         let neg = builder.add_op(CoreSemanticOp::Neg, &[sum]).unwrap()[0];
         let frozen = builder.finish(&[neg, sum]).unwrap();
 
-        let staging =
-            lower_semantic_to_exec_staging(&frozen.program, CompilerOptions::default()).unwrap();
+        let staging = stage_semantic_program(&frozen.program, CompilerOptions::default()).unwrap();
 
         assert_eq!(staging.input_slots, vec![0, 1]);
         assert_eq!(staging.output_slots, vec![3, 2]);
@@ -267,8 +275,7 @@ mod tests {
             .unwrap();
         let frozen = builder.finish(&[pair[1], pair[0]]).unwrap();
 
-        let staging =
-            lower_semantic_to_exec_staging(&frozen.program, CompilerOptions::default()).unwrap();
+        let staging = stage_semantic_program(&frozen.program, CompilerOptions::default()).unwrap();
 
         assert_eq!(frozen.bindings.len(), 1);
         assert_eq!(staging.input_slots, vec![0]);
@@ -296,8 +303,8 @@ mod tests {
             .unwrap();
         let frozen = builder.finish(&[input]).unwrap();
 
-        let error = lower_semantic_to_exec_staging(&frozen.program, CompilerOptions::default())
-            .unwrap_err();
+        let error =
+            stage_semantic_program(&frozen.program, CompilerOptions::default()).unwrap_err();
 
         assert!(matches!(error, crate::Error::Unsupported { .. }));
         assert_eq!(error.phase(), Some(crate::ErrorPhase::Compile));

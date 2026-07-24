@@ -1053,3 +1053,20 @@ fn transform_cache_checks_exact_input_on_collision_and_stays_unchanged_on_failur
     assert!(cache.apply(&left, &[&foreign]).is_err());
     assert_eq!(cache.len(), 2);
 }
+
+#[test]
+fn semantic_identity_ordinals_report_exact_retained_bytes() {
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let neg = builder.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
+    let abs = builder.add_op(CoreSemanticOp::Abs, &[neg]).unwrap()[0];
+    let frozen = builder.finish(&[abs]).unwrap();
+
+    let expected = frozen.program.values.len() * std::mem::size_of::<u32>();
+    assert_eq!(
+        frozen.program.identity.ordinals_retained_bytes(),
+        Some(expected)
+    );
+}

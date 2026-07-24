@@ -20,7 +20,7 @@ use super::cache::{
 };
 use super::program::CompiledGraph;
 use crate::compiler::{
-    lower_scoped_dim_expr, semantic_staging::lower_semantic_to_exec_staging, CompilerOptions,
+    lower_scoped_dim_expr, semantic_staging::stage_semantic_program, CompilerOptions,
 };
 use crate::error::{Error, Result};
 use crate::exec::ExecProgram;
@@ -200,7 +200,7 @@ impl GraphCompiler {
     }
 
     fn compile_frozen(&mut self, frozen: &FrozenProgram) -> Result<CompiledGraph> {
-        let staging = lower_semantic_to_exec_staging(&frozen.program, self.compiler_options)?;
+        let staging = stage_semantic_program(&frozen.program, self.compiler_options)?;
         let staging = self.get_or_compile(staging);
         Ok(CompiledGraph::new(frozen.clone(), staging))
     }
@@ -613,7 +613,7 @@ impl GraphCompiler {
 
         let semantic =
             compile_materialized_semantic_program(&compiled, &descriptors, &scoped_constraints)?;
-        let exec = lower_semantic_to_exec_staging(&semantic.program, self.compiler_options)?;
+        let exec = stage_semantic_program(&semantic.program, self.compiler_options)?;
         let exec = self.get_or_compile(exec);
         Ok(CompiledGraph::new(semantic, exec))
     }
