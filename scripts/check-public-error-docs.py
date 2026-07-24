@@ -225,6 +225,8 @@ def audit(
 ) -> list[Finding]:
     findings: list[Finding] = []
     for path in paths if paths is not None else rust_files(root):
+        if not path.is_file():
+            continue
         lines = changed_lines.get(path) if changed_lines is not None else None
         findings.extend(audit_file(path, lines))
     return findings
@@ -286,9 +288,14 @@ def main() -> int:
             capture_output=True,
             text=True,
         ).stdout.splitlines()
-        paths = [(root / path).resolve() for path in changed]
+        paths = [
+            (root / path).resolve()
+            for path in changed
+            if (root / path).is_file()
+        ]
         changed_lines = changed_rust_lines(root, args.changed_from)
-    findings = audit(root, paths or None, changed_lines)
+    audit_paths = paths if args.changed_from or paths else None
+    findings = audit(root, audit_paths, changed_lines)
     if findings:
         print("public Result APIs with incomplete error documentation:", file=sys.stderr)
         for finding in findings:

@@ -231,6 +231,67 @@ class PublicErrorDocsTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("128", result.stderr)
 
+    def test_changed_audit_skips_deleted_files_without_a_full_repo_fallback(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="tenferro-error-docs-delete-") as directory:
+            root = Path(directory)
+
+            def git(*args: str, cwd: Path = root) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    ["git", *args],
+                    cwd=cwd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+            git("init", "-b", "main")
+            git("config", "user.name", "public-error-docs-test")
+            git("config", "user.email", "public-error-docs-test@example.invalid")
+
+            deleted = root / "deleted.rs"
+            deleted.write_text(
+                """
+                /// Compute a value.
+                ///
+                /// # Errors
+                ///
+                /// Returns `Error::InvalidArgument` when input is invalid.
+                pub fn compute() -> Result<(), Error> { Ok(()) }
+                """.lstrip(),
+                encoding="utf-8",
+            )
+            unchanged_bad = root / "unchanged_bad.rs"
+            unchanged_bad.write_text(
+                """
+                /// Compute a value.
+                pub fn compute() -> Result<(), Error> { Ok(()) }
+                """.lstrip(),
+                encoding="utf-8",
+            )
+            git("add", "deleted.rs", "unchanged_bad.rs")
+            git("commit", "-m", "base")
+            base = git("rev-parse", "HEAD").stdout.strip()
+
+            deleted.unlink()
+            git("add", "deleted.rs")
+            git("commit", "-m", "delete file")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--root-dir",
+                    str(root),
+                    "--changed-from",
+                    base,
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("public-error-docs-ok", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
