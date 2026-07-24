@@ -12,10 +12,10 @@ once with three. No re-trace or recompile is needed between the two executions.
 <!-- snippet-source: docs/tutorial-code/src/bin/dynamic_shape_truncated_svd.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::GraphCompilerEinsumExt;
 use tenferro_linalg::{SvdOptions, TracedTensorLinalgExt};
 use tenferro_runtime::{
-    CompareDir, DType, GraphCompiler, GraphExecutor, CompiledGraph, Tensor, TracedTensor,
+    CompareDir, CompiledGraph, DType, DotGeneralConfig, GraphCompiler, GraphExecutor, Tensor,
+    TracedTensor,
 };
 
 fn assert_close(actual: &[f64], expected: &[f64], tolerance: f64) {
@@ -53,13 +53,13 @@ fn run_case(
     executor: &mut GraphExecutor<CpuBackend>,
     reconstructed_program: &CompiledGraph,
     singular_values_program: &CompiledGraph,
-    x: &TracedTensor,
     input: &Tensor,
+    threshold: &Tensor,
     expected_rank: usize,
     expected_values: &[f64],
 ) -> Result<(), tenferro_runtime::Error> {
-    let reconstructed = executor.run_with_inputs(reconstructed_program, &[(x, input)])?;
-    let singular_values = executor.run_with_inputs(singular_values_program, &[(x, input)])?;
+    let reconstructed = executor.run_with_inputs(reconstructed_program, &[input, threshold])?;
+    let singular_values = executor.run_with_inputs(singular_values_program, &[input, threshold])?;
 
     assert_eq!(singular_values.shape(), &[expected_rank]);
     assert_eq!(reconstructed.shape(), &[4, 4]);
@@ -81,15 +81,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .convert(DType::F64)?
         .reduce_sum(Some(&[0]))?;
 
-    let u_truncated = u.dynamic_truncate(&keep_count, 1)?;
     let s_truncated = s.dynamic_truncate(&keep_count, 0)?;
-    let vt_truncated = vt.dynamic_truncate(&keep_count, 0)?;
 
     let mut compiler = GraphCompiler::new();
-    let reconstructed = compiler.einsum_with(
-        &[&u_truncated, &s_truncated, &vt_truncated],
-        "ik,k,kj->ij",
-        tenferro_einsum::EinsumOptimize::Path(vec![(0, 1), (0, 1)]),
+    let keep_mask = s.compare(&threshold, CompareDir::Gt)?.convert(DType::F64)?;
+    let masked_s = (&s * &keep_mask)?;
+    let scaled_u = (&u * &masked_s.broadcast_in_dim(&[4, 4], &[1])?)?;
+    let reconstructed = scaled_u.dot_general(
+        &vt,
+        DotGeneralConfig {
+            lhs_contracting_dims: vec![1],
+            rhs_contracting_dims: vec![0],
+            lhs_batch_dims: vec![],
+            rhs_batch_dims: vec![],
+        },
     )?;
     let input_specs = [(&x, DType::F64, &[4, 4][..])];
     let reconstructed_program = compiler.compile_with_input_specs(&reconstructed, &input_specs)?;
@@ -99,13 +104,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     executor.register_extension(tenferro_linalg::register_runtime)?;
     executor.register_extension(tenferro_einsum::register_runtime)?;
 
+    let threshold_input = Tensor::from_vec_col_major(vec![], vec![0.5_f64])?;
     let rank2 = diagonal_matrix(&[4.0, 3.0, 0.1, 0.01])?;
     run_case(
         &mut executor,
         &reconstructed_program,
         &singular_values_program,
-        &x,
         &rank2,
+        &threshold_input,
         2,
         &truncated_expected(&[4.0, 3.0, 0.1, 0.01], 0.5),
     )?;
@@ -115,8 +121,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &mut executor,
         &reconstructed_program,
         &singular_values_program,
-        &x,
         &rank3,
+        &threshold_input,
         3,
         &truncated_expected(&[4.0, 3.0, 2.0, 0.01], 0.5),
     )?;

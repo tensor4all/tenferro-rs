@@ -237,7 +237,7 @@ means summing down each column and keeping one value per column.
 ## Einsum
 
 Use `tenferro_einsum::EagerEinsumExt` when working with `EagerTensor`.
-For traced graph execution, use `tenferro_einsum::GraphCompilerEinsumExt` and
+For traced graph execution, use `tenferro_einsum::TraceContextEinsumExt` and
 register `tenferro_einsum::register_runtime` on the `GraphExecutor`.
 
 ## Extracting data

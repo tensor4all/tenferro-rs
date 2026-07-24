@@ -17,8 +17,8 @@ type Symbol = (usize, usize);
 ///
 /// # Examples
 ///
-/// Guard internals are opaque; callers can inspect the number of obligations
-/// retained by an [`ExecProgram`](crate::exec::ExecProgram).
+/// Guard internals are opaque; compiled programs retain them in private
+/// execution staging.
 ///
 /// ```rust
 /// use tenferro_runtime::ShapeGuard;

@@ -18,10 +18,7 @@ use tenferro_tensor::DType;
 
 use crate::dim_expr::{DimExpr, DimExprEvalError};
 #[cfg(feature = "autodiff")]
-use crate::ext_op::{
-    ExtensionAdDispatcher, ExtensionLinearTransposeRule, ExtensionLinearizeRule,
-    ExtensionPrimalVjpRule, ExtensionRuleSet,
-};
+use crate::ext_op::ExtensionAdDispatcher;
 use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
@@ -381,8 +378,6 @@ pub struct ShapeGuardContext {
     #[cfg(feature = "autodiff")]
     deferred_shape_error: Arc<Mutex<Option<ShapeGuardError>>>,
     #[cfg(feature = "autodiff")]
-    extension_rules: Option<ExtensionRuleSet>,
-    #[cfg(feature = "autodiff")]
     extension_ad_dispatcher: Option<Arc<dyn ExtensionAdDispatcher>>,
     #[cfg(feature = "autodiff")]
     active_value_keys: Option<std::sync::Arc<std::collections::HashSet<ValueKey<StdTensorOp>>>>,
@@ -432,25 +427,6 @@ impl ShapeGuardContext {
     #[doc(hidden)]
     pub fn shape_source(&self, tensor_id: u64) -> Option<&ValueKey<StdTensorOp>> {
         self.shape_sources.get(&tensor_id)
-    }
-
-    /// Use an explicit extension AD rule set for this context.
-    ///
-    /// Extension AD lookup is context-owned: a context without an attached rule
-    /// set has no extension AD rules.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ops::{ExtensionRuleSet, ShapeGuardContext};
-    ///
-    /// let _ctx = ShapeGuardContext::default().with_extension_rules(ExtensionRuleSet::new());
-    /// ```
-    #[cfg(feature = "autodiff")]
-    pub fn with_extension_rules(mut self, rules: ExtensionRuleSet) -> Self {
-        self.extension_ad_dispatcher = rules.dispatcher();
-        self.extension_rules = Some(rules);
-        self
     }
 
     #[doc(hidden)]
@@ -511,46 +487,6 @@ impl ShapeGuardContext {
     #[cfg(feature = "autodiff")]
     pub fn transpose_primal_outputs_were_used(&self) -> bool {
         self.transpose_primal_outputs_used
-    }
-
-    /// Look up an extension linearize rule using this context's ownership policy.
-    ///
-    /// Contexts without an explicit rule set have no extension AD rules.
-    #[doc(hidden)]
-    #[cfg(feature = "autodiff")]
-    pub(crate) fn extension_linearize_rule_for(
-        &self,
-        family_id: &str,
-    ) -> Option<Arc<dyn ExtensionLinearizeRule>> {
-        self.extension_rules
-            .as_ref()
-            .and_then(|rules| rules.lookup_linearize(family_id))
-    }
-
-    /// Look up an extension linear-transpose rule using this context's
-    /// ownership policy.
-    #[doc(hidden)]
-    #[cfg(feature = "autodiff")]
-    pub(crate) fn extension_linear_transpose_rule_for(
-        &self,
-        family_id: &str,
-    ) -> Option<Arc<dyn ExtensionLinearTransposeRule>> {
-        self.extension_rules
-            .as_ref()
-            .and_then(|rules| rules.lookup_linear_transpose(family_id))
-    }
-
-    /// Look up an extension direct primal-VJP rule using this context's
-    /// ownership policy.
-    #[doc(hidden)]
-    #[cfg(feature = "autodiff")]
-    pub(crate) fn extension_primal_vjp_rule_for(
-        &self,
-        family_id: &str,
-    ) -> Option<Arc<dyn ExtensionPrimalVjpRule>> {
-        self.extension_rules
-            .as_ref()
-            .and_then(|rules| rules.lookup_primal_vjp(family_id))
     }
 
     /// Returns the guards recorded so far.

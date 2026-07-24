@@ -1,10 +1,8 @@
 use std::fmt;
 use std::sync::Arc;
 
-use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::ExtensionOp;
-use tenferro_ops::input_key::TensorInputKey;
-use tenferro_tensor::{DType, Tensor};
+use tenferro_tensor::Tensor;
 
 use crate::extension_cache::ExtensionCacheStore;
 use crate::program::{
@@ -12,7 +10,6 @@ use crate::program::{
     ProgramFinishError, ProgramInputSpec, ProgramValue, ProgramValueMetadata, SemanticProgram,
     SemanticProgramBuilder,
 };
-use crate::traced::next_input_key;
 
 /// Mutable owner of one backend-neutral semantic trace.
 ///
@@ -21,7 +18,6 @@ use crate::traced::next_input_key;
 /// [`TracedGraph`].
 pub struct TraceContext {
     builder: SemanticProgramBuilder,
-    inputs: Vec<TraceInputDescriptor>,
     extension_caches: ExtensionCacheStore,
 }
 
@@ -30,7 +26,6 @@ impl TraceContext {
     pub fn new() -> Self {
         Self {
             builder: SemanticProgramBuilder::new(),
-            inputs: Vec::new(),
             extension_caches: ExtensionCacheStore::new(),
         }
     }
@@ -42,15 +37,7 @@ impl TraceContext {
     /// Returns [`ProgramBuildError::TooManyValues`] if another value cannot be
     /// represented.
     pub fn input(&mut self, spec: ProgramInputSpec) -> Result<TraceValue, ProgramBuildError> {
-        let input_idx = self.inputs.len();
-        let dtype = spec.metadata().dtype();
-        let shape = input_shape(spec.metadata(), input_idx);
         let value = self.builder.input(spec)?;
-        self.inputs.push(TraceInputDescriptor {
-            key: next_input_key(),
-            dtype,
-            shape,
-        });
         Ok(TraceValue { value })
     }
 
@@ -58,8 +45,10 @@ impl TraceContext {
     ///
     /// # Errors
     ///
-    /// Returns the same typed build failures as [`input`](Self::input) and
-    /// [`bind_input`](Self::bind_input).
+    /// Returns [`ProgramBuildError::TooManyValues`] when another input cannot be
+    /// represented, [`ProgramBuildError::BindingTargetNotInput`] if the new
+    /// value is not accepted as an input, or
+    /// [`ProgramBuildError::DuplicateBinding`] if it is already bound.
     pub fn input_with_default(
         &mut self,
         spec: ProgramInputSpec,
@@ -90,8 +79,11 @@ impl TraceContext {
     ///
     /// # Errors
     ///
-    /// Returns typed ownership, arity, metadata, or output-count build
-    /// failures.
+    /// Returns [`ProgramBuildError::ForeignValue`] for an input from another
+    /// context, [`ProgramBuildError::Arity`] for the wrong input count, or
+    /// [`ProgramBuildError::Metadata`] /
+    /// [`ProgramBuildError::OutputMetadataCount`] when inference returns
+    /// invalid metadata.
     pub fn add_op(
         &mut self,
         op: CoreSemanticOp,
@@ -105,8 +97,12 @@ impl TraceContext {
     ///
     /// # Errors
     ///
-    /// Returns typed ownership, arity, effect, alias, metadata, or
-    /// output-count build failures.
+    /// Returns [`ProgramBuildError::ForeignValue`] or
+    /// [`ProgramBuildError::Arity`] for invalid inputs,
+    /// [`ProgramBuildError::UndeclaredExtensionEffects`] /
+    /// [`ProgramBuildError::UndeclaredExtensionAliases`] for an incomplete
+    /// extension contract, or [`ProgramBuildError::Metadata`] when inference
+    /// fails.
     pub fn add_extension(
         &mut self,
         op: Arc<dyn ExtensionOp>,
@@ -145,10 +141,7 @@ impl TraceContext {
     pub fn finish(self, outputs: &[TraceValue]) -> Result<TracedGraph, ProgramFinishError> {
         let outputs = program_values(outputs);
         let frozen = self.builder.finish(&outputs)?;
-        Ok(TracedGraph {
-            frozen,
-            inputs: self.inputs.into_boxed_slice(),
-        })
+        Ok(TracedGraph { frozen })
     }
 }
 
@@ -174,7 +167,6 @@ impl fmt::Debug for TraceValue {
 #[derive(Clone)]
 pub struct TracedGraph {
     frozen: FrozenProgram,
-    inputs: Box<[TraceInputDescriptor]>,
 }
 
 impl TracedGraph {
@@ -190,10 +182,6 @@ impl TracedGraph {
 
     pub(crate) fn frozen(&self) -> &FrozenProgram {
         &self.frozen
-    }
-
-    pub(crate) fn inputs(&self) -> &[TraceInputDescriptor] {
-        &self.inputs
     }
 }
 
@@ -212,26 +200,6 @@ impl fmt::Debug for TracedGraph {
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct TraceInputDescriptor {
-    pub(crate) key: TensorInputKey,
-    pub(crate) dtype: DType,
-    pub(crate) shape: Vec<DimExpr>,
-}
-
-fn input_shape(metadata: &ProgramValueMetadata, input_idx: usize) -> Vec<DimExpr> {
-    metadata
-        .shape()
-        .iter()
-        .enumerate()
-        .map(|(axis, extent)| match extent {
-            tenferro_ops::ShapeExtent::Exact(expression)
-            | tenferro_ops::ShapeExtent::UpperBound(expression) => expression.clone(),
-            tenferro_ops::ShapeExtent::Unknown => DimExpr::InputDim { input_idx, axis },
-        })
-        .collect()
-}
-
 fn program_values(values: &[TraceValue]) -> Vec<ProgramValue> {
     values.iter().map(|value| value.value).collect()
 }
@@ -247,11 +215,12 @@ fn trace_values(values: Box<[ProgramValue]>) -> Box<[TraceValue]> {
 #[cfg(test)]
 mod tests {
     use tenferro_ops::ShapeExtent;
+    use tenferro_tensor::DType;
 
     use super::*;
 
     #[test]
-    fn unknown_input_extents_keep_their_ordered_input_coordinate() {
+    fn unknown_input_extents_keep_ordered_semantic_inputs() {
         let spec = || {
             ProgramInputSpec::from_metadata(ProgramValueMetadata::from_extents(
                 DType::F64,
@@ -263,19 +232,12 @@ mod tests {
         let second = context.input(spec()).unwrap();
         let graph = context.finish(&[first, second]).unwrap();
 
-        assert_eq!(
-            graph.inputs()[0].shape,
-            [DimExpr::InputDim {
-                input_idx: 0,
-                axis: 0
-            }]
-        );
-        assert_eq!(
-            graph.inputs()[1].shape,
-            [DimExpr::InputDim {
-                input_idx: 1,
-                axis: 0
-            }]
-        );
+        assert_eq!(graph.program().inputs().len(), 2);
+        for input in graph.program().inputs() {
+            assert_eq!(
+                graph.program().value_metadata(*input).unwrap().shape(),
+                [ShapeExtent::Unknown]
+            );
+        }
     }
 }

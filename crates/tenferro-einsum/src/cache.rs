@@ -5,14 +5,10 @@ use crate::EinsumSubscripts;
 /// Stable family identifier for the standard tenferro einsum extension.
 pub const EINSUM_EXTENSION_FAMILY_ID: &str = "tenferro.einsum.v1";
 
-/// Compiler-side static contraction-plan cache name.
-pub(crate) const EINSUM_STATIC_PLANS_CACHE: &str = "static_plans";
 /// Compiler-side subscript parse cache name.
 pub(crate) const EINSUM_PARSE_CACHE: &str = "parse";
 /// Executor-side runtime contraction-plan cache name.
 pub(crate) const EINSUM_RUNTIME_PLANS_CACHE: &str = "runtime_plans";
-/// Executor-side compiled inner execution program cache name.
-pub(crate) const EINSUM_RUNTIME_EXEC_PROGRAMS_CACHE: &str = "runtime_exec_programs";
 /// EagerTensor expanded standard-op program cache name.
 #[cfg(feature = "autodiff")]
 pub(crate) const EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE: &str = "eager_expanded_programs";

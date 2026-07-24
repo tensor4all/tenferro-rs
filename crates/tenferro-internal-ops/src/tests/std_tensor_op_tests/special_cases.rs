@@ -1,5 +1,4 @@
 use super::*;
-use crate::ad::PrimitiveRuleBuilder;
 
 #[test]
 fn test_std_tensor_op_structural_special_cases_cover_identity_and_empty_axes() {
@@ -534,87 +533,6 @@ impl ExtensionOp for RuleOnlyExt {
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
     }
-}
-
-#[derive(Debug)]
-struct RuleOnlyIdentityAd {
-    family: &'static str,
-}
-
-impl ExtensionLinearizeRule for RuleOnlyIdentityAd {
-    fn family_id(&self) -> &'static str {
-        self.family
-    }
-
-    fn linearize(
-        &self,
-        _op: &dyn ExtensionOp,
-        _builder: &mut dyn PrimitiveRuleBuilder,
-        _primal_in: &[ValueKey<StdTensorOp>],
-        _primal_out: &[ValueKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValueId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        Ok(vec![tangent_in[0]])
-    }
-}
-
-impl ExtensionLinearTransposeRule for RuleOnlyIdentityAd {
-    fn family_id(&self) -> &'static str {
-        self.family
-    }
-
-    fn linear_transpose(
-        &self,
-        _op: &dyn ExtensionOp,
-        _builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        _inputs: &[tidu::PrimitiveTransposeInput<StdTensorOp>],
-        _active_mask: &[bool],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        Ok(vec![cotangent_out[0]])
-    }
-}
-
-#[test]
-fn extension_linearize_uses_registered_rule() {
-    let family = "stdtensor.rule_only_identity.v1";
-    let rules = ExtensionRuleSet::new()
-        .with_linearize(Arc::new(RuleOnlyIdentityAd { family }))
-        .expect("extension rule should register");
-    let op = StdTensorOp::Extension(Arc::new(RuleOnlyExt { family }));
-    let mut builder = GraphBuilder::<StdTensorOp>::new();
-    let mut ad_ctx = ShapeGuardContext::default().with_extension_rules(rules);
-    let dx = builder.add_input(tensor_input_key(900));
-    let result = op
-        .jvp_rule(&mut builder, &[], &[], &[Some(dx)], &mut ad_ctx)
-        .expect("registered extension rule should linearize");
-
-    assert_eq!(result, vec![Some(dx)]);
-}
-
-#[test]
-fn extension_transpose_uses_registered_rule() {
-    let family = "stdtensor.rule_only_transpose.v1";
-    let rules = ExtensionRuleSet::new()
-        .with_linear_transpose(Arc::new(RuleOnlyIdentityAd { family }))
-        .expect("extension rule should register");
-    let op = StdTensorOp::Extension(Arc::new(RuleOnlyExt { family }));
-    let mut builder = GraphBuilder::<StdTensorOp>::new();
-    let mut ad_ctx = ShapeGuardContext::default().with_extension_rules(rules);
-    let ct = builder.add_input(tensor_input_key(901));
-    let result = op
-        .transpose_rule(
-            &mut builder,
-            &[Some(ct)],
-            &external_inputs(910, 1),
-            &linear_mode(&[true]),
-            &mut ad_ctx,
-        )
-        .expect("registered extension rule should transpose");
-
-    assert_eq!(result, vec![Some(ct)]);
 }
 
 #[test]

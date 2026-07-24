@@ -20,8 +20,7 @@ use tenferro_gpu::CudaBackend;
 use tenferro_gpu::WebGpuBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::ExtensionRuleSet;
-use tenferro_ops::ShapeGuardContext;
+use tenferro_ops::{ExtensionAdDispatcher, ShapeGuardContext};
 use tenferro_runtime::ad_support::ones_tensor;
 use tenferro_runtime::ErrorPhase;
 use tenferro_tensor::{BackendSession, BackendSessionHost};
@@ -376,7 +375,7 @@ pub struct EagerRuntime {
     id: ContextId,
     pub(crate) backend: Mutex<EagerBackend>,
     pub(crate) extension_executor: Mutex<ExtensionExecutor<EagerBackend>>,
-    extension_rules: Option<ExtensionRuleSet>,
+    extension_ad_dispatcher: Option<Arc<dyn ExtensionAdDispatcher>>,
     grad_slots: Mutex<HashMap<ValueKey<StdTensorOp>, WeakGradSlot>>,
     value_records: Mutex<HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>,
     value_ptr_records: Mutex<HashMap<usize, Weak<EagerTensorRecord>>>,
@@ -403,7 +402,10 @@ impl fmt::Debug for EagerRuntime {
                 debug.field("extension_executor", &"<locked>");
             }
         }
-        debug.field("has_extension_rules", &self.extension_rules.is_some());
+        debug.field(
+            "has_extension_ad_dispatcher",
+            &self.extension_ad_dispatcher.is_some(),
+        );
         match self.grad_slots.try_lock() {
             Ok(slots) => {
                 debug.field("grad_slots_len", &slots.len());
@@ -494,30 +496,30 @@ impl EagerRuntime {
     }
 
     fn from_backend(backend: EagerBackend) -> Self {
-        Self::from_backend_with_extension_rules(backend, None)
+        Self::from_backend_with_extension_ad_dispatcher(backend, None)
     }
 
-    fn from_backend_with_extension_rules(
+    fn from_backend_with_extension_ad_dispatcher(
         backend: EagerBackend,
-        extension_rules: Option<ExtensionRuleSet>,
+        extension_ad_dispatcher: Option<Arc<dyn ExtensionAdDispatcher>>,
     ) -> Self {
-        Self::from_backend_with_extension_rules_and_cache(
+        Self::from_backend_with_extension_ad_dispatcher_and_cache(
             backend,
-            extension_rules,
+            extension_ad_dispatcher,
             Arc::new(AdTransformCache::new()),
         )
     }
 
-    fn from_backend_with_extension_rules_and_cache(
+    fn from_backend_with_extension_ad_dispatcher_and_cache(
         backend: EagerBackend,
-        extension_rules: Option<ExtensionRuleSet>,
+        extension_ad_dispatcher: Option<Arc<dyn ExtensionAdDispatcher>>,
         ad_transform_cache: Arc<AdTransformCache>,
     ) -> Self {
         Self {
             id: ContextId::fresh(),
             backend: Mutex::new(backend),
             extension_executor: Mutex::new(ExtensionExecutor::new()),
-            extension_rules,
+            extension_ad_dispatcher,
             grad_slots: Mutex::new(HashMap::new()),
             value_records: Mutex::new(HashMap::new()),
             value_ptr_records: Mutex::new(HashMap::new()),
@@ -617,9 +619,9 @@ impl EagerRuntime {
     /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
     /// ```
     pub fn with_cpu_backend_and_ad_context(backend: CpuBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_extension_rules_and_cache(
+        Arc::new(Self::from_backend_with_extension_ad_dispatcher_and_cache(
             EagerBackend::cpu(backend),
-            Some(ad.extension_rule_set()),
+            ad.extension_ad_dispatcher(),
             ad.ad_transform_cache(),
         ))
     }
@@ -653,9 +655,9 @@ impl EagerRuntime {
     /// ```
     #[cfg(feature = "cuda")]
     pub fn with_cuda_backend_and_ad_context(backend: CudaBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_extension_rules_and_cache(
+        Arc::new(Self::from_backend_with_extension_ad_dispatcher_and_cache(
             EagerBackend::cuda(backend),
-            Some(ad.extension_rule_set()),
+            ad.extension_ad_dispatcher(),
             ad.ad_transform_cache(),
         ))
     }
@@ -689,9 +691,9 @@ impl EagerRuntime {
     /// ```
     #[cfg(feature = "webgpu")]
     pub fn with_webgpu_backend_and_ad_context(backend: WebGpuBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_extension_rules_and_cache(
+        Arc::new(Self::from_backend_with_extension_ad_dispatcher_and_cache(
             EagerBackend::webgpu(backend),
-            Some(ad.extension_rule_set()),
+            ad.extension_ad_dispatcher(),
             ad.ad_transform_cache(),
         ))
     }
@@ -2489,8 +2491,8 @@ impl EagerTensor {
             self.metadata_scopes.clone(),
         );
         let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-        if let Some(extension_rules) = &self.ctx.extension_rules {
-            ad_ctx = ad_ctx.with_extension_rules(extension_rules.clone());
+        if let Some(dispatcher) = &self.ctx.extension_ad_dispatcher {
+            ad_ctx = ad_ctx.with_extension_ad_dispatcher(Arc::clone(dispatcher));
         }
         let cotangents_result = eager::backward(
             &self.key,

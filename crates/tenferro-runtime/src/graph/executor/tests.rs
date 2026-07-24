@@ -527,26 +527,6 @@ fn single_value_wrappers_preserve_lazy_outputs_and_debug_state() {
 }
 
 #[test]
-fn deferred_zero_tensor_covers_supported_dtypes_and_overflow() {
-    for dtype in [
-        DType::F32,
-        DType::F64,
-        DType::I32,
-        DType::I64,
-        DType::Bool,
-        DType::C32,
-        DType::C64,
-    ] {
-        let zero = super::zeros_tensor(dtype, vec![2]).unwrap();
-        assert_eq!(zero.dtype(), dtype);
-        assert_eq!(zero.shape(), &[2]);
-    }
-
-    let err = super::zeros_tensor(DType::Bool, vec![usize::MAX, 2]).unwrap_err();
-    assert!(matches!(err, Error::Internal(_)));
-}
-
-#[test]
 fn borrowed_input_workspace_does_not_retype_static_slot_vec() {
     let source = include_str!("../executor.rs");
 

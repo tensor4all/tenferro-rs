@@ -48,12 +48,12 @@ mod tensor_ext;
 mod traced;
 
 #[cfg(feature = "autodiff")]
+pub use ad::semantic_ad_rules;
+#[cfg(feature = "autodiff")]
 pub use ad::support::{
     all_linalg_ad_support, linalg_ad_support, LinalgAdModeSupport, LinalgAdOpKind,
     LinalgAdOutputSupport, LinalgAdRoute, LinalgAdRuleSupport, LinalgAdSupport,
 };
-#[cfg(feature = "autodiff")]
-pub use ad::{ad_rules, semantic_ad_rules};
 pub use backend::LinalgBackend;
 #[cfg(feature = "autodiff")]
 pub use eager_ext::EagerTensorLinalgExt;

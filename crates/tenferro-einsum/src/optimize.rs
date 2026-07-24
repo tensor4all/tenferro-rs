@@ -23,21 +23,32 @@ use crate::{
 /// # Examples
 ///
 /// ```
-/// use tenferro_einsum::{EinsumOptimize, GraphCompilerEinsumExt};
-/// use tenferro_runtime::{GraphCompiler, TracedTensor};
+/// use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
+/// use tenferro_ops::dim_expr::DimExpr;
+/// use tenferro_runtime::program::ProgramInputSpec;
+/// use tenferro_runtime::{DType, TraceContext};
 ///
-/// let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-/// let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
-///
-/// let mut compiler = GraphCompiler::new();
-/// let out = compiler.einsum_with(
-///     &[&lhs, &rhs],
+/// let mut trace = TraceContext::new();
+/// let lhs = trace.input(ProgramInputSpec::new(
+///     DType::F64,
+///     DimExpr::from_concrete(&[2, 3]),
+/// )).unwrap();
+/// let rhs = trace.input(ProgramInputSpec::new(
+///     DType::F64,
+///     DimExpr::from_concrete(&[3, 2]),
+/// )).unwrap();
+/// let out = trace.einsum_with(
+///     &[lhs, rhs],
 ///     "ij,jk->ik",
 ///     EinsumOptimize::False,
 /// )
 /// .unwrap();
 ///
-/// assert_eq!(out.try_concrete_shape(), Some(vec![2, 2]));
+/// let graph = trace.finish(&[out]).unwrap();
+/// assert_eq!(
+///     graph.program().value_metadata(graph.program().outputs()[0]).unwrap().shape().len(),
+///     2,
+/// );
 /// ```
 #[derive(Debug)]
 pub enum EinsumOptimize {

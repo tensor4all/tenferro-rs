@@ -6,7 +6,7 @@
 //! tensor storage and backend kernels live in `tenferro-tensor`.
 //!
 //! Use this crate directly when you want concrete tensor helpers or reusable
-//! traced graph execution without opting into autodiff. Start with
+//! traced graph execution without depending on `tenferro-ad`. Start with
 //! [`TypedTensor`] when the scalar type is fixed in Rust, [`Tensor`] when dtype
 //! is selected at runtime, and [`TracedTensor`] plus [`GraphCompiler`] and
 //! [`GraphExecutor`] when the same expression should be compiled once and run

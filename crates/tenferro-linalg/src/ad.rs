@@ -11,7 +11,8 @@
 //! use tenferro_runtime::TracedTensor;
 //!
 //! let ad = AdContext::builder()
-//!     .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
+//!     .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
+//!     .unwrap()
 //!     .build()
 //!     .unwrap();
 //! let x = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 2.0]).unwrap();
@@ -21,19 +22,18 @@
 //! assert_eq!(grad.rank, 2);
 //! ```
 
+#[cfg(test)]
 use std::sync::Arc;
 
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-use tenferro_ad::extension::{
-    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionOp, ExtensionRegistryError,
-    ExtensionRuleSet,
-};
+use tenferro_ad::extension::ExtensionOp;
 use tenferro_ops::ad::PrimitiveRuleBuilder;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 use crate::extension::{LinalgExtensionOp, LinalgOp};
+#[cfg(test)]
 use crate::LINALG_EXTENSION_FAMILY_ID;
 
 mod rules;
@@ -42,35 +42,10 @@ pub mod support;
 
 pub use semantic::semantic_ad_rules;
 
-/// Return the explicit linalg extension AD rule set.
-///
-/// # Examples
-///
-/// ```rust
-/// let rules = tenferro_linalg::ad_rules().unwrap();
-/// assert!(rules.is_linearize_registered(tenferro_linalg::LINALG_EXTENSION_FAMILY_ID));
-/// assert!(rules.is_linear_transpose_registered(tenferro_linalg::LINALG_EXTENSION_FAMILY_ID));
-/// ```
-///
-/// # Errors
-///
-/// Returns `ExtensionRegistryError::MalformedFamilyId` if the linalg family
-/// identifier is invalid, or `ExtensionRegistryError::DuplicateRule` if the
-/// rule set already contains a rule for this family and transform.
-pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
-    ExtensionRuleSet::new()
-        .with_linearize(Arc::new(LinalgAdRule))?
-        .with_linear_transpose(Arc::new(LinalgAdRule))
-}
-
 #[derive(Debug)]
 struct LinalgAdRule;
 
-impl ExtensionLinearizeRule for LinalgAdRule {
-    fn family_id(&self) -> &'static str {
-        LINALG_EXTENSION_FAMILY_ID
-    }
-
+impl LinalgAdRule {
     fn linearize(
         &self,
         op: &dyn ExtensionOp,
@@ -161,13 +136,6 @@ impl ExtensionLinearizeRule for LinalgAdRule {
             }
         }
     }
-}
-
-impl ExtensionLinearTransposeRule for LinalgAdRule {
-    fn family_id(&self) -> &'static str {
-        LINALG_EXTENSION_FAMILY_ID
-    }
-
     fn linear_transpose(
         &self,
         op: &dyn ExtensionOp,
@@ -2190,7 +2158,13 @@ mod tests {
                 assert!(jvp.is_ok(), "{kind:?} semantic JVP failed: {jvp:?}");
                 assert!(vjp.is_ok(), "{kind:?} semantic VJP failed: {vjp:?}");
             } else {
-                assert!(jvp.is_err(), "{kind:?} semantic JVP must be unsupported");
+                let jvp = jvp.unwrap_or_else(|error| {
+                    panic!("{kind:?} value-only semantic JVP failed unexpectedly: {error}")
+                });
+                assert!(
+                    jvp.derivative_output_indices().iter().all(Option::is_none),
+                    "{kind:?} value-only semantic JVP must not expose derivatives"
+                );
                 assert!(vjp.is_err(), "{kind:?} semantic VJP must be unsupported");
             }
         }

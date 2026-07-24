@@ -15,7 +15,7 @@ This page is a translation guide for readers who already know `torch` or `jax.nu
 | Transform AD | `torch.autograd.grad(...)`, `torch.func.jvp` | `jax.grad`, `jax.vjp`, `jax.jvp`, HVP via composition | `EagerRuntime::{grad,vjp,jvp}` or traced `.grad()?` / `.vjp()?` / `.jvp()?`; HVP via composition |
 | Device/runtime | Device is attached to tensors | Device is attached to arrays | Backend lives in direct tensor calls, `EagerRuntime`, or `GraphExecutor` |
 | CUDA execution | `x.to("cuda")` | `jax.device_put(x)` | `tenferro_gpu::upload_tensor(...)` and `download_tensor(...)` |
-| Matrix contraction | `torch.einsum` | `jnp.einsum` | `compiler.einsum(...)` via `GraphCompilerEinsumExt` |
+| Matrix contraction | `torch.einsum` | `jnp.einsum` | `trace.einsum(...)` via `TraceContextEinsumExt` |
 
 ## Function mapping
 
@@ -28,7 +28,7 @@ This page is a translation guide for readers who already know `torch` or `jax.nu
 | Transpose | `x.transpose(0, 1)` | `jnp.transpose(x, axes)` | `x.transpose(&perm, &mut ctx)` via `TensorOpsExt` | `x.transpose(&perm)` |
 | Broadcast | `x.expand(...)` / implicit broadcast | implicit broadcast in many ops | backend-level op | `x.broadcast_in_dim(&shape, &dims)` |
 | Reduce sum | `x.sum(dim=...)` | `jnp.sum(x, axis=...)` | `x.reduce_sum(&axes, &mut ctx)` via `TensorOpsExt` | `x.reduce_sum(Some(&axes))` |
-| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `compiler.einsum(...)` via `GraphCompilerEinsumExt` plus `register_runtime` |
+| Einsum | `torch.einsum(spec, ...)` | `jnp.einsum(spec, ...)` | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus `register_runtime` |
 | SVD | `torch.linalg.svd(x)` | `jnp.linalg.svd(x)` | `tenferro_linalg::LinalgBackend::svd(&mut ctx, &x)?` | `x.svd()?` via `TracedTensorLinalgExt` |
 | QR | `torch.linalg.qr(x)` | `jnp.linalg.qr(x)` | `tenferro_linalg::LinalgBackend::qr(&mut ctx, &x)?` | `x.qr()?` via `TracedTensorLinalgExt` |
 | Cholesky | `torch.linalg.cholesky(x)` | `jnp.linalg.cholesky(x)` | `tenferro_linalg::LinalgBackend::cholesky(&mut ctx, &x)?` | `x.cholesky()?` via `TracedTensorLinalgExt` |

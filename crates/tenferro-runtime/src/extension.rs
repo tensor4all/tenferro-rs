@@ -23,7 +23,6 @@ use computegraph::types::{OperationRole, ValueRef};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
-use tenferro_tensor::{Tensor, TensorBackend};
 
 use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, ErrorPhase, Result};
@@ -37,10 +36,6 @@ use crate::traced::{merge_traced_inputs_map, next_traced_id, TracedTensor};
 type ExpandedOutputMetas = Vec<(tenferro_tensor::DType, Vec<SymDim>)>;
 
 pub use crate::compiler::CompilerOptions;
-#[doc(hidden)]
-pub use crate::compiler::{compile_std_to_exec, compile_std_to_exec_with_options};
-#[doc(hidden)]
-pub use crate::exec::{ExecInstruction, ExecOp, ExecOutputExtents, ExecOutputShapes, ExecProgram};
 #[doc(hidden)]
 pub use crate::shape_infer::{
     infer_output_dtype, infer_output_extents, infer_output_shapes, promote_dtype,
@@ -56,25 +51,6 @@ pub use crate::extension_runtime::{
     ExtensionExecutionContext, ExtensionExecutor, ExtensionRegistry, ExtensionRuntime,
     ExtensionRuntimeRegistryError, HostReferenceRuntime,
 };
-
-/// Execute a lowered core program with caller-owned backend runtime cache state.
-///
-/// This owner-scoped hook is for operation-family runtimes that expand an
-/// extension into core tensor operations and need to run that lowered program
-/// while preserving the runtime cache owned by the outer graph executor.
-#[doc(hidden)]
-pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
-    backend: &mut B,
-    program: &ExecProgram,
-    inputs: Vec<Tensor>,
-    backend_cache: &mut B::RuntimeCache,
-) -> Result<Vec<Tensor>> {
-    crate::exec::ensure_core_exec_program(
-        program,
-        "extension::execute_lowered_program_with_backend_cache",
-    )?;
-    crate::exec::eval_exec_ir_with_backend_cache(backend, program, inputs, backend_cache)
-}
 
 /// Apply an extension op in the traced graph.
 ///

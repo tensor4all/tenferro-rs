@@ -20,6 +20,7 @@ tenferro-einsum = { path = "../../crates/tenferro-einsum", default-features = fa
 tenferro-fft = { path = "../../crates/tenferro-fft", default-features = false, features = ["webgpu"], optional = true }
 tenferro-gpu = { path = "../../crates/tenferro-gpu", default-features = false, features = ["webgpu"], optional = true }
 tenferro-linalg = { path = "../../crates/tenferro-linalg", default-features = false, features = ["autodiff"] }
+tenferro-ops = { package = "tenferro-internal-ops", path = "../../crates/tenferro-internal-ops" }
 tenferro-runtime = { path = "../../crates/tenferro-runtime", default-features = false }
 tenferro-tensor = { path = "../../crates/tenferro-tensor", optional = true }
 tenferro-xla = { path = "../../crates/tenferro-xla", default-features = false }

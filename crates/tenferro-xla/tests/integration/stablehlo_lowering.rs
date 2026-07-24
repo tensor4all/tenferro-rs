@@ -1,5 +1,7 @@
-use tenferro_einsum::GraphCompilerEinsumExt;
-use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, TracedTensor};
+use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, TraceContext, TracedTensor};
 use tenferro_xla::lower_to_stablehlo;
 
 #[test]
@@ -132,25 +134,7 @@ fn lowers_unbatched_dot_general() {
 
 #[test]
 fn lowers_concrete_nary_einsum_via_standard_ops() {
-    let lhs = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0])
-        .unwrap();
-    let mid = TracedTensor::from_vec_col_major(
-        vec![3, 4],
-        vec![
-            10.0_f64, 20.0, 30.0, 11.0, 21.0, 31.0, 12.0, 22.0, 32.0, 13.0, 23.0, 33.0,
-        ],
-    )
-    .unwrap();
-    let rhs = TracedTensor::from_vec_col_major(
-        vec![4, 2],
-        vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-    )
-    .unwrap();
-    let mut compiler = GraphCompiler::new();
-    let product = compiler
-        .einsum(&[&lhs, &mid, &rhs], "ij,jk,kl->il")
-        .unwrap();
-    let program = compiler.compile(&product).unwrap();
+    let program = compile_nary_einsum();
 
     let module = lower_to_stablehlo(program.program()).unwrap();
     let text = module.as_str();
@@ -162,25 +146,8 @@ fn lowers_concrete_nary_einsum_via_standard_ops() {
 }
 
 #[test]
-#[ignore = "re-enabled when the serial einsum semantic-AD migration declares extension semantics"]
 fn lowers_static_symbolic_nary_einsum_extension_via_standard_ops() {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let mid = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let mut compiler = GraphCompiler::new();
-    let product = compiler
-        .einsum(&[&lhs, &mid, &rhs], "ij,jk,kl->il")
-        .unwrap();
-    let program = compiler
-        .compile_with_input_specs(
-            &product,
-            &[
-                (&lhs, DType::F64, &[2, 3]),
-                (&mid, DType::F64, &[3, 4]),
-                (&rhs, DType::F64, &[4, 2]),
-            ],
-        )
-        .unwrap();
+    let program = compile_nary_einsum();
 
     let module = lower_to_stablehlo(program.program()).unwrap();
     let text = module.as_str();
@@ -189,6 +156,21 @@ fn lowers_static_symbolic_nary_einsum_extension_via_standard_ops() {
     assert_eq!(text.matches("stablehlo.dot_general").count(), 2);
     assert!(!text.contains("tenferro.einsum"));
     assert!(text.contains("-> tensor<2x2xf64>"));
+}
+
+fn compile_nary_einsum() -> tenferro_runtime::CompiledGraph {
+    let mut trace = TraceContext::new();
+    let inputs = [[2, 3], [3, 4], [4, 2]].map(|shape| {
+        trace
+            .input(ProgramInputSpec::new(
+                DType::F64,
+                DimExpr::from_concrete(&shape),
+            ))
+            .unwrap()
+    });
+    let product = trace.einsum(&inputs, "ij,jk,kl->il").unwrap();
+    let graph = trace.finish(&[product]).unwrap();
+    GraphCompiler::new().compile_traced_graph(&graph).unwrap()
 }
 
 #[test]

@@ -44,7 +44,7 @@ use tidu::{
 };
 
 #[cfg(feature = "autodiff")]
-use crate::ext_op::{linearize_extension_rule, transpose_extension_rule};
+use crate::ext_op::{dispatch_extension_linearize, dispatch_extension_transpose};
 #[cfg(feature = "autodiff")]
 use crate::std_tensor_op::StdTensorOp;
 
@@ -141,7 +141,7 @@ pub fn linearize(
     ctx: &mut context::ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if let StdTensorOp::Extension(ext) = op {
-        return linearize_extension_rule(
+        return dispatch_extension_linearize(
             ext.as_ref(),
             builder,
             primal_in,
@@ -183,7 +183,7 @@ pub fn transpose_rule(
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
     if let StdTensorOp::Extension(ext) = op {
         let builder_dyn: &mut dyn PrimitiveRuleBuilder = builder;
-        return transpose_extension_rule(
+        return dispatch_extension_transpose(
             ext.as_ref(),
             builder_dyn,
             cotangent_out,

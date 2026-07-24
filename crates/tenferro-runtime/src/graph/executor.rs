@@ -1,19 +1,14 @@
-use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::shape_extent::ShapeExtent;
-use tenferro_tensor::{
-    DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead, TensorValue, TypedTensor,
-};
+use tenferro_tensor::{DType, RuntimeCacheControl, Tensor, TensorBackend, TensorRead, TensorValue};
 
 use super::cache::GraphExecutorCacheStats;
-use super::program::{CompiledGraph, GraphProgramInput};
+use super::program::CompiledGraph;
 use crate::error::{Error, Result};
 use crate::exec::{ExecProgram, ExecSlot};
 use crate::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError};
-use crate::traced::TracedTensor;
 
 /// Executes compiled graph programs on a concrete tensor backend.
 ///
@@ -720,86 +715,6 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
         self.eval_exec_ir_slot_values(&program.staging, inputs)
     }
 
-    #[doc(hidden)]
-    pub fn run_with_bindings(
-        &mut self,
-        program: &CompiledGraph,
-        bindings: &[(&TracedTensor, &Tensor)],
-    ) -> Result<Tensor> {
-        let mut outputs = self.run_many_with_bindings(program, bindings)?;
-        expect_single_output(&mut outputs)
-    }
-
-    #[doc(hidden)]
-    pub fn run_value_with_bindings(
-        &mut self,
-        program: &CompiledGraph,
-        bindings: &[(&TracedTensor, &Tensor)],
-    ) -> Result<TensorValue> {
-        let mut outputs = self.run_many_values_with_bindings(program, bindings)?;
-        expect_single_value(&mut outputs)
-    }
-
-    #[doc(hidden)]
-    pub fn run_many_with_bindings(
-        &mut self,
-        program: &CompiledGraph,
-        bindings: &[(&TracedTensor, &Tensor)],
-    ) -> Result<Vec<Tensor>> {
-        let inputs = resolve_inputs(program, bindings, &mut self.backend)?;
-        self.eval_exec_ir(&program.staging, inputs)
-    }
-
-    #[doc(hidden)]
-    pub fn run_many_values_with_bindings(
-        &mut self,
-        program: &CompiledGraph,
-        bindings: &[(&TracedTensor, &Tensor)],
-    ) -> Result<Vec<TensorValue>> {
-        let inputs = resolve_inputs(program, bindings, &mut self.backend)?;
-        self.eval_exec_ir_values(&program.staging, inputs)
-    }
-
-    #[doc(hidden)]
-    pub fn run_with_read_bindings<'a>(
-        &mut self,
-        program: &'a CompiledGraph,
-        bindings: &[(&TracedTensor, TensorRead<'a>)],
-    ) -> Result<Tensor> {
-        let mut outputs = self.run_many_with_read_bindings(program, bindings)?;
-        expect_single_output(&mut outputs)
-    }
-
-    #[doc(hidden)]
-    pub fn run_value_with_read_bindings<'a>(
-        &mut self,
-        program: &'a CompiledGraph,
-        bindings: &[(&TracedTensor, TensorRead<'a>)],
-    ) -> Result<TensorValue> {
-        let mut outputs = self.run_many_values_with_read_bindings(program, bindings)?;
-        expect_single_value(&mut outputs)
-    }
-
-    #[doc(hidden)]
-    pub fn run_many_with_read_bindings<'a>(
-        &mut self,
-        program: &'a CompiledGraph,
-        bindings: &[(&TracedTensor, TensorRead<'a>)],
-    ) -> Result<Vec<Tensor>> {
-        let inputs = resolve_input_reads(program, bindings, &mut self.backend)?;
-        self.eval_exec_ir_slots(&program.staging, inputs)
-    }
-
-    #[doc(hidden)]
-    pub fn run_many_values_with_read_bindings<'a>(
-        &mut self,
-        program: &'a CompiledGraph,
-        bindings: &[(&TracedTensor, TensorRead<'a>)],
-    ) -> Result<Vec<TensorValue>> {
-        let inputs = resolve_input_reads(program, bindings, &mut self.backend)?;
-        self.eval_exec_ir_slot_values(&program.staging, inputs)
-    }
-
     /// Evaluate an execution program through this executor's backend state.
     ///
     /// This lower-level entry point is intended for code that already owns an
@@ -827,7 +742,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// [`Error::ShapeConstraintEvaluation`] when symbolic guards fail, and
     /// [`Error::TensorRuntime`] or [`Error::Extension`] when typed backend or
     /// extension execution fails.
-    pub fn eval_exec_ir(
+    pub(crate) fn eval_exec_ir(
         &mut self,
         program: &ExecProgram,
         inputs: Vec<Tensor>,
@@ -871,7 +786,7 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// [`Error::ShapeConstraintEvaluation`] when symbolic guards fail, and
     /// [`Error::TensorRuntime`] or [`Error::Extension`] when typed backend or
     /// extension execution fails.
-    pub fn eval_exec_ir_values(
+    pub(crate) fn eval_exec_ir_values(
         &mut self,
         program: &ExecProgram,
         inputs: Vec<Tensor>,
@@ -914,7 +829,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// [`Error::ShapeConstraintEvaluation`] when symbolic guards fail, and
     /// [`Error::TensorRuntime`] or [`Error::Extension`] when typed backend or
     /// extension execution fails.
-    pub fn eval_exec_ir_non_consuming(
+    #[cfg(test)]
+    pub(crate) fn eval_exec_ir_non_consuming(
         &mut self,
         program: &ExecProgram,
         inputs: &[Tensor],
@@ -952,7 +868,8 @@ impl<B: TensorBackend + 'static> GraphExecutor<B> {
     /// [`Error::ShapeConstraintEvaluation`] when symbolic guards fail, and
     /// [`Error::TensorRuntime`] or [`Error::Extension`] when typed backend or
     /// extension execution fails.
-    pub fn eval_exec_ir_non_consuming_values(
+    #[cfg(test)]
+    pub(crate) fn eval_exec_ir_non_consuming_values(
         &mut self,
         program: &ExecProgram,
         inputs: &[Tensor],
@@ -1124,7 +1041,7 @@ fn resolve_ordered_inputs(
     backend: &mut impl TensorBackend,
 ) -> Result<Vec<Tensor>> {
     if inputs.is_empty() {
-        return resolve_inputs(program, &[], backend);
+        return resolve_default_inputs(program, backend);
     }
     validate_ordered_input_metadata(program, inputs)?;
     let input_shapes: Vec<_> = inputs.iter().map(|tensor| tensor.shape()).collect();
@@ -1138,7 +1055,7 @@ fn resolve_ordered_input_reads<'a>(
     backend: &mut impl TensorBackend,
 ) -> Result<Vec<ExecSlot<'a>>> {
     if inputs.is_empty() {
-        return resolve_input_reads(program, &[], backend);
+        return resolve_default_input_reads(program, backend);
     }
     validate_ordered_input_metadata(program, inputs)?;
     let input_shapes: Vec<_> = inputs.iter().map(TensorRead::shape).collect();
@@ -1148,6 +1065,58 @@ fn resolve_ordered_input_reads<'a>(
         .cloned()
         .map(ExecSlot::Read)
         .collect::<Vec<_>>())
+}
+
+fn semantic_default_inputs(program: &CompiledGraph) -> Result<Vec<&Tensor>> {
+    program
+        .program()
+        .inputs()
+        .iter()
+        .enumerate()
+        .map(|(input_index, value)| {
+            program
+                .bindings()
+                .tensor_ref_for_input(*value)
+                .map(AsRef::as_ref)
+                .ok_or_else(|| Error::UnboundPlaceholder {
+                    input_key: format!("semantic input {input_index}"),
+                })
+        })
+        .collect()
+}
+
+fn resolve_default_inputs(
+    program: &CompiledGraph,
+    backend: &mut impl TensorBackend,
+) -> Result<Vec<Tensor>> {
+    let defaults = semantic_default_inputs(program)?;
+    validate_ordered_input_metadata(program, &defaults)?;
+    let input_shapes: Vec<_> = defaults.iter().map(|tensor| tensor.shape()).collect();
+    crate::exec::validate_shape_guards(&program.staging, &input_shapes)?;
+    defaults
+        .into_iter()
+        .map(|default| resolve_default_tensor(default, backend))
+        .collect()
+}
+
+fn resolve_default_input_reads<'a>(
+    program: &'a CompiledGraph,
+    backend: &mut impl TensorBackend,
+) -> Result<Vec<ExecSlot<'a>>> {
+    let defaults = semantic_default_inputs(program)?;
+    validate_ordered_input_metadata(program, &defaults)?;
+    let input_shapes: Vec<_> = defaults.iter().map(|tensor| tensor.shape()).collect();
+    crate::exec::validate_shape_guards(&program.staging, &input_shapes)?;
+    defaults
+        .into_iter()
+        .map(|default| {
+            if should_upload_default_tensor(default) {
+                Ok(ExecSlot::Owned(backend.upload_host_tensor(default)?))
+            } else {
+                Ok(ExecSlot::Read(TensorRead::from_tensor(default)))
+            }
+        })
+        .collect()
 }
 
 fn validate_ordered_input_metadata<T: InputMetadata>(
@@ -1228,120 +1197,6 @@ fn validate_ordered_input_metadata<T: InputMetadata>(
     Ok(())
 }
 
-fn resolve_inputs(
-    program: &CompiledGraph,
-    bindings: &[(&TracedTensor, &Tensor)],
-    backend: &mut impl TensorBackend,
-) -> Result<Vec<Tensor>> {
-    let program_keys: HashSet<_> = program
-        .inputs
-        .iter()
-        .map(|input| input.key.clone())
-        .collect();
-    let tangent_root_specs = tangent_root_specs(&program.inputs);
-    let default_map = semantic_default_map(program)?;
-    let mut binding_map = HashMap::new();
-    for (index, (placeholder, tensor)) in bindings.iter().enumerate() {
-        if placeholder.data.is_some() {
-            return Err(Error::UnexpectedBinding {
-                binding_index: index,
-            });
-        }
-        let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
-            binding_index: index,
-        })?;
-        validate_binding_placeholder(index, placeholder, tensor)?;
-        let is_program_input = program_keys.contains(&key);
-        if !is_program_input && !tangent_root_specs.contains_key(&key) {
-            return Err(Error::UnexpectedBinding {
-                binding_index: index,
-            });
-        }
-        if binding_map.insert(key.clone(), *tensor).is_some() {
-            return Err(Error::DuplicateBinding {
-                input_key: format!("{:?}", key),
-            });
-        }
-    }
-
-    let selected = select_inputs(program, &binding_map, &default_map)?;
-    materialize_inputs(&program.staging, selected, backend, zeros_tensor)
-}
-
-fn resolve_input_reads<'a>(
-    program: &'a CompiledGraph,
-    bindings: &[(&TracedTensor, TensorRead<'a>)],
-    backend: &mut impl TensorBackend,
-) -> Result<Vec<ExecSlot<'a>>> {
-    let program_keys: HashSet<_> = program
-        .inputs
-        .iter()
-        .map(|input| input.key.clone())
-        .collect();
-    let tangent_root_specs = tangent_root_specs(&program.inputs);
-    let default_map = semantic_default_map(program)?;
-    let mut binding_map = HashMap::new();
-    for (index, (placeholder, read)) in bindings.iter().enumerate() {
-        if placeholder.data.is_some() {
-            return Err(Error::UnexpectedBinding {
-                binding_index: index,
-            });
-        }
-        let key = placeholder.input_key().ok_or(Error::UnexpectedBinding {
-            binding_index: index,
-        })?;
-        validate_binding_placeholder_read(index, placeholder, read)?;
-        let is_program_input = program_keys.contains(&key);
-        if !is_program_input && !tangent_root_specs.contains_key(&key) {
-            return Err(Error::UnexpectedBinding {
-                binding_index: index,
-            });
-        }
-        if binding_map.insert(key.clone(), read.clone()).is_some() {
-            return Err(Error::DuplicateBinding {
-                input_key: format!("{:?}", key),
-            });
-        }
-    }
-
-    let selected = select_inputs(program, &binding_map, &default_map)?;
-    materialize_input_reads(&program.staging, selected, backend, zeros_tensor)
-}
-
-fn tangent_root_specs(inputs: &[GraphProgramInput]) -> HashMap<TensorInputKey, &GraphProgramInput> {
-    let mut specs = HashMap::new();
-    for input in inputs {
-        if !matches!(input.key, TensorInputKey::User { .. }) {
-            specs
-                .entry(tangent_primal_root(&input.key).clone())
-                .or_insert(input);
-        }
-    }
-    specs
-}
-
-fn semantic_default_map(program: &CompiledGraph) -> Result<HashMap<TensorInputKey, &Tensor>> {
-    if program.inputs.len() != program.input_count() {
-        return Err(Error::RuntimeState {
-            op: "GraphExecutor::semantic_default_map",
-            phase: crate::error::ErrorPhase::Execution,
-            message: "compiled graph input descriptors do not match semantic input order"
-                .to_string(),
-        });
-    }
-    Ok(program
-        .inputs
-        .iter()
-        .zip(program.program().inputs())
-        .filter_map(|(input, value)| {
-            program
-                .bindings()
-                .tensor_ref_for_input(*value)
-                .map(|tensor| (input.key.clone(), tensor.as_ref()))
-        })
-        .collect())
-}
-
 trait InputMetadata {
     fn dtype(&self) -> DType;
     fn shape(&self) -> &[usize];
@@ -1367,121 +1222,6 @@ impl InputMetadata for TensorRead<'_> {
     }
 }
 
-enum SelectedInput<'program, 'binding, T> {
-    Bound(&'binding T),
-    Default(&'program Tensor),
-    DeferredZero { dtype: DType, shape: Vec<usize> },
-}
-
-impl<T: InputMetadata> SelectedInput<'_, '_, T> {
-    fn dtype(&self) -> DType {
-        match self {
-            Self::Bound(value) => value.dtype(),
-            Self::Default(value) => value.dtype(),
-            Self::DeferredZero { dtype, .. } => *dtype,
-        }
-    }
-
-    fn shape(&self) -> &[usize] {
-        match self {
-            Self::Bound(value) => value.shape(),
-            Self::Default(value) => value.shape(),
-            Self::DeferredZero { shape, .. } => shape,
-        }
-    }
-}
-
-impl<T: InputMetadata> InputMetadata for SelectedInput<'_, '_, T> {
-    fn dtype(&self) -> DType {
-        SelectedInput::dtype(self)
-    }
-
-    fn shape(&self) -> &[usize] {
-        SelectedInput::shape(self)
-    }
-}
-
-fn select_inputs<'program, 'binding, T: InputMetadata>(
-    program: &'program CompiledGraph,
-    bindings: &'binding HashMap<TensorInputKey, T>,
-    defaults: &HashMap<TensorInputKey, &'program Tensor>,
-) -> Result<Vec<SelectedInput<'program, 'binding, T>>> {
-    let mut selected = Vec::with_capacity(program.inputs.len());
-    for input in &program.inputs {
-        let value = if let Some(bound) = bindings.get(&input.key) {
-            SelectedInput::Bound(bound)
-        } else if let Some(default) = defaults.get(&input.key) {
-            SelectedInput::Default(default)
-        } else if let Some((dtype, shape)) = deferred_zero_metadata(&input.key, bindings, defaults)
-        {
-            SelectedInput::DeferredZero { dtype, shape }
-        } else {
-            return Err(Error::UnboundPlaceholder {
-                input_key: format!("{:?}", input.key),
-            });
-        };
-        selected.push(value);
-    }
-    validate_ordered_input_metadata(program, &selected)?;
-    Ok(selected)
-}
-
-fn validate_selected_shape_guards<T: InputMetadata>(
-    program: &ExecProgram,
-    selected: &[SelectedInput<'_, '_, T>],
-) -> Result<()> {
-    let input_shapes: Vec<_> = selected.iter().map(SelectedInput::shape).collect();
-    crate::exec::validate_shape_guards(program, &input_shapes)
-}
-
-fn materialize_inputs<F>(
-    program: &ExecProgram,
-    selected: Vec<SelectedInput<'_, '_, &Tensor>>,
-    backend: &mut impl TensorBackend,
-    mut deferred_zero_factory: F,
-) -> Result<Vec<Tensor>>
-where
-    F: FnMut(DType, Vec<usize>) -> Result<Tensor>,
-{
-    validate_selected_shape_guards(program, &selected)?;
-    selected
-        .into_iter()
-        .map(|input| match input {
-            SelectedInput::Bound(bound) => Ok((**bound).clone()),
-            SelectedInput::Default(default) => resolve_default_tensor(default, backend),
-            SelectedInput::DeferredZero { dtype, shape } => deferred_zero_factory(dtype, shape),
-        })
-        .collect()
-}
-
-fn materialize_input_reads<'a, F>(
-    program: &ExecProgram,
-    selected: Vec<SelectedInput<'a, '_, TensorRead<'a>>>,
-    backend: &mut impl TensorBackend,
-    mut deferred_zero_factory: F,
-) -> Result<Vec<ExecSlot<'a>>>
-where
-    F: FnMut(DType, Vec<usize>) -> Result<Tensor>,
-{
-    validate_selected_shape_guards(program, &selected)?;
-    selected
-        .into_iter()
-        .map(|input| match input {
-            SelectedInput::Bound(bound) => Ok(ExecSlot::Read(bound.clone())),
-            SelectedInput::Default(default) => {
-                if should_upload_default_tensor(default) {
-                    Ok(ExecSlot::Owned(backend.upload_host_tensor(default)?))
-                } else {
-                    Ok(ExecSlot::Read(TensorRead::from_tensor(default)))
-                }
-            }
-            SelectedInput::DeferredZero { dtype, shape } => {
-                Ok(ExecSlot::Owned(deferred_zero_factory(dtype, shape)?))
-            }
-        })
-        .collect()
-}
-
 fn resolve_default_tensor(default: &Tensor, backend: &mut impl TensorBackend) -> Result<Tensor> {
     if should_upload_default_tensor(default) {
         Ok(backend.upload_host_tensor(default)?)
@@ -1496,129 +1236,6 @@ fn should_upload_default_tensor(default: &Tensor) -> bool {
 
 fn tensor_has_host_buffer(tensor: &Tensor) -> bool {
     !tensor.is_backend_buffer()
-}
-
-fn validate_binding_placeholder(
-    index: usize,
-    placeholder: &TracedTensor,
-    tensor: &Tensor,
-) -> Result<()> {
-    if placeholder.data.is_some() {
-        return Err(Error::UnexpectedBinding {
-            binding_index: index,
-        });
-    }
-    if placeholder.dtype != tensor.dtype() {
-        return Err(Error::PlaceholderDtypeMismatch {
-            expected: placeholder.dtype,
-            actual: tensor.dtype(),
-        });
-    }
-    match placeholder.try_concrete_shape() {
-        Some(expected_shape) => {
-            if expected_shape.as_slice() != tensor.shape() {
-                return Err(Error::PlaceholderShapeMismatch {
-                    expected: expected_shape,
-                    actual: tensor.shape().to_vec(),
-                });
-            }
-        }
-        None => {
-            if placeholder.rank != tensor.shape().len() {
-                return Err(Error::PlaceholderRankMismatch {
-                    expected: placeholder.rank,
-                    actual: tensor.shape().len(),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_binding_placeholder_read(
-    index: usize,
-    placeholder: &TracedTensor,
-    read: &TensorRead<'_>,
-) -> Result<()> {
-    if placeholder.data.is_some() {
-        return Err(Error::UnexpectedBinding {
-            binding_index: index,
-        });
-    }
-    if placeholder.dtype != read.dtype() {
-        return Err(Error::PlaceholderDtypeMismatch {
-            expected: placeholder.dtype,
-            actual: read.dtype(),
-        });
-    }
-    match placeholder.try_concrete_shape() {
-        Some(expected_shape) => {
-            if expected_shape.as_slice() != read.shape() {
-                return Err(Error::PlaceholderShapeMismatch {
-                    expected: expected_shape,
-                    actual: read.shape().to_vec(),
-                });
-            }
-        }
-        None => {
-            if placeholder.rank != read.shape().len() {
-                return Err(Error::PlaceholderRankMismatch {
-                    expected: placeholder.rank,
-                    actual: read.shape().len(),
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-fn deferred_zero_metadata<T: InputMetadata>(
-    key: &TensorInputKey,
-    bindings: &HashMap<TensorInputKey, T>,
-    defaults: &HashMap<TensorInputKey, &Tensor>,
-) -> Option<(DType, Vec<usize>)> {
-    if !key.is_tangent() {
-        return None;
-    }
-    let root = tangent_primal_root(key);
-    if let Some(primal) = bindings.get(root) {
-        return Some((primal.dtype(), primal.shape().to_vec()));
-    }
-    defaults
-        .get(root)
-        .map(|primal| (primal.dtype(), primal.shape().to_vec()))
-}
-
-fn tangent_primal_root(key: &TensorInputKey) -> &TensorInputKey {
-    key.primal_root()
-}
-
-fn zeros_tensor(dtype: DType, shape: Vec<usize>) -> Result<Tensor> {
-    match dtype {
-        DType::F32 => Ok(Tensor::F32(TypedTensor::zeros(shape)?)),
-        DType::F64 => Ok(Tensor::F64(TypedTensor::zeros(shape)?)),
-        DType::I32 => Ok(Tensor::I32(TypedTensor::zeros(shape)?)),
-        DType::I64 => Ok(Tensor::I64(TypedTensor::zeros(shape)?)),
-        DType::Bool => {
-            let len = checked_default_element_count(&shape)?;
-            Ok(Tensor::Bool(TypedTensor::from_vec_col_major(
-                shape,
-                vec![false; len],
-            )?))
-        }
-        DType::C32 => Ok(Tensor::C32(TypedTensor::zeros(shape)?)),
-        DType::C64 => Ok(Tensor::C64(TypedTensor::zeros(shape)?)),
-    }
-}
-
-fn checked_default_element_count(shape: &[usize]) -> Result<usize> {
-    shape.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim).ok_or_else(|| {
-            Error::Internal(format!(
-                "deferred zero shape product overflows usize for shape {shape:?}"
-            ))
-        })
-    })
 }
 
 #[cfg(test)]

@@ -41,64 +41,9 @@ pub struct ExecProgram {
     /// Normalized symbolic shape obligations retained during compilation.
     ///
     /// Guard internals are opaque. Execution validates them before backend,
-    /// host, or extension work.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use std::{any::Any, sync::Arc};
-    ///
-    /// use computegraph::compile::{CompiledProgram, Instruction};
-    /// use tenferro_ops::{
-    ///     dim_expr::DimExpr, ext_op::ExtensionOp, std_tensor_op::StdTensorOp,
-    ///     ExtensionShapeContext, SymDim,
-    /// };
-    /// use tenferro_runtime::{extension::compile_std_to_exec, DType};
-    ///
-    /// #[derive(Clone, Debug)]
-    /// struct MatchingAxes;
-    ///
-    /// impl ExtensionOp for MatchingAxes {
-    ///     fn family_id(&self) -> &'static str { "example.matching-axes.v1" }
-    ///     fn payload_hash(&self, _hasher: &mut dyn std::hash::Hasher) {}
-    ///     fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-    ///         other.as_any().downcast_ref::<Self>().is_some()
-    ///     }
-    ///     fn clone_arc(&self) -> Arc<dyn ExtensionOp> { Arc::new(self.clone()) }
-    ///     fn as_any(&self) -> &dyn Any { self }
-    ///     fn input_count(&self) -> usize { 2 }
-    ///     fn output_count(&self) -> usize { 1 }
-    ///     fn infer_output_meta(
-    ///         &self,
-    ///         ctx: &mut ExtensionShapeContext<'_>,
-    ///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-    ///         let lhs = ctx.input_axis(0, 0)?;
-    ///         let rhs = ctx.input_axis(1, 0)?;
-    ///         ctx.require_equal(lhs, rhs * 2)?;
-    ///         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
-    ///     }
-    /// }
-    ///
-    /// let program = CompiledProgram {
-    ///     instructions: vec![Instruction {
-    ///         operation: StdTensorOp::Extension(Arc::new(MatchingAxes)),
-    ///         inputs: vec![0, 1],
-    ///         outputs: vec![2],
-    ///     }],
-    ///     input_slots: vec![0, 1],
-    ///     output_slots: vec![2],
-    ///     n_slots: 3,
-    /// };
-    /// let compiled = compile_std_to_exec(
-    ///     &program,
-    ///     &[DType::F64, DType::F64],
-    ///     &[
-    ///         vec![DimExpr::InputDim { input_idx: 0, axis: 0 }],
-    ///         vec![DimExpr::InputDim { input_idx: 1, axis: 0 }],
-    ///     ],
-    /// ).unwrap();
-    /// assert_eq!(compiled.shape_guards.len(), 1);
-    /// ```
+    /// host, or extension work. Public callers obtain guarded programs through
+    /// [`crate::GraphCompiler`]; this execution-stage representation remains
+    /// crate-private.
     #[doc(hidden)]
     pub shape_guards: Vec<crate::ShapeGuard>,
 }
@@ -573,25 +518,6 @@ pub(crate) fn resolve_tensor_shape_exprs(
     })
 }
 
-pub(crate) fn ensure_core_exec_program(program: &ExecProgram, caller: &str) -> Result<()> {
-    for (idx, inst) in program.instructions.iter().enumerate() {
-        if let ExecOp::Extension(ext) = &inst.op {
-            return Err(Error::validation(
-                "extension",
-                ErrorPhase::Execution,
-                ValidationError::InvalidArgument {
-                    argument: "program",
-                    message: format!(
-                    "{caller} can execute only core ExecProgram instructions; instruction {idx} uses extension family_id {:?}",
-                    ext.family_id()
-                    ),
-                },
-            ));
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn validate_shape_guards(
     program: &ExecProgram,
     input_shapes: &[&[usize]],
@@ -602,27 +528,7 @@ pub(crate) fn validate_shape_guards(
     Ok(())
 }
 
-/// Evaluate an [`ExecProgram`] with caller-owned backend runtime cache state.
-pub(crate) fn eval_exec_ir_with_backend_cache<B: TensorBackend + 'static>(
-    backend: &mut B,
-    program: &ExecProgram,
-    inputs: Vec<Tensor>,
-    backend_cache: &mut B::RuntimeCache,
-) -> Result<Vec<Tensor>> {
-    validate_exec_input_count(program, inputs.len(), "initialize_exec_slots_in")?;
-    let input_shapes: Vec<&[usize]> = inputs.iter().map(Tensor::shape).collect();
-    validate_shape_guards(program, &input_shapes)?;
-    let mut slots = Vec::new();
-    crate::segment::eval_exec_segmented_with_cache_and_workspace(
-        backend,
-        program,
-        inputs,
-        &mut slots,
-        backend_cache,
-        None,
-    )
-}
-
+#[cfg(test)]
 pub(crate) fn eval_exec_ir_unsegmented_with_cache<B: TensorBackend + 'static>(
     backend: &mut B,
     program: &ExecProgram,
@@ -632,6 +538,7 @@ pub(crate) fn eval_exec_ir_unsegmented_with_cache<B: TensorBackend + 'static>(
     eval_exec_ir_unsegmented_with_cache_and_workspace(backend, program, inputs, &mut slots, None)
 }
 
+#[cfg(test)]
 pub(crate) fn eval_exec_ir_unsegmented_with_cache_and_workspace<B: TensorBackend + 'static>(
     backend: &mut B,
     program: &ExecProgram,

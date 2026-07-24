@@ -6,14 +6,8 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use computegraph::compile::compile;
 use computegraph::graph::GraphBuilder;
-use computegraph::materialize::materialize_merge;
-use computegraph::resolve::resolve;
-#[cfg(feature = "autodiff")]
-use computegraph::types::{LocalValueId, OperationRole};
-use computegraph::types::{ValueKey, ValueRef};
-use smallvec::SmallVec;
+use computegraph::types::ValueRef;
 #[cfg(feature = "autodiff")]
 use tenferro_ad::semantic_extension::{
     AdValue, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
@@ -23,39 +17,21 @@ use tenferro_ad::semantic_extension::{
 };
 use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
-use tenferro_ops::ad::context::ShapeGuardContext;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ad::transpose_input::TransposeInputRef;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ad::PrimitiveRuleBuilder;
-#[cfg(feature = "autodiff")]
 use tenferro_ops::dim_expr::DimExpr;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ext_op::{ExtensionLinearTransposeRule, ExtensionLinearizeRule};
 use tenferro_ops::ext_op::{
     ExtensionLoweringError, ExtensionLoweringResult, ExtensionOp, HostReference,
 };
-use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
-use tenferro_runtime::extension::{
-    ExecInstruction, ExecOp, ExecProgram, ExtensionCacheKey, ExtensionExecutionContext,
-};
+use tenferro_runtime::extension::{ExtensionCacheKey, ExtensionExecutionContext};
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
-use tenferro_tensor::{
-    DType, Error as TensorError, RuntimeCacheControl, Tensor, TensorBackend, TensorRead,
-};
-#[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
+use tenferro_tensor::{DType, Error as TensorError, Tensor, TensorBackend, TensorRead};
 
 use crate::builder::build_einsum_graph;
 use crate::cache::{
-    einsum_subscripts_retained_bytes, saturating_sum, vec_of_vec_retained_bytes,
-    vec_retained_bytes, EINSUM_EXTENSION_FAMILY_ID, EINSUM_RUNTIME_EXEC_PROGRAMS_CACHE,
-    EINSUM_RUNTIME_PLANS_CACHE,
+    einsum_subscripts_retained_bytes, saturating_sum, vec_retained_bytes,
+    EINSUM_EXTENSION_FAMILY_ID, EINSUM_RUNTIME_PLANS_CACHE,
 };
 #[cfg(test)]
 use crate::optimize::default_auto_options;
@@ -67,8 +43,6 @@ use crate::util::map_label_occurrences;
 use crate::{
     ContractionTree, EinsumSubscripts, Error as EinsumError, Result as EinsumResult, Subscripts,
 };
-
-type InputIndexVec = SmallVec<[usize; 8]>;
 
 /// Standard einsum extension payload.
 ///
@@ -128,6 +102,7 @@ impl EinsumExtensionOp {
 
     /// Create an einsum extension payload with an explicit output shape hint.
     #[must_use]
+    #[cfg(any(feature = "autodiff", test))]
     pub(crate) fn with_output_shape_hint(
         subscripts: EinsumSubscripts,
         output_shape_hint: Vec<SymDim>,
@@ -348,20 +323,6 @@ fn concrete_sym_shape_slices(input_shapes: &[&[SymDim]]) -> Option<Vec<Vec<usize
         .collect()
 }
 
-/// Return the explicit einsum extension AD rule set.
-#[cfg(feature = "autodiff")]
-///
-/// # Errors
-///
-/// Returns [`ExtensionRegistryError::MalformedFamilyId`] if the einsum family
-/// identifier is invalid, or [`ExtensionRegistryError::DuplicateRule`] if a
-/// rule for the family and role is already present.
-pub fn ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
-    ExtensionRuleSet::new()
-        .with_linearize(Arc::new(EinsumAdRule))?
-        .with_linear_transpose(Arc::new(EinsumAdRule))
-}
-
 /// Return the semantic-program einsum extension AD rules.
 #[cfg(feature = "autodiff")]
 ///
@@ -381,166 +342,6 @@ pub fn semantic_ad_rules(
 #[derive(Debug)]
 #[cfg(feature = "autodiff")]
 struct EinsumAdRule;
-
-#[cfg(feature = "autodiff")]
-impl ExtensionLinearizeRule for EinsumAdRule {
-    fn family_id(&self) -> &'static str {
-        EINSUM_EXTENSION_FAMILY_ID
-    }
-
-    fn linearize(
-        &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        primal_in: &[ValueKey<StdTensorOp>],
-        _primal_out: &[ValueKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValueId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let op = downcast_ad_op(op, ADRuleKind::Jvp)?;
-        let mut terms = Vec::new();
-
-        for (active_idx, tangent) in tangent_in.iter().enumerate() {
-            let Some(dt) = tangent else {
-                continue;
-            };
-
-            let mut inputs = Vec::with_capacity(primal_in.len());
-            for (input_idx, key) in primal_in.iter().enumerate() {
-                if input_idx == active_idx {
-                    inputs.push(ValueRef::Local(*dt));
-                } else {
-                    inputs.push(ValueRef::External(key.clone()));
-                }
-            }
-
-            let out = builder.add_operation(
-                StdTensorOp::Extension(Arc::new(op.clone())),
-                inputs,
-                OperationRole::Linearized {
-                    active_mask: (0..primal_in.len()).map(|idx| idx == active_idx).collect(),
-                },
-            );
-            terms.push(out[0]);
-        }
-
-        Ok(vec![sum_terms(builder, terms)])
-    }
-}
-
-#[cfg(feature = "autodiff")]
-impl ExtensionLinearTransposeRule for EinsumAdRule {
-    fn family_id(&self) -> &'static str {
-        EINSUM_EXTENSION_FAMILY_ID
-    }
-
-    fn linear_transpose(
-        &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
-        active_mask: &[bool],
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let op = downcast_ad_op(op, ADRuleKind::Transpose)?;
-        let inputs: Vec<_> = inputs.iter().map(TransposeInputRef::new).collect();
-        let input_labels = &op.subscripts.inputs;
-        let output_labels = &op.subscripts.output;
-        let input_count = input_labels.len();
-
-        let Some(ct) = cotangent_out.first().copied().flatten() else {
-            return Ok(vec![None; input_count]);
-        };
-        let primal_input_shapes: Vec<Vec<SymDim>> = inputs
-            .iter()
-            .map(|input| {
-                let metadata = input.metadata_value();
-                ctx.shape_of(&metadata).map(|shape| shape.to_vec())
-            })
-            .collect::<Result<_, _>>()?;
-        let cotangent_shape = op.output_shape_hint.clone().ok_or_else(|| {
-            ADRuleError::unsupported(
-                "einsum VJP requires an output shape hint for cotangent planning",
-                ADRuleKind::Transpose,
-            )
-        })?;
-
-        let mut result = Vec::with_capacity(input_count);
-        for active_idx in 0..input_count {
-            if !active_mask.get(active_idx).copied().unwrap_or(false) {
-                result.push(None);
-                continue;
-            }
-
-            let mut available_labels: HashSet<u32> = output_labels.iter().copied().collect();
-            for (input_idx, labels) in input_labels.iter().enumerate() {
-                if input_idx != active_idx {
-                    available_labels.extend(labels.iter().copied());
-                }
-            }
-            let vjp_output_labels: Vec<u32> = input_labels[active_idx]
-                .iter()
-                .copied()
-                .filter(|label| available_labels.contains(label))
-                .collect();
-            let mut vjp_input_labels = Vec::with_capacity(input_count);
-            let mut vjp_inputs = Vec::with_capacity(input_count);
-            let mut vjp_input_shapes = Vec::with_capacity(input_count);
-            vjp_input_labels.push(output_labels.clone());
-            vjp_inputs.push(ValueRef::Local(ct));
-            vjp_input_shapes.push(cotangent_shape.clone());
-
-            for input_idx in 0..input_count {
-                if input_idx == active_idx {
-                    continue;
-                }
-                vjp_input_labels.push(input_labels[input_idx].clone());
-                vjp_input_shapes.push(primal_input_shapes[input_idx].clone());
-                let fixed_input = inputs[input_idx].fixed_value("einsum VJP", input_idx)?;
-                vjp_inputs.push(conjugate_primal_if_complex(builder, fixed_input, ctx)?);
-            }
-
-            let output_shape_hint = primal_input_shapes[active_idx].clone();
-            let vjp_op = vjp_einsum_op_with_inherited_plan(
-                op,
-                active_idx,
-                EinsumSubscripts {
-                    inputs: vjp_input_labels,
-                    output: vjp_output_labels.clone(),
-                },
-                output_shape_hint.clone(),
-                &vjp_input_shapes,
-            )?;
-            let out = builder.add_operation(
-                StdTensorOp::Extension(Arc::new(vjp_op)),
-                vjp_inputs,
-                OperationRole::Linearized {
-                    active_mask: std::iter::once(true)
-                        .chain(std::iter::repeat_n(false, input_count.saturating_sub(1)))
-                        .collect(),
-                },
-            );
-            let mut cotangent = out[0];
-            if vjp_output_labels != input_labels[active_idx] {
-                let (shape, shape_sources) =
-                    inputs[active_idx].shape_operand(output_shape_hint.len(), 1, ctx)?;
-                let remapped = broadcast_einsum_vjp_to_input_shape(
-                    builder,
-                    cotangent,
-                    &vjp_output_labels,
-                    &input_labels[active_idx],
-                    shape,
-                    shape_sources,
-                )?;
-                cotangent = remapped;
-            }
-            result.push(Some(cotangent));
-        }
-
-        Ok(result)
-    }
-}
 
 #[cfg(feature = "autodiff")]
 impl SemanticLinearizeRule for EinsumAdRule {
@@ -712,8 +513,7 @@ fn semantic_vjp_einsum_op(
     input_shapes: &[Vec<DimExpr>],
 ) -> std::result::Result<EinsumExtensionOp, SemanticAdError> {
     let plan_spec =
-        vjp_plan_spec_for_active(primal_op.plan_spec(), primal_op.input_count(), active_idx)
-            .map_err(|source| semantic_einsum_unsupported(source.to_string()))?;
+        vjp_plan_spec_for_active(primal_op.plan_spec(), primal_op.input_count(), active_idx)?;
     let mut op = EinsumExtensionOp::with_plan_spec(subscripts.clone(), plan_spec.clone());
     let sym_shapes: Vec<Vec<SymDim>> = input_shapes
         .iter()
@@ -851,48 +651,15 @@ fn semantic_einsum_unsupported(message: impl Into<String>) -> SemanticAdError {
 }
 
 #[cfg(feature = "autodiff")]
-fn vjp_einsum_op_with_inherited_plan(
-    primal_op: &EinsumExtensionOp,
-    active_idx: usize,
-    subscripts: EinsumSubscripts,
-    output_shape_hint: Vec<SymDim>,
-    input_shapes: &[Vec<SymDim>],
-) -> ADRuleResult<EinsumExtensionOp> {
-    let plan_spec =
-        vjp_plan_spec_for_active(primal_op.plan_spec(), primal_op.input_count(), active_idx)?;
-    let mut op = EinsumExtensionOp::with_output_shape_hint(
-        subscripts.clone(),
-        output_shape_hint,
-        plan_spec.clone(),
-    );
-    if let Some(concrete_shapes) = concrete_sym_shapes(input_shapes) {
-        let shape_refs: Vec<&[usize]> = concrete_shapes.iter().map(Vec::as_slice).collect();
-        let raw_subscripts = Subscripts::from(&subscripts);
-        let tree =
-            resolve_plan_spec(&plan_spec, &raw_subscripts, &shape_refs).map_err(|err| {
-                ADRuleError::unsupported(
-                    format!(
-                        "failed to resolve inherited einsum VJP plan for active input {active_idx}: {err}"
-                    ),
-                    ADRuleKind::Transpose,
-                )
-            })?;
-        op = op.with_static_tree_hint(Arc::new(tree));
-    }
-    Ok(op)
-}
-
-#[cfg(feature = "autodiff")]
 fn vjp_plan_spec_for_active(
     primal_plan: &EinsumPlanSpec,
     input_count: usize,
     active_idx: usize,
-) -> ADRuleResult<EinsumPlanSpec> {
+) -> std::result::Result<EinsumPlanSpec, SemanticAdError> {
     if active_idx >= input_count {
-        return Err(ADRuleError::unsupported(
-            format!("einsum VJP active input {active_idx} is outside {input_count} inputs"),
-            ADRuleKind::Transpose,
-        ));
+        return Err(semantic_einsum_unsupported(format!(
+            "einsum VJP active input {active_idx} is outside {input_count} inputs"
+        )));
     }
 
     match primal_plan {
@@ -900,12 +667,9 @@ fn vjp_plan_spec_for_active(
         EinsumPlanSpec::LeftToRight => Ok(EinsumPlanSpec::LeftToRight),
         EinsumPlanSpec::Path(path) => {
             let pairs = jax_path_to_v1_pairs(path, input_count).map_err(|err| {
-                ADRuleError::unsupported(
-                    format!(
-                        "failed to inherit einsum Path plan for VJP active input {active_idx}: {err}"
-                    ),
-                    ADRuleKind::Transpose,
-                )
+                semantic_einsum_unsupported(format!(
+                    "failed to inherit einsum Path plan for VJP active input {active_idx}: {err}"
+                ))
             })?;
             derive_vjp_fixed_pairs(&pairs, input_count, active_idx).map(EinsumPlanSpec::FixedPairs)
         }
@@ -920,29 +684,24 @@ fn derive_vjp_fixed_pairs(
     primal_pairs: &[(usize, usize)],
     input_count: usize,
     active_idx: usize,
-) -> ADRuleResult<Vec<(usize, usize)>> {
+) -> std::result::Result<Vec<(usize, usize)>, SemanticAdError> {
     if input_count == 0 {
-        return Err(ADRuleError::unsupported(
+        return Err(semantic_einsum_unsupported(
             "einsum VJP cannot derive a plan for zero primal inputs",
-            ADRuleKind::Transpose,
         ));
     }
     if active_idx >= input_count {
-        return Err(ADRuleError::unsupported(
-            format!("einsum VJP active input {active_idx} is outside {input_count} inputs"),
-            ADRuleKind::Transpose,
-        ));
+        return Err(semantic_einsum_unsupported(format!(
+            "einsum VJP active input {active_idx} is outside {input_count} inputs"
+        )));
     }
     let required_steps = input_count.saturating_sub(1);
     if primal_pairs.len() != required_steps {
-        return Err(ADRuleError::unsupported(
-            format!(
-                "einsum VJP cannot inherit explicit plan for active input {active_idx}: \
-                 expected {required_steps} primal steps for {input_count} inputs, got {}",
-                primal_pairs.len()
-            ),
-            ADRuleKind::Transpose,
-        ));
+        return Err(semantic_einsum_unsupported(format!(
+            "einsum VJP cannot inherit explicit plan for active input {active_idx}: \
+             expected {required_steps} primal steps for {input_count} inputs, got {}",
+            primal_pairs.len()
+        )));
     }
     if input_count == 1 {
         return Ok(Vec::new());
@@ -971,14 +730,11 @@ fn derive_vjp_fixed_pairs(
     )?;
     let expected_final = input_count + pairs.len() - 1;
     if final_id != expected_final || pairs.len() != required_steps {
-        return Err(ADRuleError::unsupported(
-            format!(
-                "einsum VJP plan derivation for active input {active_idx} produced an invalid \
-                 tree: final id {final_id}, expected {expected_final}, steps {}",
-                pairs.len()
-            ),
-            ADRuleKind::Transpose,
-        ));
+        return Err(semantic_einsum_unsupported(format!(
+            "einsum VJP plan derivation for active input {active_idx} produced an invalid \
+             tree: final id {final_id}, expected {expected_final}, steps {}",
+            pairs.len()
+        )));
     }
     Ok(pairs)
 }
@@ -988,7 +744,7 @@ fn fixed_pair_children(
     pairs: &[(usize, usize)],
     input_count: usize,
     active_idx: usize,
-) -> ADRuleResult<Vec<Option<(usize, usize)>>> {
+) -> std::result::Result<Vec<Option<(usize, usize)>>, SemanticAdError> {
     let mut live = vec![false; input_count + pairs.len()];
     for slot in live.iter_mut().take(input_count) {
         *slot = true;
@@ -1042,7 +798,7 @@ fn emit_vjp_adjoint(
     active_idx: usize,
     primal_to_vjp: &[Option<usize>],
     pairs: &mut Vec<(usize, usize)>,
-) -> ADRuleResult<usize> {
+) -> std::result::Result<usize, SemanticAdError> {
     if node < input_count {
         return if node == active_idx {
             Ok(cotangent_id)
@@ -1119,7 +875,7 @@ fn emit_vjp_subtree(
     active_idx: usize,
     primal_to_vjp: &[Option<usize>],
     pairs: &mut Vec<(usize, usize)>,
-) -> ADRuleResult<usize> {
+) -> std::result::Result<usize, SemanticAdError> {
     if node < input_count {
         return primal_to_vjp[node].ok_or_else(|| {
             invalid_vjp_plan_error(
@@ -1168,7 +924,7 @@ fn subtree_contains_active(
     children: &[Option<(usize, usize)>],
     input_count: usize,
     active_idx: usize,
-) -> ADRuleResult<bool> {
+) -> std::result::Result<bool, SemanticAdError> {
     if node < input_count {
         return Ok(node == active_idx);
     }
@@ -1182,11 +938,10 @@ fn subtree_contains_active(
 }
 
 #[cfg(feature = "autodiff")]
-fn invalid_vjp_plan_error(active_idx: usize, reason: String) -> ADRuleError {
-    ADRuleError::unsupported(
-        format!("einsum VJP cannot inherit explicit plan for active input {active_idx}: {reason}"),
-        ADRuleKind::Transpose,
-    )
+fn invalid_vjp_plan_error(active_idx: usize, reason: String) -> SemanticAdError {
+    semantic_einsum_unsupported(format!(
+        "einsum VJP cannot inherit explicit plan for active input {active_idx}: {reason}"
+    ))
 }
 
 #[cfg(feature = "autodiff")]
@@ -1195,73 +950,6 @@ fn concrete_sym_shapes(shapes: &[Vec<SymDim>]) -> Option<Vec<Vec<usize>>> {
         .iter()
         .map(|shape| shape.iter().map(SymDim::constant_value).collect())
         .collect()
-}
-
-#[cfg(feature = "autodiff")]
-fn broadcast_einsum_vjp_to_input_shape(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    cotangent: LocalValueId,
-    cotangent_labels: &[u32],
-    input_labels: &[u32],
-    shape: Vec<DimExpr>,
-    shape_sources: Vec<ValueRef<StdTensorOp>>,
-) -> ADRuleResult<LocalValueId> {
-    let dims = map_label_occurrences(cotangent_labels, input_labels).ok_or_else(|| {
-        ADRuleError::unsupported(
-            format!(
-                "einsum VJP broadcast remap failed for cotangent labels {cotangent_labels:?} \
-                 into active input labels {input_labels:?}"
-            ),
-            ADRuleKind::Transpose,
-        )
-    })?;
-    let source_count = shape_sources.len();
-    let mut inputs = vec![ValueRef::Local(cotangent)];
-    inputs.extend(shape_sources);
-    let active_mask = std::iter::once(true)
-        .chain(std::iter::repeat_n(false, source_count))
-        .collect();
-    let broadcast = builder.add_operation(
-        StdTensorOp::BroadcastInDim { shape, dims },
-        inputs,
-        OperationRole::Linearized { active_mask },
-    )[0];
-    Ok(project_repeated_labels_to_diagonal(
-        builder,
-        broadcast,
-        input_labels,
-    ))
-}
-
-#[cfg(feature = "autodiff")]
-fn project_repeated_labels_to_diagonal(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    cotangent: LocalValueId,
-    labels: &[u32],
-) -> LocalValueId {
-    let mut result = cotangent;
-    let mut first_axis_by_label = HashMap::new();
-    for (axis_b, label) in labels.iter().copied().enumerate() {
-        let Some(&axis_a) = first_axis_by_label.get(&label) else {
-            first_axis_by_label.insert(label, axis_b);
-            continue;
-        };
-        let extracted = builder.add_operation(
-            StdTensorOp::ExtractDiag { axis_a, axis_b },
-            vec![ValueRef::Local(result)],
-            OperationRole::Linearized {
-                active_mask: vec![true],
-            },
-        )[0];
-        result = builder.add_operation(
-            StdTensorOp::EmbedDiag { axis_a, axis_b },
-            vec![ValueRef::Local(extracted)],
-            OperationRole::Linearized {
-                active_mask: vec![true],
-            },
-        )[0];
-    }
-    result
 }
 
 define_extension_runtime! {
@@ -1300,68 +988,10 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         })?
     };
 
-    if is_binary_non_contracting(&subs) {
-        let output = ctx
-            .backend_mut()
-            .with_backend_session(|exec| crate::eager::eager_einsum_exec(exec, inputs, &tree))?;
-        return Ok(vec![output]);
-    }
-
-    let (backend, caches) = ctx.parts_mut();
-    let compiler_options = tenferro_runtime::extension::CompilerOptions::default();
-    let optimizer_fingerprint = compiler_options.optimizer.fingerprint();
-    let plan_hash = plan_spec_hash(op.plan_spec());
-    let key = runtime_exec_program_cache_key(op, inputs, &shapes, plan_hash, optimizer_fingerprint);
-    let cache_matches = caches
-        .get::<CachedRuntimeExecProgram<B::RuntimeCache>>(&key)
-        .is_some_and(|cached| {
-            let key_data = &cached.key_data;
-            key_data.matches_runtime_exec_program(op, inputs, &shapes, optimizer_fingerprint)
-        });
-    if !cache_matches {
-        let key_data =
-            RuntimeExecProgramCacheKeyData::new(op, inputs, &shapes, optimizer_fingerprint);
-        let cached = build_runtime_exec_program::<B>(
-            tree.as_ref(),
-            inputs,
-            &shapes,
-            compiler_options,
-            key_data,
-        )?;
-        caches.put_with_retained_bytes(key, cached, |cached| {
-            cached_runtime_exec_program_retained_bytes(cached)
-        });
-    }
-    let cached = caches
-        .get_mut::<CachedRuntimeExecProgram<B::RuntimeCache>>(&key)
-        .ok_or_else(|| {
-            tenferro_tensor::Error::runtime_state(
-                "einsum_extension",
-                "runtime exec program cache entry missing after insertion",
-            )
-        })?;
-    let key_data = &cached.key_data;
-    if !key_data.matches_runtime_exec_program(op, inputs, &shapes, optimizer_fingerprint) {
-        return Err(tenferro_tensor::Error::runtime_state(
-            "einsum_extension",
-            "runtime exec program cache hash collision was not replaced",
-        ));
-    }
-    let program_inputs = runtime_program_inputs(inputs, cached.input_indices.as_slice())?;
-    let mut outputs = tenferro_runtime::extension::execute_lowered_program_with_backend_cache(
-        backend,
-        &cached.program,
-        program_inputs,
-        &mut cached.backend_cache,
-    )
-    .map_err(|err| tenferro_tensor::Error::backend_source("einsum_extension", err))?;
-    if outputs.len() != 1 {
-        return Err(tenferro_tensor::Error::runtime_state(
-            "einsum_extension",
-            format!("expected 1 output, got {}", outputs.len()),
-        ));
-    }
-    Ok(vec![outputs.remove(0)])
+    let output = ctx
+        .backend_mut()
+        .with_backend_session(|exec| crate::eager::eager_einsum_exec(exec, inputs, &tree))?;
+    Ok(vec![output])
 }
 
 fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
@@ -1407,18 +1037,6 @@ fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
     Ok(vec![output])
 }
 
-fn is_binary_non_contracting(subs: &Subscripts) -> bool {
-    if subs.inputs.len() != 2 {
-        return false;
-    }
-
-    let lhs = &subs.inputs[0];
-    let rhs = &subs.inputs[1];
-    let output = &subs.output;
-    !lhs.iter()
-        .any(|label| rhs.contains(label) && !output.contains(label))
-}
-
 #[derive(Clone)]
 struct RuntimeTreeCacheKeyData {
     subscripts: EinsumSubscripts,
@@ -1462,242 +1080,6 @@ impl RuntimeTreeCacheKeyData {
 struct CachedRuntimeTree {
     key_data: RuntimeTreeCacheKeyData,
     tree: Arc<ContractionTree>,
-}
-
-#[derive(Clone)]
-struct RuntimeExecProgramCacheKeyData {
-    subscripts: EinsumSubscripts,
-    shapes: Vec<Vec<usize>>,
-    input_dtypes: Vec<DType>,
-    plan_spec: EinsumPlanSpec,
-    optimizer_fingerprint: u64,
-}
-
-impl RuntimeExecProgramCacheKeyData {
-    fn new(
-        op: &EinsumExtensionOp,
-        inputs: &[&Tensor],
-        shapes: &[Vec<usize>],
-        optimizer_fingerprint: u64,
-    ) -> Self {
-        Self {
-            subscripts: op.subscripts().clone(),
-            shapes: shapes.to_vec(),
-            input_dtypes: inputs.iter().map(|tensor| tensor.dtype()).collect(),
-            plan_spec: op.plan_spec().clone(),
-            optimizer_fingerprint,
-        }
-    }
-
-    fn matches_runtime_exec_program(
-        &self,
-        op: &EinsumExtensionOp,
-        inputs: &[&Tensor],
-        shapes: &[Vec<usize>],
-        optimizer_fingerprint: u64,
-    ) -> bool {
-        self.subscripts == *op.subscripts()
-            && self.shapes.as_slice() == shapes
-            && self.optimizer_fingerprint == optimizer_fingerprint
-            && plan_specs_equal(&self.plan_spec, op.plan_spec())
-            && self.input_dtypes.len() == inputs.len()
-            && self
-                .input_dtypes
-                .iter()
-                .zip(inputs.iter())
-                .all(|(&dtype, tensor)| dtype == tensor.dtype())
-    }
-
-    fn retained_bytes(&self) -> usize {
-        saturating_sum([
-            einsum_subscripts_retained_bytes(&self.subscripts),
-            saturating_sum(self.shapes.iter().map(vec_retained_bytes)),
-            vec_retained_bytes(&self.input_dtypes),
-            plan_spec_retained_bytes(&self.plan_spec),
-            std::mem::size_of_val(&self.optimizer_fingerprint),
-        ])
-    }
-}
-
-struct CachedRuntimeExecProgram<C> {
-    key_data: RuntimeExecProgramCacheKeyData,
-    program: ExecProgram,
-    input_indices: InputIndexVec,
-    backend_cache: C,
-}
-
-fn runtime_exec_program_cache_key(
-    op: &EinsumExtensionOp,
-    inputs: &[&Tensor],
-    shapes: &[Vec<usize>],
-    plan_hash: u64,
-    optimizer_fingerprint: u64,
-) -> ExtensionCacheKey {
-    let mut hasher = DefaultHasher::new();
-    op.subscripts().hash(&mut hasher);
-    shapes.hash(&mut hasher);
-    for input in inputs {
-        input.dtype().hash(&mut hasher);
-    }
-    plan_hash.hash(&mut hasher);
-    optimizer_fingerprint.hash(&mut hasher);
-    ExtensionCacheKey::new(
-        EINSUM_EXTENSION_FAMILY_ID,
-        EINSUM_RUNTIME_EXEC_PROGRAMS_CACHE,
-        hasher.finish(),
-    )
-}
-
-fn build_runtime_exec_program<B: TensorBackend>(
-    tree: &ContractionTree,
-    inputs: &[&Tensor],
-    shapes: &[Vec<usize>],
-    compiler_options: tenferro_runtime::extension::CompilerOptions,
-    key_data: RuntimeExecProgramCacheKeyData,
-) -> tenferro_tensor::Result<CachedRuntimeExecProgram<B::RuntimeCache>> {
-    let mut builder = GraphBuilder::<StdTensorOp>::new();
-    let mut input_vals = Vec::with_capacity(inputs.len());
-    for input_idx in 0..inputs.len() {
-        let local = builder.add_input(TensorInputKey::User {
-            id: input_idx as u64,
-        });
-        input_vals.push(ValueRef::Local(local));
-    }
-
-    let result_ref = build_einsum_graph(&mut builder, tree, &input_vals, shapes)
-        .map_err(einsum_runtime_error)?;
-    let result_local = match result_ref {
-        ValueRef::Local(local) => local,
-        ValueRef::External(_) => {
-            return Err(tenferro_tensor::Error::runtime_state(
-                "einsum_extension",
-                "einsum builder returned an external value at runtime",
-            ))
-        }
-    };
-    builder.set_outputs(vec![result_local]);
-    let graph = Arc::new(builder.build());
-    let output_key = graph.values()[result_local].key.clone();
-
-    let view = resolve(vec![graph]);
-    let graph = materialize_merge(&view, &[output_key]);
-    let compiled = compile(&graph);
-
-    let mut input_indices = InputIndexVec::new();
-    let mut input_dtypes = Vec::with_capacity(graph.inputs.len());
-    let mut input_shapes = Vec::with_capacity(graph.inputs.len());
-    for key in &graph.inputs {
-        match key {
-            ValueKey::Input(TensorInputKey::User { id }) => {
-                let input_idx = *id as usize;
-                let tensor = inputs.get(input_idx).ok_or_else(|| {
-                    tenferro_tensor::Error::runtime_state(
-                        "einsum_extension",
-                        format!("runtime input {input_idx} missing"),
-                    )
-                })?;
-                input_indices.push(input_idx);
-                input_dtypes.push(tensor.dtype());
-                input_shapes.push(tenferro_ops::dim_expr::DimExpr::from_concrete(
-                    tensor.shape(),
-                ));
-            }
-            other => {
-                return Err(tenferro_tensor::Error::runtime_state(
-                    "einsum_extension",
-                    format!("unexpected runtime input key: {other:?}"),
-                ))
-            }
-        }
-    }
-
-    let program = tenferro_runtime::extension::compile_std_to_exec_with_options(
-        &compiled,
-        &input_dtypes,
-        &input_shapes,
-        compiler_options,
-    )
-    .map_err(|err| tenferro_tensor::Error::backend_source("einsum_extension", err))?;
-    Ok(CachedRuntimeExecProgram {
-        key_data,
-        program,
-        input_indices,
-        backend_cache: B::RuntimeCache::default(),
-    })
-}
-
-fn runtime_program_inputs(
-    inputs: &[&Tensor],
-    input_indices: &[usize],
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let mut program_inputs = Vec::with_capacity(input_indices.len());
-    for &input_idx in input_indices {
-        let tensor = inputs.get(input_idx).ok_or_else(|| {
-            tenferro_tensor::Error::runtime_state(
-                "einsum_extension",
-                format!("runtime input {input_idx} missing"),
-            )
-        })?;
-        program_inputs.push((*tensor).clone());
-    }
-    Ok(program_inputs)
-}
-
-fn cached_runtime_exec_program_retained_bytes<C: RuntimeCacheControl>(
-    cached: &CachedRuntimeExecProgram<C>,
-) -> usize {
-    saturating_sum([
-        std::mem::size_of::<CachedRuntimeExecProgram<C>>(),
-        cached.key_data.retained_bytes(),
-        exec_program_retained_bytes(&cached.program),
-        smallvec_retained_bytes(&cached.input_indices),
-        cached.backend_cache.stats().retained_bytes,
-    ])
-}
-
-fn smallvec_retained_bytes<A: smallvec::Array>(values: &SmallVec<A>) -> usize {
-    if values.spilled() {
-        values
-            .capacity()
-            .saturating_mul(std::mem::size_of::<A::Item>())
-    } else {
-        0
-    }
-}
-
-fn exec_program_retained_bytes(program: &ExecProgram) -> usize {
-    saturating_sum([
-        std::mem::size_of::<ExecProgram>(),
-        vec_retained_bytes(&program.instructions),
-        saturating_sum(
-            program
-                .instructions
-                .iter()
-                .map(exec_instruction_retained_bytes),
-        ),
-        vec_retained_bytes(&program.input_slots),
-        vec_retained_bytes(&program.output_slots),
-    ])
-}
-
-fn exec_instruction_retained_bytes(inst: &ExecInstruction) -> usize {
-    saturating_sum([
-        std::mem::size_of::<ExecInstruction>(),
-        exec_op_retained_bytes(&inst.op),
-        vec_retained_bytes(&inst.input_slots),
-        vec_retained_bytes(&inst.output_slots),
-        vec_of_vec_retained_bytes(&inst.output_shapes),
-        vec_of_vec_retained_bytes(&inst.output_extents),
-        vec_retained_bytes(&inst.last_use),
-    ])
-}
-
-fn exec_op_retained_bytes(op: &ExecOp) -> usize {
-    match op {
-        ExecOp::Constant { bytes, .. } => vec_retained_bytes(bytes),
-        ExecOp::Extension(extension) => std::mem::size_of_val(extension),
-        _ => 0,
-    }
 }
 
 fn cached_runtime_tree<B: TensorBackend>(
@@ -1771,52 +1153,6 @@ fn plan_spec_retained_bytes(plan_spec: &EinsumPlanSpec) -> usize {
             vec_retained_bytes(path),
         ]),
     }
-}
-
-#[cfg(feature = "autodiff")]
-fn downcast_ad_op(op: &dyn ExtensionOp, kind: ADRuleKind) -> ADRuleResult<&EinsumExtensionOp> {
-    op.as_any()
-        .downcast_ref::<EinsumExtensionOp>()
-        .ok_or_else(|| ADRuleError::unsupported("tenferro.einsum.v1 payload type mismatch", kind))
-}
-
-#[cfg(feature = "autodiff")]
-fn sum_terms(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    terms: Vec<LocalValueId>,
-) -> Option<LocalValueId> {
-    match terms.as_slice() {
-        [] => None,
-        [only] => Some(*only),
-        [head, tail @ ..] => {
-            let mut result = *head;
-            for &term in tail {
-                let sum = builder.add_operation(
-                    StdTensorOp::Add,
-                    vec![ValueRef::Local(result), ValueRef::Local(term)],
-                    OperationRole::Linearized {
-                        active_mask: vec![true, true],
-                    },
-                );
-                result = sum[0];
-            }
-            Some(result)
-        }
-    }
-}
-
-#[cfg(feature = "autodiff")]
-fn conjugate_primal_if_complex(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    input: ValueRef<StdTensorOp>,
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<ValueRef<StdTensorOp>> {
-    Ok(match ctx.dtype_of(&input)? {
-        DType::F32 | DType::F64 | DType::I32 | DType::I64 | DType::Bool => input,
-        DType::C32 | DType::C64 => ValueRef::Local(
-            builder.add_operation(StdTensorOp::Conj, vec![input], OperationRole::Primary)[0],
-        ),
-    })
 }
 
 fn promote_dtypes(dtypes: impl IntoIterator<Item = DType>) -> DType {

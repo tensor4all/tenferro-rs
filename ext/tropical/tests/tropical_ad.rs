@@ -3,7 +3,7 @@
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
 use tenferro_ext_tropical::traced::tropical_dot_general_fused;
-use tenferro_ext_tropical::tropical_ad_rules;
+use tenferro_ext_tropical::tropical_semantic_ad_rules;
 use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
 
@@ -19,7 +19,10 @@ fn run_traced(output: &TracedTensor) -> Tensor {
 
 fn tropical_ad() -> AdContext {
     AdContext::builder()
-        .with_extension_rules(tropical_ad_rules().expect("tropical AD rules"))
+        .with_semantic_extension_rules(
+            tropical_semantic_ad_rules().expect("tropical semantic AD rules"),
+        )
+        .unwrap()
         .build()
         .expect("AD context")
 }

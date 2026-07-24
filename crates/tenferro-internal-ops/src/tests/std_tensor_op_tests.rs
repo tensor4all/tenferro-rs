@@ -1,8 +1,8 @@
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;
-use crate::ext_op::{ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionOp};
+use crate::ext_op::ExtensionOp;
 use crate::std_tensor_op::StdTensorOp;
-use crate::{ExtensionRuleSet, SymDim, TensorMeta};
+use crate::{SymDim, TensorMeta};
 use computegraph::graph::{Graph, GraphBuilder};
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use computegraph::GraphOperation;
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
 };
-use tidu::{ADRuleKind, ADRuleResult, Primitive};
+use tidu::{ADRuleKind, Primitive};
 
 use crate::input_key::TensorInputKey;
 

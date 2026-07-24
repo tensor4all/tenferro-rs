@@ -89,8 +89,6 @@ pub use concrete::{
 #[cfg(feature = "autodiff")]
 pub use eager_ad::{EagerEinsumExt, EagerTensorEinsumExt};
 pub use error::{Error, PlanningError, Result};
-#[cfg(feature = "autodiff")]
-pub use extension::ad_rules;
 pub use extension::register_runtime;
 #[cfg(feature = "autodiff")]
 pub use extension::semantic_ad_rules;
@@ -100,7 +98,7 @@ pub use subscripts::{parse_einsum_subscripts, EinsumSubscripts};
 pub use syntax::nested::NestedEinsum;
 pub use syntax::subscripts::Subscripts;
 pub use tensordot::TensorDotAxes;
-pub use traced::{GraphCompilerEinsumExt, TraceContextEinsumExt, TracedTensorEinsumExt};
+pub use traced::{TraceContextEinsumExt, TracedTensorEinsumExt};
 
 #[cfg(test)]
 mod concrete_tests;

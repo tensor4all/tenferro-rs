@@ -10,10 +10,7 @@ use tenferro_tensor::{Tensor, TensorValue};
 
 use crate::eager::{eager_grad_recording_enabled, record_eager_outputs, EagerRuntime, EagerTensor};
 
-pub use tenferro_ops::ext_op::{
-    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionPrimalVjpRule,
-    ExtensionRegistryError, ExtensionRuleRole, ExtensionRuleSet, HostReference,
-};
+pub use tenferro_ops::ext_op::HostReference;
 pub use tenferro_runtime::extension::{
     apply, ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
     ExtensionExecutionContext, ExtensionExecutor, ExtensionFamilyId, ExtensionOp,

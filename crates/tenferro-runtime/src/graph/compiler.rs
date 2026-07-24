@@ -18,7 +18,7 @@ use super::cache::{
     compile_cache_stats, compute_cache_key, CacheKey, GraphCompilerCacheStats,
     DEFAULT_COMPILE_CACHE_CAPACITY,
 };
-use super::program::{CompiledGraph, GraphProgramInput};
+use super::program::CompiledGraph;
 use crate::compiler::{
     lower_scoped_dim_expr, semantic_staging::lower_semantic_to_exec_staging, CompilerOptions,
 };
@@ -31,11 +31,10 @@ use crate::program::{
 };
 use crate::shape_constraint::SlotScopedShapeConstraint;
 use crate::trace::TracedGraph;
-use crate::traced::{next_input_key, try_concrete_shape, TracedTensor};
+use crate::traced::{try_concrete_shape, TracedTensor};
 
 #[derive(Clone)]
 struct InputDescriptor {
-    key: TensorInputKey,
     dtype: DType,
     shape: Vec<usize>,
     default_tensor: Option<Arc<Tensor>>,
@@ -155,17 +154,12 @@ impl GraphCompiler {
     ///
     /// # Errors
     ///
-    /// Returns typed semantic-staging, shape-inference, validation, or
-    /// extension-lowering failures.
+    /// Returns [`Error::Validation`] for invalid metadata or shape constraints,
+    /// [`Error::Extension`] when extension lowering fails,
+    /// [`Error::RuntimeState`] for inconsistent staging state, or
+    /// [`Error::Internal`] when compilation encounters an invariant violation.
     pub fn compile_traced_graph(&mut self, graph: &TracedGraph) -> Result<CompiledGraph> {
-        let inputs = graph
-            .inputs()
-            .iter()
-            .map(|input| {
-                GraphProgramInput::new(input.key.clone(), input.dtype, input.shape.clone(), None)
-            })
-            .collect();
-        self.compile_frozen_with_inputs(graph.frozen(), inputs)
+        self.compile_frozen(graph.frozen())
     }
 
     /// Compile an immutable semantic program for ordered execution.
@@ -197,52 +191,18 @@ impl GraphCompiler {
     ///
     /// # Errors
     ///
-    /// Returns typed semantic-staging, shape-inference, validation, or
-    /// extension-lowering failures.
+    /// Returns [`Error::Validation`] for invalid metadata or shape constraints,
+    /// [`Error::Extension`] when extension lowering fails,
+    /// [`Error::RuntimeState`] for inconsistent staging state, or
+    /// [`Error::Internal`] when compilation encounters an invariant violation.
     pub fn compile_frozen_program(&mut self, frozen: &FrozenProgram) -> Result<CompiledGraph> {
-        let inputs = frozen
-            .program
-            .inputs()
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(input_idx, value)| {
-                let metadata = frozen.program.value_metadata(value).map_err(|source| {
-                    Error::runtime_state_source(
-                        "GraphCompiler::compile_frozen_program",
-                        crate::error::ErrorPhase::Compile,
-                        source,
-                    )
-                })?;
-                let shape = metadata
-                    .shape()
-                    .iter()
-                    .enumerate()
-                    .map(|(axis, extent)| match extent {
-                        tenferro_ops::ShapeExtent::Exact(expression)
-                        | tenferro_ops::ShapeExtent::UpperBound(expression) => expression.clone(),
-                        tenferro_ops::ShapeExtent::Unknown => DimExpr::InputDim { input_idx, axis },
-                    })
-                    .collect();
-                Ok(GraphProgramInput::new(
-                    next_input_key(),
-                    metadata.dtype(),
-                    shape,
-                    None,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        self.compile_frozen_with_inputs(frozen, inputs)
+        self.compile_frozen(frozen)
     }
 
-    fn compile_frozen_with_inputs(
-        &mut self,
-        frozen: &FrozenProgram,
-        inputs: Vec<GraphProgramInput>,
-    ) -> Result<CompiledGraph> {
+    fn compile_frozen(&mut self, frozen: &FrozenProgram) -> Result<CompiledGraph> {
         let staging = lower_semantic_to_exec_staging(&frozen.program, self.compiler_options)?;
         let staging = self.get_or_compile(staging);
-        Ok(CompiledGraph::new(frozen.clone(), staging, inputs))
+        Ok(CompiledGraph::new(frozen.clone(), staging))
     }
 
     /// Compile multiple traced outputs into one graph program.
@@ -327,7 +287,6 @@ impl GraphCompiler {
                 .insert(
                     key.clone(),
                     InputDescriptor {
-                        key: key.clone(),
                         dtype: *dtype,
                         shape: (*shape).to_vec(),
                         default_tensor: None,
@@ -617,12 +576,7 @@ impl GraphCompiler {
                 ));
             };
             let descriptor = descriptor_for_input(input_key, binding_specs, default_inputs)?;
-            descriptors.push(GraphProgramInput::new(
-                descriptor.key,
-                descriptor.dtype,
-                DimExpr::from_concrete(&descriptor.shape),
-                descriptor.default_tensor,
-            ));
+            descriptors.push(descriptor);
         }
         if let Some(explicit_input_order) = explicit_input_order {
             let input_position_by_key: HashMap<_, _> = graph
@@ -661,7 +615,7 @@ impl GraphCompiler {
             compile_materialized_semantic_program(&compiled, &descriptors, &scoped_constraints)?;
         let exec = lower_semantic_to_exec_staging(&semantic.program, self.compiler_options)?;
         let exec = self.get_or_compile(exec);
-        Ok(CompiledGraph::new(semantic, exec, descriptors))
+        Ok(CompiledGraph::new(semantic, exec))
     }
 
     fn get_or_compile(&mut self, exec: ExecProgram) -> ExecProgram {
@@ -678,7 +632,7 @@ impl GraphCompiler {
 
 fn compile_materialized_semantic_program(
     compiled: &CompiledProgram<StdTensorOp>,
-    descriptors: &[GraphProgramInput],
+    descriptors: &[InputDescriptor],
     scoped_constraints: &[SlotScopedShapeConstraint],
 ) -> Result<FrozenProgram> {
     if compiled.input_slots.len() != descriptors.len() {
@@ -702,7 +656,7 @@ fn compile_materialized_semantic_program(
         let value = builder
             .input(ProgramInputSpec::new(
                 descriptor.dtype,
-                descriptor.dim_expr_shape.clone(),
+                DimExpr::from_concrete(&descriptor.shape),
             ))
             .map_err(semantic_build_error)?;
         if let Some(tensor) = &descriptor.default_tensor {
@@ -711,7 +665,7 @@ fn compile_materialized_semantic_program(
                 .map_err(semantic_build_error)?;
         }
         *value_slot = Some(value);
-        slot_shapes[slot] = Some(descriptor.dim_expr_shape.clone());
+        slot_shapes[slot] = Some(DimExpr::from_concrete(&descriptor.shape));
     }
 
     for instruction in &compiled.instructions {
@@ -896,7 +850,6 @@ fn descriptor_for_input(
 ) -> Result<InputDescriptor> {
     if let Some(tensor) = default_inputs.get(key) {
         return Ok(InputDescriptor {
-            key: key.clone(),
             dtype: tensor.dtype(),
             shape: tensor.shape().to_vec(),
             default_tensor: Some(tensor.clone()),
@@ -1242,7 +1195,7 @@ mod tests {
             .instructions
             .iter()
             .find_map(|inst| match &inst.op {
-                crate::extension::ExecOp::Extension(op)
+                crate::exec::ExecOp::Extension(op)
                     if op.family_id() == "tenferro-runtime.test-prunable.v1" =>
                 {
                     Some((

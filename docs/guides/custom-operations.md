@@ -94,13 +94,15 @@ and register `HostReferenceRuntime`; otherwise register a backend-specific
 runtime owned by the extension crate.
 
 For AD, implement the role-specific traits the operation needs:
-`tenferro_ad::extension::ExtensionLinearizeRule`,
-`ExtensionLinearTransposeRule`, and optionally `ExtensionPrimalVjpRule`. Put
-those rules in a `tenferro_ad::extension::ExtensionRuleSet`, and attach that
-set with `tenferro_ad::AdContext::builder().with_extension_rules(...)`. Rule
-builders expose incoming tangents/cotangents and helper methods for emitting
-tensor operations, so extension authors do not need to handle graph IDs
-directly. The extension crate should expose a small `ad_rules()` helper that
+`tenferro_ad::semantic_extension::SemanticLinearizeRule`,
+`SemanticLinearTransposeRule`, and optionally `SemanticPrimalVjpRule`. Put
+those rules in a
+`tenferro_ad::semantic_extension::SemanticExtensionRuleSet`, and attach that
+set with
+`tenferro_ad::AdContext::builder().with_semantic_extension_rules(...)`.
+Requests expose ordered primal values, tangents/cotangents, active masks, and
+provenance; rules emit validated values through `SemanticProgramBuilder`.
+The extension crate should expose a small `semantic_ad_rules()` helper that
 constructs the fresh rule set its operations need.
 
 When porting Julia `frule` / `rrule` code:
@@ -113,7 +115,7 @@ When porting Julia `frule` / `rrule` code:
 
 The lower-level adapter API remains available for specialized extension
 authors who need direct graph-builder control. New extension authors should
-start with role-specific AD rule traits plus an explicit `ExtensionRuleSet`.
+start with role-specific AD rule traits plus an explicit `SemanticExtensionRuleSet`.
 The old `ExtensionFactory` / `register_extension` op-registration API has been
 removed; operation descriptors are carried directly in the graph.
 

@@ -1,9 +1,3 @@
-use std::sync::Arc;
-
-use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::input_key::TensorInputKey;
-use tenferro_tensor::{DType, Tensor};
-
 use crate::exec::ExecProgram;
 use crate::program::{FrozenProgram, ProgramBindings, SemanticProgram};
 
@@ -16,20 +10,11 @@ use crate::program::{FrozenProgram, ProgramBindings, SemanticProgram};
 pub struct CompiledGraph {
     pub(crate) staging: ExecProgram,
     pub(crate) frozen: FrozenProgram,
-    pub(crate) inputs: Vec<GraphProgramInput>,
 }
 
 impl CompiledGraph {
-    pub(crate) fn new(
-        frozen: FrozenProgram,
-        staging: ExecProgram,
-        inputs: Vec<GraphProgramInput>,
-    ) -> Self {
-        Self {
-            staging,
-            frozen,
-            inputs,
-        }
+    pub(crate) fn new(frozen: FrozenProgram, staging: ExecProgram) -> Self {
+        Self { staging, frozen }
     }
 
     /// Borrow the immutable backend-neutral semantic program.
@@ -65,32 +50,5 @@ impl std::fmt::Debug for CompiledGraph {
                 &self.program().semantic_fingerprint(),
             )
             .finish()
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct GraphProgramInput {
-    pub(crate) key: TensorInputKey,
-    pub(crate) dtype: DType,
-    // Preserved for symbolic-shape diagnostics and future graph-input metadata
-    // without exposing `DimExpr` through the stable input-spec accessor.
-    #[allow(dead_code)]
-    pub(crate) dim_expr_shape: Vec<DimExpr>,
-    pub(crate) default_tensor: Option<Arc<Tensor>>,
-}
-
-impl GraphProgramInput {
-    pub(crate) fn new(
-        key: TensorInputKey,
-        dtype: DType,
-        dim_expr_shape: Vec<DimExpr>,
-        default_tensor: Option<Arc<Tensor>>,
-    ) -> Self {
-        Self {
-            key,
-            dtype,
-            dim_expr_shape,
-            default_tensor,
-        }
     }
 }

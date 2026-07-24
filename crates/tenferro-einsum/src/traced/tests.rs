@@ -1,69 +1,52 @@
-use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef};
+use tenferro_runtime::TraceContext;
+use tenferro_tensor::DType;
 
-use super::{einsum, einsum_with};
-use crate::EinsumOptimize;
+use super::TraceContextEinsumExt;
+use crate::{EinsumOptimize, EINSUM_EXTENSION_FAMILY_ID};
 
-#[test]
-fn concrete_traced_nary_einsum_expands_to_standard_graph() {
-    let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
-    let b = TracedTensor::from_vec_col_major(vec![3, 4], vec![1.0_f64; 12]).unwrap();
-    let c = TracedTensor::from_vec_col_major(vec![4, 5], vec![1.0_f64; 20]).unwrap();
-    let mut compiler = GraphCompiler::new();
-
-    let out = einsum(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
-
-    assert!(out
-        .graph()
-        .operations()
-        .iter()
-        .all(|node| { !matches!(node.operation, StdTensorOp::Extension(_)) }));
-    assert!(out
-        .graph()
-        .operations()
-        .iter()
-        .any(|node| { matches!(node.operation, StdTensorOp::DotGeneral { .. }) }));
+fn matrix(rows: usize, cols: usize) -> ProgramInputSpec {
+    ProgramInputSpec::new(DType::F64, [DimExpr::Const(rows), DimExpr::Const(cols)])
 }
 
 #[test]
-fn symbolic_path_traced_nary_einsum_expands_to_standard_graph() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let mut compiler = GraphCompiler::new();
+fn trace_context_nary_einsum_records_one_ordered_semantic_extension() {
+    let mut trace = TraceContext::new();
+    let a = trace.input(matrix(2, 3)).unwrap();
+    let b = trace.input(matrix(3, 4)).unwrap();
+    let c = trace.input(matrix(4, 5)).unwrap();
 
-    let out = einsum_with(
-        &mut compiler,
-        &[&a, &b, &c],
-        "ij,jk,kl->il",
-        EinsumOptimize::Path(vec![(0, 1), (0, 1)]),
-    )
-    .unwrap();
+    let out = trace.einsum(&[a, b, c], "ij,jk,kl->il").unwrap();
+    let graph = trace.finish(&[out]).unwrap();
+    let operations: Vec<_> = graph.program().operations().collect();
 
-    assert!(out
-        .graph()
-        .operations()
-        .iter()
-        .all(|node| { !matches!(node.operation, StdTensorOp::Extension(_)) }));
-    assert!(out
-        .graph()
-        .operations()
-        .iter()
-        .any(|node| { matches!(node.operation, StdTensorOp::DotGeneral { .. }) }));
+    assert_eq!(operations.len(), 1);
+    assert_eq!(operations[0].inputs(), graph.program().inputs());
+    let SemanticOpRef::Extension(op) = operations[0].op() else {
+        panic!("einsum trace must remain a semantic extension");
+    };
+    assert_eq!(op.family_id(), EINSUM_EXTENSION_FAMILY_ID);
 }
 
 #[test]
-fn symbolic_auto_traced_nary_einsum_remains_extension() {
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let mut compiler = GraphCompiler::new();
+fn trace_context_explicit_path_remains_semantic_until_compilation() {
+    let mut trace = TraceContext::new();
+    let a = trace.input(matrix(2, 3)).unwrap();
+    let b = trace.input(matrix(3, 4)).unwrap();
+    let c = trace.input(matrix(4, 5)).unwrap();
 
-    let out = einsum(&mut compiler, &[&a, &b, &c], "ij,jk,kl->il").unwrap();
+    let out = trace
+        .einsum_with(
+            &[a, b, c],
+            "ij,jk,kl->il",
+            EinsumOptimize::Path(vec![(0, 1), (0, 1)]),
+        )
+        .unwrap();
+    let graph = trace.finish(&[out]).unwrap();
 
-    assert!(out
-        .graph()
-        .operations()
-        .iter()
-        .any(|node| { matches!(node.operation, StdTensorOp::Extension(_)) }));
+    assert!(matches!(
+        graph.program().operations().next().unwrap().op(),
+        SemanticOpRef::Extension(_)
+    ));
 }

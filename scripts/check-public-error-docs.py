@@ -48,6 +48,7 @@ DEFERRED_HINT_RE = re.compile(
 # prose spell-checker so boilerplate cannot satisfy the repository contract.
 CONCRETE_ERROR_RE = re.compile(
     r"(?:"
+    r"\bInfallible\b|"
     r"\b(?:Error|ErrorKind)::(?!Validation\b)[A-Za-z0-9_]+\b|"
     r"\bValidationError::[A-Za-z0-9_]+\b|"
     r"\b[A-Z][A-Za-z0-9_]*(?:Error|Failure|Mismatch|OutOfBounds|Overflow|"

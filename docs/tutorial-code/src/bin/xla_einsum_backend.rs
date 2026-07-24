@@ -1,6 +1,8 @@
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::GraphCompilerEinsumExt;
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TraceContext};
 use tenferro_xla::XlaExecutor;
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
@@ -38,23 +40,25 @@ fn tail_value() -> Result<Tensor, Box<dyn std::error::Error>> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut compiler = GraphCompiler::new();
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
-    let product = compiler.einsum(&[&a, &b, &c], "ij,jk,kl->il")?;
-
     let a_value = lhs_value()?;
     let b_value = middle_value()?;
     let c_value = tail_value()?;
-    let program = compiler.compile_with_input_specs(
-        &product,
-        &[
-            (&a, DType::F64, a_value.shape()),
-            (&b, DType::F64, b_value.shape()),
-            (&c, DType::F64, c_value.shape()),
-        ],
-    )?;
+    let mut trace = TraceContext::new();
+    let a = trace.input(ProgramInputSpec::new(
+        a_value.dtype(),
+        DimExpr::from_concrete(a_value.shape()),
+    ))?;
+    let b = trace.input(ProgramInputSpec::new(
+        b_value.dtype(),
+        DimExpr::from_concrete(b_value.shape()),
+    ))?;
+    let c = trace.input(ProgramInputSpec::new(
+        c_value.dtype(),
+        DimExpr::from_concrete(c_value.shape()),
+    ))?;
+    let product = trace.einsum(&[a, b, c], "ij,jk,kl->il")?;
+    let graph = trace.finish(&[product])?;
+    let program = GraphCompiler::new().compile_traced_graph(&graph)?;
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
     executor.register_extension(tenferro_einsum::register_runtime)?;

@@ -41,11 +41,7 @@ pub use ad::context::{
     ShapeGuard, ShapeGuardContext, ShapeGuardError, ShapeGuardFailure, ShapeGuardResult, TensorMeta,
 };
 #[cfg(feature = "autodiff")]
-pub use ext_op::{
-    linearize_extension_rule, transpose_extension_rule, ExtensionAdDispatcher,
-    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionOp, ExtensionPrimalVjpRule,
-    ExtensionRegistryError, ExtensionRuleRole, ExtensionRuleSet, HostReference,
-};
+pub use ext_op::{ExtensionAdDispatcher, ExtensionOp, HostReference};
 #[cfg(not(feature = "autodiff"))]
 pub use ext_op::{ExtensionOp, HostReference};
 pub use shape_constraint::{ExtensionShapeContext, ExtensionShapeError, ShapeRelation};

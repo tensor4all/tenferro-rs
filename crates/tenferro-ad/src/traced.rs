@@ -9,8 +9,7 @@ use computegraph::resolve::{ResolvedView, ValueDef};
 use computegraph::types::ValueKey;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::ExtensionRuleSet;
-use tenferro_ops::ShapeGuardContext;
+use tenferro_ops::{ExtensionAdDispatcher, ShapeGuardContext};
 use tenferro_runtime::ad_support::{
     checkpoint_chain as tensor_checkpoint_chain, checkpoint_tensor,
     extra_roots as tensor_extra_roots, inputs_map as tensor_inputs_map, leaf_input_key,
@@ -52,14 +51,14 @@ fn error_shape_hint(tensor: &TracedTensor) -> Vec<usize> {
 }
 
 fn shape_guard_context(
-    extension_rules: Option<&ExtensionRuleSet>,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
     active_values: Option<Arc<HashSet<ValueKey<StdTensorOp>>>>,
     roots: &[Arc<Graph<StdTensorOp>>],
 ) -> ShapeGuardContext {
     let mut ctx = ShapeGuardContext::with_global_metadata();
     register_shape_sources(&mut ctx, roots);
-    let ctx = match extension_rules {
-        Some(rules) => ctx.with_extension_rules(rules.clone()),
+    let ctx = match extension_ad_dispatcher {
+        Some(dispatcher) => ctx.with_extension_ad_dispatcher(Arc::clone(dispatcher)),
         None => ctx,
     };
     match active_values {
@@ -137,9 +136,9 @@ fn graph_has_registered_primal_vjp(
     view: &ResolvedView<StdTensorOp>,
     outputs: &[ValueKey<StdTensorOp>],
     aliases: &HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
-    extension_rules: Option<&ExtensionRuleSet>,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
 ) -> bool {
-    let Some(extension_rules) = extension_rules else {
+    let Some(extension_ad_dispatcher) = extension_ad_dispatcher else {
         return false;
     };
     let mut seen = HashSet::new();
@@ -150,7 +149,7 @@ fn graph_has_registered_primal_vjp(
         }
         if let ValueKey::Derived { operation, .. } = &key {
             if let StdTensorOp::Extension(ext) = operation.operation() {
-                if extension_rules.lookup_primal_vjp(ext.family_id()).is_some() {
+                if extension_ad_dispatcher.has_primal_vjp(ext.family_id()) {
                     return true;
                 }
             }
@@ -181,17 +180,17 @@ fn is_not_applicable_custom_vjp(err: &ADRuleError) -> bool {
 pub(crate) fn grad_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
-    extension_rules: &ExtensionRuleSet,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
-    grad_with_optional_rules(output, wrt, Some(extension_rules), ad_transform_cache)
+    grad_with_optional_rules(output, wrt, extension_ad_dispatcher, ad_transform_cache)
 }
 
 pub(crate) fn jvp_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     tangent: &TracedTensor,
-    extension_rules: &ExtensionRuleSet,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
     let wrt_input_key = leaf_input_key(wrt)?;
@@ -199,7 +198,7 @@ pub(crate) fn jvp_with_rules_and_cache(
         output,
         wrt,
         tangent,
-        Some(extension_rules),
+        extension_ad_dispatcher,
         ad_transform_cache,
     )?
     .ok_or_else(|| Error::Internal(format!("jvp output is inactive for {:?}", wrt_input_key)))
@@ -208,7 +207,7 @@ pub(crate) fn jvp_with_rules_and_cache(
 pub(crate) fn grad_optional_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
-    extension_rules: &ExtensionRuleSet,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     if output.rank != 0 {
@@ -223,7 +222,7 @@ pub(crate) fn grad_optional_with_rules_and_cache(
         output,
         wrt,
         &seed,
-        Some(extension_rules),
+        extension_ad_dispatcher,
         "grad",
         ad_transform_cache,
     )
@@ -233,14 +232,14 @@ pub(crate) fn jvp_optional_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     tangent: &TracedTensor,
-    extension_rules: &ExtensionRuleSet,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     jvp_optional_impl(
         output,
         wrt,
         tangent,
-        Some(extension_rules),
+        extension_ad_dispatcher,
         ad_transform_cache,
     )
 }
@@ -249,7 +248,7 @@ pub(crate) fn vjp_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
-    extension_rules: &ExtensionRuleSet,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
     let wrt_input_key = leaf_input_key(wrt)?;
@@ -257,7 +256,7 @@ pub(crate) fn vjp_with_rules_and_cache(
         output,
         wrt,
         cotangent,
-        Some(extension_rules),
+        extension_ad_dispatcher,
         "vjp",
         ad_transform_cache,
     )?
@@ -268,14 +267,14 @@ pub(crate) fn vjp_optional_with_rules_and_cache(
     output: &TracedTensor,
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
-    extension_rules: &ExtensionRuleSet,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     vjp_optional_impl(
         output,
         wrt,
         cotangent,
-        Some(extension_rules),
+        extension_ad_dispatcher,
         "vjp",
         ad_transform_cache,
     )
@@ -284,7 +283,7 @@ pub(crate) fn vjp_optional_with_rules_and_cache(
 fn grad_with_optional_rules(
     output: &TracedTensor,
     wrt: &TracedTensor,
-    extension_rules: Option<&ExtensionRuleSet>,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<TracedTensor> {
     if output.rank != 0 {
@@ -300,7 +299,7 @@ fn grad_with_optional_rules(
         output,
         wrt,
         &seed,
-        extension_rules,
+        extension_ad_dispatcher,
         "grad",
         ad_transform_cache,
     )?
@@ -641,7 +640,7 @@ fn jvp_optional_impl(
     output: &TracedTensor,
     wrt: &TracedTensor,
     tangent: &TracedTensor,
-    extension_rules: Option<&ExtensionRuleSet>,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
     let wrt_input_key = leaf_input_key(wrt)?;
@@ -675,7 +674,7 @@ fn jvp_optional_impl(
                 linear
             } else {
                 let mut ad_ctx =
-                    shape_guard_context(extension_rules, Some(active_values), &view.roots);
+                    shape_guard_context(extension_ad_dispatcher, Some(active_values), &view.roots);
                 let linear = linearize(
                     &view,
                     std::slice::from_ref(&output_key),
@@ -691,7 +690,8 @@ fn jvp_optional_impl(
             }
         }
         _ => {
-            let mut ad_ctx = shape_guard_context(extension_rules, Some(active_values), &view.roots);
+            let mut ad_ctx =
+                shape_guard_context(extension_ad_dispatcher, Some(active_values), &view.roots);
             let linear = linearize(
                 &view,
                 std::slice::from_ref(&output_key),
@@ -809,11 +809,12 @@ fn compute_linear_vjp_transform(
     output_key: &ValueKey<StdTensorOp>,
     wrt_input_key: &TensorInputKey,
     aliases: &HashMap<TensorInputKey, ValueKey<StdTensorOp>>,
-    extension_rules: Option<&ExtensionRuleSet>,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
     active_values: Arc<HashSet<ValueKey<StdTensorOp>>>,
     wrt: &TracedTensor,
 ) -> Result<tidu::ADRuleResult<Option<ActiveLinearVjp>>> {
-    let mut linear_ad_ctx = shape_guard_context(extension_rules, Some(active_values), &view.roots);
+    let mut linear_ad_ctx =
+        shape_guard_context(extension_ad_dispatcher, Some(active_values), &view.roots);
     let linear = match linearize(
         view,
         std::slice::from_ref(output_key),
@@ -866,7 +867,7 @@ fn vjp_optional_impl(
     output: &TracedTensor,
     wrt: &TracedTensor,
     cotangent: &TracedTensor,
-    extension_rules: Option<&ExtensionRuleSet>,
+    extension_ad_dispatcher: Option<&Arc<dyn ExtensionAdDispatcher>>,
     transform: &'static str,
     ad_transform_cache: Option<&AdTransformCache>,
 ) -> Result<Option<TracedTensor>> {
@@ -900,9 +901,9 @@ fn vjp_optional_impl(
         &view,
         std::slice::from_ref(&output_key),
         &aliases,
-        extension_rules,
+        extension_ad_dispatcher,
     ) {
-        let mut primal_ad_ctx = shape_guard_context(extension_rules, None, &view.roots);
+        let mut primal_ad_ctx = shape_guard_context(extension_ad_dispatcher, None, &view.roots);
         primal_ad_ctx.refresh_global_metadata();
         match try_primal_transpose(
             &view,
@@ -963,7 +964,7 @@ fn vjp_optional_impl(
                     &output_key,
                     &wrt_input_key,
                     &aliases,
-                    extension_rules,
+                    extension_ad_dispatcher,
                     active_values,
                     wrt,
                 )?;
@@ -978,7 +979,7 @@ fn vjp_optional_impl(
             &output_key,
             &wrt_input_key,
             &aliases,
-            extension_rules,
+            extension_ad_dispatcher,
             active_values,
             wrt,
         )?,

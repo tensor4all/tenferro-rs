@@ -1,8 +1,6 @@
 #[path = "integration/support/mod.rs"]
 mod support;
 
-#[path = "integration/ad.rs"]
-mod ad;
 #[path = "integration/ad_api_naming_contract.rs"]
 mod ad_api_naming_contract;
 #[path = "integration/ad_optimizer.rs"]
@@ -19,8 +17,6 @@ mod cache_management;
 mod checkpoint;
 #[path = "integration/checkpoint_truncate_integration.rs"]
 mod checkpoint_truncate_integration;
-#[path = "integration/compiler_wiring.rs"]
-mod compiler_wiring;
 #[path = "integration/convenience_api.rs"]
 mod convenience_api;
 #[path = "integration/cpu_backend.rs"]
@@ -41,8 +37,6 @@ mod eager_runtime_api;
 mod eager_tensor;
 #[path = "integration/engine_eval.rs"]
 mod engine_eval;
-#[path = "integration/extension_op.rs"]
-mod extension_op;
 #[path = "integration/fallible_api.rs"]
 mod fallible_api;
 #[path = "integration/gpu_ad_tests.rs"]

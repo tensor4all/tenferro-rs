@@ -2,8 +2,10 @@
 
 use std::sync::MutexGuard;
 
-use tenferro_einsum::GraphCompilerEinsumExt;
-use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
+use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec};
+use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, TraceContext, TracedTensor};
 use tenferro_tensor::Tensor;
 use tenferro_xla::{XlaExecutor, TENFERRO_PJRT_PLUGIN_ENV};
 
@@ -59,23 +61,7 @@ fn pjrt_executes_nary_einsum_from_rust_when_configured() {
         return;
     };
 
-    let lhs = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
-    let mid = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
-    let rhs = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
-    let mut compiler = GraphCompiler::new();
-    let product = compiler
-        .einsum(&[&lhs, &mid, &rhs], "ij,jk,kl->il")
-        .unwrap();
-    let program = compiler
-        .compile_with_input_specs(
-            &product,
-            &[
-                (&lhs, DType::F32, &[2, 3]),
-                (&mid, DType::F32, &[3, 4]),
-                (&rhs, DType::F32, &[4, 2]),
-            ],
-        )
-        .unwrap();
+    let program = compile_nary_einsum(false);
 
     let lhs_values = vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0];
     let mid_values = vec![
@@ -100,32 +86,7 @@ fn pjrt_executes_nary_einsum_plus_elementwise_from_rust_when_configured() {
         return;
     };
 
-    let lhs = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
-    let mid = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
-    let rhs = TracedTensor::input_symbolic_shape(DType::F32, 2).unwrap();
-    let mut compiler = GraphCompiler::new();
-    let product = compiler
-        .einsum(&[&lhs, &mid, &rhs], "ij,jk,kl->il")
-        .unwrap();
-    let y = product
-        .abs()
-        .unwrap()
-        .sqrt()
-        .unwrap()
-        .log1p()
-        .unwrap()
-        .exp()
-        .unwrap();
-    let program = compiler
-        .compile_with_input_specs(
-            &y,
-            &[
-                (&lhs, DType::F32, &[2, 3]),
-                (&mid, DType::F32, &[3, 4]),
-                (&rhs, DType::F32, &[4, 2]),
-            ],
-        )
-        .unwrap();
+    let program = compile_nary_einsum(true);
 
     let lhs_values = vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0];
     let mid_values = vec![
@@ -145,6 +106,31 @@ fn pjrt_executes_nary_einsum_plus_elementwise_from_rust_when_configured() {
         .collect::<Vec<_>>();
     assert_eq!(output.shape(), &[2, 2]);
     assert_close_f32(output.as_slice::<f32>().unwrap(), &expected, 1.0e-3);
+}
+
+fn compile_nary_einsum(postprocess: bool) -> CompiledGraph {
+    let mut trace = TraceContext::new();
+    let inputs = [[2, 3], [3, 4], [4, 2]].map(|shape| {
+        trace
+            .input(ProgramInputSpec::new(
+                DType::F32,
+                DimExpr::from_concrete(&shape),
+            ))
+            .unwrap()
+    });
+    let mut output = trace.einsum(&inputs, "ij,jk,kl->il").unwrap();
+    if postprocess {
+        for op in [
+            CoreSemanticOp::Abs,
+            CoreSemanticOp::Sqrt,
+            CoreSemanticOp::Log1p,
+            CoreSemanticOp::Exp,
+        ] {
+            output = trace.add_op(op, &[output]).unwrap()[0];
+        }
+    }
+    let graph = trace.finish(&[output]).unwrap();
+    GraphCompiler::new().compile_traced_graph(&graph).unwrap()
 }
 
 fn configured_executor() -> Option<(MutexGuard<'static, ()>, XlaExecutor)> {

@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::GraphCompilerEinsumExt;
+use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec};
 use tenferro_runtime::{
-    CompiledGraph, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
+    CompiledGraph, GraphCompiler, GraphExecutor, Tensor, TraceContext, TypedTensor,
 };
 
 const L: usize = 32;
@@ -56,40 +60,51 @@ fn build_mps_fixture(sites: usize, phys_dim: usize, bond_dim: usize) -> MpsFixtu
     }
 }
 
+fn trace_default(trace: &mut TraceContext, tensor: &Tensor) -> tenferro_runtime::TraceValue {
+    trace
+        .input_with_default(
+            ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape())),
+            Arc::new(tensor.clone()),
+        )
+        .unwrap()
+}
+
 fn build_inner_product_graph(
-    compiler: &mut GraphCompiler,
-    bra: &[TracedTensor],
-    ket: &[TracedTensor],
-) -> TracedTensor {
-    let mut env =
-        TracedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]).unwrap();
+    trace: &mut TraceContext,
+    fixture: &MpsFixture,
+) -> tenferro_runtime::TraceValue {
+    let env_tensor =
+        Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]).unwrap();
+    let mut env = trace_default(trace, &env_tensor);
+    let bra = fixture
+        .bra_tensors
+        .iter()
+        .map(|tensor| trace_default(trace, tensor))
+        .collect::<Vec<_>>();
+    let ket = fixture
+        .ket_tensors
+        .iter()
+        .map(|tensor| trace_default(trace, tensor))
+        .collect::<Vec<_>>();
     for (bra_core, ket_core) in bra.iter().zip(ket) {
-        let bra_core = bra_core.conj().unwrap();
-        env = compiler
-            .einsum(&[&env, &bra_core, ket_core], "ab,acr,bcs->rs")
+        let bra_core = trace.add_op(CoreSemanticOp::Conj, &[*bra_core]).unwrap()[0];
+        env = trace
+            .einsum(&[env, bra_core, ket_core], "ab,acr,bcs->rs")
             .expect("MPS inner-product contraction should build");
     }
-    env.reshape(&[])
-        .expect("final MPS inner-product scalar reshape should preserve element count")
+    env
 }
 
 fn compile_mps_inner_product(fixture: &MpsFixture) -> CompiledGraph {
-    let bra_placeholders: Vec<_> = fixture
-        .bra_tensors
-        .iter()
-        .map(|tensor| TracedTensor::from_tensor_concrete_shape(tensor.clone()).unwrap())
-        .collect();
-    let ket_placeholders: Vec<_> = fixture
-        .ket_tensors
-        .iter()
-        .map(|tensor| TracedTensor::from_tensor_concrete_shape(tensor.clone()).unwrap())
-        .collect();
-
+    let mut trace = TraceContext::new();
+    let output = build_inner_product_graph(&mut trace, fixture);
+    let graph = trace
+        .finish(&[output])
+        .expect("MPS inner-product trace should finish");
     let mut compiler = GraphCompiler::new();
-    let output = build_inner_product_graph(&mut compiler, &bra_placeholders, &ket_placeholders);
     compiler
-        .compile(&output)
-        .expect("MPS inner-product graph should compile")
+        .compile_traced_graph(&graph)
+        .expect("MPS inner-product semantic graph should compile")
 }
 
 fn bench_mps_inner_product(c: &mut Criterion) {

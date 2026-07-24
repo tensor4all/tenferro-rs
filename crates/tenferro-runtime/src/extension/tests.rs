@@ -1,6 +1,5 @@
 use computegraph::types::OperationRole;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
 use tenferro_tensor::{DType, ValidationError};
 
 use super::*;
@@ -96,45 +95,6 @@ fn apply_returns_error_for_output_metadata_count_mismatch() {
         }
         other => panic!("expected structured extension validation error, got {other:?}"),
     }
-}
-
-#[test]
-fn execute_lowered_program_with_backend_cache_rejects_nested_extension_ops() {
-    let ext = Arc::new(TestExtension {
-        input_count: 1,
-        output_count: 1,
-        inferred_outputs: 1,
-    });
-    let program = crate::exec::ExecProgram {
-        instructions: vec![crate::exec::ExecInstruction {
-            op: crate::exec::ExecOp::Extension(ext),
-            input_slots: vec![0],
-            output_slots: vec![1],
-            dtype: DType::F64,
-            output_shapes: vec![vec![DimExpr::Const(1)]].into(),
-            output_extents: vec![vec![ShapeExtent::exact(DimExpr::Const(1))]].into(),
-            last_use: vec![true],
-        }],
-        input_slots: vec![0],
-        output_slots: vec![1],
-        n_slots: 2,
-        shape_guards: Vec::new(),
-    };
-    let mut backend = tenferro_cpu::CpuBackend::new();
-    let mut backend_cache = Default::default();
-    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
-
-    let err = execute_lowered_program_with_backend_cache(
-        &mut backend,
-        &program,
-        vec![input],
-        &mut backend_cache,
-    )
-    .unwrap_err();
-
-    let message = err.to_string();
-    assert!(message.contains("core ExecProgram"), "{message}");
-    assert!(message.contains("extension family_id"), "{message}");
 }
 
 #[test]

@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use computegraph::traits::GraphOperation;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-use tenferro_ad::extension::{ExtensionLinearTransposeRule, ExtensionLinearizeRule};
 use tenferro_ad::semantic_extension::{
     AdValue, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
     SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
@@ -65,6 +64,14 @@ impl SemanticLinearizeRule for LinalgAdRule {
     ) -> Result<SemanticLinearizeResult, SemanticAdError> {
         let op = semantic_linalg_op(request.op(), SemanticAdRuleRole::Linearize)?;
         if matches!(op.op(), LinalgOp::LuFactor | LinalgOp::SvdFull) {
+            // These value-only operations can appear inside a differentiable
+            // composite (for example, `solve` uses `LuFactor` outputs as
+            // prepared-solve residuals).  Returning absent tangents lets the
+            // composite rule differentiate through the primal inputs without
+            // pretending that the factorization outputs are differentiable.
+            // A caller requesting those outputs directly still observes that
+            // no derivative output was produced, while VJP rejects their
+            // unsupported transpose below.
             return Ok(SemanticLinearizeResult::new(
                 std::iter::repeat_n(AdValue::Absent, request.primal_outputs().len()),
                 [],
@@ -88,16 +95,16 @@ impl SemanticLinearizeRule for LinalgAdRule {
             .map(|(index, value)| value.map(|_| index))
             .collect();
         let mut recorded = RecordedBuilder::with_seed_count(seed_values.len());
-        let tangent_outputs = ExtensionLinearizeRule::linearize(
-            self,
-            op,
-            &mut recorded,
-            &legacy.input_keys,
-            &legacy.output_keys,
-            &tangent_inputs,
-            &mut legacy.context.clone(),
-        )
-        .map_err(|error| legacy_error(SemanticAdRuleRole::Linearize, error))?;
+        let tangent_outputs = LinalgAdRule
+            .linearize(
+                op,
+                &mut recorded,
+                &legacy.input_keys,
+                &legacy.output_keys,
+                &tangent_inputs,
+                &mut legacy.context.clone(),
+            )
+            .map_err(|error| legacy_error(SemanticAdRuleRole::Linearize, error))?;
         let locals = recorded.replay(
             &seed_values,
             &legacy.external_values,
@@ -180,16 +187,16 @@ fn semantic_linearized_transpose(
         .map(|(index, active)| active.then_some(index))
         .collect();
     let mut recorded = RecordedBuilder::with_seed_count(primal_inputs.len());
-    let tangent_outputs = ExtensionLinearizeRule::linearize(
-        &LinalgAdRule,
-        op,
-        &mut recorded,
-        &legacy.input_keys,
-        &legacy.output_keys,
-        &tangent_inputs,
-        &mut legacy.context.clone(),
-    )
-    .map_err(|error| legacy_error(SemanticAdRuleRole::LinearTranspose, error))?;
+    let tangent_outputs = LinalgAdRule
+        .linearize(
+            op,
+            &mut recorded,
+            &legacy.input_keys,
+            &legacy.output_keys,
+            &tangent_inputs,
+            &mut legacy.context.clone(),
+        )
+        .map_err(|error| legacy_error(SemanticAdRuleRole::LinearTranspose, error))?;
     recorded.transpose_linear_fragment(
         &tangent_outputs,
         cotangent_outputs,
@@ -232,16 +239,16 @@ fn semantic_custom_transpose(
         .map(PrimitiveTransposeInput::Residual)
         .collect();
     let mut recorded = RecordedBuilder::with_seed_count(seed_values.len());
-    let cotangent_inputs = ExtensionLinearTransposeRule::linear_transpose(
-        &LinalgAdRule,
-        op,
-        &mut recorded,
-        &cotangents,
-        &transpose_inputs,
-        active_inputs,
-        &mut legacy.context.clone(),
-    )
-    .map_err(|error| legacy_error(role, error))?;
+    let cotangent_inputs = LinalgAdRule
+        .linear_transpose(
+            op,
+            &mut recorded,
+            &cotangents,
+            &transpose_inputs,
+            active_inputs,
+            &mut legacy.context.clone(),
+        )
+        .map_err(|error| legacy_error(role, error))?;
     let locals = recorded.replay(
         &seed_values,
         &legacy.external_values,
@@ -1129,16 +1136,16 @@ fn transpose_linalg_extension(
         .map(PrimitiveTransposeInput::Residual)
         .collect();
     let mut recorded = RecordedBuilder::with_seed_count(1);
-    let outputs = ExtensionLinearTransposeRule::linear_transpose(
-        &LinalgAdRule,
-        extension,
-        &mut recorded,
-        &[Some(0)],
-        &inputs,
-        active_mask,
-        &mut context,
-    )
-    .map_err(|error| legacy_error(role, error))?;
+    let outputs = LinalgAdRule
+        .linear_transpose(
+            extension,
+            &mut recorded,
+            &[Some(0)],
+            &inputs,
+            active_mask,
+            &mut context,
+        )
+        .map_err(|error| legacy_error(role, error))?;
     let locals = recorded.replay(
         &[Some(cotangent)],
         &replay_values,

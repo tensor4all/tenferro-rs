@@ -52,7 +52,8 @@ enum MissingConstraintOrigin {
 /// `RankMismatch`, `AxisOutOfBounds`, `DuplicateAxis`, or `InvalidArgument`
 /// for operation metadata and discharged shape constraints, and
 /// [`Error::Unsupported`] when an extension cannot be lowered or dispatched.
-pub fn compile_std_to_exec(
+#[cfg(test)]
+pub(crate) fn compile_std_to_exec(
     prog: &CompiledProgram<StdTensorOp>,
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
@@ -84,7 +85,8 @@ pub fn compile_std_to_exec(
 /// `RankMismatch`, `AxisOutOfBounds`, `DuplicateAxis`, or `InvalidArgument`
 /// for operation metadata and discharged shape constraints, and
 /// [`Error::Unsupported`] when an extension cannot be lowered or dispatched.
-pub fn compile_std_to_exec_with_options(
+#[cfg(test)]
+pub(crate) fn compile_std_to_exec_with_options(
     prog: &CompiledProgram<StdTensorOp>,
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],

@@ -56,7 +56,13 @@ impl RunTraced for TracedTensor {
 
         let mut compiler = GraphCompiler::new();
         let program = compiler.compile_with_input_specs(self, &specs)?;
-        executor.run_with_bindings(&program, bindings)
+        let mut ordered_inputs: Vec<Tensor> = bindings
+            .iter()
+            .map(|(_, tensor)| (*tensor).clone())
+            .collect();
+        ordered_inputs.extend(program.bindings().iter().map(|(_, tensor)| tensor.clone()));
+        let input_refs: Vec<&Tensor> = ordered_inputs.iter().collect();
+        executor.run_with_inputs(&program, &input_refs)
     }
 }
 

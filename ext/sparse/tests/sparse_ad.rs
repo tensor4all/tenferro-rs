@@ -3,7 +3,7 @@
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
 use tenferro_ext_sparse::{
-    register_runtime, sparse_ad_rules, sparse_matmul, sparse_matmul_eager, SparseCooTensor,
+    register_runtime, sparse_matmul, sparse_matmul_eager, sparse_semantic_ad_rules, SparseCooTensor,
     SparseCooTracedTensor,
 };
 use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, TracedTensor};
@@ -100,7 +100,10 @@ fn run_values(values: &TracedTensor) -> Tensor {
 
 fn sparse_ad() -> AdContext {
     AdContext::builder()
-        .with_extension_rules(sparse_ad_rules().expect("sparse AD rules"))
+        .with_semantic_extension_rules(
+            sparse_semantic_ad_rules().expect("sparse semantic AD rules"),
+        )
+        .unwrap()
         .build()
         .expect("AD context")
 }

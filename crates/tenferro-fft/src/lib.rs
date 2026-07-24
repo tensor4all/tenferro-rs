@@ -95,13 +95,6 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-#[cfg(feature = "autodiff")]
-use tenferro_ad::extension::{
-    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionPrimalVjpRule,
-    ExtensionRegistryError, ExtensionRuleSet,
-};
-#[cfg(feature = "autodiff")]
 use tenferro_ad::semantic_extension::{
     AdValue, SemanticAdError, SemanticExtensionRegistryError, SemanticExtensionRuleSet,
     SemanticLinearTransposeRequest, SemanticLinearTransposeRule, SemanticLinearizeRequest,
@@ -109,20 +102,12 @@ use tenferro_ad::semantic_extension::{
     SemanticPrimalVjpRule,
 };
 use tenferro_extension_macros::define_extension_runtime;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ad::{transpose_input::TransposeInputRef, PrimitiveRuleBuilder};
-#[cfg(feature = "autodiff")]
-use tenferro_ops::std_tensor_op::StdTensorOp;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
 use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOp, HostReference};
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
 use tenferro_tensor::{CacheStats, DType, ErrorKind, Tensor, TensorRead, ValidationError};
-#[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 mod backend;
 mod cache;
@@ -1161,90 +1146,6 @@ fn tensor_unsupported_dtype(
 struct FftAdRule;
 
 #[cfg(feature = "autodiff")]
-impl ExtensionLinearizeRule for FftAdRule {
-    fn family_id(&self) -> &'static str {
-        FFT_EXTENSION_FAMILY_ID
-    }
-
-    fn linearize(
-        &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        _primal_in: &[ValueKey<StdTensorOp>],
-        _primal_out: &[ValueKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValueId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let fft_op = fft_payload(op, ADRuleKind::Jvp)?;
-        if !fft_op.operation.is_c2c() {
-            return Err(ADRuleError::unsupported(
-                fft_ad_family_id(fft_op.operation),
-                ADRuleKind::Jvp,
-            ));
-        }
-
-        match tangent_in[0] {
-            Some(dx) => {
-                let outputs = builder.add_operation(
-                    StdTensorOp::Extension(Arc::new(fft_op.clone())),
-                    vec![ValueRef::Local(dx)],
-                    OperationRole::Linearized {
-                        active_mask: vec![true],
-                    },
-                );
-                Ok(vec![Some(outputs[0])])
-            }
-            None => Ok(vec![None]),
-        }
-    }
-}
-
-#[cfg(feature = "autodiff")]
-impl ExtensionLinearTransposeRule for FftAdRule {
-    fn family_id(&self) -> &'static str {
-        FFT_EXTENSION_FAMILY_ID
-    }
-
-    fn linear_transpose(
-        &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[tidu::PrimitiveTransposeInput<StdTensorOp>],
-        active_mask: &[bool],
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let inputs: Vec<_> = inputs.iter().map(TransposeInputRef::new).collect();
-        transpose_fft_adjoint_from_transpose_inputs(
-            op,
-            builder,
-            cotangent_out,
-            &inputs,
-            active_mask,
-            ctx,
-        )
-    }
-}
-
-#[cfg(feature = "autodiff")]
-impl ExtensionPrimalVjpRule for FftAdRule {
-    fn family_id(&self) -> &'static str {
-        FFT_EXTENSION_FAMILY_ID
-    }
-
-    fn primal_vjp(
-        &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[ValueRef<StdTensorOp>],
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        transpose_fft_adjoint(op, builder, cotangent_out, inputs, None, ctx)
-    }
-}
-
-#[cfg(feature = "autodiff")]
 impl SemanticLinearizeRule for FftAdRule {
     fn family_id(&self) -> &'static str {
         FFT_EXTENSION_FAMILY_ID
@@ -1430,194 +1331,6 @@ fn semantic_fft_unsupported_family(
         },
         message: message.into(),
     }
-}
-
-#[cfg(feature = "autodiff")]
-fn transpose_fft_adjoint(
-    op: &dyn ExtensionOp,
-    builder: &mut dyn PrimitiveRuleBuilder,
-    cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
-    active_mask: Option<&[bool]>,
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let Some((adjoint, fft_op)) = emit_c2c_adjoint(op, builder, cotangent_out, active_mask)? else {
-        return Ok(vec![None]);
-    };
-    let restored = restore_c2c_adjoint_input_length(builder, adjoint, inputs, fft_op, ctx)?;
-    Ok(vec![Some(restored)])
-}
-
-#[cfg(feature = "autodiff")]
-fn transpose_fft_adjoint_from_transpose_inputs(
-    op: &dyn ExtensionOp,
-    builder: &mut dyn PrimitiveRuleBuilder,
-    cotangent_out: &[Option<LocalValueId>],
-    inputs: &[TransposeInputRef<'_>],
-    active_mask: &[bool],
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let Some((adjoint, fft_op)) = emit_c2c_adjoint(op, builder, cotangent_out, Some(active_mask))?
-    else {
-        return Ok(vec![None]);
-    };
-    let restored = restore_c2c_adjoint_input_length_from_transpose_input(
-        builder, adjoint, inputs, fft_op, ctx,
-    )?;
-    Ok(vec![Some(restored)])
-}
-
-#[cfg(feature = "autodiff")]
-fn emit_c2c_adjoint<'a>(
-    op: &'a dyn ExtensionOp,
-    builder: &mut dyn PrimitiveRuleBuilder,
-    cotangent_out: &[Option<LocalValueId>],
-    active_mask: Option<&[bool]>,
-) -> ADRuleResult<Option<(LocalValueId, &'a FftOp)>> {
-    let fft_op = fft_payload(op, ADRuleKind::Transpose)?;
-    if !fft_op.operation.is_c2c() {
-        return Err(ADRuleError::unsupported(
-            fft_ad_family_id(fft_op.operation),
-            ADRuleKind::Transpose,
-        ));
-    }
-    if active_mask.is_some_and(|mask| !mask.first().copied().unwrap_or(false)) {
-        return Ok(None);
-    }
-
-    let Some(ct) = cotangent_out.first().copied().flatten() else {
-        return Ok(None);
-    };
-    let adjoint_op = fft_op
-        .c2c_adjoint()
-        .ok_or_else(|| ADRuleError::unsupported(FFT_EXTENSION_FAMILY_ID, ADRuleKind::Transpose))?;
-    let outputs = builder.add_operation(
-        StdTensorOp::Extension(Arc::new(adjoint_op)),
-        vec![ValueRef::Local(ct)],
-        OperationRole::Linearized {
-            active_mask: vec![true],
-        },
-    );
-    Ok(Some((outputs[0], fft_op)))
-}
-
-#[cfg(feature = "autodiff")]
-fn restore_c2c_adjoint_input_length(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    adjoint: LocalValueId,
-    inputs: &[ValueRef<StdTensorOp>],
-    fft_op: &FftOp,
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<LocalValueId> {
-    let Some(transform_len) = fft_op.n else {
-        return Ok(adjoint);
-    };
-    let Some(input) = inputs.first() else {
-        return Err(ADRuleError::invalid_input(
-            FFT_EXTENSION_FAMILY_ID,
-            ADRuleKind::Transpose,
-            "FFT transpose rule expected one primal input",
-        ));
-    };
-    if ctx
-        .shape_of(input)
-        .ok()
-        .and_then(|shape| shape.get(fft_op.axis).and_then(SymDim::constant_value))
-        == Some(transform_len)
-    {
-        return Ok(adjoint);
-    }
-
-    let size = builder.add_operation(
-        StdTensorOp::ShapeOf { axis: fft_op.axis },
-        vec![input.clone()],
-        OperationRole::Linearized {
-            active_mask: vec![false],
-        },
-    )[0];
-    let truncated = builder.add_operation(
-        StdTensorOp::DynamicTruncate { axis: fft_op.axis },
-        vec![ValueRef::Local(adjoint), ValueRef::Local(size)],
-        OperationRole::Linearized {
-            active_mask: vec![true, false],
-        },
-    )[0];
-    let padded = builder.add_operation(
-        StdTensorOp::PadToMatch { axis: fft_op.axis },
-        vec![ValueRef::Local(truncated), input.clone()],
-        OperationRole::Linearized {
-            active_mask: vec![true, false],
-        },
-    )[0];
-    Ok(padded)
-}
-
-#[cfg(feature = "autodiff")]
-fn restore_c2c_adjoint_input_length_from_transpose_input(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    adjoint: LocalValueId,
-    inputs: &[TransposeInputRef<'_>],
-    fft_op: &FftOp,
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<LocalValueId> {
-    let Some(transform_len) = fft_op.n else {
-        return Ok(adjoint);
-    };
-    let Some(input) = inputs.first() else {
-        return Err(ADRuleError::invalid_input(
-            FFT_EXTENSION_FAMILY_ID,
-            ADRuleKind::Transpose,
-            "FFT transpose rule expected one primal input",
-        ));
-    };
-    let metadata = input.metadata_value();
-    if ctx
-        .shape_of(&metadata)
-        .ok()
-        .and_then(|shape| shape.get(fft_op.axis).and_then(SymDim::constant_value))
-        == Some(transform_len)
-    {
-        return Ok(adjoint);
-    }
-
-    let shape_source = input.shape_source_value(FFT_EXTENSION_FAMILY_ID, 0)?;
-    let size = builder.add_operation(
-        StdTensorOp::ShapeOf { axis: fft_op.axis },
-        vec![shape_source.clone()],
-        OperationRole::Linearized {
-            active_mask: vec![false],
-        },
-    )[0];
-    let truncated = builder.add_operation(
-        StdTensorOp::DynamicTruncate { axis: fft_op.axis },
-        vec![ValueRef::Local(adjoint), ValueRef::Local(size)],
-        OperationRole::Linearized {
-            active_mask: vec![true, false],
-        },
-    )[0];
-    let padded = builder.add_operation(
-        StdTensorOp::PadToMatch { axis: fft_op.axis },
-        vec![ValueRef::Local(truncated), shape_source],
-        OperationRole::Linearized {
-            active_mask: vec![true, false],
-        },
-    )[0];
-    Ok(padded)
-}
-
-/// Return the explicit FFT extension AD rule set.
-#[cfg(feature = "autodiff")]
-///
-/// # Errors
-///
-/// Returns [`ExtensionRegistryError::MalformedFamilyId`] if the FFT family
-/// identifier is invalid, or [`ExtensionRegistryError::DuplicateRule`] if a
-/// rule for the family and role is already registered.
-pub fn ad_rules() -> std::result::Result<ExtensionRuleSet, ExtensionRegistryError> {
-    ExtensionRuleSet::new()
-        .with_linearize(Arc::new(FftAdRule))?
-        .with_linear_transpose(Arc::new(FftAdRule))?
-        .with_primal_vjp(Arc::new(FftAdRule))
 }
 
 /// Return the semantic-program FFT extension AD rule set.
@@ -1998,13 +1711,6 @@ fn fft_ad_family_id(operation: FftOperation) -> &'static str {
     }
 }
 
-#[cfg(feature = "autodiff")]
-fn fft_payload(op: &dyn ExtensionOp, rule: ADRuleKind) -> ADRuleResult<&FftOp> {
-    op.as_any()
-        .downcast_ref::<FftOp>()
-        .ok_or_else(|| ADRuleError::unsupported(FFT_EXTENSION_FAMILY_ID, rule))
-}
-
 fn output_shape_c2c(
     shape: &[usize],
     axis: usize,
@@ -2208,74 +1914,6 @@ mod tests {
             .expect_err("lane layout should reject stride overflow");
 
         assert!(err.to_string().contains("overflows usize"), "{err}");
-    }
-
-    #[cfg(feature = "autodiff")]
-    #[test]
-    fn fft_transpose_rule_respects_inactive_linearized_input() {
-        let rule = FftAdRule;
-        let op = FftOp::new(FftOperation::C2cForward, 0, None, FftNorm::Backward);
-        let mut builder = computegraph::graph::GraphBuilder::<StdTensorOp>::new();
-        let cotangent = builder.add_input(tenferro_ops::input_key::TensorInputKey::User { id: 0 });
-        let result = ExtensionLinearTransposeRule::linear_transpose(
-            &rule,
-            &op,
-            &mut builder,
-            &[Some(cotangent)],
-            &[],
-            &[false],
-            &mut ShapeGuardContext::default(),
-        )
-        .unwrap();
-
-        assert_eq!(result, vec![None]);
-        assert!(builder.build().operations().is_empty());
-    }
-
-    #[cfg(feature = "autodiff")]
-    #[test]
-    fn fft_transpose_rule_uses_metadata_for_linear_only_matching_length() {
-        let rule = FftAdRule;
-        let op = FftOp::new(FftOperation::C2cForward, 0, Some(4), FftNorm::Backward);
-        let active_key = ValueKey::Input(tenferro_ops::input_key::TensorInputKey::User { id: 1 });
-        let mut ctx = ShapeGuardContext::default();
-        ctx.insert_metadata(
-            active_key.clone(),
-            tenferro_ops::TensorMeta::exact(DType::C64, vec![SymDim::from(4usize)]),
-        );
-
-        let mut builder = computegraph::graph::GraphBuilder::<StdTensorOp>::new();
-        let cotangent = builder.add_input(tenferro_ops::input_key::TensorInputKey::User { id: 0 });
-        let result = ExtensionLinearTransposeRule::linear_transpose(
-            &rule,
-            &op,
-            &mut builder,
-            &[Some(cotangent)],
-            &[tidu::PrimitiveTransposeInput::Linear {
-                key: active_key.clone(),
-                primal: None,
-            }],
-            &[true],
-            &mut ctx,
-        )
-        .unwrap();
-
-        assert_eq!(result.len(), 1);
-        assert!(result[0].is_some());
-        let active_ref = ValueRef::External(active_key);
-        let graph = builder.build();
-        assert!(graph
-            .operations()
-            .iter()
-            .all(|node| !node.inputs.iter().any(|input| input == &active_ref)));
-        assert!(graph.operations().iter().all(|node| {
-            !matches!(
-                node.operation,
-                StdTensorOp::ShapeOf { .. }
-                    | StdTensorOp::DynamicTruncate { .. }
-                    | StdTensorOp::PadToMatch { .. }
-            )
-        }));
     }
 
     #[cfg(feature = "autodiff")]

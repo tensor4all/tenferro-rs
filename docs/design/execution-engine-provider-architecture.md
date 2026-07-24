@@ -295,7 +295,7 @@ never imported implicitly as a default. Cross-`TraceContext` tensor use also
 requires an explicit import; tracing does not merge graphs implicitly.
 
 Extension tracing APIs target `TraceContext`. Existing APIs such as
-`GraphCompilerEinsumExt` are replaced atomically when the new compiler
+`TraceContextEinsumExt` are replaced atomically when the new compiler
 extension point lands; they are not permanent compiler extension points.
 
 ### Verified semantic transforms and AD
@@ -329,9 +329,9 @@ current extension roles explicitly:
 
 | Current role | Semantic-program role |
 | --- | --- |
-| `ExtensionLinearizeRule` | Emit a validated primal-plus-linear semantic fragment from one extension op and active tangent inputs. |
-| `ExtensionLinearTransposeRule` | Transpose an already linearized semantic fragment and emit cotangents for its active inputs. |
-| `ExtensionPrimalVjpRule` | Optional direct-VJP transform retained only as a measured optimization; the canonical reverse path remains linearize then transpose. |
+| `SemanticLinearizeRule` | Emit a validated primal-plus-linear semantic fragment from one extension op and active tangent inputs. |
+| `SemanticLinearTransposeRule` | Transpose an already linearized semantic fragment and emit cotangents for its active inputs. |
+| `SemanticPrimalVjpRule` | Optional direct-VJP transform retained only as a measured optimization; the canonical reverse path remains linearize then transpose. |
 
 The new callbacks consume immutable semantic op/value views and emit through a
 validation-preserving semantic AD builder. They do not expose

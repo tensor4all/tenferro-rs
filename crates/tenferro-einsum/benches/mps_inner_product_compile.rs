@@ -1,17 +1,18 @@
+use std::sync::Arc;
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use num_complex::Complex64;
-use tenferro_einsum::GraphCompilerEinsumExt;
-use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, TracedTensor};
+use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, Tensor, TraceContext, TracedGraph};
 
 const PHYS_DIM: usize = 2;
 const CHI: usize = 32;
 const LS: &[usize] = &[4, 8, 16, 32, 64];
 
 struct CompileCase {
-    shapes: Vec<Vec<usize>>,
-    bra_placeholders: Vec<TracedTensor>,
-    ket_placeholders: Vec<TracedTensor>,
-    output: TracedTensor,
+    graph: TracedGraph,
 }
 
 fn mps_shapes(sites: usize, phys_dim: usize, bond_dim: usize) -> Vec<Vec<usize>> {
@@ -25,55 +26,68 @@ fn mps_shapes(sites: usize, phys_dim: usize, bond_dim: usize) -> Vec<Vec<usize>>
 }
 
 fn build_inner_product_graph(
-    compiler: &mut GraphCompiler,
-    bra: &[TracedTensor],
-    ket: &[TracedTensor],
-) -> TracedTensor {
-    let mut env =
-        TracedTensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]).unwrap();
+    trace: &mut TraceContext,
+    shapes: &[Vec<usize>],
+) -> tenferro_runtime::TraceValue {
+    let env_tensor =
+        Tensor::from_vec_col_major(vec![1, 1], vec![Complex64::new(1.0, 0.0)]).unwrap();
+    let mut env = trace
+        .input_with_default(
+            ProgramInputSpec::new(DType::C64, DimExpr::from_concrete(env_tensor.shape())),
+            Arc::new(env_tensor),
+        )
+        .unwrap();
+    let bra = shapes
+        .iter()
+        .map(|shape| {
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::C64,
+                    DimExpr::from_concrete(shape),
+                ))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let ket = shapes
+        .iter()
+        .map(|shape| {
+            trace
+                .input(ProgramInputSpec::new(
+                    DType::C64,
+                    DimExpr::from_concrete(shape),
+                ))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
     for (bra_core, ket_core) in bra.iter().zip(ket) {
-        let bra_core = bra_core.conj().unwrap();
-        env = compiler
-            .einsum(&[&env, &bra_core, ket_core], "ab,acr,bcs->rs")
+        let bra_core = trace
+            .add_op(
+                tenferro_runtime::program::CoreSemanticOp::Conj,
+                &[*bra_core],
+            )
+            .unwrap()[0];
+        env = trace
+            .einsum(&[env, bra_core, ket_core], "ab,acr,bcs->rs")
             .expect("MPS inner-product contraction should build");
     }
-    env.reshape(&[])
-        .expect("final MPS inner-product scalar reshape should preserve element count")
+    env
 }
 
 fn build_compile_case(sites: usize, chi: usize) -> CompileCase {
     let shapes = mps_shapes(sites, PHYS_DIM, chi);
-    let bra_placeholders = shapes
-        .iter()
-        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape).unwrap())
-        .collect::<Vec<_>>();
-    let ket_placeholders = shapes
-        .iter()
-        .map(|shape| TracedTensor::input_concrete_shape(DType::C64, shape).unwrap())
-        .collect::<Vec<_>>();
-    let mut compiler = GraphCompiler::new();
-    let output = build_inner_product_graph(&mut compiler, &bra_placeholders, &ket_placeholders);
-
-    CompileCase {
-        shapes,
-        bra_placeholders,
-        ket_placeholders,
-        output,
-    }
+    let mut trace = TraceContext::new();
+    let output = build_inner_product_graph(&mut trace, &shapes);
+    let graph = trace
+        .finish(&[output])
+        .expect("MPS inner-product trace should finish");
+    CompileCase { graph }
 }
 
 fn compile_case(case: &CompileCase) -> CompiledGraph {
-    let mut specs = Vec::with_capacity(case.shapes.len() * 2);
-    for site in 0..case.shapes.len() {
-        let shape = case.shapes[site].as_slice();
-        specs.push((&case.bra_placeholders[site], DType::C64, shape));
-        specs.push((&case.ket_placeholders[site], DType::C64, shape));
-    }
-
     let mut compiler = GraphCompiler::new();
     compiler
-        .compile_with_input_specs(&case.output, &specs)
-        .expect("MPS inner-product graph should compile from specs")
+        .compile_traced_graph(&case.graph)
+        .expect("MPS inner-product semantic graph should compile")
 }
 
 fn bench_mps_inner_product_compile(c: &mut Criterion) {
@@ -85,7 +99,7 @@ fn bench_mps_inner_product_compile(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("build_graph_only", &params), |b| {
             b.iter(|| {
                 let case = build_compile_case(black_box(l), black_box(CHI));
-                black_box(case.output.rank);
+                black_box(case.graph.program().operations().count());
             });
         });
 

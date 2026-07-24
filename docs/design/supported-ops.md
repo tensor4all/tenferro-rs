@@ -135,7 +135,7 @@ Implemented:
 - `ContractionTree::optimize`, `optimize_with_options`, and `from_pairs`.
 - `build_einsum_fragment` for traced graph lowering.
 - `eager_einsum` and `eager_einsum_owned` for concrete `Tensor` execution.
-- `GraphCompilerEinsumExt::einsum` and `tenferro_einsum::register_runtime` for traced
+- `TraceContextEinsumExt::einsum` and `tenferro_einsum::register_runtime` for traced
   extension use.
 - Repeated-label semantics:
   - `ii->` trace,

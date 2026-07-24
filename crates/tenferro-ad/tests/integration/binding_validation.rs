@@ -149,9 +149,7 @@ fn executor_run_with_inputs_validates_and_uses_bound_tensors() {
     assert_eq!(program.output_count(), 1);
 
     let mut executor = GraphExecutor::new(CpuBackend::new());
-    let out = executor
-        .run_with_bindings(&program, &[(&x, &bound)])
-        .unwrap();
+    let out = executor.run_with_inputs(&program, &[&bound]).unwrap();
     assert_eq!(out.shape(), &[2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 
@@ -159,15 +157,9 @@ fn executor_run_with_inputs_validates_and_uses_bound_tensors() {
     assert!(matches!(err, Error::UnboundPlaceholder { .. }));
 
     let err = executor
-        .run_with_bindings(&program, &[(&x, &bound), (&x, &bound)])
+        .run_with_inputs(&program, &[&bound, &bound])
         .unwrap_err();
-    assert!(matches!(err, Error::DuplicateBinding { .. }));
-
-    let concrete = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let err = executor
-        .run_with_bindings(&program, &[(&concrete, &bound)])
-        .unwrap_err();
-    assert!(matches!(err, Error::UnexpectedBinding { binding_index: 0 }));
+    assert!(matches!(err, Error::GraphInputCountMismatch { .. }));
 }
 
 #[test]

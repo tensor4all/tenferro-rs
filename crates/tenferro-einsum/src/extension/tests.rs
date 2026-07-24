@@ -3,22 +3,10 @@ use std::hash::Hasher;
 
 use super::*;
 use crate::optimize::EinsumPlanSpec;
-#[cfg(feature = "autodiff")]
-use computegraph::graph::GraphBuilder;
-#[cfg(feature = "autodiff")]
-use computegraph::types::OperationRole;
 use tenferro_cpu::CpuBackend;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ext_op::ExtensionLinearTransposeRule;
-use tenferro_ops::ext_op::{invoke_extension_shape_inference, ExtensionOp};
-#[cfg(feature = "autodiff")]
-use tenferro_ops::input_key::TensorInputKey;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::TensorMeta;
+use tenferro_ops::ext_op::invoke_extension_shape_inference;
 use tenferro_runtime::ExtensionCacheStore;
 use tenferro_tensor::{TensorOwnedView, TensorRead};
-#[cfg(feature = "autodiff")]
-use tidu::PrimitiveTransposeInput;
 
 #[cfg(feature = "autodiff")]
 #[test]
@@ -212,32 +200,19 @@ fn einsum_extension_caches_verify_exact_key_data_after_hash_lookup() {
     let extension_source = include_str!("../extension.rs");
     assert!(extension_source.contains("struct RuntimeTreeCacheKeyData"));
     assert!(extension_source.contains("struct CachedRuntimeTree"));
-    assert!(extension_source.contains("struct RuntimeExecProgramCacheKeyData"));
     assert!(extension_source.contains("key_data.matches_runtime_tree("));
-    assert!(extension_source.contains("key_data.matches_runtime_exec_program("));
     assert!(!extension_source.contains("get::<Arc<ContractionTree>>(&key)"));
+    assert!(!extension_source.contains("RuntimeExecProgram"));
 
     let traced_source = include_str!("../traced.rs");
     assert!(traced_source.contains("struct ParsedEinsumCacheEntry"));
-    assert!(traced_source.contains("struct StaticTreeCacheKeyData"));
-    assert!(traced_source.contains("struct CachedStaticTree"));
-    assert!(traced_source.contains("key_data.matches_static_tree("));
     assert!(!traced_source.contains("get::<Arc<ParsedEinsum>>(&key)"));
-    assert!(!traced_source.contains("get::<Arc<ContractionTree>>(&key)"));
 
     let eager_source = include_str!("../eager_ad.rs");
     assert!(eager_source.contains("struct ExpandedEagerProgramCacheKeyData"));
     assert!(eager_source.contains("struct CachedExpandedEagerProgram"));
     assert!(eager_source.contains("key_data.matches_expanded_eager_program("));
     assert!(!eager_source.contains("get::<Arc<ExpandedEagerProgram>>(&key)"));
-}
-
-#[test]
-fn runtime_input_index_vec_stays_inline_for_common_arity() {
-    let mut indices = InputIndexVec::new();
-    indices.extend(0..4);
-
-    assert!(!indices.spilled());
 }
 
 #[test]
@@ -275,19 +250,12 @@ fn vjp_einsum_op_inherits_plan_spec_and_precomputes_concrete_tree() {
         output: vec![0, 1],
     };
     let vjp_shapes = vec![
-        vec![SymDim::from(2usize), SymDim::from(5usize)],
-        vec![SymDim::from(3usize), SymDim::from(4usize)],
-        vec![SymDim::from(4usize), SymDim::from(5usize)],
+        vec![DimExpr::Const(2), DimExpr::Const(5)],
+        vec![DimExpr::Const(3), DimExpr::Const(4)],
+        vec![DimExpr::Const(4), DimExpr::Const(5)],
     ];
 
-    let op = vjp_einsum_op_with_inherited_plan(
-        &primal_op,
-        0,
-        vjp_subscripts,
-        vec![SymDim::from(2usize), SymDim::from(3usize)],
-        &vjp_shapes,
-    )
-    .unwrap();
+    let op = semantic_vjp_einsum_op(&primal_op, 0, vjp_subscripts, &vjp_shapes).unwrap();
 
     assert!(matches!(
         op.plan_spec(),
@@ -310,19 +278,12 @@ fn vjp_einsum_op_derives_plan_for_nonfirst_active_input() {
         output: vec![1, 2],
     };
     let vjp_shapes = vec![
-        vec![SymDim::from(2usize), SymDim::from(5usize)],
-        vec![SymDim::from(2usize), SymDim::from(3usize)],
-        vec![SymDim::from(4usize), SymDim::from(5usize)],
+        vec![DimExpr::Const(2), DimExpr::Const(5)],
+        vec![DimExpr::Const(2), DimExpr::Const(3)],
+        vec![DimExpr::Const(4), DimExpr::Const(5)],
     ];
 
-    let op = vjp_einsum_op_with_inherited_plan(
-        &primal_op,
-        1,
-        vjp_subscripts,
-        vec![SymDim::from(3usize), SymDim::from(4usize)],
-        &vjp_shapes,
-    )
-    .unwrap();
+    let op = semantic_vjp_einsum_op(&primal_op, 1, vjp_subscripts, &vjp_shapes).unwrap();
 
     assert!(matches!(
         op.plan_spec(),
@@ -336,176 +297,74 @@ fn vjp_einsum_op_derives_plan_for_nonfirst_active_input() {
 #[test]
 #[cfg(feature = "autodiff")]
 fn repeated_label_projection_projects_each_extra_occurrence() {
-    let mut builder = RecordingRuleBuilder::default();
+    use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef, SemanticProgramBuilder};
 
-    let result = project_repeated_labels_to_diagonal(&mut builder, 0, &[0, 1, 1, 1]);
+    let mut builder = SemanticProgramBuilder::new();
+    let cotangent = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [
+                DimExpr::Const(2),
+                DimExpr::Const(3),
+                DimExpr::Const(3),
+                DimExpr::Const(3),
+            ],
+        ))
+        .unwrap();
+    let result = semantic_project_repeated_labels(&mut builder, cotangent, &[0, 1, 1, 1]).unwrap();
+    let frozen = builder.finish(&[result]).unwrap();
+    let ops: Vec<_> = frozen
+        .program
+        .operations()
+        .map(|operation| operation.op())
+        .collect();
 
-    assert_eq!(result, 4);
-    assert_eq!(
-        builder.ops,
-        vec![
-            StdTensorOp::ExtractDiag {
+    assert!(matches!(
+        ops.as_slice(),
+        [
+            SemanticOpRef::Core(CoreSemanticOp::ExtractDiag {
                 axis_a: 1,
-                axis_b: 2,
-            },
-            StdTensorOp::EmbedDiag {
+                axis_b: 2
+            }),
+            SemanticOpRef::Core(CoreSemanticOp::EmbedDiag {
                 axis_a: 1,
-                axis_b: 2,
-            },
-            StdTensorOp::ExtractDiag {
+                axis_b: 2
+            }),
+            SemanticOpRef::Core(CoreSemanticOp::ExtractDiag {
                 axis_a: 1,
-                axis_b: 3,
-            },
-            StdTensorOp::EmbedDiag {
+                axis_b: 3
+            }),
+            SemanticOpRef::Core(CoreSemanticOp::EmbedDiag {
                 axis_a: 1,
-                axis_b: 3,
-            },
+                axis_b: 3
+            })
         ]
-    );
+    ));
 }
 
 #[test]
 #[cfg(feature = "autodiff")]
 fn vjp_broadcast_remap_failure_returns_error() {
-    let mut builder = RecordingRuleBuilder::default();
+    use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
 
-    let err = broadcast_einsum_vjp_to_input_shape(
+    let mut builder = SemanticProgramBuilder::new();
+    let cotangent = builder
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [DimExpr::Const(2), DimExpr::Const(4)],
+        ))
+        .unwrap();
+    let err = semantic_broadcast_einsum_vjp(
         &mut builder,
-        0,
+        cotangent,
         &[0, 2],
         &[0, 1],
-        vec![
-            DimExpr::InputDim {
-                input_idx: 1,
-                axis: 0,
-            },
-            DimExpr::InputDim {
-                input_idx: 1,
-                axis: 1,
-            },
-        ],
-        vec![ValueRef::Local(1)],
+        vec![DimExpr::Const(2), DimExpr::Const(3)],
     )
     .expect_err("unmappable VJP labels should be an AD rule error");
 
     let message = err.to_string();
-    assert!(message.contains("einsum VJP broadcast remap"));
-    assert!(message.contains("cotangent"));
-    assert!(builder.ops.is_empty());
-}
-
-#[cfg(feature = "autodiff")]
-fn ad_input_key(id: u64) -> TensorInputKey {
-    TensorInputKey::User { id }
-}
-
-#[cfg(feature = "autodiff")]
-fn ad_value_key(id: u64) -> ValueKey<StdTensorOp> {
-    ValueKey::Input(ad_input_key(id))
-}
-
-#[test]
-#[cfg(feature = "autodiff")]
-fn linear_transpose_broadcasts_linear_only_active_input_from_metadata() {
-    let rule = EinsumAdRule;
-    let op = EinsumExtensionOp::with_output_shape_hint(
-        EinsumSubscripts {
-            inputs: vec![vec![b'i' as u32]],
-            output: vec![],
-        },
-        vec![],
-        EinsumPlanSpec::LeftToRight,
-    );
-    let active_key = ad_value_key(10);
-    let mut ctx = ShapeGuardContext::default();
-    ctx.insert_metadata(
-        active_key.clone(),
-        TensorMeta::exact(DType::F64, vec![SymDim::from(3usize)]),
-    );
-
-    let mut builder = GraphBuilder::<StdTensorOp>::new();
-    let cotangent = builder.add_input(ad_input_key(0));
-    let result = ExtensionLinearTransposeRule::linear_transpose(
-        &rule,
-        &op,
-        &mut builder,
-        &[Some(cotangent)],
-        &[PrimitiveTransposeInput::Linear {
-            key: active_key.clone(),
-            primal: None,
-        }],
-        &[true],
-        &mut ctx,
-    )
-    .unwrap();
-
-    assert_eq!(result.len(), 1);
-    assert!(result[0].is_some());
-    let active_ref = ValueRef::External(active_key);
-    let graph = builder.build();
-    assert!(graph
-        .operations()
-        .iter()
-        .all(|node| !node.inputs.iter().any(|input| input == &active_ref)));
-    assert!(graph.operations().iter().any(|node| {
-        matches!(
-            (&node.operation, &node.role, node.inputs.len()),
-            (
-                StdTensorOp::BroadcastInDim { shape, dims },
-                OperationRole::Linearized { active_mask },
-                1
-            ) if shape == &[DimExpr::Const(3)] && dims.is_empty() && active_mask == &[true]
-        )
-    }));
-}
-
-#[test]
-#[cfg(feature = "autodiff")]
-fn linear_transpose_rejects_linear_only_coefficient_input() {
-    let rule = EinsumAdRule;
-    let op = EinsumExtensionOp::with_output_shape_hint(
-        EinsumSubscripts {
-            inputs: vec![vec![b'i' as u32], vec![b'i' as u32]],
-            output: vec![],
-        },
-        vec![],
-        EinsumPlanSpec::LeftToRight,
-    );
-    let active_key = ad_value_key(10);
-    let coefficient_key = ad_value_key(11);
-    let mut ctx = ShapeGuardContext::default();
-    for key in [&active_key, &coefficient_key] {
-        ctx.insert_metadata(
-            key.clone(),
-            TensorMeta::exact(DType::F64, vec![SymDim::from(3usize)]),
-        );
-    }
-
-    let mut builder = GraphBuilder::<StdTensorOp>::new();
-    let cotangent = builder.add_input(ad_input_key(0));
-    let err = ExtensionLinearTransposeRule::linear_transpose(
-        &rule,
-        &op,
-        &mut builder,
-        &[Some(cotangent)],
-        &[
-            PrimitiveTransposeInput::Linear {
-                key: active_key,
-                primal: None,
-            },
-            PrimitiveTransposeInput::Linear {
-                key: coefficient_key,
-                primal: None,
-            },
-        ],
-        &[true, false],
-        &mut ctx,
-    )
-    .unwrap_err();
-
-    let message = err.to_string();
-    assert!(message.contains("linear-only"), "{message}");
-    assert!(message.contains("einsum VJP"), "{message}");
+    assert!(message.contains("einsum VJP cannot remap labels"));
 }
 
 #[test]
@@ -607,27 +466,6 @@ fn semantic_rules_preserve_nary_order_absent_tangents_and_active_vjp_mask() {
         .nth(1)
         .unwrap();
     assert_eq!(tangent_operation.inputs(), &[dlhs, rhs]);
-}
-
-#[cfg(feature = "autodiff")]
-#[derive(Default)]
-struct RecordingRuleBuilder {
-    ops: Vec<StdTensorOp>,
-    next_id: LocalValueId,
-}
-
-#[cfg(feature = "autodiff")]
-impl PrimitiveRuleBuilder for RecordingRuleBuilder {
-    fn add_operation(
-        &mut self,
-        operation: StdTensorOp,
-        _inputs: Vec<ValueRef<StdTensorOp>>,
-        _role: OperationRole,
-    ) -> Vec<LocalValueId> {
-        self.ops.push(operation);
-        self.next_id += 1;
-        vec![self.next_id]
-    }
 }
 
 fn payload_hash(op: &EinsumExtensionOp) -> u64 {

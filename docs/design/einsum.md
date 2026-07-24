@@ -6,7 +6,7 @@ extension traits: `TensorEinsumExt` and `TypedTensorEinsumExt` for owned
 concrete inputs, `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for
 borrowed inputs, and their `*IntoExt` counterparts for preallocated output
 execution,
-`GraphCompilerEinsumExt` for traced graph construction, `EagerEinsumExt` for
+`TraceContextEinsumExt` for traced graph construction, `EagerEinsumExt` for
 autodiff eager execution, and tensor extension traits for `tensordot`
 contraction sugar. `ConcreteEinsumPlan` owns repeated concrete executions with
 fixed input dtype and shape metadata. `tensordot` is not a `tenferro-linalg`
@@ -43,18 +43,34 @@ The extension crate exposes lazy traced einsum:
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::GraphCompilerEinsumExt;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, TraceContext};
 
-let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]);
-
-let mut compiler = GraphCompiler::new();
-let c = compiler.einsum(&[&a, &b], "ij,jk->ik").unwrap();
-let program = compiler.compile(&c).unwrap();
+let mut trace = TraceContext::new();
+let a = trace.input(ProgramInputSpec::new(
+    DType::F64,
+    DimExpr::from_concrete(&[2, 3]),
+)).unwrap();
+let b = trace.input(ProgramInputSpec::new(
+    DType::F64,
+    DimExpr::from_concrete(&[3, 2]),
+)).unwrap();
+let c = trace.einsum(&[a, b], "ij,jk->ik").unwrap();
+let graph = trace.finish(&[c]).unwrap();
+let program = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
 let mut executor = GraphExecutor::new(CpuBackend::new());
 executor.register_extension(tenferro_einsum::register_runtime).unwrap();
-let result = executor.run(&program).unwrap();
+let lhs = tenferro_runtime::Tensor::from_vec_col_major(
+    vec![2, 3],
+    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+).unwrap();
+let rhs = tenferro_runtime::Tensor::from_vec_col_major(
+    vec![3, 2],
+    vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+).unwrap();
+let result = executor.run_with_inputs(&program, &[&lhs, &rhs]).unwrap();
 assert_eq!(result.shape(), &[2, 2]);
 ```
 

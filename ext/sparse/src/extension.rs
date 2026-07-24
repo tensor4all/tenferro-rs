@@ -4,28 +4,16 @@ use std::hash::Hasher;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-#[cfg(feature = "autodiff")]
 use tenferro_ad::semantic_extension::{
     AdValue, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
     SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
     SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
     SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
 };
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ad::{transpose_input::TransposeInputRef, PrimitiveRuleBuilder};
 use tenferro_ops::ext_op::{
     ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp, HostReference,
 };
-#[cfg(feature = "autodiff")]
-use tenferro_ops::std_tensor_op::StdTensorOp;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::{
-    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionRegistryError, ExtensionRuleSet,
-};
 use tenferro_runtime::extension::{
     apply, ExtensionExecutor, ExtensionRuntimeRegistryError, HostReferenceRuntime,
 };
@@ -33,8 +21,6 @@ use tenferro_runtime::extension::{
 use tenferro_runtime::program::{ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{Error as RuntimeError, Result as RuntimeResult};
 use tenferro_tensor::{DType, Error, Result, Tensor, TensorBackend};
-#[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 use crate::sparse::{
     coordinates_tensor, validate_traced_values, validate_value_tensor, SparseCooTracedTensor,
@@ -505,55 +491,6 @@ impl HostReference for SparseMatmulVjpOp {
 struct SparseMatmulAdRule;
 
 #[cfg(feature = "autodiff")]
-impl ExtensionLinearizeRule for SparseMatmulAdRule {
-    fn family_id(&self) -> &'static str {
-        FAMILY_ID
-    }
-
-    fn linearize(
-        &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        primal_in: &[ValueKey<StdTensorOp>],
-        _primal_out: &[ValueKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValueId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let op = downcast_matmul_op(op, ADRuleKind::Jvp)?;
-        let active_inputs: Vec<usize> = tangent_in
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, tangent)| tangent.is_some().then_some(idx))
-            .collect();
-        if active_inputs.is_empty() {
-            return Ok(vec![None]);
-        }
-        let mut inputs = vec![
-            ValueRef::External(primal_in[0].clone()),
-            ValueRef::External(primal_in[1].clone()),
-        ];
-        for &active in &active_inputs {
-            let Some(tangent) = tangent_in.get(active).copied().flatten() else {
-                return Ok(vec![None]);
-            };
-            inputs.push(ValueRef::Local(tangent));
-        }
-        let active_mask = std::iter::repeat_n(false, 2)
-            .chain(std::iter::repeat_n(true, active_inputs.len()))
-            .collect();
-        let out = builder.add_operation(
-            StdTensorOp::Extension(Arc::new(SparseMatmulJvpOp {
-                plan: op.plan.clone(),
-                active_inputs,
-            })),
-            inputs,
-            OperationRole::Linearized { active_mask },
-        );
-        Ok(vec![Some(out[0])])
-    }
-}
-
-#[cfg(feature = "autodiff")]
 impl SemanticLinearizeRule for SparseMatmulAdRule {
     fn family_id(&self) -> &'static str {
         FAMILY_ID
@@ -593,54 +530,6 @@ impl SemanticLinearizeRule for SparseMatmulAdRule {
             &inputs,
         )?[0];
         Ok(SemanticLinearizeResult::new([AdValue::Value(tangent)], []))
-    }
-}
-
-#[cfg(feature = "autodiff")]
-#[derive(Debug)]
-struct SparseMatmulJvpAdRule;
-
-#[cfg(feature = "autodiff")]
-impl ExtensionLinearTransposeRule for SparseMatmulJvpAdRule {
-    fn family_id(&self) -> &'static str {
-        JVP_FAMILY_ID
-    }
-
-    fn linear_transpose(
-        &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
-        active_mask: &[bool],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let op = downcast_jvp_op(op, ADRuleKind::Transpose)?;
-        let inputs: Vec<_> = inputs.iter().map(TransposeInputRef::new).collect();
-        let Some(ct) = cotangent_out.first().copied().flatten() else {
-            return Ok(vec![None; op.input_count()]);
-        };
-        let lhs = inputs[0].fixed_value("sparse matmul VJP", 0)?;
-        let rhs = inputs[1].fixed_value("sparse matmul VJP", 1)?;
-        let mut result = vec![None; op.input_count()];
-        for (active_pos, &active_input) in op.active_inputs.iter().enumerate() {
-            let tangent_input_idx = 2 + active_pos;
-            if !active_mask.get(tangent_input_idx).copied().unwrap_or(false) {
-                continue;
-            }
-            let out = builder.add_operation(
-                StdTensorOp::Extension(Arc::new(SparseMatmulVjpOp {
-                    plan: op.plan.clone(),
-                    active_input,
-                })),
-                vec![lhs.clone(), rhs.clone(), ValueRef::Local(ct)],
-                OperationRole::Linearized {
-                    active_mask: vec![false, false, true],
-                },
-            );
-            result[tangent_input_idx] = Some(out[0]);
-        }
-        Ok(result)
     }
 }
 
@@ -686,29 +575,6 @@ impl SemanticPrimalVjpRule for SparseMatmulAdRule {
             SemanticAdRuleRole::PrimalVjp,
         )
     }
-}
-
-/// Build sparse extension AD rules.
-///
-/// # Errors
-///
-/// Returns `ExtensionRegistryError::MalformedFamilyId` if a generated sparse
-/// family identifier is invalid, or `ExtensionRegistryError::DuplicateRule`
-/// if a sparse linearize or linear-transpose rule is already registered.
-///
-/// # Examples
-///
-/// ```
-/// let rules = tenferro_ext_sparse::sparse_ad_rules().unwrap();
-/// assert!(rules.is_linearize_registered("tenferro-ext-sparse.matmul.v1"));
-/// assert!(rules.is_linear_transpose_registered("tenferro-ext-sparse.matmul_jvp.v1"));
-/// ```
-#[cfg(feature = "autodiff")]
-pub fn sparse_ad_rules() -> std::result::Result<ExtensionRuleSet, ExtensionRegistryError> {
-    let mut rules = ExtensionRuleSet::new();
-    rules.register_linearize(Arc::new(SparseMatmulAdRule))?;
-    rules.register_linear_transpose(Arc::new(SparseMatmulJvpAdRule))?;
-    Ok(rules)
 }
 
 /// Build sparse extension semantic-program AD rules.
@@ -945,20 +811,6 @@ fn validate_vjp_inputs(
     }
     validate_primal_inputs(plan, &inputs[..2])?;
     validate_value_tensor(inputs[2], plan.output_nnz())
-}
-
-#[cfg(feature = "autodiff")]
-fn downcast_matmul_op(op: &dyn ExtensionOp, rule: ADRuleKind) -> ADRuleResult<&SparseMatmulOp> {
-    op.as_any()
-        .downcast_ref::<SparseMatmulOp>()
-        .ok_or_else(|| ADRuleError::unsupported(FAMILY_ID, rule))
-}
-
-#[cfg(feature = "autodiff")]
-fn downcast_jvp_op(op: &dyn ExtensionOp, rule: ADRuleKind) -> ADRuleResult<&SparseMatmulJvpOp> {
-    op.as_any()
-        .downcast_ref::<SparseMatmulJvpOp>()
-        .ok_or_else(|| ADRuleError::unsupported(JVP_FAMILY_ID, rule))
 }
 
 fn hash_plan(plan: &SparseMatmulPlan, hasher: &mut dyn Hasher) {

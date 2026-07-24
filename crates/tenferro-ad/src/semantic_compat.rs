@@ -31,6 +31,10 @@ impl SemanticCompatDispatcher {
 }
 
 impl ExtensionAdDispatcher for SemanticCompatDispatcher {
+    fn has_primal_vjp(&self, family_id: &str) -> bool {
+        self.rules.lookup_primal_vjp(family_id).is_some()
+    }
+
     fn linearize(
         &self,
         op: &dyn ExtensionOp,

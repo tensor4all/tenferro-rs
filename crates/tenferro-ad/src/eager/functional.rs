@@ -49,8 +49,8 @@ pub(super) fn functional_vjp_optional(
     callbacks.remember_tensor(wrt)?;
     callbacks.remember_tensor(cotangent)?;
     let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-    if let Some(extension_rules) = &ctx.extension_rules {
-        ad_ctx = ad_ctx.with_extension_rules(extension_rules.clone());
+    if let Some(dispatcher) = &ctx.extension_ad_dispatcher {
+        ad_ctx = ad_ctx.with_extension_ad_dispatcher(Arc::clone(dispatcher));
     }
 
     let cotangents_result = tidu::eager::backward(
@@ -99,8 +99,8 @@ pub(super) fn functional_jvp(
     callbacks.remember_tensor(tangent)?;
     let tangent_seeds = HashMap::from([(wrt.key.clone(), tangent_value)]);
     let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-    if let Some(extension_rules) = &ctx.extension_rules {
-        ad_ctx = ad_ctx.with_extension_rules(extension_rules.clone());
+    if let Some(dispatcher) = &ctx.extension_ad_dispatcher {
+        ad_ctx = ad_ctx.with_extension_ad_dispatcher(Arc::clone(dispatcher));
     }
 
     let tangent_result = tidu::eager::try_forward(

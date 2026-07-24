@@ -96,7 +96,8 @@ fn eager_norm_supports_zero_and_matrix_induced_orders() {
 #[test]
 fn eager_composite_records_existing_primitives_for_backward() {
     let ad = AdContext::builder()
-        .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
+        .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
+        .unwrap()
         .build()
         .unwrap();
     let runtime = EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::new(), &ad);

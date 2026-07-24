@@ -38,7 +38,7 @@ This spec extends the three normative contracts that already exist in
   document extends it by specifying how an `ExtensionOp` participates in
   AD **without** itself implementing `Primitive`: the dispatcher in
   `crates/tenferro-internal-ops/src/ad/mod.rs` routes `StdTensorOp::Extension(op)` to a
-  rule for `op.family_id()` in the active `ExtensionRuleSet`. The rule emits
+  rule for `op.family_id()` in the active `SemanticExtensionRuleSet`. The rule emits
   tangents and cotangents expressed in the core `StdTensorOp` vocabulary, or
   in extension helper families covered by Section 10's AD-closure rules. The
   ad-contract closure rule (add only ops that implement `Primitive`) is
@@ -308,7 +308,7 @@ op interner, AD rule caching, and structural graph comparison.
   breaks `HashMap`-keyed caches. Symptom: AD caches return wrong
   cotangents or miss.
 - An implementer whose AD rule emits an `Extension` whose family has no rule in
-  the active `ExtensionRuleSet` gets `ADRuleError::Unsupported` on the next AD
+  the active `SemanticExtensionRuleSet` gets `ADRuleError::Unsupported` on the next AD
   pass.
 
 ---
@@ -362,7 +362,7 @@ payload family collisions are not caught when a payload is constructed.
 
 Registration surfaces enforce narrower duplicate rules:
 
-- `ExtensionRuleSet` rejects two AD rules with the same `family_id`.
+- `SemanticExtensionRuleSet` rejects two AD rules with the same `family_id`.
 - runtime executor registration is idempotent by `family_id` and keeps the
   first executor.
 
@@ -822,15 +822,15 @@ than overloading runtime graph construction.
 
 ### AD rule ownership
 
-AD rules are owned by an explicit `ExtensionRuleSet` attached to
+AD rules are owned by an explicit `SemanticExtensionRuleSet` attached to
 `tenferro_ad::AdContext`. The rule surface is role-specific: linearization,
 linear-transpose, and optional direct primal VJP rules are registered
 independently. New extension crates should expose a helper that constructs a
 fresh rule set and registers the roles supported by each family:
 
 ```rust
-pub fn extension_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
-    let mut rules = ExtensionRuleSet::new();
+pub fn extension_rules() -> Result<SemanticExtensionRuleSet, ExtensionRegistryError> {
+    let mut rules = SemanticExtensionRuleSet::new();
     rules.register_linearize(Arc::new(MyLinearizeRule))?;
     rules.register_linear_transpose(Arc::new(MyLinearTransposeRule))?;
     Ok(rules)
@@ -862,9 +862,9 @@ pub enum ExtensionRegistryError {
 
 ### Thread safety
 
-An `ExtensionRuleSet` MUST be safe to clone and read from any thread used by AD
+An `SemanticExtensionRuleSet` MUST be safe to clone and read from any thread used by AD
 graph construction. Extension AD rule lookup MUST NOT consult hidden
-process-global or thread-local state; the active `ExtensionRuleSet` is the only
+process-global or thread-local state; the active `SemanticExtensionRuleSet` is the only
 owner of extension AD rules for a transform.
 
 ### Failure signature
@@ -882,14 +882,14 @@ owner of extension AD rules for a transform.
 
 Extension AD is registered independently from the primal op. Extension crates
 implement one or more role-specific rule traits and add them to an
-`ExtensionRuleSet`. Rules return `ADRuleResult<_>` so missing rules can
+`SemanticExtensionRuleSet`. Rules return `ADRuleResult<_>` so missing rules can
 propagate without panic.
 
-`ExtensionLinearizeRule` provides the definitional JVP used when an extension
+`SemanticLinearizeRule` provides the definitional JVP used when an extension
 appears in a primal graph:
 
 ```rust
-pub trait ExtensionLinearizeRule: Debug + Send + Sync + 'static {
+pub trait SemanticLinearizeRule: Debug + Send + Sync + 'static {
     fn family_id(&self) -> &'static str;
 
     fn linearize(
@@ -904,11 +904,11 @@ pub trait ExtensionLinearizeRule: Debug + Send + Sync + 'static {
 }
 ```
 
-`ExtensionLinearTransposeRule` provides the transpose of an extension viewed as
+`SemanticLinearTransposeRule` provides the transpose of an extension viewed as
 a linear map in the active linearized inputs:
 
 ```rust
-pub trait ExtensionLinearTransposeRule: Debug + Send + Sync + 'static {
+pub trait SemanticLinearTransposeRule: Debug + Send + Sync + 'static {
     fn family_id(&self) -> &'static str;
 
     fn linear_transpose(
@@ -923,11 +923,11 @@ pub trait ExtensionLinearTransposeRule: Debug + Send + Sync + 'static {
 }
 ```
 
-`ExtensionPrimalVjpRule` is an optional direct VJP hook for reverse-mode
+`SemanticPrimalVjpRule` is an optional direct VJP hook for reverse-mode
 fallbacks from the primal graph:
 
 ```rust
-pub trait ExtensionPrimalVjpRule: Debug + Send + Sync + 'static {
+pub trait SemanticPrimalVjpRule: Debug + Send + Sync + 'static {
     fn family_id(&self) -> &'static str;
 
     fn primal_vjp(
@@ -946,17 +946,17 @@ that need payload parameters should downcast via `op.as_any()`.
 
 The AD engine dispatches by operation role:
 
-- `linearize` uses `ExtensionRuleSet::lookup_linearize`.
+- `linearize` uses `SemanticExtensionRuleSet::lookup_linearize`.
 - `linear_transpose` of a linearized extension op uses
-  `ExtensionRuleSet::lookup_linear_transpose` and passes the active input mask.
-- primal reverse-mode fallback uses `ExtensionRuleSet::lookup_primal_vjp`.
+  `SemanticExtensionRuleSet::lookup_linear_transpose` and passes the active input mask.
+- primal reverse-mode fallback uses `SemanticExtensionRuleSet::lookup_primal_vjp`.
 
 ### AD closure
 
 `linearize`, `linear_transpose`, and `primal_vjp` may add core `StdTensorOp`
 values and `StdTensorOp::Extension` values. Emitted extension families MUST
 have the role-specific rules needed by any subsequent AD pass in the active
-`ExtensionRuleSet`. Terminal first-order helper families MAY omit separate
+`SemanticExtensionRuleSet`. Terminal first-order helper families MAY omit separate
 rules when the owning extension documents that higher-order AD through that
 helper is unsupported. This keeps out-of-tree operations in the same compute
 graph while preserving the `Primitive` closure invariant at the
@@ -1063,8 +1063,8 @@ these error types / behaviours in the listed scenarios.
 | `HostReferenceRuntime` receives an op with no `host_reference()` capability | Return `Error::NoHostReference { family_id }`. MUST NOT panic or synthesize a fake result. |
 | Graph references an unregistered `family_id` at eager or graph runtime execution time | Return a backend/config error with `family_id` and registration guidance. |
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
-| AD dispatch (`linearize` / `linear_transpose` / primal VJP) encounters an `Extension` with no rule for the required role in the active `ExtensionRuleSet` | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced transforms and eager `backward` / functional `grad` / `vjp` / `jvp` propagate it through the public `Error` type re-exported by the owning surface crate. |
-| Duplicate AD rule `(family_id, role)` in one `ExtensionRuleSet` | Rule registration MUST reject with `ExtensionRegistryError::DuplicateRule { family_id, role }`. |
+| AD dispatch (`linearize` / `linear_transpose` / primal VJP) encounters an `Extension` with no rule for the required role in the active `SemanticExtensionRuleSet` | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced transforms and eager `backward` / functional `grad` / `vjp` / `jvp` propagate it through the public `Error` type re-exported by the owning surface crate. |
+| Duplicate AD rule `(family_id, role)` in one `SemanticExtensionRuleSet` | Rule registration MUST reject with `ExtensionRegistryError::DuplicateRule { family_id, role }`. |
 | Arity mismatch: `input_count()` disagrees with the `primal_in.len()` the dispatcher passed | `Error::InvalidConfig { op: "extension", message: "family_id=<id>: expected N inputs, got M" }`. |
 | Output shape disagrees with `infer_output_meta` result length | `Error::InvalidConfig` with `family_id` and the mismatched counts. |
 | A reachable extension equality is concretely false | `Error::ShapeConstraintViolation` before backend execution, with `family_id`, equality relation, expressions, values, and instruction provenance. |

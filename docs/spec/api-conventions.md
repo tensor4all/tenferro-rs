@@ -70,7 +70,7 @@ The default stratum is internal.
    borrowed-view inputs; `TensorEinsumIntoExt`, `TypedTensorEinsumIntoExt`,
    `TensorReadEinsumIntoExt`, and `TypedTensorReadEinsumIntoExt` for
    preallocated-output concrete execution; `ConcreteEinsumPlan` for repeated
-   concrete executions with fixed input metadata; `GraphCompilerEinsumExt` for
+   concrete executions with fixed input metadata; `TraceContextEinsumExt` for
    traced graph construction; and `EagerEinsumExt` for autodiff eager input
    slices/arrays. Typed preallocated outputs use `TypedTensorWrite` so both
    owned typed tensors and mutable typed views are accepted.

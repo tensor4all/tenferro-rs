@@ -124,7 +124,10 @@ impl SemanticAdProgram {
 ///
 /// # Errors
 ///
-/// Returns typed mask, source-query, semantic-rule, build, or finish errors.
+/// Returns [`SemanticAdTransformError::ActivityArity`] for a mask-length
+/// mismatch, [`SemanticAdTransformError::Extension`] for a rejected extension
+/// rule, or the corresponding `Query`, `Build`, `Finish`, or unsupported
+/// operation/metadata variant for failures encountered during transformation.
 pub fn semantic_jvp(
     input: &FrozenProgram,
     active_inputs: &[bool],
@@ -219,7 +222,10 @@ pub fn semantic_jvp(
 ///
 /// # Errors
 ///
-/// Returns typed mask, source-query, semantic-rule, build, or finish errors.
+/// Returns [`SemanticAdTransformError::ActivityArity`] for a mask-length
+/// mismatch, [`SemanticAdTransformError::Extension`] for a rejected extension
+/// rule, or the corresponding `Query`, `Build`, `Finish`, or unsupported
+/// operation/metadata variant for failures encountered during transformation.
 pub fn semantic_vjp(
     input: &FrozenProgram,
     active_inputs: &[bool],
