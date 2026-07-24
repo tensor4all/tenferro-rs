@@ -1669,10 +1669,7 @@ mod tests {
                             ))
                             .unwrap();
                         let pivots = builder
-                            .input(ProgramInputSpec::new(
-                                DType::I32,
-                                [DimExpr::Const(2)],
-                            ))
+                            .input(ProgramInputSpec::new(DType::I32, [DimExpr::Const(2)]))
                             .unwrap();
                         let solution = builder
                             .add_extension(
@@ -1684,9 +1681,7 @@ mod tests {
                             )
                             .unwrap()[0];
                         (
-                            format!(
-                                "prepared transpose={transpose_a} conjugate={conjugate_a}"
-                            ),
+                            format!("prepared transpose={transpose_a} conjugate={conjugate_a}"),
                             solution,
                         )
                     }
@@ -1739,16 +1734,10 @@ mod tests {
                     )
                 } else {
                     (
-                        Tensor::from_vec_col_major(
-                            vec![2, 2],
-                            vec![2.0_f64, 0.75, -0.5, 3.0],
-                        )
-                        .unwrap(),
-                        Tensor::from_vec_col_major(
-                            vec![2, 2],
-                            vec![0.2_f64, 0.05, -0.08, 0.4],
-                        )
-                        .unwrap(),
+                        Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.75, -0.5, 3.0])
+                            .unwrap(),
+                        Tensor::from_vec_col_major(vec![2, 2], vec![0.2_f64, 0.05, -0.08, 0.4])
+                            .unwrap(),
                         Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 2.0]).unwrap(),
                         Tensor::from_vec_col_major(vec![2, 1], vec![0.3_f64, -0.1]).unwrap(),
                     )
@@ -1798,16 +1787,15 @@ mod tests {
                     .unwrap();
                 let mut jvp_inputs = primal_inputs.clone();
                 jvp_inputs.extend([&matrix_tangent, &rhs_tangent]);
-                let tangent_output = executor
-                    .run_with_inputs(&jvp, &jvp_inputs)
-                    .unwrap_or_else(|error| {
-                        panic!("{name} complex={complex} semantic JVP execution: {error}")
-                    });
+                let tangent_output =
+                    executor
+                        .run_with_inputs(&jvp, &jvp_inputs)
+                        .unwrap_or_else(|error| {
+                            panic!("{name} complex={complex} semantic JVP execution: {error}")
+                        });
                 let cotangent = ones_tensor(dtype, tangent_output.shape().to_vec()).unwrap();
 
-                let vjp = ad
-                    .vjp_program(&source, active_inputs, &[true])
-                    .unwrap();
+                let vjp = ad.vjp_program(&source, active_inputs, &[true]).unwrap();
                 let vjp = GraphCompiler::new()
                     .compile_frozen_program(vjp.frozen())
                     .unwrap();
@@ -1821,9 +1809,8 @@ mod tests {
                 assert_eq!(input_cotangents.len(), 2, "{name}");
 
                 let lhs = semantic_real_inner_product(&cotangent, &tangent_output);
-                let rhs =
-                    semantic_real_inner_product(&matrix_tangent, &input_cotangents[0])
-                        + semantic_real_inner_product(&rhs_tangent, &input_cotangents[1]);
+                let rhs = semantic_real_inner_product(&matrix_tangent, &input_cotangents[0])
+                    + semantic_real_inner_product(&rhs_tangent, &input_cotangents[1]);
                 let tolerance = 1.0e-8 * lhs.abs().max(rhs.abs()).max(1.0);
                 assert!(
                     (lhs - rhs).abs() <= tolerance,

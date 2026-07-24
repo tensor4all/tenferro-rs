@@ -124,7 +124,8 @@ fn assert_close_complex_scalar(
 
 fn ad_context() -> AdContext {
     AdContext::builder()
-        .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
+        .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
+        .unwrap()
         .build()
         .unwrap()
 }

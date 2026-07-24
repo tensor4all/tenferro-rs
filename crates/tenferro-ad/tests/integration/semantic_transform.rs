@@ -1521,10 +1521,8 @@ fn semantic_program_transforms_use_activity_keyed_collision_checked_cache() {
 
     ad.jvp_program(&source, &[false, true]).unwrap();
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 2);
-    ad.vjp_program(&source, &[true, false], &[true])
-        .unwrap();
-    ad.vjp_program(&source, &[true, false], &[true])
-        .unwrap();
+    ad.vjp_program(&source, &[true, false], &[true]).unwrap();
+    ad.vjp_program(&source, &[true, false], &[true]).unwrap();
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 3);
 
     ad.clear_ad_transform_caches().unwrap();

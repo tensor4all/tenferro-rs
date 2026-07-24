@@ -65,11 +65,10 @@ impl SemanticLinearizeRule for LinalgAdRule {
     ) -> Result<SemanticLinearizeResult, SemanticAdError> {
         let op = semantic_linalg_op(request.op(), SemanticAdRuleRole::Linearize)?;
         if matches!(op.op(), LinalgOp::LuFactor | LinalgOp::SvdFull) {
-            return Err(SemanticAdError::Unsupported {
-                family_id: LINALG_EXTENSION_FAMILY_ID,
-                role: SemanticAdRuleRole::Linearize,
-                message: format!("semantic JVP is unsupported for {:?}", op.op()),
-            });
+            return Ok(SemanticLinearizeResult::new(
+                std::iter::repeat_n(AdValue::Absent, request.primal_outputs().len()),
+                [],
+            ));
         }
         let legacy = LegacyInvocation::new(
             request.primal_inputs(),

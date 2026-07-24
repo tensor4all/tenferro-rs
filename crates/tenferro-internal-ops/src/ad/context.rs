@@ -19,7 +19,8 @@ use tenferro_tensor::DType;
 use crate::dim_expr::{DimExpr, DimExprEvalError};
 #[cfg(feature = "autodiff")]
 use crate::ext_op::{
-    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionPrimalVjpRule, ExtensionRuleSet,
+    ExtensionAdDispatcher, ExtensionLinearTransposeRule, ExtensionLinearizeRule,
+    ExtensionPrimalVjpRule, ExtensionRuleSet,
 };
 use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
@@ -382,6 +383,8 @@ pub struct ShapeGuardContext {
     #[cfg(feature = "autodiff")]
     extension_rules: Option<ExtensionRuleSet>,
     #[cfg(feature = "autodiff")]
+    extension_ad_dispatcher: Option<Arc<dyn ExtensionAdDispatcher>>,
+    #[cfg(feature = "autodiff")]
     active_value_keys: Option<std::sync::Arc<std::collections::HashSet<ValueKey<StdTensorOp>>>>,
     #[cfg(feature = "autodiff")]
     transpose_primal_outputs: Option<Vec<ValueKey<StdTensorOp>>>,
@@ -445,8 +448,25 @@ impl ShapeGuardContext {
     /// ```
     #[cfg(feature = "autodiff")]
     pub fn with_extension_rules(mut self, rules: ExtensionRuleSet) -> Self {
+        self.extension_ad_dispatcher = rules.dispatcher();
         self.extension_rules = Some(rules);
         self
+    }
+
+    #[doc(hidden)]
+    #[cfg(feature = "autodiff")]
+    pub fn with_extension_ad_dispatcher(
+        mut self,
+        dispatcher: Arc<dyn ExtensionAdDispatcher>,
+    ) -> Self {
+        self.extension_ad_dispatcher = Some(dispatcher);
+        self
+    }
+
+    #[doc(hidden)]
+    #[cfg(feature = "autodiff")]
+    pub(crate) fn extension_ad_dispatcher(&self) -> Option<Arc<dyn ExtensionAdDispatcher>> {
+        self.extension_ad_dispatcher.as_ref().map(Arc::clone)
     }
 
     #[cfg(feature = "autodiff")]

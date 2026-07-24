@@ -616,6 +616,35 @@ pub enum ExtensionAliasDeclaration<'a> {
     Declared(&'a [ExtensionAlias]),
 }
 
+/// Single context-owned bridge from the legacy core AD sweep to semantic
+/// extension rules.
+///
+/// Family-specific rules must not implement this trait. `tenferro-ad` owns the
+/// sole bridge and dispatches through its `SemanticExtensionRuleSet`.
+#[doc(hidden)]
+#[cfg(feature = "autodiff")]
+pub trait ExtensionAdDispatcher: Debug + Send + Sync + 'static {
+    fn linearize(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        primal_in: &[ValueKey<StdTensorOp>],
+        primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
+
+    fn transpose(
+        &self,
+        op: &dyn ExtensionOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
+        mode: &OperationRole,
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
+}
+
 /// Definitional JVP rule provider for an extension family.
 ///
 /// Required only for families that appear in primal graphs and must be
@@ -747,6 +776,7 @@ pub struct ExtensionRuleSet {
     linearize_rules: Arc<LinearizeRuleMap>,
     linear_transpose_rules: Arc<LinearTransposeRuleMap>,
     primal_vjp_rules: Arc<PrimalVjpRuleMap>,
+    dispatcher: Option<Arc<dyn ExtensionAdDispatcher>>,
 }
 
 #[cfg(feature = "autodiff")]
@@ -762,6 +792,7 @@ impl std::fmt::Debug for ExtensionRuleSet {
             .field("linearize", &linearize)
             .field("linear_transpose", &linear_transpose)
             .field("primal_vjp", &primal_vjp)
+            .field("has_semantic_dispatcher", &self.dispatcher.is_some())
             .finish()
     }
 }
@@ -780,6 +811,17 @@ impl ExtensionRuleSet {
     /// ```
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[doc(hidden)]
+    pub fn with_dispatcher(mut self, dispatcher: Arc<dyn ExtensionAdDispatcher>) -> Self {
+        self.dispatcher = Some(dispatcher);
+        self
+    }
+
+    #[doc(hidden)]
+    pub(crate) fn dispatcher(&self) -> Option<Arc<dyn ExtensionAdDispatcher>> {
+        self.dispatcher.as_ref().map(Arc::clone)
     }
 
     /// Add one linearize rule to this owned set.
@@ -1178,6 +1220,9 @@ pub fn linearize_extension_rule(
     tangent_in: &[Option<LocalValueId>],
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    if let Some(dispatcher) = ctx.extension_ad_dispatcher() {
+        return dispatcher.linearize(op, builder, primal_in, primal_out, tangent_in, ctx);
+    }
     match ctx.extension_linearize_rule_for(op.family_id()) {
         Some(rule) => rule.linearize(op, builder, primal_in, primal_out, tangent_in, ctx),
         None => Err(ADRuleError::unsupported(op.family_id(), ADRuleKind::Jvp)),
@@ -1202,6 +1247,9 @@ pub fn transpose_extension_rule(
     mode: &OperationRole,
     ctx: &mut ShapeGuardContext,
 ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    if let Some(dispatcher) = ctx.extension_ad_dispatcher() {
+        return dispatcher.transpose(op, builder, cotangent_out, inputs, mode, ctx);
+    }
     match mode {
         OperationRole::Linearized { active_mask } => {
             match ctx.extension_linear_transpose_rule_for(op.family_id()) {

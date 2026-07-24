@@ -6,6 +6,7 @@ use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
 use tenferro_runtime::program::FrozenProgram;
 use tenferro_runtime::{CacheStats, Result, TracedTensor};
 
+use crate::semantic_compat::SemanticCompatDispatcher;
 use crate::semantic_extension::{SemanticExtensionRegistryError, SemanticExtensionRuleSet};
 use crate::semantic_transform::{
     semantic_jvp, semantic_vjp, SemanticAdProgram, SemanticAdTransformError,
@@ -121,8 +122,7 @@ impl AdContext {
             {
                 return Ok(cached.as_ref().clone());
             }
-            let transformed =
-                semantic_jvp(input, active_inputs, &self.semantic_extension_rules)?;
+            let transformed = semantic_jvp(input, active_inputs, &self.semantic_extension_rules)?;
             self.ad_transform_cache
                 .put_semantic(key, input, Arc::new(transformed.clone()))
                 .map_err(SemanticAdTransformError::Cache)?;
@@ -611,6 +611,11 @@ impl AdContextBuilder {
         let mut extension_rules = ExtensionRuleSet::new();
         for rules in self.extension_rule_sets {
             extension_rules.merge(rules)?;
+        }
+        if !self.semantic_extension_rules.is_empty() {
+            extension_rules = extension_rules.with_dispatcher(Arc::new(
+                SemanticCompatDispatcher::new(self.semantic_extension_rules.clone()),
+            ));
         }
         Ok(AdContext {
             semantic_extension_rules: self.semantic_extension_rules,

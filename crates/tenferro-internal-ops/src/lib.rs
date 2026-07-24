@@ -42,9 +42,9 @@ pub use ad::context::{
 };
 #[cfg(feature = "autodiff")]
 pub use ext_op::{
-    linearize_extension_rule, transpose_extension_rule, ExtensionLinearTransposeRule,
-    ExtensionLinearizeRule, ExtensionOp, ExtensionPrimalVjpRule, ExtensionRegistryError,
-    ExtensionRuleRole, ExtensionRuleSet, HostReference,
+    linearize_extension_rule, transpose_extension_rule, ExtensionAdDispatcher,
+    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionOp, ExtensionPrimalVjpRule,
+    ExtensionRegistryError, ExtensionRuleRole, ExtensionRuleSet, HostReference,
 };
 #[cfg(not(feature = "autodiff"))]
 pub use ext_op::{ExtensionOp, HostReference};

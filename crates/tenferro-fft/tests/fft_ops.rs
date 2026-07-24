@@ -88,7 +88,6 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 #[cfg(feature = "autodiff")]
 fn fft_ad_context() -> tenferro_ad::AdContext {
     tenferro_ad::AdContext::builder()
-        .with_extension_rules(tenferro_fft::ad_rules().unwrap())
         .with_semantic_extension_rules(tenferro_fft::semantic_ad_rules().unwrap())
         .unwrap()
         .build()
