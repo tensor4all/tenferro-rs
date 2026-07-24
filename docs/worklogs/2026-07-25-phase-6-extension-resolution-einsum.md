@@ -95,7 +95,8 @@ git diff --check
 - `7f47a15a` — `refactor(xla): consume typed extension lowering outcomes`
 - `3cf20b43` — `feat(runtime): track extension cache events`
 - `9a93071e` — `fix(runtime): scope extension cache event stats`
-- closeout docs commit — record the Phase 6 checkpoint and spec updates
+- `1bdd9ab7` — `docs(phase6): record extension resolution checkpoint`
+- closeout evidence commit — record the Phase 6 closeout gate
 
 ## Open-decision ledger
 
@@ -118,3 +119,29 @@ Phase 7 starts from the typed extension-lowering contract and the selector-safe
 extension cache stats. Phase 8 remains the owner of XLA/subgraph integration.
 PR creation, CI babysitting, and merge are deferred until Phase 8 and the AMD
 CPU/CUDA benchmark gate are complete.
+
+## Closeout gate before Phase 7
+
+The Phase 6 local closeout gate passed before starting Phase 7:
+
+```text
+cargo test -p tenferro-internal-ops
+cargo test -p tenferro-runtime
+cargo test -p tenferro-einsum
+cargo test -p tenferro-xla
+scripts/check-pr-fast.sh --no-fetch --coverage-reviewed \
+  --test 'cargo test -p tenferro-runtime' \
+  --test 'cargo test -p tenferro-einsum' \
+  --test 'cargo test -p tenferro-xla'
+python3 scripts/repository-rules-review.py \
+  --base origin/main \
+  --head HEAD \
+  --worktree \
+  --dry-run \
+  --no-dotenv \
+  --llm-skipped-reason 'Phase 6 local closeout before Phase 7; hosted LLM review deferred until PR gate after Phase 8.' \
+  --output-json /tmp/repository-rules-review-phase6-worktree-dry-run.json
+```
+
+The repository-rules dry-run verdict was `pass`. It recorded only the expected
+warning that the hosted LLM review was skipped until the PR gate after Phase 8.
