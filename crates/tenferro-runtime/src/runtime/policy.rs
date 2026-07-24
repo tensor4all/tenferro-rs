@@ -324,18 +324,13 @@ impl ResolvedProgramPlacement {
 ///
 /// assert_eq!(CacheInFlightBehavior::default(), CacheInFlightBehavior::Wait);
 /// ```
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum CacheInFlightBehavior {
     /// Wait for the in-flight preparation.
+    #[default]
     Wait,
     /// Refuse to join the in-flight preparation.
     Refuse,
-}
-
-impl Default for CacheInFlightBehavior {
-    fn default() -> Self {
-        Self::Wait
-    }
 }
 
 /// Process-wide execution planning policy.

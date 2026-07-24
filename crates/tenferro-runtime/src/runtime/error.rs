@@ -1,4 +1,8 @@
+use super::capability::{
+    CoreCapabilityKind, PreparationKeySummary, PreparedOperationBinding, UnsupportedReason,
+};
 use super::identity::EngineId;
+use super::specialization::SpecializationProjection;
 use tenferro_tensor::Error as TensorError;
 
 /// Classifies a malformed runtime identifier without retaining its input.
@@ -43,7 +47,7 @@ impl IdentityError {
 /// ```
 /// use tenferro_runtime::IdentityKind;
 ///
-/// assert_eq!(IdentityKind::Engine, IdentityKind::Engine);
+/// assert_eq!(IdentityKind::CacheOwner, IdentityKind::CacheOwner);
 /// ```
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
@@ -56,6 +60,8 @@ pub enum IdentityKind {
     StorageClass,
     /// A layout-class identifier.
     LayoutClass,
+    /// A runtime cache-owner identifier.
+    CacheOwner,
 }
 
 /// Reports invalid placement constraints.
@@ -247,6 +253,76 @@ pub enum SpecializationError {
     },
 }
 
+/// A typed execution-context mismatch from erased runtime dispatch.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{ExecutionContextIdentity, ExecutionContextMismatch};
+///
+/// let error = ExecutionContextMismatch {
+///     expected: ExecutionContextIdentity::of::<u64>(),
+///     actual: ExecutionContextIdentity::of::<u32>(),
+/// };
+/// assert_eq!(error.expected, ExecutionContextIdentity::of::<u64>());
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[error("execution context mismatch: expected {expected:?}, actual {actual:?}")]
+pub struct ExecutionContextMismatch {
+    /// Expected execution-context type identity.
+    pub expected: super::ExecutionContextIdentity,
+    /// Actual stored execution-context type identity.
+    pub actual: super::ExecutionContextIdentity,
+}
+
+/// Reports provider violations of runtime preparation contracts.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{CoreCapabilityKind, ProviderContractError};
+///
+/// let error = ProviderContractError::WrongOperationFamily {
+///     expected: CoreCapabilityKind::Elementwise,
+///     operation: "dot_general",
+/// };
+/// assert!(error.to_string().contains("dot_general"));
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ProviderContractError {
+    /// A provider accepted a request from the wrong core operation family.
+    #[error("operation {operation:?} is not in {expected:?}")]
+    WrongOperationFamily {
+        /// Expected core capability family.
+        expected: CoreCapabilityKind,
+        /// Operation diagnostic name.
+        operation: &'static str,
+    },
+    /// A prepared operation returned a different binding than requested.
+    #[error("prepared binding mismatch")]
+    BindingMismatch {
+        /// Runtime-created binding requested from the provider.
+        expected: Box<PreparedOperationBinding>,
+        /// Binding returned by the provider.
+        actual: Box<PreparedOperationBinding>,
+    },
+    /// A prepared operation returned a different specialization projection.
+    #[error("prepared specialization projection mismatch")]
+    ProjectionMismatch {
+        /// Runtime-created projection requested from the provider.
+        expected: Box<SpecializationProjection>,
+        /// Projection returned by the provider.
+        actual: Box<SpecializationProjection>,
+    },
+    /// A provider returned an invalid specialization.
+    #[error("invalid provider specialization: {source}")]
+    InvalidSpecialization {
+        /// Original specialization failure.
+        #[source]
+        source: SpecializationError,
+    },
+}
+
 /// Reports failures while preparing runtime execution artifacts.
 ///
 /// # Examples
@@ -272,5 +348,24 @@ pub enum PrepareError {
     Specialization {
         /// Typed source error.
         source: SpecializationError,
+    },
+    /// No provider supports this operation under the requested constraints.
+    #[error("operation is unsupported: {reason}")]
+    Unsupported {
+        /// Deterministic unsupported reason.
+        reason: UnsupportedReason,
+    },
+    /// Provider returned a value that violates the runtime preparation contract.
+    #[error("provider contract violation: {source}")]
+    ProviderContract {
+        /// Typed provider-contract source.
+        #[source]
+        source: ProviderContractError,
+    },
+    /// Preparation recursion reached an unsupported cycle.
+    #[error("preparation cycle at {key:?}")]
+    PreparationCycle {
+        /// Bounded summary of the recursive key.
+        key: PreparationKeySummary,
     },
 }

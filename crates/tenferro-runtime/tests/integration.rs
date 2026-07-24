@@ -8,6 +8,8 @@ mod public_surface_contract;
 mod runtime_error_api;
 #[path = "integration/runtime_foundations.rs"]
 mod runtime_foundations;
+#[path = "integration/runtime_preparation_api.rs"]
+mod runtime_preparation_api;
 #[path = "integration/runtime_public_api.rs"]
 mod runtime_public_api;
 #[path = "integration/trace_context.rs"]

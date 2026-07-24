@@ -70,15 +70,23 @@ pub use graph::{
     CompiledGraph, GraphCompiler, GraphCompilerCacheStats, GraphExecutor, GraphExecutorCacheStats,
 };
 pub use runtime::{
-    CacheInFlightBehavior, Determinism, EngineId, ExecutionContextIdentity, ExecutionPolicy,
-    HardwareClassId, IdentityError, IdentityKind, InputSignature, InputSignatureEntry,
-    InputSignatureError, InputSpecializationProjection, InputSpecializationRequirements,
-    InputSpecializationRequirementsBuilder, InputSpecializationRequirementsError, LayoutClass,
-    LayoutProjection, LayoutSpecialization, PlacementConstraintError, PlacementProjection,
-    PlacementSpecialization, PrepareError, PrepareOptions, PrepareOptionsKey,
-    ProgramPlacementConstraint, RankRequirement, RegistrationIdentity, ResolvedPlanningConfig,
-    ResolvedPlanningKey, ResolvedProgramPlacement, RuntimeEpoch, RuntimeId, SpecializationError,
-    SpecializationProjection, SpecializationRequirements, StorageClass,
+    CacheInFlightBehavior, CacheOwnerError, CacheOwnerFailure, CacheOwnerId, CoreCapabilityBundle,
+    CoreCapabilityBundleBuilder, CoreCapabilityKind, CorePrepareContext, Determinism,
+    DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
+    EngineId, ErasedExecutionContext, ExecutionContextIdentity, ExecutionContextMismatch,
+    ExecutionPolicy, ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest,
+    HardwareClassId, IdentityError, IdentityKind, IndexingPrepareRequest, IndexingRuntime,
+    InputSignature, InputSignatureEntry, InputSignatureError, InputSpecializationProjection,
+    InputSpecializationRequirements, InputSpecializationRequirementsBuilder,
+    InputSpecializationRequirementsError, LayoutClass, LayoutPrepareRequest, LayoutProjection,
+    LayoutRuntime, LayoutSpecialization, PlacementConstraintError, PlacementProjection,
+    PlacementSpecialization, PreparationKeySummary, PrepareCapability, PrepareError,
+    PrepareOptions, PrepareOptionsKey, PreparedOperation, PreparedOperationBinding,
+    PreparedOperationHandle, ProgramPlacementConstraint, ProviderContractError, RankRequirement,
+    ReductionPrepareRequest, ReductionRuntime, RegistrationIdentity, ResolvedPlanningConfig,
+    ResolvedPlanningKey, ResolvedProgramPlacement, RuntimeCacheError, RuntimeCacheOwner,
+    RuntimeEpoch, RuntimeId, RuntimeStateError, SpecializationError, SpecializationProjection,
+    SpecializationRequirements, StorageClass, UnsupportedReason,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;
