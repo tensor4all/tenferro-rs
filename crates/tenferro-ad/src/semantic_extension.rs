@@ -112,6 +112,27 @@ pub enum SemanticAdError {
         /// Bounded family-specific diagnostic.
         message: String,
     },
+    /// A family-specific rule failed with a typed source error.
+    #[error("semantic extension family {family_id:?} {role:?} rule failed: {source}")]
+    Rule {
+        /// Extension family whose rule failed.
+        family_id: &'static str,
+        /// Semantic AD role being evaluated.
+        role: SemanticAdRuleRole,
+        /// Original typed rule failure.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+    /// A family-specific semantic rule invariant was violated.
+    #[error("semantic extension family {family_id:?} {role:?} invariant failed: {message}")]
+    Invariant {
+        /// Extension family whose invariant failed.
+        family_id: &'static str,
+        /// Semantic AD role being evaluated.
+        role: SemanticAdRuleRole,
+        /// Bounded invariant diagnostic.
+        message: String,
+    },
     /// Semantic-program construction failed inside a rule.
     #[error("semantic extension AD program construction failed: {0}")]
     Build(#[from] ProgramBuildError),

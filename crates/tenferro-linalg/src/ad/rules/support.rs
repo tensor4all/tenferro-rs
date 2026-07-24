@@ -585,6 +585,51 @@ pub(super) fn leading_column_selector_fixed(
     )
 }
 
+pub(super) fn leading_column_selector_symbolic(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
+    leading_cols: DimExpr,
+    total_cols: DimExpr,
+    batch_shape: &[DimExpr],
+    anchor: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    let one = ad_support::one_like(builder, dtype, anchor.clone(), 0);
+    let ones = builder.add_operation(
+        StdTensorOp::BroadcastInDim {
+            shape: vector_shape(leading_cols.clone(), batch_shape),
+            dims: vec![],
+        },
+        vec![ValueRef::Local(one)],
+        OperationRole::Primary,
+    )[0];
+    let identity = fixed_unary(
+        builder,
+        StdTensorOp::EmbedDiag {
+            axis_a: 0,
+            axis_b: 1,
+        },
+        ValueRef::Local(ones),
+    );
+    let zero = ad_support::zero_like(builder, dtype, anchor, 0);
+    let trailing_cols = DimExpr::sub(total_cols, leading_cols.clone());
+    let zeros = builder.add_operation(
+        StdTensorOp::BroadcastInDim {
+            shape: matrix_shape(leading_cols, trailing_cols, batch_shape),
+            dims: vec![],
+        },
+        vec![ValueRef::Local(zero)],
+        OperationRole::Primary,
+    )[0];
+    builder.add_operation(
+        StdTensorOp::Concatenate {
+            axis: 1,
+            input_count: 2,
+        },
+        vec![ValueRef::Local(identity), ValueRef::Local(zeros)],
+        OperationRole::Primary,
+    )[0]
+}
+
 pub(super) fn trailing_column_selector_fixed(
     builder: &mut dyn PrimitiveRuleBuilder,
     dtype: DType,
@@ -796,11 +841,12 @@ mod tests {
 
     use computegraph::graph::{Graph, GraphBuilder};
     use computegraph::types::ValueRef;
+    use tenferro_ops::dim_expr::DimExpr;
     use tenferro_ops::input_key::TensorInputKey;
     use tenferro_ops::std_tensor_op::StdTensorOp;
     use tenferro_tensor::DType;
 
-    use super::{identity_matrix_fixed, one_like_fixed};
+    use super::{identity_matrix_fixed, leading_column_selector_symbolic, one_like_fixed};
 
     fn op_kind_name(op: &StdTensorOp) -> &'static str {
         match op {
@@ -879,6 +925,35 @@ mod tests {
         assert_eq!(
             op_kind_histogram(&graph),
             BTreeMap::from([("BroadcastInDim", 1), ("Constant", 1), ("EmbedDiag", 1)])
+        );
+    }
+
+    #[test]
+    fn symbolic_leading_selector_broadcasts_scalar_constants_once() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let anchor = builder.add_input(TensorInputKey::User { id: 3 });
+
+        let selector = leading_column_selector_symbolic(
+            &mut builder,
+            DType::F64,
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: 1,
+            },
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            },
+            &[],
+            ValueRef::Local(anchor),
+        );
+        let graph = builder.build();
+
+        assert!(graph.values()[selector].producer.is_some());
+        assert_eq!(
+            op_kind_histogram(&graph).get("BroadcastInDim"),
+            Some(&2),
+            "selector constants must remain scalar until their one required broadcast"
         );
     }
 }

@@ -254,6 +254,17 @@ pub enum Error {
         actual: Vec<usize>,
     },
 
+    /// A binding tensor dimension exceeds a semantic input's declared bound.
+    #[error("binding dimension {axis} exceeds semantic input upper bound {bound}: got {actual}")]
+    PlaceholderShapeBoundExceeded {
+        /// Axis whose runtime extent exceeded the bound.
+        axis: usize,
+        /// Evaluated upper bound.
+        bound: usize,
+        /// Runtime extent.
+        actual: usize,
+    },
+
     /// A binding tensor's rank does not match an `input_symbolic_shape`
     /// placeholder's declared rank.
     #[error(
@@ -629,7 +640,7 @@ impl Error {
             Self::PlaceholderDtypeMismatch { .. } => {
                 ErrorKind::Validation(ValidationKind::DTypeMismatch)
             }
-            Self::PlaceholderShapeMismatch { .. } => {
+            Self::PlaceholderShapeMismatch { .. } | Self::PlaceholderShapeBoundExceeded { .. } => {
                 ErrorKind::Validation(ValidationKind::ShapeMismatch)
             }
             Self::PlaceholderRankMismatch { .. } => {

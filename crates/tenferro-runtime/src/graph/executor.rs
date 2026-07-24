@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::{
@@ -1162,6 +1161,7 @@ fn validate_ordered_input_metadata<T: InputMetadata>(
             actual: inputs.len(),
         });
     }
+    let input_shapes: Vec<_> = inputs.iter().map(InputMetadata::shape).collect();
     for (input_value, actual) in program.program().inputs().iter().zip(inputs) {
         let metadata = program
             .program()
@@ -1177,8 +1177,48 @@ fn validate_ordered_input_metadata<T: InputMetadata>(
                 actual: actual.dtype(),
             });
         }
-        let expected_shape = exact_semantic_input_shape(metadata.shape())?;
-        if expected_shape.as_slice() != actual.shape() {
+        if metadata.shape().len() != actual.shape().len() {
+            return Err(Error::PlaceholderRankMismatch {
+                expected: metadata.shape().len(),
+                actual: actual.shape().len(),
+            });
+        }
+        let mut expected_shape = actual.shape().to_vec();
+        let mut exact_mismatch = false;
+        for (axis, (extent, actual_size)) in metadata.shape().iter().zip(actual.shape()).enumerate()
+        {
+            match extent {
+                ShapeExtent::Exact(expression) => {
+                    let expected = expression.eval(&input_shapes).map_err(|source| {
+                        Error::runtime_state_source(
+                            "GraphExecutor::validate_ordered_input_metadata",
+                            crate::error::ErrorPhase::Execution,
+                            source,
+                        )
+                    })?;
+                    expected_shape[axis] = expected;
+                    exact_mismatch |= expected != *actual_size;
+                }
+                ShapeExtent::UpperBound(expression) => {
+                    let bound = expression.eval(&input_shapes).map_err(|source| {
+                        Error::runtime_state_source(
+                            "GraphExecutor::validate_ordered_input_metadata",
+                            crate::error::ErrorPhase::Execution,
+                            source,
+                        )
+                    })?;
+                    if *actual_size > bound {
+                        return Err(Error::PlaceholderShapeBoundExceeded {
+                            axis,
+                            bound,
+                            actual: *actual_size,
+                        });
+                    }
+                }
+                ShapeExtent::Unknown => {}
+            }
+        }
+        if exact_mismatch {
             return Err(Error::PlaceholderShapeMismatch {
                 expected: expected_shape,
                 actual: actual.shape().to_vec(),
@@ -1186,20 +1226,6 @@ fn validate_ordered_input_metadata<T: InputMetadata>(
         }
     }
     Ok(())
-}
-
-fn exact_semantic_input_shape(shape: &[ShapeExtent<DimExpr>]) -> Result<Vec<usize>> {
-    shape
-        .iter()
-        .map(|extent| match extent {
-            ShapeExtent::Exact(DimExpr::Const(size)) => Ok(*size),
-            _ => Err(Error::RuntimeState {
-                op: "GraphExecutor::validate_ordered_input_metadata",
-                phase: crate::error::ErrorPhase::Execution,
-                message: "compiled graph input metadata is not an exact concrete shape".to_string(),
-            }),
-        })
-        .collect()
 }
 
 fn resolve_inputs(

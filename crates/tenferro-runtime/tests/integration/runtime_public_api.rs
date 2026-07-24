@@ -470,7 +470,7 @@ fn graph_executor_public_helpers_and_ordered_input_errors_are_covered() {
     let rank = executor
         .run_many_with_input_reads(&program, &[TensorRead::from_tensor(&rank_input)])
         .unwrap_err();
-    assert!(matches!(rank, Error::PlaceholderShapeMismatch { .. }));
+    assert!(matches!(rank, Error::PlaceholderRankMismatch { .. }));
 
     let shape_input = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let shape = executor
