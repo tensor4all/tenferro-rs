@@ -11,6 +11,7 @@ use tenferro_tensor::{DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, 
 
 use crate::compiler::{semantic_staging::stage_semantic_program, CompilerOptions};
 use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
+use crate::graph::CompiledGraph;
 use crate::program::{
     CoreSemanticOp, FrozenProgram, ProgramShapeRelation, SemanticFingerprint, SemanticOpRef,
     SemanticOperationView, SemanticProgram,
@@ -66,6 +67,7 @@ struct PreparedRootIdentity {
     registration_identity: RegistrationIdentity,
     context_identity: ExecutionContextIdentity,
     hardware_class: HardwareClassId,
+    compiler_options: CompilerOptions,
     resolved_planning: ResolvedPlanningKey,
     prepare_options: PrepareOptionsKey,
     operation_bindings: Box<[PreparedOperationBinding]>,
@@ -84,6 +86,7 @@ impl fmt::Debug for PreparedRootIdentity {
             .field("registration_identity", &self.registration_identity)
             .field("context_identity", &self.context_identity)
             .field("hardware_class", &self.hardware_class)
+            .field("compiler_options", &self.compiler_options)
             .field("resolved_planning", &self.resolved_planning)
             .field("prepare_options", &self.prepare_options)
             .field("operation_bindings", &self.operation_bindings.len())
@@ -214,6 +217,18 @@ impl PreparedProgramRoot {
         }
     }
 
+    pub(crate) fn staging(&self) -> &ExecProgram {
+        &self.staging
+    }
+
+    pub(crate) fn engine_id(&self) -> &EngineId {
+        &self.identity.engine_id
+    }
+
+    pub(crate) fn epoch(&self) -> super::RuntimeEpoch {
+        self.identity.epoch
+    }
+
     #[cfg(test)]
     pub(crate) fn semantic_for_test(&self) -> &Arc<SemanticProgram> {
         &self.semantic
@@ -277,6 +292,14 @@ impl PreparedProgram {
             specialization,
             operations,
         }
+    }
+
+    pub(crate) fn root(&self) -> &Arc<PreparedProgramRoot> {
+        &self.root
+    }
+
+    pub(crate) fn specialization(&self) -> &SpecializationProjection {
+        &self.specialization
     }
 
     #[cfg(test)]
@@ -370,6 +393,41 @@ pub(crate) fn prepare_for(
     signature: &InputSignature,
     options: &PrepareOptions,
 ) -> PreparedProgramResult<Arc<PreparedProgram>> {
+    prepare_for_with_compiler_options(
+        runtime,
+        caches,
+        frozen,
+        CompilerOptions::default(),
+        signature,
+        options,
+    )
+}
+
+pub(crate) fn prepare_compiled_for(
+    runtime: &Runtime,
+    caches: &RuntimeCacheSet<PreparedEntryKey, PreparedProgram>,
+    program: &CompiledGraph,
+    signature: &InputSignature,
+    options: &PrepareOptions,
+) -> PreparedProgramResult<Arc<PreparedProgram>> {
+    prepare_for_with_compiler_options(
+        runtime,
+        caches,
+        program.frozen(),
+        program.compiler_options(),
+        signature,
+        options,
+    )
+}
+
+fn prepare_for_with_compiler_options(
+    runtime: &Runtime,
+    caches: &RuntimeCacheSet<PreparedEntryKey, PreparedProgram>,
+    frozen: &FrozenProgram,
+    compiler_options: CompilerOptions,
+    signature: &InputSignature,
+    options: &PrepareOptions,
+) -> PreparedProgramResult<Arc<PreparedProgram>> {
     validate_signature_arity(frozen, signature)?;
     validate_semantic_shape_guards(&frozen.program, signature)?;
     let signature_bytes = signature
@@ -379,7 +437,11 @@ pub(crate) fn prepare_for(
         .snapshot()
         .map_err(|source| Arc::new(PrepareError::CacheState { source }))?;
     let context = Arc::new(resolve_preparation_context(
-        runtime, &snapshot, frozen, options,
+        runtime,
+        &snapshot,
+        frozen,
+        compiler_options,
+        options,
     )?);
     let mut requirements = SpecializationRequirements::polymorphic(signature.entries().len());
     let retry_limit = specialization_retry_bound(&requirements, signature)?;
@@ -431,6 +493,7 @@ fn resolve_preparation_context(
     runtime: &Runtime,
     snapshot: &Arc<super::RuntimeConfigSnapshot>,
     frozen: &FrozenProgram,
+    compiler_options: CompilerOptions,
     options: &PrepareOptions,
 ) -> PreparedProgramResult<PreparationContext> {
     let constraint = options
@@ -466,6 +529,7 @@ fn resolve_preparation_context(
             runtime,
             snapshot,
             frozen,
+            compiler_options,
             &engine,
             resolved_placement,
             planning,
@@ -495,6 +559,7 @@ fn build_operation_dispatch(
     runtime: &Runtime,
     snapshot: &Arc<super::RuntimeConfigSnapshot>,
     frozen: &FrozenProgram,
+    compiler_options: CompilerOptions,
     engine: &super::EngineSnapshotView<'_>,
     resolved_placement: ResolvedProgramPlacement,
     planning: ResolvedPlanningConfig,
@@ -558,6 +623,7 @@ fn build_operation_dispatch(
         registration_identity: engine.registration_identity(),
         context_identity: engine.context_identity(),
         hardware_class: engine.hardware_class().clone(),
+        compiler_options,
         resolved_planning: planning_key,
         prepare_options: prepare_options_key.clone(),
         operation_bindings: bindings.into_boxed_slice(),
@@ -762,7 +828,7 @@ fn root_for_key(
         PreparedRootKey::Identity(identity) => Arc::clone(identity),
         PreparedRootKey::Prepared(_) => unreachable!(),
     };
-    let staging = stage_semantic_program(&identity.semantic, CompilerOptions::default()).map_err(
+    let staging = stage_semantic_program(&identity.semantic, identity.compiler_options).map_err(
         |source| {
             Arc::new(PrepareError::Engine {
                 source: Arc::new(source),
@@ -1042,6 +1108,7 @@ fn hash_root_identity_for_digest(identity: &PreparedRootIdentity, state: &mut im
     identity.registration_identity.hash(state);
     identity.context_identity.hash(state);
     identity.hardware_class.hash(state);
+    identity.compiler_options.hash(state);
     identity.resolved_planning.hash(state);
     identity.prepare_options.hash(state);
     identity.operation_bindings.hash(state);
@@ -1062,6 +1129,7 @@ fn root_identity_exact_eq(left: &PreparedRootIdentity, right: &PreparedRootIdent
         && left.registration_identity == right.registration_identity
         && left.context_identity == right.context_identity
         && left.hardware_class == right.hardware_class
+        && left.compiler_options == right.compiler_options
         && left.resolved_planning == right.resolved_planning
         && left.prepare_options == right.prepare_options
         && left.operation_bindings == right.operation_bindings

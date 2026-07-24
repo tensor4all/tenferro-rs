@@ -6,6 +6,9 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use tenferro_tensor::{Tensor, TensorValue};
+
+use crate::graph::CompiledGraph;
 use crate::program::FrozenProgram;
 
 use super::cache::{PreparedPlanCacheLimits, RuntimeCacheSet};
@@ -437,6 +440,73 @@ impl Runtime {
         options: &PrepareOptions,
     ) -> PreparedProgramResult<Arc<PreparedProgram>> {
         super::preparation::prepare_for(self, &self.0.caches, frozen, signature, options)
+    }
+
+    pub(crate) fn prepare_compiled_for(
+        &self,
+        program: &CompiledGraph,
+        signature: &InputSignature,
+        options: &PrepareOptions,
+    ) -> PreparedProgramResult<Arc<PreparedProgram>> {
+        super::preparation::prepare_compiled_for(self, &self.0.caches, program, signature, options)
+    }
+
+    /// Run a compiled graph through runtime-owned prepared execution.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use tenferro_runtime::{Runtime, TracedTensor, GraphCompiler};
+    ///
+    /// let runtime = Runtime::builder().build()?;
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// let program = GraphCompiler::new().compile(&x)?;
+    /// let error = runtime.run_compiled(&program, &[]).unwrap_err();
+    /// assert!(error.to_string().contains("no eligible engine"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error`] when input validation, runtime preparation, or
+    /// backend execution fails.
+    pub fn run_compiled(
+        &self,
+        program: &CompiledGraph,
+        inputs: &[&Tensor],
+    ) -> crate::Result<Vec<Tensor>> {
+        super::execution::run_compiled(self, program, inputs)
+    }
+
+    /// Run a compiled graph and preserve lazy owned output views.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use tenferro_runtime::{Runtime, TracedTensor, GraphCompiler};
+    ///
+    /// let runtime = Runtime::builder().build()?;
+    /// let x = TracedTensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// let program = GraphCompiler::new().compile(&x)?;
+    /// let error = runtime.run_compiled_values(&program, &[]).unwrap_err();
+    /// assert!(error.to_string().contains("no eligible engine"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error`] when input validation, runtime preparation, or
+    /// backend execution fails.
+    pub fn run_compiled_values(
+        &self,
+        program: &CompiledGraph,
+        inputs: &[&Tensor],
+    ) -> crate::Result<Vec<TensorValue>> {
+        super::execution::run_compiled_values(self, program, inputs)
     }
 
     /// Transactionally edit and publish runtime configuration.
@@ -907,6 +977,12 @@ impl<'a> EngineSnapshotView<'a> {
 
     pub(super) fn default_storage_class(&self) -> &'a StorageClass {
         self.slot.registration.default_storage_class()
+    }
+
+    pub(super) fn execution_engine(
+        &self,
+    ) -> Option<&'a Arc<dyn super::execution::ErasedTensorBackendExecutor>> {
+        self.slot.registration.execution_engine.as_ref()
     }
 
     #[cfg(test)]
