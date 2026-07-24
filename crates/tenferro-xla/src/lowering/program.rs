@@ -7,6 +7,7 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{ValueKey, ValueRef};
 use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::ext_op::ExtensionStandardLowering;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -305,19 +306,22 @@ fn lower_extension_operation(
         })
         .collect::<Vec<_>>();
 
-    let Some(output_refs) = op
-        .lower_to_standard_ops(
+    let output_refs = match op
+        .lower_to_standard_ops_typed(
             &mut builder,
             &input_refs,
             &input_dtypes,
             &input_sym_shape_refs,
         )
         .map_err(|source| Error::ExtensionLowering { source })?
-    else {
-        return Err(Error::UnsupportedOp {
-            op: op.family_id(),
-            reason: "extension does not provide a standard-op lowering for exact static shapes",
-        });
+    {
+        ExtensionStandardLowering::Lowered(outputs) => outputs,
+        ExtensionStandardLowering::Unsupported => {
+            return Err(Error::UnsupportedOp {
+                op: op.family_id(),
+                reason: "extension does not provide a standard-op lowering for exact static shapes",
+            });
+        }
     };
 
     if output_refs.len() != operation.outputs().len() {

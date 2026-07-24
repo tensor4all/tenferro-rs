@@ -100,6 +100,20 @@ fn special_float_literals_preserve_dtype_width_and_nan_payload() {
 }
 
 #[test]
+fn extension_lowering_uses_typed_outcome_not_option_protocol() {
+    let source = include_str!("../program.rs");
+    let region = source
+        .split_once("fn lower_extension_operation")
+        .and_then(|(_, rest)| rest.split_once("fn lower_program"))
+        .map(|(body, _)| body)
+        .unwrap_or(source);
+
+    assert!(region.contains("ExtensionStandardLowering::Lowered"));
+    assert!(region.contains("ExtensionStandardLowering::Unsupported"));
+    assert!(!region.contains("let Some(output_refs)"));
+}
+
+#[test]
 fn dot_shape_rejects_invalid_dimension_config() {
     let err = stablehlo_dot_shape(
         &[2, 3],
