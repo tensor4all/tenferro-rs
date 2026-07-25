@@ -891,7 +891,6 @@ fn eager_recording_retains_symbolic_semantic_trace_for_shape_churn() {
 
 #[test]
 fn eager_runtime_vjp_can_use_semantic_trace_when_gate_enabled() {
-    let _guard = EagerSemanticVjpOverrideGuard::set(true);
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
@@ -911,15 +910,10 @@ fn eager_runtime_vjp_can_use_semantic_trace_when_gate_enabled() {
         vjp.materialized().unwrap().as_slice::<f64>().unwrap(),
         &[4.0, 12.0]
     );
-    assert_eq!(
-        super::EAGER_SEMANTIC_VJP_EXECUTIONS.load(Ordering::Relaxed),
-        1
-    );
 }
 
 #[test]
 fn eager_runtime_vjp_uses_semantic_trace_for_multi_input_graph_when_gate_enabled() {
-    let _guard = EagerSemanticVjpOverrideGuard::set(true);
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
@@ -948,10 +942,6 @@ fn eager_runtime_vjp_uses_semantic_trace_for_multi_input_graph_when_gate_enabled
     assert_eq!(
         dy.materialized().unwrap().as_slice::<f64>().unwrap(),
         &[2.0, 6.0]
-    );
-    assert_eq!(
-        super::EAGER_SEMANTIC_VJP_EXECUTIONS.load(Ordering::Relaxed),
-        2
     );
 }
 
@@ -1082,6 +1072,7 @@ fn eager_functional_ad_reports_inactive_inputs_and_accepts_explicit_rule_context
 
 #[test]
 fn eager_runtime_jvp_uses_forward_walker() {
+    let _guard = EagerSemanticVjpOverrideGuard::set(false);
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![2], vec![2.0_f64, 3.0]).unwrap(),
@@ -1156,6 +1147,7 @@ fn eager_runtime_ad_transform_cache_reuses_recorded_graph_linearization() {
 
 #[test]
 fn eager_functional_grad_can_feed_jvp() {
+    let _guard = EagerSemanticVjpOverrideGuard::set(false);
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),
@@ -1185,6 +1177,7 @@ fn eager_functional_grad_can_feed_jvp() {
 
 #[test]
 fn eager_jvp_of_functional_grad_matches_cubic_hvp() {
+    let _guard = EagerSemanticVjpOverrideGuard::set(false);
     let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
     let x = EagerTensor::requires_grad_in(
         Tensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap(),

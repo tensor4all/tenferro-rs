@@ -106,8 +106,10 @@ fn eager_semantic_vjp_enabled() -> bool {
         return value;
     }
 
+    // Semantic eager VJP/JVP on by default (Unification 7).
+    // Set TENFERRO_EAGER_SEMANTIC_VJP=0 to disable.
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env::var("TENFERRO_EAGER_SEMANTIC_VJP").is_ok())
+    *ENABLED.get_or_init(|| env::var("TENFERRO_EAGER_SEMANTIC_VJP").map_or(true, |v| v != "0"))
 }
 
 /// Scope guard that temporarily disables eager operation recording.
@@ -2076,7 +2078,7 @@ fn semantic_eager_vjp_optional(
         Arc::clone(ctx),
         eager_val_key(),
         Arc::new(result),
-        false,
+        true,
         None,
         Vec::new(),
     )?)))
