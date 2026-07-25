@@ -242,6 +242,28 @@ Partial logs were written under:
 target/unification-performance-gate/baseline-c6418-effa6ca1-run3/
 ```
 
+### Invalid baseline attempt: 2026-07-25 run4
+
+A fourth attempted baseline run against pinned commit
+`c6418eecfe2d38ca09d6e6386760fcb23982691e`, with the fixed harness files from
+commit `65e2a05d`, was stopped during
+`tenferro-ad/eager_dispatch_baseline`.
+
+Classification: `INCONCLUSIVE`, not a baseline.
+
+Reason: external Cargo/rustc work started during the benchmark. At
+2026-07-25 13:05:11 JST, `ps` showed an unrelated `/tmp/koushi-305-target`
+build running `cargo test -p koushi-core --lib` and a `rustc` process for
+`koushi_core` at roughly 100% CPU, alongside long-running Julia kernels. This
+violates the host-noise validity gate, so the run was interrupted and all
+partial Criterion output is diagnostic only.
+
+Partial logs were written under:
+
+```text
+target/unification-performance-gate/baseline-c6418-65e2a05d-run4/
+```
+
 ## Remaining risks and follow-up
 
 - Baseline numbers must be collected from the pinned baseline implementation
