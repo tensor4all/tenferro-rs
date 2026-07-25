@@ -25,7 +25,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::ones_tensor;
 use tenferro_runtime::{
-    CoreCapabilityBundle, EngineId, ErrorPhase, ExecutionContextIdentity,
+    CompiledGraph, CoreCapabilityBundle, EngineId, ErrorPhase, ExecutionContextIdentity,
     ExtensionModule, GraphCompiler, HardwareClassId, RegistrationIdentity, Runtime,
     RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, TracedTensor,
 };
@@ -549,6 +549,9 @@ pub struct EagerRuntime {
     value_records: Mutex<HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>,
     value_ptr_records: Mutex<HashMap<usize, Weak<EagerTensorRecord>>>,
     ad_transform_cache: Arc<AdTransformCache>,
+    /// S2: prepared derivative programs keyed by (structure_digest, wrt_input_index).
+    /// Avoids re-running freeze+AD transform+compile_frozen on warm structure hits.
+    prepared_derivative_cache: Mutex<HashMap<(u64, usize), Arc<PreparedDerivative>>>,
 }
 
 impl fmt::Debug for EagerRuntime {
@@ -742,6 +745,7 @@ impl EagerRuntime {
             value_records: Mutex::new(HashMap::new()),
             value_ptr_records: Mutex::new(HashMap::new()),
             ad_transform_cache,
+            prepared_derivative_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1032,6 +1036,15 @@ impl EagerRuntime {
     pub fn clear_caches(&self) -> Result<()> {
         self.clear_extension_caches()?;
         self.clear_ad_transform_caches()?;
+        self.clear_prepared_derivative_cache()?;
+        Ok(())
+    }
+
+    fn clear_prepared_derivative_cache(&self) -> Result<()> {
+        self.prepared_derivative_cache
+            .lock()
+            .map_err(|_| Error::Internal("prepared derivative cache lock poisoned".into()))?
+            .clear();
         Ok(())
     }
 
@@ -1894,6 +1907,35 @@ impl EagerRuntime {
     }
 }
 
+/// Compute a structure digest from a traced tensor's operation graph.
+///
+/// Hashes each operation's type discriminant and arity (excluding concrete
+/// tensor values), so identical operation sequences produce the same digest
+/// across different concrete bindings.  This is the S2 record-time digest
+/// from issue #1460 — computed here from the already-recorded graph rather
+/// than incrementally during recording (same effect, simpler implementation).
+fn trace_structure_digest(trace: &TracedTensor) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    let graph = trace.graph();
+    let ops = graph.operations();
+    ops.len().hash(&mut hasher);
+    for op_node in ops.iter() {
+        core::mem::discriminant(&op_node.operation).hash(&mut hasher);
+        op_node.inputs.len().hash(&mut hasher);
+        op_node.outputs.len().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Cached prepared derivative: program + index metadata.
+struct PreparedDerivative {
+    program: Arc<CompiledGraph>,
+    seed_input_index: usize,
+    derivative_output_index: usize,
+}
+
 fn semantic_eager_vjp_optional(
     ctx: &Arc<EagerRuntime>,
     output: &EagerTensor,
@@ -1912,6 +1954,10 @@ fn semantic_eager_vjp_optional(
         return Ok(None);
     }
 
+    let digest = trace_structure_digest(output_trace);
+
+    // First compile the trace to get bindings and wrt_input_index.
+    // (The compile step is needed even for cache hits to extract tensor bindings.)
     let mut compiler = GraphCompiler::new();
     let source = compiler.compile(output_trace)?;
     if source.output_count() != 1
@@ -1924,40 +1970,71 @@ fn semantic_eager_vjp_optional(
         return Ok(None);
     };
 
-    let mut active_inputs = vec![false; source.input_count()];
-    if let Some(active) = active_inputs.get_mut(wrt_input_index) {
-        *active = true;
-    } else {
-        return Ok(None);
-    }
-    let active_outputs = vec![true; source.output_count()];
-    let ad = AdContext::core_with_transform_cache(Arc::clone(&ctx.ad_transform_cache));
-    let derivative = ad
-        .vjp_program(source.frozen_program(), &active_inputs, &active_outputs)
-        .map_err(|source| {
-            Error::runtime_state_source("semantic_eager_vjp", ErrorPhase::GraphBuild, source)
-        })?;
-    // derivative_input_indices maps source output → derivative seed input.
-    // There is always exactly one source output (guarded above).
-    let Some(seed_input_index) = derivative
-        .derivative_input_indices()
-        .first()
-        .copied()
-        .flatten()
-    else {
-        return Ok(Some(None));
+    // S2: check prepared-derivative cache before AD transform + compile_frozen.
+    let cache_key = (digest, wrt_input_index);
+    let prepared = {
+        let cache = ctx
+            .prepared_derivative_cache
+            .lock()
+            .map_err(|_| Error::Internal("prepared derivative cache lock poisoned".into()))?;
+        cache.get(&cache_key).cloned()
     };
-    // derivative_output_indices maps source input → derivative output.
-    let Some(derivative_output_index) = derivative
-        .derivative_output_indices()
-        .get(wrt_input_index)
-        .copied()
-        .flatten()
-    else {
-        return Ok(Some(None));
-    };
+    let (seed_input_index, derivative_output_index, derivative_program) =
+        if let Some(prepared) = prepared {
+            (
+                prepared.seed_input_index,
+                prepared.derivative_output_index,
+                Arc::clone(&prepared.program),
+            )
+        } else {
+            let mut active_inputs = vec![false; source.input_count()];
+            if let Some(active) = active_inputs.get_mut(wrt_input_index) {
+                *active = true;
+            } else {
+                return Ok(None);
+            }
+            let active_outputs = vec![true; source.output_count()];
+            let ad = AdContext::core_with_transform_cache(Arc::clone(&ctx.ad_transform_cache));
+            let derivative = ad
+                .vjp_program(source.frozen_program(), &active_inputs, &active_outputs)
+                .map_err(|source| {
+                    Error::runtime_state_source(
+                        "semantic_eager_vjp",
+                        ErrorPhase::GraphBuild,
+                        source,
+                    )
+                })?;
+            let seed_input_index = derivative
+                .derivative_input_indices()
+                .first()
+                .copied()
+                .flatten();
+            let derivative_output_index = derivative
+                .derivative_output_indices()
+                .get(wrt_input_index)
+                .copied()
+                .flatten();
+            let (Some(seed_input_index), Some(derivative_output_index)) =
+                (seed_input_index, derivative_output_index)
+            else {
+                return Ok(Some(None));
+            };
+            let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
+            let input_count = derivative_program.input_count();
+            // Cache the prepared derivative.
+            let mut cache = ctx.prepared_derivative_cache.lock().map_err(|_| {
+                Error::Internal("prepared derivative cache lock poisoned".into())
+            })?;
+            let program = Arc::new(derivative_program.clone());
+            let entry = Arc::new(PreparedDerivative {
+                program: Arc::clone(&program),
+                seed_input_index,
+                derivative_output_index,
+            });
+            cache.insert(cache_key, entry);
+            (seed_input_index, derivative_output_index, program)
+        };
 
-    let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
     let input_count = derivative_program.input_count();
     let mut owned_inputs = vec![None; input_count];
     for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
