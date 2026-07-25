@@ -105,15 +105,10 @@ fn eager_semantic_vjp_enabled() -> bool {
         return value;
     }
 
-    // Semantic eager VJP/JVP are opt-in until composability (trace
-    // pass-through for downstream AD) is implemented.  The downstream
-    // JVP path depends on output.trace being present, and semantic
-    // VJP produces results without a tidu trace.  When the semantic
-    // JVP is used alone (end-of-chain), correctness is the same as
-    // tidu; the gate is intentionally conservative to avoid breaking
-    // composable VJP→JVP chains in default configuration.
+    // Semantic eager VJP/JVP are enabled by default.
+    // Set TENFERRO_EAGER_SEMANTIC_VJP=0 to disable and fall back to tidu.
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env::var("TENFERRO_EAGER_SEMANTIC_VJP").is_ok())
+    *ENABLED.get_or_init(|| env::var("TENFERRO_EAGER_SEMANTIC_VJP").map_or(true, |v| v != "0"))
 }
 
 /// Scope guard that temporarily disables eager operation recording.
@@ -1916,11 +1911,42 @@ fn graph_structure_fingerprint(graph: &Graph<StdTensorOp>) -> u64 {
     let ops = graph.operations();
     ops.len().hash(&mut hasher);
     for op_node in ops.iter() {
-        core::mem::discriminant(&op_node.operation).hash(&mut hasher);
+        // Hash the operation's Debug representation for full type+config coverage
+        format!("{:?}", op_node.operation).hash(&mut hasher);
         op_node.inputs.len().hash(&mut hasher);
         op_node.outputs.len().hash(&mut hasher);
     }
     hasher.finish()
+}
+
+/// Look up or insert a compiled graph in the S2 cache, keyed by structure
+/// fingerprint.  Evicts a random entry when the cache reaches 128 entries.
+fn s2_compile_cached(
+    ctx: &EagerRuntime,
+    fingerprint: u64,
+    output_trace: &TracedTensor,
+    compiler: &mut GraphCompiler,
+) -> Result<Arc<CompiledGraph>> {
+    let mut cache = ctx
+        .semantic_compile_cache
+        .lock()
+        .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
+    if let Some(cached) = cache.get(&fingerprint) {
+        return Ok(Arc::clone(cached));
+    }
+    drop(cache);
+    let compiled = Arc::new(compiler.compile(output_trace)?);
+    let mut cache = ctx
+        .semantic_compile_cache
+        .lock()
+        .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
+    if cache.len() >= 128 {
+        if let Some(oldest) = cache.keys().next().copied() {
+            cache.remove(&oldest);
+        }
+    }
+    cache.insert(fingerprint, Arc::clone(&compiled));
+    Ok(compiled)
 }
 
 fn semantic_eager_vjp_optional(
@@ -1943,24 +1969,8 @@ fn semantic_eager_vjp_optional(
 
     let fingerprint = graph_structure_fingerprint(output_trace.graph());
     let mut compiler = GraphCompiler::new();
-    let source: Arc<CompiledGraph> = {
-        let cache = ctx
-            .semantic_compile_cache
-            .lock()
-            .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
-        if let Some(cached) = cache.get(&fingerprint) {
-            Arc::clone(cached)
-        } else {
-            drop(cache);
-            let compiled = Arc::new(compiler.compile(output_trace)?);
-            let mut cache = ctx
-                .semantic_compile_cache
-                .lock()
-                .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
-            cache.insert(fingerprint, Arc::clone(&compiled));
-            compiled
-        }
-    };
+    let source: Arc<CompiledGraph> =
+        s2_compile_cached(ctx, fingerprint, output_trace, &mut compiler)?;
     if source.output_count() != 1
         || source.input_keys().len() != source.input_count()
         || source.bindings().len() != source.input_count()
@@ -2048,7 +2058,7 @@ fn semantic_eager_vjp_optional(
         Arc::clone(ctx),
         eager_val_key(),
         Arc::new(result),
-        false,
+        true,
         None,
         Vec::new(),
     )?)))
@@ -2074,24 +2084,8 @@ fn semantic_eager_jvp_optional(
 
     let fingerprint = graph_structure_fingerprint(output_trace.graph());
     let mut compiler = GraphCompiler::new();
-    let source: Arc<CompiledGraph> = {
-        let cache = ctx
-            .semantic_compile_cache
-            .lock()
-            .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
-        if let Some(cached) = cache.get(&fingerprint) {
-            Arc::clone(cached)
-        } else {
-            drop(cache);
-            let compiled = Arc::new(compiler.compile(output_trace)?);
-            let mut cache = ctx
-                .semantic_compile_cache
-                .lock()
-                .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
-            cache.insert(fingerprint, Arc::clone(&compiled));
-            compiled
-        }
-    };
+    let source: Arc<CompiledGraph> =
+        s2_compile_cached(ctx, fingerprint, output_trace, &mut compiler)?;
     if source.output_count() != 1
         || source.input_keys().len() != source.input_count()
         || source.bindings().len() != source.input_count()
