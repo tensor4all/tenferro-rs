@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use crate::extension_cache::{ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore};
+#[cfg(test)]
 use computegraph::graph::Graph;
 use computegraph::ValueKey;
 #[cfg(test)]
@@ -24,7 +25,7 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::ones_tensor;
 use tenferro_runtime::{
-    CompiledGraph, CoreCapabilityBundle, EngineId, ErrorPhase, ExecutionContextIdentity,
+    CoreCapabilityBundle, EngineId, ErrorPhase, ExecutionContextIdentity,
     ExtensionModule, GraphCompiler, HardwareClassId, RegistrationIdentity, Runtime,
     RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, TracedTensor,
 };
@@ -105,10 +106,8 @@ fn eager_semantic_vjp_enabled() -> bool {
         return value;
     }
 
-    // Semantic eager VJP/JVP are enabled by default.
-    // Set TENFERRO_EAGER_SEMANTIC_VJP=0 to disable and fall back to tidu.
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| env::var("TENFERRO_EAGER_SEMANTIC_VJP").map_or(true, |v| v != "0"))
+    *ENABLED.get_or_init(|| env::var("TENFERRO_EAGER_SEMANTIC_VJP").is_ok())
 }
 
 /// Scope guard that temporarily disables eager operation recording.
@@ -550,9 +549,6 @@ pub struct EagerRuntime {
     value_records: Mutex<HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>,
     value_ptr_records: Mutex<HashMap<usize, Weak<EagerTensorRecord>>>,
     ad_transform_cache: Arc<AdTransformCache>,
-    /// S2: cache compiled semantic programs by graph-structure fingerprint
-    /// to avoid re-compiling identical trace structures for warm shape-churn.
-    semantic_compile_cache: Mutex<HashMap<u64, Arc<CompiledGraph>>>,
 }
 
 impl fmt::Debug for EagerRuntime {
@@ -746,7 +742,6 @@ impl EagerRuntime {
             value_records: Mutex::new(HashMap::new()),
             value_ptr_records: Mutex::new(HashMap::new()),
             ad_transform_cache,
-            semantic_compile_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1899,56 +1894,6 @@ impl EagerRuntime {
     }
 }
 
-/// Compute a structure fingerprint from a traced graph's operations.
-///
-/// Hashes the operation type variants and arities (excluding concrete
-/// input tensor values) so identical operation structures produce the
-/// same fingerprint across different concrete bindings.
-fn graph_structure_fingerprint(graph: &Graph<StdTensorOp>) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    let ops = graph.operations();
-    ops.len().hash(&mut hasher);
-    for op_node in ops.iter() {
-        // Hash the operation's Debug representation for full type+config coverage
-        format!("{:?}", op_node.operation).hash(&mut hasher);
-        op_node.inputs.len().hash(&mut hasher);
-        op_node.outputs.len().hash(&mut hasher);
-    }
-    hasher.finish()
-}
-
-/// Look up or insert a compiled graph in the S2 cache, keyed by structure
-/// fingerprint.  Evicts a random entry when the cache reaches 128 entries.
-fn s2_compile_cached(
-    ctx: &EagerRuntime,
-    fingerprint: u64,
-    output_trace: &TracedTensor,
-    compiler: &mut GraphCompiler,
-) -> Result<Arc<CompiledGraph>> {
-    let mut cache = ctx
-        .semantic_compile_cache
-        .lock()
-        .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
-    if let Some(cached) = cache.get(&fingerprint) {
-        return Ok(Arc::clone(cached));
-    }
-    drop(cache);
-    let compiled = Arc::new(compiler.compile(output_trace)?);
-    let mut cache = ctx
-        .semantic_compile_cache
-        .lock()
-        .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
-    if cache.len() >= 128 {
-        if let Some(oldest) = cache.keys().next().copied() {
-            cache.remove(&oldest);
-        }
-    }
-    cache.insert(fingerprint, Arc::clone(&compiled));
-    Ok(compiled)
-}
-
 fn semantic_eager_vjp_optional(
     ctx: &Arc<EagerRuntime>,
     output: &EagerTensor,
@@ -1967,10 +1912,8 @@ fn semantic_eager_vjp_optional(
         return Ok(None);
     }
 
-    let fingerprint = graph_structure_fingerprint(output_trace.graph());
     let mut compiler = GraphCompiler::new();
-    let source: Arc<CompiledGraph> =
-        s2_compile_cached(ctx, fingerprint, output_trace, &mut compiler)?;
+    let source = compiler.compile(output_trace)?;
     if source.output_count() != 1
         || source.input_keys().len() != source.input_count()
         || source.bindings().len() != source.input_count()
@@ -2058,7 +2001,7 @@ fn semantic_eager_vjp_optional(
         Arc::clone(ctx),
         eager_val_key(),
         Arc::new(result),
-        true,
+        false,
         None,
         Vec::new(),
     )?)))
@@ -2082,10 +2025,8 @@ fn semantic_eager_jvp_optional(
         return Ok(None);
     }
 
-    let fingerprint = graph_structure_fingerprint(output_trace.graph());
     let mut compiler = GraphCompiler::new();
-    let source: Arc<CompiledGraph> =
-        s2_compile_cached(ctx, fingerprint, output_trace, &mut compiler)?;
+    let source = compiler.compile(output_trace)?;
     if source.output_count() != 1
         || source.input_keys().len() != source.input_count()
         || source.bindings().len() != source.input_count()
