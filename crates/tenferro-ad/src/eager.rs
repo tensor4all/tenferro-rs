@@ -1979,61 +1979,59 @@ fn semantic_eager_vjp_optional(
             .map_err(|_| Error::Internal("prepared derivative cache lock poisoned".into()))?;
         cache.get(&cache_key).cloned()
     };
-    let (seed_input_index, derivative_output_index, derivative_program) =
-        if let Some(prepared) = prepared {
-            (
-                prepared.seed_input_index,
-                prepared.derivative_output_index,
-                Arc::clone(&prepared.program),
-            )
+    let (seed_input_index, derivative_output_index, derivative_program) = if let Some(prepared) =
+        prepared
+    {
+        (
+            prepared.seed_input_index,
+            prepared.derivative_output_index,
+            Arc::clone(&prepared.program),
+        )
+    } else {
+        let mut active_inputs = vec![false; source.input_count()];
+        if let Some(active) = active_inputs.get_mut(wrt_input_index) {
+            *active = true;
         } else {
-            let mut active_inputs = vec![false; source.input_count()];
-            if let Some(active) = active_inputs.get_mut(wrt_input_index) {
-                *active = true;
-            } else {
-                return Ok(None);
-            }
-            let active_outputs = vec![true; source.output_count()];
-            let ad = AdContext::core_with_transform_cache(Arc::clone(&ctx.ad_transform_cache));
-            let derivative = ad
-                .vjp_program(source.frozen_program(), &active_inputs, &active_outputs)
-                .map_err(|source| {
-                    Error::runtime_state_source(
-                        "semantic_eager_vjp",
-                        ErrorPhase::GraphBuild,
-                        source,
-                    )
-                })?;
-            let seed_input_index = derivative
-                .derivative_input_indices()
-                .first()
-                .copied()
-                .flatten();
-            let derivative_output_index = derivative
-                .derivative_output_indices()
-                .get(wrt_input_index)
-                .copied()
-                .flatten();
-            let (Some(seed_input_index), Some(derivative_output_index)) =
-                (seed_input_index, derivative_output_index)
-            else {
-                return Ok(Some(None));
-            };
-            let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
-            let input_count = derivative_program.input_count();
-            // Cache the prepared derivative.
-            let mut cache = ctx.prepared_derivative_cache.lock().map_err(|_| {
-                Error::Internal("prepared derivative cache lock poisoned".into())
+            return Ok(None);
+        }
+        let active_outputs = vec![true; source.output_count()];
+        let ad = AdContext::core_with_transform_cache(Arc::clone(&ctx.ad_transform_cache));
+        let derivative = ad
+            .vjp_program(source.frozen_program(), &active_inputs, &active_outputs)
+            .map_err(|source| {
+                Error::runtime_state_source("semantic_eager_vjp", ErrorPhase::GraphBuild, source)
             })?;
-            let program = Arc::new(derivative_program.clone());
-            let entry = Arc::new(PreparedDerivative {
-                program: Arc::clone(&program),
-                seed_input_index,
-                derivative_output_index,
-            });
-            cache.insert(cache_key, entry);
-            (seed_input_index, derivative_output_index, program)
+        let seed_input_index = derivative
+            .derivative_input_indices()
+            .first()
+            .copied()
+            .flatten();
+        let derivative_output_index = derivative
+            .derivative_output_indices()
+            .get(wrt_input_index)
+            .copied()
+            .flatten();
+        let (Some(seed_input_index), Some(derivative_output_index)) =
+            (seed_input_index, derivative_output_index)
+        else {
+            return Ok(Some(None));
         };
+        let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
+        let input_count = derivative_program.input_count();
+        // Cache the prepared derivative.
+        let mut cache = ctx
+            .prepared_derivative_cache
+            .lock()
+            .map_err(|_| Error::Internal("prepared derivative cache lock poisoned".into()))?;
+        let program = Arc::new(derivative_program.clone());
+        let entry = Arc::new(PreparedDerivative {
+            program: Arc::clone(&program),
+            seed_input_index,
+            derivative_output_index,
+        });
+        cache.insert(cache_key, entry);
+        (seed_input_index, derivative_output_index, program)
+    };
 
     let input_count = derivative_program.input_count();
     let mut owned_inputs = vec![None; input_count];
