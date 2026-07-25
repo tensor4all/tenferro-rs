@@ -1093,6 +1093,7 @@ impl EagerTensor {
         let trace = recorded.traces.pop().ok_or_else(|| {
             Error::Internal(format!("expected one eager trace for {:?}, got 0", op))
         })?;
+        let semantic_trace = recorded.semantic_traces.pop().flatten();
         let mut metadata_scopes = vec![Arc::clone(&recorded.metadata_scope)];
         for tensor in tensors {
             for scope in &tensor.metadata_scopes {
@@ -1106,6 +1107,7 @@ impl EagerTensor {
             value,
             trace.requires_grad,
             trace.trace,
+            semantic_trace,
             metadata_scopes,
         )
     }

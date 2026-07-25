@@ -9,7 +9,6 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use crate::extension_cache::{ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore};
-#[cfg(test)]
 use computegraph::graph::Graph;
 use computegraph::ValueKey;
 #[cfg(test)]
@@ -25,9 +24,9 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::ShapeGuardContext;
 use tenferro_runtime::ad_support::ones_tensor;
 use tenferro_runtime::{
-    CoreCapabilityBundle, EngineId, ErrorPhase, ExecutionContextIdentity, ExtensionModule,
-    GraphCompiler, HardwareClassId, RegistrationIdentity, Runtime, RuntimeConfigError,
-    RuntimeConfigSnapshot, RuntimeEpoch, TracedTensor,
+    CompiledGraph, CoreCapabilityBundle, EngineId, ErrorPhase, ExecutionContextIdentity,
+    ExtensionModule, GraphCompiler, HardwareClassId, RegistrationIdentity, Runtime,
+    RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, TracedTensor,
 };
 use tenferro_tensor::{BackendSession, BackendSessionHost};
 use tenferro_tensor::{
@@ -556,6 +555,9 @@ pub struct EagerRuntime {
     value_records: Mutex<HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>,
     value_ptr_records: Mutex<HashMap<usize, Weak<EagerTensorRecord>>>,
     ad_transform_cache: Arc<AdTransformCache>,
+    /// S2: cache compiled semantic programs by graph-structure fingerprint
+    /// to avoid re-compiling identical trace structures for warm shape-churn.
+    semantic_compile_cache: Mutex<HashMap<u64, Arc<CompiledGraph>>>,
 }
 
 impl fmt::Debug for EagerRuntime {
@@ -749,6 +751,7 @@ impl EagerRuntime {
             value_records: Mutex::new(HashMap::new()),
             value_ptr_records: Mutex::new(HashMap::new()),
             ad_transform_cache,
+            semantic_compile_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1901,6 +1904,25 @@ impl EagerRuntime {
     }
 }
 
+/// Compute a structure fingerprint from a traced graph's operations.
+///
+/// Hashes the operation type variants and arities (excluding concrete
+/// input tensor values) so identical operation structures produce the
+/// same fingerprint across different concrete bindings.
+fn graph_structure_fingerprint(graph: &Graph<StdTensorOp>) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    let ops = graph.operations();
+    ops.len().hash(&mut hasher);
+    for op_node in ops.iter() {
+        core::mem::discriminant(&op_node.operation).hash(&mut hasher);
+        op_node.inputs.len().hash(&mut hasher);
+        op_node.outputs.len().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 fn semantic_eager_vjp_optional(
     ctx: &Arc<EagerRuntime>,
     output: &EagerTensor,
@@ -1919,8 +1941,26 @@ fn semantic_eager_vjp_optional(
         return Ok(None);
     }
 
+    let fingerprint = graph_structure_fingerprint(output_trace.graph());
     let mut compiler = GraphCompiler::new();
-    let source = compiler.compile(output_trace)?;
+    let source: Arc<CompiledGraph> = {
+        let cache = ctx
+            .semantic_compile_cache
+            .lock()
+            .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
+        if let Some(cached) = cache.get(&fingerprint) {
+            Arc::clone(cached)
+        } else {
+            drop(cache);
+            let compiled = Arc::new(compiler.compile(output_trace)?);
+            let mut cache = ctx
+                .semantic_compile_cache
+                .lock()
+                .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
+            cache.insert(fingerprint, Arc::clone(&compiled));
+            compiled
+        }
+    };
     if source.output_count() != 1
         || source.input_keys().len() != source.input_count()
         || source.bindings().len() != source.input_count()
@@ -2032,8 +2072,26 @@ fn semantic_eager_jvp_optional(
         return Ok(None);
     }
 
+    let fingerprint = graph_structure_fingerprint(output_trace.graph());
     let mut compiler = GraphCompiler::new();
-    let source = compiler.compile(output_trace)?;
+    let source: Arc<CompiledGraph> = {
+        let cache = ctx
+            .semantic_compile_cache
+            .lock()
+            .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
+        if let Some(cached) = cache.get(&fingerprint) {
+            Arc::clone(cached)
+        } else {
+            drop(cache);
+            let compiled = Arc::new(compiler.compile(output_trace)?);
+            let mut cache = ctx
+                .semantic_compile_cache
+                .lock()
+                .map_err(|_| Error::Internal("semantic compile cache lock poisoned".into()))?;
+            cache.insert(fingerprint, Arc::clone(&compiled));
+            compiled
+        }
+    };
     if source.output_count() != 1
         || source.input_keys().len() != source.input_count()
         || source.bindings().len() != source.input_count()
@@ -2378,6 +2436,7 @@ impl EagerTensor {
         value: TensorValue,
         requires_grad: bool,
         trace: Option<Trace<StdTensorOp>>,
+        semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
         Self::from_parts(
@@ -2385,7 +2444,7 @@ impl EagerTensor {
             key,
             requires_grad,
             trace,
-            None,
+            semantic_trace,
             Arc::new(value),
             metadata_scopes,
             true,
