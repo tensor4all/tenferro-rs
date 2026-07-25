@@ -38,7 +38,7 @@ pub(crate) mod eager_exec;
 pub(crate) mod eager_ops;
 pub(crate) mod eager_ops_elementwise;
 pub mod extension;
-mod semantic_compat;
+// semantic_compat removed in Unification 7.
 pub mod semantic_extension;
 pub mod semantic_transform;
 mod shape_packing;

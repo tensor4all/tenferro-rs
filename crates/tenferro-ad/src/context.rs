@@ -6,7 +6,8 @@ use tenferro_ops::ad::ExtensionAdDispatcher;
 use tenferro_runtime::program::FrozenProgram;
 use tenferro_runtime::{CacheStats, Result, TracedTensor};
 
-use crate::semantic_compat::SemanticCompatDispatcher;
+// SemanticCompatDispatcher removed in Unification 7.
+// Extension AD is handled exclusively by SemanticExtensionRuleSet.
 use crate::semantic_extension::{SemanticExtensionRegistryError, SemanticExtensionRuleSet};
 use crate::semantic_transform::{
     semantic_jvp, semantic_vjp, SemanticAdProgram, SemanticAdTransformError,
@@ -595,14 +596,9 @@ impl AdContextBuilder {
     /// never returns `Err` after semantic rule registration. It retains a
     /// `Result` so callers can compose it with the fallible registration step.
     pub fn build(self) -> std::result::Result<AdContext, std::convert::Infallible> {
-        let extension_ad_dispatcher = (!self.semantic_extension_rules.is_empty()).then(|| {
-            Arc::new(SemanticCompatDispatcher::new(
-                self.semantic_extension_rules.clone(),
-            )) as Arc<dyn ExtensionAdDispatcher>
-        });
         Ok(AdContext {
             semantic_extension_rules: self.semantic_extension_rules,
-            extension_ad_dispatcher,
+            extension_ad_dispatcher: None,
             ad_transform_cache: Arc::new(AdTransformCache::new()),
         })
     }

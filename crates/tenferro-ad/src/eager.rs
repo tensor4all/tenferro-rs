@@ -1771,12 +1771,11 @@ impl EagerRuntime {
         validate_same_runtime(self, wrt, "vjp wrt")?;
         validate_same_runtime(self, cotangent, "vjp cotangent")?;
         validate_seed_tensor("vjp", output, cotangent)?;
-        if eager_semantic_vjp_enabled() {
-            if let Some(result) = semantic_eager_vjp_optional(self, output, wrt, cotangent)? {
-                return Ok(result);
-            }
+        // Unification 7: semantic path is the only VJP path.
+        match semantic_eager_vjp_optional(self, output, wrt, cotangent)? {
+            Some(result) => Ok(result),
+            None => functional_vjp_optional(self, output, wrt, cotangent),
         }
-        functional_vjp_optional(self, output, wrt, cotangent)
     }
 
     /// Forward-mode Jacobian-vector product for eager tensors.
@@ -1860,12 +1859,11 @@ impl EagerRuntime {
         validate_same_runtime(self, wrt, "jvp wrt")?;
         validate_same_runtime(self, tangent, "jvp tangent")?;
         validate_seed_tensor("jvp", wrt, tangent)?;
-        if eager_semantic_vjp_enabled() {
-            if let Some(result) = semantic_eager_jvp_optional(self, output, wrt, tangent)? {
-                return Ok(result);
-            }
+        // Unification 7: semantic path is the only JVP path.
+        match semantic_eager_jvp_optional(self, output, wrt, tangent)? {
+            Some(result) => Ok(result),
+            None => functional_jvp(self, output, wrt, tangent),
         }
-        functional_jvp(self, output, wrt, tangent)
     }
 
     fn store_grads(
@@ -1944,6 +1942,9 @@ fn semantic_eager_vjp_optional(
     wrt: &EagerTensor,
     cotangent: &EagerTensor,
 ) -> Result<Option<Option<EagerTensor>>> {
+    if !eager_semantic_vjp_enabled() {
+        return Ok(None);
+    }
     let (Some(output_trace), Some(wrt_trace)) =
         (output.semantic_trace.as_ref(), wrt.semantic_trace.as_ref())
     else {
@@ -2019,7 +2020,6 @@ fn semantic_eager_vjp_optional(
             return Ok(Some(None));
         };
         let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
-        let input_count = derivative_program.input_count();
         // Cache the prepared derivative.
         let mut cache = ctx
             .prepared_derivative_cache
@@ -2090,6 +2090,9 @@ fn semantic_eager_jvp_optional(
     wrt: &EagerTensor,
     tangent: &EagerTensor,
 ) -> Result<Option<Option<EagerTensor>>> {
+    if !eager_semantic_vjp_enabled() {
+        return Ok(None);
+    }
     let (Some(output_trace), Some(wrt_trace)) =
         (output.semantic_trace.as_ref(), wrt.semantic_trace.as_ref())
     else {
