@@ -106,6 +106,13 @@ fn eager_semantic_vjp_enabled() -> bool {
         return value;
     }
 
+    // Semantic eager VJP/JVP are opt-in until composability (trace
+    // pass-through for downstream AD) is implemented.  The downstream
+    // JVP path depends on output.trace being present, and semantic
+    // VJP produces results without a tidu trace.  When the semantic
+    // JVP is used alone (end-of-chain), correctness is the same as
+    // tidu; the gate is intentionally conservative to avoid breaking
+    // composable VJP→JVP chains in default configuration.
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| env::var("TENFERRO_EAGER_SEMANTIC_VJP").is_ok())
 }
@@ -1845,6 +1852,11 @@ impl EagerRuntime {
         validate_same_runtime(self, wrt, "jvp wrt")?;
         validate_same_runtime(self, tangent, "jvp tangent")?;
         validate_seed_tensor("jvp", wrt, tangent)?;
+        if eager_semantic_vjp_enabled() {
+            if let Some(result) = semantic_eager_jvp_optional(self, output, wrt, tangent)? {
+                return Ok(result);
+            }
+        }
         functional_jvp(self, output, wrt, tangent)
     }
 
@@ -1991,6 +2003,115 @@ fn semantic_eager_vjp_optional(
 
     #[cfg(test)]
     EAGER_SEMANTIC_VJP_EXECUTIONS.fetch_add(1, Ordering::Relaxed);
+
+    Ok(Some(Some(EagerTensor::new_result_arc(
+        Arc::clone(ctx),
+        eager_val_key(),
+        Arc::new(result),
+        false,
+        None,
+        Vec::new(),
+    )?)))
+}
+
+fn semantic_eager_jvp_optional(
+    ctx: &Arc<EagerRuntime>,
+    output: &EagerTensor,
+    wrt: &EagerTensor,
+    tangent: &EagerTensor,
+) -> Result<Option<Option<EagerTensor>>> {
+    let (Some(output_trace), Some(wrt_trace)) =
+        (output.semantic_trace.as_ref(), wrt.semantic_trace.as_ref())
+    else {
+        return Ok(None);
+    };
+    let Some(wrt_key) = wrt_trace.input_key() else {
+        return Ok(None);
+    };
+    if !output_trace.has_attached_input_key(&wrt_key) {
+        return Ok(None);
+    }
+
+    let mut compiler = GraphCompiler::new();
+    let source = compiler.compile(output_trace)?;
+    if source.output_count() != 1
+        || source.input_keys().len() != source.input_count()
+        || source.bindings().len() != source.input_count()
+    {
+        return Ok(None);
+    }
+    let Some(wrt_input_index) = source.input_key_index(&wrt_key) else {
+        return Ok(None);
+    };
+
+    let mut active_inputs = vec![false; source.input_count()];
+    if let Some(active) = active_inputs.get_mut(wrt_input_index) {
+        *active = true;
+    } else {
+        return Ok(None);
+    }
+    let ad = AdContext::core_with_transform_cache(Arc::clone(&ctx.ad_transform_cache));
+    let derivative = ad
+        .jvp_program(source.frozen_program(), &active_inputs)
+        .map_err(|source| {
+            Error::runtime_state_source("semantic_eager_jvp", ErrorPhase::GraphBuild, source)
+        })?;
+    // derivative_input_indices maps source input → derivative seed input.
+    let Some(seed_input_index) = derivative
+        .derivative_input_indices()
+        .get(wrt_input_index)
+        .copied()
+        .flatten()
+    else {
+        return Ok(Some(None));
+    };
+    // derivative_output_indices maps source output → derivative output.
+    // There is always exactly one source output (guarded above).
+    let Some(derivative_output_index) = derivative
+        .derivative_output_indices()
+        .first()
+        .copied()
+        .flatten()
+    else {
+        return Ok(Some(None));
+    };
+
+    let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
+    let input_count = derivative_program.input_count();
+    let mut owned_inputs = vec![None; input_count];
+    for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
+        let Some(slot) = owned_inputs.get_mut(source_input_index) else {
+            return Err(Error::Internal(format!(
+                "semantic eager JVP derivative program has no primal input slot {source_input_index}"
+            )));
+        };
+        *slot = Some(tensor.clone());
+    }
+    let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
+        return Err(Error::Internal(format!(
+            "semantic eager JVP seed input index {seed_input_index} is outside {} inputs",
+            owned_inputs.len()
+        )));
+    };
+    *slot = Some(tangent.materialized_arc()?.as_ref().clone());
+    let input_refs = owned_inputs
+        .iter()
+        .enumerate()
+        .map(|(index, tensor)| {
+            tensor.as_ref().ok_or_else(|| {
+                Error::Internal(format!(
+                    "semantic eager JVP derivative input {index} was not populated"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let outputs = ctx.runtime.run_compiled(&derivative_program, &input_refs)?;
+    let Some(result) = outputs.get(derivative_output_index).cloned() else {
+        return Err(Error::Internal(format!(
+            "semantic eager JVP derivative output index {derivative_output_index} is outside {} outputs",
+            outputs.len()
+        )));
+    };
 
     Ok(Some(Some(EagerTensor::new_result_arc(
         Arc::clone(ctx),
