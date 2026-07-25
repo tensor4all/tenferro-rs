@@ -1102,4 +1102,58 @@ mod tests {
         assert!(pruned_instruction.1.contains("pruned: true"));
         assert_eq!(pruned_instruction.2, 1);
     }
+
+    #[test]
+    fn compiled_graph_input_keys_preserve_order_for_binary_graph() {
+        let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+        let b = TracedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+        let a_key = a.input_key().expect("concrete traced tensor has input key");
+        let b_key = b.input_key().expect("concrete traced tensor has input key");
+        let c = a.mul(&b).unwrap();
+
+        let program = GraphCompiler::new().compile_many(&[&c]).unwrap();
+
+        assert_eq!(program.input_count(), 2);
+        assert_eq!(program.input_keys().len(), 2);
+        let keys: Vec<_> = program.input_keys().to_vec();
+        assert!(keys.contains(&a_key), "input_keys must contain a's key");
+        assert!(keys.contains(&b_key), "input_keys must contain b's key");
+        // input_key_index maps each key to its position
+        assert_eq!(
+            program.input_key_index(&a_key),
+            keys.iter().position(|k| k == &a_key)
+        );
+        assert_eq!(
+            program.input_key_index(&b_key),
+            keys.iter().position(|k| k == &b_key)
+        );
+    }
+
+    #[test]
+    fn compile_with_input_specs_reorders_inputs_by_explicit_order() {
+        let a = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+        let b = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
+        let a_key = a.input_key().expect("symbolic traced tensor has input key");
+        let b_key = b.input_key().expect("symbolic traced tensor has input key");
+        let c = a.mul(&b).unwrap();
+
+        // Request b first, then a
+        let program = GraphCompiler::new()
+            .compile_with_input_specs(&c, &[(&b, DType::F64, &[2]), (&a, DType::F64, &[2])])
+            .unwrap();
+
+        assert_eq!(program.input_count(), 2);
+        assert_eq!(program.input_keys().len(), 2);
+        // b must be at position 0 per the explicit order
+        assert_eq!(
+            program.input_key_index(&b_key),
+            Some(0),
+            "b must be first in explicit order"
+        );
+        assert_eq!(
+            program.input_key_index(&a_key),
+            Some(1),
+            "a must be second in explicit order"
+        );
+    }
 }
