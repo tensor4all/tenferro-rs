@@ -163,6 +163,27 @@ The prior eager-only table in
 `docs/worklogs/2026-07-20-eager-main-baseline.md` remains useful for comparison
 sanity checks, but it is not the complete #1454 baseline table.
 
+### Invalid baseline attempt: 2026-07-25
+
+An attempted baseline run against pinned commit
+`c6418eecfe2d38ca09d6e6386760fcb23982691e`, with the harness files from commit
+`effa6ca1`, was stopped during `tenferro-runtime/elementwise_fusion`.
+
+Classification: `INCONCLUSIVE`, not a baseline.
+
+Reason: external CPU load was present during the run. `ps` showed a separate
+`cargo check -p koushi-desktop` with multiple `rustc` processes at 100% CPU and
+several long-running Julia kernels at roughly 100% CPU while the benchmark
+process was running. This violates the host-noise validity gate, so all partial
+Criterion output from the interrupted run is diagnostic only and must not be
+copied into the baseline table.
+
+Partial logs were written under:
+
+```text
+target/unification-performance-gate/baseline-c6418-effa6ca1/
+```
+
 ## Remaining risks and follow-up
 
 - Baseline numbers must be collected from the pinned baseline implementation
