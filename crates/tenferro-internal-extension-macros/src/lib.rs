@@ -13,7 +13,7 @@
 //! ```
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{parse_macro_input, DeriveInput, Expr, ExprLit, Ident, Lit, Path, Token};
 
@@ -30,7 +30,6 @@ struct RuntimeArgs {
     op_type: Path,
     execute: Path,
     execute_reads: Path,
-    register_fn: Ident,
     backend_bound: Path,
 }
 
@@ -68,7 +67,6 @@ impl Parse for RuntimeArgs {
         let mut op_type = None;
         let mut execute = None;
         let mut execute_reads = None;
-        let mut register_fn = None;
         let mut backend_bound = None;
 
         while !input.is_empty() {
@@ -80,7 +78,6 @@ impl Parse for RuntimeArgs {
                 "op_type" => op_type = Some(input.parse()?),
                 "execute" => execute = Some(input.parse()?),
                 "execute_reads" => execute_reads = Some(input.parse()?),
-                "register_fn" => register_fn = Some(input.parse()?),
                 "backend_bound" => backend_bound = Some(input.parse()?),
                 other => {
                     return Err(syn::Error::new(
@@ -101,7 +98,6 @@ impl Parse for RuntimeArgs {
             op_type: required(op_type, "op_type")?,
             execute: required(execute, "execute")?,
             execute_reads: required(execute_reads, "execute_reads")?,
-            register_fn: required(register_fn, "register_fn")?,
             backend_bound: backend_bound
                 .unwrap_or_else(|| syn::parse_quote!(tenferro_tensor::TensorBackend)),
         })
@@ -123,7 +119,8 @@ pub fn derive_extension_family_id(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Generate a standard extension runtime and registration function.
+/// Generate a standard extension module, preparation engine, and prepared
+/// operation.
 ///
 /// The `execute` function must have this signature:
 /// `fn<B: BackendBound + 'static>(&OpType, &[&Tensor], &mut ExtensionExecutionContext<'_, B>)`.
@@ -175,67 +172,212 @@ fn expand_extension_runtime(args: RuntimeArgs) -> proc_macro2::TokenStream {
         runtime,
         family_id,
         op_type,
-        execute,
+        execute: _execute,
         execute_reads,
-        register_fn,
         backend_bound,
     } = args;
+    let module = format_ident!("{}Module", runtime);
+    let planning_config = format_ident!("{}PlanningConfig", runtime);
+    let prepared_operation = format_ident!("{}PreparedOperation", runtime);
     quote! {
-        #[derive(Debug, Default)]
-        pub(crate) struct #runtime;
+        pub(crate) struct #runtime<B: #backend_bound + 'static> {
+            engine_id: tenferro_runtime::EngineId,
+            _backend: std::marker::PhantomData<fn() -> B>,
+        }
 
-        impl<B: #backend_bound + 'static> tenferro_runtime::extension::ExtensionRuntime<B>
-            for #runtime
+        pub(crate) struct #module<B: #backend_bound + 'static> {
+            module_id: tenferro_runtime::ExtensionModuleId,
+            engine_id: tenferro_runtime::EngineId,
+            _backend: std::marker::PhantomData<fn() -> B>,
+        }
+
+        #[derive(Debug, Default)]
+        pub(crate) struct #planning_config;
+
+        pub(crate) struct #prepared_operation<B: #backend_bound + 'static> {
+            binding: tenferro_runtime::PreparedOperationBinding,
+            specialization: tenferro_runtime::SpecializationProjection,
+            op: #op_type,
+            _backend: std::marker::PhantomData<fn() -> B>,
+        }
+
+        impl<B: #backend_bound + 'static> std::fmt::Debug for #runtime<B> {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter
+                    .debug_struct(stringify!(#runtime))
+                    .field("family_id", &#family_id)
+                    .field("engine_id", &self.engine_id)
+                    .field("backend_type", &std::any::type_name::<B>())
+                    .finish()
+            }
+        }
+
+        impl<B: #backend_bound + 'static> std::fmt::Debug for #module<B> {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter
+                    .debug_struct(stringify!(#module))
+                    .field("module_id", &self.module_id)
+                    .field("engine_id", &self.engine_id)
+                    .field("backend_type", &std::any::type_name::<B>())
+                    .finish()
+            }
+        }
+
+        impl<B: #backend_bound + 'static> std::fmt::Debug for #prepared_operation<B> {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter
+                    .debug_struct(stringify!(#prepared_operation))
+                    .field("family_id", &#family_id)
+                    .field("binding", &self.binding)
+                    .field("specialization", &self.specialization)
+                    .field("backend_type", &std::any::type_name::<B>())
+                    .finish_non_exhaustive()
+            }
+        }
+
+        impl<B: #backend_bound + 'static> tenferro_runtime::ExtensionEngine for #runtime<B>
+        where
+            #op_type: Clone + Send + Sync + 'static,
         {
             fn family_id(&self) -> &'static str {
                 #family_id
             }
 
+            fn engine_id(&self) -> &tenferro_runtime::EngineId {
+                &self.engine_id
+            }
+
+            fn context_identity(&self) -> tenferro_runtime::ExecutionContextIdentity {
+                tenferro_runtime::ExecutionContextIdentity::of::<B>()
+            }
+
+            fn prepare(
+                &self,
+                request: tenferro_runtime::ExtensionPrepareRequest<'_>,
+            ) -> std::result::Result<tenferro_runtime::PrepareCapability, tenferro_runtime::PrepareError> {
+                let op = request
+                    .operation()
+                    .as_any()
+                    .downcast_ref::<#op_type>()
+                    .cloned()
+                    .ok_or_else(|| tenferro_runtime::PrepareError::ProviderContract {
+                        source: tenferro_runtime::ProviderContractError::WrongOperationFamily {
+                            expected: tenferro_runtime::CoreCapabilityKind::Elementwise,
+                            operation: #family_id,
+                        },
+                    })?;
+                Ok(tenferro_runtime::PrepareCapability::Prepared(std::sync::Arc::new(
+                    #prepared_operation::<B> {
+                        binding: request.binding().clone(),
+                        specialization: request.specialization().clone(),
+                        op,
+                        _backend: std::marker::PhantomData,
+                    },
+                )))
+            }
+        }
+
+        impl tenferro_runtime::ExtensionPlanningConfig for #planning_config {
+            fn family_id(&self) -> &'static str {
+                #family_id
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
+            fn payload_hash(&self, state: &mut dyn std::hash::Hasher) {
+                state.write_u8(0);
+            }
+
+            fn payload_eq(&self, other: &dyn tenferro_runtime::ExtensionPlanningConfig) -> bool {
+                other.as_any().downcast_ref::<Self>().is_some()
+            }
+
+            fn retained_bytes(&self) -> usize {
+                0
+            }
+        }
+
+        impl<B: #backend_bound + 'static> tenferro_runtime::PreparedOperation for #prepared_operation<B>
+        where
+            #op_type: Clone + Send + Sync + 'static,
+        {
+            fn binding(&self) -> &tenferro_runtime::PreparedOperationBinding {
+                &self.binding
+            }
+
+            fn specialization(&self) -> &tenferro_runtime::SpecializationProjection {
+                &self.specialization
+            }
+
+            fn retained_bytes(&self) -> usize {
+                0
+            }
+
             fn execute(
                 &self,
-                op: &dyn tenferro_runtime::extension::ExtensionOp,
-                inputs: &[&tenferro_tensor::Tensor],
-                ctx: &mut tenferro_runtime::extension::ExtensionExecutionContext<'_, B>,
-            ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>> {
-                let op = op
-                    .as_any()
-                    .downcast_ref::<#op_type>()
-                    .ok_or_else(|| tenferro_tensor::Error::invalid_argument(
-                        "extension_runtime",
-                        "payload",
-                        format!("type mismatch for {}", #family_id),
-                    ))?;
-                #execute(op, inputs, ctx)
-            }
-
-            fn execute_reads(
-                &self,
-                op: &dyn tenferro_runtime::extension::ExtensionOp,
+                context: &mut tenferro_runtime::ErasedExecutionContext<'_>,
+                extension_caches: &mut tenferro_runtime::ExtensionCacheStore,
                 inputs: &[tenferro_tensor::TensorRead<'_>],
-                ctx: &mut tenferro_runtime::extension::ExtensionExecutionContext<'_, B>,
-            ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>> {
-                let op = op
-                    .as_any()
-                    .downcast_ref::<#op_type>()
-                    .ok_or_else(|| tenferro_tensor::Error::invalid_argument(
-                        "extension_runtime",
-                        "payload",
-                        format!("type mismatch for {}", #family_id),
+            ) -> tenferro_runtime::Result<Vec<tenferro_tensor::Tensor>> {
+                let backend = context
+                    .downcast_mut::<B>(self.binding.context_identity())
+                    .map_err(|source| tenferro_runtime::Error::runtime_state_source(
+                        "extension",
+                        tenferro_runtime::ErrorPhase::Execution,
+                        source,
                     ))?;
-                #execute_reads(op, inputs, ctx)
+                let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(
+                    backend,
+                    extension_caches,
+                );
+                Ok(#execute_reads(&self.op, inputs, &mut ctx)?)
             }
         }
 
-        #[doc = "Register this extension runtime with an executor registry."]
-        #[doc = "\n# Errors\n\nReturns `ExtensionRuntimeRegistryError::MalformedFamilyId` when the generated family identifier is invalid."]
-        pub fn #register_fn<B: #backend_bound + 'static>(
-            executor: &mut tenferro_runtime::extension::ExtensionExecutor<B>,
-        ) -> std::result::Result<
-            (),
-            tenferro_runtime::extension::ExtensionRuntimeRegistryError,
-        > {
-            executor.registry_mut().register(std::sync::Arc::new(#runtime))
+        impl<B: #backend_bound + 'static> tenferro_runtime::ExtensionModule for #module<B>
+        where
+            #op_type: Clone + Send + Sync + 'static,
+        {
+            fn module_id(&self) -> &tenferro_runtime::ExtensionModuleId {
+                &self.module_id
+            }
+
+            fn configure(
+                &self,
+                registrar: &mut tenferro_runtime::ExtensionModuleRegistrar<'_>,
+            ) -> std::result::Result<(), tenferro_runtime::ExtensionModuleError> {
+                registrar.register_engine(std::sync::Arc::new(#runtime::<B> {
+                    engine_id: self.engine_id.clone(),
+                    _backend: std::marker::PhantomData,
+                }))?;
+                registrar.register_planning_config(
+                    self.engine_id.clone(),
+                    std::sync::Arc::new(#planning_config),
+                )?;
+                Ok(())
+            }
         }
+
+        #[doc = "Build this extension module for one runtime engine."]
+        #[doc = "\n# Errors\n\nReturns `RuntimeConfigError::MalformedIdentity` when the generated module identifier is invalid."]
+        pub fn extension_module<B: #backend_bound + 'static>(
+            engine_id: tenferro_runtime::EngineId,
+        ) -> std::result::Result<
+            std::sync::Arc<dyn tenferro_runtime::ExtensionModule>,
+            tenferro_runtime::RuntimeConfigError,
+        >
+        where
+            #op_type: Clone + Send + Sync + 'static,
+        {
+            Ok(std::sync::Arc::new(#module::<B> {
+                module_id: tenferro_runtime::ExtensionModuleId::new(format!("{}.module", #family_id))?,
+                engine_id,
+                _backend: std::marker::PhantomData,
+            }))
+        }
+
     }
 }
 

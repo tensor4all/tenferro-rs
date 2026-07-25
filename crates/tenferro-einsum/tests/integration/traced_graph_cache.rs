@@ -1,11 +1,12 @@
 #![cfg(feature = "autodiff")]
 
-use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticFingerprint};
-use tenferro_runtime::{ExtensionCacheSelector, GraphCompiler, GraphExecutor, TraceContext};
+use tenferro_runtime::{ExtensionCacheSelector, GraphCompiler, TraceContext};
 use tenferro_tensor::{DType, Tensor};
+
+use super::support;
 
 fn matrix() -> ProgramInputSpec {
     ProgramInputSpec::new(DType::F64, [DimExpr::Const(2), DimExpr::Const(2)])
@@ -62,10 +63,10 @@ fn compiler_reuses_exact_semantic_staging() {
     let mut compiler = GraphCompiler::new();
 
     compiler.compile_traced_graph(&graph).unwrap();
-    let after_first = compiler.compile_cache_len();
+    let after_first = compiler.cache_stats().entries;
     compiler.compile_traced_graph(&graph).unwrap();
 
-    assert_eq!(compiler.compile_cache_len(), after_first);
+    assert_eq!(compiler.cache_stats().entries, after_first);
     assert!(after_first >= 1);
 }
 
@@ -79,15 +80,16 @@ fn runtime_plan_cache_reuses_identical_shapes() {
     let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
     let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_einsum::register_runtime)
-        .unwrap();
+    let backend = tenferro_cpu::CpuBackend::new();
+    let runtime = support::cpu_runtime_with_einsum(&backend).unwrap();
 
-    executor.run_with_inputs(&compiled, &[&lhs, &rhs]).unwrap();
-    let after_first = executor.cache_stats().extensions.entries;
-    executor.run_with_inputs(&compiled, &[&lhs, &rhs]).unwrap();
+    runtime.run_compiled(&compiled, &[&lhs, &rhs]).unwrap();
+    let after_first = runtime.cache_stats().unwrap().extensions.entries;
+    runtime.run_compiled(&compiled, &[&lhs, &rhs]).unwrap();
 
-    assert_eq!(executor.cache_stats().extensions.entries, after_first);
+    assert_eq!(
+        runtime.cache_stats().unwrap().extensions.entries,
+        after_first
+    );
     assert!(after_first >= 1);
 }

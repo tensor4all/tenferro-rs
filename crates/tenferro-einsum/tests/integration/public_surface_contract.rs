@@ -103,15 +103,19 @@ fn gpu_dependency_is_owned_by_opt_in_backend_features() {
 }
 
 #[test]
-fn eager_extension_registration_preserves_typed_source_errors() {
+fn eager_extension_execution_uses_direct_context_without_legacy_registration() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/eager_ad.rs");
     let source = std::fs::read_to_string(root).expect("read eager tensor source");
-    let registration = source
-        .split_once(".register_extension(register_runtime)")
-        .and_then(|(_, rest)| rest.split_once("let op =").map(|(body, _)| body))
-        .expect("eager extension registration source section");
+    let section = source
+        .split_once("pub fn einsum_subscripts")
+        .and_then(|(_, rest)| {
+            rest.split_once("fn einsum_ad_context")
+                .map(|(body, _)| body)
+        })
+        .expect("eager einsum execution source section");
 
-    assert!(registration.contains("runtime_extension_error("));
-    assert!(!registration.contains("Error::Internal"));
-    assert!(!registration.contains("to_string()"));
+    assert!(section.contains("apply_eager_with_extension_context("));
+    assert!(section.contains("execute_einsum_extension_reads("));
+    assert!(!section.contains(".register_extension("));
+    assert!(!section.contains("to_string()"));
 }

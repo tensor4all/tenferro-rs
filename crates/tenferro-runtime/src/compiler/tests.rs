@@ -4,8 +4,8 @@ use super::{
     populate_last_use, producer_index_by_slot, record_producer, resolve_slot_redirect,
     slot_use_counts, transpose_folding, CompilerOptions, OptimizerConfig,
 };
-use crate::exec::{ExecInstruction, ExecOp, ExecProgram};
-use crate::{Error, ErrorPhase, GraphExecutor};
+use crate::exec::{self, ExecInstruction, ExecOp, ExecProgram};
+use crate::{Error, ErrorPhase};
 use computegraph::compile::{CompiledProgram, Instruction};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -49,6 +49,7 @@ fn make_exec_instr(
 ) -> ExecInstruction {
     ExecInstruction {
         op,
+        semantic_operation_index: None,
         input_slots,
         output_slots: output_slots.clone(),
         dtype: DType::F64,
@@ -67,6 +68,7 @@ fn make_exec_instr_with_meta(
 ) -> ExecInstruction {
     ExecInstruction {
         op,
+        semantic_operation_index: None,
         input_slots,
         output_slots,
         dtype,
@@ -1153,7 +1155,7 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
         n_slots: 3,
     };
 
-    let exec = compile_std_to_exec(
+    let exec_program = compile_std_to_exec(
         &program,
         &[DType::F64, DType::F64],
         &[dim_shape(&[2, 3, 4]), dim_shape(&[4, 5])],
@@ -1170,10 +1172,10 @@ fn test_full_pipeline_multi_free_dim_decomp_runs_correctly() {
     let rhs =
         Tensor::F64(TypedTensor::<f64>::from_vec_col_major(vec![4, 5], rhs_data.clone()).unwrap());
 
-    let mut executor = GraphExecutor::new(CpuBackend::default());
-    let mut outputs = executor
-        .eval_exec_ir(&exec, vec![lhs, rhs])
-        .expect("executing decomposed program must not fail");
+    let mut backend = CpuBackend::default();
+    let mut outputs =
+        exec::eval_exec_ir_unsegmented_with_cache(&mut backend, &exec_program, vec![lhs, rhs])
+            .expect("executing decomposed program must not fail");
     let out = outputs.remove(0);
     let typed = match &out {
         Tensor::F64(inner) => inner,

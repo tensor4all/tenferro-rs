@@ -113,10 +113,12 @@ CubeCL. ROCm is only a feature stub.
 
 `tenferro-runtime` owns operation-agnostic runtime infrastructure:
 
-- `ExtensionRegistry` and `ExtensionExecutor` for backend-parametric extension
-  runtime registration,
+- `Runtime` for compiled graph execution across registered backend engines and
+  installed extension modules,
+- `ExtensionModule` and `ExtensionEngine` for backend-parametric extension
+  execution hooks,
 - `ExtensionExecutionContext` for passing backend and extension cache state to
-  one runtime call,
+  one runtime operation,
 - `ExtensionCacheStore`, `ExtensionCacheKey`, and cache selectors/limits.
 
 Applications import these runtime types directly from `tenferro-runtime`.
@@ -135,8 +137,8 @@ Implemented:
 - `ContractionTree::optimize`, `optimize_with_options`, and `from_pairs`.
 - `build_einsum_fragment` for traced graph lowering.
 - `eager_einsum` and `eager_einsum_owned` for concrete `Tensor` execution.
-- `TraceContextEinsumExt::einsum` and `tenferro_einsum::register_runtime` for traced
-  extension use.
+- `TraceContextEinsumExt::einsum` and `tenferro_einsum::extension_module` for
+  traced runtime execution.
 - Repeated-label semantics:
   - `ii->` trace,
   - `ii->i` diagonal extraction,

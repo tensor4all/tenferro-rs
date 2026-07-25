@@ -27,6 +27,8 @@ mod inject_dual_abi_tests;
 mod inject_tests;
 #[path = "integration/linalg_internal_path_contract.rs"]
 mod linalg_internal_path_contract;
+#[path = "integration/support.rs"]
+mod support;
 #[path = "integration/traced_ad_explicit.rs"]
 mod traced_ad_explicit;
 #[path = "integration/traced_correctness.rs"]

@@ -1,7 +1,3 @@
-#[path = "integration/extension_runtime.rs"]
-mod extension_runtime;
-#[path = "integration/graph_default_input_placement.rs"]
-mod graph_default_input_placement;
 #[path = "integration/public_surface_contract.rs"]
 mod public_surface_contract;
 #[path = "integration/runtime_error_api.rs"]

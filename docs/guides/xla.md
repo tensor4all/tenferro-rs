@@ -6,7 +6,7 @@ plugins when the optional `pjrt` feature is enabled.
 
 It is not a `TensorBackend` implementation and it does not replace native CPU,
 CUDA, or WebGPU execution. Dynamic-shape graphs, extension runtimes, and the
-full tensor backend contract still run through `GraphExecutor<B>`.
+full tensor backend contract still run through `Runtime::run_compiled`.
 
 ## Supported Boundary
 

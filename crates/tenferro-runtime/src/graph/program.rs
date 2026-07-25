@@ -1,7 +1,7 @@
+use tenferro_ops::input_key::TensorInputKey;
+
 use crate::compiler::CompilerOptions;
 use crate::program::{FrozenProgram, ProgramBindings, SemanticProgram};
-#[cfg(test)]
-use crate::shape_constraint::ShapeGuard;
 
 /// A backend-neutral compiled semantic graph with runtime-private execution staging.
 ///
@@ -12,17 +12,19 @@ use crate::shape_constraint::ShapeGuard;
 pub struct CompiledGraph {
     pub(crate) frozen: FrozenProgram,
     pub(crate) compiler_options: CompilerOptions,
-    #[cfg(test)]
-    pub(crate) test_shape_guards: Vec<ShapeGuard>,
+    pub(crate) input_keys: Box<[TensorInputKey]>,
 }
 
 impl CompiledGraph {
-    pub(crate) fn new(frozen: FrozenProgram, compiler_options: CompilerOptions) -> Self {
+    pub(crate) fn new(
+        frozen: FrozenProgram,
+        compiler_options: CompilerOptions,
+        input_keys: impl Into<Box<[TensorInputKey]>>,
+    ) -> Self {
         Self {
             frozen,
             compiler_options,
-            #[cfg(test)]
-            test_shape_guards: Vec::new(),
+            input_keys: input_keys.into(),
         }
     }
 
@@ -34,18 +36,14 @@ impl CompiledGraph {
         &self.frozen
     }
 
+    /// Borrow the frozen semantic program and its bindings.
+    #[doc(hidden)]
+    pub fn frozen_program(&self) -> &FrozenProgram {
+        &self.frozen
+    }
+
     pub(crate) fn compiler_options(&self) -> CompilerOptions {
         self.compiler_options
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_test_shape_guards(&mut self, guards: Vec<ShapeGuard>) {
-        self.test_shape_guards = guards;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn test_shape_guards(&self) -> &[ShapeGuard] {
-        &self.test_shape_guards
     }
 
     /// Borrow the immutable backend-neutral semantic program.
@@ -63,6 +61,20 @@ impl CompiledGraph {
         self.frozen.program.inputs().len()
     }
 
+    /// Borrow ordered trace input keys corresponding to semantic input order.
+    #[doc(hidden)]
+    pub fn input_keys(&self) -> &[TensorInputKey] {
+        &self.input_keys
+    }
+
+    /// Return the semantic input index for a trace input key.
+    #[doc(hidden)]
+    pub fn input_key_index(&self, key: &TensorInputKey) -> Option<usize> {
+        self.input_keys
+            .iter()
+            .position(|candidate| candidate == key)
+    }
+
     /// Return the number of ordered semantic outputs.
     pub fn output_count(&self) -> usize {
         self.frozen.program.outputs().len()
@@ -75,6 +87,7 @@ impl std::fmt::Debug for CompiledGraph {
             .debug_struct("CompiledGraph")
             .field("inputs", &self.input_count())
             .field("outputs", &self.output_count())
+            .field("input_keys", &self.input_keys.len())
             .field("bindings", &self.bindings().len())
             .field(
                 "semantic_fingerprint",

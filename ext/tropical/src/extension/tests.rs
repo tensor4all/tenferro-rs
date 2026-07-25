@@ -5,17 +5,17 @@ use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
 use tenferro_einsum::Subscripts;
 use tenferro_ops::dim_expr::DimExpr;
-use tenferro_ops::ext_op::HostReference;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-use tenferro_runtime::{GraphCompiler, GraphExecutor};
+use tenferro_runtime::{GraphCompiler, Runtime};
 use tenferro_tensor::{
     core::DType as CoreDType, DType, Error, ErrorKind, ShapeMismatch, Tensor, ValidationError,
     ValidationKind,
 };
 
 use super::{
-    register_runtime, tropical_semantic_ad_rules, TropicalEinsumJvpOp, TropicalEinsumOp,
-    TropicalEinsumVjpOp,
+    execute_tropical_reference_payload, extension_modules, tropical_semantic_ad_rules,
+    TropicalEinsumJvpOp, TropicalEinsumOp, TropicalEinsumVjpOp, TROPICAL_EINSUM_JVP_FAMILY_ID,
+    TROPICAL_EINSUM_VJP_FAMILY_ID,
 };
 use crate::TropicalKind;
 
@@ -48,6 +48,30 @@ fn semantic_tropical_program() -> tenferro_runtime::program::FrozenProgram {
         )
         .unwrap()[0];
     builder.finish(&[output]).unwrap()
+}
+
+fn cpu_runtime_with_tropical() -> Runtime {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .unwrap();
+    for module in
+        extension_modules::<CpuBackend>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap()
+    {
+        builder.install_extension_module(module).unwrap();
+    }
+    builder.build().unwrap()
+}
+
+fn run_one(
+    runtime: &Runtime,
+    program: &tenferro_runtime::CompiledGraph,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<Tensor> {
+    let mut outputs = runtime.run_compiled(program, inputs)?;
+    assert_eq!(outputs.len(), 1);
+    Ok(outputs.remove(0))
 }
 
 fn host_error(result: std::thread::Result<tenferro_tensor::Result<Vec<Tensor>>>) -> Error {
@@ -130,12 +154,16 @@ fn tropical_jvp_host_boundary_rejects_count_dtype_and_exact_shape() {
     let wrong_shape = matrix(vec![2, 3]);
 
     let error = host_error(catch_unwind(AssertUnwindSafe(|| {
-        HostReference::execute(&op, &[&lhs])
+        execute_tropical_reference_payload(TROPICAL_EINSUM_JVP_FAMILY_ID, &op, &[&lhs])
     })));
     assert_invalid_argument(&error, "tropical_einsum_jvp");
 
     let error = host_error(catch_unwind(AssertUnwindSafe(|| {
-        HostReference::execute(&op, &[&lhs, &rhs, &valid_lhs_tangent, &wrong_dtype])
+        execute_tropical_reference_payload(
+            TROPICAL_EINSUM_JVP_FAMILY_ID,
+            &op,
+            &[&lhs, &rhs, &valid_lhs_tangent, &wrong_dtype],
+        )
     })));
     assert_dtype_mismatch(
         &error,
@@ -145,7 +173,11 @@ fn tropical_jvp_host_boundary_rejects_count_dtype_and_exact_shape() {
     );
 
     let error = host_error(catch_unwind(AssertUnwindSafe(|| {
-        HostReference::execute(&op, &[&lhs, &rhs, &valid_lhs_tangent, &wrong_shape])
+        execute_tropical_reference_payload(
+            TROPICAL_EINSUM_JVP_FAMILY_ID,
+            &op,
+            &[&lhs, &rhs, &valid_lhs_tangent, &wrong_shape],
+        )
     })));
     assert_shape_mismatch(&error, "tropical_einsum_jvp", &[3, 2], &[2, 3]);
 }
@@ -163,12 +195,16 @@ fn tropical_vjp_host_boundary_rejects_count_dtype_and_exact_shape() {
     let wrong_shape = matrix(vec![4]);
 
     let error = host_error(catch_unwind(AssertUnwindSafe(|| {
-        HostReference::execute(&op, &[&lhs, &rhs])
+        execute_tropical_reference_payload(TROPICAL_EINSUM_VJP_FAMILY_ID, &op, &[&lhs, &rhs])
     })));
     assert_invalid_argument(&error, "tropical_einsum_vjp");
 
     let error = host_error(catch_unwind(AssertUnwindSafe(|| {
-        HostReference::execute(&op, &[&lhs, &rhs, &wrong_dtype])
+        execute_tropical_reference_payload(
+            TROPICAL_EINSUM_VJP_FAMILY_ID,
+            &op,
+            &[&lhs, &rhs, &wrong_dtype],
+        )
     })));
     assert_dtype_mismatch(
         &error,
@@ -178,7 +214,11 @@ fn tropical_vjp_host_boundary_rejects_count_dtype_and_exact_shape() {
     );
 
     let error = host_error(catch_unwind(AssertUnwindSafe(|| {
-        HostReference::execute(&op, &[&lhs, &rhs, &wrong_shape])
+        execute_tropical_reference_payload(
+            TROPICAL_EINSUM_VJP_FAMILY_ID,
+            &op,
+            &[&lhs, &rhs, &wrong_shape],
+        )
     })));
     assert_shape_mismatch(&error, "tropical_einsum_vjp", &[2, 2], &[4]);
 }
@@ -203,11 +243,13 @@ fn tropical_semantic_rules_execute_jvp_and_vjp_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.register_extension(register_runtime).unwrap();
-    let tangent = executor
-        .run_with_inputs(&compiled, &[&lhs, &rhs, &lhs_tangent, &rhs_tangent])
-        .unwrap();
+    let runtime = cpu_runtime_with_tropical();
+    let tangent = run_one(
+        &runtime,
+        &compiled,
+        &[&lhs, &rhs, &lhs_tangent, &rhs_tangent],
+    )
+    .unwrap();
     assert_eq!(
         tangent.as_slice::<f64>().unwrap(),
         &[11.0, 21.0, 34.0, 44.0]
@@ -219,8 +261,8 @@ fn tropical_semantic_rules_execute_jvp_and_vjp_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let cotangents = executor
-        .run_many_with_inputs(&compiled, &[&lhs, &rhs, &output_cotangent])
+    let cotangents = runtime
+        .run_compiled(&compiled, &[&lhs, &rhs, &output_cotangent])
         .unwrap();
     assert_eq!(
         cotangents[0].as_slice::<f64>().unwrap(),

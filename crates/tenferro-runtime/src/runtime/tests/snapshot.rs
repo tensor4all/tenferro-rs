@@ -114,18 +114,13 @@ fn fresh_build_epoch_matches_snapshot_epoch() -> Result<(), Box<dyn StdError>> {
 }
 
 #[test]
-fn epoch_acquire_does_not_call_snapshot_or_lock_active() -> Result<(), Box<dyn StdError>> {
+fn epoch_acquire_returns_published_epoch_repeatedly() -> Result<(), Box<dyn StdError>> {
     let runtime = runtime_with("tenferro.engine.epoch-fast", 1)?;
     let epoch = runtime.snapshot()?.epoch();
 
-    runtime.reset_snapshot_lock_calls_for_test();
     for _ in 0..100 {
         assert_eq!(runtime.epoch()?, epoch);
     }
-    assert_eq!(runtime.snapshot_lock_calls_for_test(), 0);
-
-    let _ = runtime.snapshot()?;
-    assert_eq!(runtime.snapshot_lock_calls_for_test(), 1);
 
     Ok(())
 }

@@ -7,9 +7,10 @@
 //! `triangular_solve`, which both providers implement.
 
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor, TypedTensor};
+
+use super::support;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> TracedTensor {
     TracedTensor::from_tensor_concrete_shape(Tensor::F64(
@@ -28,11 +29,7 @@ fn c64_tensor(shape: Vec<usize>, data: Vec<Complex64>) -> TracedTensor {
 fn run_many(outputs: &[&TracedTensor]) -> Vec<Tensor> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(outputs).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_linalg::register_runtime)
-        .unwrap();
-    executor.run_many(&program).unwrap()
+    support::run_all(&program, &[]).unwrap()
 }
 
 fn f64_data(tensor: &Tensor) -> Vec<f64> {
@@ -273,11 +270,7 @@ fn svd_full_lapack_provider_is_unsupported() {
     let (u, s, vh) = a.svd_full().unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&u, &s, &vh]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_linalg::register_runtime)
-        .unwrap();
-    let err = executor.run_many(&program).unwrap_err();
+    let err = support::run_all(&program, &[]).unwrap_err();
     assert!(
         format!("{err}").contains("full-matrices SVD"),
         "expected typed unsupported error, got {err}"

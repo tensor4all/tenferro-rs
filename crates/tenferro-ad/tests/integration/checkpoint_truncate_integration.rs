@@ -1,8 +1,7 @@
 use crate::support;
-use support::RunTraced;
+use support::{cpu_runtime, RunTraced};
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor, TypedTensor};
 
 const TOL: f64 = 1.0e-4;
 const FD_H: f64 = 1.0e-5;
@@ -27,9 +26,9 @@ fn checkpoint_truncate_loop_grad() {
     let steps = 3;
     let a_value = 0.5_f64;
     let x0_data = vec![1.0, 2.0, 3.0];
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let mut compiler = GraphCompiler::new();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let executor = cpu_runtime();
 
     let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_value)).unwrap();
     let size = TracedTensor::from_tensor_concrete_shape(f64_scalar(2.0)).unwrap();
@@ -39,12 +38,12 @@ fn checkpoint_truncate_loop_grad() {
     for _ in 0..steps {
         x = (&a * &x).unwrap();
         x = x.dynamic_truncate(&size, 0).unwrap();
-        x.checkpoint(&mut compiler, &mut executor).unwrap();
+        x.checkpoint(&mut compiler, &executor).unwrap();
     }
 
     let loss = x.reduce_sum(Some(&[0])).unwrap();
     let grad = loss.grad(&a).unwrap();
-    let grad_value = get_f64_scalar(&grad.run_with(&mut engine).unwrap());
+    let grad_value = get_f64_scalar(&grad.run_with(&engine).unwrap());
 
     let f_concrete = |a_value: f64| {
         let mut x = x0_data.clone();

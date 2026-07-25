@@ -1,35 +1,28 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use computegraph::compile::{compile, CompiledProgram};
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::ValueKey;
-use lru::LruCache;
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_tensor::{DType, Tensor, TensorScalar};
+use tenferro_tensor::{CacheStats, DType, Tensor, TensorScalar};
 
-use super::cache::{
-    compile_cache_stats, compute_cache_key, CacheKey, GraphCompilerCacheStats,
-    DEFAULT_COMPILE_CACHE_CAPACITY,
-};
 use super::program::CompiledGraph;
-use crate::compiler::{
-    lower_scoped_dim_expr, semantic_staging::stage_semantic_program, CompilerOptions,
-};
+#[cfg(test)]
+use crate::compiler::semantic_staging::stage_semantic_program;
+use crate::compiler::{lower_scoped_dim_expr, CompilerOptions};
 use crate::error::{Error, Result};
-use crate::exec::ExecProgram;
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::program::{
     CoreSemanticOp, FrozenProgram, ProgramInputSpec, ProgramShapeRelation, SemanticProgramBuilder,
     ShapeGuard as ProgramShapeGuard,
 };
-use crate::shape_constraint::SlotScopedShapeConstraint;
+use crate::shape_constraint::{discharge, LocalShapeConstraint, SlotScopedShapeConstraint};
 use crate::trace::TracedGraph;
 use crate::traced::{try_concrete_shape, TracedTensor};
 
@@ -37,7 +30,25 @@ use crate::traced::{try_concrete_shape, TracedTensor};
 struct InputDescriptor {
     dtype: DType,
     shape: Vec<usize>,
+    extent_identity: InputExtentIdentity,
     default_tensor: Option<Arc<Tensor>>,
+}
+
+#[derive(Clone, Copy)]
+enum InputExtentIdentity {
+    Concrete,
+    Symbolic,
+}
+
+impl InputDescriptor {
+    fn semantic_shape(&self, input_idx: usize) -> Vec<DimExpr> {
+        match self.extent_identity {
+            InputExtentIdentity::Concrete => DimExpr::from_concrete(&self.shape),
+            InputExtentIdentity::Symbolic => (0..self.shape.len())
+                .map(|axis| DimExpr::InputDim { input_idx, axis })
+                .collect(),
+        }
+    }
 }
 
 /// Compiler for traced tensor graphs.
@@ -57,7 +68,6 @@ struct InputDescriptor {
 /// assert_eq!(program.output_count(), 1);
 /// ```
 pub struct GraphCompiler {
-    compile_cache: LruCache<CacheKey, ExecProgram>,
     extension_cache: ExtensionCacheStore,
     compiler_options: CompilerOptions,
 }
@@ -65,8 +75,7 @@ pub struct GraphCompiler {
 impl fmt::Debug for GraphCompiler {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GraphCompiler")
-            .field("cache_stats", &self.cache_stats())
-            .field("compile_cache_capacity", &self.compile_cache_capacity())
+            .field("extension_cache_stats", &self.cache_stats())
             .field("compiler_options", &self.compiler_options)
             .field("extension_cache", &self.extension_cache)
             .finish_non_exhaustive()
@@ -82,13 +91,10 @@ impl GraphCompiler {
     /// use tenferro_runtime::GraphCompiler;
     ///
     /// let compiler = GraphCompiler::new();
-    /// assert_eq!(compiler.compile_cache_len(), 0);
+    /// assert!(compiler.extension_caches().is_empty());
     /// ```
     pub fn new() -> Self {
         Self {
-            compile_cache: LruCache::new(
-                NonZeroUsize::new(DEFAULT_COMPILE_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN),
-            ),
             extension_cache: ExtensionCacheStore::new(),
             compiler_options: CompilerOptions::default(),
         }
@@ -112,9 +118,6 @@ impl GraphCompiler {
     /// ```
     pub fn with_compiler_options(compiler_options: CompilerOptions) -> Self {
         Self {
-            compile_cache: LruCache::new(
-                NonZeroUsize::new(DEFAULT_COMPILE_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN),
-            ),
             extension_cache: ExtensionCacheStore::new(),
             compiler_options,
         }
@@ -200,9 +203,11 @@ impl GraphCompiler {
     }
 
     fn compile_frozen(&mut self, frozen: &FrozenProgram) -> Result<CompiledGraph> {
-        let staging = stage_semantic_program(&frozen.program, self.compiler_options)?;
-        let _ = self.get_or_compile(staging);
-        Ok(CompiledGraph::new(frozen.clone(), self.compiler_options))
+        Ok(CompiledGraph::new(
+            frozen.clone(),
+            self.compiler_options,
+            [],
+        ))
     }
 
     /// Compile multiple traced outputs into one graph program.
@@ -289,6 +294,7 @@ impl GraphCompiler {
                     InputDescriptor {
                         dtype: *dtype,
                         shape: (*shape).to_vec(),
+                        extent_identity: InputExtentIdentity::Concrete,
                         default_tensor: None,
                     },
                 )
@@ -309,50 +315,6 @@ impl GraphCompiler {
         )
     }
 
-    /// Number of compiled programs currently retained.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::GraphCompiler;
-    ///
-    /// let compiler = GraphCompiler::new();
-    /// assert_eq!(compiler.compile_cache_len(), 0);
-    /// ```
-    pub fn compile_cache_len(&self) -> usize {
-        self.compile_cache.len()
-    }
-
-    /// Current compiled-program cache capacity.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::GraphCompiler;
-    ///
-    /// let compiler = GraphCompiler::new();
-    /// assert!(compiler.compile_cache_capacity().get() > 0);
-    /// ```
-    pub fn compile_cache_capacity(&self) -> NonZeroUsize {
-        self.compile_cache.cap()
-    }
-
-    /// Resize the compiled-program cache.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use std::num::NonZeroUsize;
-    /// use tenferro_runtime::GraphCompiler;
-    ///
-    /// let mut compiler = GraphCompiler::new();
-    /// compiler.set_compile_cache_capacity(NonZeroUsize::new(2).unwrap());
-    /// assert_eq!(compiler.compile_cache_capacity().get(), 2);
-    /// ```
-    pub fn set_compile_cache_capacity(&mut self, capacity: NonZeroUsize) {
-        self.compile_cache.resize(capacity);
-    }
-
     /// Return the compiler options used for future graph lowerings.
     ///
     /// # Examples
@@ -368,7 +330,7 @@ impl GraphCompiler {
         self.compiler_options
     }
 
-    /// Replace compiler options and clear compiled graph cache entries.
+    /// Replace compiler options and clear compiler-owned extension cache entries.
     ///
     /// # Examples
     ///
@@ -385,29 +347,14 @@ impl GraphCompiler {
     /// };
     /// compiler.set_compiler_options(options);
     /// assert_eq!(compiler.compiler_options(), options);
-    /// assert_eq!(compiler.compile_cache_len(), 0);
+    /// assert_eq!(compiler.cache_stats().entries, 0);
     /// ```
     pub fn set_compiler_options(&mut self, compiler_options: CompilerOptions) {
         if self.compiler_options == compiler_options {
             return;
         }
         self.compiler_options = compiler_options;
-        self.clear_compile_cache();
-    }
-
-    /// Clear the compiled-program cache.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_runtime::GraphCompiler;
-    ///
-    /// let mut compiler = GraphCompiler::new();
-    /// compiler.clear_compile_cache();
-    /// assert_eq!(compiler.compile_cache_len(), 0);
-    /// ```
-    pub fn clear_compile_cache(&mut self) {
-        self.compile_cache.clear();
+        self.clear_extension_caches();
     }
 
     /// Clear generic extension compile-time cache entries.
@@ -434,14 +381,13 @@ impl GraphCompiler {
     ///
     /// let mut compiler = GraphCompiler::new();
     /// compiler.clear_caches();
-    /// assert_eq!(compiler.cache_stats().compile.entries, 0);
+    /// assert_eq!(compiler.cache_stats().entries, 0);
     /// ```
     pub fn clear_caches(&mut self) {
-        self.clear_compile_cache();
         self.clear_extension_caches();
     }
 
-    /// Return cache-entry and retained-byte stats.
+    /// Return compiler-owned extension cache-entry and retained-byte stats.
     ///
     /// # Examples
     ///
@@ -450,13 +396,10 @@ impl GraphCompiler {
     ///
     /// let compiler = GraphCompiler::new();
     /// let stats = compiler.cache_stats();
-    /// assert_eq!(stats.compile.entries, 0);
+    /// assert_eq!(stats.entries, 0);
     /// ```
-    pub fn cache_stats(&self) -> GraphCompilerCacheStats {
-        GraphCompilerCacheStats {
-            compile: compile_cache_stats(&self.compile_cache),
-            extensions: self.extension_cache.stats(ExtensionCacheSelector::All),
-        }
+    pub fn cache_stats(&self) -> CacheStats {
+        self.extension_cache.stats(ExtensionCacheSelector::All)
     }
 
     /// Borrow generic extension compile-time cache storage.
@@ -569,6 +512,7 @@ impl GraphCompiler {
         }
 
         let mut descriptors = Vec::with_capacity(graph.inputs.len());
+        let mut input_keys = Vec::with_capacity(graph.inputs.len());
         for key in &graph.inputs {
             let ValueKey::Input(input_key) = key else {
                 return Err(Error::Internal(
@@ -577,6 +521,7 @@ impl GraphCompiler {
             };
             let descriptor = descriptor_for_input(input_key, binding_specs, default_inputs)?;
             descriptors.push(descriptor);
+            input_keys.push(input_key.clone());
         }
         if let Some(explicit_input_order) = explicit_input_order {
             let input_position_by_key: HashMap<_, _> = graph
@@ -606,27 +551,22 @@ impl GraphCompiler {
                 .map(|&position| compiled.input_slots[position])
                 .collect();
             descriptors = ordered_positions
+                .iter()
+                .map(|&position| descriptors[position].clone())
+                .collect();
+            input_keys = ordered_positions
                 .into_iter()
-                .map(|position| descriptors[position].clone())
+                .map(|position| input_keys[position].clone())
                 .collect();
         }
 
         let semantic =
             compile_materialized_semantic_program(&compiled, &descriptors, &scoped_constraints)?;
-        let exec = stage_semantic_program(&semantic.program, self.compiler_options)?;
-        let _ = self.get_or_compile(exec);
-        Ok(CompiledGraph::new(semantic, self.compiler_options))
-    }
-
-    fn get_or_compile(&mut self, exec: ExecProgram) -> ExecProgram {
-        let key = compute_cache_key(&exec);
-        if let Some(cached) = self.compile_cache.get(&key) {
-            let mut current = cached.clone();
-            current.shape_guards = exec.shape_guards;
-            return current;
-        }
-        self.compile_cache.put(key, exec.clone());
-        exec
+        Ok(CompiledGraph::new(
+            semantic,
+            self.compiler_options,
+            input_keys,
+        ))
     }
 }
 
@@ -646,17 +586,19 @@ fn compile_materialized_semantic_program(
     let mut builder = SemanticProgramBuilder::new();
     let mut values = vec![None; compiled.n_slots];
     let mut slot_shapes = vec![None; compiled.n_slots];
-    for (&slot, descriptor) in compiled.input_slots.iter().zip(descriptors) {
+    for (input_idx, (&slot, descriptor)) in compiled.input_slots.iter().zip(descriptors).enumerate()
+    {
         let Some(value_slot) = values.get_mut(slot) else {
             return Err(invalid_compiled_graph(format!(
                 "semantic input slot {slot} is outside slot table of length {}",
                 compiled.n_slots
             )));
         };
+        let semantic_shape = descriptor.semantic_shape(input_idx);
         let value = builder
             .input(ProgramInputSpec::new(
                 descriptor.dtype,
-                DimExpr::from_concrete(&descriptor.shape),
+                semantic_shape.clone(),
             ))
             .map_err(semantic_build_error)?;
         if let Some(tensor) = &descriptor.default_tensor {
@@ -665,7 +607,7 @@ fn compile_materialized_semantic_program(
                 .map_err(semantic_build_error)?;
         }
         *value_slot = Some(value);
-        slot_shapes[slot] = Some(DimExpr::from_concrete(&descriptor.shape));
+        slot_shapes[slot] = Some(semantic_shape);
     }
 
     for instruction in &compiled.instructions {
@@ -737,6 +679,7 @@ fn compile_materialized_semantic_program(
         }
     }
 
+    let mut lowered_constraints = Vec::with_capacity(scoped_constraints.len());
     for scoped in scoped_constraints {
         let target = scoped
             .origin_slots
@@ -762,13 +705,23 @@ fn compile_materialized_semantic_program(
         let relation = match scoped.local.relation {
             tenferro_ops::ShapeRelation::Equal => ProgramShapeRelation::Equal,
         };
+        let lowered = LocalShapeConstraint {
+            source: scoped.local.source.clone(),
+            relation: scoped.local.relation,
+            lhs,
+            rhs,
+        };
+        lowered_constraints.push(lowered.clone());
         builder
             .add_shape_guards_to_output(
                 target,
-                [ProgramShapeGuard::new(relation, lhs, rhs)
+                [ProgramShapeGuard::new(relation, lowered.lhs, lowered.rhs)
                     .with_source_family(scoped.local.source.family_id)],
             )
             .map_err(semantic_build_error)?;
+    }
+    if !lowered_constraints.is_empty() {
+        let _guards = discharge(lowered_constraints)?;
     }
 
     let outputs = compiled
@@ -852,6 +805,7 @@ fn descriptor_for_input(
         return Ok(InputDescriptor {
             dtype: tensor.dtype(),
             shape: tensor.shape().to_vec(),
+            extent_identity: InputExtentIdentity::Symbolic,
             default_tensor: Some(tensor.clone()),
         });
     }
@@ -966,67 +920,17 @@ mod test_support;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shape_constraint::ConstraintSource;
-    use crate::ShapeGuard;
     use std::any::Any;
     use std::hash::Hasher;
     use std::sync::Arc;
     use tenferro_ops::{
-        dim_expr::DimExpr,
         ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp},
-        ShapeRelation, SymDim,
+        SymDim,
     };
     use tenferro_tensor::{
         Buffer, BufferHandle, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement,
         TypedTensor,
     };
-
-    #[test]
-    fn compile_cache_hit_preserves_current_guard_provenance() {
-        use tenferro_cpu::CpuBackend;
-
-        let mut compiler = GraphCompiler::new();
-        let mut first = ExecProgram {
-            instructions: Vec::new(),
-            input_slots: vec![0],
-            output_slots: vec![0],
-            n_slots: 1,
-            shape_guards: vec![test_guard("example.first.v1", 3)],
-        };
-        let mut second = first.clone();
-        second.shape_guards = vec![test_guard("example.second.v1", 9)];
-
-        first = compiler.get_or_compile(first);
-        let cached = compiler.get_or_compile(second);
-
-        assert_eq!(compiler.compile_cache_len(), 1);
-        assert_eq!(first.shape_guards[0].source.family_id, "example.first.v1");
-        assert_eq!(
-            cached.shape_guards[0].source,
-            ConstraintSource {
-                family_id: "example.second.v1",
-                instruction_index: Some(9),
-            }
-        );
-
-        let mut executor = crate::GraphExecutor::new(CpuBackend::new());
-        let error = executor
-            .eval_exec_ir(
-                &cached,
-                vec![Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap()],
-            )
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            Error::ShapeConstraintViolation {
-                family: "example.second.v1",
-                instruction_index: Some(9),
-                lhs_value: 3,
-                rhs_value: 2,
-                ..
-            }
-        ));
-    }
 
     #[test]
     fn compile_publishes_semantic_program_and_separate_default_bindings() {
@@ -1047,21 +951,6 @@ mod tests {
                 .dtype(),
             DType::F64
         );
-    }
-
-    fn test_guard(family_id: &'static str, instruction_index: usize) -> ShapeGuard {
-        ShapeGuard {
-            source: ConstraintSource {
-                family_id,
-                instruction_index: Some(instruction_index),
-            },
-            relation: ShapeRelation::Equal,
-            lhs: DimExpr::InputDim {
-                input_idx: 0,
-                axis: 0,
-            },
-            rhs: DimExpr::Const(2),
-        }
     }
 
     #[test]

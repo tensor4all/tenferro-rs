@@ -56,21 +56,19 @@ choice, and similar values. Do not hide unbounded plan caches, vendor handles,
 or mutable global state inside operation identity.
 
 There is no single process-global owner for arbitrary extension state.
-`EagerRuntime`, `GraphCompiler`, and `GraphExecutor` own explicit generic
-extension cache stores. Extension runtimes put entries in those stores with
-`ExtensionCacheKey`, so retained plans are tied to the compiler, eager context,
-or executor that uses them.
+`EagerRuntime`, `GraphCompiler`, and `Runtime` own explicit bounded cache
+stores. Extension modules register cache owners with `Runtime`, so retained
+plans are tied to the compiler, eager context, or runtime that uses them.
 
 An operation descriptor may hold an `Arc` to such an extension-owned cache object only
 when the cache is a performance detail and is not part of semantic equality.
 Two extension ops that compare equal must remain interchangeable even if their
 caches are empty, warm, or independently owned.
 
-For einsum, `GraphCompiler` owns parse and static-plan caches, while
-`GraphExecutor` and `EagerRuntime` own runtime contraction-plan and inner
-execution-program caches through their extension executors. These caches default
-to bounded LRU capacity 256 and expose capacity, clear, entry count, and
-retained-byte stats through the owning runtime.
+For einsum, `GraphCompiler` owns parse and static-plan caches, while installed
+runtime cache owners and `EagerRuntime` own runtime contraction-plan caches.
+These caches are bounded and expose clear, entry count, and retained-byte stats
+through their owning runtime surfaces.
 
 Avoid hidden process-global or thread-local caches in extension crates. If a
 cache lives longer than one call, make the owner explicit and bounded, and give
@@ -87,17 +85,13 @@ Extension operation descriptors do not need process-global registration. Constru
 `Arc<dyn ExtensionOp>` and pass it to `tenferro_runtime::extension::apply` for
 traced tensors or `apply_eager` for eager tensors.
 
-Forward execution goes through a registered
-`tenferro_runtime::ExtensionRuntime`. If the operation has a simple
-host/reference implementation, expose it with `ExtensionOp::host_reference`
-and register `HostReferenceRuntime`; otherwise register a backend-specific
-runtime owned by the extension crate.
+Forward execution goes through a registered `ExtensionModule`. If the operation
+has a simple host/reference implementation, expose it with
+`ExtensionOp::host_reference` and provide a host-reference module; otherwise
+provide a backend-specific module owned by the extension crate.
 
-Phase 4 also exposes runtime preparation registration for extension authors
-who are integrating with the lower-level `Runtime::prepare_for` pipeline:
-`ExtensionModule` registers one or more extension preparation engines and their
-planning configs against an immutable runtime snapshot. This is separate from
-the eager/graph `ExtensionRuntime` execution path above. Use it for
+`ExtensionModule` registers one or more extension preparation/execution engines
+and their planning configs against an immutable runtime snapshot. Use it for
 runtime-owned preparation metadata and bounded cache owners, not for hidden
 process-global provider state.
 

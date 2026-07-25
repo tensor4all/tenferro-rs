@@ -1,6 +1,14 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorRead, TracedTensor};
+use tenferro_runtime::{DType, GraphCompiler, Runtime, Tensor, TracedTensor};
+
+fn cpu_runtime() -> Runtime {
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new()).unwrap())
+        .unwrap();
+    builder.build().unwrap()
+}
 
 fn input_tensor(n: usize, scale: f64) -> Tensor {
     let data = (0..n)
@@ -76,16 +84,10 @@ fn bench_runtime_add_mul(c: &mut Criterion) {
         let b = input_tensor(n, 1.25);
         group.throughput(criterion::Throughput::Elements(n as u64));
         group.bench_function(BenchmarkId::new("segmented_graph", n), |bench| {
-            let mut executor = GraphExecutor::new(CpuBackend::new());
+            let runtime = cpu_runtime();
             bench.iter(|| {
-                let out = executor
-                    .run_with_input_reads(
-                        black_box(&program),
-                        &[
-                            TensorRead::from_tensor(black_box(&a)),
-                            TensorRead::from_tensor(black_box(&b)),
-                        ],
-                    )
+                let out = runtime
+                    .run_compiled(black_box(&program), &[black_box(&a), black_box(&b)])
                     .expect("graph run");
                 black_box(out);
             });
@@ -105,16 +107,10 @@ fn bench_runtime_broadcast_mul(c: &mut Criterion) {
         group.bench_function(
             BenchmarkId::new("segmented_graph", format!("{rows}x{cols}")),
             |bench| {
-                let mut executor = GraphExecutor::new(CpuBackend::new());
+                let runtime = cpu_runtime();
                 bench.iter(|| {
-                    let out = executor
-                        .run_with_input_reads(
-                            black_box(&program),
-                            &[
-                                TensorRead::from_tensor(black_box(&a)),
-                                TensorRead::from_tensor(black_box(&b)),
-                            ],
-                        )
+                    let out = runtime
+                        .run_compiled(black_box(&program), &[black_box(&a), black_box(&b)])
                         .expect("graph run");
                     black_box(out);
                 });
@@ -135,16 +131,10 @@ fn bench_runtime_broadcast_mul_add(c: &mut Criterion) {
         group.bench_function(
             BenchmarkId::new("segmented_graph", format!("{rows}x{cols}")),
             |bench| {
-                let mut executor = GraphExecutor::new(CpuBackend::new());
+                let runtime = cpu_runtime();
                 bench.iter(|| {
-                    let out = executor
-                        .run_with_input_reads(
-                            black_box(&program),
-                            &[
-                                TensorRead::from_tensor(black_box(&a)),
-                                TensorRead::from_tensor(black_box(&b)),
-                            ],
-                        )
+                    let out = runtime
+                        .run_compiled(black_box(&program), &[black_box(&a), black_box(&b)])
                         .expect("graph run");
                     black_box(out);
                 });

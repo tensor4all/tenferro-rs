@@ -18,9 +18,7 @@ use tenferro_cpu::{
     CpuProviderExecutionCapabilities, CpuThreadCountControl, ExternalCpuDomain, NumaNodeId,
     ResolvedCpuPlacement, ScopedCpuJob, ScopedCpuJobs,
 };
-use tenferro_runtime::{
-    Error as RuntimeError, ErrorPhase, GraphCompiler, GraphExecutor, TracedTensor,
-};
+use tenferro_runtime::{Error as RuntimeError, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{
     BackendSessionHost, CpuDomainId, DotGeneralConfig, Error as TensorError, ErrorKind, Tensor,
     TensorDot, TensorElementwise,
@@ -414,7 +412,14 @@ fn placement_session_matches_graph_execution_for_core_operations() {
     let y = TracedTensor::from_vec_col_major(vec![1], vec![2.0_f64]).unwrap();
     let sum = (&x + &y).unwrap();
     let program = GraphCompiler::new().compile(&sum).unwrap();
-    let graph_output = GraphExecutor::new(graph_backend).run(&program).unwrap();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&graph_backend).unwrap())
+        .unwrap();
+    let graph_runtime = builder.build().unwrap();
+    let mut graph_outputs = graph_runtime.run_compiled(&program, &[]).unwrap();
+    assert_eq!(graph_outputs.len(), 1);
+    let graph_output = graph_outputs.pop().unwrap();
 
     assert_eq!(session_output.as_slice::<f64>().unwrap(), &[3.0]);
     assert_eq!(

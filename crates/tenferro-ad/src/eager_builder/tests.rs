@@ -6,10 +6,9 @@ use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_runtime::Runtime;
 use tenferro_tensor::{Tensor, TypedTensor};
 use tidu::{ADKey, PrimitiveBuilder, PrimitiveValue};
-
-use crate::extension_runtime::ExtensionExecutor;
 
 use super::{missing_tangent_base_key, zero_like_tensor, EagerPrimitiveBuilder};
 
@@ -26,23 +25,23 @@ fn debug_summarizes_builder_without_tensor_payloads() {
 
     assert!(debug.contains("EagerPrimitiveBuilder"));
     assert!(debug.contains("backend_type"));
-    assert!(debug.contains("has_extension_executor: false"));
+    assert!(debug.contains("has_runtime: false"));
     assert!(debug.contains("results_len: 1"));
 }
 
 #[test]
-fn debug_reports_extension_executor_presence() {
+fn debug_reports_runtime_presence() {
     let mut backend = CpuBackend::new();
-    let mut executor = ExtensionExecutor::<CpuBackend>::new();
-    let builder = EagerPrimitiveBuilder::with_extension_executor(&mut backend, &mut executor);
+    let runtime = Runtime::builder().build().unwrap();
+    let builder = EagerPrimitiveBuilder::with_runtime(&mut backend, Some(&runtime));
 
     let debug = format!("{builder:?}");
 
-    assert!(debug.contains("has_extension_executor: true"));
+    assert!(debug.contains("has_runtime: true"));
 }
 
 #[test]
-fn new_builder_executes_standard_primitives_without_extension_executor() {
+fn new_builder_executes_standard_primitives_without_runtime() {
     let mut backend = CpuBackend::new();
     let mut builder = EagerPrimitiveBuilder::new(&mut backend);
     let lhs = builder.push_tensor(Arc::new(

@@ -1,14 +1,15 @@
 use num_complex::{Complex32, Complex64};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
+mod support;
 #[cfg(feature = "autodiff")]
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "autodiff")]
 use tenferro_fft::EagerTensorFftExt;
-use tenferro_fft::{fft_plan_cache_selector, FftNorm, TracedTensorFftExt};
+use tenferro_fft::{FftNorm, TracedTensorFftExt};
 use tenferro_runtime::{
-    DType, Error as RuntimeError, ErrorPhase, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
+    DType, Error as RuntimeError, ErrorPhase, GraphCompiler, Tensor, TracedTensor,
 };
 use tenferro_tensor::{
     Buffer, BufferHandle, DeviceId, DeviceKind, ErrorKind, GpuBackendKind, MemoryKind, Placement,
@@ -18,11 +19,7 @@ use tenferro_tensor::{
 fn run(output: &TracedTensor) -> Tensor {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(output).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_fft::register_runtime)
-        .unwrap();
-    executor.run(&program).unwrap()
+    support::run_one(&program, &[]).unwrap()
 }
 
 #[cfg(feature = "autodiff")]
@@ -173,13 +170,11 @@ fn registered_runtime_reports_gpu_input_as_unsupported() {
         .compile_with_input_specs(&y, &[(&x, DType::C64, &[2])])
         .unwrap();
     let gpu_input = cuda_c64_tensor(vec![2]);
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_fft::register_runtime)
-        .unwrap();
+    let backend = CpuBackend::new();
+    let runtime = support::cpu_runtime_with_fft(&backend).unwrap();
 
     let result = catch_unwind(AssertUnwindSafe(|| {
-        executor.run_with_inputs(&program, &[&gpu_input])
+        runtime.run_compiled(&program, &[&gpu_input])
     }));
     assert!(
         result.is_ok(),
@@ -298,29 +293,17 @@ fn graph_runtime_owns_fft_plan_cache() {
     let y = x.fft(None, -1, FftNorm::Backward).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_fft::register_runtime)
-        .unwrap();
+    let backend = CpuBackend::new();
+    let runtime = support::cpu_runtime_with_fft(&backend).unwrap();
 
-    executor.run(&program).unwrap();
-    executor.run(&program).unwrap();
-    let stats = executor
-        .extension_executor()
-        .caches()
-        .stats(fft_plan_cache_selector());
+    runtime.run_compiled(&program, &[]).unwrap();
+    runtime.run_compiled(&program, &[]).unwrap();
+    let stats = runtime.cache_stats().unwrap().extensions;
     assert_eq!(stats.entries, 1);
     assert!(stats.retained_bytes > 0);
 
-    executor.clear_extension_caches();
-    assert_eq!(
-        executor
-            .extension_executor()
-            .caches()
-            .stats(fft_plan_cache_selector())
-            .entries,
-        0
-    );
+    runtime.clear_caches().unwrap();
+    assert_eq!(runtime.cache_stats().unwrap().extensions.entries, 0);
 }
 
 #[test]

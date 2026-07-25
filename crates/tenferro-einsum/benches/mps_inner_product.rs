@@ -6,9 +6,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec};
-use tenferro_runtime::{
-    CompiledGraph, GraphCompiler, GraphExecutor, Tensor, TraceContext, TypedTensor,
-};
+use tenferro_runtime::{CompiledGraph, GraphCompiler, Runtime, Tensor, TraceContext, TypedTensor};
 
 const L: usize = 32;
 const PHYS_DIM: usize = 2;
@@ -107,19 +105,33 @@ fn compile_mps_inner_product(fixture: &MpsFixture) -> CompiledGraph {
         .expect("MPS inner-product semantic graph should compile")
 }
 
+fn cpu_runtime_with_einsum_one_thread() -> Runtime {
+    let backend = CpuBackend::with_threads(1).unwrap();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .unwrap();
+    builder
+        .install_extension_module(
+            tenferro_einsum::extension_module::<CpuBackend>(
+                tenferro_cpu::runtime_engine_id().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    builder.build().unwrap()
+}
+
 fn bench_mps_inner_product(c: &mut Criterion) {
     let mut group = c.benchmark_group("mps_inner_product/c64/one_thread");
     for &chi in CHIS {
         let fixture = build_mps_fixture(L, PHYS_DIM, chi);
         let compiled = compile_mps_inner_product(&fixture);
-        let mut engine = GraphExecutor::new(CpuBackend::with_threads(1).unwrap());
-        engine
-            .register_extension(tenferro_einsum::register_runtime)
-            .expect("einsum runtime registration should succeed");
+        let runtime = cpu_runtime_with_einsum_one_thread();
         let params = format!("L_{L}_chi_{chi}_d_{PHYS_DIM}");
 
-        let warmup_outputs = engine
-            .run_many(&compiled)
+        let warmup_outputs = runtime
+            .run_compiled(&compiled, &[])
             .expect("warmup evaluation should succeed");
         black_box(warmup_outputs);
 
@@ -127,8 +139,8 @@ fn bench_mps_inner_product(c: &mut Criterion) {
             b.iter_batched(
                 || compiled.clone(),
                 |program| {
-                    let outputs = engine
-                        .run_many(black_box(&program))
+                    let outputs = runtime
+                        .run_compiled(black_box(&program), &[])
                         .expect("MPS inner-product evaluation should succeed");
                     black_box(outputs);
                 },
@@ -141,12 +153,9 @@ fn bench_mps_inner_product(c: &mut Criterion) {
             move |b| {
                 b.iter(|| {
                     let compiled = compile_mps_inner_product(black_box(&fixture));
-                    let mut engine = GraphExecutor::new(CpuBackend::with_threads(1).unwrap());
-                    engine
-                        .register_extension(tenferro_einsum::register_runtime)
-                        .expect("einsum runtime registration should succeed");
-                    let outputs = engine
-                        .run_many(black_box(&compiled))
+                    let runtime = cpu_runtime_with_einsum_one_thread();
+                    let outputs = runtime
+                        .run_compiled(black_box(&compiled), &[])
                         .expect("MPS inner-product compile+eval should succeed");
                     black_box(outputs);
                 });

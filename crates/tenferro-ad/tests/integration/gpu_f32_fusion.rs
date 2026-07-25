@@ -2,10 +2,8 @@
 
 // Run with: cargo test --features cuda -- --ignored
 
-use crate::support;
-use support::RunTraced;
 use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
-use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{Tensor, TracedTensor, TypedTensor};
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -31,13 +29,14 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let a = upload_traced(&gpu_backend, &a_host);
     let b = upload_traced(&gpu_backend, &b_host);
     let c = upload_traced(&gpu_backend, &c_host);
-    let mut engine = GraphExecutor::new(gpu_backend);
-
     let sum = a.add(&b).unwrap();
     let result_traced = sum.mul(&c).unwrap();
 
-    let result = result_traced.run_with(&mut engine).unwrap();
-    let result = download_tensor(engine.backend().runtime(), &result).unwrap();
+    let result = result_traced
+        .value_tensor()
+        .expect("GPU concrete traced chain should retain eager tensor values")
+        .clone();
+    let result = download_tensor(gpu_backend.runtime(), &result).unwrap();
     let values = result
         .as_slice::<f32>()
         .expect("expected downloaded F32 tensor");

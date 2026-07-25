@@ -4,8 +4,10 @@ use num_complex::{Complex32, Complex64};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_gpu::{upload_webgpu_tensor, AppleContext, WebGpuRuntime};
 use tenferro_linalg::{EagerTensorLinalgExt, LinalgBackend, TracedTensorLinalgExt};
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_tensor::{Buffer, HostAccessError, Tensor};
+
+use super::support;
 
 fn apple_context() -> Option<AppleContext> {
     match AppleContext::new() {
@@ -180,11 +182,8 @@ fn public_concrete_eager_and_traced_cholesky_preserve_apple_domain_without_trans
     let traced_input = TracedTensor::from_tensor_concrete_shape(input.clone()).unwrap();
     let traced_output = traced_input.cholesky().unwrap();
     let program = GraphCompiler::new().compile(&traced_output).unwrap();
-    let mut executor = GraphExecutor::new(context.cpu_backend().clone());
-    executor
-        .register_extension(tenferro_linalg::register_runtime)
-        .unwrap();
-    let traced = executor.run(&program).unwrap();
+    let runtime = support::cpu_runtime_with_linalg(context.cpu_backend()).unwrap();
+    let traced = runtime.run_compiled(&program, &[]).unwrap().remove(0);
     assert_cholesky_result(&input, &traced, &context, before);
 }
 

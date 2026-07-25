@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
 use tenferro_ad::error::{Error, Result};
-use tenferro_ad::extension::apply_eager;
+use tenferro_ad::extension::apply_eager_with_extension_context;
 use tenferro_ad::EagerTensor;
-use tenferro_runtime::ErrorPhase;
+use tenferro_runtime::{ErrorPhase, ExtensionModule};
 
 use crate::eager_composites;
 use crate::extension::{
-    validate_derivative_eps, EighOptions, LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
+    execute_linalg_extension_reads, extension_module, validate_derivative_eps, EighOptions,
+    LinalgExtensionOp, LinalgOp, QrOptions, SvdOptions,
 };
-use crate::register_runtime;
 
 /// Linear algebra extension methods for [`EagerTensor`].
 pub trait EagerTensorLinalgExt {
@@ -314,15 +314,25 @@ impl EagerTensorLinalgExt for EagerTensor {
 }
 
 fn apply_linalg_eager(op: LinalgOp, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
-    if let Some(first) = inputs.first() {
-        first
-            .runtime()
-            .register_extension(register_runtime)
-            .map_err(|source| {
-                Error::runtime_state_source("linalg", ErrorPhase::GraphBuild, source)
-            })?;
-    }
-    apply_eager(Arc::new(LinalgExtensionOp::new(op)), inputs)
+    let op = Arc::new(LinalgExtensionOp::new(op));
+    let execute_op = Arc::clone(&op);
+    let module = eager_cpu_extension_module()?;
+    apply_eager_with_extension_context(op, inputs, module, move |_op, input_reads, ctx| {
+        execute_linalg_extension_reads(&execute_op, input_reads, ctx)
+    })
+}
+
+fn eager_cpu_extension_module() -> Result<Arc<dyn ExtensionModule>> {
+    let engine_id = tenferro_cpu::runtime_engine_id().map_err(eager_runtime_config_error)?;
+    extension_module::<tenferro_cpu::CpuBackend>(engine_id).map_err(eager_runtime_config_error)
+}
+
+fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> Error {
+    Error::runtime_state_source(
+        "tenferro_linalg::eager_extension_module",
+        ErrorPhase::Execution,
+        source,
+    )
 }
 
 /// Singular value decomposition for eager tensors.

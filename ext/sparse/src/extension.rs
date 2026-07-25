@@ -1,6 +1,8 @@
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::Hasher;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
@@ -10,17 +12,20 @@ use tenferro_ad::semantic_extension::{
     SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
     SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
 };
-use tenferro_ops::ext_op::{
-    ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp, HostReference,
-};
+use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{
-    apply, ExtensionExecutor, ExtensionRuntimeRegistryError, HostReferenceRuntime,
-};
+use tenferro_runtime::extension::apply;
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::program::{ProgramValue, SemanticProgramBuilder};
+use tenferro_runtime::{
+    CoreCapabilityKind, EngineId, ErasedExecutionContext, ErrorPhase, ExecutionContextIdentity,
+    ExtensionCacheStore, ExtensionEngine, ExtensionModule, ExtensionModuleId,
+    ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest, PrepareCapability,
+    PrepareError, PreparedOperation, PreparedOperationBinding, ProviderContractError,
+    RuntimeConfigError, SpecializationProjection, UnsupportedReason,
+};
 use tenferro_runtime::{Error as RuntimeError, Result as RuntimeResult};
-use tenferro_tensor::{DType, Error, Result, Tensor, TensorBackend};
+use tenferro_tensor::{DType, Error, Result, Tensor, TensorBackend, TensorRead};
 
 use crate::sparse::{
     coordinates_tensor, validate_traced_values, validate_value_tensor, SparseCooTracedTensor,
@@ -134,44 +139,283 @@ impl SparseMatmulPlan {
     }
 }
 
-/// Register sparse extension runtimes on a graph or eager executor.
+struct SparseReferenceEngine<B: TensorBackend + 'static> {
+    family_id: &'static str,
+    engine_id: EngineId,
+    _backend: PhantomData<fn() -> B>,
+}
+
+struct SparseReferenceModule<B: TensorBackend + 'static> {
+    family_id: &'static str,
+    module_id: ExtensionModuleId,
+    engine_id: EngineId,
+    _backend: PhantomData<fn() -> B>,
+}
+
+#[derive(Debug)]
+struct SparseReferencePlanningConfig {
+    family_id: &'static str,
+}
+
+struct SparseReferencePreparedOperation<B: TensorBackend + 'static> {
+    family_id: &'static str,
+    binding: PreparedOperationBinding,
+    specialization: SpecializationProjection,
+    op: Arc<dyn ExtensionOp>,
+    _backend: PhantomData<fn() -> B>,
+}
+
+fn sparse_reference_module_supports(family_id: &'static str, op: &dyn ExtensionOp) -> bool {
+    match family_id {
+        FAMILY_ID => op.as_any().is::<SparseMatmulOp>(),
+        #[cfg(feature = "autodiff")]
+        JVP_FAMILY_ID => op.as_any().is::<SparseMatmulJvpOp>(),
+        #[cfg(feature = "autodiff")]
+        VJP_FAMILY_ID => op.as_any().is::<SparseMatmulVjpOp>(),
+        _ => false,
+    }
+}
+
+fn unsupported_sparse_reference_payload(family_id: &'static str) -> Error {
+    Error::unsupported(
+        OP,
+        format!("family_id {family_id:?} has no sparse host-reference module payload"),
+    )
+}
+
+fn execute_sparse_reference_payload(
+    family_id: &'static str,
+    op: &dyn ExtensionOp,
+    inputs: &[&Tensor],
+) -> Result<Vec<Tensor>> {
+    match family_id {
+        FAMILY_ID => {
+            let op = op
+                .as_any()
+                .downcast_ref::<SparseMatmulOp>()
+                .ok_or_else(|| unsupported_sparse_reference_payload(family_id))?;
+            validate_primal_inputs(&op.plan, inputs)?;
+            Ok(vec![apply_sparse_matmul(&op.plan, inputs[0], inputs[1])?])
+        }
+        #[cfg(feature = "autodiff")]
+        JVP_FAMILY_ID => {
+            let op = op
+                .as_any()
+                .downcast_ref::<SparseMatmulJvpOp>()
+                .ok_or_else(|| unsupported_sparse_reference_payload(family_id))?;
+            validate_jvp_inputs(&op.plan, inputs, &op.active_inputs)?;
+            Ok(vec![execute_jvp(&op.plan, inputs, &op.active_inputs)?])
+        }
+        #[cfg(feature = "autodiff")]
+        VJP_FAMILY_ID => {
+            let op = op
+                .as_any()
+                .downcast_ref::<SparseMatmulVjpOp>()
+                .ok_or_else(|| unsupported_sparse_reference_payload(family_id))?;
+            validate_vjp_inputs(&op.plan, inputs, op.active_input)?;
+            Ok(vec![execute_vjp(&op.plan, inputs, op.active_input)?])
+        }
+        _ => Err(unsupported_sparse_reference_payload(family_id)),
+    }
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for SparseReferenceEngine<B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SparseReferenceEngine")
+            .field("family_id", &self.family_id)
+            .field("engine_id", &self.engine_id)
+            .field("backend_type", &std::any::type_name::<B>())
+            .finish()
+    }
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for SparseReferenceModule<B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SparseReferenceModule")
+            .field("family_id", &self.family_id)
+            .field("module_id", &self.module_id)
+            .field("engine_id", &self.engine_id)
+            .field("backend_type", &std::any::type_name::<B>())
+            .finish()
+    }
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for SparseReferencePreparedOperation<B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SparseReferencePreparedOperation")
+            .field("family_id", &self.family_id)
+            .field("binding", &self.binding)
+            .field("specialization", &self.specialization)
+            .field("backend_type", &std::any::type_name::<B>())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<B: TensorBackend + 'static> ExtensionEngine for SparseReferenceEngine<B> {
+    fn family_id(&self) -> &'static str {
+        self.family_id
+    }
+
+    fn engine_id(&self) -> &EngineId {
+        &self.engine_id
+    }
+
+    fn context_identity(&self) -> ExecutionContextIdentity {
+        ExecutionContextIdentity::of::<B>()
+    }
+
+    fn prepare(
+        &self,
+        request: ExtensionPrepareRequest<'_>,
+    ) -> std::result::Result<PrepareCapability, PrepareError> {
+        if request.operation().family_id() != self.family_id {
+            return Err(PrepareError::ProviderContract {
+                source: ProviderContractError::WrongOperationFamily {
+                    expected: CoreCapabilityKind::Elementwise,
+                    operation: self.family_id,
+                },
+            });
+        }
+        if !sparse_reference_module_supports(self.family_id, request.operation()) {
+            return Ok(PrepareCapability::Unsupported(
+                UnsupportedReason::Operation {
+                    operation: self.family_id,
+                },
+            ));
+        }
+        Ok(PrepareCapability::Prepared(Arc::new(
+            SparseReferencePreparedOperation::<B> {
+                family_id: self.family_id,
+                binding: request.binding().clone(),
+                specialization: request.specialization().clone(),
+                op: request.operation().clone_arc(),
+                _backend: PhantomData,
+            },
+        )))
+    }
+}
+
+impl ExtensionPlanningConfig for SparseReferencePlanningConfig {
+    fn family_id(&self) -> &'static str {
+        self.family_id
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn payload_hash(&self, state: &mut dyn Hasher) {
+        state.write(self.family_id.as_bytes());
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionPlanningConfig) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| other.family_id == self.family_id)
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+}
+
+impl<B: TensorBackend + 'static> PreparedOperation for SparseReferencePreparedOperation<B> {
+    fn binding(&self) -> &PreparedOperationBinding {
+        &self.binding
+    }
+
+    fn specialization(&self) -> &SpecializationProjection {
+        &self.specialization
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+
+    fn execute(
+        &self,
+        context: &mut ErasedExecutionContext<'_>,
+        extension_caches: &mut ExtensionCacheStore,
+        inputs: &[TensorRead<'_>],
+    ) -> RuntimeResult<Vec<Tensor>> {
+        let backend = context
+            .downcast_mut::<B>(self.binding.context_identity())
+            .map_err(|source| {
+                RuntimeError::runtime_state_source("extension", ErrorPhase::Execution, source)
+            })?;
+        let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(backend, extension_caches);
+        let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
+            inputs
+                .iter()
+                .cloned()
+                .map(|input| exec.to_contiguous_read(input))
+                .collect::<Result<Vec<_>>>()
+        })?;
+        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+        Ok(execute_sparse_reference_payload(
+            self.family_id,
+            self.op.as_ref(),
+            &input_refs,
+        )?)
+    }
+}
+
+impl<B: TensorBackend + 'static> ExtensionModule for SparseReferenceModule<B> {
+    fn module_id(&self) -> &ExtensionModuleId {
+        &self.module_id
+    }
+
+    fn configure(
+        &self,
+        registrar: &mut ExtensionModuleRegistrar<'_>,
+    ) -> std::result::Result<(), tenferro_runtime::ExtensionModuleError> {
+        registrar.register_engine(Arc::new(SparseReferenceEngine::<B> {
+            family_id: self.family_id,
+            engine_id: self.engine_id.clone(),
+            _backend: PhantomData,
+        }))?;
+        registrar.register_planning_config(
+            self.engine_id.clone(),
+            Arc::new(SparseReferencePlanningConfig {
+                family_id: self.family_id,
+            }),
+        )?;
+        Ok(())
+    }
+}
+
+fn reference_module<B: TensorBackend + 'static>(
+    family_id: &'static str,
+    engine_id: EngineId,
+) -> std::result::Result<Arc<dyn ExtensionModule>, RuntimeConfigError> {
+    Ok(Arc::new(SparseReferenceModule::<B> {
+        family_id,
+        module_id: ExtensionModuleId::new(format!("{family_id}.module"))?,
+        engine_id,
+        _backend: PhantomData,
+    }))
+}
+
+/// Build sparse extension modules for one runtime engine.
 ///
 /// # Errors
 ///
-/// Returns [`ExtensionRuntimeRegistryError::MalformedFamilyId`] when a
-/// runtime family identifier is invalid, or
-/// [`ExtensionRuntimeRegistryError::PoisonedLock`] if registry state was
-/// poisoned while registering the family.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::GraphExecutor;
-///
-/// let mut executor = GraphExecutor::new(CpuBackend::new());
-/// executor.register_extension(tenferro_ext_sparse::register_runtime).unwrap();
-/// assert!(executor
-///     .extension_executor()
-///     .registry()
-///     .contains("tenferro-ext-sparse.matmul.v1"));
-/// ```
-pub fn register_runtime<B: TensorBackend + 'static>(
-    executor: &mut ExtensionExecutor<B>,
-) -> std::result::Result<(), ExtensionRuntimeRegistryError> {
-    executor
-        .registry_mut()
-        .register(Arc::new(HostReferenceRuntime::<B>::new(FAMILY_ID)))?;
+/// Returns [`RuntimeConfigError`] when a generated module id is invalid.
+pub fn extension_modules<B: TensorBackend + 'static>(
+    engine_id: EngineId,
+) -> std::result::Result<Vec<Arc<dyn ExtensionModule>>, RuntimeConfigError> {
+    let mut modules = Vec::new();
+    modules.push(reference_module::<B>(FAMILY_ID, engine_id.clone())?);
     #[cfg(feature = "autodiff")]
     {
-        executor
-            .registry_mut()
-            .register(Arc::new(HostReferenceRuntime::<B>::new(JVP_FAMILY_ID)))?;
-        executor
-            .registry_mut()
-            .register(Arc::new(HostReferenceRuntime::<B>::new(VJP_FAMILY_ID)))?;
+        modules.push(reference_module::<B>(JVP_FAMILY_ID, engine_id.clone())?);
+        modules.push(reference_module::<B>(VJP_FAMILY_ID, engine_id)?);
     }
-    Ok(())
+    Ok(modules)
 }
 
 /// Multiply two traced sparse COO matrices with a fixed sparse pattern.
@@ -280,17 +524,6 @@ impl ExtensionOp for SparseMatmulOp {
             vec![SymDim::from(self.plan.output_nnz())],
         )])
     }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-impl HostReference for SparseMatmulOp {
-    fn execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
-        validate_primal_inputs(&self.plan, inputs)?;
-        apply_sparse_matmul(&self.plan, inputs[0], inputs[1]).map(|tensor| vec![tensor])
-    }
 }
 
 #[cfg(feature = "autodiff")]
@@ -376,18 +609,6 @@ impl ExtensionOp for SparseMatmulJvpOp {
             vec![SymDim::from(self.plan.output_nnz())],
         )])
     }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-#[cfg(feature = "autodiff")]
-impl HostReference for SparseMatmulJvpOp {
-    fn execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
-        validate_jvp_inputs(&self.plan, inputs, &self.active_inputs)?;
-        execute_jvp(&self.plan, inputs, &self.active_inputs).map(|tensor| vec![tensor])
-    }
 }
 
 #[cfg(feature = "autodiff")]
@@ -471,18 +692,6 @@ impl ExtensionOp for SparseMatmulVjpOp {
             input_dtypes[self.active_input],
             input_shapes[self.active_input].clone(),
         )])
-    }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-#[cfg(feature = "autodiff")]
-impl HostReference for SparseMatmulVjpOp {
-    fn execute(&self, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
-        validate_vjp_inputs(&self.plan, inputs, self.active_input)?;
-        execute_vjp(&self.plan, inputs, self.active_input).map(|tensor| vec![tensor])
     }
 }
 

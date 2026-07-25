@@ -19,7 +19,7 @@ use tenferro_extension_macros::define_extension_runtime;
 #[cfg(feature = "autodiff")]
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::{
-    ExtensionLoweringError, ExtensionLoweringResult, ExtensionOp, HostReference,
+    ExtensionLoweringError, ExtensionLoweringResult, ExtensionOp, ExtensionStandardLowering,
 };
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
@@ -47,17 +47,11 @@ use crate::{
 /// Standard einsum extension payload.
 ///
 /// This mirrors the current `tenferro.einsum.v1` payload shape. Runtime-owned
-/// execution goes through [`EinsumRuntime`]. The optional
-/// [`ExtensionOp::host_reference`] hook remains available for direct
-/// context-free reference execution.
+/// execution goes through [`EinsumRuntime`].
 #[derive(Clone)]
 pub(crate) struct EinsumExtensionOp {
     subscripts: EinsumSubscripts,
     plan_spec: EinsumPlanSpec,
-    /// Optional execution hint. This is intentionally excluded from
-    /// `ExtensionOp` identity: the shape-independent `plan_spec` carries
-    /// user planning policy, while this tree is a resolved cacheable hint.
-    static_tree: Option<Arc<ContractionTree>>,
     output_shape_hint: Option<Vec<SymDim>>,
 }
 
@@ -66,7 +60,6 @@ impl std::fmt::Debug for EinsumExtensionOp {
         f.debug_struct("EinsumExtensionOp")
             .field("subscripts", &self.subscripts)
             .field("plan_spec", &self.plan_spec)
-            .field("has_static_tree", &self.static_tree.is_some())
             .field("output_shape_hint", &self.output_shape_hint)
             .finish()
     }
@@ -85,19 +78,8 @@ impl EinsumExtensionOp {
         Self {
             subscripts,
             plan_spec,
-            static_tree: None,
             output_shape_hint: None,
         }
-    }
-
-    /// Create an einsum extension payload with a precomputed plan.
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) fn with_static_tree(
-        subscripts: EinsumSubscripts,
-        tree: Arc<ContractionTree>,
-    ) -> Self {
-        Self::new(subscripts).with_static_tree_hint(tree)
     }
 
     /// Create an einsum extension payload with an explicit output shape hint.
@@ -113,13 +95,6 @@ impl EinsumExtensionOp {
         op
     }
 
-    /// Attach a precomputed contraction tree as an execution hint.
-    #[must_use]
-    pub(crate) fn with_static_tree_hint(mut self, tree: Arc<ContractionTree>) -> Self {
-        self.static_tree = Some(tree);
-        self
-    }
-
     /// Return the canonical subscripts.
     #[must_use]
     pub(crate) fn subscripts(&self) -> &EinsumSubscripts {
@@ -130,12 +105,6 @@ impl EinsumExtensionOp {
     #[must_use]
     pub(crate) fn plan_spec(&self) -> &EinsumPlanSpec {
         &self.plan_spec
-    }
-
-    /// Return the precomputed contraction tree, if present.
-    #[must_use]
-    pub(crate) fn static_tree(&self) -> Option<&Arc<ContractionTree>> {
-        self.static_tree.as_ref()
     }
 }
 
@@ -263,10 +232,6 @@ impl ExtensionOp for EinsumExtensionOp {
         )])
     }
 
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-
     fn lower_to_standard_ops(
         &self,
         builder: &mut GraphBuilder<StdTensorOp>,
@@ -288,7 +253,7 @@ impl ExtensionOp for EinsumExtensionOp {
         }
 
         let Some(shapes) = concrete_sym_shape_slices(input_shapes) else {
-            return Ok(None);
+            return Ok(ExtensionStandardLowering::Unsupported);
         };
         let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
         let subs = Subscripts::from(&self.subscripts);
@@ -298,16 +263,7 @@ impl ExtensionOp for EinsumExtensionOp {
         let output = build_einsum_graph(builder, &tree, inputs, &shapes).map_err(|source| {
             ExtensionLoweringError::from_source_with_kind(source.kind(), source)
         })?;
-        Ok(Some(vec![output]))
-    }
-}
-
-impl HostReference for EinsumExtensionOp {
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let mut backend = tenferro_cpu::CpuBackend::new();
-        let subscripts = Subscripts::from(&self.subscripts);
-        crate::eager::eager_einsum_subscripts(&mut backend, inputs, &subscripts)
-            .map(|output| vec![output])
+        Ok(ExtensionStandardLowering::Lowered(vec![output]))
     }
 }
 
@@ -514,7 +470,6 @@ fn semantic_vjp_einsum_op(
 ) -> std::result::Result<EinsumExtensionOp, SemanticAdError> {
     let plan_spec =
         vjp_plan_spec_for_active(primal_op.plan_spec(), primal_op.input_count(), active_idx)?;
-    let mut op = EinsumExtensionOp::with_plan_spec(subscripts.clone(), plan_spec.clone());
     let sym_shapes: Vec<Vec<SymDim>> = input_shapes
         .iter()
         .enumerate()
@@ -533,11 +488,10 @@ fn semantic_vjp_einsum_op(
     if let Some(concrete_shapes) = concrete_sym_shapes(&sym_shapes) {
         let shape_refs: Vec<&[usize]> = concrete_shapes.iter().map(Vec::as_slice).collect();
         let raw_subscripts = Subscripts::from(&subscripts);
-        let tree = resolve_plan_spec(&plan_spec, &raw_subscripts, &shape_refs)
+        let _tree = resolve_plan_spec(&plan_spec, &raw_subscripts, &shape_refs)
             .map_err(|source| semantic_einsum_unsupported(source.to_string()))?;
-        op = op.with_static_tree_hint(Arc::new(tree));
     }
-    Ok(op)
+    Ok(EinsumExtensionOp::with_plan_spec(subscripts, plan_spec))
 }
 
 #[cfg(feature = "autodiff")]
@@ -958,7 +912,6 @@ define_extension_runtime! {
     op_type = EinsumExtensionOp,
     execute = execute_einsum_extension,
     execute_reads = execute_einsum_extension_reads,
-    register_fn = register_runtime,
 }
 
 fn execute_einsum_extension<B: TensorBackend + 'static>(
@@ -980,13 +933,9 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
         .collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
     let subs = Subscripts::from(op.subscripts());
-    let tree = if let Some(tree) = op.static_tree() {
-        Arc::clone(tree)
-    } else {
-        cached_runtime_tree(ctx, op.subscripts(), op.plan_spec(), &shapes, || {
-            resolve_plan_spec(op.plan_spec(), &subs, &shape_refs)
-        })?
-    };
+    let tree = cached_runtime_tree(ctx, op.subscripts(), op.plan_spec(), &shapes, || {
+        resolve_plan_spec(op.plan_spec(), &subs, &shape_refs)
+    })?;
 
     let output = ctx
         .backend_mut()
@@ -994,7 +943,7 @@ fn execute_einsum_extension<B: TensorBackend + 'static>(
     Ok(vec![output])
 }
 
-fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
+pub(crate) fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
     op: &EinsumExtensionOp,
     inputs: &[TensorRead<'_>],
     ctx: &mut ExtensionExecutionContext<'_, B>,
@@ -1024,13 +973,9 @@ fn execute_einsum_extension_reads<B: TensorBackend + 'static>(
     let shapes: Vec<Vec<usize>> = inputs.iter().map(|input| input.shape().to_vec()).collect();
     let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
     let subs = Subscripts::from(op.subscripts());
-    let tree = if let Some(tree) = op.static_tree() {
-        Arc::clone(tree)
-    } else {
-        cached_runtime_tree(ctx, op.subscripts(), op.plan_spec(), &shapes, || {
-            resolve_plan_spec(op.plan_spec(), &subs, &shape_refs)
-        })?
-    };
+    let tree = cached_runtime_tree(ctx, op.subscripts(), op.plan_spec(), &shapes, || {
+        resolve_plan_spec(op.plan_spec(), &subs, &shape_refs)
+    })?;
     let output = ctx
         .backend_mut()
         .with_backend_session(|exec| crate::eager::eager_einsum_exec_read(exec, inputs, &tree))?;

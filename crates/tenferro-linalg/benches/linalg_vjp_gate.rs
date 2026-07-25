@@ -42,22 +42,11 @@ fn bench_sizes() -> Vec<usize> {
 }
 
 fn ad_ctx(threads: usize) -> Arc<EagerRuntime> {
-    #[cfg(tenferro_linalg_semantic_ad_api)]
-    let ad = {
-        AdContext::builder()
-            .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
-            .unwrap()
-            .build()
-            .unwrap()
-    };
-
-    #[cfg(not(tenferro_linalg_semantic_ad_api))]
-    let ad = {
-        AdContext::builder()
-            .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
-            .build()
-            .unwrap()
-    };
+    let ad = AdContext::builder()
+        .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
+        .unwrap()
+        .build()
+        .unwrap();
 
     EagerRuntime::with_cpu_backend_and_ad_context(CpuBackend::with_threads(threads).unwrap(), &ad)
 }

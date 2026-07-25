@@ -97,10 +97,10 @@ Every public type, trait, and function **must** include minimal but sufficient u
 
 **tenferro-rs** is a general-purpose tensor computation library in Rust (`tenferro-*` crates). It provides:
 - Dense tensor types with CPU/GPU placement metadata
-- Graph-based traced execution via `TracedTensor` + `GraphExecutor`
+- Graph-based traced execution via `TracedTensor` + `GraphCompiler` + `Runtime::run_compiled`
 - Standard extension crates for operation families such as einsum, linalg, and FFT
 - Automatic differentiation (VJP/JVP/HVP) for the standard dense numeric path
-- Single execution IR (`ExecOp`) plus a pass pipeline for backend dispatch
+- Runtime-owned execution preparation and backend/provider dispatch
 
 **strided-rs** (separate workspace) is an external foundation dependency providing:
 - `strided-traits`: `ScalarBase`, `ElementOp` traits

@@ -1,52 +1,12 @@
-use std::sync::Arc;
-
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::ext_op::invoke_extension_shape_inference;
 use tenferro_runtime::extension::ExtensionOp;
-use tenferro_tensor::{
-    Buffer, BufferHandle, DType, DeviceId, DeviceKind, Error, GpuBackendKind, MemoryKind,
-    Placement, Tensor, TypedTensor,
-};
+use tenferro_tensor::{DType, Error, Tensor, TypedTensor};
 
 use super::{
     apply_eigh_gauge, apply_qr_gauge, apply_svd_gauge, canonical_svd_gauge_layout, promote_dtypes,
     EighGauge, LinalgExtensionOp, LinalgOp, QrGauge, SvdGauge, LINALG_EXTENSION_FAMILY_ID,
 };
-
-#[test]
-fn eager_linalg_rejects_cuda_tensor_when_cuda_feature_is_disabled() {
-    let tensor = Tensor::F64(
-        TypedTensor::from_buffer_col_major(
-            vec![2, 2],
-            Buffer::Backend(Arc::new(BufferHandle::<f64>::new_with_len(7, 4))),
-            Placement {
-                memory_kind: MemoryKind::Device,
-                device: Some(DeviceId {
-                    kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
-                    ordinal: 0,
-                }),
-                cpu_affinity: None,
-            },
-        )
-        .unwrap(),
-    );
-    let op = LinalgExtensionOp::new(LinalgOp::Cholesky);
-
-    let err = op
-        .host_reference()
-        .expect("linalg host reference")
-        .execute(&[&tensor])
-        .unwrap_err();
-
-    match err {
-        Error::Unsupported { op, message } => {
-            assert_eq!(op, "linalg_host_reference");
-            assert!(message.contains("cuda feature"));
-            assert!(message.contains("download"));
-        }
-        other => panic!("expected Unsupported, got {other:?}"),
-    }
-}
 
 #[test]
 fn infer_output_meta_returns_error_on_input_count_mismatch() {

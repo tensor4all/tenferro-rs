@@ -4,7 +4,9 @@ use tenferro_cpu::CpuBackend;
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TraceContext, TypedTensor};
+use tenferro_runtime::{GraphCompiler, Tensor, TraceContext, TypedTensor};
+
+use super::support;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -48,23 +50,25 @@ fn cpu_backend_pool_reuses_nary_einsum_intermediates() {
     let c = f64_tensor(vec![2, 2], vec![9.0, 10.0, 11.0, 12.0]);
 
     let mut compiler = GraphCompiler::new();
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    engine
-        .register_extension(tenferro_einsum::register_runtime)
-        .unwrap();
+    let backend = CpuBackend::new();
+    let runtime = support::cpu_runtime_with_einsum(&backend).unwrap();
 
     let program1 = compile_nary(&mut compiler, &a, &b, &c);
 
-    let result1 = engine.run(&program1).unwrap();
+    let mut outputs1 = runtime.run_compiled(&program1, &[]).unwrap();
+    assert_eq!(outputs1.len(), 1);
+    let result1 = outputs1.remove(0);
     assert_eq!(get_f64_data(&result1), &[517.0, 766.0, 625.0, 926.0]);
 
-    let pooled_after_first = engine.backend().buffer_pool_len().unwrap();
+    let pooled_after_first = backend.buffer_pool_len().unwrap();
     assert!(pooled_after_first > 0);
 
     let program2 = compile_nary(&mut compiler, &a, &b, &c);
 
-    let result2 = engine.run(&program2).unwrap();
+    let mut outputs2 = runtime.run_compiled(&program2, &[]).unwrap();
+    assert_eq!(outputs2.len(), 1);
+    let result2 = outputs2.remove(0);
     assert_eq!(get_f64_data(&result2), &[517.0, 766.0, 625.0, 926.0]);
-    let pooled_after_second = engine.backend().buffer_pool_len().unwrap();
+    let pooled_after_second = backend.buffer_pool_len().unwrap();
     assert!(pooled_after_second < pooled_after_first * 2);
 }

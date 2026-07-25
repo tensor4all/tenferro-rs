@@ -3,8 +3,17 @@ use std::sync::Arc;
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{CoreSemanticOp, ProgramBuildError, ProgramInputSpec};
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TraceContext};
+use tenferro_runtime::{GraphCompiler, Runtime, TraceContext};
 use tenferro_tensor::{DType, Tensor};
+
+fn cpu_runtime() -> Runtime {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .unwrap();
+    builder.build().unwrap()
+}
 
 #[test]
 fn trace_values_are_context_owned_and_opaque() {
@@ -66,11 +75,14 @@ fn traced_graph_compiles_and_executes_with_ordered_inputs() {
     let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
     let lhs = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&lhs, &rhs])
+    let mut result = cpu_runtime()
+        .run_compiled(&compiled, &[&lhs, &rhs])
         .unwrap();
 
     assert_eq!(compiled.program().inputs().len(), 2);
     assert_eq!(compiled.program().outputs().len(), 1);
-    assert_eq!(result.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
+    assert_eq!(
+        result.pop().unwrap().as_slice::<f64>().unwrap(),
+        &[4.0, 6.0]
+    );
 }

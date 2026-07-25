@@ -40,7 +40,7 @@ pub mod sym_dim;
 pub use ad::context::{
     ShapeGuard, ShapeGuardContext, ShapeGuardError, ShapeGuardFailure, ShapeGuardResult, TensorMeta,
 };
-pub use ext_op::{ExtensionOp, HostReference};
+pub use ext_op::ExtensionOp;
 pub use shape_constraint::{ExtensionShapeContext, ExtensionShapeError, ShapeRelation};
 pub use shape_extent::ShapeExtent;
 pub use sym_dim::{SymDim, SymDimConversionError};

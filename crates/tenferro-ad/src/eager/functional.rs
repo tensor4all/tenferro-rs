@@ -14,9 +14,8 @@ use tidu::{
 };
 
 use crate::ad_rule_error::{ad_rule_error_with_context, DeferredErrors};
-use crate::eager_exec::exec_op_on_tensors_with_extension_executor;
+use crate::eager_exec::exec_op_on_tensors_with_runtime;
 use crate::error::{Error, Result};
-use crate::extension_runtime::ExtensionExecutor;
 
 use super::backward::{
     eager_forward_input_metadata, eager_forward_value, live_graph_values, missing_tangent_base_key,
@@ -38,11 +37,9 @@ pub(super) fn functional_vjp_optional(
 ) -> Result<Option<EagerTensor>> {
     let seed = cotangent.materialized_arc()?;
     let mut backend = ctx.lock_backend()?;
-    let mut extension_executor = ctx.lock_extension_executor()?;
     let mut callbacks = RecordingCallbacks::new(
         Arc::clone(ctx),
         &mut backend,
-        Some(&mut *extension_executor),
         output.metadata_scopes.clone(),
     );
     callbacks.remember_tensor(output)?;
@@ -87,11 +84,9 @@ pub(super) fn functional_jvp(
 ) -> Result<Option<EagerTensor>> {
     let tangent_value = tangent.materialized_arc()?;
     let mut backend = ctx.lock_backend()?;
-    let mut extension_executor = ctx.lock_extension_executor()?;
     let mut callbacks = RecordingCallbacks::new(
         Arc::clone(ctx),
         &mut backend,
-        Some(&mut *extension_executor),
         output.metadata_scopes.clone(),
     );
     callbacks.remember_tensor(output)?;
@@ -132,7 +127,6 @@ pub(super) fn functional_jvp(
 struct RecordingCallbacks<'a> {
     ctx: Arc<EagerRuntime>,
     backend: &'a mut super::EagerBackend,
-    extension_executor: Option<&'a mut ExtensionExecutor<super::EagerBackend>>,
     metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     tensors_by_ptr: HashMap<usize, EagerTensor>,
     errors: DeferredErrors,
@@ -142,13 +136,11 @@ impl<'a> RecordingCallbacks<'a> {
     fn new(
         ctx: Arc<EagerRuntime>,
         backend: &'a mut super::EagerBackend,
-        extension_executor: Option<&'a mut ExtensionExecutor<super::EagerBackend>>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Self {
         Self {
             ctx,
             backend,
-            extension_executor,
             metadata_scopes,
             tensors_by_ptr: HashMap::new(),
             errors: DeferredErrors::default(),
@@ -275,12 +267,8 @@ impl<'a> RecordingCallbacks<'a> {
         let rhs = self
             .tensor_for_arc(b)
             .map_err(|err| self.runtime_error(err))?;
-        let mut builder = RecordingPrimitiveBuilder::new(
-            Arc::clone(&self.ctx),
-            self.backend,
-            self.extension_executor.as_deref_mut(),
-            HashMap::new(),
-        );
+        let mut builder =
+            RecordingPrimitiveBuilder::new(Arc::clone(&self.ctx), self.backend, HashMap::new());
         let outputs_result = builder.execute_operation(&StdTensorOp::Add, vec![lhs, rhs]);
         let builder_typed_error = builder.take_typed_error();
         let builder_error = builder.take_error();
@@ -357,11 +345,11 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
             }
             let resolved_inputs: Vec<&Tensor> =
                 resolved_values.iter().map(|value| value.as_ref()).collect();
-            let outputs = match exec_op_on_tensors_with_extension_executor(
+            let outputs = match exec_op_on_tensors_with_runtime(
                 &op_node.operation,
                 &resolved_inputs,
                 self.backend,
-                self.extension_executor.as_deref_mut(),
+                Some(&self.ctx.runtime),
             ) {
                 Ok(outputs) => outputs,
                 Err(err) => {
@@ -404,7 +392,7 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
             linear,
             &mut external_data,
             self.backend,
-            self.extension_executor.as_deref_mut(),
+            Some(self.ctx.as_ref()),
         )
         .map_err(|err| self.record_failure(err))?;
         ctx.refresh_global_metadata();
@@ -423,12 +411,8 @@ impl BackwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
                     .transpose()
             })
             .collect::<ADRuleResult<Vec<_>>>()?;
-        let mut builder = RecordingPrimitiveBuilder::new(
-            Arc::clone(&self.ctx),
-            self.backend,
-            self.extension_executor.as_deref_mut(),
-            external_tensors,
-        );
+        let mut builder =
+            RecordingPrimitiveBuilder::new(Arc::clone(&self.ctx), self.backend, external_tensors);
         let cotangent_seed_ids = seed_tensors
             .into_iter()
             .map(|maybe_tensor| maybe_tensor.map(|tensor| builder.push_tensor(tensor)))
@@ -530,12 +514,8 @@ impl ForwardExecutor<StdTensorOp> for RecordingCallbacks<'_> {
             )
             .collect::<ADRuleResult<Vec<_>>>()?;
         let external_tensors = self.external_tensors(&external_data)?;
-        let mut builder = RecordingPrimitiveBuilder::new(
-            Arc::clone(&self.ctx),
-            self.backend,
-            self.extension_executor.as_deref_mut(),
-            external_tensors,
-        );
+        let mut builder =
+            RecordingPrimitiveBuilder::new(Arc::clone(&self.ctx), self.backend, external_tensors);
         for ((_, expected_id), tangent) in linear.tangent_inputs().iter().zip(tangent_tensors) {
             let id = builder.push_tensor(tangent);
             if id != *expected_id {
@@ -632,7 +612,6 @@ impl RecordingCallbacks<'_> {
 struct RecordingPrimitiveBuilder<'a> {
     ctx: Arc<EagerRuntime>,
     backend: &'a mut super::EagerBackend,
-    extension_executor: Option<&'a mut ExtensionExecutor<super::EagerBackend>>,
     external_data: HashMap<ValueKey<StdTensorOp>, EagerTensor>,
     results: Vec<EagerTensor>,
     errors: DeferredErrors,
@@ -642,13 +621,11 @@ impl<'a> RecordingPrimitiveBuilder<'a> {
     fn new(
         ctx: Arc<EagerRuntime>,
         backend: &'a mut super::EagerBackend,
-        extension_executor: Option<&'a mut ExtensionExecutor<super::EagerBackend>>,
         external_data: HashMap<ValueKey<StdTensorOp>, EagerTensor>,
     ) -> Self {
         Self {
             ctx,
             backend,
-            extension_executor,
             external_data,
             results: Vec::new(),
             errors: DeferredErrors::default(),
@@ -742,11 +719,11 @@ impl<'a> RecordingPrimitiveBuilder<'a> {
             })
             .collect::<ADRuleResult<Vec<_>>>()?;
         let input_refs: Vec<_> = input_values.iter().map(|tensor| tensor.as_ref()).collect();
-        let outputs = exec_op_on_tensors_with_extension_executor(
+        let outputs = exec_op_on_tensors_with_runtime(
             operation,
             &input_refs,
             self.backend,
-            self.extension_executor.as_deref_mut(),
+            Some(&self.ctx.runtime),
         )
         .map_err(|err| self.runtime_error(err))?;
         let output_arcs: Vec<_> = outputs.into_iter().map(Arc::new).collect();
@@ -888,13 +865,7 @@ mod tests {
     fn recording_callbacks_keep_typed_failures_and_cache_materialized_values() {
         let ctx = EagerRuntime::with_cpu_backend(tenferro_cpu::CpuBackend::new());
         let mut backend = ctx.lock_backend().unwrap();
-        let mut extension_executor = ctx.lock_extension_executor().unwrap();
-        let mut callbacks = RecordingCallbacks::new(
-            Arc::clone(&ctx),
-            &mut backend,
-            Some(&mut *extension_executor),
-            Vec::new(),
-        );
+        let mut callbacks = RecordingCallbacks::new(Arc::clone(&ctx), &mut backend, Vec::new());
 
         let rule_error = ADRuleError::invalid_input(
             "tenferro-ad.tests",

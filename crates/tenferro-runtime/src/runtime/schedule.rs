@@ -12,6 +12,7 @@ use std::error::Error as StdError;
 use std::fmt;
 
 use crate::error::ErrorPhase;
+#[cfg(test)]
 use crate::exec::ExecProgram;
 use crate::Error;
 
@@ -253,6 +254,7 @@ pub(crate) struct ScheduledGraph {
 }
 
 impl ScheduledGraph {
+    #[cfg(test)]
     pub(crate) fn from_exec_program(program: &ExecProgram) -> Self {
         let nodes = program
             .instructions

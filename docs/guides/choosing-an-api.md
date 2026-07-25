@@ -22,7 +22,7 @@ Quick reference:
 | No autodiff, scalar type known at compile time | `TypedTensor<T, R>` |
 | No autodiff, dtype selected at runtime | `Tensor` |
 | Immediate forward execution in one runtime, optionally `backward()` or functional `grad`/`vjp`/`jvp` | `EagerTensor` + `EagerRuntime` |
-| `grad`, `vjp`, `jvp`, HVP via composition, graph reuse | `TracedTensor` + `GraphCompiler` + `GraphExecutor<B>` |
+| `grad`, `vjp`, `jvp`, HVP via composition, graph reuse | `TracedTensor` + `GraphCompiler` + `Runtime::run_compiled` |
 
 ## Tensor Types
 
@@ -89,8 +89,8 @@ operations.
 | Need | Without autodiff | Eager path | Traced path |
 | --- | --- | --- | --- |
 | Everyday tensor ops | `TensorOpsExt` / `TypedTensorOpsExt` backend-explicit methods | `EagerTensor` methods / associated functions | `TracedTensor` methods / associated functions |
-| Einsum | `[&a, &b].einsum(...)` via `TensorEinsumExt` / `TypedTensorEinsumExt`; `TensorReadEinsumExt` / `TypedTensorReadEinsumExt` for views; `ConcreteEinsumPlan` for repeated fixed metadata | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus `register_runtime` |
-| FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | `x.fft(...)` via `EagerTensorFftExt` with `autodiff` | `x.fft(...)` via `TracedTensorFftExt` plus `register_runtime` |
+| Einsum | `[&a, &b].einsum(...)` via `TensorEinsumExt` / `TypedTensorEinsumExt`; `TensorReadEinsumExt` / `TypedTensorReadEinsumExt` for views; `ConcreteEinsumPlan` for repeated fixed metadata | `[&a, &b].einsum(...)` via `EagerEinsumExt` | `trace.einsum(...)` via `TraceContextEinsumExt` plus `extension_module` |
+| FFT | `x.fft(...)` via `TensorFftExt`; `read.fft_read(...)` via `TensorReadFftExt` | `x.fft(...)` via `EagerTensorFftExt` with `autodiff` | `x.fft(...)` via `TracedTensorFftExt` plus `extension_module` |
 | Tensordot sugar | Use `matmul` or `dot_general` directly | `a.tensordot(&b, axes)` via `EagerTensorEinsumExt` | `a.tensordot(&b, axes)` via `TracedTensorEinsumExt` |
 | Linear algebra | `tenferro_linalg::LinalgBackend` methods on a backend | `EagerTensorLinalgExt` methods with `autodiff` | `TracedTensorLinalgExt` methods |
 | Automatic differentiation | Not applicable | `backward()` plus `EagerRuntime` functional `grad`, `vjp`, `jvp`, HVP via composition | `grad`, `vjp`, `jvp`, HVP via composition |

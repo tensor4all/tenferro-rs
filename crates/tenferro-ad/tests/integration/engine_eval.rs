@@ -1,5 +1,7 @@
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{DType, GraphCompiler, Tensor, TracedTensor, TypedTensor};
+
+use crate::support::{run_compiled_one, runtime_from_cpu_backend};
 
 #[test]
 fn graph_execution_with_borrowed_inputs_preserves_caller_tensors() {
@@ -16,9 +18,8 @@ fn graph_execution_with_borrowed_inputs_preserves_caller_tensors() {
     let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
     let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![3.0]).unwrap());
 
-    let mut engine = GraphExecutor::new(CpuBackend::with_threads(1).unwrap());
-    let output = engine
-        .run_with_inputs(&program, &[&lhs, &rhs])
+    let runtime = runtime_from_cpu_backend(&CpuBackend::with_threads(1).unwrap());
+    let output = run_compiled_one(&runtime, &program, &[&lhs, &rhs])
         .expect("borrowed graph execution should succeed");
 
     assert_eq!(output.as_slice::<f64>().unwrap(), &[5.0]);

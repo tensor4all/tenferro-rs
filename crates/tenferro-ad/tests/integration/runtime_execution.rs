@@ -3,41 +3,42 @@ use std::sync::Arc;
 
 use computegraph::graph::GraphBuilder;
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::CpuBackend;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::error::Error;
 use tenferro_runtime::{
     ad_support::{tensor_from_parts, ConstraintScopeTransfer, TracedTensorParts},
-    DType, GraphCompiler, GraphExecutor, SymDim, Tensor, TracedTensor,
+    DType, GraphCompiler, SymDim, Tensor, TracedTensor,
 };
 use tidu::ADKey;
 
+use crate::support::{cpu_runtime, run_compiled_one};
+
 #[test]
-fn graph_executor_runs_compiled_single_output_program() {
+fn runtime_runs_compiled_single_output_program() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let executor = cpu_runtime();
 
-    let out = executor.run(&program).unwrap();
+    let out = run_compiled_one(&executor, &program, &[]).unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 }
 
 #[test]
-fn graph_executor_runs_compiled_multi_output_program() {
+fn runtime_runs_compiled_multi_output_program() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let sum = (&x + &x).unwrap();
     let product = (&x * &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&sum, &product]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let executor = cpu_runtime();
 
-    let outputs = executor.run_many(&program).unwrap();
+    let outputs = executor.run_compiled(&program, &[]).unwrap();
 
     assert_eq!(outputs.len(), 2);
     assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[2.0, 4.0]);
@@ -45,16 +46,16 @@ fn graph_executor_runs_compiled_multi_output_program() {
 }
 
 #[test]
-fn checkpoint_uses_explicit_compiler_and_executor() {
+fn checkpoint_uses_explicit_compiler_and_runtime() {
     let x = TracedTensor::from_vec_col_major(vec![], vec![3.0_f64]).unwrap();
     let mut y = (&x * &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    y.checkpoint(&mut compiler, &mut executor).unwrap();
+    let executor = cpu_runtime();
+    y.checkpoint(&mut compiler, &executor).unwrap();
 
     let program = compiler.compile(&y).unwrap();
-    let out = executor.run(&program).unwrap();
+    let out = run_compiled_one(&executor, &program, &[]).unwrap();
     assert_eq!(out.as_slice::<f64>().unwrap(), &[9.0]);
 }
 
@@ -64,35 +65,35 @@ fn checkpoint_reuses_existing_cached_data_without_recompiling() {
     let mut y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    y.checkpoint(&mut compiler, &mut executor).unwrap();
+    let executor = cpu_runtime();
+    y.checkpoint(&mut compiler, &executor).unwrap();
 
-    y.checkpoint(&mut compiler, &mut executor).unwrap();
+    y.checkpoint(&mut compiler, &executor).unwrap();
 
     let program = compiler.compile(&y).unwrap();
-    let out = executor.run(&program).unwrap();
+    let out = run_compiled_one(&executor, &program, &[]).unwrap();
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 }
 
 #[test]
-fn checkpoint_gradient_runs_through_graph_executor() {
+fn checkpoint_gradient_runs_through_runtime() {
     let x = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     let mut y = (&x * &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    y.checkpoint(&mut compiler, &mut executor).unwrap();
+    let executor = cpu_runtime();
+    y.checkpoint(&mut compiler, &executor).unwrap();
 
     let z = (&y * &y).unwrap();
     let grad = z.grad(&x).unwrap();
     let program = compiler.compile(&grad).unwrap();
-    let out = executor.run(&program).unwrap();
+    let out = run_compiled_one(&executor, &program, &[]).unwrap();
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[32.0]);
 }
 
 #[test]
-fn graph_executor_validates_runtime_bindings() {
+fn runtime_validates_runtime_bindings() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
 
@@ -100,21 +101,19 @@ fn graph_executor_validates_runtime_bindings() {
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[3])])
         .unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let executor = cpu_runtime();
 
     let ok = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
-    let out = executor.run_with_inputs(&program, &[&ok]).unwrap();
+    let out = run_compiled_one(&executor, &program, &[&ok]).unwrap();
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0, 6.0]);
 
     let wrong_shape = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let err = executor
-        .run_with_inputs(&program, &[&wrong_shape])
-        .unwrap_err();
+    let err = run_compiled_one(&executor, &program, &[&wrong_shape]).unwrap_err();
     assert!(format!("{err}").contains("shape"));
 }
 
 #[test]
-fn graph_executor_rejects_invalid_ordered_inputs() {
+fn runtime_rejects_invalid_ordered_inputs() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
 
@@ -122,12 +121,10 @@ fn graph_executor_rejects_invalid_ordered_inputs() {
     let program = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
         .unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let executor = cpu_runtime();
 
     let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let err = executor
-        .run_with_inputs(&program, &[&bound, &bound])
-        .unwrap_err();
+    let err = run_compiled_one(&executor, &program, &[&bound, &bound]).unwrap_err();
     assert!(
         matches!(
             err,
@@ -140,9 +137,7 @@ fn graph_executor_rejects_invalid_ordered_inputs() {
     );
 
     let wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-    let err = executor
-        .run_with_inputs(&program, &[&wrong_dtype])
-        .unwrap_err();
+    let err = run_compiled_one(&executor, &program, &[&wrong_dtype]).unwrap_err();
     assert!(
         matches!(
             err,
@@ -154,7 +149,7 @@ fn graph_executor_rejects_invalid_ordered_inputs() {
         "got {err:?}"
     );
 
-    let err = executor.run_with_inputs(&program, &[]).unwrap_err();
+    let err = run_compiled_one(&executor, &program, &[]).unwrap_err();
     assert!(
         matches!(err, Error::UnboundPlaceholder { .. }),
         "got {err:?}"
@@ -162,33 +157,37 @@ fn graph_executor_rejects_invalid_ordered_inputs() {
 }
 
 #[test]
-fn graph_executor_cache_stats_are_separate_from_compiler_stats() {
+fn runtime_cache_stats_are_separate_from_compiler_stats() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    let _ = executor.run(&program).unwrap();
+    let executor = cpu_runtime();
+    let _ = run_compiled_one(&executor, &program, &[]).unwrap();
 
-    assert!(compiler.cache_stats().compile.entries > 0);
-    assert_eq!(executor.cache_stats().extensions.entries, 0);
+    assert_eq!(compiler.cache_stats().entries, 0);
+    assert_eq!(executor.cache_stats().unwrap().extensions.entries, 0);
+    assert!(
+        executor.cache_stats().unwrap().prepared_plans.entries > 0,
+        "runtime execution should populate the prepared-plan cache"
+    );
 }
 
 #[test]
-fn graph_executor_runtime_cache_controls_are_available() {
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+fn runtime_cache_controls_are_available() {
+    let executor = cpu_runtime();
 
-    let stats = executor.cache_stats();
+    let stats = executor.cache_stats().unwrap();
     assert_eq!(stats.extensions.entries, 0);
-    assert_eq!(stats.backend.entries, 0);
+    assert_eq!(stats.engines.entries, 0);
 
-    executor.clear_backend_cache();
-    assert_eq!(executor.cache_stats().backend.entries, 0);
+    executor.clear_caches().unwrap();
 
-    executor.clear_caches();
-    assert_eq!(executor.cache_stats().extensions.entries, 0);
-    assert_eq!(executor.cache_stats().backend.entries, 0);
+    let stats = executor.cache_stats().unwrap();
+    assert_eq!(stats.extensions.entries, 0);
+    assert_eq!(stats.engines.entries, 0);
+    assert_eq!(stats.prepared_plans.entries, 0);
 }
 
 #[test]

@@ -54,6 +54,46 @@ impl PreparedCacheKey for TestKey {
 }
 
 #[derive(Debug)]
+struct CloneCountingKey {
+    value: u64,
+    clones: Arc<AtomicUsize>,
+}
+
+impl Clone for CloneCountingKey {
+    fn clone(&self) -> Self {
+        self.clones.fetch_add(1, Ordering::SeqCst);
+        Self {
+            value: self.value,
+            clones: Arc::clone(&self.clones),
+        }
+    }
+}
+
+impl PreparedCacheKey for CloneCountingKey {
+    type Shared = TestShared;
+
+    fn compact_digest(&self) -> u128 {
+        0x1451
+    }
+
+    fn exact_eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+
+    fn retained_bytes(&self) -> Option<usize> {
+        Some(0)
+    }
+
+    fn summary(&self) -> PreparationKeySummary {
+        PreparationKeySummary::for_test(self.value)
+    }
+
+    fn shared_retention(&self) -> Option<SharedRetention<Self::Shared>> {
+        None
+    }
+}
+
+#[derive(Debug)]
 struct TestValue {
     bytes: usize,
     sentinel: Option<Arc<()>>,
@@ -192,6 +232,71 @@ fn assert_capacity_error(error: Arc<PrepareError>, in_flight: usize, queued: usi
             queued_distinct_keys: actual_queued,
         } if (*actual_in_flight, *actual_queued) == (in_flight, queued)
     ));
+}
+
+#[test]
+fn retained_hit_path_does_not_clone_candidate_keys() {
+    let cache = PreparedPlanCache::<CloneCountingKey, TestValue>::new(limits(8, 4096, 1, 1));
+    let clones = Arc::new(AtomicUsize::new(0));
+    let calls = AtomicUsize::new(0);
+
+    let first = cache
+        .get_or_prepare(
+            CloneCountingKey {
+                value: 7,
+                clones: Arc::clone(&clones),
+            },
+            CacheInFlightBehavior::Wait,
+            0,
+            || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                CacheProduced::Ready {
+                    value: TestValue::new(16),
+                    shared: None,
+                }
+            },
+        )
+        .unwrap();
+    assert!(matches!(first, CacheLookup::Ready(_)));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    clones.store(0, Ordering::SeqCst);
+    let second = cache
+        .get_or_prepare(
+            CloneCountingKey {
+                value: 7,
+                clones: Arc::clone(&clones),
+            },
+            CacheInFlightBehavior::Wait,
+            0,
+            || panic!("retained hit must not call producer"),
+        )
+        .unwrap();
+
+    assert!(matches!(second, CacheLookup::Ready(_)));
+    assert_eq!(
+        clones.load(Ordering::SeqCst),
+        0,
+        "retained cache hits must not clone stored candidate keys"
+    );
+}
+
+#[test]
+fn probe_path_does_not_collect_arc_cloned_candidate_keys() {
+    let source = include_str!("../cache.rs");
+    let probe_start = source
+        .find("    fn probe(")
+        .expect("prepared cache probe should exist");
+    let handle_entry_start = source[probe_start..]
+        .find("    fn handle_entry(")
+        .expect("handle_entry should follow probe")
+        + probe_start;
+    let probe_source = &source[probe_start..handle_entry_start];
+
+    assert!(
+        !probe_source.contains("ProbeCandidate"),
+        "probe must not build an Arc-cloned candidate list on the cache hit path"
+    );
 }
 
 #[test]

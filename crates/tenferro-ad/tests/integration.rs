@@ -45,8 +45,6 @@ mod gpu_ad_tests;
 mod gpu_f32_fusion;
 #[path = "integration/graph_compile.rs"]
 mod graph_compile;
-#[path = "integration/graph_executor.rs"]
-mod graph_executor;
 #[path = "integration/hvp.rs"]
 mod hvp;
 #[path = "integration/iterative_ad.rs"]
@@ -59,6 +57,8 @@ mod numpy_api;
 mod placement_bound_eager;
 #[path = "integration/primitive_ops.rs"]
 mod primitive_ops;
+#[path = "integration/runtime_execution.rs"]
+mod runtime_execution;
 #[path = "integration/runtime_snapshot_bridge.rs"]
 mod runtime_snapshot_bridge;
 #[path = "integration/semantic_extension.rs"]

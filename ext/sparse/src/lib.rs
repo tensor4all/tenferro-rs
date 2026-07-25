@@ -6,7 +6,7 @@
 mod extension;
 mod sparse;
 
-pub use extension::{register_runtime, sparse_matmul};
 #[cfg(feature = "autodiff")]
 pub use extension::sparse_semantic_ad_rules;
+pub use extension::{extension_modules, sparse_matmul};
 pub use sparse::{sparse_matmul_eager, SparseCooTensor, SparseCooTracedTensor};

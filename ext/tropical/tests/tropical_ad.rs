@@ -3,18 +3,33 @@
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
 use tenferro_ext_tropical::traced::tropical_dot_general_fused;
-use tenferro_ext_tropical::tropical_semantic_ad_rules;
 use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
-use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_ext_tropical::{extension_modules, tropical_semantic_ad_rules};
+use tenferro_runtime::{Error, GraphCompiler, Runtime, Tensor, TracedTensor};
+
+fn cpu_runtime_with_tropical() -> Runtime {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .unwrap();
+    for module in
+        extension_modules::<CpuBackend>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap()
+    {
+        builder.install_extension_module(module).unwrap();
+    }
+    builder.build().unwrap()
+}
 
 fn run_traced(output: &TracedTensor) -> Tensor {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(output).expect("compile traced graph");
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_ext_tropical::register_runtime)
-        .expect("register tropical runtime");
-    executor.run(&program).expect("execute traced graph")
+    let runtime = cpu_runtime_with_tropical();
+    let mut outputs = runtime
+        .run_compiled(&program, &[])
+        .expect("execute traced graph");
+    assert_eq!(outputs.len(), 1);
+    outputs.remove(0)
 }
 
 fn tropical_ad() -> AdContext {

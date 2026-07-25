@@ -123,7 +123,7 @@ impl ExtensionOp for LoweringOp {
         _input_dtypes: &[DType],
         _input_shapes: &[&[SymDim]],
     ) -> ExtensionLoweringResult {
-        Ok(Some(vec![inputs[0].clone()]))
+        Ok(ExtensionStandardLowering::Lowered(vec![inputs[0].clone()]))
     }
 }
 
@@ -253,7 +253,7 @@ fn extension_payload_does_not_affect_tensor_input_arity() {
 }
 
 #[test]
-fn typed_lowering_reports_default_unsupported_without_error() {
+fn lower_to_standard_ops_reports_default_unsupported_without_error() {
     let op = PayloadOp {
         axis: 0,
         mode: WindowMode::Valid,
@@ -262,19 +262,19 @@ fn typed_lowering_reports_default_unsupported_without_error() {
     let (mut builder, input, dtypes, shape) = lowering_fixture();
 
     let lowered = op
-        .lower_to_standard_ops_typed(&mut builder, &[input], &dtypes, &[shape.as_slice()])
+        .lower_to_standard_ops(&mut builder, &[input], &dtypes, &[shape.as_slice()])
         .unwrap();
 
     assert_eq!(lowered, ExtensionStandardLowering::Unsupported);
 }
 
 #[test]
-fn typed_lowering_wraps_standard_outputs() {
+fn lower_to_standard_ops_returns_standard_outputs() {
     let op = LoweringOp;
     let (mut builder, input, dtypes, shape) = lowering_fixture();
 
     let lowered = op
-        .lower_to_standard_ops_typed(
+        .lower_to_standard_ops(
             &mut builder,
             std::slice::from_ref(&input),
             &dtypes,
@@ -286,15 +286,45 @@ fn typed_lowering_wraps_standard_outputs() {
 }
 
 #[test]
-fn typed_lowering_preserves_lowering_error_kind() {
+fn lower_to_standard_ops_preserves_lowering_error_kind() {
     let op = FailingLoweringOp;
     let (mut builder, input, dtypes, shape) = lowering_fixture();
 
     let error = op
-        .lower_to_standard_ops_typed(&mut builder, &[input], &dtypes, &[shape.as_slice()])
+        .lower_to_standard_ops(&mut builder, &[input], &dtypes, &[shape.as_slice()])
         .unwrap_err();
 
     assert_eq!(error.kind(), ErrorKind::Unsupported);
+}
+
+#[test]
+fn extension_standard_lowering_has_no_legacy_option_shim() {
+    let source = include_str!("../ext_op.rs");
+    assert!(
+        !source.contains("from_legacy"),
+        "standard lowering must expose an explicit Unsupported outcome, not a legacy Option shim"
+    );
+    assert!(
+        !source.contains("lower_to_standard_ops_typed"),
+        "lower_to_standard_ops is the canonical typed lowering hook"
+    );
+    assert!(
+        !source.contains("Option<Vec<ValueRef<StdTensorOp>>>"),
+        "standard lowering must not encode unsupported as Ok(None)"
+    );
+}
+
+#[test]
+fn extension_op_contract_has_no_host_reference_execution_hook() {
+    let source = include_str!("../ext_op.rs");
+    assert!(
+        !source.contains("pub trait HostReference"),
+        "host-reference execution must be owned by ExtensionModule implementations, not ExtensionOp"
+    );
+    assert!(
+        !source.contains("fn host_reference("),
+        "ExtensionOp must not expose an execution fallback hook"
+    );
 }
 
 #[test]

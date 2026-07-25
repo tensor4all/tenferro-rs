@@ -212,6 +212,10 @@ impl FrozenExtensionSlots {
         self.engines.len()
     }
 
+    pub(super) fn has_family(&self, family_id: ExtensionFamilyId) -> bool {
+        self.engines.iter().any(|slot| slot.family_id == family_id)
+    }
+
     pub(super) fn to_candidate_modules(
         &self,
     ) -> BTreeMap<ExtensionModuleId, CandidateModuleRecord> {

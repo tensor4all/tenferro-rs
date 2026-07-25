@@ -1,9 +1,10 @@
-use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TraceContext};
+use tenferro_runtime::{GraphCompiler, TraceContext};
 use tenferro_tensor::{DType, Tensor};
+
+use super::support;
 
 #[test]
 fn ordered_inputs_enforce_symbolic_contracted_dimension_equality() {
@@ -43,14 +44,8 @@ fn ordered_inputs_enforce_symbolic_contracted_dimension_equality() {
     let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
     let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
     let bad_rhs = Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_einsum::register_runtime)
-        .unwrap();
 
-    assert!(executor
-        .run_with_inputs(&compiled, &[&lhs, &bad_rhs])
-        .is_err());
+    assert!(support::run_one(&compiled, &[&lhs, &bad_rhs]).is_err());
 }
 
 #[test]

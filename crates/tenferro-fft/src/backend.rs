@@ -93,20 +93,16 @@ impl<'a> FftExecutionCache<'a> {
 /// accepts_fft_backend(&mut backend);
 /// ```
 ///
-/// A generic tensor backend without this explicit capability cannot register
-/// the FFT runtime:
+/// A generic tensor backend without this explicit capability cannot build
+/// the FFT extension module:
 ///
 /// ```compile_fail
-/// use tenferro_runtime::ExtensionExecutor;
 /// use tenferro_tensor::{Tensor, TensorBackend};
 /// use tenferro_fft::{FftNorm, TensorFftExt};
 ///
-/// fn register_without_fft_capability<B: TensorBackend + 'static>(
-///     executor: &mut ExtensionExecutor<B>,
-///     backend: &mut B,
-///     input: &Tensor,
-/// ) {
-///     tenferro_fft::register_runtime(executor).unwrap();
+/// fn use_without_fft_capability<B: TensorBackend + 'static>(backend: &mut B, input: &Tensor) {
+///     let _module =
+///         tenferro_fft::extension_module::<B>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap();
 ///     let _ = input.fft(None, -1, FftNorm::Backward, backend);
 /// }
 /// ```

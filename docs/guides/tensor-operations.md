@@ -242,7 +242,7 @@ Use `TracedTensor` when operations should build a graph first and execute later.
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
 let b = TracedTensor::from_vec_col_major(vec![3], vec![4.0_f64, 5.0, 6.0]).unwrap();
@@ -251,8 +251,12 @@ let product = (&a * &b).unwrap();
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile_many(&[&sum, &product]).unwrap();
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let outputs = executor.run_many(&program).unwrap();
+let mut builder = Runtime::builder();
+builder
+    .register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new()).unwrap())
+    .unwrap();
+let runtime = builder.build().unwrap();
+let outputs = runtime.run_compiled(&program, &[]).unwrap();
 
 assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[5.0, 7.0, 9.0]);
 assert_eq!(outputs[1].as_slice::<f64>().unwrap(), &[4.0, 10.0, 18.0]);

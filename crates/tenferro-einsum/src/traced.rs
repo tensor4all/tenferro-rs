@@ -165,10 +165,9 @@ fn trace_context_einsum_subscripts_with(
                 Error::planning("precomputed contraction tree requires concrete input shapes")
             })?;
             let shape_refs: Vec<_> = shapes.iter().map(Vec::as_slice).collect();
-            let (plan_spec, tree) =
+            let (plan_spec, _tree) =
                 resolve_einsum_strategy_with_spec(EinsumOptimize::Tree(tree), &subs, &shape_refs)?;
             EinsumExtensionOp::with_plan_spec(subscripts.clone(), plan_spec)
-                .with_static_tree_hint(Arc::new(tree))
         }
         optimize => EinsumExtensionOp::with_plan_spec(
             subscripts.clone(),

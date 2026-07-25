@@ -4,7 +4,9 @@ use std::{
     mem::size_of,
 };
 
-use tenferro_ops::{dim_expr::DimExpr, dim_expr::DimExprEvalError, ShapeRelation};
+#[cfg(test)]
+use tenferro_ops::dim_expr::DimExprEvalError;
+use tenferro_ops::{dim_expr::DimExpr, ShapeRelation};
 
 use super::{ConstraintSource, LocalShapeConstraint};
 use crate::error::{Error, Result, ShapeConstraintEvalError};
@@ -39,6 +41,7 @@ pub struct ShapeGuard {
 }
 
 impl ShapeGuard {
+    #[cfg(test)]
     pub(crate) fn evaluate(&self, inputs: &[&[usize]]) -> Result<()> {
         let lhs_value = self.evaluate_expression(&self.lhs, inputs)?;
         let rhs_value = self.evaluate_expression(&self.rhs, inputs)?;
@@ -56,6 +59,7 @@ impl ShapeGuard {
         ))
     }
 
+    #[cfg(test)]
     fn evaluate_expression(&self, expression: &DimExpr, inputs: &[&[usize]]) -> Result<usize> {
         expression
             .eval(inputs)
@@ -681,6 +685,7 @@ fn symbol_expr((input_idx, axis): Symbol) -> DimExpr {
     DimExpr::InputDim { input_idx, axis }
 }
 
+#[cfg(test)]
 fn map_eval_error(error: DimExprEvalError) -> ShapeConstraintEvalError {
     match error {
         DimExprEvalError::InputOutOfBounds {
@@ -736,6 +741,7 @@ fn format_binary(lhs: &DimExpr, operator: &str, rhs: &DimExpr) -> String {
     )
 }
 
+#[cfg(test)]
 fn violation(
     source: &ConstraintSource,
     relation: ShapeRelation,

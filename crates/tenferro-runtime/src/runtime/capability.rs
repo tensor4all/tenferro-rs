@@ -4,6 +4,8 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::program::SemanticOperationView;
+use crate::{Error, ErrorPhase, ExtensionCacheStore};
+use tenferro_tensor::{Tensor, TensorRead};
 
 use super::{
     ExecutionContextIdentity, ExecutionContextMismatch, HardwareClassId, InputSignature,
@@ -254,10 +256,8 @@ impl PreparedOperationBinding {
     }
 }
 
-/// Immutable metadata for a prepared provider operation.
-///
-/// The trait intentionally exposes no execution method. Phase 5 owns common
-/// execution scheduling and invocation.
+/// Immutable metadata and optional execution entrypoint for a prepared provider
+/// operation.
 pub trait PreparedOperation: fmt::Debug + Send + Sync + 'static {
     /// Return the runtime-created binding carried by this operation.
     fn binding(&self) -> &PreparedOperationBinding;
@@ -265,6 +265,31 @@ pub trait PreparedOperation: fmt::Debug + Send + Sync + 'static {
     fn specialization(&self) -> &SpecializationProjection;
     /// Return logical heap bytes owned exclusively by this operation.
     fn retained_bytes(&self) -> usize;
+
+    /// Execute this prepared operation using a runtime-owned erased backend
+    /// context and extension cache store.
+    ///
+    /// Core providers may keep the default unsupported implementation because
+    /// core execution is still lowered through `ExecOp` dispatch. Extension
+    /// providers override this method so `ExecOp::Extension` no longer needs a
+    /// separate registry/executor lookup at execution time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] when the prepared operation is not executable for the
+    /// supplied context, input reads are invalid, or backend execution fails.
+    fn execute(
+        &self,
+        _context: &mut ErasedExecutionContext<'_>,
+        _extension_caches: &mut ExtensionCacheStore,
+        _inputs: &[TensorRead<'_>],
+    ) -> crate::Result<Vec<Tensor>> {
+        Err(Error::unsupported(
+            "prepared_operation",
+            ErrorPhase::Execution,
+            "prepared operation does not implement execution",
+        ))
+    }
 }
 
 /// Shared prepared-operation handle.
@@ -315,7 +340,7 @@ pub enum PrepareCapability {
 /// ```
 pub struct ErasedExecutionContext<'a> {
     identity: ExecutionContextIdentity,
-    value: &'a mut (dyn Any + Send + Sync),
+    value: &'a mut dyn Any,
 }
 
 impl<'a> ErasedExecutionContext<'a> {
@@ -330,7 +355,7 @@ impl<'a> ErasedExecutionContext<'a> {
     /// let erased = ErasedExecutionContext::new(&mut value);
     /// assert_eq!(erased.identity().type_name(), std::any::type_name::<u64>());
     /// ```
-    pub fn new<T: Send + Sync + 'static>(value: &'a mut T) -> Self {
+    pub fn new<T: 'static>(value: &'a mut T) -> Self {
         Self {
             identity: ExecutionContextIdentity::of::<T>(),
             value,
@@ -371,7 +396,7 @@ impl<'a> ErasedExecutionContext<'a> {
     ///
     /// Returns [`ExecutionContextMismatch`] when the stored identity, supplied
     /// expected identity, and requested type do not all agree.
-    pub fn downcast_mut<T: Send + Sync + 'static>(
+    pub fn downcast_mut<T: 'static>(
         &mut self,
         expected: ExecutionContextIdentity,
     ) -> Result<&mut T, ExecutionContextMismatch> {

@@ -149,7 +149,8 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
     let instructions = prog
         .instructions
         .iter()
-        .map(|instr| {
+        .enumerate()
+        .map(|(semantic_operation_index, instr)| {
             let input_dtypes: Vec<DType> = instr
                 .inputs
                 .iter()
@@ -321,6 +322,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
 
             Ok(ExecInstruction {
                 op: ExecOp::from_std_tensor_op(&instr.operation),
+                semantic_operation_index: Some(semantic_operation_index),
                 input_slots: instr.inputs.clone(),
                 output_slots: instr.outputs.clone(),
                 dtype: instruction_dtype,
@@ -922,6 +924,7 @@ impl ConjSinkingState<'_> {
 
         let instr = ExecInstruction {
             op: ExecOp::Conj,
+            semantic_operation_index: None,
             input_slots: vec![slot],
             output_slots: vec![output_slot],
             dtype: meta.dtype,

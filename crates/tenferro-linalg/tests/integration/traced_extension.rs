@@ -4,10 +4,10 @@ use tenferro_linalg::{
     EighGauge, EighOptions, LinalgBackend, QrGauge, QrOptions, SvdGauge, SvdOptions,
     TracedTensorLinalgExt,
 };
-use tenferro_runtime::{
-    DType, Error, GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor,
-};
+use tenferro_runtime::{DType, Error, GraphCompiler, Runtime, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::Error as TensorError;
+
+use super::support;
 
 fn traced_with_dtype(dtype: DType, shape: Vec<usize>) -> TracedTensor {
     let n_elements = shape.iter().product();
@@ -49,11 +49,7 @@ fn svd_executes_after_runtime_registration() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&u, &s, &vt]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_linalg::register_runtime)
-        .unwrap();
-    let outputs = executor.run_many(&program).unwrap();
+    let outputs = support::run_all(&program, &[]).unwrap();
 
     assert_eq!(outputs.len(), 3);
     assert_eq!(outputs[0].shape(), &[2, 2]);
@@ -123,11 +119,7 @@ fn traced_decomposition_options_execute_through_registered_runtime() {
     let program = compiler
         .compile_many(&[&u, &s, &vt, &eigh_values, &eigh_vectors, &q, &r])
         .unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_linalg::register_runtime)
-        .unwrap();
-    let outputs = executor.run_many(&program).unwrap();
+    let outputs = support::run_all(&program, &[]).unwrap();
 
     assert_eq!(outputs[0].shape(), &[2, 2]);
     assert_eq!(outputs[1].shape(), &[2]);
@@ -164,11 +156,7 @@ fn complex_svd_runtime_singular_values_match_traced_real_dtype() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&s, &weighted]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_linalg::register_runtime)
-        .unwrap();
-    let outputs = executor.run_many(&program).unwrap();
+    let outputs = support::run_all(&program, &[]).unwrap();
 
     assert_eq!(outputs[0].dtype(), DType::F64);
     assert_eq!(outputs[1].dtype(), DType::F64);
@@ -219,9 +207,13 @@ fn missing_runtime_reports_linalg_family() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
-    let err = GraphExecutor::new(CpuBackend::new())
-        .run(&program)
-        .unwrap_err();
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .unwrap();
+    let runtime = builder.build().unwrap();
+    let err = runtime.run_compiled(&program, &[]).unwrap_err();
 
     assert!(err
         .to_string()
@@ -238,11 +230,7 @@ fn full_piv_lu_multi_output_slots_are_preserved() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(&[&p, &l, &u, &q, &parity]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_linalg::register_runtime)
-        .unwrap();
-    let outputs = executor.run_many(&program).unwrap();
+    let outputs = support::run_all(&program, &[]).unwrap();
 
     assert_eq!(outputs[0].shape(), &[2, 2]);
     assert_eq!(outputs[1].shape(), &[2, 2]);

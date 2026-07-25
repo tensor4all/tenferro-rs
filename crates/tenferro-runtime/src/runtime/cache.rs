@@ -278,7 +278,7 @@ enum PreparedEntryState<K: PreparedCacheKey, V: PreparedValue> {
 struct EntryRecord<K: PreparedCacheKey, V: PreparedValue> {
     id: EntryId,
     digest: u128,
-    key: K,
+    key: Arc<K>,
     state: PreparedEntryState<K, V>,
     generation: Arc<CacheGenerationToken>,
     retained_bytes: usize,
@@ -290,7 +290,7 @@ struct ActiveAttempt<K: PreparedCacheKey> {
     id: AttemptId,
     entry_id: Option<EntryId>,
     digest: u128,
-    key: K,
+    key: Arc<K>,
     generation: Arc<CacheGenerationToken>,
     key_bytes: usize,
     signature_bytes: usize,
@@ -310,7 +310,7 @@ impl<K: PreparedCacheKey> ActiveAttempt<K> {
 struct QueueRecord<K: PreparedCacheKey> {
     id: QueueId,
     digest: u128,
-    key: K,
+    key: Arc<K>,
     generation: Arc<CacheGenerationToken>,
     key_bytes: usize,
     signature_bytes: usize,
@@ -331,25 +331,6 @@ struct SharedCharge<S: Debug + Send + Sync + 'static> {
     value: Arc<S>,
     retained_bytes: usize,
     references: usize,
-}
-
-#[derive(Clone, Copy, Debug)]
-enum CandidateLocation {
-    Entry(EntryId),
-    Queue(QueueId),
-}
-
-#[derive(Debug)]
-struct ProbeCandidate<K: PreparedCacheKey> {
-    location: CandidateLocation,
-    key: K,
-}
-
-#[derive(Debug)]
-struct Probe<K: PreparedCacheKey> {
-    revision: Arc<CacheRevisionToken>,
-    generation: Arc<CacheGenerationToken>,
-    candidates: Vec<ProbeCandidate<K>>,
 }
 
 #[derive(Debug)]
@@ -583,74 +564,119 @@ impl<K: PreparedCacheKey, V: PreparedValue> PreparedPlanCache<K, V> {
 
     fn probe(&self, key: &K, digest: u128) -> Result<ProbeResult, Arc<PrepareError>> {
         loop {
-            let probe = {
+            let (revision, generation, entry_ids, queue_ids) = {
                 let state = self.lock_state()?;
-                let mut candidates = Vec::new();
-                if let Some(entries) = state.entry_buckets.get(&digest) {
-                    for entry_id in entries {
-                        if let Some(entry) = state.entries.get(entry_id) {
-                            candidates.push(ProbeCandidate {
-                                location: CandidateLocation::Entry(*entry_id),
-                                key: entry.key.clone(),
-                            });
-                        }
-                    }
-                }
-                if let Some(queues) = state.queue_buckets.get(&digest) {
-                    for queue_id in queues {
-                        if let Some(record) = state.queue_records.get(queue_id) {
-                            candidates.push(ProbeCandidate {
-                                location: CandidateLocation::Queue(*queue_id),
-                                key: record.key.clone(),
-                            });
-                        }
-                    }
-                }
-                Probe {
-                    revision: Arc::clone(&state.revision),
-                    generation: Arc::clone(&state.generation),
-                    candidates,
-                }
+                (
+                    Arc::clone(&state.revision),
+                    Arc::clone(&state.generation),
+                    state
+                        .entry_buckets
+                        .get(&digest)
+                        .cloned()
+                        .unwrap_or_default(),
+                    state
+                        .queue_buckets
+                        .get(&digest)
+                        .cloned()
+                        .unwrap_or_default(),
+                )
             };
 
-            let exact = probe
-                .candidates
-                .iter()
-                .find(|candidate| key.exact_eq(&candidate.key))
-                .map(|candidate| candidate.location);
-
-            let state = self.lock_state()?;
-            if !Arc::ptr_eq(&probe.revision, &state.revision)
-                || !Arc::ptr_eq(&probe.generation, &state.generation)
-            {
-                continue;
-            }
-            match exact {
-                Some(CandidateLocation::Entry(entry_id))
+            for entry_id in entry_ids {
+                let Some(candidate_key) =
+                    self.entry_key_if_generation_current(entry_id, digest, &revision, &generation)?
+                else {
+                    continue;
+                };
+                if key.exact_eq(candidate_key.as_ref()) {
+                    let state = self.lock_state()?;
+                    if !Arc::ptr_eq(&revision, &state.revision)
+                        || !Arc::ptr_eq(&generation, &state.generation)
+                    {
+                        continue;
+                    }
                     if state
                         .entries
                         .get(&entry_id)
-                        .is_some_and(|entry| entry.digest == digest) =>
-                {
-                    return Ok(ProbeResult::Entry(entry_id));
+                        .is_some_and(|entry| entry.digest == digest)
+                    {
+                        return Ok(ProbeResult::Entry(entry_id));
+                    }
+                    continue;
                 }
-                Some(CandidateLocation::Queue(queue_id))
+            }
+
+            for queue_id in queue_ids {
+                let Some(candidate_key) =
+                    self.queue_key_if_generation_current(queue_id, digest, &revision, &generation)?
+                else {
+                    continue;
+                };
+                if key.exact_eq(candidate_key.as_ref()) {
+                    let state = self.lock_state()?;
+                    if !Arc::ptr_eq(&revision, &state.revision)
+                        || !Arc::ptr_eq(&generation, &state.generation)
+                    {
+                        continue;
+                    }
                     if state
                         .queue_records
                         .get(&queue_id)
-                        .is_some_and(|record| record.digest == digest) =>
-                {
-                    return Ok(ProbeResult::Queue(queue_id));
-                }
-                Some(_) => continue,
-                None => {
-                    return Ok(ProbeResult::NoMatch {
-                        revision: Arc::clone(&state.revision),
-                        generation: Arc::clone(&state.generation),
-                    });
+                        .is_some_and(|record| record.digest == digest)
+                    {
+                        return Ok(ProbeResult::Queue(queue_id));
+                    }
+                    continue;
                 }
             }
+
+            let state = self.lock_state()?;
+            if !Arc::ptr_eq(&revision, &state.revision)
+                || !Arc::ptr_eq(&generation, &state.generation)
+            {
+                continue;
+            }
+            return Ok(ProbeResult::NoMatch {
+                revision: Arc::clone(&state.revision),
+                generation: Arc::clone(&state.generation),
+            });
         }
+    }
+
+    fn entry_key_if_generation_current(
+        &self,
+        entry_id: EntryId,
+        digest: u128,
+        revision: &Arc<CacheRevisionToken>,
+        generation: &Arc<CacheGenerationToken>,
+    ) -> Result<Option<Arc<K>>, Arc<PrepareError>> {
+        let state = self.lock_state()?;
+        if !Arc::ptr_eq(revision, &state.revision) || !Arc::ptr_eq(generation, &state.generation) {
+            return Ok(None);
+        }
+        Ok(state
+            .entries
+            .get(&entry_id)
+            .filter(|entry| entry.digest == digest)
+            .map(|entry| Arc::clone(&entry.key)))
+    }
+
+    fn queue_key_if_generation_current(
+        &self,
+        queue_id: QueueId,
+        digest: u128,
+        revision: &Arc<CacheRevisionToken>,
+        generation: &Arc<CacheGenerationToken>,
+    ) -> Result<Option<Arc<K>>, Arc<PrepareError>> {
+        let state = self.lock_state()?;
+        if !Arc::ptr_eq(revision, &state.revision) || !Arc::ptr_eq(generation, &state.generation) {
+            return Ok(None);
+        }
+        Ok(state
+            .queue_records
+            .get(&queue_id)
+            .filter(|record| record.digest == digest)
+            .map(|record| Arc::clone(&record.key)))
     }
 
     fn handle_entry(&self, entry_id: EntryId) -> Result<EntryAction<'_, K, V>, Arc<PrepareError>> {
@@ -751,7 +777,14 @@ impl<K: PreparedCacheKey, V: PreparedValue> PreparedPlanCache<K, V> {
         if state.in_flight < state.limits.max_in_flight_entries.get()
             && state.queue_order.is_empty()
         {
-            let guard = start_attempt(&mut state, self, key, digest, signature_bytes, None)?;
+            let guard = start_attempt(
+                &mut state,
+                self,
+                Arc::new(key),
+                digest,
+                signature_bytes,
+                None,
+            )?;
             return Ok(MissReservation::Produce(guard));
         }
         if behavior == CacheInFlightBehavior::Refuse {
@@ -763,6 +796,7 @@ impl<K: PreparedCacheKey, V: PreparedValue> PreparedPlanCache<K, V> {
             return Err(capacity_error(&state));
         }
         let queue_id = allocate_queue_id(&mut state);
+        let key = Arc::new(key);
         let key_bytes = key.retained_bytes().ok_or_else(accounting_prepare_error)?;
         let metadata_bytes = checked_sum([
             size_of::<QueueRecord<K>>(),
@@ -918,7 +952,7 @@ impl<K: PreparedCacheKey, V: PreparedValue> ProducerGuard<'_, K, V> {
             return Ok(lookup_from_produced(produced));
         }
 
-        let publication = build_publication(&attempt.key, produced);
+        let publication = build_publication(attempt.key.as_ref(), produced);
         let producer_lookup = publication.lookup();
         match publication.retention {
             PublicationRetention::Transient | PublicationRetention::Uncacheable => {
@@ -1122,7 +1156,7 @@ impl<'a, K: PreparedCacheKey, V: PreparedValue> QueueTicketGuard<'a, K, V> {
             debug_assert!(Arc::ptr_eq(&record.generation, &state.generation));
             let at_front = state.queue_order.front().copied() == Some(self.queue_id);
             if at_front && state.in_flight < state.limits.max_in_flight_entries.get() {
-                let key = record.key.clone();
+                let key = Arc::clone(&record.key);
                 let digest = record.digest;
                 let signature_bytes = record.signature_bytes;
                 let guard = start_attempt(
@@ -1409,7 +1443,7 @@ fn build_publication<K: PreparedCacheKey, V: PreparedValue>(
 fn start_attempt<'a, K: PreparedCacheKey, V: PreparedValue>(
     state: &mut CacheState<K, V>,
     cache: &'a PreparedPlanCache<K, V>,
-    key: K,
+    key: Arc<K>,
     digest: u128,
     signature_bytes: usize,
     promoted_queue: Option<QueueId>,
@@ -1434,7 +1468,7 @@ fn start_attempt<'a, K: PreparedCacheKey, V: PreparedValue>(
         id: attempt_id,
         entry_id: Some(entry_id),
         digest,
-        key: key.clone(),
+        key: Arc::clone(&key),
         generation: Arc::clone(&state.generation),
         key_bytes,
         signature_bytes,

@@ -2,13 +2,25 @@ use num_complex::Complex64;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
 
-use crate::{
-    DType, DotGeneralConfig, Error, ErrorPhase, GraphCompiler, GraphExecutor, Tensor, TracedTensor,
-};
+use crate::compiler::semantic_staging::stage_semantic_program;
+use crate::exec;
+use crate::{DType, DotGeneralConfig, Error, ErrorPhase, GraphCompiler, Tensor, TracedTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     Error as TensorError, ErrorKind, ShapeMismatch, ValidationError, ValidationKind,
 };
+
+fn run_compiled(program: &crate::CompiledGraph, inputs: Vec<Tensor>) -> crate::Result<Vec<Tensor>> {
+    let staged = stage_semantic_program(program.program(), program.compiler_options()).unwrap();
+    let mut backend = CpuBackend::new();
+    exec::eval_exec_ir_unsegmented_with_cache(&mut backend, &staged, inputs)
+}
+
+fn run_compiled_one(program: &crate::CompiledGraph, inputs: Vec<Tensor>) -> Tensor {
+    let mut outputs = run_compiled(program, inputs).unwrap();
+    assert_eq!(outputs.len(), 1);
+    outputs.pop().unwrap()
+}
 
 #[test]
 fn traced_binary_reuses_input_map_when_rhs_is_already_present() {
@@ -279,10 +291,7 @@ fn broadcast_in_dim_sym_defers_cross_tensor_symbolic_extent_validation() {
         .unwrap();
     let input_value = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let matching_shape_ref = Tensor::from_vec_col_major(vec![2], vec![0.0_f64, 0.0]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    let result = executor
-        .run_with_inputs(&program, &[&matching_shape_ref, &input_value])
-        .unwrap();
+    let result = run_compiled_one(&program, vec![matching_shape_ref, input_value.clone()]);
     assert_eq!(result.shape(), &[2]);
     assert_eq!(result.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 
@@ -290,9 +299,7 @@ fn broadcast_in_dim_sym_defers_cross_tensor_symbolic_extent_validation() {
         .compile_with_input_specs(&output, &[(&shape_ref, DType::F64, &[3])])
         .unwrap();
     let mismatched_shape_ref = Tensor::from_vec_col_major(vec![3], vec![0.0_f64; 3]).unwrap();
-    let err = executor
-        .run_with_inputs(&mismatch_program, &[&mismatched_shape_ref, &input_value])
-        .unwrap_err();
+    let err = run_compiled(&mismatch_program, vec![mismatched_shape_ref, input_value]).unwrap_err();
     assert!(matches!(
         &err,
         Error::TensorRuntime(TensorError::Validation {

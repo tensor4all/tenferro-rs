@@ -1,6 +1,6 @@
 //! End-to-end tests for the placeholder constructor API
 //! (`input_concrete_shape` / `input_symbolic_shape`) and
-//! [`GraphExecutor::run_with_inputs`].
+//! [`tenferro_runtime::Runtime::run_compiled`].
 //!
 //! These tests verify that:
 //! * A graph built against a placeholder can be evaluated by binding a
@@ -12,9 +12,8 @@
 //! * Mixed graphs (static leaves + placeholder leaves) route data correctly.
 
 use crate::support;
-use support::RunTraced;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor};
+use support::{cpu_runtime, RunTraced};
+use tenferro_runtime::{Tensor, TracedTensor};
 use tenferro_tensor::DType;
 
 fn f64_data(tensor: &Tensor) -> &[f64] {
@@ -26,10 +25,10 @@ fn identity_on_symbolic_input_rank_1() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let bound = Tensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     let out = y
-        .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
+        .run_with_inputs_auto(&engine, &[(&x, &bound)])
         .expect("run_with_inputs");
 
     assert_eq!(out.shape(), &[4]);
@@ -42,11 +41,11 @@ fn addition_of_two_symbolic_inputs() {
     let b = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&a + &b).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let ta = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
     let tb = Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap();
     let out = y
-        .run_with_inputs_auto(&mut engine, &[(&a, &ta), (&b, &tb)])
+        .run_with_inputs_auto(&engine, &[(&a, &ta), (&b, &tb)])
         .expect("run_with_inputs");
 
     assert_eq!(out.shape(), &[3]);
@@ -58,11 +57,11 @@ fn matrix_symbolic_input_uses_column_major_values() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let y = (&x + &x).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let bound =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
     let out = y
-        .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
+        .run_with_inputs_auto(&engine, &[(&x, &bound)])
         .expect("run_with_inputs");
 
     assert_eq!(out.shape(), &[2, 3]);
@@ -75,13 +74,13 @@ fn same_symbolic_graph_reused_with_different_shapes() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let graph = (&x + &x).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
 
     // First eval: shape [2].
     let g1 = graph.clone();
     let bound_small = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let out_small = g1
-        .run_with_inputs_auto(&mut engine, &[(&x, &bound_small)])
+        .run_with_inputs_auto(&engine, &[(&x, &bound_small)])
         .expect("small eval");
     assert_eq!(out_small.shape(), &[2]);
     assert_eq!(f64_data(&out_small), &[2.0, 4.0]);
@@ -90,7 +89,7 @@ fn same_symbolic_graph_reused_with_different_shapes() {
     let g2 = graph.clone();
     let bound_big = Tensor::from_vec_col_major(vec![5], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0]).unwrap();
     let out_big = g2
-        .run_with_inputs_auto(&mut engine, &[(&x, &bound_big)])
+        .run_with_inputs_auto(&engine, &[(&x, &bound_big)])
         .expect("big eval");
     assert_eq!(out_big.shape(), &[5]);
     assert_eq!(f64_data(&out_big), &[2.0, 4.0, 6.0, 8.0, 10.0]);
@@ -102,11 +101,11 @@ fn concrete_shape_placeholder_accepts_exact_shape() {
     assert!(x.is_concrete_shape());
     let y = x.clone();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let bound =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let out = y
-        .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
+        .run_with_inputs_auto(&engine, &[(&x, &bound)])
         .expect("run_with_inputs");
 
     assert_eq!(out.shape(), &[2, 3]);
@@ -122,10 +121,10 @@ fn mixed_graph_static_and_placeholder_inputs() {
     let placeholder = TracedTensor::input_concrete_shape(DType::F64, &[2]).unwrap();
     let sum = (&static_leaf + &placeholder).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let out = sum
-        .run_with_inputs_auto(&mut engine, &[(&placeholder, &bound)])
+        .run_with_inputs_auto(&engine, &[(&placeholder, &bound)])
         .expect("run_with_inputs");
 
     assert_eq!(out.shape(), &[2]);
@@ -138,9 +137,9 @@ fn eval_with_empty_bindings_behaves_like_eval_for_all_static_graph() {
     let b = TracedTensor::from_vec_col_major(vec![2], vec![10.0_f64, 20.0]).unwrap();
     let y = (&a + &b).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let out = y
-        .run_with_inputs_auto(&mut engine, &[])
+        .run_with_inputs_auto(&engine, &[])
         .expect("run_with_inputs with no bindings");
 
     assert_eq!(f64_data(&out), &[11.0, 22.0]);
@@ -171,8 +170,8 @@ fn from_tensor_symbolic_shape_drops_shape_but_keeps_data() {
     // Even though shape is advertised as symbolic, data is attached so plain
     // `eval` (via the no-bindings shortcut) still works.
     let y = x.clone();
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let out = y.run_with(&mut engine).expect("eval with attached data");
+    let engine = cpu_runtime();
+    let out = y.run_with(&engine).expect("eval with attached data");
     assert_eq!(out.shape(), &[4]);
     assert_eq!(f64_data(&out), &[1.0, 2.0, 3.0, 4.0]);
 }

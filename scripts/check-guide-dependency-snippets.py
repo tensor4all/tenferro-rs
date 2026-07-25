@@ -29,10 +29,10 @@ class GuideCase:
 
 EINSUM_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_einsum::{EagerEinsumExt, TraceContextEinsumExt};
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TraceContext};
+use tenferro_runtime::{GraphCompiler, Runtime, TraceContext};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = Tensor::from_vec_col_major(
@@ -50,9 +50,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let c = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
     let graph = trace.finish(&[c])?;
     let program = GraphCompiler::new().compile_traced_graph(&graph)?;
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.register_extension(tenferro_einsum::register_runtime)?;
-    assert_eq!(executor.run_with_inputs(&program, &[&a, &b])?.shape(), &[2, 2]);
+    let backend = CpuBackend::new();
+    let engine_id = runtime_engine_id()?;
+    let mut runtime_builder = Runtime::builder();
+    runtime_builder.register_engine(runtime_engine_registration(&backend)?)?;
+    runtime_builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(engine_id)?)?;
+    let runtime = runtime_builder.build()?;
+    let mut outputs = runtime.run_compiled(&program, &[&a, &b])?;
+    assert_eq!(outputs.remove(0).shape(), &[2, 2]);
 
     let ctx = EagerRuntime::new();
     let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
@@ -156,9 +161,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 FFT_SOURCE = r"""
 use num_complex::Complex64;
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ad = AdContext::builder().build()?;
@@ -175,9 +180,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.register_extension(tenferro_fft::register_runtime)?;
-    assert_eq!(executor.run(&program)?.shape(), &[4]);
+    let backend = CpuBackend::new();
+    let engine_id = runtime_engine_id()?;
+    let mut runtime_builder = Runtime::builder();
+    runtime_builder.register_engine(runtime_engine_registration(&backend)?)?;
+    runtime_builder.install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id)?)?;
+    let runtime = runtime_builder.build()?;
+    let mut outputs = runtime.run_compiled(&program, &[])?;
+    assert_eq!(outputs.remove(0).shape(), &[4]);
 
     Ok(())
 }

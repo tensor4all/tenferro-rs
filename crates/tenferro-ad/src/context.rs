@@ -71,6 +71,14 @@ impl AdContext {
         AdContextBuilder::default()
     }
 
+    pub(crate) fn core_with_transform_cache(ad_transform_cache: Arc<AdTransformCache>) -> Self {
+        Self {
+            semantic_extension_rules: SemanticExtensionRuleSet::default(),
+            extension_ad_dispatcher: None,
+            ad_transform_cache,
+        }
+    }
+
     /// Return semantic-program extension AD rules owned by this context.
     ///
     /// # Examples
@@ -106,23 +114,22 @@ impl AdContext {
         input: &FrozenProgram,
         active_inputs: &[bool],
     ) -> std::result::Result<SemanticAdProgram, SemanticAdTransformError> {
-        if input.bindings.is_empty() {
-            let key = SemanticAdTransformCacheKey::jvp(input, active_inputs);
-            if let Some(cached) = self
-                .ad_transform_cache
-                .get_semantic(&key, input)
-                .map_err(SemanticAdTransformError::Cache)?
-            {
-                return Ok(cached.as_ref().clone());
-            }
-            let transformed = semantic_jvp(input, active_inputs, &self.semantic_extension_rules)?;
-            self.ad_transform_cache
-                .put_semantic(key, input, Arc::new(transformed.clone()))
-                .map_err(SemanticAdTransformError::Cache)?;
-            Ok(transformed)
-        } else {
-            semantic_jvp(input, active_inputs, &self.semantic_extension_rules)
+        let key = SemanticAdTransformCacheKey::jvp(input, active_inputs);
+        if let Some(cached) = self
+            .ad_transform_cache
+            .get_semantic(&key, input)
+            .map_err(SemanticAdTransformError::Cache)?
+        {
+            return cached
+                .as_ref()
+                .with_input_prefix_bindings_from(input)
+                .map_err(SemanticAdTransformError::from);
         }
+        let transformed = semantic_jvp(input, active_inputs, &self.semantic_extension_rules)?;
+        self.ad_transform_cache
+            .put_semantic(key, input, Arc::new(transformed.clone()))
+            .map_err(SemanticAdTransformError::Cache)?;
+        Ok(transformed)
     }
 
     /// Transform a frozen semantic program into its reverse-mode derivative.
@@ -144,33 +151,27 @@ impl AdContext {
         active_inputs: &[bool],
         active_outputs: &[bool],
     ) -> std::result::Result<SemanticAdProgram, SemanticAdTransformError> {
-        if input.bindings.is_empty() {
-            let key = SemanticAdTransformCacheKey::vjp(input, active_inputs, active_outputs);
-            if let Some(cached) = self
-                .ad_transform_cache
-                .get_semantic(&key, input)
-                .map_err(SemanticAdTransformError::Cache)?
-            {
-                return Ok(cached.as_ref().clone());
-            }
-            let transformed = semantic_vjp(
-                input,
-                active_inputs,
-                active_outputs,
-                &self.semantic_extension_rules,
-            )?;
-            self.ad_transform_cache
-                .put_semantic(key, input, Arc::new(transformed.clone()))
-                .map_err(SemanticAdTransformError::Cache)?;
-            Ok(transformed)
-        } else {
-            semantic_vjp(
-                input,
-                active_inputs,
-                active_outputs,
-                &self.semantic_extension_rules,
-            )
+        let key = SemanticAdTransformCacheKey::vjp(input, active_inputs, active_outputs);
+        if let Some(cached) = self
+            .ad_transform_cache
+            .get_semantic(&key, input)
+            .map_err(SemanticAdTransformError::Cache)?
+        {
+            return cached
+                .as_ref()
+                .with_input_prefix_bindings_from(input)
+                .map_err(SemanticAdTransformError::from);
         }
+        let transformed = semantic_vjp(
+            input,
+            active_inputs,
+            active_outputs,
+            &self.semantic_extension_rules,
+        )?;
+        self.ad_transform_cache
+            .put_semantic(key, input, Arc::new(transformed.clone()))
+            .map_err(SemanticAdTransformError::Cache)?;
+        Ok(transformed)
     }
 
     pub(crate) fn extension_ad_dispatcher(&self) -> Option<Arc<dyn ExtensionAdDispatcher>> {

@@ -2,10 +2,12 @@ use std::num::NonZeroUsize;
 
 use tenferro_ad::{AdContext, AdTransformCacheLimits, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, TracedTensor};
+
+use crate::support::{cpu_runtime, run_compiled_one};
 
 #[test]
-fn compiler_clear_caches_clears_compile_entries() {
+fn compiler_clear_caches_clears_extension_entries() {
     let mut compiler = GraphCompiler::new();
 
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
@@ -13,13 +15,12 @@ fn compiler_clear_caches_clears_compile_entries() {
     let _ = compiler.compile(&y).expect("compile");
 
     let before = compiler.cache_stats();
-    assert!(before.compile.entries > 0);
+    assert_eq!(before.entries, 0);
 
     compiler.clear_caches();
 
     let after = compiler.cache_stats();
-    assert_eq!(after.compile.entries, 0);
-    assert_eq!(after.extensions.entries, 0);
+    assert_eq!(after.entries, 0);
 }
 
 #[test]
@@ -28,16 +29,16 @@ fn executor_clear_caches_leaves_no_extension_entries_without_extensions() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
     let program = compiler.compile(&y).expect("compile");
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let executor = cpu_runtime();
 
-    let _ = executor.run(&program).expect("run");
+    let _ = run_compiled_one(&executor, &program, &[]).expect("run");
 
-    let before = executor.cache_stats();
+    let before = executor.cache_stats().expect("cache stats");
     assert_eq!(before.extensions.entries, 0);
 
-    executor.clear_caches();
+    executor.clear_caches().expect("clear caches");
 
-    let after = executor.cache_stats();
+    let after = executor.cache_stats().expect("cache stats");
     assert_eq!(after.extensions.entries, 0);
 }
 
@@ -47,14 +48,15 @@ fn executor_clear_caches_clears_executor_owned_runtime_caches() {
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).expect("compile");
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let executor = cpu_runtime();
 
-    let _ = executor.run(&program).expect("run");
-    executor.clear_caches();
+    let _ = run_compiled_one(&executor, &program, &[]).expect("run");
+    executor.clear_caches().expect("clear caches");
 
-    let after = executor.cache_stats();
+    let after = executor.cache_stats().expect("cache stats");
     assert_eq!(after.extensions.entries, 0);
-    assert_eq!(after.backend.entries, 0);
+    assert_eq!(after.engines.entries, 0);
+    assert_eq!(after.prepared_plans.entries, 0);
 }
 
 #[test]

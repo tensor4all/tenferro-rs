@@ -49,13 +49,13 @@ let b = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, -1.0, 5.0])?;
 let out = tropical_einsum_with_argmax(TropicalKind::MaxPlus, &[&a, &b], "ij,jk->ik")?;
 ```
 
-Traced execution emits an extension op, so the executor must register the
-tropical runtime:
+Traced execution emits an extension op, so the runtime must install the
+tropical extension modules:
 
 ```rust
-use tenferro_cpu::CpuBackend;
-use tenferro_ext_tropical::traced::tropical_dot_general_fused;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_ext_tropical::{extension_modules, traced::tropical_dot_general_fused};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 
 let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 4.0, 0.0])?;
 let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, -1.0, 5.0])?;
@@ -63,13 +63,19 @@ let out = tropical_dot_general_fused(&a, &b)?;
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&out)?;
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.register_extension(tenferro_ext_tropical::register_runtime)?;
-let value = executor.run(&program)?;
+let backend = CpuBackend::new();
+let mut builder = Runtime::builder();
+builder.register_engine(runtime_engine_registration(&backend)?)?;
+for module in extension_modules::<CpuBackend>(runtime_engine_id()?)? {
+    builder.install_extension_module(module)?;
+}
+let runtime = builder.build()?;
+let mut outputs = runtime.run_compiled(&program, &[])?;
+let value = outputs.remove(0);
 ```
 
 The op payload holds the tropical kind and parsed einsum subscripts. Runtime
-registration maps that stable family ID to the concrete execution hook.
+module installation maps that stable family ID to the concrete execution hook.
 
 ## AD Rules
 
@@ -78,16 +84,16 @@ index. The tutorial registers explicit extension AD rules for that case:
 
 ```rust
 use tenferro_ad::AdContext;
-use tenferro_ext_tropical::tropical_ad_rules;
+use tenferro_ext_tropical::tropical_semantic_ad_rules;
 
 let ad = AdContext::builder()
-    .with_extension_rules(tropical_ad_rules()?)
+    .with_semantic_extension_rules(tropical_semantic_ad_rules()?)?
     .build()?;
 let loss = out.reduce_sum(Some(&[0, 1]))?;
 let grad_a = ad.grad(&loss, &a)?;
 ```
 
-The AD rule emits extension JVP/VJP ops, so the same runtime registration is
+The AD rule emits extension JVP/VJP ops, so the same runtime module installation is
 used when the compiled gradient graph executes.
 
 ## Run It

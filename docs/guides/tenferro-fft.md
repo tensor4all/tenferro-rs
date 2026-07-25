@@ -202,7 +202,17 @@ Source: `docs/tutorial-code/src/bin/apple_shared_fft.rs`.
 use num_complex::Complex64;
 use tenferro_cpu::CpuBackend;
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+
+fn cpu_runtime_with_fft() -> Result<Runtime, Box<dyn std::error::Error>> {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    builder.install_extension_module(tenferro_fft::extension_module::<CpuBackend>(
+        tenferro_cpu::runtime_engine_id()?,
+    )?)?;
+    Ok(builder.build()?)
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let x = TracedTensor::from_vec_col_major(
@@ -219,9 +229,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.register_extension(tenferro_fft::register_runtime)?;
-    let out = executor.run(&program)?;
+    let runtime = cpu_runtime_with_fft()?;
+    let mut outputs = runtime.run_compiled(&program, &[])?;
+    assert_eq!(outputs.len(), 1);
+    let out = outputs.remove(0);
     assert_eq!(out.shape(), &[4]);
     assert_eq!(
         out.as_slice::<Complex64>().unwrap(),

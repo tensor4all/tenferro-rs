@@ -181,13 +181,13 @@ assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
 ## Traced Matrix Multiply
 
 Use the traced route when einsum should be part of a graph compiled by
-`GraphCompiler` and executed by `GraphExecutor`.
+`GraphCompiler` and executed by `Runtime::run_compiled`.
 
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TraceContext};
+use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TraceContext};
 
 let a = Tensor::from_vec_col_major(
     vec![2, 3],
@@ -205,9 +205,15 @@ let c = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
 let graph = trace.finish(&[c])?;
 let program = GraphCompiler::new().compile_traced_graph(&graph)?;
 
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.register_extension(tenferro_einsum::register_runtime)?;
-let result = executor.run_with_inputs(&program, &[&a, &b])?;
+let backend = CpuBackend::new();
+let mut builder = Runtime::builder();
+builder.register_engine(runtime_engine_registration(&backend)?)?;
+builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+    runtime_engine_id()?,
+)?)?;
+let runtime = builder.build()?;
+let mut outputs = runtime.run_compiled(&program, &[&a, &b])?;
+let result = outputs.remove(0);
 
 assert_eq!(result.shape(), &[2, 2]);
 assert_eq!(result.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
@@ -253,9 +259,9 @@ right tensor. `TensorDotAxes::Axes` accepts explicit axis pairs, including
 negative axes.
 
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_einsum::{TensorDotAxes, TracedTensorEinsumExt};
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 
 let lhs = TracedTensor::from_vec_col_major(
     vec![2, 3],
@@ -275,8 +281,19 @@ let out = lhs.tensordot(&rhs, TensorDotAxes::Count(1)).unwrap();
 assert_eq!(out.rank, 2);
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&out).unwrap();
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let result = executor.run(&program).unwrap();
+let backend = CpuBackend::new();
+let mut builder = Runtime::builder();
+builder
+    .register_engine(runtime_engine_registration(&backend).unwrap())
+    .unwrap();
+builder
+    .install_extension_module(
+        tenferro_einsum::extension_module::<CpuBackend>(runtime_engine_id().unwrap()).unwrap(),
+    )
+    .unwrap();
+let runtime = builder.build().unwrap();
+let mut outputs = runtime.run_compiled(&program, &[]).unwrap();
+let result = outputs.remove(0);
 
 assert_eq!(result.shape(), &[2, 4]);
 assert_eq!(
@@ -335,8 +352,8 @@ assert_eq!(metadata.shape().len(), 2);
 
 Einsum uses the shared extension cache infrastructure from `tenferro-runtime`.
 Compile-time extension caches live on `GraphCompiler`; runtime
-contraction-plan and inner execution-program caches live on `GraphExecutor`
-and `EagerRuntime`.
+contraction-plan caches live on installed runtime cache owners and
+`EagerRuntime`.
 Einsum plan cache identity includes the planning policy or explicit path, not
 only the subscripts and shapes. Traced extension operation identity also includes
 those planner options and paths, so two calls with different policies are not

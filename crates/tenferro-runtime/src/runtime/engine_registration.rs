@@ -151,7 +151,7 @@ impl EngineRegistration {
     /// ```
     pub fn with_tensor_backend_executor<B>(mut self, backend: B) -> Self
     where
-        B: TensorBackend + Clone + Send + Sync + 'static,
+        B: TensorBackend + Send + Sync + 'static,
     {
         self.execution_engine = Some(execution::erased_tensor_backend_executor(backend));
         self

@@ -32,7 +32,7 @@
   <rect x="850" y="72" width="190" height="92" rx="8" class="traced"/>
   <text x="893" y="103" class="label">TracedTensor</text>
   <text x="878" y="127" class="text">GraphCompiler</text>
-  <text x="875" y="147" class="text">GraphExecutor&lt;B&gt;</text>
+  <text x="861" y="147" class="text">Runtime::run_compiled</text>
 
   <path d="M 540 156 V 228" class="line"/>
   <text x="555" y="194" class="answer">no</text>

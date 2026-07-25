@@ -1,12 +1,12 @@
-use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{
-    parse_einsum_subscripts, register_runtime, EinsumOptimize, TraceContextEinsumExt,
-    EINSUM_EXTENSION_FAMILY_ID,
+    parse_einsum_subscripts, EinsumOptimize, TraceContextEinsumExt, EINSUM_EXTENSION_FAMILY_ID,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef};
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TraceContext};
+use tenferro_runtime::{GraphCompiler, TraceContext};
 use tenferro_tensor::{DType, Tensor};
+
+use super::support;
 
 #[test]
 fn trace_context_einsum_ext_emits_one_ordered_semantic_extension() {
@@ -92,9 +92,7 @@ fn traced_semantic_einsum_compiles_and_executes_with_ordered_inputs() {
 
     let lhs = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 3.0, 2.0, 4.0]).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![2, 2], vec![5.0_f64, 7.0, 6.0, 8.0]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.register_extension(register_runtime).unwrap();
-    let result = executor.run_with_inputs(&compiled, &[&lhs, &rhs]).unwrap();
+    let result = support::run_one(&compiled, &[&lhs, &rhs]).unwrap();
 
     let operation = compiled.program().operations().next().unwrap();
     let SemanticOpRef::Extension(extension) = operation.op() else {

@@ -5,10 +5,8 @@ use std::sync::Arc;
 use num_complex::{Complex32, Complex64};
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOp, HostReference};
-use tenferro_tensor::{
-    DType, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, Tensor, TensorRead,
-};
+use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOp};
+use tenferro_tensor::{DType, Error, Tensor, TensorRead};
 
 use crate::backend::LinalgBackend;
 
@@ -379,84 +377,6 @@ impl LinalgExtensionOp {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EagerLinalgDevice {
-    Cpu,
-    Cuda(usize),
-}
-
-fn tensor_placement(input: &Tensor) -> &Placement {
-    input.placement()
-}
-
-fn input_eager_device(input: &Tensor) -> tenferro_tensor::Result<EagerLinalgDevice> {
-    let placement = tensor_placement(input);
-    match (&placement.memory_kind, placement.device.as_ref()) {
-        (MemoryKind::Device, Some(device)) => match &device.kind {
-            DeviceKind::Gpu(GpuBackendKind::Cuda) => Ok(EagerLinalgDevice::Cuda(device.ordinal)),
-            DeviceKind::Gpu(kind) => Err(Error::unsupported(
-                "linalg_host_reference",
-                format!("unsupported GPU backend {kind:?} for eager linalg"),
-            )),
-            kind => Err(Error::runtime_state(
-                "linalg_host_reference",
-                format!("unsupported device kind {kind:?} for eager linalg"),
-            )),
-        },
-        (MemoryKind::Device, None) => Err(Error::runtime_state(
-            "linalg_host_reference",
-            "device tensor is missing placement device metadata",
-        )),
-        _ => Ok(EagerLinalgDevice::Cpu),
-    }
-}
-
-fn eager_linalg_device(inputs: &[&Tensor]) -> tenferro_tensor::Result<EagerLinalgDevice> {
-    let mut selected = None;
-    for input in inputs {
-        let device = input_eager_device(input)?;
-        match (selected, device) {
-            (None, next) => selected = Some(next),
-            (Some(EagerLinalgDevice::Cpu), EagerLinalgDevice::Cpu) => {}
-            (Some(EagerLinalgDevice::Cuda(lhs)), EagerLinalgDevice::Cuda(rhs)) if lhs == rhs => {}
-            (Some(lhs), rhs) => {
-                return Err(Error::invalid_argument(
-                    "linalg_host_reference",
-                    "inputs",
-                    format!("all eager linalg inputs must be on the same device, got {lhs:?} and {rhs:?}"),
-                ));
-            }
-        }
-    }
-    Ok(selected.unwrap_or(EagerLinalgDevice::Cpu))
-}
-
-#[cfg(feature = "cuda")]
-fn execute_cuda_eager_linalg(
-    op: LinalgOp,
-    inputs: &[&Tensor],
-    device_ordinal: usize,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let mut backend = tenferro_gpu::CudaBackend::new(device_ordinal)?;
-    execute_linalg(op, inputs, &mut backend)
-}
-
-#[cfg(not(feature = "cuda"))]
-fn execute_cuda_eager_linalg(
-    _op: LinalgOp,
-    _inputs: &[&Tensor],
-    device_ordinal: usize,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    Err(Error::unsupported(
-        "linalg_host_reference",
-        format!(
-            "received CUDA tensor on cuda:{device_ordinal}, but tenferro-linalg was built \
-             without the cuda feature; enable the cuda feature or download the tensor to CPU \
-             before eager linalg"
-        ),
-    ))
-}
-
 impl ExtensionOp for LinalgExtensionOp {
     fn family_id(&self) -> &'static str {
         LINALG_EXTENSION_FAMILY_ID
@@ -614,37 +534,6 @@ impl ExtensionOp for LinalgExtensionOp {
         };
         Ok(metas)
     }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-impl HostReference for LinalgExtensionOp {
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let expected = self.input_count();
-        if inputs.len() != expected {
-            return Err(Error::invalid_argument(
-                "linalg_host_reference",
-                "inputs",
-                format!(
-                    "expected {expected} inputs for {:?}, got {}",
-                    self.op,
-                    inputs.len()
-                ),
-            ));
-        }
-
-        match eager_linalg_device(inputs)? {
-            EagerLinalgDevice::Cpu => {
-                let mut backend = tenferro_cpu::CpuBackend::new();
-                execute_linalg(self.op, inputs, &mut backend)
-            }
-            EagerLinalgDevice::Cuda(device_ordinal) => {
-                execute_cuda_eager_linalg(self.op, inputs, device_ordinal)
-            }
-        }
-    }
 }
 
 fn execute_linalg_extension<B: LinalgBackend + 'static>(
@@ -655,7 +544,7 @@ fn execute_linalg_extension<B: LinalgBackend + 'static>(
     execute_linalg(op.op(), inputs, ctx.backend_mut())
 }
 
-fn execute_linalg_extension_reads<B: LinalgBackend + 'static>(
+pub(crate) fn execute_linalg_extension_reads<B: LinalgBackend + 'static>(
     op: &LinalgExtensionOp,
     inputs: &[TensorRead<'_>],
     ctx: &mut ExtensionExecutionContext<'_, B>,
@@ -682,7 +571,6 @@ define_extension_runtime! {
     op_type = LinalgExtensionOp,
     execute = execute_linalg_extension,
     execute_reads = execute_linalg_extension_reads,
-    register_fn = register_runtime,
     backend_bound = LinalgBackend,
 }
 

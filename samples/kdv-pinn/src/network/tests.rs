@@ -1,6 +1,5 @@
 use super::*;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_tensor::Tensor;
 
 #[test]
@@ -20,7 +19,7 @@ fn mlp_forward_shape() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_with_input_specs(&y, &bindings).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let runtime = crate::cpu_runtime().unwrap();
 
     let x_tensor = Tensor::from_vec_col_major(vec![4, 2], vec![0.0_f64; 8]).unwrap();
     let param_tensors: Vec<Tensor> = specs
@@ -34,6 +33,6 @@ fn mlp_forward_shape() {
     bind_tensors.extend(param_tensors.iter());
     bind_tensors.push(&x_tensor);
 
-    let out = executor.run_with_inputs(&program, &bind_tensors).unwrap();
+    let out = crate::run_single(&runtime, &program, &bind_tensors).unwrap();
     assert_eq!(out.shape(), &[4, 1]);
 }

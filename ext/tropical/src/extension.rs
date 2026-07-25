@@ -1,6 +1,8 @@
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::Hasher;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
@@ -11,16 +13,21 @@ use tenferro_ad::semantic_extension::{
     SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
 };
 use tenferro_einsum::Subscripts;
-use tenferro_ops::ext_op::{
-    ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp, HostReference,
-};
+use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
 use tenferro_ops::SymDim;
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::program::{ProgramValue, SemanticProgramBuilder};
-use tenferro_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError, HostReferenceRuntime};
+use tenferro_runtime::{
+    CoreCapabilityKind, EngineId, ErasedExecutionContext, Error as RuntimeError, ErrorPhase,
+    ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine, ExtensionModule,
+    ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest,
+    PrepareCapability, PrepareError, PreparedOperation, PreparedOperationBinding,
+    ProviderContractError, Result as RuntimeResult, RuntimeConfigError, SpecializationProjection,
+    UnsupportedReason,
+};
 #[cfg(feature = "autodiff")]
 use tenferro_tensor::TensorScalar;
-use tenferro_tensor::{DType, Tensor, TensorBackend};
+use tenferro_tensor::{DType, Tensor, TensorBackend, TensorRead};
 
 use crate::einsum::tropical_einsum_subscripts_with_argmax;
 #[cfg(feature = "autodiff")]
@@ -38,55 +45,327 @@ fn invalid_config(op: &'static str, message: impl Into<String>) -> tenferro_tens
     tenferro_tensor::Error::invalid_argument(op, "configuration", message)
 }
 
-/// Register tropical extension runtimes on a graph or eager executor.
+struct TropicalReferenceEngine<B: TensorBackend + 'static> {
+    family_id: &'static str,
+    engine_id: EngineId,
+    _backend: PhantomData<fn() -> B>,
+}
+
+struct TropicalReferenceModule<B: TensorBackend + 'static> {
+    family_id: &'static str,
+    module_id: ExtensionModuleId,
+    engine_id: EngineId,
+    _backend: PhantomData<fn() -> B>,
+}
+
+#[derive(Debug)]
+struct TropicalReferencePlanningConfig {
+    family_id: &'static str,
+}
+
+struct TropicalReferencePreparedOperation<B: TensorBackend + 'static> {
+    family_id: &'static str,
+    binding: PreparedOperationBinding,
+    specialization: SpecializationProjection,
+    op: Arc<dyn ExtensionOp>,
+    _backend: PhantomData<fn() -> B>,
+}
+
+fn tropical_reference_module_supports(family_id: &'static str, op: &dyn ExtensionOp) -> bool {
+    match family_id {
+        TROPICAL_EINSUM_FAMILY_ID => op.as_any().is::<TropicalEinsumOp>(),
+        #[cfg(feature = "autodiff")]
+        TROPICAL_EINSUM_JVP_FAMILY_ID => op.as_any().is::<TropicalEinsumJvpOp>(),
+        #[cfg(feature = "autodiff")]
+        TROPICAL_EINSUM_VJP_FAMILY_ID => op.as_any().is::<TropicalEinsumVjpOp>(),
+        _ => false,
+    }
+}
+
+fn unsupported_tropical_reference_payload(family_id: &'static str) -> tenferro_tensor::Error {
+    tenferro_tensor::Error::unsupported(
+        "tropical_extension",
+        format!("family_id {family_id:?} has no tropical host-reference module payload"),
+    )
+}
+
+fn execute_tropical_reference_payload(
+    family_id: &'static str,
+    op: &dyn ExtensionOp,
+    inputs: &[&Tensor],
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    match family_id {
+        TROPICAL_EINSUM_FAMILY_ID => {
+            let op = op
+                .as_any()
+                .downcast_ref::<TropicalEinsumOp>()
+                .ok_or_else(|| unsupported_tropical_reference_payload(family_id))?;
+            let result = tropical_einsum_subscripts_with_argmax(op.kind, inputs, &op.subscripts)?;
+            Ok(vec![result.output])
+        }
+        #[cfg(feature = "autodiff")]
+        TROPICAL_EINSUM_JVP_FAMILY_ID => {
+            let op = op
+                .as_any()
+                .downcast_ref::<TropicalEinsumJvpOp>()
+                .ok_or_else(|| unsupported_tropical_reference_payload(family_id))?;
+            validate_tropical_jvp_inputs(inputs, &op.subscripts, &op.active_inputs)?;
+            let primal = tropical_einsum_subscripts_with_argmax(
+                op.kind,
+                &[inputs[0], inputs[1]],
+                &op.subscripts,
+            )?;
+            let step = single_argmax_step(&primal.argmax)?;
+            match primal.output.dtype() {
+                DType::F32 => {
+                    execute_jvp_typed::<f32>(inputs, &op.subscripts, step, &op.active_inputs)
+                        .map(|tensor| vec![tensor])
+                }
+                DType::F64 => {
+                    execute_jvp_typed::<f64>(inputs, &op.subscripts, step, &op.active_inputs)
+                        .map(|tensor| vec![tensor])
+                }
+                dtype => Err(unsupported_dtype("tropical_einsum_jvp", dtype)),
+            }
+        }
+        #[cfg(feature = "autodiff")]
+        TROPICAL_EINSUM_VJP_FAMILY_ID => {
+            let op = op
+                .as_any()
+                .downcast_ref::<TropicalEinsumVjpOp>()
+                .ok_or_else(|| unsupported_tropical_reference_payload(family_id))?;
+            validate_tropical_vjp_inputs(inputs, &op.subscripts, op.active_input)?;
+            let primal = tropical_einsum_subscripts_with_argmax(
+                op.kind,
+                &[inputs[0], inputs[1]],
+                &op.subscripts,
+            )?;
+            let step = single_argmax_step(&primal.argmax)?;
+            match inputs[op.active_input].dtype() {
+                DType::F32 => {
+                    execute_vjp_typed::<f32>(inputs, &op.subscripts, step, op.active_input)
+                        .map(|tensor| vec![tensor])
+                }
+                DType::F64 => {
+                    execute_vjp_typed::<f64>(inputs, &op.subscripts, step, op.active_input)
+                        .map(|tensor| vec![tensor])
+                }
+                dtype => Err(unsupported_dtype("tropical_einsum_vjp", dtype)),
+            }
+        }
+        _ => Err(unsupported_tropical_reference_payload(family_id)),
+    }
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for TropicalReferenceEngine<B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TropicalReferenceEngine")
+            .field("family_id", &self.family_id)
+            .field("engine_id", &self.engine_id)
+            .field("backend_type", &std::any::type_name::<B>())
+            .finish()
+    }
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for TropicalReferenceModule<B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TropicalReferenceModule")
+            .field("family_id", &self.family_id)
+            .field("module_id", &self.module_id)
+            .field("engine_id", &self.engine_id)
+            .field("backend_type", &std::any::type_name::<B>())
+            .finish()
+    }
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for TropicalReferencePreparedOperation<B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TropicalReferencePreparedOperation")
+            .field("family_id", &self.family_id)
+            .field("binding", &self.binding)
+            .field("specialization", &self.specialization)
+            .field("backend_type", &std::any::type_name::<B>())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<B: TensorBackend + 'static> ExtensionEngine for TropicalReferenceEngine<B> {
+    fn family_id(&self) -> &'static str {
+        self.family_id
+    }
+
+    fn engine_id(&self) -> &EngineId {
+        &self.engine_id
+    }
+
+    fn context_identity(&self) -> ExecutionContextIdentity {
+        ExecutionContextIdentity::of::<B>()
+    }
+
+    fn prepare(
+        &self,
+        request: ExtensionPrepareRequest<'_>,
+    ) -> std::result::Result<PrepareCapability, PrepareError> {
+        if request.operation().family_id() != self.family_id {
+            return Err(PrepareError::ProviderContract {
+                source: ProviderContractError::WrongOperationFamily {
+                    expected: CoreCapabilityKind::Elementwise,
+                    operation: self.family_id,
+                },
+            });
+        }
+        if !tropical_reference_module_supports(self.family_id, request.operation()) {
+            return Ok(PrepareCapability::Unsupported(
+                UnsupportedReason::Operation {
+                    operation: self.family_id,
+                },
+            ));
+        }
+        Ok(PrepareCapability::Prepared(Arc::new(
+            TropicalReferencePreparedOperation::<B> {
+                family_id: self.family_id,
+                binding: request.binding().clone(),
+                specialization: request.specialization().clone(),
+                op: request.operation().clone_arc(),
+                _backend: PhantomData,
+            },
+        )))
+    }
+}
+
+impl ExtensionPlanningConfig for TropicalReferencePlanningConfig {
+    fn family_id(&self) -> &'static str {
+        self.family_id
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn payload_hash(&self, state: &mut dyn Hasher) {
+        state.write(self.family_id.as_bytes());
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionPlanningConfig) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| other.family_id == self.family_id)
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+}
+
+impl<B: TensorBackend + 'static> PreparedOperation for TropicalReferencePreparedOperation<B> {
+    fn binding(&self) -> &PreparedOperationBinding {
+        &self.binding
+    }
+
+    fn specialization(&self) -> &SpecializationProjection {
+        &self.specialization
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+
+    fn execute(
+        &self,
+        context: &mut ErasedExecutionContext<'_>,
+        extension_caches: &mut ExtensionCacheStore,
+        inputs: &[TensorRead<'_>],
+    ) -> RuntimeResult<Vec<Tensor>> {
+        let backend = context
+            .downcast_mut::<B>(self.binding.context_identity())
+            .map_err(|source| {
+                RuntimeError::runtime_state_source("extension", ErrorPhase::Execution, source)
+            })?;
+        let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(backend, extension_caches);
+        let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
+            inputs
+                .iter()
+                .cloned()
+                .map(|input| exec.to_contiguous_read(input))
+                .collect::<tenferro_tensor::Result<Vec<_>>>()
+        })?;
+        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+        Ok(execute_tropical_reference_payload(
+            self.family_id,
+            self.op.as_ref(),
+            &input_refs,
+        )?)
+    }
+}
+
+impl<B: TensorBackend + 'static> ExtensionModule for TropicalReferenceModule<B> {
+    fn module_id(&self) -> &ExtensionModuleId {
+        &self.module_id
+    }
+
+    fn configure(
+        &self,
+        registrar: &mut ExtensionModuleRegistrar<'_>,
+    ) -> std::result::Result<(), tenferro_runtime::ExtensionModuleError> {
+        registrar.register_engine(Arc::new(TropicalReferenceEngine::<B> {
+            family_id: self.family_id,
+            engine_id: self.engine_id.clone(),
+            _backend: PhantomData,
+        }))?;
+        registrar.register_planning_config(
+            self.engine_id.clone(),
+            Arc::new(TropicalReferencePlanningConfig {
+                family_id: self.family_id,
+            }),
+        )?;
+        Ok(())
+    }
+}
+
+fn reference_module<B: TensorBackend + 'static>(
+    family_id: &'static str,
+    engine_id: EngineId,
+) -> std::result::Result<Arc<dyn ExtensionModule>, RuntimeConfigError> {
+    Ok(Arc::new(TropicalReferenceModule::<B> {
+        family_id,
+        module_id: ExtensionModuleId::new(format!("{family_id}.module"))?,
+        engine_id,
+        _backend: PhantomData,
+    }))
+}
+
+/// Build tropical extension modules for one runtime engine.
 ///
-/// The runtime executor is intentionally thin: it delegates to each tropical
-/// extension op's optional host reference implementation.
 /// AD rules are registered separately through `tropical_ad_rules` when the
 /// `autodiff` feature is enabled.
 ///
 /// # Errors
 ///
-/// Returns [`tenferro_runtime::ExtensionRuntimeRegistryError`] if runtime
-/// registration fails.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::GraphExecutor;
-///
-/// let mut executor = GraphExecutor::new(CpuBackend::new());
-/// executor
-///     .register_extension(tenferro_ext_tropical::register_runtime)
-///     .unwrap();
-/// assert!(executor
-///     .extension_executor()
-///     .registry()
-///     .contains("tenferro-ext-tropical.einsum.v1"));
-/// ```
-pub fn register_runtime<B: TensorBackend + 'static>(
-    executor: &mut ExtensionExecutor<B>,
-) -> Result<(), ExtensionRuntimeRegistryError> {
-    executor
-        .registry_mut()
-        .register(Arc::new(HostReferenceRuntime::<B>::new(
-            TROPICAL_EINSUM_FAMILY_ID,
-        )))?;
+/// Returns [`RuntimeConfigError`] when a generated module id is invalid.
+pub fn extension_modules<B: TensorBackend + 'static>(
+    engine_id: EngineId,
+) -> std::result::Result<Vec<Arc<dyn ExtensionModule>>, RuntimeConfigError> {
+    let mut modules = Vec::new();
+    modules.push(reference_module::<B>(
+        TROPICAL_EINSUM_FAMILY_ID,
+        engine_id.clone(),
+    )?);
     #[cfg(feature = "autodiff")]
     {
-        executor
-            .registry_mut()
-            .register(Arc::new(HostReferenceRuntime::<B>::new(
-                TROPICAL_EINSUM_JVP_FAMILY_ID,
-            )))?;
-        executor
-            .registry_mut()
-            .register(Arc::new(HostReferenceRuntime::<B>::new(
-                TROPICAL_EINSUM_VJP_FAMILY_ID,
-            )))?;
+        modules.push(reference_module::<B>(
+            TROPICAL_EINSUM_JVP_FAMILY_ID,
+            engine_id.clone(),
+        )?);
+        modules.push(reference_module::<B>(
+            TROPICAL_EINSUM_VJP_FAMILY_ID,
+            engine_id,
+        )?);
     }
-    Ok(())
+    Ok(modules)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -153,17 +432,6 @@ impl ExtensionOp for TropicalEinsumOp {
             "tropical_einsum",
         )?;
         Ok(vec![meta])
-    }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-impl HostReference for TropicalEinsumOp {
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let result = tropical_einsum_subscripts_with_argmax(self.kind, inputs, &self.subscripts)?;
-        Ok(vec![result.output])
     }
 }
 
@@ -257,34 +525,6 @@ impl ExtensionOp for TropicalEinsumJvpOp {
             ctx.require_same_shape(tangent_idx, active)?;
         }
         Ok(vec![primal])
-    }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-#[cfg(feature = "autodiff")]
-impl HostReference for TropicalEinsumJvpOp {
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        validate_tropical_jvp_inputs(inputs, &self.subscripts, &self.active_inputs)?;
-        let primal = tropical_einsum_subscripts_with_argmax(
-            self.kind,
-            &[inputs[0], inputs[1]],
-            &self.subscripts,
-        )?;
-        let step = single_argmax_step(&primal.argmax)?;
-        match primal.output.dtype() {
-            DType::F32 => {
-                execute_jvp_typed::<f32>(inputs, &self.subscripts, step, &self.active_inputs)
-                    .map(|tensor| vec![tensor])
-            }
-            DType::F64 => {
-                execute_jvp_typed::<f64>(inputs, &self.subscripts, step, &self.active_inputs)
-                    .map(|tensor| vec![tensor])
-            }
-            dtype => Err(unsupported_dtype("tropical_einsum_jvp", dtype)),
-        }
     }
 }
 
@@ -399,34 +639,6 @@ impl ExtensionOp for TropicalEinsumVjpOp {
             input_dtypes[self.active_input],
             input_shapes[self.active_input].clone(),
         )])
-    }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-#[cfg(feature = "autodiff")]
-impl HostReference for TropicalEinsumVjpOp {
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        validate_tropical_vjp_inputs(inputs, &self.subscripts, self.active_input)?;
-        let primal = tropical_einsum_subscripts_with_argmax(
-            self.kind,
-            &[inputs[0], inputs[1]],
-            &self.subscripts,
-        )?;
-        let step = single_argmax_step(&primal.argmax)?;
-        match inputs[self.active_input].dtype() {
-            DType::F32 => {
-                execute_vjp_typed::<f32>(inputs, &self.subscripts, step, self.active_input)
-                    .map(|tensor| vec![tensor])
-            }
-            DType::F64 => {
-                execute_vjp_typed::<f64>(inputs, &self.subscripts, step, self.active_input)
-                    .map(|tensor| vec![tensor])
-            }
-            dtype => Err(unsupported_dtype("tropical_einsum_vjp", dtype)),
-        }
     }
 }
 

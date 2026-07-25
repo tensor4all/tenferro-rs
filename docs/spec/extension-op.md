@@ -105,31 +105,14 @@ pub enum StdTensorOp {
 ```
 
 The `ExtensionOp` trait itself is the following contract. All methods are
-required unless explicitly marked `provided`. Host/reference execution is a
-separate optional capability exposed through `HostReference`.
+required unless explicitly marked `provided`. Forward execution is owned by
+runtime-installed `ExtensionModule` implementations, not by `ExtensionOp`.
 
 ```rust
-/// Optional host/reference implementation for an extension family.
-pub trait HostReference: std::fmt::Debug + Send + Sync + 'static {
-    fn execute(
-        &self,
-        inputs: &[&tenferro_tensor::Tensor],
-    ) -> tenferro_tensor::Result<Vec<tenferro_tensor::Tensor>>;
-}
-
 /// Result of attempting to express an extension as standard tensor ops.
 pub enum ExtensionStandardLowering {
     Lowered(Vec<ValueRef<StdTensorOp>>),
     Unsupported,
-}
-
-impl ExtensionStandardLowering {
-    pub fn from_legacy(value: Option<Vec<ValueRef<StdTensorOp>>>) -> Self {
-        match value {
-            Some(outputs) => Self::Lowered(outputs),
-            None => Self::Unsupported,
-        }
-    }
 }
 
 /// An out-of-tree operation that participates in the `StdTensorOp` graph
@@ -201,22 +184,13 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
         ctx: &mut ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
 
-    /// Optional host/reference execution capability.
+    /// Optional standard tensor graph lowering hook.
     ///
-    /// Backend-only extension families MAY return `None`. Runtime execution
-    /// never silently falls back to this hook; a runtime must opt in
-    /// explicitly, for example by registering `HostReferenceRuntime`.
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        None
-    }
-
-    /// Legacy compatibility hook for standard tensor graph lowering.
-    ///
-    /// This is a provided method. Return `Ok(Some(outputs))` after adding only
-    /// standard `StdTensorOp` operations to `builder`. Return `Ok(None)` when
-    /// this payload cannot be represented as standard ops for the supplied
-    /// metadata. Strict peer lowerers treat `Ok(None)` as an explicit
-    /// unsupported-extension error.
+    /// Return `ExtensionStandardLowering::Lowered(outputs)` after adding only
+    /// standard `StdTensorOp` operations to `builder`.
+    /// `ExtensionStandardLowering::Unsupported` means this payload cannot be
+    /// represented as standard ops for the supplied metadata. Strict peer
+    /// lowerers treat `Unsupported` as an explicit unsupported-extension error.
     fn lower_to_standard_ops(
         &self,
         builder: &mut GraphBuilder<StdTensorOp>,
@@ -224,22 +198,7 @@ pub trait ExtensionOp: std::fmt::Debug + Send + Sync + 'static {
         input_dtypes: &[DType],
         input_shapes: &[&[SymDim]],
     ) -> ExtensionLoweringResult {
-        Ok(None)
-    }
-
-    /// Typed standard-op lowering outcome.
-    ///
-    /// New lowerers should call this method so unsupported capability is not
-    /// encoded as a raw `Option`.
-    fn lower_to_standard_ops_typed(
-        &self,
-        builder: &mut GraphBuilder<StdTensorOp>,
-        inputs: &[ValueRef<StdTensorOp>],
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
-    ) -> Result<ExtensionStandardLowering, ExtensionLoweringError> {
-        self.lower_to_standard_ops(builder, inputs, input_dtypes, input_shapes)
-            .map(ExtensionStandardLowering::from_legacy)
+        Ok(ExtensionStandardLowering::Unsupported)
     }
 
     // AD rules are registered separately; see Section 10.
@@ -315,10 +274,10 @@ detail and two equal payloads remain interchangeable when their cache handles
 differ.
 
 There is no monolithic core runtime owner for arbitrary extension cache state.
-`EagerRuntime`, `GraphCompiler`, and `GraphExecutor` own explicit generic
-extension cache stores. Extension crates may use those stores only through the
-owning compiler/runtime/executor context; they MUST NOT hide long-lived caches
-inside semantic payloads, process globals, or thread-local state.
+`EagerRuntime`, `GraphCompiler`, and `Runtime` own explicit bounded cache
+stores. Extension crates may use those stores only through the owning
+compiler/runtime context; they MUST NOT hide long-lived caches inside semantic
+payloads, process globals, or thread-local state.
 
 ### Rationale
 
@@ -681,7 +640,7 @@ identity. Diagnostic provenance is not semantic identity. On a cache hit the
 current graph's provenance replaces cached provenance, so an equivalent cached
 program reports the current extension family and instruction location.
 
-### Graph expansion and host defense
+### Graph expansion and module-boundary defense
 
 An extension frontend that replaces a fused extension node with an equivalent
 core-op fast path MUST attach the extension's inferred shape contract to the
@@ -690,11 +649,11 @@ expanded outputs. It MUST NOT lose validation merely because no
 `apply_expanded_graph_with_shape_contract` is the canonical attachment path and
 runs inference once for both output metadata and constraints.
 
-`HostReference::execute` remains a separate public boundary. A host reference
-MUST validate concrete input count, dtype, rank, and exact shape requirements
-before indexing or computing. Compiled guards are defense in depth for graph
-execution; they do not authorize a direct host-reference caller to bypass
-validation.
+An `ExtensionModule` implementation, including one backed by a simple
+host/reference algorithm, remains a concrete public-boundary executor. It MUST
+validate concrete input count, dtype, rank, and exact shape requirements before
+indexing or computing. Compiled guards are defense in depth for graph
+execution; they do not authorize an extension module to bypass validation.
 
 ### Symbolic-shape interaction
 
@@ -731,32 +690,28 @@ both, with a normatively-split responsibility.
 
 ### Eager path
 
-The eager path runs through `EagerRuntime` and the runtime extension
-dispatcher in `crates/tenferro-runtime/src/extension_runtime.rs`.
-When execution is attached to an `EagerRuntime` and a runtime is registered for
-the extension family, the implementation MUST route `StdTensorOp::Extension(op)`
-through that runtime's `ExtensionExecutor`:
+The eager path runs through `EagerRuntime` and the runtime extension module
+dispatcher. When execution is attached to an `EagerRuntime` and an extension
+module is installed for the extension family, the implementation MUST route
+`StdTensorOp::Extension(op)` through that module's execution contract:
 
 ```rust
 // Conceptual:
-StdTensorOp::Extension(ext) => extension_executor.execute(backend, ext, inputs)?,
+StdTensorOp::Extension(ext) => extension_engine.execute(ext, inputs)?,
 ```
 
 The eager path MUST NOT open a backend execution session for extension
-ops before handing control to the extension runtime; the extension runtime owns
-its execution model and receives the backend plus its runtime-owned cache store.
+ops before handing control to the extension module; the extension module owns
+its execution model and receives its runtime-owned cache store.
 Runtime-owned execution MUST NOT fall back to host/reference execution when an
 extension family is unregistered; that is a missing-runtime error.
 
-Extension families that have a simple host/reference implementation MAY expose
-it through `ExtensionOp::host_reference`. That capability is optional and is
-not part of the mandatory `ExtensionOp` contract. Callers that want to use it
-MUST register a runtime that explicitly delegates to the capability, such as
-`HostReferenceRuntime<B>`. If such a runtime receives an op whose
-`host_reference()` is `None`, it MUST return a typed missing-capability error
-rather than panicking.
+Extension families that have a simple host/reference implementation MAY provide
+an `ExtensionModule` that owns that implementation directly. Such modules MUST
+perform any required payload downcast or capability check during preparation
+and report `Unsupported` rather than falling back implicitly.
 
-Built-in extensions with long-lived caches MUST register a runtime so
+Built-in extensions with long-lived caches MUST install a module so
 `EagerRuntime`-attached execution uses the runtime-owned cache store.
 
 ### Compiled path
@@ -772,7 +727,7 @@ The compiled path runs through
    extension inference driver to populate
    `ExecInstruction::dtype` and `ExecInstruction::output_shapes`.
 3. An `execute_extension_op` dispatcher in `crates/tenferro-runtime/src/exec.rs` that,
-   at runtime, calls the registered `ExtensionExecutor<B>`.
+   at runtime, calls the installed extension module engine.
 4. A single-instruction-boundary category for extensions in
    `crates/tenferro-runtime/src/segment.rs` (similar to `DotGeneral`).
    Extensions MUST NOT participate in elementwise fusion planning
@@ -780,21 +735,15 @@ The compiled path runs through
 
 ### Standard-op lowering hook
 
-`ExtensionOp::lower_to_standard_ops_typed` is the current optional
-owner-provided hook for peer lowerers that cannot execute extension runtimes,
-such as StableHLO/XLA lowering. It returns
+`ExtensionOp::lower_to_standard_ops` is the current optional owner-provided
+typed hook for peer lowerers that cannot execute extension runtimes, such as
+StableHLO/XLA lowering. It returns
 `ExtensionStandardLowering::Lowered(outputs)` or
 `ExtensionStandardLowering::Unsupported`, keeping unsupported capability
 separate from malformed-payload errors. The hook receives fixed input metadata
 and `ValueRef` handles in a fresh `GraphBuilder<StdTensorOp>`. If the
 extension can express the payload as standard tensor ops for those inputs, it
 adds those ops and returns their outputs.
-
-`lower_to_standard_ops` remains a compatibility method for existing extension
-implementations. New peer lowerers MUST consume the typed method. New
-extension implementations MAY continue overriding the legacy method during the
-compatibility period because the provided typed method maps `Ok(Some(outputs))`
-to `Lowered(outputs)` and `Ok(None)` to `Unsupported`.
 
 The hook MUST NOT call backend kernels, inspect tensor values, or fall back to
 `ExtensionOp::host_reference`. It is a graph rewrite hook, not an execution
@@ -811,24 +760,24 @@ payloads or invalid metadata detected while constructing the standard graph.
   extension metadata inference, and assigning
   `last_use` markers. It does not invoke backend kernels.
 - **Peer lowerers** are responsible for: calling
-  `ExtensionOp::lower_to_standard_ops_typed` only when they require a
-  standard-op program and have fixed metadata. If the hook returns
+  `ExtensionOp::lower_to_standard_ops` only when they require a standard-op
+  program and have fixed metadata. If the hook returns
   `Unsupported`, lowering is an explicit unsupported-extension error.
 - **`eager_exec` / `eager_builder`** are responsible for: resolving
   inputs from the builder's tensor cache and calling the runtime-owned
-  extension executor for extension ops. If no extension executor is available,
+  extension module engine for extension ops. If no extension module is available,
   extension execution is an error.
-- **Extension runtime (`ExtensionRuntime<B>`)** is responsible for: actual
+- **Extension module (`ExtensionModule`)** is responsible for: actual
   forward computation, backend use, runtime cache entries, and device placement
   of outputs. The core pipeline MUST NOT second-guess these choices.
-- **Host-reference runtime (`HostReferenceRuntime<B>`)** is responsible for:
-  adapting the optional `HostReference` capability into `ExtensionRuntime<B>`
+- **Reference implementation modules** are responsible for:
+  owning any host/reference algorithm, payload downcast, and validation needed
   when an owner deliberately chooses reference execution.
 
 ### Rationale
 
-Using one `ExtensionRuntime<B>` contract for eager and compiled execution keeps
-runtime caches tied to explicit owners (`EagerRuntime` or `GraphExecutor`) and
+Using one `ExtensionModule` contract for eager and compiled execution keeps
+runtime caches tied to explicit owners (`EagerRuntime` or `Runtime`) and
 avoids hidden thread-local or process-global state in extension crates.
 
 ### Failure signature
@@ -877,8 +826,8 @@ pub fn extension_rules() -> Result<SemanticExtensionRuleSet, ExtensionRegistryEr
 ```
 
 Applications then pass that set through
-`tenferro_ad::AdContext::builder().with_extension_rules(...)`; eager runtimes
-that need extension AD should be built from the same `AdContext`.
+`tenferro_ad::AdContext::builder().with_semantic_extension_rules(...)`; eager
+runtimes that need extension AD should be built from the same `AdContext`.
 
 Double-registration under the same `(family_id, role)` in a rule set MUST be
 rejected with `ExtensionRegistryError::DuplicateRule { family_id, role }`.
@@ -1027,7 +976,7 @@ paths MUST therefore report the same typed constraint diagnostic.
 Extensions MUST NOT materialise zero cotangents for symbolic-shape inputs at
 linearize time. A tangent slot that is inactive MUST be represented as `None`
 in both `tangent_in` and the returned tangent-output vector. Zero synthesis
-happens at the `GraphExecutor::run_with_inputs` boundary, not inside the
+happens at the runtime execution boundary, not inside the
 extension's AD rules.
 
 ### Failure signature
@@ -1099,7 +1048,6 @@ these error types / behaviours in the listed scenarios.
 |---|---|
 | Extension runtime execution returns `Err` | Propagate to caller with `Error::backend_failure("extension", message)` and include `family_id` in `message`. MUST NOT retry, MUST NOT swallow. |
 | Backend lacks a capability the extension needs | The extension runtime SHOULD return `Error::backend_failure(...)` with a descriptive message that includes `family_id` and the missing capability name. The core pipeline MUST NOT fall back to a different backend. |
-| `HostReferenceRuntime` receives an op with no `host_reference()` capability | Return `Error::NoHostReference { family_id }`. MUST NOT panic or synthesize a fake result. |
 | Graph references an unregistered `family_id` at eager or graph runtime execution time | Return a backend/config error with `family_id` and registration guidance. |
 | Graph references an unregistered `family_id` at compile time | Return `Error::Unsupported` from `compile_std_to_exec`. |
 | AD dispatch (`linearize` / `linear_transpose` / primal VJP) encounters an `Extension` with no rule for the required role in the active `SemanticExtensionRuleSet` | Return `ADRuleError::Unsupported` with `family_id` and rule kind; traced transforms and eager `backward` / functional `grad` / `vjp` / `jvp` propagate it through the public `Error` type re-exported by the owning surface crate. |
@@ -1111,13 +1059,13 @@ these error types / behaviours in the listed scenarios.
 | An unresolved compiled equality is false for concrete runtime bindings | `Error::ShapeConstraintViolation` before upload, allocation, backend session creation, or extension dispatch. |
 | Extension runtime returns a tensor on the wrong device | Propagate to the caller as a backend failure (the core pipeline does not re-locate tensors). |
 | AD rule registration with malformed `family_id` | `ExtensionRegistryError::MalformedFamilyId`. |
-| Runtime executor registration with malformed `family_id` | `ExtensionRuntimeRegistryError::MalformedFamilyId`. |
+| Runtime extension module registration with malformed `family_id` | `ExtensionModuleError` wrapping the malformed identity. |
 
 ### Constants for `op` field
 
 Where the table specifies `op: "extension"`, that is the recommended
-constant. Implementations MAY refine it (e.g. `op: "ExtensionOp::linearize"` vs
-`op: "HostReference::execute"`) to give better error messages, as
+constant. Implementations MAY refine it (e.g. `op: "ExtensionOp::linearize"` or
+an extension-module-specific operation name) to give better error messages, as
 long as every `Error` value for an extension includes the `family_id`
 somewhere in its message or fields.
 
@@ -1201,8 +1149,8 @@ tropical einsum:
   contraction order, shape planning, and GEMM layout. The tropical crate owns
   tropical arithmetic, first-winner argmax metadata, fallback execution, and
   optional `tropical-gemm` dispatch.
-- Runtime registration is explicit through `tenferro_ext_tropical::register_runtime`.
-- With the `autodiff` feature, `tenferro_ext_tropical::tropical_ad_rules()`
+- Runtime registration is explicit through `tenferro_ext_tropical::extension_modules`.
+- With the `autodiff` feature, `tenferro_ext_tropical::tropical_semantic_ad_rules()`
   builds an explicit rule set for `tenferro_ad::AdContext`. That rule set
   registers the primal family `tenferro-ext-tropical.einsum.v1` and the JVP
   helper family `tenferro-ext-tropical.einsum_jvp.v1`. The transposed JVP emits

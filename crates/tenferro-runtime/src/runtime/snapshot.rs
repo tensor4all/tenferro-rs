@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::num::NonZeroU64;
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use tenferro_tensor::{Tensor, TensorValue};
 
@@ -13,6 +11,7 @@ use crate::program::FrozenProgram;
 
 use super::cache::{PreparedPlanCacheLimits, RuntimeCacheSet};
 use super::cache_owner::{FrozenCacheOwner, FrozenCacheOwnerKind};
+use super::execution;
 #[cfg(test)]
 use super::extension::ExtensionSlotFullForTest;
 use super::extension::{
@@ -147,6 +146,12 @@ impl RuntimeConfigSnapshot {
         self.extensions.module_count()
     }
 
+    /// Return whether this snapshot contains an extension engine for a family.
+    #[doc(hidden)]
+    pub fn has_extension_family(&self, family_id: &'static str) -> bool {
+        self.extensions.has_family(family_id)
+    }
+
     /// Return an immutable view of a registered engine slot.
     pub fn engine(&self, id: &EngineId) -> Option<EngineSnapshotView<'_>> {
         self.engine_indices
@@ -238,11 +243,9 @@ struct RuntimeState {
     runtime_id: RuntimeId,
     issuer: NonZeroU64,
     next_registration_ordinal: AtomicU64,
-    active: Mutex<Arc<RuntimeConfigSnapshot>>,
+    active: RwLock<Arc<RuntimeConfigSnapshot>>,
     published_epoch: AtomicU64,
     caches: RuntimeCacheSet<PreparedEntryKey, PreparedProgram>,
-    #[cfg(test)]
-    snapshot_lock_calls: AtomicUsize,
 }
 
 /// Runtime owner for immutable configuration snapshots.
@@ -276,14 +279,12 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeStateError::Poisoned`] when the active snapshot mutex was
+    /// Returns [`RuntimeStateError::Poisoned`] when the active snapshot lock was
     /// poisoned by another thread.
     pub fn snapshot(&self) -> Result<Arc<RuntimeConfigSnapshot>, RuntimeStateError> {
-        #[cfg(test)]
-        self.0.snapshot_lock_calls.fetch_add(1, Ordering::SeqCst);
         self.0
             .active
-            .lock()
+            .read()
             .map(|snapshot| Arc::clone(&snapshot))
             .map_err(|_| RuntimeStateError::Poisoned {
                 lock: "runtime.active",
@@ -578,7 +579,7 @@ impl Runtime {
         let mut guard = self
             .0
             .active
-            .lock()
+            .write()
             .map_err(|_| RuntimeReconfigureError::State {
                 source: RuntimeStateError::Poisoned {
                     lock: "runtime.active",
@@ -639,18 +640,8 @@ impl Runtime {
     }
 
     #[cfg(test)]
-    pub(crate) fn reset_snapshot_lock_calls_for_test(&self) {
-        self.0.snapshot_lock_calls.store(0, Ordering::SeqCst);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn snapshot_lock_calls_for_test(&self) -> usize {
-        self.0.snapshot_lock_calls.load(Ordering::SeqCst)
-    }
-
-    #[cfg(test)]
     pub(crate) fn force_epoch_for_test(&self, epoch: RuntimeEpoch) {
-        let mut guard = self.0.active.lock().expect("test runtime lock");
+        let mut guard = self.0.active.write().expect("test runtime lock");
         let mut replacement = (**guard).clone();
         replacement.epoch = epoch;
         *guard = Arc::new(replacement);
@@ -670,7 +661,7 @@ impl Runtime {
     pub(crate) fn poison_active_lock_for_test(&self) {
         let state = Arc::clone(&self.0);
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-            let _guard = state.active.lock().expect("test runtime lock");
+            let _guard = state.active.write().expect("test runtime lock");
             panic!("poison runtime.active for test");
         }));
     }
@@ -819,11 +810,9 @@ impl RuntimeConfigBuilder {
             runtime_id,
             issuer,
             next_registration_ordinal: AtomicU64::new(post_ordinal.get()),
-            active: Mutex::new(snapshot),
+            active: RwLock::new(snapshot),
             published_epoch: AtomicU64::new(epoch.get().get()),
             caches: RuntimeCacheSet::new(PreparedPlanCacheLimits::default()),
-            #[cfg(test)]
-            snapshot_lock_calls: AtomicUsize::new(0),
         };
         Ok(Runtime(Arc::new(state)))
     }
@@ -1226,6 +1215,13 @@ fn freeze_candidate(
                 owner,
             });
         }
+        if let Some(executor) = record.registration.execution_engine.clone() {
+            cache_owners.push(FrozenCacheOwner {
+                id: engine_extension_cache_owner_id(&engine_id),
+                kind: FrozenCacheOwnerKind::Extension,
+                owner: execution::extension_cache_owner(executor),
+            });
+        }
         engine_indices.insert(engine_id, index);
         engines.push(FrozenEngineSlot {
             registration: record.registration,
@@ -1254,6 +1250,14 @@ fn freeze_candidate(
 fn engine_cache_owner_id(engine_id: &EngineId) -> CacheOwnerId {
     let id = engine_id.as_str();
     CacheOwnerId::from_canonical_owner_id(Arc::<str>::from(format!("engine[{}]:{id}", id.len())))
+}
+
+fn engine_extension_cache_owner_id(engine_id: &EngineId) -> CacheOwnerId {
+    let id = engine_id.as_str();
+    CacheOwnerId::from_canonical_owner_id(Arc::<str>::from(format!(
+        "extension-executor[{}]:{id}",
+        id.len()
+    )))
 }
 
 fn allocate_nonzero(counter: &AtomicU64) -> Result<NonZeroU64, RuntimeConfigError> {

@@ -478,7 +478,7 @@ impl TracedTensor {
     ///
     /// ```
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+    /// use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TracedTensor};
     ///
     /// let x = TracedTensor::from_tensor_concrete_shape(
     ///     Tensor::from_vec_col_major(vec![3], vec![10.0_f64, 20.0, 30.0]).unwrap(),
@@ -487,7 +487,14 @@ impl TracedTensor {
     /// let y = x.index_select(-1, &[2, 0]).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
-    /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+    /// let backend = CpuBackend::new();
+    /// let mut builder = Runtime::builder();
+    /// builder
+    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///     .unwrap();
+    /// let runtime = builder.build().unwrap();
+    /// let outputs = runtime.run_compiled(&program, &[]).unwrap();
+    /// let out = &outputs[0];
     ///
     /// assert_eq!(
     ///     out.as_slice::<f64>().unwrap(),
@@ -530,14 +537,21 @@ impl TracedTensor {
     ///
     /// ```
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+    /// use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TracedTensor};
     ///
     /// let a = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![1.0_f64]).unwrap()).unwrap();
     /// let b = TracedTensor::from_tensor_concrete_shape(Tensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap()).unwrap();
     /// let stacked = TracedTensor::stack(&[&a, &b], -1).unwrap();
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&stacked).unwrap();
-    /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+    /// let backend = CpuBackend::new();
+    /// let mut builder = Runtime::builder();
+    /// builder
+    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///     .unwrap();
+    /// let runtime = builder.build().unwrap();
+    /// let outputs = runtime.run_compiled(&program, &[]).unwrap();
+    /// let out = &outputs[0];
     ///
     /// assert_eq!(
     ///     out.as_slice::<f64>().unwrap(),

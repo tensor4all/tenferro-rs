@@ -1,11 +1,10 @@
 #![cfg(feature = "cuda")]
 
 use crate::support;
-use support::RunTraced;
+use support::{cpu_runtime, RunTraced};
 use tenferro_ad::{EagerRuntime, EagerTensor, TracedTensorAdExt};
-use tenferro_cpu::CpuBackend;
 use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
-use tenferro_runtime::{DotGeneralConfig, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{DotGeneralConfig, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::{Buffer, TensorDeviceTransfer};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -50,14 +49,8 @@ fn assert_device_backed(tensor: &Tensor) {
     }
 }
 
-fn eval_cpu_tensor(engine: &mut GraphExecutor<CpuBackend>, tensor: &mut TracedTensor) -> Tensor {
-    tensor.run_with(engine).unwrap().clone()
-}
-
-fn eval_gpu_tensor(engine: &mut GraphExecutor<CudaBackend>, tensor: &mut TracedTensor) -> Tensor {
-    let evaluated = tensor.run_with(engine).unwrap();
-    assert_device_backed(&evaluated);
-    download_tensor(engine.backend().runtime(), &evaluated).unwrap()
+fn eval_cpu_tensor(runtime: &tenferro_runtime::Runtime, tensor: &TracedTensor) -> Tensor {
+    tensor.run_with(runtime).unwrap()
 }
 
 fn upload_traced(backend: &CudaBackend, tensor: &Tensor) -> TracedTensor {
@@ -154,23 +147,55 @@ fn test_gpu_matmul_vjp() {
     let a_cpu = TracedTensor::from_tensor_concrete_shape(a_host.clone()).unwrap();
     let b_cpu = TracedTensor::from_tensor_concrete_shape(b_host.clone()).unwrap();
     let cotangent_cpu = TracedTensor::from_tensor_concrete_shape(cotangent_host.clone()).unwrap();
-    let mut cpu_engine = GraphExecutor::new(CpuBackend::new());
+    let cpu_engine = cpu_runtime();
     let y_cpu = matmul(&a_cpu, &b_cpu);
-    let mut grad_a_cpu = y_cpu.vjp(&a_cpu, &cotangent_cpu).unwrap();
-    let mut grad_b_cpu = y_cpu.vjp(&b_cpu, &cotangent_cpu).unwrap();
-    let cpu_grad_a = eval_cpu_tensor(&mut cpu_engine, &mut grad_a_cpu);
-    let cpu_grad_b = eval_cpu_tensor(&mut cpu_engine, &mut grad_b_cpu);
+    let grad_a_cpu = y_cpu.vjp(&a_cpu, &cotangent_cpu).unwrap();
+    let grad_b_cpu = y_cpu.vjp(&b_cpu, &cotangent_cpu).unwrap();
+    let cpu_grad_a = eval_cpu_tensor(&cpu_engine, &grad_a_cpu);
+    let cpu_grad_b = eval_cpu_tensor(&cpu_engine, &grad_b_cpu);
 
     let gpu_backend = CudaBackend::new(0).unwrap();
-    let a_gpu = upload_traced(&gpu_backend, &a_host);
-    let b_gpu = upload_traced(&gpu_backend, &b_host);
-    let cotangent_gpu = upload_traced(&gpu_backend, &cotangent_host);
-    let mut gpu_engine = GraphExecutor::new(gpu_backend);
-    let y_gpu = matmul(&a_gpu, &b_gpu);
-    let mut grad_a_gpu = y_gpu.vjp(&a_gpu, &cotangent_gpu).unwrap();
-    let mut grad_b_gpu = y_gpu.vjp(&b_gpu, &cotangent_gpu).unwrap();
-    let gpu_grad_a = eval_gpu_tensor(&mut gpu_engine, &mut grad_a_gpu);
-    let gpu_grad_b = eval_gpu_tensor(&mut gpu_engine, &mut grad_b_gpu);
+    let ctx = EagerRuntime::with_cuda_backend(gpu_backend);
+    let a_gpu = EagerTensor::from_tensor_in(
+        upload_tensor(ctx.backend_runtime(), &a_host).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let b_gpu = EagerTensor::from_tensor_in(
+        upload_tensor(ctx.backend_runtime(), &b_host).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let cotangent_gpu = EagerTensor::from_tensor_in(
+        upload_tensor(ctx.backend_runtime(), &cotangent_host).unwrap(),
+        ctx.clone(),
+    )
+    .unwrap();
+    let y_gpu = a_gpu
+        .dot_general(
+            &b_gpu,
+            DotGeneralConfig {
+                lhs_contracting_dims: vec![1],
+                rhs_contracting_dims: vec![0],
+                lhs_batch_dims: vec![],
+                rhs_batch_dims: vec![],
+            },
+        )
+        .unwrap();
+    let gpu_grad_a = ctx
+        .vjp(&y_gpu, &a_gpu, &cotangent_gpu)
+        .unwrap()
+        .materialized()
+        .unwrap();
+    let gpu_grad_b = ctx
+        .vjp(&y_gpu, &b_gpu, &cotangent_gpu)
+        .unwrap()
+        .materialized()
+        .unwrap();
+    assert_device_backed(&gpu_grad_a);
+    assert_device_backed(&gpu_grad_b);
+    let gpu_grad_a = download_tensor(ctx.backend_runtime(), &gpu_grad_a).unwrap();
+    let gpu_grad_b = download_tensor(ctx.backend_runtime(), &gpu_grad_b).unwrap();
 
     assert_f64_tensor_close(&gpu_grad_a, &cpu_grad_a, 1.0e-10, 1.0e-10);
     assert_f64_tensor_close(&gpu_grad_b, &cpu_grad_b, 1.0e-10, 1.0e-10);

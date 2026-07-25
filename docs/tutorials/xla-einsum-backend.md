@@ -18,7 +18,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_einsum::TraceContextEinsumExt;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TraceContext};
+use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TraceContext};
 use tenferro_xla::XlaExecutor;
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
@@ -55,6 +55,16 @@ fn tail_value() -> Result<Tensor, Box<dyn std::error::Error>> {
     )?)
 }
 
+fn cpu_runtime_with_einsum() -> Result<Runtime, Box<dyn std::error::Error>> {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+        tenferro_cpu::runtime_engine_id()?,
+    )?)?;
+    Ok(builder.build()?)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a_value = lhs_value()?;
     let b_value = middle_value()?;
@@ -76,9 +86,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let graph = trace.finish(&[product])?;
     let program = GraphCompiler::new().compile_traced_graph(&graph)?;
 
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.register_extension(tenferro_einsum::register_runtime)?;
-    let cpu_value = executor.run_with_inputs(&program, &[&a_value, &b_value, &c_value])?;
+    let runtime = cpu_runtime_with_einsum()?;
+    let mut outputs = runtime.run_compiled(&program, &[&a_value, &b_value, &c_value])?;
+    assert_eq!(outputs.len(), 1);
+    let cpu_value = outputs.remove(0);
     assert_eq!(cpu_value.shape(), &[2, 2]);
     assert_close(
         cpu_value.as_slice::<f64>().unwrap(),
@@ -116,6 +127,6 @@ export LD_LIBRARY_PATH=$CUDA_PATH/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12
 
 Only fixed-shape extension plans that expand to the supported standard
 operation subset can use this path. Dynamic extension-runtime execution still
-runs through the native `GraphExecutor<B>`. For the full environment setup and
+runs through `Runtime::run_compiled` with installed extension modules. For the full environment setup and
 the external OpenXLA execution check for this generated einsum module, see the
 [XLA and PJRT guide](../guides/xla.md).

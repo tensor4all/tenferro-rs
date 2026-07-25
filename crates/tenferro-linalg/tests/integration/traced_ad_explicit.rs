@@ -4,11 +4,12 @@ use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
 use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::{DType, Error, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{DType, Error, GraphCompiler, Tensor, TracedTensor};
 use tenferro_tensor::{Error as TensorError, TypedTensor};
+
+use super::support;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -33,11 +34,7 @@ fn eval(output: &TracedTensor) -> Tensor {
 fn eval_many(outputs: &[&TracedTensor]) -> Vec<Tensor> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(outputs).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_linalg::register_runtime)
-        .unwrap();
-    executor.run_many(&program).unwrap()
+    support::run_all(&program, &[]).unwrap()
 }
 
 fn reduce_all(tensor: &TracedTensor) -> TracedTensor {

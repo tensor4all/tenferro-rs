@@ -12,12 +12,8 @@
 //! assert_eq!(program.output_count(), 1);
 //! ```
 
-pub(crate) mod cache;
 mod compiler;
-mod executor;
 mod program;
 
-pub use cache::{GraphCompilerCacheStats, GraphExecutorCacheStats};
 pub use compiler::GraphCompiler;
-pub use executor::GraphExecutor;
 pub use program::CompiledGraph;

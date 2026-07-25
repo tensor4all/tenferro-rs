@@ -407,10 +407,7 @@ fn validate_inputs<T>(
 
 fn checked_len(lhs: usize, rhs: usize, _label: &str) -> tenferro_tensor::Result<usize> {
     lhs.checked_mul(rhs).ok_or_else(|| {
-        tenferro_tensor::Error::validation(
-            OP,
-            tenferro_tensor::ValidationError::IntegerOverflow,
-        )
+        tenferro_tensor::Error::validation(OP, tenferro_tensor::ValidationError::IntegerOverflow)
     })
 }
 

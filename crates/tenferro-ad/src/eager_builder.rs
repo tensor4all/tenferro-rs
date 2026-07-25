@@ -2,20 +2,19 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use crate::extension_runtime::ExtensionExecutor;
 use computegraph::{GraphOperation, LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::Error;
+use tenferro_runtime::{Error, Runtime};
 use tenferro_tensor::{Tensor, TensorBackend, TypedTensor};
 use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveBuilder, PrimitiveValue};
 
 use crate::ad_rule_error::DeferredErrors;
-use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
+use crate::eager_exec::exec_op_on_tensors_with_runtime;
 
 pub(crate) struct EagerPrimitiveBuilder<'a, B: TensorBackend + 'static> {
     pub(crate) backend: &'a mut B,
-    pub(crate) extension_executor: Option<&'a mut ExtensionExecutor<B>>,
+    pub(crate) runtime: Option<&'a Runtime>,
     pub(crate) external_data: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     pub(crate) results: Vec<Arc<Tensor>>,
     errors: DeferredErrors,
@@ -25,7 +24,7 @@ impl<B: TensorBackend + 'static> fmt::Debug for EagerPrimitiveBuilder<'_, B> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EagerPrimitiveBuilder")
             .field("backend_type", &std::any::type_name::<B>())
-            .field("has_extension_executor", &self.extension_executor.is_some())
+            .field("has_runtime", &self.runtime.is_some())
             .field("external_data_len", &self.external_data.len())
             .field("results_len", &self.results.len())
             .field("has_error", &self.errors.has_error())
@@ -34,23 +33,21 @@ impl<B: TensorBackend + 'static> fmt::Debug for EagerPrimitiveBuilder<'_, B> {
 }
 
 impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
+    #[cfg(test)]
     pub(crate) fn new(backend: &'a mut B) -> Self {
         Self {
             backend,
-            extension_executor: None,
+            runtime: None,
             external_data: HashMap::new(),
             results: Vec::new(),
             errors: DeferredErrors::default(),
         }
     }
 
-    pub(crate) fn with_extension_executor(
-        backend: &'a mut B,
-        extension_executor: &'a mut ExtensionExecutor<B>,
-    ) -> Self {
+    pub(crate) fn with_runtime(backend: &'a mut B, runtime: Option<&'a Runtime>) -> Self {
         Self {
             backend,
-            extension_executor: Some(extension_executor),
+            runtime,
             external_data: HashMap::new(),
             results: Vec::new(),
             errors: DeferredErrors::default(),
@@ -138,17 +135,9 @@ impl<'a, B: TensorBackend + 'static> EagerPrimitiveBuilder<'a, B> {
             .map(|tensor| tensor.as_ref())
             .collect();
 
-        let outputs = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
-            exec_op_on_tensors_with_extension_executor(
-                &operation,
-                &concrete,
-                self.backend,
-                Some(extension_executor),
-            )
-        } else {
-            exec_op_on_tensors(&operation, &concrete, self.backend)
-        }
-        .map_err(|err| self.runtime_error(err));
+        let outputs =
+            exec_op_on_tensors_with_runtime(&operation, &concrete, self.backend, self.runtime)
+                .map_err(|err| self.runtime_error(err));
 
         let outputs = match outputs {
             Ok(outputs) => outputs,

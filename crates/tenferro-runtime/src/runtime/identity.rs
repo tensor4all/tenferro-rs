@@ -251,7 +251,7 @@ pub struct ExecutionContextIdentity {
 }
 
 impl ExecutionContextIdentity {
-    /// Return the identity of a `Send + Sync + 'static` context type.
+    /// Return the identity of a `'static` context type.
     ///
     /// # Examples
     ///
@@ -260,7 +260,7 @@ impl ExecutionContextIdentity {
     ///
     /// assert_eq!(ExecutionContextIdentity::of::<u64>(), ExecutionContextIdentity::of::<u64>());
     /// ```
-    pub fn of<T: Send + Sync + 'static>() -> Self {
+    pub fn of<T: 'static>() -> Self {
         Self {
             type_id: TypeId::of::<T>(),
             type_name: std::any::type_name::<T>(),

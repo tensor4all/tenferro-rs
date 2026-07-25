@@ -131,10 +131,10 @@ SemanticProgram                  backend and runtime neutral
 Runtime::prepare_for
     |
     v
-PreparedGraph                   runtime-bound scheduled artifact
+PreparedProgram                 runtime-bound prepared artifact
     |
     v
-runtime-owned GraphExecutor
+Runtime::run_compiled
 ```
 
 Eager execution does not run a whole graph compiler for each operation. It
@@ -143,14 +143,14 @@ capability, provider, placement, and resource contracts through a
 single-operation fast path. Sharing contracts does not require eager execution
 to construct graph-only artifacts or pay graph-level orchestration costs.
 
-The current `GraphProgram`, `ExecProgram`, `GraphExecutor<B>`, and
-runtime-private execution staging is a migration input, not the final abstraction
-boundaries. In particular, an executor-shaped instruction stream is not the
-portable compiler artifact.
+The previous `GraphProgram`, executor facade, and runtime-private execution
+staging were migration inputs, not final abstraction boundaries. In
+particular, an executor-shaped instruction stream is not the portable compiler
+artifact.
 
-XLA follows this same path. A whole-program XLA compilation is represented as
-one prepared subgraph operation in a one-node `ScheduledGraph`; the internal
-PJRT executable is not a second public execution pipeline.
+XLA follows this same path. Whole-program XLA compilation is represented as a
+runtime-prepared subgraph operation; the internal PJRT executable is not a
+second public execution pipeline.
 
 The dependency direction is deliberate:
 
@@ -169,10 +169,10 @@ The first implementation keeps the logical program component in
 `CoreSemanticOp`, `ExtensionOp`, semantic metadata, shape guards, effects,
 alias declarations, validation, and process-local structural fingerprints.
 `tenferro-runtime` also owns `TraceContext`, `GraphCompiler`, runtime and
-engine traits, `PreparedGraph`, `ScheduledGraph`, `GraphExecutor`,
-`ResourceArbiter`, and prepared-plan caches. This module-first boundary avoids
-freezing a new public crate while the semantic representation and extension
-interfaces are still changing.
+engine traits, prepared programs, scheduling/resource internals, and
+prepared-plan caches. This module-first boundary avoids freezing a new public
+crate while the semantic representation and extension interfaces are still
+changing.
 
 The logical program component has no dependency on runtime resources,
 providers, scheduling, or AD even while it is physically a runtime module.
@@ -301,21 +301,17 @@ keeping the compiler artifact backend-neutral:
 - `Runtime::run_compiled` and `Runtime::run_compiled_values` are the current
   synchronous runtime-owned execution path. They derive input signatures,
   prepare through the runtime cache using the compiled graph's compiler
-  options, validate shape guards and specialization projection, build the
-  common schedule, and execute through the engine registration's erased tensor
-  backend bridge.
+  options, validate the public input contract and semantic shape guards, and
+  execute through the engine registration's erased tensor backend bridge.
 - `EngineRegistration::with_tensor_backend_executor` attaches that bridge to
   an engine registration. `tenferro-cpu::runtime_engine_registration` provides
   the CPU registration with direct core preparation capabilities, cache-owner
   hooks, and the bridge. `tenferro-runtime` still has no production dependency
   on `tenferro-cpu`.
-- `ScheduledGraph` is now the crate-private executable boundary for core
-  operations, transfers, collectives, and barriers. Transfers have explicit
-  source and destination event domains. Collectives are representable for
-  later phases but rejected by current runtime execution validation.
-- `GraphExecutor<B>` remains a legacy compatibility executor through Phase 5.
-  It restages from `CompiledGraph` using stored compiler options and must not
-  be treated as the final runtime-owned execution path.
+- Runtime-owned preparation is now the executable boundary for core operations
+  and installed extension modules. Transfers, collectives, and barriers remain
+  scheduler-owned node families for later multi-engine work; they are not
+  exposed as a compatibility executor surface.
 
 Phase 5 does not migrate extension-family derived caches, native einsum engine
 planning, CUDA/WebGPU native engines, or XLA subgraph execution. Those remain
@@ -326,18 +322,17 @@ Phase 6 through Phase 8 work.
 Phase 6 lands the first operation-family migration slice without creating a PR:
 
 - `ExtensionStandardLowering` separates successful standard-op lowering from
-  explicit unsupported capability. The legacy `Ok(None)` hook remains as a
-  compatibility entry point, but XLA now consumes the typed outcome instead of
+  explicit unsupported capability. XLA consumes the typed outcome instead of
   treating `Option` as the protocol boundary.
 - `ExtensionCacheStore` reports bounded-cache events (`hits`, `misses`,
   `evictions`, and `clears`) in the shared `CacheStats` shape. Extension cache
   selectors scope entries, retained bytes, and event counters to `All`,
   `Family`, or `Cache`.
-- The CPU einsum runtime path is covered through the registered
-  `EinsumRuntime` and `ExtensionExecutor<CpuBackend>` on a changing concrete
-  shape sequence. Distinct concrete shapes populate distinct native plan-cache
-  entries, and a repeated shape records a cache hit while preserving the
-  current matmul-chain semantics.
+- The CPU einsum runtime path is covered through
+  `tenferro_einsum::extension_module::<CpuBackend>(...)` installed on
+  `Runtime` for a changing concrete shape sequence. Distinct concrete shapes
+  populate distinct native plan-cache entries, and a repeated shape records a
+  cache hit while preserving the current matmul-chain semantics.
 
 This checkpoint deliberately does not guess unresolved ownership decisions.
 The linalg #1377 lifecycle mapping, FFT migration inventory, sparse operation
@@ -732,11 +727,11 @@ transfers and may leave collectives unavailable; reserving the core collective
 node prevents a later sharding design from bypassing common scheduling and
 lifetime rules.
 
-The common `GraphExecutor` is owned by `Runtime`; it is not generic over one
+The common execution bridge is owned by `Runtime`; it is not generic over one
 `TensorBackend`. This permits a single graph to contain CPU work, GPU work,
 explicit transfers, barriers, and work on more than one device. An opaque
 `dyn ExecutableGraph` was considered but rejected because it would hide the
-common scheduling and lifetime model. A generic `GraphExecutor<E>` was also
+common scheduling and lifetime model. A generic per-engine executor was also
 rejected because it makes heterogeneous and multi-GPU execution awkward.
 
 ### Subgraph compilation and fusion
@@ -1015,15 +1010,14 @@ An extension crate owns four pieces:
 4. a typed runtime adapter that connects its operation-family traits to core
    extension dispatch.
 
-The core runtime stores an erased `ExtensionRuntimeAdapter`, but extension
-authors and engines work with typed traits. Registration uses the stable
-`family_id` contract from `docs/spec/extension-op.md` during runtime
-configuration. An explicit `ExtensionModule` may install multiple CPU, CUDA,
-XLA, or reference engine adapters into `RuntimeConfigBuilder`. Semantic payload
-use does not require runtime registration. Runtime extension modules and AD
-rules are installed separately, and no process-global inventory is consulted.
-The result is a resolved `ExtensionSlot`; execution does not repeat a string
-hash lookup.
+The core runtime stores erased `ExtensionEngine` hooks, but extension authors
+and engines work with typed traits. Registration uses the stable `family_id`
+contract from `docs/spec/extension-op.md` during runtime configuration. An
+explicit `ExtensionModule` may install multiple CPU, CUDA, XLA, or reference
+engine adapters into `RuntimeConfigBuilder`. Semantic payload use does not
+require runtime module installation. Runtime extension modules and AD rules are
+installed separately, and no process-global inventory is consulted. The result
+is a resolved `ExtensionSlot`; execution does not repeat a string hash lookup.
 
 ```text
 family_id registration -> validation -> ExtensionSlot resolution
@@ -1045,17 +1039,15 @@ hashing or equality.
 `ExtensionOp` itself is a pure deterministic semantic object: family identity,
 payload identity, arity and metadata, effects and aliases, optional
 `lower_to_core`, and output pruning. It cannot allocate runtime storage,
-inspect providers or input values, or access device and global state. A host
-reference implementation is an explicitly registered
-`HostReferenceExtensionEngine`, not a method on the semantic payload. The
-current `host_reference` bridge is removed when that engine lands; it does not
-remain as a parallel compatibility surface.
+inspect providers or input values, or access device and global state. A
+reference implementation is an explicitly registered `ExtensionEngine`, not a
+method on the semantic payload. There is no parallel compatibility bridge on
+`ExtensionOp`.
 
 Duplicate registration is an error only for the same `(family_id, EngineId)`.
-Replacing an entry is explicit. The current per-execution `register_runtime`
-pattern may be routed through a temporary internal transactional staging path
-within its migration phase, but the old public entry point is then removed. It
-does not auto-register on every call.
+Replacing an entry is explicit. Extension crates expose module constructors
+such as `extension_module::<Backend>(engine_id)`; runtime execution does not
+auto-register operation families on every call.
 
 ### Generic extension lowering and specialization
 
@@ -1097,9 +1089,12 @@ above. It must not request arbitrary input tensor values or private provider
 cache keys. Data-dependent algorithms remain dynamic execution operations
 rather than compile-time inspection of user data.
 
-The current `lower_to_standard_ops` result uses `Ok(None)` for both temporary
-metadata insufficiency and permanent lack of a lowering. Migration replaces
-that ambiguity with `NeedsSpecialization` versus `Unsupported`.
+The current `lower_to_standard_ops` result separates successful lowering,
+unsupported capability, and malformed metadata through
+`ExtensionStandardLowering::{Lowered, Unsupported}` plus
+`ExtensionLoweringError`. Future fragment lowering can add a distinct
+`NeedsSpecialization` outcome if runtime metadata insufficiency must be kept
+separate from permanent lack of a lowering.
 
 Graph lowering is invoked by runtime preparation, because the decision depends
 on available engines and may depend on a concrete input signature. The pure
@@ -1258,10 +1253,10 @@ The primary runtime is explicit and user-owned:
 pub struct Runtime {
     engines: EngineRegistry,
     devices: DeviceRegistry,
-    extensions: ExtensionRuntimeRegistry,
+    extensions: ExtensionModuleRegistry,
     resources: ResourceArbiter,
     plans: PreparedPlanCache,
-    executor: GraphExecutor,
+    execution: RuntimeExecutionBridge,
 }
 ```
 
@@ -2181,11 +2176,12 @@ This minimizes type migration but preserves executor categories, slots,
 lifetimes, and dispatch decisions in the supposedly backend-neutral program.
 Rejected in favor of a semantic artifact followed by runtime plan compilation.
 
-### Use `GraphExecutor<E>` for each engine type
+### Use a generic executor for each engine type
 
 This retains static engine typing but makes CPU/GPU graphs, transfers,
 multi-device scheduling, and extension engines difficult to combine. Rejected
-in favor of a runtime-owned executor over a common `ScheduledGraph`.
+in favor of runtime-owned preparation and execution over common scheduling
+internals.
 
 ### Return only an opaque `dyn ExecutableGraph`
 

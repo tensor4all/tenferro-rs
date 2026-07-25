@@ -29,7 +29,7 @@ OpenXLA execution check or runtime-loaded PJRT plugin
 The native path remains:
 
 ```text
-CompiledGraph -> Runtime::run_compiled or legacy GraphExecutor<B: TensorBackend>
+CompiledGraph -> Runtime::run_compiled
 ```
 
 ## Runtime Dependency Boundary

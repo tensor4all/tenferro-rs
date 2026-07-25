@@ -3,10 +3,9 @@
 //! One test per Error variant introduced by the placeholder binding API.
 
 use crate::support;
-use support::RunTraced;
-use tenferro_cpu::CpuBackend;
+use support::{cpu_runtime, run_compiled_one, RunTraced};
 use tenferro_runtime::error::Error;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor};
 use tenferro_tensor::DType;
 
 #[test]
@@ -14,10 +13,10 @@ fn unexpected_binding_for_data_carrying_leaf() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = x.clone();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let extra = Tensor::from_vec_col_major(vec![2], vec![9.0_f64, 9.0]).unwrap();
     let err = y
-        .run_with_inputs_auto(&mut engine, &[(&x, &extra)])
+        .run_with_inputs_auto(&engine, &[(&x, &extra)])
         .expect_err("binding a non-placeholder must fail");
 
     assert!(
@@ -31,9 +30,9 @@ fn unbound_placeholder() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let err = y
-        .run_with_inputs_auto(&mut engine, &[])
+        .run_with_inputs_auto(&engine, &[])
         .expect_err("unbound placeholder must fail");
 
     assert!(
@@ -48,9 +47,9 @@ fn duplicate_binding() {
     let y = x.clone();
 
     let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let err = y
-        .run_with_inputs_auto(&mut engine, &[(&x, &bound), (&x, &bound)])
+        .run_with_inputs_auto(&engine, &[(&x, &bound), (&x, &bound)])
         .expect_err("duplicate binding must fail");
 
     assert!(matches!(err, Error::DuplicateBinding { .. }), "got {err:?}");
@@ -62,9 +61,9 @@ fn placeholder_dtype_mismatch() {
     let y = x.clone();
 
     let wrong_dtype = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let err = y
-        .run_with_inputs_auto(&mut engine, &[(&x, &wrong_dtype)])
+        .run_with_inputs_auto(&engine, &[(&x, &wrong_dtype)])
         .expect_err("dtype mismatch must fail");
 
     assert!(
@@ -85,9 +84,9 @@ fn placeholder_shape_mismatch_for_concrete_shape_placeholder() {
     let y = x.clone();
 
     let wrong_shape = Tensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let err = y
-        .run_with_inputs_auto(&mut engine, &[(&x, &wrong_shape)])
+        .run_with_inputs_auto(&engine, &[(&x, &wrong_shape)])
         .expect_err("shape mismatch must fail");
 
     match err {
@@ -105,9 +104,9 @@ fn placeholder_rank_mismatch_for_symbolic_shape_placeholder() {
     let y = x.clone();
 
     let wrong_rank = Tensor::from_vec_col_major(vec![4], vec![1.0_f64; 4]).unwrap();
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let err = y
-        .run_with_inputs_auto(&mut engine, &[(&x, &wrong_rank)])
+        .run_with_inputs_auto(&engine, &[(&x, &wrong_rank)])
         .expect_err("rank mismatch must fail");
 
     assert!(
@@ -128,16 +127,16 @@ fn symbolic_shape_placeholder_accepts_any_shape_of_matching_rank() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = x.clone();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let bound = Tensor::from_vec_col_major(vec![7], vec![1.0_f64; 7]).unwrap();
     let out = y
-        .run_with_inputs_auto(&mut engine, &[(&x, &bound)])
+        .run_with_inputs_auto(&engine, &[(&x, &bound)])
         .expect("rank-only placeholder accepts arbitrary shape of that rank");
     assert_eq!(out.shape(), &[7]);
 }
 
 #[test]
-fn executor_run_with_inputs_validates_and_uses_bound_tensors() {
+fn runtime_run_compiled_validates_and_uses_bound_tensors() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
     let bound = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
@@ -148,17 +147,15 @@ fn executor_run_with_inputs_validates_and_uses_bound_tensors() {
         .expect("symbolic placeholder binding should compile");
     assert_eq!(program.output_count(), 1);
 
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    let out = executor.run_with_inputs(&program, &[&bound]).unwrap();
+    let executor = cpu_runtime();
+    let out = run_compiled_one(&executor, &program, &[&bound]).unwrap();
     assert_eq!(out.shape(), &[2]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 
-    let err = executor.run_with_inputs(&program, &[]).unwrap_err();
+    let err = run_compiled_one(&executor, &program, &[]).unwrap_err();
     assert!(matches!(err, Error::UnboundPlaceholder { .. }));
 
-    let err = executor
-        .run_with_inputs(&program, &[&bound, &bound])
-        .unwrap_err();
+    let err = run_compiled_one(&executor, &program, &[&bound, &bound]).unwrap_err();
     assert!(matches!(err, Error::GraphInputCountMismatch { .. }));
 }
 

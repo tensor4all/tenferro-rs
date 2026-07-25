@@ -307,7 +307,7 @@ fn lower_extension_operation(
         .collect::<Vec<_>>();
 
     let output_refs = match op
-        .lower_to_standard_ops_typed(
+        .lower_to_standard_ops(
             &mut builder,
             &input_refs,
             &input_dtypes,

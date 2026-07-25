@@ -1,7 +1,6 @@
 use super::*;
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Result, TracedTensor};
+use tenferro_runtime::{DType, GraphCompiler, Result, TracedTensor};
 use tenferro_tensor::Tensor;
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
@@ -17,9 +16,9 @@ fn eval(tensor: &TracedTensor, bindings: &[(&TracedTensor, &Tensor)]) -> Tensor 
         .map(|(p, t)| (*p, t.dtype(), t.shape()))
         .collect();
     let program = compiler.compile_with_input_specs(tensor, &specs).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let runtime = crate::cpu_runtime().unwrap();
     let inputs: Vec<&Tensor> = bindings.iter().map(|(_, tensor)| *tensor).collect();
-    executor.run_with_inputs(&program, &inputs).unwrap()
+    crate::run_single(&runtime, &program, &inputs).unwrap()
 }
 
 #[test]

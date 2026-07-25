@@ -3,10 +3,10 @@
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
 use tenferro_ext_sparse::{
-    register_runtime, sparse_matmul, sparse_matmul_eager, sparse_semantic_ad_rules, SparseCooTensor,
-    SparseCooTracedTensor,
+    extension_modules, sparse_matmul, sparse_matmul_eager, sparse_semantic_ad_rules,
+    SparseCooTensor, SparseCooTracedTensor,
 };
-use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{Error, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -88,14 +88,29 @@ fn symbolic_values(len: usize) -> TracedTensor {
     .unwrap()
 }
 
+fn cpu_runtime_with_sparse() -> Runtime {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .unwrap();
+    for module in
+        extension_modules::<CpuBackend>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap()
+    {
+        builder.install_extension_module(module).unwrap();
+    }
+    builder.build().unwrap()
+}
+
 fn run_values(values: &TracedTensor) -> Tensor {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(values).expect("compile sparse graph");
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(register_runtime)
-        .expect("register sparse runtime");
-    executor.run(&program).expect("run sparse graph")
+    let runtime = cpu_runtime_with_sparse();
+    let mut outputs = runtime
+        .run_compiled(&program, &[])
+        .expect("run sparse graph");
+    assert_eq!(outputs.len(), 1);
+    outputs.remove(0)
 }
 
 fn sparse_ad() -> AdContext {

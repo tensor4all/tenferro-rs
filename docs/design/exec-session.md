@@ -7,21 +7,23 @@ backend-owned execution scope when the backend has one, such as a GPU runtime
 or the CPU backend's reusable buffer scope. Individual ops must not re-enter
 the same backend scope.
 
-`TensorBackend::with_backend_session` creates the scope. `GraphExecutor`
-owns backend cache and extension runtime state, then routes an `ExecProgram`
-through segmented execution. Consecutive backend-session instructions may run
-inside one backend session.
+`TensorBackend::with_backend_session` creates the scope. `Runtime` owns
+registered backend engines, installed extension modules, prepared-plan caches,
+and extension cache state, then routes a `CompiledGraph` through segmented
+execution. Consecutive backend-session instructions may run inside one backend
+session.
 
 ```
-GraphExecutor::eval_exec_ir(program, inputs)
-  └── segmented execution
-        └── fused backend segment
-              └── backend.with_backend_session(|exec| {
-                      for inst in segment {
-                          exec.transpose(...)
-                          exec.reclaim_buffer(...)
-                      }
-                  })
+Runtime::run_compiled(program, inputs)
+  └── runtime preparation / prepared-plan cache
+        └── segmented execution
+              └── fused backend segment
+                    └── backend.with_backend_session(|exec| {
+                            for inst in segment {
+                                exec.transpose(...)
+                                exec.reclaim_buffer(...)
+                            }
+                        })
 ```
 
 ## Why Sessions

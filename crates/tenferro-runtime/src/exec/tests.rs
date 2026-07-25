@@ -128,6 +128,7 @@ fn host_dispatch_table_excludes_backend_and_ffi_exec_ops() {
 fn exec_instruction_single_output_metadata_stays_inline() {
     let instr = ExecInstruction {
         op: ExecOp::Negate,
+        semantic_operation_index: None,
         input_slots: vec![0],
         output_slots: vec![1],
         dtype: DType::F64,
@@ -221,6 +222,7 @@ fn validate_exec_program_rejects_empty_instruction_outputs() {
     let mut program = empty_program(1);
     program.instructions.push(ExecInstruction {
         op: ExecOp::Negate,
+        semantic_operation_index: None,
         input_slots: vec![0],
         output_slots: vec![],
         dtype: DType::F64,
@@ -243,6 +245,7 @@ fn validate_exec_program_rejects_terminal_value_instruction_input_arity() {
     program.output_slots = vec![0];
     program.instructions.push(ExecInstruction {
         op: ExecOp::Transpose { perm: vec![0] },
+        semantic_operation_index: None,
         input_slots: vec![],
         output_slots: vec![0],
         dtype: DType::F64,
@@ -271,6 +274,7 @@ fn validate_exec_program_accepts_symbolic_shape_reference_inputs() {
             }],
             dims: vec![],
         },
+        semantic_operation_index: None,
         input_slots: vec![0, 1],
         output_slots: vec![2],
         dtype: DType::F64,

@@ -209,8 +209,8 @@ impl XlaExecutor {
     /// Lower a compiled graph to StableHLO without executing it.
     ///
     /// This is the preferred public lowering boundary for graph users. It
-    /// consumes [`CompiledGraph`] directly and does not route through
-    /// `GraphExecutor` or native execution staging.
+    /// consumes [`CompiledGraph`] directly and does not route through native
+    /// [`Runtime`](tenferro_runtime::Runtime) execution staging.
     ///
     /// # Examples
     ///
@@ -291,7 +291,8 @@ impl XlaExecutor {
     /// This wrapper accepts the same [`CompiledGraph`] that native runtime
     /// execution consumes, while preserving the current XLA/PJRT exact-static
     /// `F32`/`F64` subset. It delegates to the semantic-program PJRT executor
-    /// and does not route through `GraphExecutor`.
+    /// and does not route through native [`Runtime`](tenferro_runtime::Runtime)
+    /// execution.
     ///
     /// # Examples
     ///

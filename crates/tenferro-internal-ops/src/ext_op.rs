@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use computegraph::graph::GraphBuilder;
 use computegraph::types::ValueRef;
-use tenferro_tensor::{DType, ErrorKind, Tensor, ValidationKind};
+use tenferro_tensor::{DType, ErrorKind, ValidationKind};
 
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
@@ -279,13 +279,12 @@ impl ExtensionLoweringError {
 
 /// Result returned by [`ExtensionOp::lower_to_standard_ops`].
 pub type ExtensionLoweringResult =
-    std::result::Result<Option<Vec<ValueRef<StdTensorOp>>>, ExtensionLoweringError>;
+    std::result::Result<ExtensionStandardLowering, ExtensionLoweringError>;
 
 /// Typed result of trying to lower an extension into standard tensor ops.
 ///
-/// This is the Phase 6 compatibility boundary for the legacy
-/// [`ExtensionOp::lower_to_standard_ops`] hook. New callers should branch on
-/// this enum instead of treating `Ok(None)` as a capability protocol.
+/// Callers branch on this enum instead of encoding unsupported capability as a
+/// successful empty sentinel.
 ///
 /// # Examples
 ///
@@ -303,65 +302,6 @@ pub enum ExtensionStandardLowering {
     Unsupported,
 }
 
-impl ExtensionStandardLowering {
-    /// Convert the legacy optional lowering result into an explicit outcome.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ops::ext_op::ExtensionStandardLowering;
-    ///
-    /// assert_eq!(
-    ///     ExtensionStandardLowering::from_legacy(None),
-    ///     ExtensionStandardLowering::Unsupported,
-    /// );
-    /// ```
-    pub fn from_legacy(value: Option<Vec<ValueRef<StdTensorOp>>>) -> Self {
-        match value {
-            Some(outputs) => Self::Lowered(outputs),
-            None => Self::Unsupported,
-        }
-    }
-}
-
-/// Host/reference implementation for an extension family.
-///
-/// This capability is optional. Backend-only extension families can omit it
-/// and still implement [`ExtensionOp`]; runtimes that specifically delegate to
-/// host reference execution must report a typed capability-missing error when
-/// this hook is absent.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_ops::ext_op::HostReference;
-/// use tenferro_tensor::Tensor;
-///
-/// #[derive(Debug)]
-/// struct IdentityHost;
-///
-/// impl HostReference for IdentityHost {
-///     fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-///         Ok(vec![inputs[0].clone()])
-///     }
-/// }
-///
-/// let input = Tensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
-/// let output = IdentityHost.execute(&[&input]).unwrap();
-/// assert_eq!(output[0].as_slice::<f64>().unwrap(), &[3.0]);
-/// ```
-pub trait HostReference: Debug + Send + Sync + 'static {
-    /// Execute the extension op on host/reference tensors.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`tenferro_tensor::Error::Validation`] for invalid input
-    /// shapes/dtypes or output arity, [`tenferro_tensor::Error::Unsupported`]
-    /// when the reference implementation does not support an operation, or a
-    /// typed [`tenferro_tensor::Error::BackendSource`] failure from execution.
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>>;
-}
-
 /// The contract every out-of-tree extension primitive must satisfy.
 ///
 /// Implementations appear in the core graph as
@@ -372,8 +312,6 @@ pub trait HostReference: Debug + Send + Sync + 'static {
 ///   + [`payload_eq`][Self::payload_eq];
 /// - fixed arity via [`input_count`][Self::input_count] / [`output_count`][Self::output_count];
 /// - shape / dtype inference via [`infer_output_meta`][Self::infer_output_meta];
-/// - optional host/reference forward execution via
-///   [`host_reference`][Self::host_reference];
 /// - optional fixed-shape standard-op expansion via
 ///   [`lower_to_standard_ops`][Self::lower_to_standard_ops] for peer lowerers
 ///   such as XLA that cannot execute extension runtimes;
@@ -392,9 +330,9 @@ pub trait HostReference: Debug + Send + Sync + 'static {
 /// ```
 /// # use std::any::Any;
 /// use std::sync::Arc;
-/// use tenferro_ops::ext_op::{ExtensionOp, HostReference};
+/// use tenferro_ops::ext_op::ExtensionOp;
 /// use tenferro_ops::{ExtensionShapeContext, SymDim};
-/// use tenferro_tensor::{DType, Tensor};
+/// use tenferro_tensor::DType;
 ///
 /// #[derive(Clone, Debug)]
 /// struct IdentityExt;
@@ -414,15 +352,6 @@ pub trait HostReference: Debug + Send + Sync + 'static {
 ///         ctx: &mut ExtensionShapeContext<'_>,
 ///     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
 ///         Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
-///     }
-///     fn host_reference(&self) -> Option<&dyn HostReference> {
-///         Some(self)
-///     }
-/// }
-///
-/// impl HostReference for IdentityExt {
-///     fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-///         Ok(vec![inputs[0].clone()])
 ///     }
 /// }
 ///
@@ -520,31 +449,13 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
         ctx: &mut ExtensionShapeContext<'_>,
     ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>>;
 
-    // ----- Optional host/reference execution (spec Section 8) -----
-
-    /// Return the host/reference implementation for this payload, when the
-    /// family has one.
+    /// Try to expand this extension into standard tensor graph operations.
     ///
-    /// Backend-only extension families may leave the default `None`. Runtime
-    /// execution never silently falls back to this hook; a runtime must opt in
-    /// explicitly by using this capability.
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        None
-    }
-
-    /// Optionally expand this extension into standard tensor graph operations.
-    ///
-    /// This is the legacy compatibility hook. New lowering callers should call
-    /// [`Self::lower_to_standard_ops_typed`] so the unsupported case is explicit.
-    /// Return `Ok(Some(outputs))` after adding only standard [`StdTensorOp`]
-    /// operations to `builder`. Return `Ok(None)` when this extension family has
-    /// no standard-op lowering for the supplied metadata. Return
-    /// [`ExtensionLoweringError`] when the payload is malformed or the lowering
-    /// detects invalid metadata.
-    ///
-    /// The default implementation returns `Ok(None)` so existing extension
-    /// runtimes keep their native dispatch behavior until their owning crate
-    /// deliberately implements this hook.
+    /// Return [`ExtensionStandardLowering::Lowered`] after adding only standard
+    /// [`StdTensorOp`] operations to `builder`.
+    /// [`ExtensionStandardLowering::Unsupported`] means a peer lowerer may try a
+    /// configured fallback; an [`ExtensionLoweringError`] remains a real
+    /// lowering failure and must not be converted into a capability miss.
     ///
     /// # Errors
     ///
@@ -557,30 +468,7 @@ pub trait ExtensionOp: Debug + Send + Sync + 'static {
         _input_dtypes: &[DType],
         _input_shapes: &[&[SymDim]],
     ) -> ExtensionLoweringResult {
-        Ok(None)
-    }
-
-    /// Try to expand this extension into standard tensor graph operations.
-    ///
-    /// This method preserves existing extension implementations while removing
-    /// `Ok(None)` from new call sites. [`ExtensionStandardLowering::Unsupported`]
-    /// means a lowerer may try a configured fallback; an
-    /// [`ExtensionLoweringError`] remains a real lowering failure and must not be
-    /// converted into a capability miss.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ExtensionLoweringError`] when the extension payload or input
-    /// metadata cannot be lowered safely.
-    fn lower_to_standard_ops_typed(
-        &self,
-        builder: &mut GraphBuilder<StdTensorOp>,
-        inputs: &[ValueRef<StdTensorOp>],
-        input_dtypes: &[DType],
-        input_shapes: &[&[SymDim]],
-    ) -> Result<ExtensionStandardLowering, ExtensionLoweringError> {
-        self.lower_to_standard_ops(builder, inputs, input_dtypes, input_shapes)
-            .map(ExtensionStandardLowering::from_legacy)
+        Ok(ExtensionStandardLowering::Unsupported)
     }
 
     /// Optionally return an equivalent op that produces only live outputs.

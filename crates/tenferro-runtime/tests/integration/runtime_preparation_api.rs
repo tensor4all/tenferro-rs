@@ -93,7 +93,7 @@ fn runtime_extension_module_api_is_public_debug_and_transactional() {
 }
 
 #[test]
-fn prepared_operation_has_metadata_only_contract() {
+fn prepared_operation_has_bounded_execution_contract() {
     fn takes_prepared_operation(_: Option<&dyn PreparedOperation>) {}
     fn takes_prepared_handle(_: Option<&PreparedOperationHandle>) {}
     fn takes_core_traits(
@@ -127,16 +127,18 @@ fn prepared_operation_has_metadata_only_contract() {
         "fn binding(&self) -> &PreparedOperationBinding",
         "fn specialization(&self) -> &SpecializationProjection",
         "fn retained_bytes(&self) -> usize",
+        "fn execute(",
+        "&mut ErasedExecutionContext<'_>",
+        "&mut ExtensionCacheStore",
+        "&[TensorRead<'_>]",
     ] {
         assert!(
             trait_body.contains(required),
-            "PreparedOperation missing required metadata method {required}"
+            "PreparedOperation missing required method/signature fragment {required}"
         );
     }
 
-    for forbidden in [
-        "execute", "Tensor", "Runtime", "lease", "event", "schedule", "buffer", "scratch",
-    ] {
+    for forbidden in ["Runtime", "lease", "event", "schedule", "buffer", "scratch"] {
         assert!(
             !trait_body.contains(forbidden),
             "PreparedOperation must not expose {forbidden}"

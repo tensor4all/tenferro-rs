@@ -4,11 +4,10 @@
 //! matching JAX's standard HVP pattern.
 
 use crate::support;
-use support::RunTraced;
+use support::{cpu_runtime, RunTraced};
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::CpuBackend;
 use tenferro_runtime::traced::TracedTensor;
-use tenferro_runtime::{DotGeneralConfig, GraphExecutor, Tensor, TypedTensor};
+use tenferro_runtime::{DotGeneralConfig, Tensor, TypedTensor};
 
 const TOL: f64 = 1e-5;
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -27,9 +26,9 @@ fn get_f64_data(t: &Tensor) -> &[f64] {
 }
 
 fn eval_tensor(traced: TracedTensor) -> Tensor {
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let t = traced;
-    t.run_with(&mut engine).unwrap().clone()
+    t.run_with(&engine).unwrap().clone()
 }
 
 fn assert_close(actual: &[f64], expected: &[f64], tol: f64) {

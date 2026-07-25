@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
-use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{
     parse_einsum_subscripts, ContractionTree, EinsumOptimize, Subscripts, TensorDotAxes,
     TraceContextEinsumExt, TracedTensorEinsumExt,
 };
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TraceContext, TracedTensor};
+use tenferro_runtime::{GraphCompiler, TraceContext, TracedTensor};
 use tenferro_tensor::{DType, Tensor};
+
+use super::support;
 
 fn spec(tensor: &Tensor) -> ProgramInputSpec {
     ProgramInputSpec::new(tensor.dtype(), DimExpr::from_concrete(tensor.shape()))
@@ -26,11 +27,7 @@ fn compile_and_run(
 ) -> tenferro_runtime::Result<Tensor> {
     let graph = trace.finish(&[output]).unwrap();
     let compiled = GraphCompiler::new().compile_traced_graph(&graph)?;
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_einsum::register_runtime)
-        .unwrap();
-    executor.run(&compiled)
+    support::run_one(&compiled, &[])
 }
 
 #[test]
@@ -147,9 +144,7 @@ fn traced_tensor_tensordot_compatibility_still_executes() {
     let rhs = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]).unwrap();
     let output = lhs.tensordot(&rhs, TensorDotAxes::Count(1)).unwrap();
     let compiled = GraphCompiler::new().compile(&output).unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run(&compiled)
-        .unwrap();
+    let result = support::run_one(&compiled, &[]).unwrap();
 
     assert_eq!(result.shape(), &[2, 2]);
     assert_eq!(result.as_slice::<f64>().unwrap(), &[3.0; 4]);

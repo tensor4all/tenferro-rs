@@ -95,8 +95,8 @@ project already knows it is working with `f64`, `f32`, complex values, or
 another supported scalar type.
 
 Einsum is provided by the `tenferro-einsum` standard extension. Traced code
-uses `TraceContextEinsumExt` and registers `tenferro_einsum::register_runtime`
-on the executor.
+uses `TraceContextEinsumExt` and installs `tenferro_einsum::extension_module`
+on the runtime.
 
 ## Eager Execution And Autodiff
 
@@ -137,13 +137,21 @@ between the eager and direct APIs without conversion.
 ## Traced Graph Execution
 
 `TracedTensor` operations are lazy. They build a graph. A `GraphCompiler`
-lowers that graph into a reusable program, and a `GraphExecutor<B>` runs the
-program on a backend.
+lowers that graph into a reusable program, and `Runtime::run_compiled` runs the
+program on registered runtime engines.
 
 <!-- snippet-source: crates/tenferro-runtime/examples/traced_graph_execution.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
+
+fn cpu_runtime() -> Result<Runtime, Box<dyn std::error::Error>> {
+    let mut builder = Runtime::builder();
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(
+        &CpuBackend::new(),
+    )?)?;
+    Ok(builder.build()?)
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?;
@@ -152,8 +160,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&sum)?;
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    let result = executor.run(&program)?;
+    let runtime = cpu_runtime()?;
+    let mut outputs = runtime.run_compiled(&program, &[])?;
+    assert_eq!(outputs.len(), 1);
+    let result = outputs.pop().unwrap();
 
     assert_eq!(result.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 
@@ -200,4 +210,4 @@ optimization, and repeated execution.
 Core primitive AD rules are available by default. Extension operation families
 that provide AD rules, such as `tenferro-linalg`, require enabling that crate's
 `autodiff` feature and registering the extension rule set with
-`with_extension_rules`.
+`with_semantic_extension_rules`.

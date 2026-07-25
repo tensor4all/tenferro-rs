@@ -13,7 +13,7 @@
 //! ```
 //! use tenferro_linalg::TracedTensorLinalgExt;
 //! use tenferro_cpu::CpuBackend;
-//! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+//! use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 //!
 //! let a = TracedTensor::from_vec_col_major(
 //!     vec![2, 2],
@@ -24,9 +24,17 @@
 //!
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&l).unwrap();
-//! let mut executor = GraphExecutor::new(CpuBackend::new());
-//! executor.register_extension(tenferro_linalg::register_runtime).unwrap();
-//! let out = executor.run(&program).unwrap();
+//! let backend = CpuBackend::new();
+//! let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+//! let mut builder = Runtime::builder();
+//! builder
+//!     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+//!     .unwrap();
+//! builder
+//!     .install_extension_module(tenferro_linalg::extension_module::<CpuBackend>(engine_id).unwrap())
+//!     .unwrap();
+//! let runtime = builder.build().unwrap();
+//! let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 //! assert_eq!(out.shape(), &[2, 2]);
 //! ```
 
@@ -59,7 +67,7 @@ pub use backend::LinalgBackend;
 pub use eager_ext::EagerTensorLinalgExt;
 pub use error::{Error, Result};
 pub use extension::{
-    register_runtime, EighGauge, EighOptions, QrGauge, QrOptions, SvdGauge, SvdOptions,
+    extension_module, EighGauge, EighOptions, QrGauge, QrOptions, SvdGauge, SvdOptions,
     DEFAULT_DECOMPOSITION_DERIVATIVE_EPS, LINALG_EXTENSION_FAMILY_ID,
 };
 pub use tensor_ext::{

@@ -13,8 +13,7 @@ use tidu::{ADRuleError, ADRuleResult, LinearizedGraph, PrimitiveGraph};
 
 use crate::ad_rule_error::DeferredErrors;
 use crate::eager_builder::EagerPrimitiveBuilder;
-use crate::eager_exec::{exec_op_on_tensors, exec_op_on_tensors_with_extension_executor};
-use crate::extension_runtime::ExtensionExecutor;
+use crate::eager_exec::exec_op_on_tensors_with_runtime;
 use crate::metadata::{
     push_metadata_scope, register_scoped_live_graph_metadata, tensor_meta_from_tensor,
     GlobalMetadataScope,
@@ -60,7 +59,6 @@ impl From<Error> for EagerAdFailure {
 
 pub(crate) struct TenferroBackwardCallbacks<'a, B: TensorBackend + 'static> {
     backend: &'a mut B,
-    extension_executor: Option<&'a mut ExtensionExecutor<B>>,
     runtime: Option<&'a EagerRuntime>,
     metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     errors: DeferredErrors,
@@ -68,23 +66,17 @@ pub(crate) struct TenferroBackwardCallbacks<'a, B: TensorBackend + 'static> {
 
 impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
     #[cfg(test)]
-    pub(crate) fn new(
-        backend: &'a mut B,
-        extension_executor: Option<&'a mut ExtensionExecutor<B>>,
-        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
-    ) -> Self {
-        Self::with_runtime(backend, extension_executor, None, metadata_scopes)
+    pub(crate) fn new(backend: &'a mut B, metadata_scopes: Vec<Arc<GlobalMetadataScope>>) -> Self {
+        Self::with_runtime(backend, None, metadata_scopes)
     }
 
     pub(crate) fn with_runtime(
         backend: &'a mut B,
-        extension_executor: Option<&'a mut ExtensionExecutor<B>>,
         runtime: Option<&'a EagerRuntime>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Self {
         Self {
             backend,
-            extension_executor,
             runtime,
             metadata_scopes,
             errors: DeferredErrors::default(),
@@ -174,17 +166,13 @@ impl<'a, B: TensorBackend + 'static> TenferroBackwardCallbacks<'a, B> {
             }
             let resolved_inputs: Vec<&Tensor> =
                 resolved_values.iter().map(|value| value.as_ref()).collect();
-            let outputs_result =
-                if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
-                    exec_op_on_tensors_with_extension_executor(
-                        &op_node.operation,
-                        &resolved_inputs,
-                        self.backend,
-                        Some(extension_executor),
-                    )
-                } else {
-                    exec_op_on_tensors(&op_node.operation, &resolved_inputs, self.backend)
-                };
+            let runtime = self.runtime.map(|runtime| &runtime.runtime);
+            let outputs_result = exec_op_on_tensors_with_runtime(
+                &op_node.operation,
+                &resolved_inputs,
+                self.backend,
+                runtime,
+            );
             let outputs = match outputs_result {
                 Ok(outputs) => outputs,
                 Err(err) => {
@@ -393,14 +381,14 @@ pub(super) fn prefill_linear_residual_values<B: TensorBackend + 'static>(
     linear: &LinearizedGraph<StdTensorOp>,
     external_data: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     backend: &mut B,
-    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
+    runtime: Option<&EagerRuntime>,
 ) -> Result<(), EagerAdFailure> {
     let mut visited = HashSet::new();
     prefill_residual_graph_values(
         linear.residual_graph(),
         external_data,
         backend,
-        &mut extension_executor,
+        runtime,
         &mut visited,
     )
 }
@@ -409,7 +397,7 @@ fn prefill_residual_graph_values<B: TensorBackend + 'static>(
     graph: &Graph<StdTensorOp>,
     external_data: &mut HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
     backend: &mut B,
-    extension_executor: &mut Option<&mut ExtensionExecutor<B>>,
+    runtime: Option<&EagerRuntime>,
     visited: &mut HashSet<*const Graph<StdTensorOp>>,
 ) -> Result<(), EagerAdFailure> {
     let graph_ptr: *const Graph<StdTensorOp> = graph;
@@ -418,7 +406,7 @@ fn prefill_residual_graph_values<B: TensorBackend + 'static>(
     }
 
     for parent in graph.parents() {
-        prefill_residual_graph_values(parent, external_data, backend, extension_executor, visited)?;
+        prefill_residual_graph_values(parent, external_data, backend, runtime, visited)?;
     }
 
     for op_node in graph.operations() {
@@ -441,16 +429,10 @@ fn prefill_residual_graph_values<B: TensorBackend + 'static>(
 
         let resolved_inputs: Vec<&Tensor> =
             resolved_values.iter().map(|value| value.as_ref()).collect();
-        let outputs = match extension_executor.as_deref_mut() {
-            Some(executor) => exec_op_on_tensors_with_extension_executor(
-                &op_node.operation,
-                &resolved_inputs,
-                backend,
-                Some(executor),
-            ),
-            None => exec_op_on_tensors(&op_node.operation, &resolved_inputs, backend),
-        }
-        .map_err(EagerAdFailure::Runtime)?;
+        let runtime = runtime.map(|runtime| &runtime.runtime);
+        let outputs =
+            exec_op_on_tensors_with_runtime(&op_node.operation, &resolved_inputs, backend, runtime)
+                .map_err(EagerAdFailure::Runtime)?;
 
         for (output_id, output) in op_node.outputs.iter().zip(outputs) {
             let key = graph.values()[*output_id].key.clone();
@@ -537,22 +519,16 @@ impl<B: TensorBackend + 'static> BackwardExecutor<StdTensorOp>
             return Err(err);
         }
         let mut external_data = external_data.clone();
-        prefill_linear_residual_values(
-            linear,
-            &mut external_data,
-            self.backend,
-            self.extension_executor.as_deref_mut(),
-        )
-        .map_err(|err| self.record_failure(err))?;
+        prefill_linear_residual_values(linear, &mut external_data, self.backend, self.runtime)
+            .map_err(|err| self.record_failure(err))?;
         ctx.refresh_global_metadata();
         prefill_missing_linear_zero_values(linear, &mut external_data, ctx, self.backend)
             .map_err(|err| self.record_failure(err))?;
 
-        let mut builder = if let Some(extension_executor) = self.extension_executor.as_deref_mut() {
-            EagerPrimitiveBuilder::with_extension_executor(self.backend, extension_executor)
-        } else {
-            EagerPrimitiveBuilder::new(self.backend)
-        };
+        let mut builder = EagerPrimitiveBuilder::with_runtime(
+            self.backend,
+            self.runtime.map(|runtime| &runtime.runtime),
+        );
         builder.external_data = external_data;
         let cotangent_seed_ids = cotangent_out
             .iter()

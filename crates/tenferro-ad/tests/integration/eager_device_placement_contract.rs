@@ -62,7 +62,7 @@ fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() 
     let tensor_path = source_section(
         &eager_exec,
         "fn exec_standard_op_on_tensors",
-        "pub(crate) fn exec_op_on_tensors_with_extension_executor",
+        "pub(crate) fn exec_op_on_tensors_with_runtime",
     );
     assert_ordered_needles(
         "exec_standard_op_on_tensors",

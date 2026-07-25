@@ -14,7 +14,7 @@ once with three. No re-trace or recompile is needed between the two executions.
 use tenferro_cpu::CpuBackend;
 use tenferro_linalg::{SvdOptions, TracedTensorLinalgExt};
 use tenferro_runtime::{
-    CompareDir, CompiledGraph, DType, DotGeneralConfig, GraphCompiler, GraphExecutor, Tensor,
+    CompareDir, CompiledGraph, DType, DotGeneralConfig, GraphCompiler, Runtime, Tensor,
     TracedTensor,
 };
 
@@ -50,7 +50,7 @@ fn truncated_expected(diagonal: &[f64], threshold: f64) -> Vec<f64> {
 }
 
 fn run_case(
-    executor: &mut GraphExecutor<CpuBackend>,
+    runtime: &Runtime,
     reconstructed_program: &CompiledGraph,
     singular_values_program: &CompiledGraph,
     input: &Tensor,
@@ -58,8 +58,14 @@ fn run_case(
     expected_rank: usize,
     expected_values: &[f64],
 ) -> Result<(), tenferro_runtime::Error> {
-    let reconstructed = executor.run_with_inputs(reconstructed_program, &[input, threshold])?;
-    let singular_values = executor.run_with_inputs(singular_values_program, &[input, threshold])?;
+    let mut reconstructed_outputs =
+        runtime.run_compiled(reconstructed_program, &[input, threshold])?;
+    assert_eq!(reconstructed_outputs.len(), 1);
+    let reconstructed = reconstructed_outputs.remove(0);
+    let mut singular_value_outputs =
+        runtime.run_compiled(singular_values_program, &[input, threshold])?;
+    assert_eq!(singular_value_outputs.len(), 1);
+    let singular_values = singular_value_outputs.remove(0);
 
     assert_eq!(singular_values.shape(), &[expected_rank]);
     assert_eq!(reconstructed.shape(), &[4, 4]);
@@ -69,6 +75,19 @@ fn run_case(
         1.0e-10,
     );
     Ok(())
+}
+
+fn cpu_runtime_with_linalg_and_einsum() -> Result<Runtime, Box<dyn std::error::Error>> {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    let engine_id = tenferro_cpu::runtime_engine_id()?;
+    builder.install_extension_module(tenferro_linalg::extension_module::<CpuBackend>(
+        engine_id.clone(),
+    )?)?;
+    builder
+        .install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(engine_id)?)?;
+    Ok(builder.build()?)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -100,14 +119,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reconstructed_program = compiler.compile_with_input_specs(&reconstructed, &input_specs)?;
     let singular_values_program = compiler.compile_with_input_specs(&s_truncated, &input_specs)?;
 
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.register_extension(tenferro_linalg::register_runtime)?;
-    executor.register_extension(tenferro_einsum::register_runtime)?;
+    let runtime = cpu_runtime_with_linalg_and_einsum()?;
 
     let threshold_input = Tensor::from_vec_col_major(vec![], vec![0.5_f64])?;
     let rank2 = diagonal_matrix(&[4.0, 3.0, 0.1, 0.01])?;
     run_case(
-        &mut executor,
+        &runtime,
         &reconstructed_program,
         &singular_values_program,
         &rank2,
@@ -118,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let rank3 = diagonal_matrix(&[4.0, 3.0, 2.0, 0.01])?;
     run_case(
-        &mut executor,
+        &runtime,
         &reconstructed_program,
         &singular_values_program,
         &rank3,

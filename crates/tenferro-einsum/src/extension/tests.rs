@@ -5,7 +5,7 @@ use super::*;
 use crate::optimize::EinsumPlanSpec;
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::ext_op::invoke_extension_shape_inference;
-use tenferro_runtime::{ExtensionCacheStore, ExtensionExecutor};
+use tenferro_runtime::{ExtensionCacheSelector, ExtensionCacheStore, ExtensionExecutionContext};
 use tenferro_tensor::{TensorOwnedView, TensorRead};
 
 #[cfg(feature = "autodiff")]
@@ -138,34 +138,21 @@ fn infer_output_meta_keeps_structural_errors_and_records_extent_equality() {
 }
 
 #[test]
-fn payload_identity_ignores_static_tree_execution_hint() {
-    let subscripts = EinsumSubscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
-    let raw_subscripts = crate::Subscripts::from(&subscripts);
-    let shapes = [&[2, 3][..], &[3, 4][..], &[4, 5][..]];
-    let left_first =
-        Arc::new(ContractionTree::from_pairs(&raw_subscripts, &shapes, &[(0, 1), (3, 2)]).unwrap());
-    let right_first =
-        Arc::new(ContractionTree::from_pairs(&raw_subscripts, &shapes, &[(1, 2), (0, 3)]).unwrap());
-    let plan_spec = EinsumPlanSpec::LeftToRight;
+fn semantic_payload_does_not_store_static_tree_execution_hint() {
+    let source = include_str!("../extension.rs");
+    let payload_start = source
+        .find("pub(crate) struct EinsumExtensionOp")
+        .expect("einsum extension payload should exist");
+    let impl_start = source[payload_start..]
+        .find("impl std::fmt::Debug for EinsumExtensionOp")
+        .expect("debug impl should follow payload")
+        + payload_start;
+    let payload_source = &source[payload_start..impl_start];
 
-    let default_without_hint = EinsumExtensionOp::new(subscripts.clone());
-    let default_hinted =
-        EinsumExtensionOp::with_static_tree(subscripts.clone(), Arc::clone(&left_first));
-    let without_hint = EinsumExtensionOp::with_plan_spec(subscripts.clone(), plan_spec.clone());
-    let hinted_left = EinsumExtensionOp::with_plan_spec(subscripts.clone(), plan_spec.clone())
-        .with_static_tree_hint(left_first);
-    let hinted_right =
-        EinsumExtensionOp::with_plan_spec(subscripts, plan_spec).with_static_tree_hint(right_first);
-
-    assert!(default_without_hint.payload_eq(&default_hinted));
-    assert_eq!(
-        payload_hash(&default_without_hint),
-        payload_hash(&default_hinted)
+    assert!(
+        !payload_source.contains("ContractionTree") && !payload_source.contains("static_tree"),
+        "semantic einsum payload must carry plan identity only; runtime trees belong in prepared/runtime caches"
     );
-    assert!(without_hint.payload_eq(&hinted_left));
-    assert!(hinted_left.payload_eq(&hinted_right));
-    assert_eq!(payload_hash(&without_hint), payload_hash(&hinted_left));
-    assert_eq!(payload_hash(&hinted_left), payload_hash(&hinted_right));
 }
 
 #[test]
@@ -241,8 +228,7 @@ fn execute_einsum_extension_reads_consumes_strided_view_inputs() {
 #[test]
 fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
     let mut backend = CpuBackend::new();
-    let mut executor = ExtensionExecutor::<CpuBackend>::new();
-    register_runtime(&mut executor).unwrap();
+    let mut caches = ExtensionCacheStore::new();
     let op = EinsumExtensionOp::with_plan_spec(
         EinsumSubscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]),
         EinsumPlanSpec::LeftToRight,
@@ -254,9 +240,8 @@ fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
         let mid = Tensor::from_vec_col_major(vec![k, n], sequential_f64(k * n, 10.0)).unwrap();
         let rhs = Tensor::from_vec_col_major(vec![n, p], sequential_f64(n * p, 100.0)).unwrap();
 
-        let outputs = executor
-            .execute(&mut backend, &op, &[&lhs, &mid, &rhs])
-            .unwrap();
+        let mut ctx = ExtensionExecutionContext::new(&mut backend, &mut caches);
+        let outputs = execute_einsum_extension(&op, &[&lhs, &mid, &rhs], &mut ctx).unwrap();
 
         assert_eq!(outputs.len(), 1);
         assert_eq!(outputs[0].shape(), &[m, p]);
@@ -267,12 +252,11 @@ fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
     let lhs = Tensor::from_vec_col_major(vec![m, k], sequential_f64(m * k, 1.0)).unwrap();
     let mid = Tensor::from_vec_col_major(vec![k, n], sequential_f64(k * n, 10.0)).unwrap();
     let rhs = Tensor::from_vec_col_major(vec![n, p], sequential_f64(n * p, 100.0)).unwrap();
-    let outputs = executor
-        .execute(&mut backend, &op, &[&lhs, &mid, &rhs])
-        .unwrap();
+    let mut ctx = ExtensionExecutionContext::new(&mut backend, &mut caches);
+    let outputs = execute_einsum_extension(&op, &[&lhs, &mid, &rhs], &mut ctx).unwrap();
     assert_einsum_matches_matmul_chain(&outputs[0], &lhs, &mid, &rhs);
 
-    let stats = executor.cache_stats();
+    let stats = caches.stats(ExtensionCacheSelector::All);
     assert_eq!(stats.entries, cases.len());
     assert_eq!(stats.misses, cases.len() as u64);
     assert_eq!(stats.hits, 1);
@@ -280,7 +264,7 @@ fn runtime_einsum_changing_shapes_track_native_plan_cache_stats() {
 
 #[test]
 #[cfg(feature = "autodiff")]
-fn vjp_einsum_op_inherits_plan_spec_and_precomputes_concrete_tree() {
+fn vjp_einsum_op_inherits_plan_spec_without_storing_concrete_tree() {
     let primal_op = EinsumExtensionOp::with_plan_spec(
         EinsumSubscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]),
         EinsumPlanSpec::Path(vec![(1, 2), (0, 1)]),
@@ -301,9 +285,6 @@ fn vjp_einsum_op_inherits_plan_spec_and_precomputes_concrete_tree() {
         op.plan_spec(),
         EinsumPlanSpec::FixedPairs(pairs) if pairs == &vec![(1, 2), (0, 3)]
     ));
-    let tree = op.static_tree().expect("expected concrete VJP tree");
-    assert_eq!(tree.step_pair(0), Some((1, 2)));
-    assert_eq!(tree.step_pair(1), Some((0, 3)));
 }
 
 #[test]
@@ -329,9 +310,6 @@ fn vjp_einsum_op_derives_plan_for_nonfirst_active_input() {
         op.plan_spec(),
         EinsumPlanSpec::FixedPairs(pairs) if pairs == &vec![(0, 1), (3, 2)]
     ));
-    let tree = op.static_tree().expect("expected concrete VJP tree");
-    assert_eq!(tree.step_pair(0), Some((0, 1)));
-    assert_eq!(tree.step_pair(1), Some((3, 2)));
 }
 
 #[test]

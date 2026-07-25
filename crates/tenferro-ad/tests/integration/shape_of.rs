@@ -1,8 +1,7 @@
 use crate::support;
-use support::RunTraced;
+use support::{cpu_runtime, RunTraced};
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{Tensor, TracedTensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -20,16 +19,16 @@ fn get_f64_scalar(tensor: &Tensor) -> f64 {
 
 #[test]
 fn shape_of_returns_axis_size() {
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let x = TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![3, 5, 7], vec![0.0; 105]))
         .unwrap();
     let s0 = x.shape_of(0).unwrap();
     let s1 = x.shape_of(1).unwrap();
     let s2 = x.shape_of(2).unwrap();
 
-    assert_eq!(get_f64_scalar(&s0.run_with(&mut engine).unwrap()), 3.0);
-    assert_eq!(get_f64_scalar(&s1.run_with(&mut engine).unwrap()), 5.0);
-    assert_eq!(get_f64_scalar(&s2.run_with(&mut engine).unwrap()), 7.0);
+    assert_eq!(get_f64_scalar(&s0.run_with(&engine).unwrap()), 3.0);
+    assert_eq!(get_f64_scalar(&s1.run_with(&engine).unwrap()), 5.0);
+    assert_eq!(get_f64_scalar(&s2.run_with(&engine).unwrap()), 7.0);
 }
 
 #[test]

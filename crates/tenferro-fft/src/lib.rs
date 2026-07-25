@@ -20,7 +20,7 @@
 //! ```
 //! use num_complex::Complex64;
 //! use tenferro_cpu::CpuBackend;
-//! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+//! use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 //! use tenferro_fft::{FftNorm, TracedTensorFftExt};
 //!
 //! let x = TracedTensor::from_vec_col_major(
@@ -37,9 +37,17 @@
 //!
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let mut executor = GraphExecutor::new(CpuBackend::new());
-//! executor.register_extension(tenferro_fft::register_runtime).unwrap();
-//! let out = executor.run(&program).unwrap();
+//! let backend = CpuBackend::new();
+//! let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+//! let mut builder = Runtime::builder();
+//! builder
+//!     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+//!     .unwrap();
+//! builder
+//!     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+//!     .unwrap();
+//! let runtime = builder.build().unwrap();
+//! let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 //! assert_eq!(out.shape(), &[4]);
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
 //! ```
@@ -103,7 +111,7 @@ use tenferro_ad::semantic_extension::{
 };
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOp, HostReference};
+use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOp};
 #[cfg(feature = "autodiff")]
 use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
@@ -884,40 +892,6 @@ impl ExtensionOp for FftOp {
 
         Ok(vec![(output_dtype, out_shape)])
     }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-impl HostReference for FftOp {
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        execute_host_fft_op(self, inputs)
-    }
-}
-
-fn execute_host_fft_op(op: &FftOp, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-    if inputs.len() != 1 {
-        return Err(tenferro_tensor::Error::invalid_argument(
-            "tenferro-fft",
-            "inputs",
-            format!("expected 1 input, got {}", inputs.len()),
-        ));
-    }
-    let input = inputs[0];
-    let spec = validated_fft_plan_spec(
-        fft_op_name(op.operation),
-        op.operation,
-        input.dtype(),
-        input.shape(),
-        op.n,
-        op.axis,
-        op.norm,
-    )?;
-    cpu::validate_host_fft_input(fft_op_name(op.operation), input)?;
-    let mut plans = FftPlanCache::with_capacity(NonZeroUsize::MIN);
-    let output = cpu::execute_fft_with_plans(input, &spec, &mut plans)?;
-    Ok(vec![output])
 }
 
 fn execute_concrete_fft_op<B: FftBackend>(
@@ -1377,7 +1351,7 @@ fn execute_fft_extension<B: FftBackend + 'static>(
     Ok(vec![output])
 }
 
-fn execute_fft_extension_reads<B: FftBackend + 'static>(
+pub(crate) fn execute_fft_extension_reads<B: FftBackend + 'static>(
     op: &FftOp,
     inputs: &[TensorRead<'_>],
     ctx: &mut ExtensionExecutionContext<'_, B>,
@@ -1401,7 +1375,6 @@ define_extension_runtime! {
     op_type = FftOp,
     execute = execute_fft_extension,
     execute_reads = execute_fft_extension_reads,
-    register_fn = register_runtime,
     backend_bound = FftBackend,
 }
 
@@ -1415,7 +1388,7 @@ define_extension_runtime! {
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]).unwrap();
@@ -1423,9 +1396,17 @@ define_extension_runtime! {
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let mut executor = GraphExecutor::new(CpuBackend::new());
-/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
-/// let out = executor.run(&program).unwrap();
+/// let backend = CpuBackend::new();
+/// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+/// let mut builder = Runtime::builder();
+/// builder
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .unwrap();
+/// builder
+///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .unwrap();
+/// let runtime = builder.build().unwrap();
+/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
 fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor> {
@@ -1440,7 +1421,7 @@ fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Re
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]).unwrap();
@@ -1448,9 +1429,17 @@ fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Re
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let mut executor = GraphExecutor::new(CpuBackend::new());
-/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
-/// let out = executor.run(&program).unwrap();
+/// let backend = CpuBackend::new();
+/// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+/// let mut builder = Runtime::builder();
+/// builder
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .unwrap();
+/// builder
+///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .unwrap();
+/// let runtime = builder.build().unwrap();
+/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(1.0, 0.0));
 /// ```
 fn ifft(
@@ -1473,7 +1462,7 @@ fn ifft(
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
@@ -1481,9 +1470,17 @@ fn ifft(
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let mut executor = GraphExecutor::new(CpuBackend::new());
-/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
-/// let out = executor.run(&program).unwrap();
+/// let backend = CpuBackend::new();
+/// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+/// let mut builder = Runtime::builder();
+/// builder
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .unwrap();
+/// builder
+///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .unwrap();
+/// let runtime = builder.build().unwrap();
+/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 /// assert_eq!(out.shape(), &[2]);
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
@@ -1507,7 +1504,7 @@ fn rfft(
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(
@@ -1519,9 +1516,17 @@ fn rfft(
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let mut executor = GraphExecutor::new(CpuBackend::new());
-/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
-/// let out = executor.run(&program).unwrap();
+/// let backend = CpuBackend::new();
+/// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+/// let mut builder = Runtime::builder();
+/// builder
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .unwrap();
+/// builder
+///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .unwrap();
+/// let runtime = builder.build().unwrap();
+/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 /// ```
 fn irfft(

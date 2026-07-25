@@ -298,8 +298,8 @@ impl PreparedProgram {
         &self.root
     }
 
-    pub(crate) fn specialization(&self) -> &SpecializationProjection {
-        &self.specialization
+    pub(crate) fn operations(&self) -> &[PreparedOperationHandle] {
+        &self.operations
     }
 
     #[cfg(test)]

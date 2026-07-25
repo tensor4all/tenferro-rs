@@ -114,6 +114,17 @@ impl SemanticAdProgram {
     pub fn into_frozen(self) -> FrozenProgram {
         self.frozen
     }
+
+    pub(crate) fn with_input_prefix_bindings_from(
+        &self,
+        source: &FrozenProgram,
+    ) -> Result<Self, ProgramFinishError> {
+        Ok(Self {
+            frozen: self.frozen.with_input_prefix_bindings_from(source)?,
+            derivative_input_indices: self.derivative_input_indices.clone(),
+            derivative_output_indices: self.derivative_output_indices.clone(),
+        })
+    }
 }
 
 /// Build a forward-mode derivative program.

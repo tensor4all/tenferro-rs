@@ -3,10 +3,14 @@ use std::path::PathBuf;
 use tenferro_runtime::{CompiledGraph, GraphCompiler, TracedTensor};
 
 fn repo_file(path: &str) -> String {
+    std::fs::read_to_string(repo_path(path)).expect("source file must be readable")
+}
+
+fn repo_path(path: &str) -> PathBuf {
     let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     root.push("../..");
     root.push(path);
-    std::fs::read_to_string(root).expect("source file must be readable")
+    root
 }
 
 fn assert_no_panic_helpers(path: &str, source: &str) {
@@ -52,6 +56,75 @@ fn compiled_graph_exposes_only_semantic_program_structure() {
     assert_eq!(program.program().outputs().len(), 1);
     assert_eq!(operations.len(), 1);
     assert_eq!(operations[0].outputs().len(), 1);
+}
+
+#[test]
+fn graph_executor_legacy_facade_is_not_public_surface() {
+    let lib = repo_file("crates/tenferro-runtime/src/lib.rs");
+    let graph_mod = repo_file("crates/tenferro-runtime/src/graph/mod.rs");
+    let graph_cache_path = repo_path("crates/tenferro-runtime/src/graph/cache.rs");
+    let graph_cache = std::fs::read_to_string(&graph_cache_path).unwrap_or_default();
+    let graph_compiler = repo_file("crates/tenferro-runtime/src/graph/compiler.rs");
+
+    assert!(
+        !lib.contains("GraphExecutor"),
+        "tenferro-runtime crate root must not export or document the retired GraphExecutor facade"
+    );
+    assert!(
+        !graph_mod.contains("pub use executor::GraphExecutor"),
+        "graph module must not re-export the retired GraphExecutor facade"
+    );
+    assert!(
+        !lib.contains("GraphExecutorCacheStats")
+            && !graph_mod.contains("GraphExecutorCacheStats")
+            && !graph_cache.contains("pub struct GraphExecutorCacheStats"),
+        "GraphExecutor-specific cache stats must not remain public after retiring the facade"
+    );
+    assert!(
+        !graph_cache_path.exists()
+            || (!graph_cache.contains("LegacyStagingCache")
+                && !graph_cache.contains("legacy_staging_cache")),
+        "legacy semantic staging cache module must be removed with the retired facade"
+    );
+    assert!(
+        !lib.contains("GraphCompilerCacheStats")
+            && !graph_mod.contains("GraphCompilerCacheStats")
+            && !graph_compiler.contains("compile_cache")
+            && !graph_compiler.contains("get_or_compile"),
+        "GraphCompiler must not retain the retired ExecProgram compile-cache API"
+    );
+}
+
+#[test]
+fn legacy_extension_executor_registry_is_not_public_surface() {
+    let lib = repo_file("crates/tenferro-runtime/src/lib.rs");
+    let extension = repo_file("crates/tenferro-runtime/src/extension.rs");
+    let extension_context = repo_file("crates/tenferro-runtime/src/extension_execution_context.rs");
+
+    for symbol in [
+        "ExtensionExecutor",
+        "ExtensionRegistry",
+        "ExtensionRuntime",
+        "ExtensionRuntimeRegistryError",
+        "HostReferenceRuntime",
+    ] {
+        assert!(
+            !lib.contains(symbol),
+            "tenferro-runtime crate root must not expose retired legacy extension symbol {symbol}"
+        );
+        assert!(
+            !extension.contains(symbol),
+            "tenferro-runtime::extension must not re-export retired legacy extension symbol {symbol}"
+        );
+    }
+    assert!(
+        !extension_context.contains("pub trait ExtensionRuntime")
+            && !extension_context.contains("pub struct ExtensionRegistry")
+            && !extension_context.contains("pub struct ExtensionExecutor")
+            && !extension_context.contains("pub struct HostReferenceRuntime")
+            && !extension_context.contains("pub enum ExtensionRuntimeRegistryError"),
+        "extension_execution_context.rs must only retain prepared-path context/cache helpers, not legacy executor API"
+    );
 }
 
 #[test]

@@ -726,11 +726,38 @@ impl TracedTensor {
     /// Returns [`Error::RuntimeStateSource`] when symbolic graph metadata
     /// registration is unavailable or its registry state is poisoned.
     pub fn from_tensor_symbolic_shape(tensor: Tensor) -> Result<Self> {
-        let rank = tensor.shape().len();
-        let dtype = tensor.dtype();
+        Self::from_tensor_arc_symbolic_shape(Arc::new(tensor))
+    }
+
+    /// Build a data-attached symbolic-shape traced leaf from shared tensor data.
+    ///
+    /// This is an internal crate-boundary helper for eager AD recording. It
+    /// preserves the same tensor allocation used by the eager value while graph
+    /// passes see symbolic input extents.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tenferro_runtime::{Tensor, TracedTensor};
+    ///
+    /// let tensor = Arc::new(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+    /// let traced = TracedTensor::from_tensor_arc_symbolic_shape(tensor)?;
+    /// assert_eq!(traced.rank, 1);
+    /// assert!(!traced.is_concrete_shape());
+    /// # Ok::<(), tenferro_runtime::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeStateSource`] when symbolic graph metadata
+    /// registration is unavailable or its registry state is poisoned.
+    #[doc(hidden)]
+    pub fn from_tensor_arc_symbolic_shape(data: Arc<Tensor>) -> Result<Self> {
+        let rank = data.shape().len();
+        let dtype = data.dtype();
         let key = next_input_key();
         let id = next_traced_id();
-        let data = Arc::new(tensor);
 
         let mut builder = GraphBuilder::new();
         let val = builder.add_input(key.clone());
@@ -762,7 +789,7 @@ impl TracedTensor {
 
     /// Build a data-less placeholder leaf with a fixed (concrete) shape.
     ///
-    /// Must be bound via [`crate::GraphExecutor::run_with_inputs`] before evaluation.
+    /// Must be passed as an input to [`crate::Runtime::run_compiled`] before evaluation.
     /// Use this when you know the exact shape of the input but want to build
     /// the graph once and feed different concrete tensors at execution time.
     ///
@@ -816,7 +843,7 @@ impl TracedTensor {
     /// Build a data-less placeholder leaf with the given rank but fully
     /// symbolic shape (every dim is a distinct `SymDim::TensorAxis`).
     ///
-    /// Must be bound via [`crate::GraphExecutor::run_with_inputs`] before
+    /// Must be passed as an input to [`crate::Runtime::run_compiled`] before
     /// evaluation. Use this to build shape-agnostic graphs.
     ///
     /// # Examples
@@ -963,6 +990,12 @@ impl TracedTensor {
             ValueKey::Input(key) => Some(key.clone()),
             _ => None,
         }
+    }
+
+    /// Return whether this traced graph carries default data for `key`.
+    #[doc(hidden)]
+    pub fn has_attached_input_key(&self, key: &TensorInputKey) -> bool {
+        self.inputs_map.contains_key(key)
     }
 
     /// Elementwise addition with NumPy-style broadcasting.
@@ -2567,13 +2600,20 @@ impl TracedTensor {
     ///
     /// ```
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     /// let cols = x.shape_of(1)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&cols).unwrap();
-    /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+    /// let backend = CpuBackend::new();
+    /// let mut builder = Runtime::builder();
+    /// builder
+    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///     .unwrap();
+    /// let runtime = builder.build().unwrap();
+    /// let outputs = runtime.run_compiled(&program, &[]).unwrap();
+    /// let out = &outputs[0];
     /// assert_eq!(out.shape(), &[] as &[usize]);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -2604,14 +2644,21 @@ impl TracedTensor {
     ///
     /// ```
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
     /// let size = TracedTensor::from_vec_col_major(vec![], vec![2.0_f64]).unwrap();
     /// let y = x.dynamic_truncate(&size, 0)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
-    /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+    /// let backend = CpuBackend::new();
+    /// let mut builder = Runtime::builder();
+    /// builder
+    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///     .unwrap();
+    /// let runtime = builder.build().unwrap();
+    /// let outputs = runtime.run_compiled(&program, &[]).unwrap();
+    /// let out = &outputs[0];
     /// assert_eq!(out.shape(), &[2]);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```
@@ -2656,14 +2703,21 @@ impl TracedTensor {
     ///
     /// ```
     /// use tenferro_cpu::CpuBackend;
-    /// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+    /// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
     ///
     /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     /// let reference = TracedTensor::from_vec_col_major(vec![4], vec![0.0_f64, 0.0, 0.0, 0.0]).unwrap();
     /// let y = x.pad_to_match(&reference, 0)?;
     /// let mut compiler = GraphCompiler::new();
     /// let program = compiler.compile(&y).unwrap();
-    /// let out = GraphExecutor::new(CpuBackend::new()).run(&program).unwrap();
+    /// let backend = CpuBackend::new();
+    /// let mut builder = Runtime::builder();
+    /// builder
+    ///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    ///     .unwrap();
+    /// let runtime = builder.build().unwrap();
+    /// let outputs = runtime.run_compiled(&program, &[]).unwrap();
+    /// let out = &outputs[0];
     /// assert_eq!(out.shape(), &[4]);
     /// # Ok::<(), tenferro_runtime::Error>(())
     /// ```

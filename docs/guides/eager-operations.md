@@ -238,7 +238,7 @@ means summing down each column and keeping one value per column.
 
 Use `tenferro_einsum::EagerEinsumExt` when working with `EagerTensor`.
 For traced graph execution, use `tenferro_einsum::TraceContextEinsumExt` and
-register `tenferro_einsum::register_runtime` on the `GraphExecutor`.
+install `tenferro_einsum::extension_module` on the `Runtime`.
 
 ## Extracting data
 
@@ -439,5 +439,5 @@ assert_eq!(x.grad().unwrap().unwrap().as_slice::<f64>().unwrap(), &[182.0, 410.0
 | Immediate forward execution through one runtime | `EagerTensor` |
 | Need reverse-mode gradients with gradient slots | tracked `EagerTensor` variables + `backward()` / `backward_with(seed)` |
 | Need functional eager `grad` / `vjp` / `jvp` / HVP composition | `EagerRuntime` functional APIs |
-| Need compiled `grad` / `vjp` / `jvp` / HVP composition | Lazy traced (`TracedTensor` + `GraphCompiler` + `GraphExecutor<B>`) |
-| CUDA execution for supported operations | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `GraphExecutor<B>`) with explicit upload/download |
+| Need compiled `grad` / `vjp` / `jvp` / HVP composition | Lazy traced (`TracedTensor` + `GraphCompiler` + `Runtime`) |
+| CUDA execution for supported operations | Eager (`Tensor` / `EagerTensor`) or lazy traced (`TracedTensor` + `Runtime`) with explicit upload/download |

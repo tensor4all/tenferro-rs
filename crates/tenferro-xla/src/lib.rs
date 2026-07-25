@@ -87,8 +87,8 @@ pub fn lower_to_stablehlo(
 ///
 /// This is the preferred public lowering boundary for graph users. It consumes
 /// the backend-neutral [`CompiledGraph`](tenferro_runtime::CompiledGraph) view
-/// directly and does not route through [`GraphExecutor`](tenferro_runtime::GraphExecutor)
-/// or native execution staging.
+/// directly and does not route through native [`Runtime`](tenferro_runtime::Runtime)
+/// execution staging.
 ///
 /// # Examples
 ///

@@ -56,10 +56,9 @@ parallelism policy:
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::GraphExecutor;
 
-let executor = GraphExecutor::new(CpuBackend::with_threads(4).unwrap());
-assert_eq!(executor.backend().num_threads(), 4);
+let backend = CpuBackend::with_threads(4).unwrap();
+assert_eq!(backend.num_threads(), 4);
 ```
 
 `CpuBackend::new()` reads `RAYON_NUM_THREADS` and falls back to the
@@ -218,17 +217,20 @@ Reuse execution objects when you repeat related work:
 - `GraphCompiler` retains graph lowering and static extension planning caches.
   Its compiled artifact keeps semantic program plus compiler options, not
   backend staging.
-- `GraphExecutor<B>` retains runtime extension plans, compiled inner extension
-  programs, backend analysis, and reusable backend buffers. It is the legacy
-  executor path; prefer runtime-owned `Runtime::run_compiled*` for new compiled
-  execution work.
+- `Runtime` owns prepared-plan caching and registered runtime cache owners.
+  CPU backend buffer pools remain owned by the registered CPU backend.
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor};
+use tenferro_runtime::{GraphCompiler, Runtime};
 
 let mut compiler = GraphCompiler::new();
-let mut executor = GraphExecutor::new(CpuBackend::with_threads(4));
+let backend = CpuBackend::with_threads(4).unwrap();
+let mut builder = Runtime::builder();
+builder
+    .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    .unwrap();
+let runtime = builder.build().unwrap();
 ```
 
 Short-lived scripts can usually ignore cache tuning. Services, notebooks, and
@@ -236,7 +238,7 @@ benchmark harnesses should treat caches as part of runtime resource management.
 
 ## Cache Limits
 
-Runtime, compiler, executor, and eager caches are bounded by default and can be
+Runtime, compiler, eager, and CPU backend caches are bounded by default and can be
 configured independently.
 
 ```rust
@@ -244,7 +246,7 @@ use std::num::NonZeroUsize;
 use tenferro_ad::EagerRuntime;
 use tenferro_runtime::extension::ExtensionCacheLimits;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, PreparedPlanCacheLimits, Runtime};
+use tenferro_runtime::{GraphCompiler, PreparedPlanCacheLimits, Runtime};
 
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(
@@ -257,26 +259,19 @@ runtime.set_prepared_cache_limits(PreparedPlanCacheLimits::new(
 )).unwrap();
 
 let mut compiler = GraphCompiler::new();
-compiler.set_compile_cache_capacity(NonZeroUsize::new(128).unwrap());
-compiler
-    .extension_caches_mut()
-    .set_limits(ExtensionCacheLimits::new(NonZeroUsize::new(128).unwrap()));
+compiler.clear_caches();
 
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor
-    .extension_executor_mut()
-    .set_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(128).unwrap()));
-executor.set_gemm_analysis_cache_capacity(512);
+let mut backend = CpuBackend::new();
+backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024).unwrap();
 ```
 
-For CPU executors, the CPU buffer pool has its own retention limit:
+For CPU backends, the CPU buffer pool has its own retention limit:
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::GraphExecutor;
 
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.set_buffer_pool_limit_bytes(32 * 1024 * 1024);
+let mut backend = CpuBackend::new();
+backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024).unwrap();
 ```
 
 ## Clearing Cached Memory
@@ -288,27 +283,25 @@ than reusing old plans and buffers.
 ```rust
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Runtime};
+use tenferro_runtime::{GraphCompiler, Runtime};
 
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
 let runtime = Runtime::builder().build().unwrap();
 let mut compiler = GraphCompiler::new();
-let mut executor = GraphExecutor::new(CpuBackend::new());
 
 runtime.clear_prepared_cache().unwrap();
+runtime.clear_caches().unwrap();
 compiler.clear_caches();
-executor.clear_caches();
 eager.clear_caches().unwrap();
 ```
 
-For CPU executors, `clear_all_caches()` also clears the CPU buffer pool:
+For CPU backends, clear the buffer pool through the backend:
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::GraphExecutor;
 
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.clear_all_caches();
+let mut backend = CpuBackend::new();
+backend.clear_runtime_caches().unwrap();
 ```
 
 `retained_bytes` in cache stats is tenferro's logical retained-data

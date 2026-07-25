@@ -278,7 +278,7 @@ fn shape_of_each_axis() {
 }
 
 #[test]
-fn extension_op_requires_extension_executor() {
+fn extension_op_requires_installed_extension_module_runtime() {
     let mut b = CpuBackend::new();
     let x = scalar(1.0);
     let err = exec_op_on_tensors(
@@ -290,7 +290,7 @@ fn extension_op_requires_extension_executor() {
 
     let message = err.to_string();
     assert!(
-        message.contains("requires an ExtensionExecutor"),
+        message.contains("requires a Runtime with an installed ExtensionModule"),
         "{message}"
     );
     assert!(

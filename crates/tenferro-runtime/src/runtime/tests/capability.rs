@@ -289,7 +289,7 @@ fn core_prepare_requests_preserve_operation_and_context_borrows() {
 }
 
 #[test]
-fn prepared_operation_source_contract_has_no_execution_surface() {
+fn prepared_operation_source_contract_has_bounded_execution_surface() {
     let source = include_str!("../capability.rs");
     let trait_body = source
         .split_once("pub trait PreparedOperation")
@@ -301,16 +301,18 @@ fn prepared_operation_source_contract_has_no_execution_surface() {
         "fn binding(&self) -> &PreparedOperationBinding",
         "fn specialization(&self) -> &SpecializationProjection",
         "fn retained_bytes(&self) -> usize",
+        "fn execute(",
+        "&mut ErasedExecutionContext<'_>",
+        "&mut ExtensionCacheStore",
+        "&[TensorRead<'_>]",
     ] {
         assert!(
             trait_body.contains(required),
-            "PreparedOperation missing required metadata method {required}"
+            "PreparedOperation missing required method/signature fragment {required}"
         );
     }
 
-    for forbidden in [
-        "execute", "Tensor", "Runtime", "lease", "event", "schedule", "buffer", "scratch",
-    ] {
+    for forbidden in ["Runtime", "lease", "event", "schedule", "buffer", "scratch"] {
         assert!(
             !trait_body.contains(forbidden),
             "PreparedOperation must not expose {forbidden}"

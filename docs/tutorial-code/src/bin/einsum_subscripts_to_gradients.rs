@@ -5,7 +5,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_einsum::{EagerEinsumExt, EinsumOptimize, TraceContextEinsumExt};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::program::ProgramInputSpec;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TraceContext};
+use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TraceContext};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -39,6 +39,16 @@ fn matrix_c() -> Result<Tensor, Box<dyn std::error::Error>> {
     )?)
 }
 
+fn cpu_runtime_with_einsum() -> Result<Runtime, Box<dyn std::error::Error>> {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+        tenferro_cpu::runtime_engine_id()?,
+    )?)?;
+    Ok(builder.build()?)
+}
+
 fn trace_and_run(
     inputs: &[Tensor],
     optimize: EinsumOptimize,
@@ -56,9 +66,10 @@ fn trace_and_run(
     let output = trace.einsum_with(&values, "ij,jk,kl->il", optimize)?;
     let graph = trace.finish(&[output])?;
     let program = GraphCompiler::new().compile_traced_graph(&graph)?;
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.register_extension(tenferro_einsum::register_runtime)?;
-    Ok(executor.run(&program)?)
+    let runtime = cpu_runtime_with_einsum()?;
+    let mut outputs = runtime.run_compiled(&program, &[])?;
+    assert_eq!(outputs.len(), 1);
+    Ok(outputs.remove(0))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

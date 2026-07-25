@@ -13,8 +13,8 @@ use crate::exec::{
     is_host_instruction, reclaim_last_use_inputs_backend, reclaim_last_use_inputs_exec,
     resolve_tensor_shape_exprs, terminal_output_slots, try_execute_terminal_value_instruction,
     validate_exec_program, DispatchMode, ExecInstruction, ExecOp, ExecProgram, ExecSlot,
+    ExtensionExecutionDispatch,
 };
-use crate::extension_runtime::ExtensionExecutor;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::backend::{
     ElementwiseFusionInputView, ElementwiseFusionInst, ElementwiseFusionPlan,
@@ -184,9 +184,9 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
     backend: &mut B,
     program: &ExecProgram,
     inputs: Vec<Tensor>,
-    slots: &mut Vec<Option<ExecSlot<'static>>>,
+    slots: &mut Vec<Option<ExecSlot>>,
     backend_cache: &mut B::RuntimeCache,
-    extension_executor: Option<&mut ExtensionExecutor<B>>,
+    extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<Tensor>> {
     let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
     eval_exec_segmented_slots_with_cache_and_workspace(
@@ -195,7 +195,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
         inputs,
         slots,
         backend_cache,
-        extension_executor,
+        extension_dispatch,
     )
 }
 
@@ -205,10 +205,10 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
 >(
     backend: &mut B,
     program: &ExecProgram,
-    inputs: Vec<ExecSlot<'input>>,
-    slots: &mut Vec<Option<ExecSlot<'input>>>,
+    inputs: Vec<ExecSlot>,
+    slots: &mut Vec<Option<ExecSlot>>,
     backend_cache: &mut B::RuntimeCache,
-    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
+    mut extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<Tensor>> {
     validate_exec_program(program, "segmented executor")?;
     let has_fused_segment = has_multi_instruction_fused_segment(program);
@@ -237,7 +237,7 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
             program,
             inputs,
             slots,
-            extension_executor,
+            extension_dispatch,
         );
     }
 
@@ -274,7 +274,7 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
                         inst,
                         DispatchMode::Segmented,
                         Some(inst_idx),
-                        extension_executor.as_deref_mut(),
+                        extension_dispatch.as_deref_mut(),
                     )?;
                     reclaim_last_use_inputs_backend(slots, inst, backend);
                     inst_idx += 1;
@@ -299,10 +299,10 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
 >(
     backend: &mut B,
     program: &ExecProgram,
-    inputs: Vec<ExecSlot<'input>>,
-    slots: &mut Vec<Option<ExecSlot<'input>>>,
+    inputs: Vec<ExecSlot>,
+    slots: &mut Vec<Option<ExecSlot>>,
     backend_cache: &mut B::RuntimeCache,
-    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
+    mut extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<TensorValue>> {
     validate_exec_program(program, "segmented value executor")?;
     let has_fused_segment = has_multi_instruction_fused_segment(program);
@@ -322,7 +322,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
             inputs,
             slots,
             backend_cache,
-            extension_executor,
+            extension_dispatch,
         );
     }
 
@@ -366,7 +366,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
                             inst,
                             DispatchMode::Segmented,
                             Some(inst_idx),
-                            extension_executor.as_deref_mut(),
+                            extension_dispatch.as_deref_mut(),
                         )?;
                     }
                     reclaim_last_use_inputs_backend(slots, inst, backend);
@@ -395,8 +395,8 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
 fn eval_exec_segmented_single_session_slots_with_workspace<'input, B: TensorBackend>(
     backend: &mut B,
     program: &ExecProgram,
-    inputs: Vec<ExecSlot<'input>>,
-    slots: &mut Vec<Option<ExecSlot<'input>>>,
+    inputs: Vec<ExecSlot>,
+    slots: &mut Vec<Option<ExecSlot>>,
     backend_cache: &mut B::RuntimeCache,
 ) -> Result<Vec<Tensor>> {
     let result = (|| {
@@ -444,8 +444,8 @@ fn eval_exec_segmented_single_session_slots_with_workspace<'input, B: TensorBack
 fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: TensorBackend>(
     backend: &mut B,
     program: &ExecProgram,
-    inputs: Vec<ExecSlot<'input>>,
-    slots: &mut Vec<Option<ExecSlot<'input>>>,
+    inputs: Vec<ExecSlot>,
+    slots: &mut Vec<Option<ExecSlot>>,
     backend_cache: &mut B::RuntimeCache,
 ) -> Result<Vec<TensorValue>> {
     let result = (|| {
@@ -508,7 +508,7 @@ fn eval_exec_segmented_single_session_slot_values_with_workspace<'input, B: Tens
 
 fn execute_fused_segment(
     exec: &mut dyn BackendSession,
-    slots: &mut [Option<ExecSlot<'_>>],
+    slots: &mut [Option<ExecSlot>],
     instructions: &[ExecInstruction],
     input_slots: &[usize],
     output_slots: &[usize],
@@ -556,7 +556,7 @@ fn execute_fused_segment(
 
 fn execute_fused_value_segment(
     exec: &mut dyn BackendSession,
-    slots: &mut [Option<ExecSlot<'_>>],
+    slots: &mut [Option<ExecSlot>],
     instructions: &[ExecInstruction],
     input_slots: &[usize],
     output_slots: &[usize],
@@ -644,7 +644,7 @@ fn has_multi_instruction_fused_segment(program: &ExecProgram) -> bool {
 
 fn try_execute_broadcast_multiply_segment(
     exec: &mut dyn tenferro_tensor::BackendSession,
-    slots: &[Option<ExecSlot<'_>>],
+    slots: &[Option<ExecSlot>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
 ) -> Result<Option<Tensor>> {
@@ -758,7 +758,7 @@ fn aligned_broadcast_dims(source_shape: &[usize], target_shape: &[usize]) -> Opt
 }
 
 fn read_slot<'slot, 'input>(
-    slots: &'slot [Option<ExecSlot<'input>>],
+    slots: &'slot [Option<ExecSlot>],
     slot: usize,
 ) -> Result<TensorRead<'slot>>
 where
@@ -773,7 +773,7 @@ where
 
 fn try_execute_single_broadcast_multiply_segment(
     exec: &mut dyn tenferro_tensor::BackendSession,
-    slots: &[Option<ExecSlot<'_>>],
+    slots: &[Option<ExecSlot>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
 ) -> Result<Option<Tensor>> {
@@ -838,7 +838,7 @@ fn try_execute_single_broadcast_multiply_segment(
 
 fn try_execute_terminal_broadcast_multiply_value_segment(
     exec: &mut dyn tenferro_tensor::BackendSession,
-    slots: &[Option<ExecSlot<'_>>],
+    slots: &[Option<ExecSlot>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
     terminal_slots: &[bool],
@@ -893,7 +893,7 @@ fn try_execute_terminal_broadcast_multiply_value_segment(
 
 fn try_execute_terminal_single_broadcast_multiply_value_segment(
     exec: &mut dyn tenferro_tensor::BackendSession,
-    slots: &[Option<ExecSlot<'_>>],
+    slots: &[Option<ExecSlot>],
     instructions: &[ExecInstruction],
     output_slots: &[usize],
     terminal_slots: &[bool],
@@ -1085,7 +1085,7 @@ fn build_fused_segment(
 }
 
 fn collect_segment_inputs<'a>(
-    slots: &'a [Option<ExecSlot<'_>>],
+    slots: &'a [Option<ExecSlot>],
     input_slots: &[usize],
 ) -> Result<Vec<&'a Tensor>> {
     input_slots
@@ -1100,7 +1100,7 @@ fn collect_segment_inputs<'a>(
 }
 
 fn reclaim_segment_inputs_exec(
-    slots: &mut [Option<ExecSlot<'_>>],
+    slots: &mut [Option<ExecSlot>],
     input_slots: &[usize],
     last_use: &[bool],
     exec: &mut dyn tenferro_tensor::BackendSession,

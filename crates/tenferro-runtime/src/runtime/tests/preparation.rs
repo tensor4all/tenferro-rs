@@ -114,11 +114,15 @@ impl PreparedOperation for RecordingPreparedOperation {
     }
 }
 
-fn repo_file(path: &str) -> String {
+fn repo_path(path: &str) -> PathBuf {
     let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     root.push("../..");
     root.push(path);
-    std::fs::read_to_string(root).expect("source file must be readable")
+    root
+}
+
+fn repo_file(path: &str) -> String {
+    std::fs::read_to_string(repo_path(path)).expect("source file must be readable")
 }
 
 fn engine_id(value: &str) -> EngineId {
@@ -477,9 +481,20 @@ fn phase5_deletes_phase4_only_staging_adapter_name() {
 #[test]
 fn phase5_runtime_execution_module_is_the_only_new_execution_owner() {
     let runtime_mod = repo_file("crates/tenferro-runtime/src/runtime/mod.rs");
-    let graph_executor = repo_file("crates/tenferro-runtime/src/graph/executor.rs");
+    let graph_executor = repo_path("crates/tenferro-runtime/src/graph/executor.rs");
+    let graph_mod = repo_file("crates/tenferro-runtime/src/graph/mod.rs");
 
     assert!(runtime_mod.contains("mod execution;"));
     assert!(runtime_mod.contains("mod schedule;"));
-    assert!(graph_executor.contains("legacy"));
+    assert!(
+        !graph_executor.exists(),
+        "retired graph executor facade file must not remain"
+    );
+    assert!(
+        !graph_mod.contains("mod executor")
+            && !graph_mod.contains("pub use executor")
+            && !graph_mod.contains("GraphExecutor")
+            && !graph_mod.contains("legacy"),
+        "retired graph executor facade and legacy execution path must not remain in graph modules"
+    );
 }

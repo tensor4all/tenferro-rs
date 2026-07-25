@@ -5,16 +5,15 @@ use std::sync::Arc;
 use computegraph::GraphOperation;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::ad_support::push_metadata_scope;
-use tenferro_runtime::{Error, ErrorPhase, Result};
-use tenferro_tensor::{Tensor, TensorValue};
+use tenferro_runtime::{Error, ErrorPhase, ExtensionModule, Result};
+use tenferro_tensor::{Tensor, TensorRead, TensorValue};
 
 use crate::eager::{eager_grad_recording_enabled, record_eager_outputs, EagerRuntime, EagerTensor};
+use crate::eager_backend::EagerBackend;
 
-pub use tenferro_ops::ext_op::HostReference;
 pub use tenferro_runtime::extension::{
     apply, ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
-    ExtensionExecutionContext, ExtensionExecutor, ExtensionFamilyId, ExtensionOp,
-    ExtensionRegistry, ExtensionRuntime, ExtensionRuntimeRegistryError,
+    ExtensionExecutionContext, ExtensionFamilyId, ExtensionOp,
 };
 
 /// Adopt an untracked eager tensor value produced by this runtime's backend.
@@ -71,6 +70,48 @@ pub fn adopt_untracked_eager_value(ctx: Arc<EagerRuntime>, value: TensorValue) -
 /// `Error::ContextMismatch` when tensors belong to different eager runtimes;
 /// backend, extension, and runtime-state failures retain their typed sources.
 pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<Vec<EagerTensor>> {
+    let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
+    let std_op = StdTensorOp::Extension(op);
+    let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
+    let outputs = ctx.exec_outputs_read(&std_op, &input_reads)?;
+    finish_eager_extension_outputs(ctx, std_op, inputs, outputs)
+}
+
+/// Apply an extension op to eager tensors through a direct prepared-operation callback.
+///
+/// This keeps eager extension execution on the extension crate's semantic
+/// implementation without using the retired legacy extension executor.
+///
+/// # Errors
+///
+/// Returns `Error::Validation` with `InvalidArgument` when `inputs` is empty
+/// or its length differs from the extension's declared input count. Returns
+/// `Error::ContextMismatch` when tensors belong to different eager runtimes;
+/// backend, extension, and runtime-state failures retain their typed sources.
+pub fn apply_eager_with_extension_context(
+    op: Arc<dyn ExtensionOp>,
+    inputs: &[&EagerTensor],
+    module: Arc<dyn ExtensionModule>,
+    execute: impl FnOnce(
+        &dyn ExtensionOp,
+        &[TensorRead<'_>],
+        &mut ExtensionExecutionContext<'_, EagerBackend>,
+    ) -> tenferro_tensor::Result<Vec<Tensor>>,
+) -> Result<Vec<EagerTensor>> {
+    let ctx = validate_eager_extension_inputs(op.as_ref(), inputs)?;
+    ctx.install_extension_module(module)?;
+    let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
+    let outputs = ctx.with_backend_and_extension_caches_mut(|backend, extension_caches| {
+        let mut extension_ctx = ExtensionExecutionContext::new(backend, extension_caches);
+        execute(op.as_ref(), &input_reads, &mut extension_ctx)
+    })?;
+    finish_eager_extension_outputs(ctx, StdTensorOp::Extension(op), inputs, outputs)
+}
+
+fn validate_eager_extension_inputs(
+    op: &dyn ExtensionOp,
+    inputs: &[&EagerTensor],
+) -> Result<Arc<EagerRuntime>> {
     let Some(first) = inputs.first() else {
         return Err(Error::invalid_argument(
             "extension::apply_eager",
@@ -102,10 +143,15 @@ pub fn apply_eager(op: Arc<dyn ExtensionOp>, inputs: &[&EagerTensor]) -> Result<
             });
         }
     }
+    Ok(ctx)
+}
 
-    let op = StdTensorOp::Extension(op);
-    let input_reads: Vec<_> = inputs.iter().map(|tensor| tensor.tensor_read()).collect();
-    let outputs = ctx.exec_outputs_read(&op, &input_reads)?;
+fn finish_eager_extension_outputs(
+    ctx: Arc<EagerRuntime>,
+    op: StdTensorOp,
+    inputs: &[&EagerTensor],
+    outputs: Vec<Tensor>,
+) -> Result<Vec<EagerTensor>> {
     if outputs.len() != op.output_count() {
         return Err(Error::Internal(format!(
             "expected {} eager outputs for {:?}, got {}",

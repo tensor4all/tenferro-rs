@@ -520,6 +520,56 @@ fn validate_output_count(expected: usize, actual: usize) -> Result<(), ProgramBu
     }
 }
 
+impl FrozenProgram {
+    /// Return a clone of this frozen program with tensor bindings copied from
+    /// `source` onto this program's input prefix.
+    ///
+    /// This is intentionally narrow: semantic AD transforms import every source
+    /// primal input first, then append derivative seed inputs. Cached derivative
+    /// program structure can therefore be reused across source programs with the
+    /// same normalized semantics while still carrying the current source's
+    /// process-local tensor defaults.
+    #[doc(hidden)]
+    pub fn with_input_prefix_bindings_from(
+        &self,
+        source: &FrozenProgram,
+    ) -> Result<FrozenProgram, ProgramFinishError> {
+        if self.program.inputs.len() < source.program.inputs.len() {
+            return Err(ProgramFinishError::StructuralValidation {
+                source: ProgramStructuralError::InvalidValueReference,
+            });
+        }
+
+        let mut bindings = Vec::new();
+        for (source_input, destination_input) in
+            source.program.inputs.iter().zip(self.program.inputs.iter())
+        {
+            if let Some(tensor) = source.bindings.tensor_for_input(*source_input) {
+                bindings.push(PendingBinding {
+                    key: BindingKey::new(destination_input.slot, self.program.owner),
+                    input: *destination_input,
+                    tensor,
+                });
+            }
+        }
+
+        let input_specs: Vec<_> = self
+            .program
+            .inputs
+            .iter()
+            .map(|input| {
+                ProgramInputSpec::from_metadata(self.program.values[input.slot as usize].clone())
+            })
+            .collect();
+        validate_bindings(&self.program.inputs, &input_specs, &bindings)?;
+
+        Ok(FrozenProgram {
+            program: Arc::clone(&self.program),
+            bindings: ProgramBindings::freeze(self.program.owner, bindings),
+        })
+    }
+}
+
 struct ImportTransaction {
     inputs: Vec<ProgramValue>,
     input_specs: Vec<ProgramInputSpec>,

@@ -51,7 +51,7 @@ pub use eager::{
 };
 pub use eager_backend::EagerBackend;
 pub use shape_packing::EagerSliceBuilder;
-pub(crate) use tenferro_runtime::{extension_cache, extension_runtime, scalar_semantics};
+pub(crate) use tenferro_runtime::{extension_cache, scalar_semantics};
 pub use transform_cache::AdTransformCacheLimits;
 pub(crate) mod shape_infer {
     pub use tenferro_runtime::extension::{

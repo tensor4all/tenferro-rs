@@ -306,6 +306,32 @@ mod tests {
     use tenferro_ops::{ShapeExtent, SymDim, TensorMeta};
     use tenferro_tensor::DType;
 
+    fn cpu_runtime_with_linalg(backend: &tenferro_cpu::CpuBackend) -> tenferro_runtime::Runtime {
+        let mut builder = tenferro_runtime::Runtime::builder();
+        builder
+            .register_engine(tenferro_cpu::runtime_engine_registration(backend).unwrap())
+            .unwrap();
+        builder
+            .install_extension_module(
+                crate::extension::extension_module::<tenferro_cpu::CpuBackend>(
+                    tenferro_cpu::runtime_engine_id().unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        builder.build().unwrap()
+    }
+
+    fn run_one(
+        runtime: &tenferro_runtime::Runtime,
+        program: &tenferro_runtime::CompiledGraph,
+        inputs: &[&tenferro_tensor::Tensor],
+    ) -> tenferro_runtime::Result<tenferro_tensor::Tensor> {
+        let mut outputs = runtime.run_compiled(program, inputs)?;
+        assert_eq!(outputs.len(), 1);
+        Ok(outputs.remove(0))
+    }
+
     fn input_key(id: u64) -> ValueKey<StdTensorOp> {
         ValueKey::Input(TensorInputKey::User { id })
     }
@@ -1085,7 +1111,7 @@ mod tests {
         use tenferro_ad::AdContext;
         use tenferro_ops::dim_expr::DimExpr;
         use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-        use tenferro_runtime::{GraphCompiler, GraphExecutor};
+        use tenferro_runtime::GraphCompiler;
         use tenferro_tensor::Tensor;
 
         let mut builder = SemanticProgramBuilder::new();
@@ -1126,13 +1152,9 @@ mod tests {
         let compiled = GraphCompiler::new()
             .compile_frozen_program(jvp.frozen())
             .unwrap();
-        let mut executor = GraphExecutor::new(tenferro_cpu::CpuBackend::new());
-        executor
-            .register_extension(crate::register_runtime)
-            .unwrap();
-        let tangent = executor
-            .run_with_inputs(&compiled, &[&matrix, &rhs, &rhs_tangent])
-            .unwrap();
+        let backend = tenferro_cpu::CpuBackend::new();
+        let runtime = cpu_runtime_with_linalg(&backend);
+        let tangent = run_one(&runtime, &compiled, &[&matrix, &rhs, &rhs_tangent]).unwrap();
         assert_eq!(tangent.as_slice::<f64>().unwrap(), &[1.0, 0.75]);
 
         let output_cotangent = Tensor::from_vec_col_major(vec![2, 1], vec![1.0_f64, 1.0]).unwrap();
@@ -1140,9 +1162,7 @@ mod tests {
         let compiled = GraphCompiler::new()
             .compile_frozen_program(vjp.frozen())
             .unwrap();
-        let cotangent = executor
-            .run_with_inputs(&compiled, &[&matrix, &rhs, &output_cotangent])
-            .unwrap();
+        let cotangent = run_one(&runtime, &compiled, &[&matrix, &rhs, &output_cotangent]).unwrap();
         assert_eq!(cotangent.as_slice::<f64>().unwrap(), &[0.375, 0.25]);
     }
 
@@ -1151,7 +1171,7 @@ mod tests {
         use tenferro_ad::AdContext;
         use tenferro_ops::dim_expr::DimExpr;
         use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-        use tenferro_runtime::{GraphCompiler, GraphExecutor};
+        use tenferro_runtime::GraphCompiler;
         use tenferro_tensor::Tensor;
 
         let mut builder = SemanticProgramBuilder::new();
@@ -1177,18 +1197,14 @@ mod tests {
             .unwrap();
         let matrix = Tensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 0.0, 0.0, 3.0]).unwrap();
         let tangent = Tensor::from_vec_col_major(vec![2, 2], vec![2.0_f64, 0.0, 0.0, 4.0]).unwrap();
-        let mut executor = GraphExecutor::new(tenferro_cpu::CpuBackend::new());
-        executor
-            .register_extension(crate::register_runtime)
-            .unwrap();
+        let backend = tenferro_cpu::CpuBackend::new();
+        let runtime = cpu_runtime_with_linalg(&backend);
 
         let jvp = ad.jvp_program(&source, &[true]).unwrap();
         let compiled = GraphCompiler::new()
             .compile_frozen_program(jvp.frozen())
             .unwrap();
-        let tangent_output = executor
-            .run_with_inputs(&compiled, &[&matrix, &tangent])
-            .unwrap();
+        let tangent_output = run_one(&runtime, &compiled, &[&matrix, &tangent]).unwrap();
         assert_eq!(tangent_output.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 
         let output_cotangent = Tensor::from_vec_col_major(vec![2], vec![5.0_f64, 7.0]).unwrap();
@@ -1196,9 +1212,7 @@ mod tests {
         let compiled = GraphCompiler::new()
             .compile_frozen_program(vjp.frozen())
             .unwrap();
-        let cotangent = executor
-            .run_with_inputs(&compiled, &[&matrix, &output_cotangent])
-            .unwrap();
+        let cotangent = run_one(&runtime, &compiled, &[&matrix, &output_cotangent]).unwrap();
         assert_eq!(cotangent.as_slice::<f64>().unwrap(), &[5.0, 0.0, 0.0, 7.0]);
     }
 
@@ -1236,7 +1250,7 @@ mod tests {
         use tenferro_ops::dim_expr::DimExpr;
         use tenferro_runtime::ad_support::ones_tensor;
         use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-        use tenferro_runtime::{GraphCompiler, GraphExecutor};
+        use tenferro_runtime::GraphCompiler;
         use tenferro_tensor::Tensor;
 
         struct Case {
@@ -1364,15 +1378,13 @@ mod tests {
             let source = builder.finish(&roots).unwrap();
             let matrix = Tensor::from_vec_col_major(vec![2, 2], case.matrix.to_vec()).unwrap();
             let tangent = Tensor::from_vec_col_major(vec![2, 2], case.tangent.to_vec()).unwrap();
-            let mut executor = GraphExecutor::new(tenferro_cpu::CpuBackend::new());
-            executor
-                .register_extension(crate::register_runtime)
-                .unwrap();
+            let backend = tenferro_cpu::CpuBackend::new();
+            let runtime = cpu_runtime_with_linalg(&backend);
 
             let primal = GraphCompiler::new()
                 .compile_frozen_program(&source)
                 .unwrap();
-            let primal_outputs = executor.run_many_with_inputs(&primal, &[&matrix]).unwrap();
+            let primal_outputs = runtime.run_compiled(&primal, &[&matrix]).unwrap();
             let cotangents: Vec<_> = primal_outputs
                 .iter()
                 .map(|output| ones_tensor(output.dtype(), output.shape().to_vec()).unwrap())
@@ -1382,9 +1394,7 @@ mod tests {
             let jvp = GraphCompiler::new()
                 .compile_frozen_program(jvp.frozen())
                 .unwrap();
-            let tangent_outputs = executor
-                .run_many_with_inputs(&jvp, &[&matrix, &tangent])
-                .unwrap();
+            let tangent_outputs = runtime.run_compiled(&jvp, &[&matrix, &tangent]).unwrap();
             assert_eq!(
                 tangent_outputs.len(),
                 cotangents.len(),
@@ -1400,8 +1410,8 @@ mod tests {
                 .unwrap();
             let mut vjp_inputs = vec![&matrix];
             vjp_inputs.extend(cotangents.iter());
-            let input_cotangents = executor
-                .run_many_with_inputs(&vjp, &vjp_inputs)
+            let input_cotangents = runtime
+                .run_compiled(&vjp, &vjp_inputs)
                 .unwrap_or_else(|error| panic!("{} semantic VJP execution: {error}", case.name));
             assert_eq!(input_cotangents.len(), 1, "{} VJP input order", case.name);
 
@@ -1427,7 +1437,7 @@ mod tests {
         use tenferro_ops::dim_expr::DimExpr;
         use tenferro_runtime::ad_support::ones_tensor;
         use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-        use tenferro_runtime::{GraphCompiler, GraphExecutor};
+        use tenferro_runtime::GraphCompiler;
         use tenferro_tensor::Tensor;
 
         let ad = AdContext::builder()
@@ -1525,21 +1535,19 @@ mod tests {
                                     .unwrap(),
                                 )
                             };
-                            let mut executor = GraphExecutor::new(tenferro_cpu::CpuBackend::new());
-                            executor
-                                .register_extension(crate::register_runtime)
-                                .unwrap();
+                            let backend = tenferro_cpu::CpuBackend::new();
+                            let runtime = cpu_runtime_with_linalg(&backend);
 
                             let jvp = ad.jvp_program(&source, &[true, true]).unwrap();
                             let jvp = GraphCompiler::new()
                                 .compile_frozen_program(jvp.frozen())
                                 .unwrap();
-                            let tangent_output = executor
-                                .run_with_inputs(
-                                    &jvp,
-                                    &[&matrix, &rhs, &matrix_tangent, &rhs_tangent],
-                                )
-                                .unwrap();
+                            let tangent_output = run_one(
+                                &runtime,
+                                &jvp,
+                                &[&matrix, &rhs, &matrix_tangent, &rhs_tangent],
+                            )
+                            .unwrap();
                             let cotangent =
                                 ones_tensor(dtype, tangent_output.shape().to_vec()).unwrap();
 
@@ -1547,8 +1555,8 @@ mod tests {
                             let vjp = GraphCompiler::new()
                                 .compile_frozen_program(vjp.frozen())
                                 .unwrap();
-                            let input_cotangents = executor
-                                .run_many_with_inputs(&vjp, &[&matrix, &rhs, &cotangent])
+                            let input_cotangents = runtime
+                                .run_compiled(&vjp, &[&matrix, &rhs, &cotangent])
                                 .unwrap();
                             assert_eq!(input_cotangents.len(), 2);
 
@@ -1578,7 +1586,7 @@ mod tests {
         use tenferro_ops::dim_expr::DimExpr;
         use tenferro_runtime::ad_support::ones_tensor;
         use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-        use tenferro_runtime::{GraphCompiler, GraphExecutor};
+        use tenferro_runtime::GraphCompiler;
         use tenferro_tensor::Tensor;
 
         #[derive(Clone, Copy)]
@@ -1711,10 +1719,8 @@ mod tests {
                     )
                 };
 
-                let mut executor = GraphExecutor::new(tenferro_cpu::CpuBackend::new());
-                executor
-                    .register_extension(crate::register_runtime)
-                    .unwrap();
+                let backend = tenferro_cpu::CpuBackend::new();
+                let runtime = cpu_runtime_with_linalg(&backend);
                 let factor_outputs = if matches!(case, SolveCase::Prepared { .. }) {
                     let mut factor_builder = SemanticProgramBuilder::new();
                     let factor_matrix = factor_builder
@@ -1733,9 +1739,7 @@ mod tests {
                     let factor_program = GraphCompiler::new()
                         .compile_frozen_program(&factor_source)
                         .unwrap();
-                    executor
-                        .run_many_with_inputs(&factor_program, &[&matrix])
-                        .unwrap()
+                    runtime.run_compiled(&factor_program, &[&matrix]).unwrap()
                 } else {
                     Vec::new()
                 };
@@ -1755,12 +1759,9 @@ mod tests {
                     .unwrap();
                 let mut jvp_inputs = primal_inputs.clone();
                 jvp_inputs.extend([&matrix_tangent, &rhs_tangent]);
-                let tangent_output =
-                    executor
-                        .run_with_inputs(&jvp, &jvp_inputs)
-                        .unwrap_or_else(|error| {
-                            panic!("{name} complex={complex} semantic JVP execution: {error}")
-                        });
+                let tangent_output = run_one(&runtime, &jvp, &jvp_inputs).unwrap_or_else(|error| {
+                    panic!("{name} complex={complex} semantic JVP execution: {error}")
+                });
                 let cotangent = ones_tensor(dtype, tangent_output.shape().to_vec()).unwrap();
 
                 let vjp = ad.vjp_program(&source, active_inputs, &[true]).unwrap();
@@ -1769,11 +1770,12 @@ mod tests {
                     .unwrap();
                 let mut vjp_inputs = primal_inputs;
                 vjp_inputs.push(&cotangent);
-                let input_cotangents = executor
-                    .run_many_with_inputs(&vjp, &vjp_inputs)
-                    .unwrap_or_else(|error| {
-                        panic!("{name} complex={complex} semantic VJP execution: {error}")
-                    });
+                let input_cotangents =
+                    runtime
+                        .run_compiled(&vjp, &vjp_inputs)
+                        .unwrap_or_else(|error| {
+                            panic!("{name} complex={complex} semantic VJP execution: {error}")
+                        });
                 assert_eq!(input_cotangents.len(), 2, "{name}");
 
                 let lhs = semantic_real_inner_product(&cotangent, &tangent_output);
@@ -1794,7 +1796,7 @@ mod tests {
         use tenferro_ops::dim_expr::DimExpr;
         use tenferro_runtime::ad_support::ones_tensor;
         use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
-        use tenferro_runtime::{GraphCompiler, GraphExecutor};
+        use tenferro_runtime::GraphCompiler;
         use tenferro_tensor::Tensor;
 
         let cases = [
@@ -1869,10 +1871,8 @@ mod tests {
             let vjp = GraphCompiler::new()
                 .compile_frozen_program(vjp.frozen())
                 .unwrap();
-            let mut executor = GraphExecutor::new(tenferro_cpu::CpuBackend::new());
-            executor
-                .register_extension(crate::register_runtime)
-                .unwrap();
+            let backend = tenferro_cpu::CpuBackend::new();
+            let runtime = cpu_runtime_with_linalg(&backend);
 
             for (rows, cols) in [(3, 2), (2, 3)] {
                 let row_anchor =
@@ -1895,8 +1895,8 @@ mod tests {
                     .collect();
                 let matrix = Tensor::from_vec_col_major(vec![rows, cols], matrix_data).unwrap();
                 let tangent = Tensor::from_vec_col_major(vec![rows, cols], tangent_data).unwrap();
-                let primal_outputs = executor
-                    .run_many_with_inputs(&primal, &[&row_anchor, &col_anchor, &matrix])
+                let primal_outputs = runtime
+                    .run_compiled(&primal, &[&row_anchor, &col_anchor, &matrix])
                     .unwrap_or_else(|error| {
                         panic!("{name} {rows}x{cols} symbolic primal execution: {error}")
                     });
@@ -1904,18 +1904,19 @@ mod tests {
                     .iter()
                     .map(|output| ones_tensor(output.dtype(), output.shape().to_vec()).unwrap())
                     .collect();
-                let tangent_outputs = executor
-                    .run_many_with_inputs(&jvp, &[&row_anchor, &col_anchor, &matrix, &tangent])
+                let tangent_outputs = runtime
+                    .run_compiled(&jvp, &[&row_anchor, &col_anchor, &matrix, &tangent])
                     .unwrap_or_else(|error| {
                         panic!("{name} {rows}x{cols} symbolic JVP execution: {error}")
                     });
                 let mut vjp_inputs = vec![&row_anchor, &col_anchor, &matrix];
                 vjp_inputs.extend(&cotangents);
-                let input_cotangents = executor
-                    .run_many_with_inputs(&vjp, &vjp_inputs)
-                    .unwrap_or_else(|error| {
-                        panic!("{name} {rows}x{cols} symbolic VJP execution: {error}")
-                    });
+                let input_cotangents =
+                    runtime
+                        .run_compiled(&vjp, &vjp_inputs)
+                        .unwrap_or_else(|error| {
+                            panic!("{name} {rows}x{cols} symbolic VJP execution: {error}")
+                        });
                 assert_eq!(input_cotangents.len(), 1);
                 for (index, output) in tangent_outputs.iter().enumerate() {
                     let values = output.as_slice::<f64>().unwrap();
@@ -1979,7 +1980,7 @@ mod tests {
         fn transform_sizes(
             source: &tenferro_runtime::program::FrozenProgram,
         ) -> (usize, usize, usize) {
-            use tenferro_runtime::{GraphCompiler, GraphExecutor};
+            use tenferro_runtime::GraphCompiler;
             use tenferro_tensor::Tensor;
 
             let ad = AdContext::builder()
@@ -1999,18 +2000,15 @@ mod tests {
                 .compile_frozen_program(jvp.frozen())
                 .unwrap();
             let backend = tenferro_cpu::CpuBackend::new();
-            let mut executor = GraphExecutor::new(backend.clone());
-            executor
-                .register_extension(crate::register_runtime)
-                .unwrap();
+            let runtime = cpu_runtime_with_linalg(&backend);
             let matrix =
                 Tensor::from_vec_col_major(vec![3, 2], vec![3.0_f64, 0.5, 0.25, 1.0, 4.0, 0.75])
                     .unwrap();
             let tangent =
                 Tensor::from_vec_col_major(vec![3, 2], vec![0.2_f64, -0.1, 0.05, 0.3, 0.4, -0.2])
                     .unwrap();
-            let outputs = executor
-                .run_many_with_inputs(&compiled, &[&matrix, &tangent])
+            let outputs = runtime
+                .run_compiled(&compiled, &[&matrix, &tangent])
                 .unwrap();
             drop(outputs);
             (

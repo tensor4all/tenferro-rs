@@ -9,15 +9,16 @@ use tenferro_ad::semantic_extension::{
 };
 use tenferro_ad::semantic_transform::SemanticAdTransformError;
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
 use tenferro_ops::{ExtensionShapeContext, SymDim};
 use tenferro_runtime::program::{CoreSemanticOp, ProgramInputSpec, SemanticProgramBuilder};
-use tenferro_runtime::{GraphCompiler, GraphExecutor};
+use tenferro_runtime::GraphCompiler;
 use tenferro_tensor::{
     DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig, Tensor,
 };
+
+use crate::support::{cpu_runtime, RunCompiledTestExt};
 
 const FAMILY: &str = "tenferro-ad.semantic-transform-test.v1";
 
@@ -163,6 +164,23 @@ fn core_square_program() -> tenferro_runtime::program::FrozenProgram {
     let mut builder = SemanticProgramBuilder::new();
     let input = builder
         .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let output = builder
+        .add_op(CoreSemanticOp::Mul, &[input, input])
+        .unwrap()[0];
+    builder.finish(&[output]).unwrap()
+}
+
+fn bound_core_square_program(values: Vec<f64>) -> tenferro_runtime::program::FrozenProgram {
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    builder
+        .bind_input(
+            input,
+            Arc::new(Tensor::from_vec_col_major(vec![2], values).unwrap()),
+        )
         .unwrap();
     let output = builder
         .add_op(CoreSemanticOp::Mul, &[input, input])
@@ -741,8 +759,8 @@ fn semantic_core_dot_general_jvp_and_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let jvp_value = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&lhs, &rhs, &lhs_tangent, &rhs_tangent])
+    let jvp_value = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&lhs, &rhs, &lhs_tangent, &rhs_tangent])
         .unwrap();
     assert_eq!(jvp_value.as_slice::<f64>().unwrap(), &[7.0, 0.0, 9.0, 4.0]);
 
@@ -752,8 +770,8 @@ fn semantic_core_dot_general_jvp_and_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let cotangents = GraphExecutor::new(CpuBackend::new())
-        .run_many_with_inputs(&compiled, &[&lhs, &rhs, &output_cotangent])
+    let cotangents = cpu_runtime()
+        .run_compiled(&compiled, &[&lhs, &rhs, &output_cotangent])
         .unwrap();
     assert_eq!(
         cotangents[0].as_slice::<f64>().unwrap(),
@@ -819,8 +837,8 @@ fn semantic_core_maximum_jvp_and_vjp_execute_with_balanced_ties() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let tangent = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&lhs, &rhs, &lhs_tangent, &rhs_tangent])
+    let tangent = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&lhs, &rhs, &lhs_tangent, &rhs_tangent])
         .unwrap();
     assert_eq!(tangent.as_slice::<f64>().unwrap(), &[1.0, 11.0, 30.0]);
 
@@ -829,8 +847,8 @@ fn semantic_core_maximum_jvp_and_vjp_execute_with_balanced_ties() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let cotangents = GraphExecutor::new(CpuBackend::new())
-        .run_many_with_inputs(&compiled, &[&lhs, &rhs, &output_cotangent])
+    let cotangents = cpu_runtime()
+        .run_compiled(&compiled, &[&lhs, &rhs, &output_cotangent])
         .unwrap();
     assert_eq!(cotangents[0].as_slice::<f64>().unwrap(), &[0.0, 2.0, 6.0]);
     assert_eq!(cotangents[1].as_slice::<f64>().unwrap(), &[2.0, 2.0, 0.0]);
@@ -865,8 +883,8 @@ fn semantic_core_reduce_prod_handles_zero_multiplicity_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&input, &tangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&input, &tangent])
         .unwrap();
     assert_eq!(result.as_slice::<f64>().unwrap(), &[5.0, 4.0, 0.0]);
 
@@ -875,8 +893,8 @@ fn semantic_core_reduce_prod_handles_zero_multiplicity_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&input, &output_cotangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&input, &output_cotangent])
         .unwrap();
     assert_eq!(
         result.as_slice::<f64>().unwrap(),
@@ -901,8 +919,8 @@ fn semantic_core_reduce_max_balances_ties_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&input, &tangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&input, &tangent])
         .unwrap();
     assert_eq!(result.as_slice::<f64>().unwrap(), &[20.0, 40.0, 70.0]);
 
@@ -911,8 +929,8 @@ fn semantic_core_reduce_max_balances_ties_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&input, &output_cotangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&input, &output_cotangent])
         .unwrap();
     assert_eq!(
         result.as_slice::<f64>().unwrap(),
@@ -1052,8 +1070,8 @@ fn semantic_core_strided_slice_jvp_and_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&input, &tangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&input, &tangent])
         .unwrap();
     assert_eq!(result.as_slice::<f64>().unwrap(), &[20.0, 40.0]);
 
@@ -1062,8 +1080,8 @@ fn semantic_core_strided_slice_jvp_and_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&input, &output_cotangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&input, &output_cotangent])
         .unwrap();
     assert_eq!(
         result.as_slice::<f64>().unwrap(),
@@ -1099,8 +1117,8 @@ fn semantic_core_concatenate_jvp_zero_fills_and_vjp_splits_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&lhs, &rhs, &lhs_tangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&lhs, &rhs, &lhs_tangent])
         .unwrap();
     assert_eq!(result.as_slice::<f64>().unwrap(), &[10.0, 20.0, 0.0]);
 
@@ -1109,8 +1127,8 @@ fn semantic_core_concatenate_jvp_zero_fills_and_vjp_splits_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_many_with_inputs(&compiled, &[&lhs, &rhs, &output_cotangent])
+    let result = cpu_runtime()
+        .run_compiled(&compiled, &[&lhs, &rhs, &output_cotangent])
         .unwrap();
     assert_eq!(result[0].as_slice::<f64>().unwrap(), &[4.0, 5.0]);
     assert_eq!(result[1].as_slice::<f64>().unwrap(), &[6.0]);
@@ -1134,8 +1152,8 @@ fn semantic_core_pad_jvp_and_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&input, &tangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&input, &tangent])
         .unwrap();
     assert_eq!(
         result.as_slice::<f64>().unwrap(),
@@ -1148,8 +1166,8 @@ fn semantic_core_pad_jvp_and_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&input, &output_cotangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&input, &output_cotangent])
         .unwrap();
     assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 }
@@ -1203,8 +1221,8 @@ fn semantic_core_gather_and_scatter_jvp_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(
+    let result = cpu_runtime()
+        .run_compiled_one_output(
             &compiled,
             &[&operand_value, &indices_value, &operand_tangent],
         )
@@ -1216,8 +1234,8 @@ fn semantic_core_gather_and_scatter_jvp_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(
+    let result = cpu_runtime()
+        .run_compiled_one_output(
             &compiled,
             &[&operand_value, &indices_value, &gather_cotangent],
         )
@@ -1254,8 +1272,8 @@ fn semantic_core_gather_and_scatter_jvp_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(
+    let result = cpu_runtime()
+        .run_compiled_one_output(
             &compiled,
             &[
                 &operand_value,
@@ -1279,8 +1297,8 @@ fn semantic_core_gather_and_scatter_jvp_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_many_with_inputs(
+    let result = cpu_runtime()
+        .run_compiled(
             &compiled,
             &[
                 &operand_value,
@@ -1326,8 +1344,8 @@ fn semantic_core_dynamic_slice_and_update_jvp_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(
+    let result = cpu_runtime()
+        .run_compiled_one_output(
             &compiled,
             &[&operand_value, &starts_value, &operand_tangent],
         )
@@ -1341,8 +1359,8 @@ fn semantic_core_dynamic_slice_and_update_jvp_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(
+    let result = cpu_runtime()
+        .run_compiled_one_output(
             &compiled,
             &[&operand_value, &starts_value, &slice_cotangent],
         )
@@ -1378,8 +1396,8 @@ fn semantic_core_dynamic_slice_and_update_jvp_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(
+    let result = cpu_runtime()
+        .run_compiled_one_output(
             &compiled,
             &[
                 &operand_value,
@@ -1403,8 +1421,8 @@ fn semantic_core_dynamic_slice_and_update_jvp_vjp_execute_numerically() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_many_with_inputs(
+    let result = cpu_runtime()
+        .run_compiled(
             &compiled,
             &[
                 &operand_value,
@@ -1445,8 +1463,8 @@ fn semantic_core_dynamic_truncate_and_pad_to_match_execute_jvp_vjp() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&input_value, &size_value, &tangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&input_value, &size_value, &tangent])
         .unwrap();
     assert_eq!(result.as_slice::<f64>().unwrap(), &[10.0, 20.0, 30.0]);
 
@@ -1476,8 +1494,8 @@ fn semantic_core_dynamic_truncate_and_pad_to_match_execute_jvp_vjp() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(jvp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&short_input, &reference_value, &short_tangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&short_input, &reference_value, &short_tangent])
         .unwrap();
     assert_eq!(
         result.as_slice::<f64>().unwrap(),
@@ -1492,8 +1510,8 @@ fn semantic_core_dynamic_truncate_and_pad_to_match_execute_jvp_vjp() {
     let compiled = GraphCompiler::new()
         .compile_frozen_program(vjp.frozen())
         .unwrap();
-    let result = GraphExecutor::new(CpuBackend::new())
-        .run_with_inputs(&compiled, &[&short_input, &reference_value, &pad_cotangent])
+    let result = cpu_runtime()
+        .run_compiled_one_output(&compiled, &[&short_input, &reference_value, &pad_cotangent])
         .unwrap();
     assert_eq!(result.as_slice::<f64>().unwrap(), &[1.0, 2.0, 3.0]);
 }
@@ -1527,4 +1545,49 @@ fn semantic_program_transforms_use_activity_keyed_collision_checked_cache() {
 
     ad.clear_ad_transform_caches().unwrap();
     assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 0);
+}
+
+#[test]
+fn semantic_program_transform_cache_reuses_bound_programs_without_stale_bindings() {
+    fn only_bound_f64_values(program: &tenferro_runtime::program::FrozenProgram) -> Vec<f64> {
+        let mut bindings = program.bindings.iter();
+        let (_, tensor) = bindings.next().expect("one source input binding");
+        assert!(
+            bindings.next().is_none(),
+            "derivative seed inputs must not inherit source bindings"
+        );
+        tensor.as_slice::<f64>().unwrap().to_vec()
+    }
+
+    let first_source = bound_core_square_program(vec![2.0, 3.0]);
+    let second_source = bound_core_square_program(vec![5.0, 7.0]);
+    assert!(first_source
+        .program
+        .semantic_eq(second_source.program.as_ref()));
+
+    let ad = AdContext::builder().build().unwrap();
+
+    let first_jvp = ad.jvp_program(&first_source, &[true]).unwrap();
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert_eq!(only_bound_f64_values(first_jvp.frozen()), vec![2.0, 3.0]);
+
+    let second_jvp = ad.jvp_program(&second_source, &[true]).unwrap();
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 1);
+    assert!(first_jvp
+        .frozen()
+        .program
+        .semantic_eq(second_jvp.frozen().program.as_ref()));
+    assert_eq!(only_bound_f64_values(second_jvp.frozen()), vec![5.0, 7.0]);
+
+    let first_vjp = ad.vjp_program(&first_source, &[true], &[true]).unwrap();
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 2);
+    assert_eq!(only_bound_f64_values(first_vjp.frozen()), vec![2.0, 3.0]);
+
+    let second_vjp = ad.vjp_program(&second_source, &[true], &[true]).unwrap();
+    assert_eq!(ad.ad_transform_cache_stats().unwrap().entries, 2);
+    assert!(first_vjp
+        .frozen()
+        .program
+        .semantic_eq(second_vjp.frozen().program.as_ref()));
+    assert_eq!(only_bound_f64_values(second_vjp.frozen()), vec![5.0, 7.0]);
 }
