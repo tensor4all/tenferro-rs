@@ -91,6 +91,11 @@ harness = false
 required-features = ["autodiff"]
 
 [[bench]]
+name = "changing_shape_prepare"
+harness = false
+required-features = ["autodiff"]
+
+[[bench]]
 name = "mps_inner_product"
 harness = false
 

@@ -65,6 +65,10 @@ harness = false
 name = "eager_dispatch_baseline"
 harness = false
 
+[[bench]]
+name = "eager_backward_shape_churn"
+harness = false
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
