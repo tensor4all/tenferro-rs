@@ -1,6 +1,4 @@
 use std::hash::Hasher;
-
-use sha2::{Digest, Sha256};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::{
@@ -15,12 +13,16 @@ use super::{
 };
 
 /// Cached fixed-size identity of normalized semantic program structure.
+///
+/// Uses a fast 128-bit hash (two SipHash-1-3 passes).  Cryptographic
+/// strength is unnecessary because caches confirm matches with exact
+/// structural equality on collision.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SemanticFingerprint([u8; 32]);
+pub struct SemanticFingerprint([u8; 16]);
 
 impl SemanticFingerprint {
-    /// Borrow the cached SHA-256 bytes.
-    pub const fn as_bytes(&self) -> &[u8; 32] {
+    /// Borrow the cached hash bytes.
+    pub const fn as_bytes(&self) -> &[u8; 16] {
         &self.0
     }
 }
@@ -180,22 +182,30 @@ fn semantic_op_exact_eq(left: &SemanticOp, right: &SemanticOp) -> bool {
 }
 
 struct CanonicalEncoder {
-    digest: Sha256,
+    buf: Vec<u8>,
 }
 
 impl CanonicalEncoder {
     fn new() -> Self {
-        Self {
-            digest: Sha256::new(),
-        }
+        Self { buf: Vec::new() }
     }
 
-    fn finalize(self) -> [u8; 32] {
-        self.digest.finalize().into()
+    fn finalize(self) -> [u8; 16] {
+        let mut h1 = std::collections::hash_map::DefaultHasher::new();
+        let mut h2 = std::collections::hash_map::DefaultHasher::new();
+        h1.write(&self.buf);
+        h2.write(b"\x01");
+        h2.write(&self.buf);
+        let v1 = h1.finish().to_le_bytes();
+        let v2 = h2.finish().to_le_bytes();
+        let mut result = [0u8; 16];
+        result[..8].copy_from_slice(&v1);
+        result[8..].copy_from_slice(&v2);
+        result
     }
 
     fn raw(&mut self, bytes: &[u8]) {
-        self.digest.update(bytes);
+        self.buf.extend_from_slice(bytes);
     }
 
     fn bytes(&mut self, bytes: &[u8]) {
@@ -244,10 +254,9 @@ impl CanonicalEncoder {
 
 impl Hasher for CanonicalEncoder {
     fn finish(&self) -> u64 {
-        let digest = self.digest.clone().finalize();
-        let mut prefix = [0_u8; 8];
-        prefix.copy_from_slice(&digest[..8]);
-        u64::from_le_bytes(prefix)
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        h.write(&self.buf);
+        h.finish()
     }
 
     fn write(&mut self, bytes: &[u8]) {
