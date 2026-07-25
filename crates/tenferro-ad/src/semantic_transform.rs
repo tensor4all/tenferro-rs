@@ -263,8 +263,9 @@ pub fn semantic_vjp(
     let mut next_input = input.program.inputs().len();
     for (index, source) in input.program.outputs().iter().copied().enumerate() {
         if active_outputs[index] {
+            let imported_source = values[&source];
             let cotangent = builder.input(ProgramInputSpec::from_metadata(
-                input.program.value_metadata(source)?.clone(),
+                builder.value_metadata(imported_source)?.clone(),
             ))?;
             derivative_input_indices[index] = Some(next_input);
             next_input += 1;

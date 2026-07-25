@@ -676,6 +676,35 @@ impl ImportTransaction {
             bindings: Vec::new(),
             roots: Box::new([]),
         };
+        // Pre-resolve concrete input shapes from tensor bindings for InputDim
+        // resolution in imported metadata.
+        let bound_input_shapes: Vec<Option<Vec<DimExpr>>> = source
+            .inputs
+            .iter()
+            .map(|input| {
+                request.bindings.tensor_for_input(*input).map(|tensor| {
+                    tensor
+                        .shape()
+                        .iter()
+                        .map(|&size| DimExpr::Const(size))
+                        .collect()
+                })
+            })
+            .collect();
+
+        let resolve_extent = |extent: &ShapeExtent<DimExpr>| -> ShapeExtent<DimExpr> {
+            match extent {
+                ShapeExtent::Exact(expr) => ShapeExtent::Exact(resolve_dim_expr_from_input_shapes(
+                    expr,
+                    &bound_input_shapes,
+                )),
+                ShapeExtent::UpperBound(expr) => ShapeExtent::UpperBound(
+                    resolve_dim_expr_from_input_shapes(expr, &bound_input_shapes),
+                ),
+                ShapeExtent::Unknown => ShapeExtent::Unknown,
+            }
+        };
+
         let mut remap = vec![None; source.values.len()];
 
         for &input in &source.inputs {
@@ -683,6 +712,14 @@ impl ImportTransaction {
                 continue;
             }
             let metadata = source.values[input.slot as usize].clone();
+            let metadata = ProgramValueMetadata::from_extents(
+                metadata.dtype(),
+                metadata
+                    .shape()
+                    .iter()
+                    .map(|extent| resolve_extent(extent))
+                    .collect::<Vec<_>>(),
+            );
             let imported = transaction.next_value(destination.values.len(), destination.owner)?;
             transaction.inputs.push(imported);
             transaction
@@ -716,9 +753,15 @@ impl ImportTransaction {
             for output in &operation.outputs {
                 let imported =
                     transaction.next_value(destination.values.len(), destination.owner)?;
-                transaction
-                    .values
-                    .push(source.values[output.slot as usize].clone());
+                let meta = source.values[output.slot as usize].clone();
+                let resolved = ProgramValueMetadata::from_extents(
+                    meta.dtype(),
+                    meta.shape()
+                        .iter()
+                        .map(|extent| resolve_extent(extent))
+                        .collect::<Vec<_>>(),
+                );
+                transaction.values.push(resolved);
                 remap[output.slot as usize] = Some(imported);
                 outputs.push(imported);
             }
@@ -1075,4 +1118,50 @@ fn validate_bindings(
         }
     }
     Ok(())
+}
+
+/// Resolve [`DimExpr::InputDim`] references using concrete bound-input shapes.
+///
+/// When an input has a known tensor binding, its concrete shape replaces the
+/// symbolic `InputDim { input_idx, axis }` reference. References to unbound
+/// inputs are left unchanged.
+fn resolve_dim_expr_from_input_shapes(
+    expr: &DimExpr,
+    bound_input_shapes: &[Option<Vec<DimExpr>>],
+) -> DimExpr {
+    match expr {
+        DimExpr::Const(_) => expr.clone(),
+        DimExpr::InputDim { input_idx, axis } => {
+            if let Some(Some(shape)) = bound_input_shapes.get(*input_idx) {
+                if let Some(dim) = shape.get(*axis) {
+                    return dim.clone();
+                }
+            }
+            expr.clone()
+        }
+        DimExpr::Add(a, b) => DimExpr::add(
+            resolve_dim_expr_from_input_shapes(a, bound_input_shapes),
+            resolve_dim_expr_from_input_shapes(b, bound_input_shapes),
+        ),
+        DimExpr::Sub(a, b) => DimExpr::sub(
+            resolve_dim_expr_from_input_shapes(a, bound_input_shapes),
+            resolve_dim_expr_from_input_shapes(b, bound_input_shapes),
+        ),
+        DimExpr::Mul(a, b) => DimExpr::mul(
+            resolve_dim_expr_from_input_shapes(a, bound_input_shapes),
+            resolve_dim_expr_from_input_shapes(b, bound_input_shapes),
+        ),
+        DimExpr::FloorDiv(a, b) => DimExpr::floor_div(
+            resolve_dim_expr_from_input_shapes(a, bound_input_shapes),
+            resolve_dim_expr_from_input_shapes(b, bound_input_shapes),
+        ),
+        DimExpr::Min(a, b) => DimExpr::min(
+            resolve_dim_expr_from_input_shapes(a, bound_input_shapes),
+            resolve_dim_expr_from_input_shapes(b, bound_input_shapes),
+        ),
+        DimExpr::Max(a, b) => DimExpr::max(
+            resolve_dim_expr_from_input_shapes(a, bound_input_shapes),
+            resolve_dim_expr_from_input_shapes(b, bound_input_shapes),
+        ),
+    }
 }

@@ -1932,17 +1932,20 @@ fn semantic_eager_vjp_optional(
         .map_err(|source| {
             Error::runtime_state_source("semantic_eager_vjp", ErrorPhase::GraphBuild, source)
         })?;
+    // derivative_input_indices maps source output → derivative seed input.
+    // There is always exactly one source output (guarded above).
     let Some(seed_input_index) = derivative
         .derivative_input_indices()
-        .get(wrt_input_index)
+        .first()
         .copied()
         .flatten()
     else {
         return Ok(Some(None));
     };
+    // derivative_output_indices maps source input → derivative output.
     let Some(derivative_output_index) = derivative
         .derivative_output_indices()
-        .first()
+        .get(wrt_input_index)
         .copied()
         .flatten()
     else {
