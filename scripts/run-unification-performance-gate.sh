@@ -145,6 +145,7 @@ export MKL_NUM_THREADS=1
 export VECLIB_MAXIMUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export TENFERRO_BENCH_THREADS=1
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 
 mkdir -p "$OUTPUT_DIR"
 manifest="$OUTPUT_DIR/${LABEL}-manifest.txt"
@@ -160,6 +161,7 @@ manifest="$OUTPUT_DIR/${LABEL}-manifest.txt"
   printf 'warm_up_time=%s\n' "$WARM_UP_TIME"
   printf 'measurement_time=%s\n' "$MEASUREMENT_TIME"
   printf 'sample_size=%s\n' "$SAMPLE_SIZE"
+  printf 'cargo_build_jobs=%s\n' "$CARGO_BUILD_JOBS"
   printf 'allow_missing=%s\n' "$ALLOW_MISSING"
 } >"$manifest"
 
@@ -169,6 +171,7 @@ printf '  baseline commit:  %s\n' "$BASELINE_COMMIT"
 printf '  output dir:       %s\n' "$OUTPUT_DIR"
 printf '  criterion args:   %s\n' "${criterion_args[*]}"
 printf '  thread env:       RAYON=1 OMP=1 OPENBLAS=1 MKL=1 VECLIB=1 NUMEXPR=1\n'
+printf '  build jobs:       CARGO_BUILD_JOBS=%s\n' "$CARGO_BUILD_JOBS"
 
 missing=0
 for entry in "${BENCHMARKS[@]}"; do
@@ -192,6 +195,25 @@ for entry in "${BENCHMARKS[@]}"; do
   fi
 
   printf 'status:      present\n'
+  bench_env=()
+  bench_rustflags="${RUSTFLAGS:-}"
+  bench_api="default"
+  if [[ "$package" == "tenferro-linalg" && "$bench" == "linalg_vjp_gate" ]]; then
+    if grep -q "with_semantic_extension_rules" "$ROOT_DIR/crates/tenferro-ad/src/context.rs" \
+      && grep -q "semantic_ad_rules" "$ROOT_DIR/crates/tenferro-linalg/src/lib.rs"; then
+      bench_api="semantic-ad"
+      if [[ -n "$bench_rustflags" ]]; then
+        bench_rustflags+=" --cfg tenferro_linalg_semantic_ad_api"
+      else
+        bench_rustflags="--cfg tenferro_linalg_semantic_ad_api"
+      fi
+      bench_env=(env "RUSTFLAGS=$bench_rustflags")
+    else
+      bench_api="legacy-extension-ad"
+    fi
+    printf 'ad api:      %s\n' "$bench_api"
+    printf 'linalg_vjp_gate_ad_api=%s\n' "$bench_api" >>"$manifest"
+  fi
   build_log="$OUTPUT_DIR/${LABEL}-${package}-${bench}-build.log"
   run_log="$OUTPUT_DIR/${LABEL}-${package}-${bench}-run.log"
   build_cmd=(cargo bench -p "$package")
@@ -205,15 +227,18 @@ for entry in "${BENCHMARKS[@]}"; do
 
   printf 'build:       %s\n' "${build_cmd[*]}"
   printf 'run:         %s\n' "${run_cmd[*]}"
+  if ((${#bench_env[@]} > 0)); then
+    printf 'rustflags:   %s\n' "$bench_rustflags"
+  fi
 
   if [[ "$MODE" == "run" ]]; then
     (
       cd "$ROOT_DIR"
-      "${build_cmd[@]}"
+      "${bench_env[@]}" "${build_cmd[@]}"
     ) 2>&1 | tee "$build_log"
     (
       cd "$ROOT_DIR"
-      "${run_cmd[@]}"
+      "${bench_env[@]}" "${run_cmd[@]}"
     ) 2>&1 | tee "$run_log"
   fi
 done

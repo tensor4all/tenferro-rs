@@ -93,7 +93,15 @@ runs each Criterion benchmark with:
 - measurement time: 5 seconds;
 - sample size: 100;
 - one-thread CPU/backend/provider environment;
+- one Cargo build job during benchmark target builds;
 - `taskset -c 0` when `taskset` is available.
+
+The `tenferro-linalg/linalg_vjp_gate` benchmark is harness-compatible across
+the pinned baseline AD API generation and the semantic-extension AD API
+generation. The runner detects the semantic API from local source and supplies
+a bench-only `--cfg tenferro_linalg_semantic_ad_api` when needed. This keeps
+the compatibility branch local to the benchmark harness; no production
+compatibility shim is added to the library API.
 
 ## Statistic and threshold
 
@@ -204,6 +212,34 @@ Partial logs were written under:
 
 ```text
 target/unification-performance-gate/baseline-c6418-effa6ca1-run2/
+```
+
+### Invalid baseline attempt: 2026-07-25 run3
+
+A third attempted baseline run against pinned commit
+`c6418eecfe2d38ca09d6e6386760fcb23982691e`, with the harness files from commit
+`effa6ca1`, reached `tenferro-linalg/linalg_vjp_gate` but failed during the
+benchmark target build.
+
+Classification: `INCONCLUSIVE`, not a baseline.
+
+Reason: the first linalg VJP benchmark harness used the semantic-extension AD
+API names introduced after the pinned baseline. The pinned baseline exposes the
+older `tenferro_linalg::ad_rules()` and
+`AdContextBuilder::with_extension_rules(...)` names, so
+`tenferro_linalg::semantic_ad_rules()` and
+`AdContextBuilder::with_semantic_extension_rules(...)` failed to compile.
+
+Resolution: the harness now detects the AD API generation in
+`scripts/run-unification-performance-gate.sh` and selects the matching
+benchmark-local code path in `crates/tenferro-linalg/benches/linalg_vjp_gate.rs`.
+The runner also sets `CARGO_BUILD_JOBS=1` by default so validation and benchmark
+target builds do not monopolize the host while other processes are active.
+
+Partial logs were written under:
+
+```text
+target/unification-performance-gate/baseline-c6418-effa6ca1-run3/
 ```
 
 ## Remaining risks and follow-up
