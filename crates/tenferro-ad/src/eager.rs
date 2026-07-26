@@ -2663,16 +2663,16 @@ impl EagerTensor {
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        Self::new_result_arc_with_semantic_trace_registered(
+        Self::from_parts(EagerTensorParts {
             ctx,
             key,
-            tensor,
             requires_grad,
             trace,
             semantic_trace,
+            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
             metadata_scopes,
-            true,
-        )
+            register_value: true,
+        })
     }
 
     pub(crate) fn new_unregistered_result_arc_with_semantic_trace(
@@ -2684,28 +2684,6 @@ impl EagerTensor {
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        Self::new_result_arc_with_semantic_trace_registered(
-            ctx,
-            key,
-            tensor,
-            requires_grad,
-            trace,
-            semantic_trace,
-            metadata_scopes,
-            false,
-        )
-    }
-
-    fn new_result_arc_with_semantic_trace_registered(
-        ctx: Arc<EagerRuntime>,
-        key: ValueKey<StdTensorOp>,
-        tensor: Arc<Tensor>,
-        requires_grad: bool,
-        trace: Option<EagerTrace>,
-        semantic_trace: Option<TracedTensor>,
-        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
-        register_value: bool,
-    ) -> Result<Self> {
         Self::from_parts(EagerTensorParts {
             ctx,
             key,
@@ -2714,7 +2692,7 @@ impl EagerTensor {
             semantic_trace,
             value: Arc::new(TensorValue::from_tensor_arc(tensor)),
             metadata_scopes,
-            register_value,
+            register_value: false,
         })
     }
 

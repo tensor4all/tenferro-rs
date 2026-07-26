@@ -629,16 +629,19 @@ impl RecordedBuilder {
             if output_cotangents.iter().all(Option::is_none) {
                 continue;
             }
+            let context = RecordedTransposeContext {
+                recorded: self,
+                external_values,
+                fixed_locals: &fixed_locals,
+                shape_sources,
+                role,
+            };
             let input_cotangents = transpose_recorded_operation(
-                self,
                 operation,
                 &output_cotangents,
                 active_mask,
-                external_values,
-                &fixed_locals,
-                shape_sources,
+                &context,
                 builder,
-                role,
             )?;
             for ((input, active), cotangent) in operation
                 .inputs
@@ -735,6 +738,14 @@ fn linear_active_mask(role: &OperationRole) -> Option<&[bool]> {
         OperationRole::Primary => None,
         OperationRole::Linearized { active_mask } => Some(active_mask),
     }
+}
+
+struct RecordedTransposeContext<'a> {
+    recorded: &'a RecordedBuilder,
+    external_values: &'a HashMap<ValueKey<StdTensorOp>, ProgramValue>,
+    fixed_locals: &'a [Option<ProgramValue>],
+    shape_sources: &'a [ProgramValue],
+    role: SemanticAdRuleRole,
 }
 
 fn resolve_recorded_inputs(
@@ -973,15 +984,11 @@ fn localize_dim(
 }
 
 fn transpose_recorded_operation(
-    recorded: &RecordedBuilder,
     operation: &RecordedOperation,
     cotangent_outputs: &[Option<ProgramValue>],
     active_mask: &[bool],
-    external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
-    fixed_locals: &[Option<ProgramValue>],
-    shape_sources: &[ProgramValue],
+    context: &RecordedTransposeContext<'_>,
     builder: &mut SemanticProgramBuilder,
-    role: SemanticAdRuleRole,
 ) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
     let Some(cotangent) = cotangent_outputs.first().copied().flatten() else {
         return Ok(vec![None; operation.inputs.len()]);
@@ -991,8 +998,8 @@ fn transpose_recorded_operation(
             None
         } else {
             match operation.inputs.get(index) {
-                Some(ValueRef::External(key)) => external_values.get(key).copied(),
-                Some(ValueRef::Local(local)) => fixed_locals.get(*local).copied().flatten(),
+                Some(ValueRef::External(key)) => context.external_values.get(key).copied(),
+                Some(ValueRef::Local(local)) => context.fixed_locals.get(*local).copied().flatten(),
                 None => None,
             }
         }
@@ -1018,22 +1025,19 @@ fn transpose_recorded_operation(
             let value = builder.add_op(CoreSemanticOp::Conj, &[cotangent])?[0];
             unary(value)
         }
-        StdTensorOp::Mul => transpose_mul(cotangent, active_mask, &fixed, builder, role),
-        StdTensorOp::Div => transpose_div(cotangent, active_mask, &fixed, builder, role),
-        StdTensorOp::DotGeneral { config } => {
-            transpose_matrix_dot(cotangent, config, active_mask, &fixed, builder, role)
-        }
-        StdTensorOp::ReduceSum { axes } => transpose_reduce_sum(
-            recorded,
-            operation,
+        StdTensorOp::Mul => transpose_mul(cotangent, active_mask, &fixed, builder, context.role),
+        StdTensorOp::Div => transpose_div(cotangent, active_mask, &fixed, builder, context.role),
+        StdTensorOp::DotGeneral { config } => transpose_matrix_dot(
             cotangent,
-            axes,
+            config,
             active_mask,
-            external_values,
-            shape_sources,
+            &fixed,
             builder,
-            role,
+            context.role,
         ),
+        StdTensorOp::ReduceSum { axes } => {
+            transpose_reduce_sum(context, operation, cotangent, axes, active_mask, builder)
+        }
         StdTensorOp::Transpose { perm } => {
             let mut inverse = vec![0; perm.len()];
             for (output_axis, input_axis) in perm.iter().copied().enumerate() {
@@ -1086,32 +1090,28 @@ fn transpose_recorded_operation(
             operation,
             cotangent,
             active_mask,
-            external_values,
-            fixed_locals,
+            context.external_values,
+            context.fixed_locals,
             builder,
         ),
         other => Err(semantic_internal(
-            role,
+            context.role,
             format!("unsupported linear linalg fragment operation {other:?}"),
         )),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn transpose_reduce_sum(
-    recorded: &RecordedBuilder,
+    context: &RecordedTransposeContext<'_>,
     operation: &RecordedOperation,
     cotangent: ProgramValue,
     axes: &[usize],
     active_mask: &[bool],
-    external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
-    shape_sources: &[ProgramValue],
     builder: &mut SemanticProgramBuilder,
-    role: SemanticAdRuleRole,
 ) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
     if operation.inputs.len() != 1 || active_mask.len() != 1 {
         return Err(semantic_internal(
-            role,
+            context.role,
             "linear reduce_sum fragment has malformed arity",
         ));
     }
@@ -1120,23 +1120,23 @@ fn transpose_reduce_sum(
     }
     let mut cache = HashMap::new();
     let input_shape = recorded_value_shape(
-        recorded,
+        context.recorded,
         &operation.inputs[0],
-        external_values,
-        shape_sources,
+        context.external_values,
+        context.shape_sources,
         builder,
-        role,
+        context.role,
         &mut cache,
     )?
     .ok_or_else(|| {
         semantic_internal(
-            role,
+            context.role,
             "linear reduce_sum fragment is missing input shape metadata",
         )
     })?;
     if axes.iter().any(|axis| *axis >= input_shape.len()) {
         return Err(semantic_internal(
-            role,
+            context.role,
             format!(
                 "linear reduce_sum axis is out of bounds for input rank {}",
                 input_shape.len()
@@ -1150,11 +1150,11 @@ fn transpose_reduce_sum(
     let shape = localize_dims(
         &input_shape,
         &[cotangent],
-        shape_sources,
+        context.shape_sources,
         1,
         &mut inputs,
         builder,
-        role,
+        context.role,
     )?;
     Ok(vec![Some(
         builder.add_op(CoreSemanticOp::BroadcastInDim { shape, dims }, &inputs)?[0],
