@@ -10,9 +10,10 @@ use tenferro_runtime::{
     IndexingPrepareRequest, IndexingRuntime, InputSignature, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
     LayoutSpecialization, PrepareCapability, PrepareError, PreparedOperation,
-    PreparedOperationBinding, ProviderContractError, ReductionPrepareRequest, ReductionRuntime,
-    RuntimeCacheOwner, RuntimeConfigError, SpecializationError, SpecializationProjection,
-    SpecializationRequirements, StorageClass, UnsupportedReason,
+    PreparedOperationBinding, PreparedOperationPlan, ProviderContractError,
+    ReductionPrepareRequest, ReductionRuntime, RuntimeCacheOwner, RuntimeConfigError,
+    SpecializationError, SpecializationProjection, SpecializationRequirements, StorageClass,
+    UnsupportedReason,
 };
 
 use crate::CpuBackend;
@@ -224,13 +225,13 @@ fn prepare_cpu(
         return Ok(PrepareCapability::NeedsSpecialization(merged));
     }
 
-    Ok(PrepareCapability::Prepared(Arc::new(
-        CpuPreparedOperation {
+    Ok(PrepareCapability::Prepared(
+        PreparedOperationPlan::metadata(Arc::new(CpuPreparedOperation {
             binding: context.binding().clone(),
             specialization: context.specialization().clone(),
             kind: actual_kind,
-        },
-    )))
+        })),
+    ))
 }
 
 fn validate_cpu_runtime_context(context: &CorePrepareContext<'_>) -> Result<(), PrepareError> {

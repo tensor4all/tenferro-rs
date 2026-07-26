@@ -7,9 +7,9 @@ use tenferro_runtime::{
     DotGeneralPrepareRequest, EngineId, EngineRegistration, ExecutionContextIdentity,
     HardwareClassId, InputSignature, InputSpecializationProjection,
     InputSpecializationRequirements, LayoutProjection, LayoutSpecialization, PrepareCapability,
-    PrepareError, PreparedOperation, PreparedOperationBinding, ProviderContractError,
-    RuntimeConfigError, SpecializationError, SpecializationProjection, SpecializationRequirements,
-    StorageClass, UnsupportedReason,
+    PrepareError, PreparedOperation, PreparedOperationBinding, PreparedOperationPlan,
+    ProviderContractError, RuntimeConfigError, SpecializationError, SpecializationProjection,
+    SpecializationRequirements, StorageClass, UnsupportedReason,
 };
 
 use super::WebGpuBackend;
@@ -161,12 +161,12 @@ fn prepare_webgpu_dot_general(
         return Ok(PrepareCapability::NeedsSpecialization(merged));
     }
 
-    Ok(PrepareCapability::Prepared(Arc::new(
-        WebGpuPreparedOperation {
+    Ok(PrepareCapability::Prepared(
+        PreparedOperationPlan::metadata(Arc::new(WebGpuPreparedOperation {
             binding: context.binding().clone(),
             specialization: context.specialization().clone(),
-        },
-    )))
+        })),
+    ))
 }
 
 fn validate_webgpu_runtime_context(context: &CorePrepareContext<'_>) -> Result<(), PrepareError> {

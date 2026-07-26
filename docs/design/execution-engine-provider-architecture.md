@@ -713,7 +713,7 @@ execution. Its nodes are conceptually:
 ```rust
 pub enum ScheduledNode {
     Operation {
-        operation: Arc<dyn PreparedOperation>,
+        operation: PreparedOperationPlan,
         resources: ResourceRequirements,
     },
     Transfer(PreparedTransfer),
@@ -725,11 +725,12 @@ pub enum ScheduledNode {
 The schedule also records value slots, the dependency DAG, buffer lifetimes,
 output bindings, and event dependencies. Each prepared operation binding is
 self-contained enough for same-storage execution: it retains the resolved
-engine/provider and algorithm plan. The current extension hook is still the
-public `PreparedOperation::execute` trait method, so extension execution uses
-that prepared operation while avoiding family-id or provider-registry lookup in
-the scheduled loop. A narrower internal operation object can replace that hook
-only as a deliberate public-boundary cleanup.
+engine/provider and algorithm plan. Public `PreparedOperation` objects expose
+only immutable metadata. Runtime execution stores them inside a
+`PreparedOperationPlan`, and extension operations attach a hidden
+`PreparedOperationExecutor` bridge to that plan. This keeps the user-facing
+metadata surface small while still avoiding family-id or provider-registry
+lookup in the scheduled loop.
 
 Provider code receives an `ErasedExecutionContext` and performs one safe
 `TypeId` check/downcast to its typed context. Preparation validates the same
@@ -1116,7 +1117,7 @@ pub trait ExtensionEngine {
         &self,
         operation: &dyn ExtensionOp,
         context: &ExtensionPrepareContext<'_>,
-    ) -> Result<PrepareCapability<PreparedOperation>>;
+    ) -> Result<PrepareCapability>;
 }
 ```
 

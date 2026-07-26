@@ -29,7 +29,7 @@ use super::{
     HardwareClassId, IndexingPrepareRequest, IndexingRuntime, InputSignature,
     InputSpecializationRequirements, LayoutPrepareRequest, LayoutProjection, LayoutRuntime,
     PlacementSpecialization, PrepareError, PrepareOptions, PrepareOptionsKey,
-    PreparedOperationBinding, PreparedOperationHandle, ProgramPlacementConstraint,
+    PreparedOperationBinding, PreparedOperationPlan, ProgramPlacementConstraint,
     ProviderContractError, ReductionPrepareRequest, ReductionRuntime, RegistrationIdentity,
     ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement, Runtime,
     RuntimeStateError, SpecializationProjection, SpecializationRequirements, StorageClass,
@@ -304,14 +304,14 @@ pub(crate) struct PreparedProgram {
     )]
     root: Arc<PreparedProgramRoot>,
     specialization: SpecializationProjection,
-    operations: Box<[PreparedOperationHandle]>,
+    operations: Box<[PreparedOperationPlan]>,
 }
 
 impl PreparedProgram {
     fn new(
         root: Arc<PreparedProgramRoot>,
         specialization: SpecializationProjection,
-        operations: Box<[PreparedOperationHandle]>,
+        operations: Box<[PreparedOperationPlan]>,
     ) -> Self {
         Self {
             root,
@@ -324,7 +324,7 @@ impl PreparedProgram {
         &self.root
     }
 
-    pub(crate) fn operations(&self) -> &[PreparedOperationHandle] {
+    pub(crate) fn operations(&self) -> &[PreparedOperationPlan] {
         &self.operations
     }
 
@@ -339,7 +339,7 @@ impl PreparedProgram {
     }
 
     #[cfg(test)]
-    pub(crate) fn operations_for_test(&self) -> &[PreparedOperationHandle] {
+    pub(crate) fn operations_for_test(&self) -> &[PreparedOperationPlan] {
         &self.operations
     }
 }
@@ -351,7 +351,7 @@ impl PreparedValue for PreparedProgram {
             specialization_projection_retained_bytes(&self.specialization)?,
             self.operations
                 .len()
-                .checked_mul(size_of::<PreparedOperationHandle>())?,
+                .checked_mul(size_of::<PreparedOperationPlan>())?,
             checked_sum_options(
                 self.operations
                     .iter()
@@ -1037,7 +1037,7 @@ fn prepare_entry(
         match prepare_operation(operation, dispatch, signature, &key.specialization)? {
             super::PrepareCapability::Prepared(operation) => {
                 validate_prepared_operation(
-                    operation.as_ref(),
+                    operation.operation().as_ref(),
                     &dispatch.binding,
                     &key.specialization,
                 )?;

@@ -12,9 +12,9 @@ use crate::extension_cache::ExtensionCacheStore;
 
 /// Backend and cache state passed to one prepared extension execution.
 ///
-/// Extension crates should obtain this value from their
-/// [`crate::PreparedOperation::execute`] implementation and use it only for the
-/// duration of that call.
+/// Extension crates should obtain this value from their hidden
+/// [`crate::PreparedOperationExecutor`] bridge and use it only for the duration
+/// of that call.
 ///
 /// # Examples
 ///

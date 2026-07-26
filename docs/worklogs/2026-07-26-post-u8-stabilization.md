@@ -64,9 +64,11 @@ splitting the follow-up work into unrelated pull requests.
 - `ScheduledTransfer`, device-native event-domain bridging, pending-output
   composition, and full admission logic remain later #1471 follow-up scope.
 - The extension execution hook is still the public
-  `PreparedOperation::execute` trait method. This is compatible with the
-  current extension architecture; narrowing it to an internal operation object
-  would be a separate public-boundary cleanup.
+  hidden `PreparedOperationExecutor` bridge carried by
+  `PreparedOperationPlan`. Public `PreparedOperation` is now metadata-only:
+  binding, specialization, and retained-byte accounting. Core prepared
+  operations use metadata-only plans; extension prepared operations attach an
+  executor bridge for the scheduled loop.
 - `run_compiled_values` preserves the metadata-only terminal lazy value path
   for layout/view-like outputs before falling back to normal scheduled
   execution.
@@ -116,6 +118,12 @@ CARGO_TARGET_DIR=/tmp/tenferro-1472-candidate-target.Y3WFns CARGO_BUILD_JOBS=64 
 CARGO_TARGET_DIR=/tmp/tenferro-1472-candidate-target.Y3WFns CARGO_BUILD_JOBS=64 CARGO_INCREMENTAL=0 RUSTC_WRAPPER= /usr/bin/time -v cargo test -p tenferro-cpu --release --lib --no-run --timings
 gh issue close 1473 --reason completed
 git diff --check
+CARGO_BUILD_JOBS=64 cargo test -p tenferro-runtime capability::prepared_operation_source_contract_splits_metadata_from_execution_surface -- --nocapture
+CARGO_BUILD_JOBS=64 cargo test -p tenferro-runtime --test integration runtime_execution -- --nocapture
+CARGO_BUILD_JOBS=64 cargo test -p tenferro-runtime --test integration runtime_preparation_api -- --nocapture
+CARGO_BUILD_JOBS=64 cargo test -p tenferro-runtime runtime::tests::preparation -- --nocapture
+CARGO_BUILD_JOBS=64 cargo test --manifest-path ext/sparse/Cargo.toml --all-targets -- --nocapture
+CARGO_BUILD_JOBS=64 cargo test --manifest-path ext/tropical/Cargo.toml --all-targets -- --nocapture
 ```
 
 The full local oracle replay reported:

@@ -289,11 +289,11 @@ fn core_prepare_requests_preserve_operation_and_context_borrows() {
 }
 
 #[test]
-fn prepared_operation_source_contract_has_bounded_execution_surface() {
+fn prepared_operation_source_contract_splits_metadata_from_execution_surface() {
     let source = include_str!("../capability.rs");
     let trait_body = source
         .split_once("pub trait PreparedOperation")
-        .and_then(|(_, rest)| rest.split_once("pub type PreparedOperationHandle"))
+        .and_then(|(_, rest)| rest.split_once("#[doc(hidden)]"))
         .map(|(body, _)| body)
         .expect("PreparedOperation trait should precede handle alias");
 
@@ -301,21 +301,46 @@ fn prepared_operation_source_contract_has_bounded_execution_surface() {
         "fn binding(&self) -> &PreparedOperationBinding",
         "fn specialization(&self) -> &SpecializationProjection",
         "fn retained_bytes(&self) -> usize",
+    ] {
+        assert!(
+            trait_body.contains(required),
+            "PreparedOperation missing required metadata method {required}"
+        );
+    }
+
+    for forbidden in [
+        "fn execute(",
+        "ErasedExecutionContext",
+        "ExtensionCacheStore",
+        "TensorRead",
+        "Runtime",
+        "lease",
+        "event",
+        "schedule",
+        "buffer",
+        "scratch",
+    ] {
+        assert!(
+            !trait_body.contains(forbidden),
+            "PreparedOperation must not expose {forbidden}"
+        );
+    }
+
+    let executor_body = source
+        .split_once("pub trait PreparedOperationExecutor")
+        .and_then(|(_, rest)| rest.split_once("pub type PreparedOperationExecutorHandle"))
+        .map(|(body, _)| body)
+        .expect("PreparedOperationExecutor trait should precede handle alias");
+
+    for required in [
         "fn execute(",
         "&mut ErasedExecutionContext<'_>",
         "&mut ExtensionCacheStore",
         "&[TensorRead<'_>]",
     ] {
         assert!(
-            trait_body.contains(required),
-            "PreparedOperation missing required method/signature fragment {required}"
-        );
-    }
-
-    for forbidden in ["Runtime", "lease", "event", "schedule", "buffer", "scratch"] {
-        assert!(
-            !trait_body.contains(forbidden),
-            "PreparedOperation must not expose {forbidden}"
+            executor_body.contains(required),
+            "PreparedOperationExecutor missing required execution fragment {required}"
         );
     }
 }

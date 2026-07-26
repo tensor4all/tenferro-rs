@@ -25,7 +25,8 @@ pub use capability::{
     DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
     ErasedExecutionContext, IndexingPrepareRequest, IndexingRuntime, LayoutPrepareRequest,
     LayoutRuntime, PreparationKeySummary, PrepareCapability, PreparedOperation,
-    PreparedOperationBinding, PreparedOperationHandle, ReductionPrepareRequest, ReductionRuntime,
+    PreparedOperationBinding, PreparedOperationExecutor, PreparedOperationExecutorHandle,
+    PreparedOperationHandle, PreparedOperationPlan, ReductionPrepareRequest, ReductionRuntime,
     UnsupportedReason,
 };
 pub use engine_registration::EngineRegistration;
