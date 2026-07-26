@@ -11,8 +11,8 @@ use tenferro_cpu::CpuBackend;
 use tenferro_linalg::TracedTensorLinalgExt;
 use tenferro_runtime::{DType, DotGeneralConfig, GraphCompiler, Runtime, Tensor, TracedTensor};
 
-use crate::db::{self, CaseRecord, ComparisonTolerance, DbTensor};
-use crate::support::{self, RecordSupport};
+use super::db::{self, CaseRecord, ComparisonTolerance, DbTensor};
+use super::support::{self, RecordSupport};
 
 #[derive(Clone)]
 struct NamedTensor {
@@ -79,7 +79,7 @@ impl ReplayConfig {
     }
 }
 
-pub fn replay_case_id(op: &str, family: &str, case_id: &str) -> Result<(), String> {
+pub(super) fn replay_case_id(op: &str, family: &str, case_id: &str) -> Result<(), String> {
     let root = db::default_oracle_db_root().ok_or_else(|| {
         "vendored tensor-ad-oracles root not found; set TENSOR_AD_ORACLES_ROOT".to_string()
     })?;
@@ -88,7 +88,11 @@ pub fn replay_case_id(op: &str, family: &str, case_id: &str) -> Result<(), Strin
     replay_case_with_config(&record, ReplayConfig::all_derivatives())
 }
 
-pub fn replay_expected_error_case_id(op: &str, family: &str, case_id: &str) -> Result<(), String> {
+pub(super) fn replay_expected_error_case_id(
+    op: &str,
+    family: &str,
+    case_id: &str,
+) -> Result<(), String> {
     let root = db::default_oracle_db_root().ok_or_else(|| {
         "vendored tensor-ad-oracles root not found; set TENSOR_AD_ORACLES_ROOT".to_string()
     })?;
@@ -97,7 +101,7 @@ pub fn replay_expected_error_case_id(op: &str, family: &str, case_id: &str) -> R
     replay_expected_error_case(&record)
 }
 
-pub fn replay_supported_cases_from_env() -> Result<Option<ReplayRunSummary>, String> {
+pub(super) fn replay_supported_cases_from_env() -> Result<Option<ReplayRunSummary>, String> {
     if !env_flag("RUN_ORACLE_REPLAY") {
         return Ok(None);
     }

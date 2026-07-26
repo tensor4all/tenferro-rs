@@ -114,8 +114,3 @@ required-features = ["autodiff", "__bench_unification_semantic_ad_api"]
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
-
-[[test]]
-name = "oracle_replay"
-path = "tests/oracle_replay.rs"
-required-features = ["autodiff"]

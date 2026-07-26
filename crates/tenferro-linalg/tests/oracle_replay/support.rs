@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::db::CaseRecord;
+use super::db::CaseRecord;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReplayKind {

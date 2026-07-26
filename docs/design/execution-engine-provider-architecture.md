@@ -303,6 +303,9 @@ keeping the compiler artifact backend-neutral:
   prepare through the runtime cache using the compiled graph's compiler
   options, validate the public input contract and semantic shape guards, and
   execute through the engine registration's erased tensor backend bridge.
+- `GraphExecutor<B>` remains a legacy compatibility executor. It restages from
+  the backend-neutral `CompiledGraph` and then executes through the same
+  runtime-owned preparation and engine bridge path.
 - `EngineRegistration::with_tensor_backend_executor` attaches that bridge to
   an engine registration. `tenferro-cpu::runtime_engine_registration` provides
   the CPU registration with direct core preparation capabilities, cache-owner

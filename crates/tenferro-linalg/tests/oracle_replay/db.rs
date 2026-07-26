@@ -252,7 +252,7 @@ fn parse_case_record_str(raw: &str) -> Result<CaseRecord, String> {
     record.validate()
 }
 
-pub fn default_oracle_db_root() -> Option<PathBuf> {
+pub(super) fn default_oracle_db_root() -> Option<PathBuf> {
     if let Some(root) = env::var_os("TENSOR_AD_ORACLES_ROOT") {
         let path = PathBuf::from(root);
         if path.is_dir() {
@@ -268,7 +268,7 @@ pub fn default_oracle_db_root() -> Option<PathBuf> {
     vendored.is_dir().then_some(vendored)
 }
 
-pub fn case_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+pub(super) fn case_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     let cases_root = root.join("cases");
     let mut files = Vec::new();
     let op_dirs = fs::read_dir(&cases_root)
@@ -295,7 +295,7 @@ pub fn case_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
-pub fn load_case_records(path: &Path) -> Result<Vec<CaseRecord>, String> {
+pub(super) fn load_case_records(path: &Path) -> Result<Vec<CaseRecord>, String> {
     let text = fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     text.lines()

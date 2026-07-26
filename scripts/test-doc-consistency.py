@@ -168,6 +168,14 @@ def test_review_bot_workflow_exists() -> None:
     assert "rules-review:waive" in text
 
 
+def test_review_bot_uses_current_deepseek_model_fallback() -> None:
+    text = read(".github/workflows/review_bot.yml")
+
+    assert "deepseek-v4-pro" in text
+    assert "'deepseek-chat'" not in text
+    assert "'deepseek-reasoner'" not in text
+
+
 def test_repo_settings_requires_repository_rules_review() -> None:
     text = read("ai/repo-settings.json")
 
@@ -442,6 +450,7 @@ def main() -> int:
         test_docs_ci_runs_docs_script_tests,
         test_ci_enforces_public_error_docs_and_extension_clippy,
         test_review_bot_workflow_exists,
+        test_review_bot_uses_current_deepseek_model_fallback,
         test_repo_settings_requires_repository_rules_review,
         test_gpu_ci_waits_for_review_bot_gate_before_cuda_work,
         test_pre_pr_checklist_requires_local_llm_review,

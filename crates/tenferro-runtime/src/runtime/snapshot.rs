@@ -502,8 +502,18 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// Returns the same validation, preparation, and runtime-state errors as
-    /// [`Self::run_compiled`] before backend execution begins.
+    /// Returns [`crate::Error::UnboundPlaceholder`] when no explicit inputs are
+    /// supplied and a semantic input has no bound default tensor.
+    /// Returns [`crate::Error::GraphInputCountMismatch`],
+    /// [`crate::Error::PlaceholderDtypeMismatch`],
+    /// [`crate::Error::PlaceholderRankMismatch`],
+    /// [`crate::Error::PlaceholderShapeMismatch`], or
+    /// [`crate::Error::PlaceholderShapeBoundExceeded`] when ordered runtime
+    /// inputs do not match the compiled graph metadata.
+    /// Returns [`crate::Error::RuntimeState`] when runtime preparation, schedule
+    /// validation, snapshot access, stale epoch checks, or execution-bridge
+    /// resolution fails, including a runtime with no eligible engine or no
+    /// execution bridge for the prepared engine.
     pub fn prepare_compiled(
         &self,
         program: &CompiledGraph,

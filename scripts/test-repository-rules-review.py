@@ -39,6 +39,13 @@ def test_added_lines_by_file() -> None:
     assert lines["foo.rs"] == {2}
 
 
+def test_default_deepseek_model_uses_current_v4_name() -> None:
+    mod = load_module()
+
+    assert mod.DEFAULT_MODEL == "deepseek-v4-pro"
+    assert mod.DEFAULT_API_URL == "https://api.deepseek.com/chat/completions"
+
+
 def test_filter_findings_drops_unchanged_files() -> None:
     mod = load_module()
     finding = mod.Finding(
@@ -726,6 +733,7 @@ def test_contains_sensitive_text_ignores_env_lookup_code() -> None:
 def main() -> int:
     for test in [
         test_added_lines_by_file,
+        test_default_deepseek_model_uses_current_v4_name,
         test_filter_findings_drops_unchanged_files,
         test_filter_findings_keeps_added_line,
         test_filter_findings_drops_line_finding_without_added_lines,

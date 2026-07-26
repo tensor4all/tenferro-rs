@@ -256,10 +256,13 @@ The local oracle replay harness was also updated to run replay records in
 parallel via bounded OS worker threads. An attempted outer Rayon pool was
 rejected because CPU backend kernels use backend-owned Rayon scopes internally;
 wrapping whole oracle records in another Rayon managed scope trips the CPU
-backend re-entry guard. The full local replay was then run with HVP enabled:
+backend re-entry guard. The replay entrypoint now lives under the consolidated
+`tenferro-linalg` integration test target so the crate still links one
+integration-test binary in CI. The full local replay was then run with HVP
+enabled:
 
 ```console
-RUST_TEST_THREADS=1 RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_JOBS=48 CARGO_BUILD_JOBS=48 cargo test -p tenferro-linalg --features autodiff --test oracle_replay oracle_replays_supported_db_cases_when_requested -- --nocapture
+RUST_TEST_THREADS=1 RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_JOBS=48 CARGO_BUILD_JOBS=48 cargo test -p tenferro-linalg --features autodiff --test integration oracle_replays_supported_db_cases_when_requested -- --nocapture
 ```
 
 It passed in 79.49s with `9585` total records, `2090` supported-success

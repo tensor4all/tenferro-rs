@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::env;
 
-#[path = "oracle_replay/db.rs"]
+#[path = "../oracle_replay/db.rs"]
 mod db;
-#[path = "oracle_replay/replay.rs"]
+#[path = "../oracle_replay/replay.rs"]
 mod replay;
-#[path = "oracle_replay/support.rs"]
+#[path = "../oracle_replay/support.rs"]
 mod support;
 
 #[derive(Debug, Default, Eq, PartialEq)]

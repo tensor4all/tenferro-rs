@@ -1,8 +1,9 @@
 # Tensor AD Oracles Support Coverage
 
 This file is a checked-in support snapshot derived from the vendored
-`third_party/tensor-ad-oracles` subtree. The crate-local replay harness lives
-under `crates/tenferro-linalg/tests/oracle_replay` and is env-gated for local
+`third_party/tensor-ad-oracles` subtree. The crate-local replay entrypoint lives
+under `crates/tenferro-linalg/tests/integration/oracle_replay.rs`, with helpers
+under `crates/tenferro-linalg/tests/oracle_replay`, and is env-gated for local
 or nightly execution rather than default PR CI.
 
 ## Summary
@@ -20,7 +21,7 @@ replaying the whole database. Full replay is opt-in:
 
 ```console
 RUST_TEST_THREADS=1 RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_JOBS=48 \
-  cargo test -p tenferro-linalg --features autodiff --test oracle_replay \
+  cargo test -p tenferro-linalg --features autodiff --test integration \
   oracle_replays_supported_db_cases_when_requested -- --nocapture
 ```
 
