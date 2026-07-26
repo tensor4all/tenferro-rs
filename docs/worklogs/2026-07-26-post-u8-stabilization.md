@@ -26,9 +26,11 @@ splitting the follow-up work into unrelated pull requests.
   loop before dispatching the downstream operation.
 - #1468 linalg semantic AD cleanup: semantic linalg `linearize` now emits JVP
   fragments directly into `SemanticProgramBuilder` instead of first recording
-  and replaying a legacy fragment. The remaining linalg recorded-fragment usage
-  is limited to reverse-mode construction paths that need a local linear
-  fragment to transpose.
+  and replaying a legacy fragment. Custom linalg transposed-linear rules also
+  emit directly through `SemanticRuleBuilder`; the remaining reverse-mode
+  `LinearizeThenTranspose` route uses an op-local `SemanticLinearFragment`
+  that stores semantic core ops or extension payloads rather than replaying the
+  legacy `RecordedBuilder` family.
 - #1464 CPU elementwise fusion classifier: replaced the hand-written
   add/multiply pattern arms with an explicit two-input, two-operation,
   one-output, identity-view binary-tail classifier. The classifier recognizes
@@ -85,11 +87,11 @@ cargo test -p tenferro-runtime prepared_program_is_binding_free_and_shares_stage
 cargo test -p tenferro-runtime preparation -- --nocapture
 cargo test -p tenferro-runtime --test integration runtime_execution -- --nocapture
 cargo test -p tenferro-ad --test integration runtime_execution -- --nocapture
-cargo test -p tenferro-linalg --test integration --features autodiff linalg_internal_path_contract::semantic_linalg_linearize_does_not_replay_recorded_legacy_fragments -- --nocapture
+CARGO_BUILD_JOBS=64 cargo test -p tenferro-linalg --test integration --features autodiff linalg_internal_path_contract:: -- --nocapture
 cargo test -p tenferro-linalg --test integration --features autodiff ad_support_manifest:: -- --nocapture
 cargo test -p tenferro-linalg --test integration --features autodiff traced_ad_explicit:: -- --nocapture
 cargo test -p tenferro-linalg --test integration --features autodiff oracle_replay:: -- --nocapture
-RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_JOBS=64 cargo test -p tenferro-linalg --test integration --features autodiff oracle_replay::oracle_replays_supported_db_cases_when_requested -- --nocapture
+RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_JOBS=64 CARGO_BUILD_JOBS=64 cargo test -p tenferro-linalg --test integration --features autodiff oracle_replay:: -- --nocapture
 cargo test -p tenferro-cpu two_input_binary_tail_classifier --lib -- --nocapture
 cargo test -p tenferro-cpu binary_tail_specialization --lib -- --nocapture
 cargo test -p tenferro-cpu elementwise_fusion --lib -- --nocapture

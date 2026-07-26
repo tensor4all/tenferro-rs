@@ -324,18 +324,18 @@ fn semantic_linearized_transpose(
         .enumerate()
         .map(|(index, active)| active.then_some(index))
         .collect();
-    let mut recorded = RecordedBuilder::with_seed_count(primal_inputs.len());
+    let mut fragment = SemanticLinearFragmentBuilder::with_seed_count(primal_inputs.len());
     let tangent_outputs = LinalgAdRule
         .linearize(
             op,
-            &mut recorded,
+            &mut fragment,
             &legacy.input_keys,
             &legacy.output_keys,
             &tangent_inputs,
             &mut legacy.context.clone(),
         )
         .map_err(|error| legacy_error(SemanticAdRuleRole::LinearTranspose, error))?;
-    recorded.transpose_linear_fragment(
+    fragment.transpose_linear_fragment(
         &tangent_outputs,
         cotangent_outputs,
         active_inputs,
@@ -376,24 +376,24 @@ fn semantic_custom_transpose(
         .cloned()
         .map(PrimitiveTransposeInput::Residual)
         .collect();
-    let mut recorded = RecordedBuilder::with_seed_count(seed_values.len());
+    let mut emitted = SemanticRuleBuilder::with_seeds(
+        &seed_values,
+        &legacy.external_values,
+        &legacy.shape_sources,
+        builder,
+        role,
+    );
     let cotangent_inputs = LinalgAdRule
         .linear_transpose(
             op,
-            &mut recorded,
+            &mut emitted,
             &cotangents,
             &transpose_inputs,
             active_inputs,
             &mut legacy.context.clone(),
         )
         .map_err(|error| legacy_error(role, error))?;
-    let locals = recorded.replay(
-        &seed_values,
-        &legacy.external_values,
-        &legacy.shape_sources,
-        builder,
-        role,
-    )?;
+    let locals = emitted.finish()?;
     Ok(cotangent_inputs
         .into_iter()
         .map(|value| {
@@ -525,11 +525,45 @@ fn collect_input_ranks(expression: &DimExpr, ranks: &mut Vec<usize>) {
     }
 }
 
-struct RecordedOperation {
-    operation: StdTensorOp,
-    inputs: Vec<ValueRef<StdTensorOp>>,
+#[derive(Clone, Debug)]
+enum SemanticLinearFragmentOp {
+    Core(CoreSemanticOp),
+    Extension(Arc<dyn tenferro_ad::extension::ExtensionOp>),
+    Unsupported(String),
+}
+
+#[derive(Clone)]
+enum SemanticLinearFragmentInput {
+    External(ValueKey<StdTensorOp>),
+    Local(LocalValueId),
+}
+
+impl From<ValueRef<StdTensorOp>> for SemanticLinearFragmentInput {
+    fn from(value: ValueRef<StdTensorOp>) -> Self {
+        match value {
+            ValueRef::External(key) => Self::External(key),
+            ValueRef::Local(local) => Self::Local(local),
+        }
+    }
+}
+
+struct SemanticLinearFragmentOperation {
+    operation: SemanticLinearFragmentOp,
+    inputs: Vec<SemanticLinearFragmentInput>,
     role: OperationRole,
     outputs: Vec<LocalValueId>,
+}
+
+fn semantic_linear_fragment_op(operation: &StdTensorOp) -> SemanticLinearFragmentOp {
+    match operation {
+        StdTensorOp::Extension(extension) => {
+            SemanticLinearFragmentOp::Extension(Arc::clone(extension))
+        }
+        core => CoreSemanticOp::try_from(core).map_or_else(
+            |_| SemanticLinearFragmentOp::Unsupported(format!("{core:?}")),
+            SemanticLinearFragmentOp::Core,
+        ),
+    }
 }
 
 struct SemanticRuleBuilder<'a, 'builder> {
@@ -582,17 +616,23 @@ impl PrimitiveRuleBuilder for SemanticRuleBuilder<'_, '_> {
         self.next_local += output_count;
         self.locals.resize(self.next_local, None);
         if self.error.is_none() {
-            let emitted =
-                resolve_recorded_inputs(&inputs, self.external_values, &self.locals, self.role)
-                    .and_then(|resolved| {
-                        emit_recorded_operation(
-                            &operation,
-                            &resolved,
-                            self.shape_sources,
-                            self.builder,
-                            self.role,
-                        )
-                    });
+            let fragment_op = semantic_linear_fragment_op(&operation);
+            let fragment_inputs: Vec<_> = inputs.into_iter().map(Into::into).collect();
+            let emitted = resolve_semantic_linear_fragment_inputs(
+                &fragment_inputs,
+                self.external_values,
+                &self.locals,
+                self.role,
+            )
+            .and_then(|resolved| {
+                emit_semantic_linear_fragment_operation(
+                    &fragment_op,
+                    &resolved,
+                    self.shape_sources,
+                    self.builder,
+                    self.role,
+                )
+            });
             match emitted {
                 Ok(values) => {
                     if values.len() != outputs.len() {
@@ -619,65 +659,24 @@ impl PrimitiveRuleBuilder for SemanticRuleBuilder<'_, '_> {
     }
 }
 
-struct RecordedBuilder {
+/// Op-local semantic linear fragment used by the manifest's
+/// `LinearizeThenTranspose` route. General linalg decomposition VJPs remain
+/// derived by transposing their emitted linearization, but the fragment stores
+/// semantic core ops or extension payloads instead of replaying legacy
+/// `StdTensorOp` graphs into the destination builder.
+struct SemanticLinearFragmentBuilder {
     seed_count: usize,
     next_local: usize,
-    operations: Vec<RecordedOperation>,
+    operations: Vec<SemanticLinearFragmentOperation>,
 }
 
-impl RecordedBuilder {
+impl SemanticLinearFragmentBuilder {
     fn with_seed_count(seed_count: usize) -> Self {
         Self {
             seed_count,
             next_local: seed_count,
             operations: Vec::new(),
         }
-    }
-
-    fn replay(
-        &self,
-        seeds: &[Option<ProgramValue>],
-        external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
-        shape_sources: &[ProgramValue],
-        builder: &mut SemanticProgramBuilder,
-        role: SemanticAdRuleRole,
-    ) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
-        let mut locals = vec![None; self.next_local];
-        for (index, seed) in seeds.iter().copied().enumerate().take(self.seed_count) {
-            locals[index] = seed;
-        }
-        for operation in &self.operations {
-            let inputs: Vec<_> = operation
-                .inputs
-                .iter()
-                .map(|input| match input {
-                    ValueRef::External(key) => external_values.get(key).copied(),
-                    ValueRef::Local(local) => locals.get(*local).copied().flatten(),
-                })
-                .collect::<Option<_>>()
-                .ok_or_else(|| {
-                    semantic_internal(
-                        role,
-                        "recorded linalg AD fragment references an unavailable value",
-                    )
-                })?;
-            let outputs = emit_recorded_operation(
-                &operation.operation,
-                &inputs,
-                shape_sources,
-                builder,
-                role,
-            )?;
-            for (local, value) in operation
-                .outputs
-                .iter()
-                .copied()
-                .zip(outputs.iter().copied())
-            {
-                locals[local] = Some(value);
-            }
-        }
-        Ok(locals)
     }
 
     fn transpose_linear_fragment(
@@ -690,7 +689,8 @@ impl RecordedBuilder {
         builder: &mut SemanticProgramBuilder,
     ) -> Result<Box<[AdValue]>, SemanticAdError> {
         let role = SemanticAdRuleRole::LinearTranspose;
-        let fixed_locals = self.replay_fixed(external_values, shape_sources, builder, role)?;
+        let fixed_locals =
+            self.emit_fixed_primal_ops(external_values, shape_sources, builder, role)?;
         let mut cotangents = HashMap::<LocalValueId, ProgramValue>::new();
         for (tangent, cotangent) in tangent_outputs
             .iter()
@@ -716,14 +716,14 @@ impl RecordedBuilder {
             if output_cotangents.iter().all(Option::is_none) {
                 continue;
             }
-            let context = RecordedTransposeContext {
-                recorded: self,
+            let context = SemanticLinearFragmentTransposeContext {
+                fragment: self,
                 external_values,
                 fixed_locals: &fixed_locals,
                 shape_sources,
                 role,
             };
-            let input_cotangents = transpose_recorded_operation(
+            let input_cotangents = transpose_semantic_linear_fragment_operation(
                 operation,
                 &output_cotangents,
                 active_mask,
@@ -739,7 +739,9 @@ impl RecordedBuilder {
                 if !active {
                     continue;
                 }
-                let (ValueRef::Local(input), Some(cotangent)) = (input, cotangent) else {
+                let (SemanticLinearFragmentInput::Local(input), Some(cotangent)) =
+                    (input, cotangent)
+                else {
                     return Err(semantic_internal(
                         role,
                         "linear linalg fragment has a non-local active input",
@@ -764,7 +766,7 @@ impl RecordedBuilder {
             .collect())
     }
 
-    fn replay_fixed(
+    fn emit_fixed_primal_ops(
         &self,
         external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
         shape_sources: &[ProgramValue],
@@ -778,9 +780,13 @@ impl RecordedBuilder {
             {
                 continue;
             }
-            let inputs =
-                resolve_recorded_inputs(&operation.inputs, external_values, &locals, role)?;
-            let outputs = emit_recorded_operation(
+            let inputs = resolve_semantic_linear_fragment_inputs(
+                &operation.inputs,
+                external_values,
+                &locals,
+                role,
+            )?;
+            let outputs = emit_semantic_linear_fragment_operation(
                 &operation.operation,
                 &inputs,
                 shape_sources,
@@ -800,7 +806,7 @@ impl RecordedBuilder {
     }
 }
 
-impl PrimitiveRuleBuilder for RecordedBuilder {
+impl PrimitiveRuleBuilder for SemanticLinearFragmentBuilder {
     fn add_operation(
         &mut self,
         operation: StdTensorOp,
@@ -810,9 +816,9 @@ impl PrimitiveRuleBuilder for RecordedBuilder {
         let output_count = GraphOperation::output_count(&operation);
         let outputs: Vec<_> = (self.next_local..self.next_local + output_count).collect();
         self.next_local += output_count;
-        self.operations.push(RecordedOperation {
-            operation,
-            inputs,
+        self.operations.push(SemanticLinearFragmentOperation {
+            operation: semantic_linear_fragment_op(&operation),
+            inputs: inputs.into_iter().map(Into::into).collect(),
             role,
             outputs: outputs.clone(),
         });
@@ -827,16 +833,16 @@ fn linear_active_mask(role: &OperationRole) -> Option<&[bool]> {
     }
 }
 
-struct RecordedTransposeContext<'a> {
-    recorded: &'a RecordedBuilder,
+struct SemanticLinearFragmentTransposeContext<'a> {
+    fragment: &'a SemanticLinearFragmentBuilder,
     external_values: &'a HashMap<ValueKey<StdTensorOp>, ProgramValue>,
     fixed_locals: &'a [Option<ProgramValue>],
     shape_sources: &'a [ProgramValue],
     role: SemanticAdRuleRole,
 }
 
-fn resolve_recorded_inputs(
-    inputs: &[ValueRef<StdTensorOp>],
+fn resolve_semantic_linear_fragment_inputs(
+    inputs: &[SemanticLinearFragmentInput],
     external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
     locals: &[Option<ProgramValue>],
     role: SemanticAdRuleRole,
@@ -844,37 +850,34 @@ fn resolve_recorded_inputs(
     inputs
         .iter()
         .map(|input| match input {
-            ValueRef::External(key) => external_values.get(key).copied(),
-            ValueRef::Local(local) => locals.get(*local).copied().flatten(),
+            SemanticLinearFragmentInput::External(key) => external_values.get(key).copied(),
+            SemanticLinearFragmentInput::Local(local) => locals.get(*local).copied().flatten(),
         })
         .collect::<Option<_>>()
         .ok_or_else(|| {
             semantic_internal(
                 role,
-                "recorded linalg AD fragment references an unavailable fixed value",
+                "semantic linalg linear fragment references an unavailable fixed value",
             )
         })
 }
 
-fn emit_recorded_operation(
-    operation: &StdTensorOp,
+fn emit_semantic_linear_fragment_operation(
+    operation: &SemanticLinearFragmentOp,
     inputs: &[ProgramValue],
     shape_sources: &[ProgramValue],
     builder: &mut SemanticProgramBuilder,
     role: SemanticAdRuleRole,
 ) -> Result<Box<[ProgramValue]>, SemanticAdError> {
     match operation {
-        StdTensorOp::Extension(extension) => {
+        SemanticLinearFragmentOp::Extension(extension) => {
             Ok(builder.add_extension(Arc::clone(extension), inputs)?)
         }
-        core => {
-            let core = CoreSemanticOp::try_from(core).map_err(|_| {
-                semantic_internal(role, "linalg AD emitted a non-semantic standard operation")
-            })?;
-            let recorded_core = core.clone();
+        SemanticLinearFragmentOp::Core(core) => {
+            let fragment_core = core.clone();
             let (core, inputs) =
-                localize_shape_expressions(core, inputs, shape_sources, builder, role).map_err(
-                    |error| match error {
+                localize_shape_expressions(core.clone(), inputs, shape_sources, builder, role)
+                    .map_err(|error| match error {
                         SemanticAdError::Invariant {
                             family_id,
                             role,
@@ -882,13 +885,18 @@ fn emit_recorded_operation(
                         } => SemanticAdError::Invariant {
                             family_id,
                             role,
-                            message: format!("{message}; recorded operation {recorded_core:?}"),
+                            message: format!(
+                                "{message}; linear fragment operation {fragment_core:?}"
+                            ),
                         },
                         other => other,
-                    },
-                )?;
+                    })?;
             Ok(builder.add_op(core, &inputs)?)
         }
+        SemanticLinearFragmentOp::Unsupported(operation) => Err(semantic_internal(
+            role,
+            format!("linalg AD emitted a non-semantic standard operation {operation}"),
+        )),
     }
 }
 
@@ -1070,11 +1078,11 @@ fn localize_dim(
     }
 }
 
-fn transpose_recorded_operation(
-    operation: &RecordedOperation,
+fn transpose_semantic_linear_fragment_operation(
+    operation: &SemanticLinearFragmentOperation,
     cotangent_outputs: &[Option<ProgramValue>],
     active_mask: &[bool],
-    context: &RecordedTransposeContext<'_>,
+    context: &SemanticLinearFragmentTransposeContext<'_>,
     builder: &mut SemanticProgramBuilder,
 ) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
     let Some(cotangent) = cotangent_outputs.first().copied().flatten() else {
@@ -1085,47 +1093,57 @@ fn transpose_recorded_operation(
             None
         } else {
             match operation.inputs.get(index) {
-                Some(ValueRef::External(key)) => context.external_values.get(key).copied(),
-                Some(ValueRef::Local(local)) => context.fixed_locals.get(*local).copied().flatten(),
+                Some(SemanticLinearFragmentInput::External(key)) => {
+                    context.external_values.get(key).copied()
+                }
+                Some(SemanticLinearFragmentInput::Local(local)) => {
+                    context.fixed_locals.get(*local).copied().flatten()
+                }
                 None => None,
             }
         }
     };
     let unary = |value| Ok(vec![Some(value)]);
     match &operation.operation {
-        StdTensorOp::Add => Ok(active_mask
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::Add) => Ok(active_mask
             .iter()
             .map(|active| active.then_some(cotangent))
             .collect()),
-        StdTensorOp::Sub => {
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::Sub) => {
             let rhs = builder.add_op(CoreSemanticOp::Neg, &[cotangent])?[0];
             Ok(vec![
                 active_mask[0].then_some(cotangent),
                 active_mask[1].then_some(rhs),
             ])
         }
-        StdTensorOp::Neg => {
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::Neg) => {
             let value = builder.add_op(CoreSemanticOp::Neg, &[cotangent])?[0];
             unary(value)
         }
-        StdTensorOp::Conj => {
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::Conj) => {
             let value = builder.add_op(CoreSemanticOp::Conj, &[cotangent])?[0];
             unary(value)
         }
-        StdTensorOp::Mul => transpose_mul(cotangent, active_mask, &fixed, builder, context.role),
-        StdTensorOp::Div => transpose_div(cotangent, active_mask, &fixed, builder, context.role),
-        StdTensorOp::DotGeneral { config } => transpose_matrix_dot(
-            cotangent,
-            config,
-            active_mask,
-            &fixed,
-            builder,
-            context.role,
-        ),
-        StdTensorOp::ReduceSum { axes } => {
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::Mul) => {
+            transpose_mul(cotangent, active_mask, &fixed, builder, context.role)
+        }
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::Div) => {
+            transpose_div(cotangent, active_mask, &fixed, builder, context.role)
+        }
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::DotGeneral { config }) => {
+            transpose_matrix_dot(
+                cotangent,
+                config,
+                active_mask,
+                &fixed,
+                builder,
+                context.role,
+            )
+        }
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::ReduceSum { axes }) => {
             transpose_reduce_sum(context, operation, cotangent, axes, active_mask, builder)
         }
-        StdTensorOp::Transpose { perm } => {
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::Transpose { perm }) => {
             let mut inverse = vec![0; perm.len()];
             for (output_axis, input_axis) in perm.iter().copied().enumerate() {
                 inverse[input_axis] = output_axis;
@@ -1134,7 +1152,7 @@ fn transpose_recorded_operation(
                 builder.add_op(CoreSemanticOp::Transpose { perm: inverse }, &[cotangent])?[0];
             unary(value)
         }
-        StdTensorOp::Convert { from, to } => {
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::Convert { from, to }) => {
             let value = builder.add_op(
                 CoreSemanticOp::Convert {
                     from: *to,
@@ -1144,7 +1162,7 @@ fn transpose_recorded_operation(
             )?[0];
             unary(value)
         }
-        StdTensorOp::ExtractDiag { axis_a, axis_b } => {
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::ExtractDiag { axis_a, axis_b }) => {
             let value = builder.add_op(
                 CoreSemanticOp::EmbedDiag {
                     axis_a: *axis_a,
@@ -1154,7 +1172,7 @@ fn transpose_recorded_operation(
             )?[0];
             unary(value)
         }
-        StdTensorOp::EmbedDiag { axis_a, axis_b } => {
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::EmbedDiag { axis_a, axis_b }) => {
             let value = builder.add_op(
                 CoreSemanticOp::ExtractDiag {
                     axis_a: *axis_a,
@@ -1164,15 +1182,15 @@ fn transpose_recorded_operation(
             )?[0];
             unary(value)
         }
-        StdTensorOp::Tril { k } => {
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::Tril { k }) => {
             let value = builder.add_op(CoreSemanticOp::Tril { k: *k }, &[cotangent])?[0];
             unary(value)
         }
-        StdTensorOp::Triu { k } => {
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::Triu { k }) => {
             let value = builder.add_op(CoreSemanticOp::Triu { k: *k }, &[cotangent])?[0];
             unary(value)
         }
-        StdTensorOp::Extension(extension) => transpose_linalg_extension(
+        SemanticLinearFragmentOp::Extension(extension) => transpose_linalg_extension(
             extension.as_ref(),
             operation,
             cotangent,
@@ -1181,6 +1199,10 @@ fn transpose_recorded_operation(
             context.fixed_locals,
             builder,
         ),
+        SemanticLinearFragmentOp::Unsupported(operation) => Err(semantic_internal(
+            context.role,
+            format!("unsupported linear linalg fragment operation {operation}"),
+        )),
         other => Err(semantic_internal(
             context.role,
             format!("unsupported linear linalg fragment operation {other:?}"),
@@ -1189,8 +1211,8 @@ fn transpose_recorded_operation(
 }
 
 fn transpose_reduce_sum(
-    context: &RecordedTransposeContext<'_>,
-    operation: &RecordedOperation,
+    context: &SemanticLinearFragmentTransposeContext<'_>,
+    operation: &SemanticLinearFragmentOperation,
     cotangent: ProgramValue,
     axes: &[usize],
     active_mask: &[bool],
@@ -1206,8 +1228,8 @@ fn transpose_reduce_sum(
         return Ok(vec![None]);
     }
     let mut cache = HashMap::new();
-    let input_shape = recorded_value_shape(
-        context.recorded,
+    let input_shape = semantic_linear_fragment_value_shape(
+        context.fragment,
         &operation.inputs[0],
         context.external_values,
         context.shape_sources,
@@ -1248,9 +1270,9 @@ fn transpose_reduce_sum(
     )])
 }
 
-fn recorded_value_shape(
-    recorded: &RecordedBuilder,
-    value: &ValueRef<StdTensorOp>,
+fn semantic_linear_fragment_value_shape(
+    fragment: &SemanticLinearFragmentBuilder,
+    value: &SemanticLinearFragmentInput,
     external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
     shape_sources: &[ProgramValue],
     builder: &SemanticProgramBuilder,
@@ -1258,17 +1280,17 @@ fn recorded_value_shape(
     cache: &mut HashMap<LocalValueId, Option<Vec<DimExpr>>>,
 ) -> Result<Option<Vec<DimExpr>>, SemanticAdError> {
     match value {
-        ValueRef::External(key) => {
+        SemanticLinearFragmentInput::External(key) => {
             let source = external_values.get(key).copied().ok_or_else(|| {
                 semantic_internal(
                     role,
-                    "recorded linalg shape references missing external value",
+                    "semantic linalg linear-fragment shape references missing external value",
                 )
             })?;
             source_shape(source, shape_sources, builder, role).map(Some)
         }
-        ValueRef::Local(local) => recorded_local_shape(
-            recorded,
+        SemanticLinearFragmentInput::Local(local) => semantic_linear_fragment_local_shape(
+            fragment,
             *local,
             external_values,
             shape_sources,
@@ -1279,8 +1301,8 @@ fn recorded_value_shape(
     }
 }
 
-fn recorded_local_shape(
-    recorded: &RecordedBuilder,
+fn semantic_linear_fragment_local_shape(
+    fragment: &SemanticLinearFragmentBuilder,
     local: LocalValueId,
     external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
     shape_sources: &[ProgramValue],
@@ -1291,16 +1313,16 @@ fn recorded_local_shape(
     if let Some(cached) = cache.get(&local) {
         return Ok(cached.clone());
     }
-    let shape = if local < recorded.seed_count {
+    let shape = if local < fragment.seed_count {
         let source = shape_sources.get(local).copied().ok_or_else(|| {
             semantic_internal(
                 role,
-                format!("recorded linalg seed local {local} has no shape source"),
+                format!("semantic linalg linear-fragment seed local {local} has no shape source"),
             )
         })?;
         Some(source_shape(source, shape_sources, builder, role)?)
     } else {
-        let (operation, output_index) = recorded
+        let (operation, output_index) = fragment
             .operations
             .iter()
             .find_map(|operation| {
@@ -1313,11 +1335,13 @@ fn recorded_local_shape(
             .ok_or_else(|| {
                 semantic_internal(
                     role,
-                    format!("recorded linalg local {local} has no producing operation"),
+                    format!(
+                        "semantic linalg linear-fragment local {local} has no producing operation"
+                    ),
                 )
             })?;
-        recorded_operation_output_shape(
-            recorded,
+        semantic_linear_fragment_operation_output_shape(
+            fragment,
             operation,
             output_index,
             external_values,
@@ -1348,9 +1372,9 @@ fn source_shape(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn recorded_operation_output_shape(
-    recorded: &RecordedBuilder,
-    operation: &RecordedOperation,
+fn semantic_linear_fragment_operation_output_shape(
+    fragment: &SemanticLinearFragmentBuilder,
+    operation: &SemanticLinearFragmentOperation,
     output_index: usize,
     external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
     shape_sources: &[ProgramValue],
@@ -1364,11 +1388,11 @@ fn recorded_operation_output_shape(
         let input = operation.inputs.get(input_index).ok_or_else(|| {
             semantic_internal(
                 role,
-                "recorded linalg shape requested missing operation input",
+                "semantic linalg linear-fragment shape requested missing operation input",
             )
         })?;
-        recorded_value_shape(
-            recorded,
+        semantic_linear_fragment_value_shape(
+            fragment,
             input,
             external_values,
             shape_sources,
@@ -1378,13 +1402,14 @@ fn recorded_operation_output_shape(
         )
     };
     match &operation.operation {
-        StdTensorOp::Extension(extension) => {
+        SemanticLinearFragmentOp::Extension(extension) => {
             let linalg = semantic_linalg_op(extension.as_ref(), role)?;
             match linalg.op() {
                 LinalgOp::LuFactor => match output_index {
                     0 => input_shape(0, cache),
                     1 => Ok(input_shape(0, cache)?.map(|shape| {
-                        let (rows, cols, batch) = recorded_matrix_shape_parts(&shape);
+                        let (rows, cols, batch) =
+                            semantic_linear_fragment_matrix_shape_parts(&shape);
                         let mut pivots_shape =
                             vec![DimExpr::Min(Box::new(rows.clone()), Box::new(cols.clone()))];
                         pivots_shape.extend_from_slice(batch);
@@ -1397,28 +1422,38 @@ fn recorded_operation_output_shape(
                 _ => Ok(None),
             }
         }
-        StdTensorOp::ExtractDiag { axis_a, axis_b } => Ok(input_shape(0, cache)?
-            .map(|shape| extract_diag_shape(&shape, *axis_a, *axis_b))
-            .transpose()?),
-        StdTensorOp::ReduceSum { axes } => Ok(input_shape(0, cache)?.map(|shape| {
-            shape
-                .into_iter()
-                .enumerate()
-                .filter_map(|(axis, dim)| (!axes.contains(&axis)).then_some(dim))
-                .collect()
-        })),
-        StdTensorOp::Convert { .. }
-        | StdTensorOp::Neg
-        | StdTensorOp::Conj
-        | StdTensorOp::Tril { .. }
-        | StdTensorOp::Triu { .. } => input_shape(0, cache),
-        StdTensorOp::Transpose { perm } => Ok(input_shape(0, cache)?
-            .map(|shape| perm.iter().map(|axis| shape[*axis].clone()).collect())),
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::ExtractDiag { axis_a, axis_b }) => {
+            Ok(input_shape(0, cache)?
+                .map(|shape| extract_diag_shape(&shape, *axis_a, *axis_b))
+                .transpose()?)
+        }
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::ReduceSum { axes }) => {
+            Ok(input_shape(0, cache)?.map(|shape| {
+                shape
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(axis, dim)| (!axes.contains(&axis)).then_some(dim))
+                    .collect()
+            }))
+        }
+        SemanticLinearFragmentOp::Core(
+            CoreSemanticOp::Convert { .. }
+            | CoreSemanticOp::Neg
+            | CoreSemanticOp::Conj
+            | CoreSemanticOp::Tril { .. }
+            | CoreSemanticOp::Triu { .. },
+        ) => input_shape(0, cache),
+        SemanticLinearFragmentOp::Core(CoreSemanticOp::Transpose { perm }) => {
+            Ok(input_shape(0, cache)?
+                .map(|shape| perm.iter().map(|axis| shape[*axis].clone()).collect()))
+        }
         _ => Ok(None),
     }
 }
 
-fn recorded_matrix_shape_parts(shape: &[DimExpr]) -> (&DimExpr, &DimExpr, &[DimExpr]) {
+fn semantic_linear_fragment_matrix_shape_parts(
+    shape: &[DimExpr],
+) -> (&DimExpr, &DimExpr, &[DimExpr]) {
     (&shape[0], &shape[1], &shape[2..])
 }
 
@@ -1647,7 +1682,7 @@ fn conjugate_if_complex(
 
 fn transpose_linalg_extension(
     extension: &dyn tenferro_ad::extension::ExtensionOp,
-    operation: &RecordedOperation,
+    operation: &SemanticLinearFragmentOperation,
     cotangent: ProgramValue,
     active_mask: &[bool],
     external_values: &HashMap<ValueKey<StdTensorOp>, ProgramValue>,
@@ -1671,7 +1706,7 @@ fn transpose_linalg_extension(
         ));
     }
     let mut context = ShapeGuardContext::default();
-    let mut replay_values = HashMap::new();
+    let mut fixed_values = HashMap::new();
     let mut keys = Vec::with_capacity(operation.inputs.len());
     let mut shape_sources = Vec::with_capacity(operation.inputs.len());
     for (index, (input, active)) in operation.inputs.iter().zip(active_mask).enumerate() {
@@ -1682,8 +1717,10 @@ fn transpose_linalg_extension(
             cotangent
         } else {
             match input {
-                ValueRef::External(key) => external_values.get(key).copied(),
-                ValueRef::Local(local) => fixed_locals.get(*local).copied().flatten(),
+                SemanticLinearFragmentInput::External(key) => external_values.get(key).copied(),
+                SemanticLinearFragmentInput::Local(local) => {
+                    fixed_locals.get(*local).copied().flatten()
+                }
             }
             .ok_or_else(|| {
                 semantic_internal(role, "linear solve fragment is missing a fixed operand")
@@ -1697,7 +1734,7 @@ fn transpose_linalg_extension(
             legacy_metadata(&metadata, &symbolic_shape_refs),
         );
         if !active {
-            replay_values.insert(key.clone(), value);
+            fixed_values.insert(key.clone(), value);
         }
         shape_sources.push(value);
         keys.push(key);
@@ -1707,24 +1744,24 @@ fn transpose_linalg_extension(
         .cloned()
         .map(PrimitiveTransposeInput::Residual)
         .collect();
-    let mut recorded = RecordedBuilder::with_seed_count(1);
+    let mut emitted = SemanticRuleBuilder::with_seeds(
+        &[Some(cotangent)],
+        &fixed_values,
+        &shape_sources,
+        builder,
+        role,
+    );
     let outputs = LinalgAdRule
         .linear_transpose(
             extension,
-            &mut recorded,
+            &mut emitted,
             &[Some(0)],
             &inputs,
             active_mask,
             &mut context,
         )
         .map_err(|error| legacy_error(role, error))?;
-    let locals = recorded.replay(
-        &[Some(cotangent)],
-        &replay_values,
-        &shape_sources,
-        builder,
-        role,
-    )?;
+    let locals = emitted.finish()?;
     Ok(outputs
         .into_iter()
         .map(|output| output.and_then(|local| locals.get(local).copied().flatten()))
