@@ -72,7 +72,11 @@ pub(crate) fn plane_contains_nan<F: Float>(value: F) -> bool {
 #[allow(clippy::eq_op)]
 #[cube]
 pub(crate) fn plane_propagate_nan<F: Float>(value: F) -> F {
-    let nan_or_zero = if value != value { value } else { F::new(0.0) };
+    let nan_or_zero = if value != value {
+        value
+    } else {
+        F::new(0.0_f32)
+    };
     plane_sum(nan_or_zero)
 }
 

@@ -98,6 +98,14 @@ pub(crate) fn eager_runtime_for_backend(
     if let Some(backend) = backend.cpu_snapshot() {
         builder.register_engine(cpu_runtime_engine_registration(&backend)?)?;
     }
+    #[cfg(feature = "cuda")]
+    if let EagerBackend::Cuda(backend) = backend {
+        builder.register_engine(tenferro_gpu::cuda_runtime_engine_registration(backend)?)?;
+    }
+    #[cfg(feature = "webgpu")]
+    if let EagerBackend::WebGpu(backend) = backend {
+        builder.register_engine(tenferro_gpu::webgpu_runtime_engine_registration(backend)?)?;
+    }
     builder.build()
 }
 

@@ -77,13 +77,12 @@
 //! ```
 
 use std::any::{Any, TypeId};
-use std::cell::OnceCell;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use cubecl::client::ComputeClient;
 use cubecl::features::AtomicUsage;
@@ -124,6 +123,7 @@ pub(crate) mod interop;
 mod memory;
 pub(crate) mod op_descriptor;
 mod runtime;
+mod runtime_adapter;
 
 use dispatch::{
     alloc_bool_output, alloc_output, bool_tensor_array_arg, comptime_sequence, cube_count_for_len,
@@ -141,6 +141,9 @@ use error::{unexpected_validation_flag_dtype, unsupported_dtype, unsupported_ope
 pub use capability::cuda_capabilities;
 pub use memory::{device_ptr, download_tensor, upload_tensor};
 pub use runtime::{gpu_available, CudaRuntime};
+pub use runtime_adapter::{
+    cuda_runtime_engine_id, cuda_runtime_engine_registration, cuda_runtime_hardware_class,
+};
 
 fn op_name(
     kind: PrimitiveOpKind,
@@ -235,11 +238,16 @@ fn scatter_update_len(meta: &ScatterLaunchMeta) -> crate::Result<usize> {
 ///
 /// let _ctor: fn(usize) -> tenferro_tensor::Result<CudaBackend> = CudaBackend::new;
 /// ```
+#[derive(Clone)]
 pub struct CudaBackend {
+    inner: Arc<CudaBackendState>,
+}
+
+struct CudaBackendState {
     // CUDA library handles are dropped before `rt`; Rust drops fields in
     // declaration order, so cache-owned handles release while the CUDA primary
     // context is still retained by `CudaRuntime`.
-    cutensor: OnceCell<ffi::cutensor::CutensorHandle>,
+    cutensor: OnceLock<ffi::cutensor::CutensorHandle>,
     extension_cache: CudaExtensionCache,
     rt: CudaRuntime,
 }
@@ -247,9 +255,9 @@ pub struct CudaBackend {
 impl fmt::Debug for CudaBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CudaBackend")
-            .field("runtime", &self.rt)
-            .field("cuda_extension_cache", &self.extension_cache)
-            .field("cutensor_initialized", &self.cutensor.get().is_some())
+            .field("runtime", &self.inner.rt)
+            .field("cuda_extension_cache", &self.inner.extension_cache)
+            .field("cutensor_initialized", &self.inner.cutensor.get().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -538,9 +546,11 @@ impl CudaBackend {
     /// context creation, or CubeCL client creation fails.
     pub fn new(device_ordinal: usize) -> crate::Result<Self> {
         Ok(Self {
-            cutensor: OnceCell::new(),
-            extension_cache: CudaExtensionCache::new(),
-            rt: CudaRuntime::new(device_ordinal)?,
+            inner: Arc::new(CudaBackendState {
+                cutensor: OnceLock::new(),
+                extension_cache: CudaExtensionCache::new(),
+                rt: CudaRuntime::new(device_ordinal)?,
+            }),
         })
     }
 
@@ -554,16 +564,16 @@ impl CudaBackend {
     /// let _runtime: fn(&CudaBackend) -> &CudaRuntime = CudaBackend::runtime;
     /// ```
     pub fn runtime(&self) -> &CudaRuntime {
-        &self.rt
+        &self.inner.rt
     }
 
     fn cutensor_handle(&self) -> crate::Result<&ffi::cutensor::CutensorHandle> {
-        if let Some(handle) = self.cutensor.get() {
+        if let Some(handle) = self.inner.cutensor.get() {
             return Ok(handle);
         }
         let handle = ffi::cutensor::CutensorHandle::load()?;
-        let _ = self.cutensor.set(handle);
-        self.cutensor.get().ok_or_else(|| {
+        let _ = self.inner.cutensor.set(handle);
+        self.inner.cutensor.get().ok_or_else(|| {
             crate::Error::runtime_state(
                 "dot_general",
                 "cuTENSOR handle initialization completed without a stored handle",
@@ -573,7 +583,7 @@ impl CudaBackend {
 
     #[doc(hidden)]
     pub fn cuda_extension_cache(&self) -> &CudaExtensionCache {
-        &self.extension_cache
+        &self.inner.extension_cache
     }
 
     /// Clear CUDA extension-owned backend state.
@@ -583,7 +593,7 @@ impl CudaBackend {
     /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
     /// poisoned.
     pub fn clear_cuda_extension_cache(&self) -> crate::Result<()> {
-        self.extension_cache.clear()
+        self.inner.extension_cache.clear()
     }
 
     /// Return CUDA extension cache stats.
@@ -593,7 +603,7 @@ impl CudaBackend {
     /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
     /// poisoned.
     pub fn cuda_extension_cache_stats(&self) -> crate::Result<CacheStats> {
-        self.extension_cache.stats()
+        self.inner.extension_cache.stats()
     }
 
     /// Return the CUDA extension cache entry bound.
@@ -603,7 +613,7 @@ impl CudaBackend {
     /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
     /// poisoned.
     pub fn cuda_extension_cache_max_entries(&self) -> crate::Result<NonZeroUsize> {
-        self.extension_cache.max_entries()
+        self.inner.extension_cache.max_entries()
     }
 
     /// Configure the CUDA extension cache entry bound.
@@ -616,7 +626,7 @@ impl CudaBackend {
         &self,
         max_entries: NonZeroUsize,
     ) -> crate::Result<()> {
-        self.extension_cache.set_max_entries(max_entries)
+        self.inner.extension_cache.set_max_entries(max_entries)
     }
 
     fn transpose_typed<T>(
