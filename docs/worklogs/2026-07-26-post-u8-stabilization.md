@@ -35,6 +35,13 @@ splitting the follow-up work into unrelated pull requests.
   the benchmark-motivated `Add`/`Multiply` family only, including reversed
   commutative input order for the first op, and still rejects broadcast views,
   repeated inputs, multi-output plans, unsupported ops, and longer chains.
+- #1473 tactical performance triage: rechecked the remaining #1426 findings
+  against the post-U8 code, closed #1473 with one-line dispositions, and split
+  the true positives into focused follow-ups: #1479 strided `dot_general`
+  accumulation fallback, #1480 host identity copies, #1481 multi-axis CPU
+  reductions, #1482 CPU indexing hot loops, #1483 eager AD accumulation
+  allocation, #1484 FFT plan/scratch reuse, and #1485 cuTENSOR
+  descriptor/plan/workspace caching.
 
 ## Current runtime boundary
 
@@ -79,6 +86,7 @@ cargo test -p tenferro-cpu binary_tail_specialization --lib -- --nocapture
 cargo test -p tenferro-cpu elementwise_fusion --lib -- --nocapture
 cargo test -p tenferro-runtime --test integration runtime_public_api -- --nocapture
 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=64 cargo bench -p tenferro-runtime --features __bench_unification_run_compiled_api --bench elementwise_fusion -- --sample-size 10 --warm-up-time 0.1 --measurement-time 0.3
+gh issue close 1473 --reason completed
 git diff --check
 ```
 
@@ -124,3 +132,7 @@ runtime_elementwise_chain/f64/broadcast_mul_add/segmented_graph/1024x1024 2.7071
   classifier, but does not introduce a broad symbolic optimizer or tune
   `Divide`, `Pow`, ordered ops, broadcast views, or longer chains without
   separate benchmark evidence.
+- Cache consolidation is complete for the current PR's runtime/AD/extension
+  cache owners (#1478), but performance follow-ups #1484 and #1485 will add or
+  reuse FFT/cuTENSOR caches only if they inherit the same owner, bounded
+  default, retained-byte accounting, clear/configure API, and stats contract.
