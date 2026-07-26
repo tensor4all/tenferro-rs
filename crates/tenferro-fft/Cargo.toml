@@ -20,7 +20,6 @@ blas-openblas = ["tenferro-ad?/blas-openblas", "tenferro-cpu/blas-openblas"]
 blas-accelerate = ["tenferro-ad?/blas-accelerate", "tenferro-cpu/blas-accelerate"]
 blas-mkl = ["tenferro-ad?/blas-mkl", "tenferro-cpu/blas-mkl"]
 autodiff = [
-    "dep:tidu",
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
 ]
@@ -45,7 +44,6 @@ cubecl-wgpu = { workspace = true, optional = true }
 cubek-fft = { workspace = true, optional = true }
 tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.2.0" }
 tenferro-internal-ops = { path = "../tenferro-internal-ops", version = "0.2.0", default-features = false }
-tidu = { workspace = true, optional = true }
 computegraph.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true

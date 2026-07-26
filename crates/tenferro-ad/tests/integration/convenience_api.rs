@@ -1,8 +1,7 @@
 use crate::support;
 use num_complex::{Complex32, Complex64};
-use support::RunTraced;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphExecutor, Tensor, TensorScalar, TracedTensor};
+use support::{cpu_runtime, RunTraced};
+use tenferro_runtime::{Tensor, TensorScalar, TracedTensor};
 use tenferro_tensor::DType;
 
 #[test]
@@ -13,8 +12,8 @@ fn traced_tensor_new_and_tensor_as_slice_cover_common_f64_flow() {
         .unwrap();
 
     let sum = (&a + &b).unwrap();
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = sum.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = sum.run_with(&engine).unwrap();
 
     assert_eq!(
         result.as_slice::<f64>().unwrap(),

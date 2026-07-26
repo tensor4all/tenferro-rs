@@ -9,8 +9,8 @@ use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
 use tenferro_ops::ShapeExtent;
 use tenferro_tensor::{
-    DType, DotGeneralConfig, Error as TensorError, GatherConfig, PadConfig, ShapeMismatch,
-    ShapeVec, SliceConfig, ValidationError,
+    CompareDir, DType, DotGeneralConfig, Error as TensorError, GatherConfig, PadConfig,
+    ShapeMismatch, ShapeVec, SliceConfig, ValidationError,
 };
 
 use crate::error::ErrorPhase;
@@ -84,7 +84,7 @@ fn ordered_dtype_op_name(op: &StdTensorOp) -> Option<&'static str> {
     // Complex values have no total order; keep magnitude ordering explicit by
     // rejecting ordered primitives before dtype promotion.
     match op {
-        StdTensorOp::Compare(_) => Some("Compare"),
+        StdTensorOp::Compare(dir) if *dir != CompareDir::Eq => Some("Compare"),
         StdTensorOp::Maximum => Some("Maximum"),
         StdTensorOp::Minimum => Some("Minimum"),
         StdTensorOp::Rem => Some("Rem"),
@@ -575,7 +575,10 @@ fn require_input<'a>(
     })
 }
 
-fn resolve_dim_expr_from_shapes(expr: &DimExpr, input_shapes: &[&[DimExpr]]) -> Result<DimExpr> {
+pub(crate) fn resolve_dim_expr_from_shapes(
+    expr: &DimExpr,
+    input_shapes: &[&[DimExpr]],
+) -> Result<DimExpr> {
     match expr {
         DimExpr::Const(value) => Ok(DimExpr::Const(*value)),
         DimExpr::InputDim { input_idx, axis } => {

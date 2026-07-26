@@ -502,17 +502,15 @@ struct InferredGraphOutput {
 }
 
 fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<InferredGraphOutput> {
-    let input_shape_exprs: Vec<Vec<DimExpr>> = input_metas
-        .iter()
-        .enumerate()
-        .map(|(input_idx, meta)| DimExpr::input_shape(input_idx, meta.rank()))
-        .collect();
-    let input_shape_refs: Vec<&[DimExpr]> = input_shape_exprs.iter().map(Vec::as_slice).collect();
     let input_dtypes: Vec<DType> = input_metas.iter().map(|meta| meta.dtype).collect();
     let resolved_inputs = resolved_bound_shapes(input_metas)?;
-    let resolved_input_refs: Vec<&[SymDim]> = resolved_inputs.iter().map(Vec::as_slice).collect();
 
     if let StdTensorOp::Extension(ext) = op {
+        let input_shape_exprs = generic_input_shape_exprs(input_metas);
+        let input_shape_refs: Vec<&[DimExpr]> =
+            input_shape_exprs.iter().map(Vec::as_slice).collect();
+        let resolved_input_refs: Vec<&[SymDim]> =
+            resolved_inputs.iter().map(Vec::as_slice).collect();
         let inferred = infer_extension_output_meta_with_constraints(
             ext.as_ref(),
             &input_dtypes,
@@ -537,6 +535,10 @@ fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<In
         });
     }
 
+    let input_shape_exprs = constant_exact_input_shape_exprs(input_metas)
+        .unwrap_or_else(|| generic_input_shape_exprs(input_metas));
+    let input_shape_refs: Vec<&[DimExpr]> = input_shape_exprs.iter().map(Vec::as_slice).collect();
+    let resolved_input_refs: Vec<&[SymDim]> = resolved_inputs.iter().map(Vec::as_slice).collect();
     let output_dtype = infer_output_dtype(op, &input_dtypes)?;
     let output_metas = infer_output_extents(op, &input_shape_refs)?
         .into_iter()
@@ -552,6 +554,26 @@ fn infer_output_metas(op: &StdTensorOp, input_metas: &[TensorMeta]) -> Result<In
         output_metas,
         constraints: Vec::new(),
     })
+}
+
+fn generic_input_shape_exprs(input_metas: &[TensorMeta]) -> Vec<Vec<DimExpr>> {
+    input_metas
+        .iter()
+        .enumerate()
+        .map(|(input_idx, meta)| DimExpr::input_shape(input_idx, meta.rank()))
+        .collect()
+}
+
+fn constant_exact_input_shape_exprs(input_metas: &[TensorMeta]) -> Option<Vec<Vec<DimExpr>>> {
+    input_metas
+        .iter()
+        .map(|meta| {
+            meta.exact_shape()?
+                .into_iter()
+                .map(|dim| dim.constant_value().map(DimExpr::Const))
+                .collect()
+        })
+        .collect()
 }
 
 fn resolved_bound_shapes(input_metas: &[TensorMeta]) -> Result<Vec<Vec<SymDim>>> {

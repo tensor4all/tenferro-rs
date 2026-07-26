@@ -2,11 +2,12 @@
 
 use num_complex::Complex32;
 use tenferro_ad::{EagerRuntime, EagerTensor};
-use tenferro_einsum::EagerEinsumExt;
-use tenferro_einsum::GraphCompilerEinsumExt;
+use tenferro_einsum::{EagerEinsumExt, TraceContextEinsumExt};
 use tenferro_gpu::{download_webgpu_tensor, upload_webgpu_tensor, webgpu_available};
 use tenferro_gpu::{WebGpuBackend, WebGpuRuntime};
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, Runtime, Tensor, TraceContext};
 
 fn matmul2_col_major(lhs: &[Complex32], rhs: &[Complex32]) -> [Complex32; 4] {
     let a00 = lhs[0];
@@ -49,6 +50,37 @@ fn assert_f32_close(actual: &[f32], expected: &[f32]) {
             "f32 mismatch: actual={actual} expected={expected}"
         );
     }
+}
+
+fn compile_einsum(dtype: DType, shapes: &[&[usize]], subscripts: &str) -> CompiledGraph {
+    let mut trace = TraceContext::new();
+    let inputs = shapes
+        .iter()
+        .map(|shape| {
+            trace
+                .input(ProgramInputSpec::new(dtype, DimExpr::from_concrete(shape)))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let output = trace.einsum(&inputs, subscripts).unwrap();
+    let graph = trace.finish(&[output]).unwrap();
+    GraphCompiler::new().compile_traced_graph(&graph).unwrap()
+}
+
+fn webgpu_runtime_with_einsum(backend: &WebGpuBackend) -> Runtime {
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_gpu::webgpu_runtime_engine_registration(backend).unwrap())
+        .unwrap();
+    builder
+        .install_extension_module(
+            tenferro_einsum::extension_module::<WebGpuBackend>(
+                tenferro_gpu::webgpu_runtime_engine_id().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    builder.build().unwrap()
 }
 
 #[test]
@@ -161,30 +193,23 @@ fn traced_einsum_runs_rank2_f32_matmul_on_webgpu_when_adapter_available() {
         return;
     }
 
-    let lhs = TracedTensor::input_concrete_shape(DType::F32, &[2, 3]).unwrap();
-    let rhs = TracedTensor::input_concrete_shape(DType::F32, &[3, 2]).unwrap();
-    let mut compiler = GraphCompiler::new();
-    let out = compiler.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
-    let program = compiler
-        .compile_with_input_specs(
-            &out,
-            &[(&lhs, DType::F32, &[2, 3]), (&rhs, DType::F32, &[3, 2])],
-        )
-        .unwrap();
-    let runtime = WebGpuRuntime::new_default().unwrap();
+    let program = compile_einsum(DType::F32, &[&[2, 3], &[3, 2]], "ij,jk->ik");
+    let gpu_runtime = WebGpuRuntime::new_default().unwrap();
     let lhs_host =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0]).unwrap();
     let rhs_host =
         Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0]).unwrap();
-    let lhs_gpu = upload_webgpu_tensor(&runtime, &lhs_host).unwrap();
-    let rhs_gpu = upload_webgpu_tensor(&runtime, &rhs_host).unwrap();
-    let mut executor = GraphExecutor::new(WebGpuBackend::from_runtime(runtime.clone()));
+    let lhs_gpu = upload_webgpu_tensor(&gpu_runtime, &lhs_host).unwrap();
+    let rhs_gpu = upload_webgpu_tensor(&gpu_runtime, &rhs_host).unwrap();
+    let backend = WebGpuBackend::from_runtime(gpu_runtime.clone());
+    let exec_runtime = webgpu_runtime_with_einsum(&backend);
 
-    let out = executor
-        .run_with_inputs(&program, &[(&lhs, &lhs_gpu), (&rhs, &rhs_gpu)])
-        .unwrap();
-    executor.backend().synchronize().unwrap();
-    let host = download_webgpu_tensor(executor.backend().runtime(), &out).unwrap();
+    let out = exec_runtime
+        .run_compiled(&program, &[&lhs_gpu, &rhs_gpu])
+        .unwrap()
+        .remove(0);
+    backend.synchronize().unwrap();
+    let host = download_webgpu_tensor(backend.runtime(), &out).unwrap();
 
     assert_eq!(host.shape(), &[2, 2]);
     let actual = host.as_slice::<f32>().unwrap();
@@ -200,20 +225,8 @@ fn traced_einsum_runs_batched_f32_matmul_on_webgpu_when_adapter_available() {
         return;
     }
 
-    let lhs = TracedTensor::input_concrete_shape(DType::F32, &[2, 3, 2]).unwrap();
-    let rhs = TracedTensor::input_concrete_shape(DType::F32, &[3, 2, 2]).unwrap();
-    let mut compiler = GraphCompiler::new();
-    let out = compiler.einsum(&[&lhs, &rhs], "ikb,kjb->ijb").unwrap();
-    let program = compiler
-        .compile_with_input_specs(
-            &out,
-            &[
-                (&lhs, DType::F32, &[2, 3, 2]),
-                (&rhs, DType::F32, &[3, 2, 2]),
-            ],
-        )
-        .unwrap();
-    let runtime = WebGpuRuntime::new_default().unwrap();
+    let program = compile_einsum(DType::F32, &[&[2, 3, 2], &[3, 2, 2]], "ikb,kjb->ijb");
+    let gpu_runtime = WebGpuRuntime::new_default().unwrap();
     let lhs_host = Tensor::from_vec_col_major(
         vec![2, 3, 2],
         vec![
@@ -228,15 +241,17 @@ fn traced_einsum_runs_batched_f32_matmul_on_webgpu_when_adapter_available() {
         ],
     )
     .unwrap();
-    let lhs_gpu = upload_webgpu_tensor(&runtime, &lhs_host).unwrap();
-    let rhs_gpu = upload_webgpu_tensor(&runtime, &rhs_host).unwrap();
-    let mut executor = GraphExecutor::new(WebGpuBackend::from_runtime(runtime.clone()));
+    let lhs_gpu = upload_webgpu_tensor(&gpu_runtime, &lhs_host).unwrap();
+    let rhs_gpu = upload_webgpu_tensor(&gpu_runtime, &rhs_host).unwrap();
+    let backend = WebGpuBackend::from_runtime(gpu_runtime.clone());
+    let exec_runtime = webgpu_runtime_with_einsum(&backend);
 
-    let out = executor
-        .run_with_inputs(&program, &[(&lhs, &lhs_gpu), (&rhs, &rhs_gpu)])
-        .unwrap();
-    executor.backend().synchronize().unwrap();
-    let host = download_webgpu_tensor(executor.backend().runtime(), &out).unwrap();
+    let out = exec_runtime
+        .run_compiled(&program, &[&lhs_gpu, &rhs_gpu])
+        .unwrap()
+        .remove(0);
+    backend.synchronize().unwrap();
+    let host = download_webgpu_tensor(backend.runtime(), &out).unwrap();
 
     assert_eq!(host.shape(), &[2, 2, 2]);
     assert_f32_close(

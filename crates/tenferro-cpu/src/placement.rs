@@ -52,7 +52,30 @@ pub enum CpuPlacement {
     AllAllowed,
 }
 
-/// Concrete managed placement after topology resolution.
+/// Strength of a caller's declared CPU placement for one resource domain.
+///
+/// This declaration does not verify executor worker affinity. Executor
+/// capabilities report affinity verification independently.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_cpu::CpuPlacementGuarantee;
+///
+/// assert_ne!(
+///     CpuPlacementGuarantee::ExactDeclared,
+///     CpuPlacementGuarantee::AdvisoryDeclared,
+/// );
+/// ```
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CpuPlacementGuarantee {
+    /// The caller requires execution to remain within the declared CPU set.
+    ExactDeclared,
+    /// The declared CPU set is advisory rather than a strict placement bound.
+    AdvisoryDeclared,
+}
+
+/// Concrete CPU placement resolved for a managed domain or declared by an external domain.
 ///
 /// # Examples
 ///
@@ -67,22 +90,22 @@ pub enum CpuPlacement {
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolvedCpuPlacement {
-    /// A selected usable OS NUMA node.
+    /// A concrete OS NUMA-node placement.
     NumaNode {
         /// The sparse OS NUMA node ID.
         id: NumaNodeId,
-        /// The node CPUs permitted by the process affinity mask.
+        /// The logical CPUs resolved or declared for the node.
         cpus: CpuSet,
     },
-    /// The complete process affinity CPU set.
+    /// A resolved or declared complete process-affinity CPU set.
     AllAllowed {
-        /// Logical CPUs permitted by the process affinity mask.
+        /// Logical CPUs resolved or declared as process-permitted.
         cpus: CpuSet,
     },
 }
 
 impl ResolvedCpuPlacement {
-    /// Return the concrete logical CPU set used for pinning and arbitration.
+    /// Return the concrete logical CPU set resolved or declared for this placement.
     ///
     /// # Examples
     ///
@@ -187,6 +210,12 @@ pub enum CpuPlacementError {
         /// The selected public backend kind.
         backend: CpuBackendKind,
     },
+    /// An externally managed coordinator has no domain for the explicit placement.
+    #[error("externally managed CPU coordinator has no registered domain for {requested:?}")]
+    UnregisteredExternalPlacement {
+        /// The explicit registry-only placement request.
+        requested: CpuPlacement,
+    },
     /// A pinned engine could not be built for an otherwise valid placement.
     #[error("cannot resolve {requested:?} for {backend:?}: engine construction failed: {source}")]
     EngineConstruction {
@@ -214,6 +243,7 @@ pub enum CpuPlacementError {
 pub(crate) enum ResolvedCpuExecution {
     Compatibility,
     Managed(ResolvedCpuPlacement),
+    ExternalManaged(ResolvedCpuPlacement),
     ProviderDefaultExclusive,
 }
 

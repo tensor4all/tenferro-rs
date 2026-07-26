@@ -83,6 +83,16 @@ fn reject_complex_ordered_dtypes(op: &'static str, dtypes: &[DType]) -> crate::R
     Ok(())
 }
 
+fn reject_complex_unsupported_compare_dtypes(
+    dir: &CompareDir,
+    dtypes: &[DType],
+) -> crate::Result<()> {
+    if *dir != CompareDir::Eq {
+        reject_complex_ordered_dtypes("compare", dtypes)?;
+    }
+    Ok(())
+}
+
 const ELEMENTWISE_FUSION_OP: &str = "execute_elementwise_fusion";
 const ELEMENTWISE_FUSION_MIN_ELEMENTS: usize = 16 * 1024;
 
@@ -286,6 +296,15 @@ macro_rules! impl_tier2_elem_complex {
                     Self::zero()
                 } else {
                     self / self.abs_elem()
+                }
+            }
+        }
+
+        impl CompareElem for Complex<$real> {
+            fn compare_elem(self, other: Self, dir: &CompareDir) -> bool {
+                match dir {
+                    CompareDir::Eq => self == other,
+                    CompareDir::Lt | CompareDir::Le | CompareDir::Gt | CompareDir::Ge => false,
                 }
             }
         }
@@ -1197,33 +1216,66 @@ where
         || input_views.len() != 2
         || plan.outputs() != [3]
         || plan.ops().len() != 2
-        || plan.ops()[0].op() != ElementwiseFusionOp::Multiply
-        || plan.ops()[0].inputs() != [0, 1]
-        || plan.ops()[1].op() != ElementwiseFusionOp::Add
     {
         return Ok(None);
     }
 
-    // SAFETY: zip_map2_into overwrites every output element.
-    let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
-    match plan.ops()[1].inputs() {
-        [2, 0] | [0, 2] => zip_map2_into(
-            &mut out.view_mut(),
-            &input_views[0],
-            &input_views[1],
-            |a, b| a.fused_multiply(b).fused_add(a),
-        ),
-        [2, 1] | [1, 2] => zip_map2_into(
-            &mut out.view_mut(),
-            &input_views[0],
-            &input_views[1],
-            |a, b| a.fused_multiply(b).fused_add(b),
-        ),
-        _ => return Ok(None),
+    match (
+        plan.ops()[0].op(),
+        plan.ops()[0].inputs(),
+        plan.ops()[1].op(),
+        plan.ops()[1].inputs(),
+    ) {
+        (ElementwiseFusionOp::Multiply, [0, 1], ElementwiseFusionOp::Add, [2, 0] | [0, 2]) => {
+            // SAFETY: zip_map2_into overwrites every output element.
+            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
+            zip_map2_into(
+                &mut out.view_mut(),
+                &input_views[0],
+                &input_views[1],
+                |a, b| a.fused_multiply(b).fused_add(a),
+            )
+            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
+            Ok(Some(vec![wrap(tensor_from_array(out))]))
+        }
+        (ElementwiseFusionOp::Multiply, [0, 1], ElementwiseFusionOp::Add, [2, 1] | [1, 2]) => {
+            // SAFETY: zip_map2_into overwrites every output element.
+            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
+            zip_map2_into(
+                &mut out.view_mut(),
+                &input_views[0],
+                &input_views[1],
+                |a, b| a.fused_multiply(b).fused_add(b),
+            )
+            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
+            Ok(Some(vec![wrap(tensor_from_array(out))]))
+        }
+        (ElementwiseFusionOp::Add, [0, 1], ElementwiseFusionOp::Multiply, [2, 0] | [0, 2]) => {
+            // SAFETY: zip_map2_into overwrites every output element.
+            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
+            zip_map2_into(
+                &mut out.view_mut(),
+                &input_views[0],
+                &input_views[1],
+                |a, b| a.fused_add(b).fused_multiply(a),
+            )
+            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
+            Ok(Some(vec![wrap(tensor_from_array(out))]))
+        }
+        (ElementwiseFusionOp::Add, [0, 1], ElementwiseFusionOp::Multiply, [2, 1] | [1, 2]) => {
+            // SAFETY: zip_map2_into overwrites every output element.
+            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
+            zip_map2_into(
+                &mut out.view_mut(),
+                &input_views[0],
+                &input_views[1],
+                |a, b| a.fused_add(b).fused_multiply(b),
+            )
+            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
+            Ok(Some(vec![wrap(tensor_from_array(out))]))
+        }
+        _ => Ok(None),
     }
-    .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-
-    Ok(Some(vec![wrap(tensor_from_array(out))]))
 }
 
 fn typed_fusion_input_view<'a, T>(
@@ -2134,6 +2186,7 @@ pub(crate) fn broadcast_multiply_read_with_pool(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(crate) fn broadcast_multiply_value_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
@@ -2143,6 +2196,22 @@ pub(crate) fn broadcast_multiply_value_with_pool(
     rhs_shape: &[usize],
     rhs_dims: &[usize],
 ) -> crate::Result<Option<TensorValue>> {
+    broadcast_multiply_value_with_pool_in_domain(
+        buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn broadcast_multiply_value_with_pool_in_domain(
+    buffers: &mut BufferPool,
+    lhs: TensorRead<'_>,
+    lhs_shape: &[usize],
+    lhs_dims: &[usize],
+    rhs: TensorRead<'_>,
+    rhs_shape: &[usize],
+    rhs_dims: &[usize],
+    domain: Option<crate::CpuDomainId>,
+) -> crate::Result<Option<TensorValue>> {
     let lhs_view = read_as_cpu_view(lhs.clone());
     let rhs_view = read_as_cpu_view(rhs.clone());
 
@@ -2151,8 +2220,12 @@ pub(crate) fn broadcast_multiply_value_with_pool(
             if let Some(out) = try_lazy_outer_product_with_pool(
                 buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims,
             )? {
+                let mut base = Tensor::$variant(out.base);
+                if let Some(domain) = domain {
+                    crate::backend::tag_fresh_output(&mut base, domain);
+                }
                 return Ok(Some(lazy_outer_product_value(
-                    Tensor::$variant(out.base),
+                    base,
                     out.shape,
                     out.strides,
                 )?));
@@ -2182,8 +2255,13 @@ pub(crate) fn broadcast_multiply_value_with_pool(
         _ => {}
     }
 
-    broadcast_multiply_read_with_pool(buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims)
-        .map(|tensor| tensor.map(TensorValue::from_tensor))
+    let mut tensor = broadcast_multiply_read_with_pool(
+        buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+    )?;
+    if let (Some(tensor), Some(domain)) = (&mut tensor, domain) {
+        crate::backend::tag_fresh_output(tensor, domain);
+    }
+    Ok(tensor.map(TensorValue::from_tensor))
 }
 
 /// Divide two CPU tensors elementwise.
@@ -2893,7 +2971,7 @@ pub(crate) fn compare_with_pool(
     rhs: &Tensor,
     dir: &CompareDir,
 ) -> crate::Result<Tensor> {
-    reject_complex_ordered_dtypes("compare", &[lhs.dtype(), rhs.dtype()])?;
+    reject_complex_unsupported_compare_dtypes(dir, &[lhs.dtype(), rhs.dtype()])?;
 
     match (lhs, rhs) {
         (Tensor::F32(a), Tensor::F32(b)) => {
@@ -2909,6 +2987,12 @@ pub(crate) fn compare_with_pool(
             Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
         }
         (Tensor::Bool(a), Tensor::Bool(b)) => {
+            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
+        }
+        (Tensor::C32(a), Tensor::C32(b)) => {
+            Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
+        }
+        (Tensor::C64(a), Tensor::C64(b)) => {
             Ok(Tensor::Bool(typed_compare_with_pool(buffers, a, b, dir)?))
         }
         _ => Err(crate::Error::dtype_mismatch(
@@ -2927,7 +3011,7 @@ pub(crate) fn compare_read_with_pool(
 ) -> crate::Result<Tensor> {
     let lhs_dtype = lhs.dtype();
     let rhs_dtype = rhs.dtype();
-    reject_complex_ordered_dtypes("compare", &[lhs_dtype, rhs_dtype])?;
+    reject_complex_unsupported_compare_dtypes(dir, &[lhs_dtype, rhs_dtype])?;
 
     match (read_as_cpu_view(lhs), read_as_cpu_view(rhs)) {
         (CpuReadView::F32(a), CpuReadView::F32(b)) => Ok(Tensor::Bool(
@@ -2951,6 +3035,16 @@ pub(crate) fn compare_read_with_pool(
             })?,
         )),
         (CpuReadView::Bool(a), CpuReadView::Bool(b)) => Ok(Tensor::Bool(
+            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
+                x.compare_elem(y, dir)
+            })?,
+        )),
+        (CpuReadView::C32(a), CpuReadView::C32(b)) => Ok(Tensor::Bool(
+            typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
+                x.compare_elem(y, dir)
+            })?,
+        )),
+        (CpuReadView::C64(a), CpuReadView::C64(b)) => Ok(Tensor::Bool(
             typed_same_shape_binary_view_with_pool("compare", buffers, &a, &b, |x, y| {
                 x.compare_elem(y, dir)
             })?,

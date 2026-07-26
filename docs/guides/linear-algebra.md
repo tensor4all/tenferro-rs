@@ -138,7 +138,8 @@ owned rule set in an explicit context:
 use tenferro_ad::AdContext;
 
 let ad = AdContext::builder()
-    .with_extension_rules(tenferro_linalg::ad_rules().unwrap())
+    .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules().unwrap())
+    .unwrap()
     .build()
     .unwrap();
 ```
@@ -324,18 +325,28 @@ assert!(max_abs_diff(&reconstructed, &a) < 1.0e-12);
 ## Traced Cholesky Factorization
 
 ```rust
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]).unwrap();
 let factor = a.cholesky().unwrap();
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&factor).unwrap();
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.register_extension(tenferro_linalg::register_runtime).unwrap();
-let result = executor.run(&program).unwrap();
+let backend = CpuBackend::new();
+let mut builder = Runtime::builder();
+builder
+    .register_engine(runtime_engine_registration(&backend).unwrap())
+    .unwrap();
+builder
+    .install_extension_module(
+        tenferro_linalg::extension_module::<CpuBackend>(runtime_engine_id().unwrap()).unwrap(),
+    )
+    .unwrap();
+let runtime = builder.build().unwrap();
+let mut outputs = runtime.run_compiled(&program, &[]).unwrap();
+let result = outputs.remove(0);
 
 assert_eq!(result.shape(), &[2, 2]);
 assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 0.0, 0.0, 3.0]);
@@ -344,19 +355,29 @@ assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 0.0, 0.0, 3.0]);
 ## Traced Solve In A Graph
 
 ```rust
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_linalg::TracedTensorLinalgExt;
 
-let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]);
-let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0]);
+let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![4.0_f64, 0.0, 0.0, 9.0]).unwrap();
+let b = TracedTensor::from_vec_col_major(vec![2, 1], vec![8.0_f64, 27.0]).unwrap();
 let x = a.solve(&b).unwrap();
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&x).unwrap();
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.register_extension(tenferro_linalg::register_runtime).unwrap();
-let result = executor.run(&program).unwrap();
+let backend = CpuBackend::new();
+let mut builder = Runtime::builder();
+builder
+    .register_engine(runtime_engine_registration(&backend).unwrap())
+    .unwrap();
+builder
+    .install_extension_module(
+        tenferro_linalg::extension_module::<CpuBackend>(runtime_engine_id().unwrap()).unwrap(),
+    )
+    .unwrap();
+let runtime = builder.build().unwrap();
+let mut outputs = runtime.run_compiled(&program, &[]).unwrap();
+let result = outputs.remove(0);
 
 assert_eq!(result.shape(), &[2, 1]);
 assert_eq!(result.as_slice::<f64>().unwrap(), &[2.0, 3.0]);

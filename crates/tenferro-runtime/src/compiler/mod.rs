@@ -16,6 +16,7 @@ use super::exec::{ExecInstruction, ExecOp, ExecProgram};
 
 mod optimizer;
 mod options;
+pub(crate) mod semantic_staging;
 
 pub use options::{CompilerOptions, OptimizerConfig};
 
@@ -51,7 +52,8 @@ enum MissingConstraintOrigin {
 /// `RankMismatch`, `AxisOutOfBounds`, `DuplicateAxis`, or `InvalidArgument`
 /// for operation metadata and discharged shape constraints, and
 /// [`Error::Unsupported`] when an extension cannot be lowered or dispatched.
-pub fn compile_std_to_exec(
+#[cfg(test)]
+pub(crate) fn compile_std_to_exec(
     prog: &CompiledProgram<StdTensorOp>,
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
@@ -63,6 +65,7 @@ pub fn compile_std_to_exec(
         CompilerOptions::default(),
         &[],
         input_shapes,
+        true,
     )
 }
 
@@ -83,7 +86,8 @@ pub fn compile_std_to_exec(
 /// `RankMismatch`, `AxisOutOfBounds`, `DuplicateAxis`, or `InvalidArgument`
 /// for operation metadata and discharged shape constraints, and
 /// [`Error::Unsupported`] when an extension cannot be lowered or dispatched.
-pub fn compile_std_to_exec_with_options(
+#[cfg(test)]
+pub(crate) fn compile_std_to_exec_with_options(
     prog: &CompiledProgram<StdTensorOp>,
     input_dtypes: &[DType],
     input_shapes: &[Vec<DimExpr>],
@@ -96,6 +100,7 @@ pub fn compile_std_to_exec_with_options(
         options,
         &[],
         input_shapes,
+        true,
     )
 }
 
@@ -106,6 +111,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
     options: CompilerOptions,
     scoped_constraints: &[SlotScopedShapeConstraint],
     analysis_input_shapes: &[Vec<DimExpr>],
+    infer_extension_constraints: bool,
 ) -> Result<ExecProgram> {
     validate_unique_output_producers(prog)?;
     if prog.input_slots.len() != input_dtypes.len() {
@@ -146,7 +152,8 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
     let instructions = prog
         .instructions
         .iter()
-        .map(|instr| {
+        .enumerate()
+        .map(|(semantic_operation_index, instr)| {
             let input_dtypes: Vec<DType> = instr
                 .inputs
                 .iter()
@@ -217,7 +224,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
                             local,
                         )?;
                     }
-                    if !inferred_constraints.is_empty() {
+                    if infer_extension_constraints && !inferred_constraints.is_empty() {
                         pending_constraints.push(PendingShapeConstraints {
                             origin_output_slots: instr.outputs.clone(),
                             fallback_provenance_slots: Vec::new(),
@@ -318,6 +325,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
 
             Ok(ExecInstruction {
                 op: ExecOp::from_std_tensor_op(&instr.operation),
+                semantic_operation_index: Some(semantic_operation_index),
                 input_slots: instr.inputs.clone(),
                 output_slots: instr.outputs.clone(),
                 dtype: instruction_dtype,
@@ -418,7 +426,7 @@ pub(crate) fn compile_std_to_exec_with_options_and_constraints(
     Ok(program)
 }
 
-fn lower_scoped_dim_expr(
+pub(crate) fn lower_scoped_dim_expr(
     expr: &DimExpr,
     input_slots: &[usize],
     slot_shapes: &[Option<Vec<DimExpr>>],
@@ -919,6 +927,7 @@ impl ConjSinkingState<'_> {
 
         let instr = ExecInstruction {
             op: ExecOp::Conj,
+            semantic_operation_index: None,
             input_slots: vec![slot],
             output_slots: vec![output_slot],
             dtype: meta.dtype,

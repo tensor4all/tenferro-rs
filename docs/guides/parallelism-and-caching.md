@@ -56,10 +56,9 @@ parallelism policy:
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::GraphExecutor;
 
-let executor = GraphExecutor::new(CpuBackend::with_threads(4).unwrap());
-assert_eq!(executor.backend().num_threads(), 4);
+let backend = CpuBackend::with_threads(4).unwrap();
+assert_eq!(backend.num_threads(), 4);
 ```
 
 `CpuBackend::new()` reads `RAYON_NUM_THREADS` and falls back to the
@@ -78,18 +77,27 @@ counts still apply to tenferro-owned CPU kernels and fallback paths.
 ## CPU Operation Parallelism
 
 `CpuContext` owns the Rayon pool used by tenferro-owned CPU tensor kernels.
-Standalone backend calls and compiled `BackendSession` execution enter that
-pool before dispatching tensor-sized kernels.
+Standalone backend calls and compiled `BackendSession` operations cross the
+selected domain executor exactly once before dispatch. Provider-facing
+execution contexts are already entered and cannot install or submit nested
+executor work.
+
+Inside that entry, tenferro-native strided kernels use the policy selected by
+`CpuExecutionContext`: `Inner` work whose selected executor advertises Rayon
+uses only that executor up to its validated budget, while `Sequential`,
+engine-outer children, and external-worker `Inner` contexts stay sequential.
+An ambient Rayon pool is never an implicit fallback. External BLAS/LAPACK
+workers remain provider-owned and may fan out independently.
 
 | Operation family | Threading behavior |
 | --- | --- |
-| Elementwise and analytic ops | `strided-kernel` map/zip kernels run under `CpuContext` and can use Rayon when the context has more than one thread. |
-| Reductions | `strided-kernel::reduce_axis` runs under `CpuContext` and can use Rayon when the context has more than one thread. |
-| View materialization, transpose/permute, broadcast, convert, and diagonal extraction | `strided-kernel` copy/map kernels run under `CpuContext` and can use Rayon for tensor-sized copies. |
-| `dot_general` through `cpu-faer` | faer receives `Par::Seq` for one-thread contexts and explicit `Par::rayon(n)` using the configured context degree for multi-thread contexts. |
+| Elementwise and analytic ops | `strided-kernel` map/zip kernels use the already-entered context's native policy. Rayon-capable `Inner` may use the selected executor; all other modes above are sequential. |
+| Reductions | `strided-kernel::reduce_axis` uses the same selected native policy and never ambient Rayon. |
+| View materialization, transpose/permute, broadcast, convert, and diagonal extraction | `strided-kernel` copy/map kernels use the same selected native policy; layout fallback and linalg input materialization are included. |
+| `dot_general` through `cpu-faer` | faer receives `Par::rayon(n)` only for `Inner` execution whose selected executor advertises Rayon and whose validated budget is greater than one; otherwise it receives `Par::Seq`. |
 | GEMM and linalg through `cpu-blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
 | Supported `dot_general` contractions through `cpu-tblis` | TBLIS owns provider threading; unsupported TBLIS shapes fall back to the compiled faer/BLAS provider. |
-| Indexing, scatter/gather, slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside `CpuContext::install`, and source comments mark the intentional sequential path. |
+| Indexing, scatter/gather, slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside the selected executor entry, and source comments mark the intentional sequential path. |
 
 CPU affine-strided copy, permutation, broadcast, map, zip-map, and axis
 reduction delegate to `strided-rs`, while tenferro supplies operation semantics,
@@ -155,6 +163,28 @@ provider worker affinity. External BLAS therefore supports only
 `CpuPlacement::Auto` and executes under an exclusive coordinator permit. Use
 the faer backend when tenferro-managed NUMA placement is required.
 
+Custom CPU provider bundles declare count and placement separately through
+their provider traits. Bundle installation validates those declarations
+against every registered domain, including lazily constructible managed NUMA
+domains. `CpuBackend::from_external_managed_domains_with_provider_bundle`
+performs external-domain registry construction and this validation atomically.
+The provider bundle currently covers the `dot_general` family; linalg provider
+selection remains separate. The current built-in BLAS adapter does not apply
+and restore a genuinely local setter per call, so the ordinary
+external-managed constructor rejects that strict standard BLAS bundle.
+OpenBLAS's `openblas_set_num_threads_local` does not change this conclusion:
+despite its name, it applies a process-global count and returns the old value
+for restoration, so concurrent threads can observe the temporary setting.
+Applications can use the custom-bundle constructor with an adapter that
+declares and enforces suitable controls. Parallel OpenBLAS remains available
+only through provider-owned, process-exclusive compatibility execution; it is
+not a strict per-call thread-budget guarantee.
+
+A provider declaring `BinaryClampToOne` must select its single-threaded mode
+for every finite domain budget. It must never select provider-controlled auto
+mode inside such a call; inability to guarantee that requires the conservative
+`GlobalOrUncontrolled` declaration.
+
 ## Avoid Oversubscription
 
 Do not accidentally multiply outer application parallelism by inner kernel
@@ -175,18 +205,32 @@ the result.
 
 Reuse execution objects when you repeat related work:
 
+- `tenferro_runtime::Runtime` retains immutable engine/extension registration
+  snapshots, prepared-plan cache entries, and registered runtime cache owners
+  for the `Runtime::prepare_for` and `Runtime::run_compiled*` pipelines.
 - `EagerRuntime` retains eager extension plans and compiled inner extension
-  programs across immediate operations.
+  programs across immediate operations. CPU-backed eager runtimes also keep a
+  private `Runtime` snapshot so placement-bound CPU views can refresh runtime
+  registration metadata by epoch comparison without holding idle resources.
+  The CPU registration is built by `tenferro-cpu` and includes the runtime
+  execution bridge.
 - `GraphCompiler` retains graph lowering and static extension planning caches.
-- `GraphExecutor<B>` retains runtime extension plans, compiled inner extension
-  programs, backend analysis, and reusable backend buffers.
+  Its compiled artifact keeps semantic program plus compiler options, not
+  backend staging.
+- `Runtime` owns prepared-plan caching and registered runtime cache owners.
+  CPU backend buffer pools remain owned by the registered CPU backend.
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor};
+use tenferro_runtime::{GraphCompiler, Runtime};
 
 let mut compiler = GraphCompiler::new();
-let mut executor = GraphExecutor::new(CpuBackend::with_threads(4));
+let backend = CpuBackend::with_threads(4).unwrap();
+let mut builder = Runtime::builder();
+builder
+    .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+    .unwrap();
+let runtime = builder.build().unwrap();
 ```
 
 Short-lived scripts can usually ignore cache tuning. Services, notebooks, and
@@ -194,7 +238,7 @@ benchmark harnesses should treat caches as part of runtime resource management.
 
 ## Cache Limits
 
-Compiler, executor, and eager caches are bounded by default and can be
+Runtime, compiler, eager, and CPU backend caches are bounded by default and can be
 configured independently.
 
 ```rust
@@ -202,34 +246,32 @@ use std::num::NonZeroUsize;
 use tenferro_ad::EagerRuntime;
 use tenferro_runtime::extension::ExtensionCacheLimits;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor};
+use tenferro_runtime::{GraphCompiler, PreparedPlanCacheLimits, Runtime};
 
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
 eager.set_extension_cache_limits(ExtensionCacheLimits::new(
     NonZeroUsize::new(128).unwrap(),
 )).unwrap();
 
-let mut compiler = GraphCompiler::new();
-compiler.set_compile_cache_capacity(NonZeroUsize::new(128).unwrap());
-compiler
-    .extension_caches_mut()
-    .set_limits(ExtensionCacheLimits::new(NonZeroUsize::new(128).unwrap()));
+let runtime = Runtime::builder().build().unwrap();
+runtime.set_prepared_cache_limits(PreparedPlanCacheLimits::new(
+    NonZeroUsize::new(128).unwrap(),
+)).unwrap();
 
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor
-    .extension_executor_mut()
-    .set_cache_limits(ExtensionCacheLimits::new(NonZeroUsize::new(128).unwrap()));
-executor.set_gemm_analysis_cache_capacity(512);
+let mut compiler = GraphCompiler::new();
+compiler.clear_caches();
+
+let mut backend = CpuBackend::new();
+backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024).unwrap();
 ```
 
-For CPU executors, the CPU buffer pool has its own retention limit:
+For CPU backends, the CPU buffer pool has its own retention limit:
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::GraphExecutor;
 
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.set_buffer_pool_limit_bytes(32 * 1024 * 1024);
+let mut backend = CpuBackend::new();
+backend.set_buffer_pool_limit_bytes(32 * 1024 * 1024).unwrap();
 ```
 
 ## Clearing Cached Memory
@@ -241,30 +283,36 @@ than reusing old plans and buffers.
 ```rust
 use tenferro_ad::EagerRuntime;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor};
+use tenferro_runtime::{GraphCompiler, Runtime};
 
 let eager = EagerRuntime::with_cpu_backend(CpuBackend::new());
+let runtime = Runtime::builder().build().unwrap();
 let mut compiler = GraphCompiler::new();
-let mut executor = GraphExecutor::new(CpuBackend::new());
 
+runtime.clear_prepared_cache().unwrap();
+runtime.clear_caches().unwrap();
 compiler.clear_caches();
-executor.clear_caches();
 eager.clear_caches().unwrap();
 ```
 
-For CPU executors, `clear_all_caches()` also clears the CPU buffer pool:
+For CPU backends, clear the buffer pool through the backend:
 
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::GraphExecutor;
 
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.clear_all_caches();
+let mut backend = CpuBackend::new();
+backend.clear_runtime_caches().unwrap();
 ```
 
 `retained_bytes` in cache stats is tenferro's logical retained-data
 estimate. It is not operating-system RSS and does not include allocator arena
 slack, thread stacks, or provider-owned memory.
+
+`CacheStats` also reports cache events when the owner can observe them:
+`hits`, `misses`, `evictions`, and explicit `clears`. Extension cache
+selectors scope event counters the same way they scope `entries` and
+`retained_bytes`, so `ExtensionCacheSelector::Family` and
+`ExtensionCacheSelector::Cache` report only the selected family or cache.
 
 ## CUDA Transfer Boundaries
 

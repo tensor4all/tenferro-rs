@@ -11,7 +11,7 @@ use tenferro_fft::{
     FftBackend, FftExecutionCache, FftExecutor, FftNorm, FftOperation, FftPlanSpec, TensorFftExt,
     FFT_EXTENSION_FAMILY_ID,
 };
-use tenferro_runtime::{ExtensionCacheKey, GraphExecutor};
+use tenferro_runtime::{ExtensionCacheKey, Runtime};
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSessionHost, Buffer, BufferHandle, CompareDir,
     DType, DeviceId, DeviceKind, DotGeneralConfig, ErrorKind, GatherConfig, GpuBackendKind,
@@ -268,10 +268,22 @@ fn cpu_backend_is_fft_capable_and_runtime_registration_accepts_it() {
     assert_fft_backend::<CpuBackend>();
     assert_tensor_backend::<TensorOnlyBackend>();
 
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_fft::register_runtime)
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
         .unwrap();
+    builder
+        .install_extension_module(
+            tenferro_fft::extension_module::<CpuBackend>(
+                tenferro_cpu::runtime_engine_id().unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let runtime = builder.build().unwrap();
+
+    assert_eq!(runtime.snapshot().unwrap().extension_module_count(), 1);
 }
 
 #[test]
@@ -402,6 +414,7 @@ fn cuda_c64_tensor(shape: Vec<usize>) -> Tensor {
                     kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                     ordinal: 0,
                 }),
+                cpu_affinity: None,
             },
         )
         .unwrap(),

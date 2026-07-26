@@ -15,8 +15,10 @@ OpenXLA test described below executes the same generated einsum module through
 <!-- snippet-source: docs/tutorial-code/src/bin/xla_einsum_backend.rs -->
 ```rust
 use tenferro_cpu::CpuBackend;
-use tenferro_einsum::GraphCompilerEinsumExt;
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TraceContext};
 use tenferro_xla::XlaExecutor;
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
@@ -53,36 +55,48 @@ fn tail_value() -> Result<Tensor, Box<dyn std::error::Error>> {
     )?)
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut compiler = GraphCompiler::new();
-    let a = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
-    let b = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
-    let c = TracedTensor::input_symbolic_shape(DType::F64, 2)?;
-    let product = compiler.einsum(&[&a, &b, &c], "ij,jk,kl->il")?;
+fn cpu_runtime_with_einsum() -> Result<Runtime, Box<dyn std::error::Error>> {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend)?)?;
+    builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+        tenferro_cpu::runtime_engine_id()?,
+    )?)?;
+    Ok(builder.build()?)
+}
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a_value = lhs_value()?;
     let b_value = middle_value()?;
     let c_value = tail_value()?;
-    let program = compiler.compile_with_input_specs(
-        &product,
-        &[
-            (&a, DType::F64, a_value.shape()),
-            (&b, DType::F64, b_value.shape()),
-            (&c, DType::F64, c_value.shape()),
-        ],
-    )?;
+    let mut trace = TraceContext::new();
+    let a = trace.input(ProgramInputSpec::new(
+        a_value.dtype(),
+        DimExpr::from_concrete(a_value.shape()),
+    ))?;
+    let b = trace.input(ProgramInputSpec::new(
+        b_value.dtype(),
+        DimExpr::from_concrete(b_value.shape()),
+    ))?;
+    let c = trace.input(ProgramInputSpec::new(
+        c_value.dtype(),
+        DimExpr::from_concrete(c_value.shape()),
+    ))?;
+    let product = trace.einsum(&[a, b, c], "ij,jk,kl->il")?;
+    let graph = trace.finish(&[product])?;
+    let program = GraphCompiler::new().compile_traced_graph(&graph)?;
 
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.register_extension(tenferro_einsum::register_runtime)?;
-    let cpu_value =
-        executor.run_with_inputs(&program, &[(&a, &a_value), (&b, &b_value), (&c, &c_value)])?;
+    let runtime = cpu_runtime_with_einsum()?;
+    let mut outputs = runtime.run_compiled(&program, &[&a_value, &b_value, &c_value])?;
+    assert_eq!(outputs.len(), 1);
+    let cpu_value = outputs.remove(0);
     assert_eq!(cpu_value.shape(), &[2, 2]);
     assert_close(
         cpu_value.as_slice::<f64>().unwrap(),
         &[1520.0, 3500.0, 3904.0, 8980.0],
     );
 
-    let module = XlaExecutor::default().lower_to_stablehlo(&program)?;
+    let module = XlaExecutor::default().lower_compiled_to_stablehlo(&program)?;
     let stablehlo = module.as_str();
 
     assert!(stablehlo.contains("stablehlo.dot_general"));
@@ -113,6 +127,6 @@ export LD_LIBRARY_PATH=$CUDA_PATH/lib64:/usr/lib/x86_64-linux-gnu/libcutensor/12
 
 Only fixed-shape extension plans that expand to the supported standard
 operation subset can use this path. Dynamic extension-runtime execution still
-runs through the native `GraphExecutor<B>`. For the full environment setup and
+runs through `Runtime::run_compiled` with installed extension modules. For the full environment setup and
 the external OpenXLA execution check for this generated einsum module, see the
 [XLA and PJRT guide](../guides/xla.md).

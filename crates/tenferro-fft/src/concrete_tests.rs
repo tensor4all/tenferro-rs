@@ -161,7 +161,13 @@ fn fft_plan_cache_is_bounded_lru_and_reports_known_retention() {
     assert!(std::sync::Arc::ptr_eq(&first, &cache.plan_f64(4, true)));
 
     cache.clear();
-    assert_eq!(cache.stats(), tenferro_tensor::CacheStats::empty());
+    let stats = cache.stats();
+    assert_eq!(stats.entries, 0);
+    assert_eq!(stats.retained_bytes, 0);
+    assert_eq!(stats.hits, 4);
+    assert_eq!(stats.misses, 4);
+    assert_eq!(stats.evictions, 1);
+    assert_eq!(stats.clears, 1);
     cache.set_capacity(NonZeroUsize::MIN);
     assert_eq!(cache.capacity(), NonZeroUsize::MIN);
 }

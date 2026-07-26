@@ -5,10 +5,8 @@ use std::sync::Arc;
 use num_complex::{Complex32, Complex64};
 use tenferro_extension_macros::define_extension_runtime;
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOp, HostReference};
-use tenferro_tensor::{
-    DType, DeviceKind, Error, GpuBackendKind, MemoryKind, Placement, Tensor, TensorRead,
-};
+use tenferro_runtime::extension::{ExtensionExecutionContext, ExtensionOp};
+use tenferro_tensor::{DType, Error, ErrorKind, Tensor, TensorRead};
 
 use crate::backend::LinalgBackend;
 
@@ -277,6 +275,8 @@ pub(crate) enum LinalgOp {
         transpose_a: bool,
         conjugate_a: bool,
     },
+    SignDetFromLuFactor,
+    LogAbsDetFromLuFactor,
     FullPivLu,
     FullPivLuSolve {
         transpose_a: bool,
@@ -323,7 +323,9 @@ impl LinalgOp {
             | Self::EighVals { .. }
             | Self::EigVals { .. }
             | Self::FullPivLuSolve { .. }
+            | Self::LogAbsDetFromLuFactor
             | Self::LuSolvePrepared { .. }
+            | Self::SignDetFromLuFactor
             | Self::SvdVals { .. }
             | Self::TriangularSolve { .. } => 1,
             Self::Svd { .. } | Self::SvdFull => 3,
@@ -337,6 +339,8 @@ impl LinalgOp {
     fn input_count(self) -> usize {
         match self {
             Self::FullPivLuSolve { .. } | Self::TriangularSolve { .. } => 2,
+            Self::LogAbsDetFromLuFactor => 2,
+            Self::SignDetFromLuFactor => 3,
             Self::LuSolvePrepared { .. } => 4,
             _ => 1,
         }
@@ -359,6 +363,8 @@ impl LinalgOp {
             Self::EighVals { .. } => 13,
             Self::EigVals { .. } => 14,
             Self::SvdFull => 15,
+            Self::LogAbsDetFromLuFactor => 16,
+            Self::SignDetFromLuFactor => 17,
         }
     }
 }
@@ -377,84 +383,6 @@ impl LinalgExtensionOp {
     pub(crate) fn op(&self) -> LinalgOp {
         self.op
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EagerLinalgDevice {
-    Cpu,
-    Cuda(usize),
-}
-
-fn tensor_placement(input: &Tensor) -> &Placement {
-    input.placement()
-}
-
-fn input_eager_device(input: &Tensor) -> tenferro_tensor::Result<EagerLinalgDevice> {
-    let placement = tensor_placement(input);
-    match (&placement.memory_kind, placement.device.as_ref()) {
-        (MemoryKind::Device, Some(device)) => match &device.kind {
-            DeviceKind::Gpu(GpuBackendKind::Cuda) => Ok(EagerLinalgDevice::Cuda(device.ordinal)),
-            DeviceKind::Gpu(kind) => Err(Error::unsupported(
-                "linalg_host_reference",
-                format!("unsupported GPU backend {kind:?} for eager linalg"),
-            )),
-            kind => Err(Error::runtime_state(
-                "linalg_host_reference",
-                format!("unsupported device kind {kind:?} for eager linalg"),
-            )),
-        },
-        (MemoryKind::Device, None) => Err(Error::runtime_state(
-            "linalg_host_reference",
-            "device tensor is missing placement device metadata",
-        )),
-        _ => Ok(EagerLinalgDevice::Cpu),
-    }
-}
-
-fn eager_linalg_device(inputs: &[&Tensor]) -> tenferro_tensor::Result<EagerLinalgDevice> {
-    let mut selected = None;
-    for input in inputs {
-        let device = input_eager_device(input)?;
-        match (selected, device) {
-            (None, next) => selected = Some(next),
-            (Some(EagerLinalgDevice::Cpu), EagerLinalgDevice::Cpu) => {}
-            (Some(EagerLinalgDevice::Cuda(lhs)), EagerLinalgDevice::Cuda(rhs)) if lhs == rhs => {}
-            (Some(lhs), rhs) => {
-                return Err(Error::invalid_argument(
-                    "linalg_host_reference",
-                    "inputs",
-                    format!("all eager linalg inputs must be on the same device, got {lhs:?} and {rhs:?}"),
-                ));
-            }
-        }
-    }
-    Ok(selected.unwrap_or(EagerLinalgDevice::Cpu))
-}
-
-#[cfg(feature = "cuda")]
-fn execute_cuda_eager_linalg(
-    op: LinalgOp,
-    inputs: &[&Tensor],
-    device_ordinal: usize,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    let mut backend = tenferro_gpu::CudaBackend::new(device_ordinal)?;
-    execute_linalg(op, inputs, &mut backend)
-}
-
-#[cfg(not(feature = "cuda"))]
-fn execute_cuda_eager_linalg(
-    _op: LinalgOp,
-    _inputs: &[&Tensor],
-    device_ordinal: usize,
-) -> tenferro_tensor::Result<Vec<Tensor>> {
-    Err(Error::unsupported(
-        "linalg_host_reference",
-        format!(
-            "received CUDA tensor on cuda:{device_ordinal}, but tenferro-linalg was built \
-             without the cuda feature; enable the cuda feature or download the tensor to CPU \
-             before eager linalg"
-        ),
-    ))
 }
 
 impl ExtensionOp for LinalgExtensionOp {
@@ -512,6 +440,8 @@ impl ExtensionOp for LinalgExtensionOp {
             LinalgOp::Cholesky
             | LinalgOp::Lu
             | LinalgOp::LuFactor
+            | LinalgOp::LogAbsDetFromLuFactor
+            | LinalgOp::SignDetFromLuFactor
             | LinalgOp::FullPivLu
             | LinalgOp::SvdFull => {}
         }
@@ -538,6 +468,14 @@ impl ExtensionOp for LinalgExtensionOp {
 
     fn output_count(&self) -> usize {
         self.op.output_count()
+    }
+
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
     }
 
     fn prune_outputs(&self, live_outputs: &[bool]) -> Option<Arc<dyn ExtensionOp>> {
@@ -590,6 +528,21 @@ impl ExtensionOp for LinalgExtensionOp {
             }
             LinalgOp::Lu => lu_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::LuFactor => lu_factor_meta(input_dtypes[0], input_shapes[0])?,
+            LinalgOp::SignDetFromLuFactor => {
+                vec![signdet_from_lu_factor_meta(
+                    input_dtypes[0],
+                    input_shapes[0],
+                    input_shapes[1],
+                    input_shapes[2],
+                )?]
+            }
+            LinalgOp::LogAbsDetFromLuFactor => {
+                vec![logabsdet_from_lu_factor_meta(
+                    input_dtypes[0],
+                    input_shapes[0],
+                    input_shapes[1],
+                )?]
+            }
             LinalgOp::FullPivLu => full_piv_lu_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::Svd { .. } => svd_meta(input_dtypes[0], input_shapes[0])?,
             LinalgOp::SvdFull => svd_full_meta(input_dtypes[0], input_shapes[0])?,
@@ -606,37 +559,6 @@ impl ExtensionOp for LinalgExtensionOp {
         };
         Ok(metas)
     }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-impl HostReference for LinalgExtensionOp {
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let expected = self.input_count();
-        if inputs.len() != expected {
-            return Err(Error::invalid_argument(
-                "linalg_host_reference",
-                "inputs",
-                format!(
-                    "expected {expected} inputs for {:?}, got {}",
-                    self.op,
-                    inputs.len()
-                ),
-            ));
-        }
-
-        match eager_linalg_device(inputs)? {
-            EagerLinalgDevice::Cpu => {
-                let mut backend = tenferro_cpu::CpuBackend::new();
-                execute_linalg(self.op, inputs, &mut backend)
-            }
-            EagerLinalgDevice::Cuda(device_ordinal) => {
-                execute_cuda_eager_linalg(self.op, inputs, device_ordinal)
-            }
-        }
-    }
 }
 
 fn execute_linalg_extension<B: LinalgBackend + 'static>(
@@ -647,7 +569,7 @@ fn execute_linalg_extension<B: LinalgBackend + 'static>(
     execute_linalg(op.op(), inputs, ctx.backend_mut())
 }
 
-fn execute_linalg_extension_reads<B: LinalgBackend + 'static>(
+pub(crate) fn execute_linalg_extension_reads<B: LinalgBackend + 'static>(
     op: &LinalgExtensionOp,
     inputs: &[TensorRead<'_>],
     ctx: &mut ExtensionExecutionContext<'_, B>,
@@ -655,6 +577,34 @@ fn execute_linalg_extension_reads<B: LinalgBackend + 'static>(
     if op.op() == LinalgOp::Cholesky {
         return Ok(vec![ctx.backend_mut().cholesky_read(inputs[0].clone())?]);
     }
+    if let LinalgOp::TriangularSolve {
+        left_side,
+        lower,
+        transpose_a,
+        unit_diagonal,
+    } = op.op()
+    {
+        match ctx.backend_mut().triangular_solve_read(
+            inputs[0].clone(),
+            inputs[1].clone(),
+            left_side,
+            lower,
+            transpose_a,
+            unit_diagonal,
+        ) {
+            Ok(output) => return Ok(vec![output]),
+            Err(error) if error.kind() == ErrorKind::Unsupported => {}
+            Err(error) => return Err(error),
+        }
+    }
+    execute_linalg_extension_materialized_reads(op, inputs, ctx)
+}
+
+fn execute_linalg_extension_materialized_reads<B: LinalgBackend + 'static>(
+    op: &LinalgExtensionOp,
+    inputs: &[TensorRead<'_>],
+    ctx: &mut ExtensionExecutionContext<'_, B>,
+) -> tenferro_tensor::Result<Vec<Tensor>> {
     // Linalg backends currently operate on compact tensors; materialization is
     // explicit here so borrowed views cannot silently bypass backend errors.
     let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
@@ -674,7 +624,6 @@ define_extension_runtime! {
     op_type = LinalgExtensionOp,
     execute = execute_linalg_extension,
     execute_reads = execute_linalg_extension_reads,
-    register_fn = register_runtime,
     backend_bound = LinalgBackend,
 }
 
@@ -687,6 +636,13 @@ fn execute_linalg<B: LinalgBackend>(
         LinalgOp::Cholesky => Ok(vec![backend.cholesky(inputs[0])?]),
         LinalgOp::Lu => backend.lu(inputs[0]),
         LinalgOp::LuFactor => backend.lu_factor(inputs[0]),
+        LinalgOp::SignDetFromLuFactor => Ok(vec![signdet_from_lu_factor(
+            inputs[0].dtype(),
+            inputs[1],
+            inputs[2],
+            backend,
+        )?]),
+        LinalgOp::LogAbsDetFromLuFactor => Ok(vec![logabsdet_from_lu_factor(inputs[1], backend)?]),
         LinalgOp::LuSolvePrepared {
             transpose_a,
             conjugate_a,
@@ -744,6 +700,41 @@ fn execute_linalg<B: LinalgBackend>(
             unit_diagonal,
         )?]),
     }
+}
+
+fn signdet_from_lu_factor<B: LinalgBackend>(
+    input_dtype: DType,
+    packed_lu: &Tensor,
+    parity: &Tensor,
+    backend: &mut B,
+) -> tenferro_tensor::Result<Tensor> {
+    backend.with_backend_session(|exec| {
+        let diag = exec.extract_diagonal(packed_lu, 0, 1)?;
+        let det_u = exec.reduce_prod_read(TensorRead::from_tensor(&diag), &[0])?;
+        let det = exec.mul_read(
+            TensorRead::from_tensor(parity),
+            TensorRead::from_tensor(&det_u),
+        )?;
+        if matches!(input_dtype, DType::C32 | DType::C64) {
+            let abs = exec.abs_read(TensorRead::from_tensor(&det))?;
+            let abs = exec.convert(&abs, input_dtype)?;
+            exec.div_read(TensorRead::from_tensor(&det), TensorRead::from_tensor(&abs))
+        } else {
+            exec.sign_read(TensorRead::from_tensor(&det))
+        }
+    })
+}
+
+fn logabsdet_from_lu_factor<B: LinalgBackend>(
+    packed_lu: &Tensor,
+    backend: &mut B,
+) -> tenferro_tensor::Result<Tensor> {
+    backend.with_backend_session(|exec| {
+        let diag = exec.extract_diagonal(packed_lu, 0, 1)?;
+        let abs = exec.abs_read(TensorRead::from_tensor(&diag))?;
+        let log = exec.log_read(TensorRead::from_tensor(&abs))?;
+        exec.reduce_sum_read(TensorRead::from_tensor(&log), &[0])
+    })
 }
 
 pub(crate) fn apply_svd_gauge(
@@ -1117,6 +1108,40 @@ fn lu_factor_meta(
         (DType::I32, vector_shape(k, batch)),
         (dtype, batch.to_vec()),
     ])
+}
+
+fn signdet_from_lu_factor_meta(
+    input_dtype: DType,
+    input_shape: &[SymDim],
+    packed_shape: &[SymDim],
+    parity_shape: &[SymDim],
+) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
+    let (_, _, batch) = matrix_meta_parts("tenferro-linalg.signdet_from_lu_factor", input_shape)?;
+    require_matrix_meta(
+        "tenferro-linalg.signdet_from_lu_factor_packed",
+        packed_shape,
+    )?;
+    if parity_shape.len() != batch.len() {
+        return Err(Error::rank_mismatch(
+            "tenferro-linalg.signdet_from_lu_factor_parity",
+            batch.len(),
+            parity_shape.len(),
+        ));
+    }
+    Ok((input_dtype, batch.to_vec()))
+}
+
+fn logabsdet_from_lu_factor_meta(
+    input_dtype: DType,
+    input_shape: &[SymDim],
+    packed_shape: &[SymDim],
+) -> tenferro_tensor::Result<(DType, Vec<SymDim>)> {
+    let (_, _, batch) = matrix_meta_parts("tenferro-linalg.logabsdet_from_lu_factor", input_shape)?;
+    require_matrix_meta(
+        "tenferro-linalg.logabsdet_from_lu_factor_packed",
+        packed_shape,
+    )?;
+    Ok((singular_values_dtype(input_dtype), batch.to_vec()))
 }
 
 fn full_piv_lu_meta(

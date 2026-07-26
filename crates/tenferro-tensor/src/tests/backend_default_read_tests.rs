@@ -1516,6 +1516,7 @@ fn structural_runtime_materialization_rejects_foreign_backend_storage_by_default
                     kind: crate::DeviceKind::Gpu(crate::GpuBackendKind::Cuda),
                     ordinal: 0,
                 }),
+                cpu_affinity: None,
             },
         )
         .unwrap(),

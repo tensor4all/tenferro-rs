@@ -4,9 +4,9 @@ use crate::ad::support::{
     dtype_of_or_real, project_linear_to_dtype, promote_dtype_div_like,
 };
 use crate::ad::zeros::build_one_like;
+use crate::ad::ADRuleResult;
 use crate::ad::PrimitiveRuleBuilder;
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-use tidu::ADRuleResult;
 
 use crate::std_tensor_op::StdTensorOp;
 

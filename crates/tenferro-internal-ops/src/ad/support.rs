@@ -1,7 +1,7 @@
+use crate::ad::ADRuleResult;
 use computegraph::types::{LocalValueId, OperationRole, ValueRef};
 use tenferro_core_ops::PrimitiveOpKind;
 use tenferro_tensor::DType;
-use tidu::ADRuleResult;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::ad::PrimitiveRuleBuilder;

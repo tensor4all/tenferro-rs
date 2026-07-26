@@ -6,13 +6,14 @@
 //! tensor storage and backend kernels live in `tenferro-tensor`.
 //!
 //! Use this crate directly when you want concrete tensor helpers or reusable
-//! traced graph execution without opting into autodiff. Start with
+//! traced graph execution without depending on `tenferro-ad`. Start with
 //! [`TypedTensor`] when the scalar type is fixed in Rust, [`Tensor`] when dtype
 //! is selected at runtime, and [`TracedTensor`] plus [`GraphCompiler`] and
-//! [`GraphExecutor`] when the same expression should be compiled once and run
+//! [`Runtime`] when the same expression should be compiled once and run
 //! repeatedly. Operation-family crates such as `tenferro-einsum`,
-//! `tenferro-linalg`, and `tenferro-fft` register extension runtimes with
-//! [`GraphExecutor`] when compiled execution reaches those operations.
+//! `tenferro-linalg`, and `tenferro-fft` register extension runtimes through
+//! runtime engine registrations when compiled execution reaches those
+//! operations.
 //!
 //! User-facing guides live at
 //! <https://tensor4all.org/tenferro-rs/guides/choosing-an-api.html> and
@@ -21,14 +22,18 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+//! use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 //! use tenferro_cpu::CpuBackend;
 //!
 //! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 //! let y = (&x + &x).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let out = GraphExecutor::new(CpuBackend::default()).run(&program).unwrap();
+//! let backend = CpuBackend::default();
+//! let mut builder = Runtime::builder();
+//! builder.register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap()).unwrap();
+//! let runtime = builder.build().unwrap();
+//! let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 //! assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 //! ```
 
@@ -40,9 +45,11 @@ pub mod error;
 mod exec;
 pub mod extension;
 pub mod extension_cache;
-pub mod extension_runtime;
+mod extension_execution_context;
 pub mod graph;
 mod metadata;
+pub mod program;
+pub mod runtime;
 #[doc(hidden)]
 pub mod scalar_semantics;
 mod segment;
@@ -51,6 +58,7 @@ mod shape_infer;
 mod shape_packing;
 pub mod sym_dim;
 mod tensor;
+mod trace;
 pub mod traced;
 mod typed_tensor;
 
@@ -59,14 +67,31 @@ pub use error::{ContextId, Error, ErrorPhase, Result, ShapeConstraintEvalError};
 pub use extension_cache::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
 };
-pub use extension_runtime::{
-    ExtensionExecutionContext, ExtensionExecutor, ExtensionRegistry, ExtensionRuntime,
-    ExtensionRuntimeRegistryError, HostReferenceRuntime,
-};
-pub use graph::{
-    GraphCompiler, GraphCompilerCacheStats, GraphExecutor, GraphExecutorCacheStats,
-    GraphInstructionView, GraphOpView, GraphProgram, GraphProgramInput,
-    GraphProgramLoweringShapeError, GraphProgramLoweringView,
+pub use extension_execution_context::ExtensionExecutionContext;
+pub use graph::{CompiledGraph, GraphCompiler};
+pub use runtime::{
+    CacheInFlightBehavior, CacheOwnerError, CacheOwnerFailure, CacheOwnerId, CoreCapabilityBundle,
+    CoreCapabilityBundleBuilder, CoreCapabilityKind, CorePrepareContext, Determinism,
+    DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
+    EngineId, EngineRegistration, EngineSnapshotView, ErasedExecutionContext,
+    ExecutionContextIdentity, ExecutionContextMismatch, ExecutionPolicy, ExecutionPolicyError,
+    ExtensionEngine, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
+    ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest, HardwareClassId,
+    IdentityError, IdentityKind, IndexingPrepareRequest, IndexingRuntime, InputSignature,
+    InputSignatureEntry, InputSignatureError, InputSpecializationProjection,
+    InputSpecializationRequirements, InputSpecializationRequirementsBuilder,
+    InputSpecializationRequirementsError, LayoutClass, LayoutPrepareRequest, LayoutProjection,
+    LayoutRuntime, LayoutSpecialization, PlacementConstraintError, PlacementProjection,
+    PlacementSpecialization, PreparationKeySummary, PrepareCapability, PrepareError,
+    PrepareOptions, PrepareOptionsKey, PreparedCompiledGraph, PreparedOperation,
+    PreparedOperationBinding, PreparedOperationHandle, PreparedPlanCacheLimits,
+    PreparedPlanCacheStats, ProgramPlacementConstraint, ProviderContractError, RankRequirement,
+    ReductionPrepareRequest, ReductionRuntime, RegistrationIdentity, RegistrationKey,
+    ResolvedPlanningConfig, ResolvedPlanningKey, ResolvedProgramPlacement, Runtime,
+    RuntimeCacheError, RuntimeCacheOwner, RuntimeCacheStats, RuntimeConfigBuilder,
+    RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, RuntimeId, RuntimeReconfiguration,
+    RuntimeReconfigureError, RuntimeStateError, SpecializationError, SpecializationProjection,
+    SpecializationRequirements, StorageClass, UnsupportedReason,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;
@@ -78,6 +103,7 @@ pub use tenferro_tensor::{
     SliceConfig, Tensor, TensorBackend, TensorRead, TensorScalar, TensorValue, TensorView,
     TypedTensor, TypedTensorView,
 };
+pub use trace::{TraceContext, TraceValue, TracedGraph};
 
 /// Backend-explicit concrete tensor operations.
 ///

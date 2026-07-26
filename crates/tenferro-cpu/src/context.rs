@@ -1,11 +1,18 @@
 use std::env;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use rayon::prelude::*;
 use thiserror::Error as ThisError;
 
 use crate::affinity::{CpuAffinityError, SystemThreadAffinity, ThreadAffinity};
 use crate::arbiter::{
-    register_worker_execution_scope, with_execution_owner, ExecutionScopeState, ResourceOwner,
+    current_execution_owner, register_worker_execution_scope, worker_execution_scope_matches,
+    ExecutionScopeState,
+};
+use crate::domain_executor::{
+    CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, ScopedCpuJob, ScopedCpuJobs,
 };
 use crate::{CpuId, CpuSet, Error, ErrorKind, Result, ValidationKind};
 
@@ -80,6 +87,8 @@ pub struct CpuContext {
     pool: Option<Arc<rayon::ThreadPool>>,
     pinned_cpus: Option<CpuSet>,
     execution_scope: Arc<ExecutionScopeState>,
+    #[cfg(test)]
+    executor_install_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl CpuContext {
@@ -199,6 +208,8 @@ impl CpuContext {
             pool,
             pinned_cpus: None,
             execution_scope,
+            #[cfg(test)]
+            executor_install_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 
@@ -296,6 +307,8 @@ impl CpuContext {
             pool: Some(pool),
             pinned_cpus: Some(cpus),
             execution_scope,
+            #[cfg(test)]
+            executor_install_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 
@@ -305,6 +318,8 @@ impl CpuContext {
             pool: None,
             pinned_cpus: None,
             execution_scope: Arc::new(ExecutionScopeState::default()),
+            #[cfg(test)]
+            executor_install_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 
@@ -357,37 +372,75 @@ impl CpuContext {
         }
     }
 
-    pub(crate) fn install_with_execution_owner<R: Send>(
-        &self,
-        owner: ResourceOwner,
-        op: impl FnOnce() -> R + Send,
-    ) -> R {
-        // Workers share this state from construction; broadcasting owner TLS
-        // here would only reintroduce per-entry scheduler work and allocation.
-        let _scope = self.execution_scope.enter(owner);
-        self.install(|| with_execution_owner(owner, op))
-    }
-
-    /// Return the faer parallelism policy for work run inside this context.
-    ///
-    /// The explicit degree keeps policy construction independent of the
-    /// ambient Rayon pool, including plans prepared before [`Self::install`].
-    #[cfg(feature = "cpu-faer")]
-    #[doc(hidden)]
-    pub fn faer_par(&self) -> faer::Par {
-        if self.num_threads == 1 {
-            faer::Par::Seq
+    pub(crate) fn install_if_needed<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
+        if self.pool.is_some() && worker_execution_scope_matches(&self.execution_scope) {
+            op()
         } else {
-            // `rayon(0)` captures the ambient pool immediately, which may not
-            // be this context when a provider plan is prepared outside install.
-            faer::Par::rayon(self.num_threads)
+            self.install(op)
         }
     }
 
-    #[cfg(feature = "cpu-faer")]
-    #[doc(hidden)]
-    pub fn faer_seq(&self) -> faer::Par {
-        faer::Par::Seq
+    #[cfg(test)]
+    pub(crate) fn owns_current_worker_for_test(&self) -> bool {
+        worker_execution_scope_matches(&self.execution_scope)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn executor_install_calls_for_test(&self) -> usize {
+        self.executor_install_calls
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl CpuDomainExecutor for CpuContext {
+    fn capabilities(&self) -> CpuDomainExecutorCapabilities {
+        // INVARIANT: every CpuContext constructor rejects zero workers, and
+        // `num_threads` is private so it cannot be invalidated after creation.
+        let worker_count = match NonZeroUsize::new(self.num_threads) {
+            Some(worker_count) => worker_count,
+            None => unreachable!("CpuContext must contain at least one worker"),
+        };
+        CpuDomainExecutorCapabilities {
+            worker_count,
+            outer_parallelism: self.num_threads > 1,
+            inner_parallelism: if self.pool.is_some() {
+                CpuInnerParallelism::Rayon
+            } else {
+                CpuInnerParallelism::None
+            },
+            // This permits internal entry through the same executor. Public
+            // CpuBackend re-entry remains guarded by BACKEND_REENTRY_PANIC.
+            reentrancy: CpuExecutorReentrancy::SameExecutor,
+            affinity: if self.pinned_cpus.is_some() {
+                CpuExecutorAffinity::TenferroPinnedVerified
+            } else {
+                CpuExecutorAffinity::None
+            },
+            shutdown: CpuExecutorShutdown::TenferroOwned,
+        }
+    }
+
+    fn submit(&self, jobs: &dyn ScopedCpuJobs) -> std::result::Result<(), CpuDomainExecutorError> {
+        let _scope = current_execution_owner().map(|owner| self.execution_scope.enter(owner));
+        if self.pool.is_none() {
+            return (0..jobs.len()).try_for_each(|index| jobs.run(index));
+        }
+        self.install_if_needed(|| {
+            (0..jobs.len())
+                .into_par_iter()
+                .try_for_each(|index| jobs.run(index))
+        })
+    }
+
+    fn install(
+        &self,
+        job: &mut dyn ScopedCpuJob,
+    ) -> std::result::Result<(), CpuDomainExecutorError> {
+        #[cfg(test)]
+        self.executor_install_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let _scope = current_execution_owner().map(|owner| self.execution_scope.enter(owner));
+        self.install_if_needed(|| job.run())
     }
 }
 

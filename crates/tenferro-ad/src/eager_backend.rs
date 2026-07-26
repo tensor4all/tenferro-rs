@@ -1,13 +1,15 @@
 #[cfg(test)]
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+use std::sync::Arc;
 use tenferro_cpu::CpuBackend;
 #[cfg(feature = "cuda")]
 use tenferro_gpu::CudaBackend;
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::WebGpuBackend;
+use tenferro_runtime::{
+    EngineId, EngineRegistration, HardwareClassId, Runtime, RuntimeConfigError,
+};
 use tenferro_tensor::backend::ElementwiseFusionPlan;
 use tenferro_tensor::{
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir, DType,
@@ -46,6 +48,18 @@ impl EagerBackend {
         Self::Cpu(backend)
     }
 
+    pub(crate) fn cpu_snapshot(&self) -> Option<CpuBackend> {
+        match self {
+            Self::Cpu(backend) => Some(backend.clone()),
+            #[cfg(test)]
+            Self::Recording(_) => None,
+            #[cfg(feature = "cuda")]
+            Self::Cuda(_) => None,
+            #[cfg(feature = "webgpu")]
+            Self::WebGpu(_) => None,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn recording_cpu(materializations: Arc<AtomicUsize>) -> Self {
         Self::Recording(RecordingBackend {
@@ -75,6 +89,38 @@ impl EagerBackend {
             Self::WebGpu(backend) => backend.synchronize(),
         }
     }
+}
+
+pub(crate) fn eager_runtime_for_backend(
+    backend: &EagerBackend,
+) -> Result<Runtime, RuntimeConfigError> {
+    let mut builder = Runtime::builder();
+    if let Some(backend) = backend.cpu_snapshot() {
+        builder.register_engine(cpu_runtime_engine_registration(&backend)?)?;
+    }
+    #[cfg(feature = "cuda")]
+    if let EagerBackend::Cuda(backend) = backend {
+        builder.register_engine(tenferro_gpu::cuda_runtime_engine_registration(backend)?)?;
+    }
+    #[cfg(feature = "webgpu")]
+    if let EagerBackend::WebGpu(backend) = backend {
+        builder.register_engine(tenferro_gpu::webgpu_runtime_engine_registration(backend)?)?;
+    }
+    builder.build()
+}
+
+pub(crate) fn cpu_runtime_engine_id() -> Result<EngineId, RuntimeConfigError> {
+    tenferro_cpu::runtime_engine_id()
+}
+
+pub(crate) fn cpu_runtime_hardware_class() -> Result<HardwareClassId, RuntimeConfigError> {
+    tenferro_cpu::runtime_hardware_class()
+}
+
+pub(crate) fn cpu_runtime_engine_registration(
+    backend: &CpuBackend,
+) -> Result<EngineRegistration, RuntimeConfigError> {
+    tenferro_cpu::runtime_engine_registration(backend)
 }
 
 macro_rules! dispatch {

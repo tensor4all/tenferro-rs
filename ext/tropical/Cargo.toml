@@ -20,18 +20,18 @@ path = "src/lib.rs"
 default = []
 autodiff = [
     "dep:computegraph",
-    "dep:tidu",
+    "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
 ]
 tropical-gemm = ["dep:tropical-gemm"]
 
 [dependencies]
+tenferro-ad = { path = "../../crates/tenferro-ad", default-features = false, optional = true }
 tenferro-einsum = { path = "../../crates/tenferro-einsum" }
 tenferro-internal-ops = { path = "../../crates/tenferro-internal-ops", default-features = false }
 tenferro-runtime = { path = "../../crates/tenferro-runtime" }
 tenferro-tensor = { path = "../../crates/tenferro-tensor" }
 computegraph = { git = "https://github.com/tensor4all/computegraph-rs.git", rev = "691def2d82fd4367b397d61209449f68e82050b7", optional = true }
-tidu = { git = "https://github.com/tensor4all/tidu-rs.git", rev = "57a2e7ebe7738ca2f8b5c96f4c6ce4e467b20495", optional = true }
 num-traits = "0.2"
 thiserror = "2"
 tropical-gemm = { version = "0.2", default-features = false, optional = true }

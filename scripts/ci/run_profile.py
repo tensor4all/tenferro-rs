@@ -15,8 +15,23 @@ from typing import TextIO
 _CARGO_PROFILE = "ci"
 _NEXTEST_PROFILE = f"--cargo-profile {_CARGO_PROFILE}"
 _CARGO_TEST_PROFILE = f"--profile {_CARGO_PROFILE}"
+_CLIPPY_FLAGS = (
+    "-D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc"
+)
 
 PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
+    "fmt": (
+        "cargo fmt --all --check",
+        "cargo fmt --manifest-path ext/tropical/Cargo.toml --all --check",
+        "cargo fmt --manifest-path ext/sparse/Cargo.toml --all --check",
+    ),
+    "clippy": (
+        f"cargo clippy --workspace --all-targets -- {_CLIPPY_FLAGS}",
+        "cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets -- "
+        f"{_CLIPPY_FLAGS}",
+        "cargo clippy --manifest-path ext/sparse/Cargo.toml --all-targets -- "
+        f"{_CLIPPY_FLAGS}",
+    ),
     "workspace-faer": (
         f"cargo nextest run --workspace {_NEXTEST_PROFILE} --no-fail-fast",
         f"cargo test --doc --workspace {_CARGO_TEST_PROFILE}",
@@ -60,6 +75,8 @@ PROFILE_COMMANDS: dict[str, tuple[str, ...]] = {
 }
 
 FULL_PROFILE = (
+    "fmt",
+    "clippy",
     "workspace-faer",
     "workspace-blas",
     "blas-inject",

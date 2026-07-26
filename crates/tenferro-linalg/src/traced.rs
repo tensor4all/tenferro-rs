@@ -1089,6 +1089,9 @@ pub fn triangular_solve(
 /// Symbolic square-shape constraints can fail later as
 /// `ShapeConstraintViolation` or `ShapeConstraintEvaluation`.
 pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
+    if let Some(empty) = slogdet_empty_square(a)? {
+        return Ok(empty);
+    }
     let mut factor_outputs =
         apply(Arc::new(LinalgExtensionOp::new(LinalgOp::LuFactor)), &[a])?.into_iter();
     let (packed_lu, parity) = match (
@@ -1100,10 +1103,24 @@ pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
         (Some(packed_lu), Some(_pivots), Some(parity), None) => (packed_lu, parity),
         _ => return Err(unexpected_output_count("lu_factor", 3)),
     };
-    let diag_u = packed_lu.extract_diag(0, 1)?;
-    let sign_u = diag_u.sign()?.reduce_prod(Some(&[0]))?;
-    let sign = (&parity * &sign_u)?;
-    let logabsdet = diag_u.abs()?.log()?.reduce_sum(Some(&[0]))?;
+    let mut sign_outputs = apply(
+        Arc::new(LinalgExtensionOp::new(LinalgOp::SignDetFromLuFactor)),
+        &[a, &packed_lu, &parity],
+    )?
+    .into_iter();
+    let sign = match (sign_outputs.next(), sign_outputs.next()) {
+        (Some(sign), None) => sign,
+        _ => return Err(unexpected_output_count("signdet_from_lu_factor", 1)),
+    };
+    let mut logabsdet_outputs = apply(
+        Arc::new(LinalgExtensionOp::new(LinalgOp::LogAbsDetFromLuFactor)),
+        &[a, &packed_lu],
+    )?
+    .into_iter();
+    let logabsdet = match (logabsdet_outputs.next(), logabsdet_outputs.next()) {
+        (Some(logabsdet), None) => logabsdet,
+        _ => return Err(unexpected_output_count("logabsdet_from_lu_factor", 1)),
+    };
     Ok((sign, logabsdet))
 }
 
@@ -1131,8 +1148,27 @@ pub fn slogdet(a: &TracedTensor) -> Result<(TracedTensor, TracedTensor)> {
 /// Symbolic shape checks can later produce `ShapeConstraintViolation`,
 /// `ShapeConstraintEvaluation`, or `ShapeExpressionEvaluation`.
 pub fn det(a: &TracedTensor) -> Result<TracedTensor> {
-    let (sign, logabsdet) = slogdet(a)?;
-    &sign * &logabsdet.exp()?
+    if let Some((det, _logabsdet)) = slogdet_empty_square(a)? {
+        return Ok(det);
+    }
+    let (_p, _l, u, parity) = lu(a)?;
+    let diag_u = u.extract_diag(0, 1)?;
+    let det_u = diag_u.reduce_prod(Some(&[0]))?;
+    &parity * &det_u
+}
+
+fn slogdet_empty_square(a: &TracedTensor) -> Result<Option<(TracedTensor, TracedTensor)>> {
+    let Some(shape) = a.try_concrete_shape() else {
+        return Ok(None);
+    };
+    if shape.len() < 2 || shape[0] != 0 || shape[1] != 0 {
+        return Ok(None);
+    }
+    let batch_shape = shape[2..].to_vec();
+    Ok(Some((
+        filled_real(a.dtype, batch_shape.clone(), 1.0)?,
+        filled_real(real_values_dtype(a.dtype), batch_shape, 0.0)?,
+    )))
 }
 
 /// Build a traced matrix inverse op.
@@ -1350,6 +1386,11 @@ pub fn norm(
         return Ok(a.clone());
     }
     validate_axes("norm", a.rank, &axes)?;
+    if reduced_axes_have_zero_extent(&shape, &axes) {
+        if let Some(zero) = zero_norm_for_empty_reduction(a.dtype, &shape, &axes, keepdim, ord)? {
+            return Ok(zero);
+        }
+    }
 
     let out = match axes.len() {
         1 => vector_norm(a, axes[0], ord)?,
@@ -1460,6 +1501,31 @@ fn scalar_real(dtype: DType, value: f64) -> Result<TracedTensor> {
         DType::C32 => {
             TracedTensor::from_vec_col_major(vec![], vec![Complex32::new(value as f32, 0.0)])
         }
+    }
+}
+
+fn filled_real(dtype: DType, shape: Vec<usize>, value: f64) -> Result<TracedTensor> {
+    let len = tenferro_tensor::validate::checked_shape_product("slogdet", "output shape", &shape)?;
+    match dtype {
+        DType::F64 => TracedTensor::from_vec_col_major(shape, vec![value; len]),
+        DType::F32 => TracedTensor::from_vec_col_major(shape, vec![value as f32; len]),
+        DType::I32 => TracedTensor::from_vec_col_major(shape, vec![value.round() as i32; len]),
+        DType::I64 => TracedTensor::from_vec_col_major(shape, vec![value.round() as i64; len]),
+        DType::Bool => TracedTensor::from_vec_col_major(shape, vec![value != 0.0; len]),
+        DType::C64 => {
+            TracedTensor::from_vec_col_major(shape, vec![Complex64::new(value, 0.0); len])
+        }
+        DType::C32 => {
+            TracedTensor::from_vec_col_major(shape, vec![Complex32::new(value as f32, 0.0); len])
+        }
+    }
+}
+
+fn real_values_dtype(dtype: DType) -> DType {
+    match dtype {
+        DType::C64 => DType::F64,
+        DType::C32 => DType::F32,
+        other => other,
     }
 }
 
@@ -1580,6 +1646,97 @@ fn p_norm(abs: &TracedTensor, axes: &[usize], p: f64) -> Result<TracedTensor> {
     let power = abs.pow(&scalar_real(abs.dtype, p)?)?;
     let inv_p = scalar_real(abs.dtype, 1.0 / p)?;
     power.reduce_sum(Some(axes))?.pow(&inv_p)
+}
+
+fn reduced_axes_have_zero_extent(shape: &[usize], axes: &[usize]) -> bool {
+    axes.iter().any(|&axis| shape[axis] == 0)
+}
+
+fn zero_norm_for_empty_reduction(
+    dtype: DType,
+    input_shape: &[usize],
+    axes: &[usize],
+    keepdim: bool,
+    ord: Option<f64>,
+) -> Result<Option<TracedTensor>> {
+    if !empty_reduction_norm_is_zero(axes.len(), ord) {
+        return Ok(None);
+    }
+    let output_shape = reduction_shape(input_shape, axes, keepdim);
+    zero_traced_tensor(real_norm_dtype(dtype)?, output_shape).map(Some)
+}
+
+fn empty_reduction_norm_is_zero(axis_count: usize, ord: Option<f64>) -> bool {
+    match ord {
+        None => true,
+        Some(0.0) => true,
+        Some(p) if p.is_infinite() => true,
+        Some(p) if p.is_finite() && p > 0.0 => axis_count != 2 || p != 2.0,
+        _ => false,
+    }
+}
+
+fn reduction_shape(input_shape: &[usize], axes: &[usize], keepdim: bool) -> Vec<usize> {
+    if keepdim {
+        let mut shape = input_shape.to_vec();
+        for &axis in axes {
+            shape[axis] = 1;
+        }
+        return shape;
+    }
+    let mut reduced = vec![false; input_shape.len()];
+    for &axis in axes {
+        reduced[axis] = true;
+    }
+    input_shape
+        .iter()
+        .enumerate()
+        .filter_map(|(axis, &dim)| (!reduced[axis]).then_some(dim))
+        .collect()
+}
+
+fn real_norm_dtype(dtype: DType) -> Result<DType> {
+    match dtype {
+        DType::F32 | DType::F64 => Ok(dtype),
+        DType::C32 => Ok(DType::F32),
+        DType::C64 => Ok(DType::F64),
+        _ => Err(Error::TensorRuntime(
+            tenferro_tensor::Error::unsupported_dtype(
+                "norm",
+                dtype,
+                "norm supports only floating-point and complex dtypes",
+            ),
+        )),
+    }
+}
+
+fn zero_traced_tensor(dtype: DType, shape: Vec<usize>) -> Result<TracedTensor> {
+    let len = checked_element_count("norm", &shape)?;
+    match dtype {
+        DType::F32 => TracedTensor::from_vec_col_major(shape, vec![0.0_f32; len]),
+        DType::F64 => TracedTensor::from_vec_col_major(shape, vec![0.0_f64; len]),
+        DType::C32 => TracedTensor::from_vec_col_major(shape, vec![Complex32::new(0.0, 0.0); len]),
+        DType::C64 => TracedTensor::from_vec_col_major(shape, vec![Complex64::new(0.0, 0.0); len]),
+        _ => Err(Error::TensorRuntime(
+            tenferro_tensor::Error::unsupported_dtype(
+                "norm",
+                dtype,
+                "norm supports only floating-point and complex dtypes",
+            ),
+        )),
+    }
+}
+
+fn checked_element_count(op: &'static str, shape: &[usize]) -> Result<usize> {
+    shape.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim).ok_or_else(|| {
+            Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
+                op,
+                "shape",
+                "shape element count overflow",
+            ))
+        })
+    })
 }
 
 fn default_pinv_rtol(dtype: DType, max_dim: usize) -> f64 {

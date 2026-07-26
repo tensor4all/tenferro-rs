@@ -11,15 +11,13 @@
 
 use crate::support;
 use std::collections::HashSet;
-use support::{run_many_traced_with, RunTraced};
+use support::{cpu_runtime, run_many_traced_with, RunTraced};
 use tenferro_ad::TracedTensorAdExt;
 
 use computegraph::graph::Graph;
-use tenferro_cpu::CpuBackend;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_runtime::traced::TracedTensor;
-use tenferro_runtime::GraphExecutor;
-use tenferro_runtime::{Tensor, TypedTensor};
+use tenferro_runtime::{Runtime, Tensor, TypedTensor};
 
 const TOL: f64 = 1e-6;
 const FD_H: f64 = 1e-6;
@@ -84,7 +82,7 @@ fn fixed_point_traced(
     x0: f64,
     max_iter: usize,
     conv_tol: f64,
-    engine: &mut GraphExecutor<CpuBackend>,
+    runtime: &Runtime,
 ) -> (TracedTensor, usize) {
     let mut x = TracedTensor::from_tensor_concrete_shape(f64_scalar(x0)).unwrap();
     let mut prev_val = x0;
@@ -95,7 +93,7 @@ fn fixed_point_traced(
 
         // Convergence check — eval() must NOT break the graph
         let x_check = x_new.clone();
-        let val = get_f64_scalar(&x_check.run_with(engine).unwrap());
+        let val = get_f64_scalar(&x_check.run_with(runtime).unwrap());
 
         if (val - prev_val).abs() < conv_tol {
             return (x_new, iter);
@@ -114,16 +112,16 @@ fn fixed_point_traced(
 #[test]
 fn eval_mid_loop_preserves_graph_connectivity() {
     let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(0.8)).unwrap();
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
 
-    let (x_final, iters) = fixed_point_traced(&a, 0.5, 100, 1e-12, &mut engine);
+    let (x_final, iters) = fixed_point_traced(&a, 0.5, 100, 1e-12, &engine);
     assert!(iters < 100, "iteration did not converge");
 
     // x_final is still a TracedTensor connected to `a`.
     // Verify by computing grad — if the graph were broken, this would give 0.
     let grad = x_final.grad(&a).unwrap();
     let grad_clone = grad.clone();
-    let grad_val = get_f64_scalar(&grad_clone.run_with(&mut engine).unwrap());
+    let grad_val = get_f64_scalar(&grad_clone.run_with(&engine).unwrap());
     assert!(
         grad_val.abs() > 1e-10,
         "gradient is near zero — graph connectivity likely broken; grad={grad_val}"
@@ -143,12 +141,12 @@ fn iterative_ad_gradient_matches_finite_diff() {
 
     // --- AD gradient ---
     let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val)).unwrap();
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let (x_final, _) = fixed_point_traced(&a, x0, max_iter, conv_tol, &mut engine);
+    let engine = cpu_runtime();
+    let (x_final, _) = fixed_point_traced(&a, x0, max_iter, conv_tol, &engine);
 
     let loss = x_final;
     let grad = loss.grad(&a).unwrap();
-    let results = run_many_traced_with(&mut engine, &[&loss, &grad]).unwrap();
+    let results = run_many_traced_with(&engine, &[&loss, &grad]).unwrap();
     let ad_grad = get_f64_scalar(&results[1]);
 
     // --- Finite difference gradient ---
@@ -171,16 +169,16 @@ fn iterative_ad_gradient_matches_finite_diff() {
 fn eval_all_evaluates_primal_and_gradient() {
     let a_val = 0.8_f64;
     let a = TracedTensor::from_tensor_concrete_shape(f64_scalar(a_val)).unwrap();
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
 
-    let (x_final, _) = fixed_point_traced(&a, 0.5, 100, 1e-12, &mut engine);
+    let (x_final, _) = fixed_point_traced(&a, 0.5, 100, 1e-12, &engine);
 
     let primal = x_final.clone();
     let grad = x_final.grad(&a).unwrap();
 
     // run_many_traced_with merges graphs and deduplicates shared subexpressions.
     // If this panics or returns wrong values, deduplication is broken.
-    let results = run_many_traced_with(&mut engine, &[&primal, &grad]).unwrap();
+    let results = run_many_traced_with(&engine, &[&primal, &grad]).unwrap();
     assert_eq!(results.len(), 2);
 
     let primal_val = get_f64_scalar(&results[0]);

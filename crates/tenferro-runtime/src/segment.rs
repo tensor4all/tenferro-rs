@@ -13,8 +13,8 @@ use crate::exec::{
     is_host_instruction, reclaim_last_use_inputs_backend, reclaim_last_use_inputs_exec,
     resolve_tensor_shape_exprs, terminal_output_slots, try_execute_terminal_value_instruction,
     validate_exec_program, DispatchMode, ExecInstruction, ExecOp, ExecProgram, ExecSlot,
+    ExtensionExecutionDispatch,
 };
-use crate::extension_runtime::ExtensionExecutor;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_tensor::backend::{
     ElementwiseFusionInputView, ElementwiseFusionInst, ElementwiseFusionPlan,
@@ -186,7 +186,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
     inputs: Vec<Tensor>,
     slots: &mut Vec<Option<ExecSlot<'static>>>,
     backend_cache: &mut B::RuntimeCache,
-    extension_executor: Option<&mut ExtensionExecutor<B>>,
+    extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<Tensor>> {
     let inputs = inputs.into_iter().map(ExecSlot::Owned).collect();
     eval_exec_segmented_slots_with_cache_and_workspace(
@@ -195,7 +195,7 @@ pub(crate) fn eval_exec_segmented_with_cache_and_workspace<B: TensorBackend + 's
         inputs,
         slots,
         backend_cache,
-        extension_executor,
+        extension_dispatch,
     )
 }
 
@@ -208,7 +208,7 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
     inputs: Vec<ExecSlot<'input>>,
     slots: &mut Vec<Option<ExecSlot<'input>>>,
     backend_cache: &mut B::RuntimeCache,
-    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
+    mut extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<Tensor>> {
     validate_exec_program(program, "segmented executor")?;
     let has_fused_segment = has_multi_instruction_fused_segment(program);
@@ -237,7 +237,7 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
             program,
             inputs,
             slots,
-            extension_executor,
+            extension_dispatch,
         );
     }
 
@@ -274,7 +274,7 @@ pub(crate) fn eval_exec_segmented_slots_with_cache_and_workspace<
                         inst,
                         DispatchMode::Segmented,
                         Some(inst_idx),
-                        extension_executor.as_deref_mut(),
+                        extension_dispatch.as_deref_mut(),
                     )?;
                     reclaim_last_use_inputs_backend(slots, inst, backend);
                     inst_idx += 1;
@@ -302,7 +302,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
     inputs: Vec<ExecSlot<'input>>,
     slots: &mut Vec<Option<ExecSlot<'input>>>,
     backend_cache: &mut B::RuntimeCache,
-    mut extension_executor: Option<&mut ExtensionExecutor<B>>,
+    mut extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<Vec<TensorValue>> {
     validate_exec_program(program, "segmented value executor")?;
     let has_fused_segment = has_multi_instruction_fused_segment(program);
@@ -322,7 +322,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
             inputs,
             slots,
             backend_cache,
-            extension_executor,
+            extension_dispatch,
         );
     }
 
@@ -366,7 +366,7 @@ pub(crate) fn eval_exec_segmented_slot_values_with_cache_and_workspace<
                             inst,
                             DispatchMode::Segmented,
                             Some(inst_idx),
-                            extension_executor.as_deref_mut(),
+                            extension_dispatch.as_deref_mut(),
                         )?;
                     }
                     reclaim_last_use_inputs_backend(slots, inst, backend);
@@ -758,7 +758,7 @@ fn aligned_broadcast_dims(source_shape: &[usize], target_shape: &[usize]) -> Opt
 }
 
 fn read_slot<'slot, 'input>(
-    slots: &'slot [Option<ExecSlot<'input>>],
+    slots: &'slot [Option<ExecSlot<'_>>],
     slot: usize,
 ) -> Result<TensorRead<'slot>>
 where

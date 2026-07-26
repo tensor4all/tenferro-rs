@@ -15,7 +15,7 @@ name = "tenferro_ops"
 
 [features]
 default = ["autodiff"]
-autodiff = ["dep:tidu"]
+autodiff = []
 cuda = []
 webgpu = []
 rocm = []
@@ -25,6 +25,5 @@ tenferro-core-ops = { path = "../tenferro-core-ops", version = "0.2.0" }
 tenferro-tensor = { path = "../tenferro-tensor", version = "0.2.0", default-features = false }
 tenferro-internal-extension-macros = { path = "../tenferro-internal-extension-macros", version = "0.2.0" }
 computegraph.workspace = true
-tidu = { workspace = true, optional = true }
 num-complex.workspace = true
 thiserror.workspace = true

@@ -3,10 +3,10 @@
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
 use tenferro_ext_sparse::{
-    register_runtime, sparse_ad_rules, sparse_matmul, sparse_matmul_eager, SparseCooTensor,
-    SparseCooTracedTensor,
+    extension_modules, sparse_matmul, sparse_matmul_eager, sparse_semantic_ad_rules,
+    SparseCooTensor, SparseCooTracedTensor,
 };
-use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -88,19 +88,37 @@ fn symbolic_values(len: usize) -> TracedTensor {
     .unwrap()
 }
 
+fn cpu_runtime_with_sparse() -> Runtime {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .unwrap();
+    for module in
+        extension_modules::<CpuBackend>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap()
+    {
+        builder.install_extension_module(module).unwrap();
+    }
+    builder.build().unwrap()
+}
+
 fn run_values(values: &TracedTensor) -> Tensor {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(values).expect("compile sparse graph");
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(register_runtime)
-        .expect("register sparse runtime");
-    executor.run(&program).expect("run sparse graph")
+    let runtime = cpu_runtime_with_sparse();
+    let mut outputs = runtime
+        .run_compiled(&program, &[])
+        .expect("run sparse graph");
+    assert_eq!(outputs.len(), 1);
+    outputs.remove(0)
 }
 
 fn sparse_ad() -> AdContext {
     AdContext::builder()
-        .with_extension_rules(sparse_ad_rules().expect("sparse AD rules"))
+        .with_semantic_extension_rules(
+            sparse_semantic_ad_rules().expect("sparse semantic AD rules"),
+        )
+        .unwrap()
         .build()
         .expect("AD context")
 }
@@ -170,17 +188,18 @@ fn tangent_shape_constraint_rejects_independent_sparse_tangent_mismatch() -> Tes
     compiler.compile(&jvp)?;
 
     let mismatched_tangent = symbolic_values(4);
-    let mismatched_jvp = sparse_ad().jvp(output.values(), lhs.values(), &mismatched_tangent)?;
-    let error = GraphCompiler::new()
-        .compile(&mismatched_jvp)
-        .expect_err("mismatched sparse tangent axis must fail during compilation");
+    let error = sparse_ad()
+        .jvp(output.values(), lhs.values(), &mismatched_tangent)
+        .expect_err("mismatched sparse tangent shape must fail during JVP seed validation");
     assert!(matches!(
-        error,
-        Error::ShapeConstraintViolation {
-            family: "tenferro-ext-sparse.matmul_jvp.v1",
+        &error,
+        Error::Validation {
+            op: "jvp",
+            phase: ErrorPhase::GraphBuild,
             ..
-        }
+        },
     ));
+    assert!(error.to_string().contains("seed input 2 shape mismatch"));
     Ok(())
 }
 
@@ -218,17 +237,17 @@ fn cotangent_shape_constraint_rejects_sparse_vjp_output_nnz_mismatch() -> TestRe
         cotangent.axis_sym_dim(0)?,
         "output and cotangent must have independent symbolic origins"
     );
-    let vjp = sparse_ad().vjp(output.values(), lhs.values(), &cotangent)?;
-
-    let error = GraphCompiler::new()
-        .compile(&vjp)
-        .expect_err("mismatched sparse cotangent axis must fail during compilation");
+    let error = sparse_ad()
+        .vjp(output.values(), lhs.values(), &cotangent)
+        .expect_err("mismatched sparse cotangent shape must fail during VJP seed validation");
     assert!(matches!(
-        error,
-        Error::ShapeConstraintViolation {
-            family: "tenferro-ext-sparse.matmul_vjp.v1",
+        &error,
+        Error::Validation {
+            op: "vjp",
+            phase: ErrorPhase::GraphBuild,
             ..
-        }
+        },
     ));
+    assert!(error.to_string().contains("seed input 2 shape mismatch"));
     Ok(())
 }

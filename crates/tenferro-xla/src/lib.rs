@@ -1,7 +1,7 @@
 //! Experimental StableHLO lowering and runtime PJRT plugin loading for tenferro.
 //!
 //! This crate is an optional peer executor over `tenferro-runtime`
-//! [`GraphProgram`](tenferro_runtime::GraphProgram) values. It does not
+//! [`SemanticProgram`](tenferro_runtime::program::SemanticProgram) values. It does not
 //! implement `TensorBackend` and it does not change native CPU, CUDA, or
 //! WebGPU execution.
 //!
@@ -9,13 +9,13 @@
 //!
 //! ```
 //! use tenferro_runtime::{GraphCompiler, TracedTensor};
-//! use tenferro_xla::lower_to_stablehlo;
+//! use tenferro_xla::lower_compiled_to_stablehlo;
 //!
 //! let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
 //! let y = (&x + &x).unwrap();
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let module = lower_to_stablehlo(&program).unwrap();
+//! let module = lower_compiled_to_stablehlo(&program).unwrap();
 //! assert!(module.as_str().contains("stablehlo.add"));
 //! ```
 
@@ -68,7 +68,7 @@ pub const TENFERRO_PJRT_GPU_PLUGIN_ENV: &str = "TENFERRO_PJRT_GPU_PLUGIN";
 /// let mut compiler = GraphCompiler::new();
 /// let y = x.neg().unwrap();
 /// let program = compiler.compile(&y).unwrap();
-/// let module = lower_to_stablehlo(&program).unwrap();
+/// let module = lower_to_stablehlo(program.program()).unwrap();
 /// assert!(module.as_str().contains("stablehlo.negate"));
 /// ```
 ///
@@ -77,6 +77,40 @@ pub const TENFERRO_PJRT_GPU_PLUGIN_ENV: &str = "TENFERRO_PJRT_GPU_PLUGIN";
 /// Returns `Error::UnsupportedDType`, `Error::UnsupportedOp`, or
 /// `Error::NonStaticShape` for unsupported graph content, and
 /// `Error::InvalidProgram` for inconsistent graph metadata.
-pub fn lower_to_stablehlo(program: &tenferro_runtime::GraphProgram) -> Result<StableHloModule> {
+pub fn lower_to_stablehlo(
+    program: &tenferro_runtime::program::SemanticProgram,
+) -> Result<StableHloModule> {
     lowering::lower_to_stablehlo(program)
+}
+
+/// Lower a compiled graph to StableHLO MLIR text.
+///
+/// This is the preferred public lowering boundary for graph users. It consumes
+/// the backend-neutral [`CompiledGraph`](tenferro_runtime::CompiledGraph) view
+/// directly and does not route through native [`Runtime`](tenferro_runtime::Runtime)
+/// execution staging.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_runtime::{GraphCompiler, TracedTensor};
+/// use tenferro_xla::lower_compiled_to_stablehlo;
+///
+/// let x = TracedTensor::from_vec_col_major(vec![1], vec![3.0_f64]).unwrap();
+/// let mut compiler = GraphCompiler::new();
+/// let y = x.neg().unwrap();
+/// let program = compiler.compile(&y).unwrap();
+/// let module = lower_compiled_to_stablehlo(&program).unwrap();
+/// assert!(module.as_str().contains("stablehlo.negate"));
+/// ```
+///
+/// # Errors
+///
+/// Returns `Error::UnsupportedDType`, `Error::UnsupportedOp`, or
+/// `Error::NonStaticShape` for unsupported graph content, and
+/// `Error::InvalidProgram` for inconsistent graph metadata.
+pub fn lower_compiled_to_stablehlo(
+    program: &tenferro_runtime::CompiledGraph,
+) -> Result<StableHloModule> {
+    lowering::lower_to_stablehlo(program.program())
 }

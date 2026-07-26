@@ -56,7 +56,7 @@ jobs:
           components: rustfmt
       - name: Run rustfmt
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
-        run: cargo fmt --all --check
+        run: python3 scripts/ci/run_profile.py fmt
       - name: Report rustfmt disposition
         if: always()
         env:

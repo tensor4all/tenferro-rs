@@ -5,7 +5,7 @@ use num_traits::{Float, FromPrimitive, Zero};
 use tenferro_cpu::CpuBackend;
 use tenferro_tensor::{
     AllocationDomainId, BackendSessionHost, Buffer, DType, DeviceKind, HostAccessError, MemoryKind,
-    Placement, SharedTensorAllocationDomain, Tensor, TypedTensor,
+    Placement, SharedTensorAllocationDomain, Tensor, TensorRead, TensorView, TypedTensor,
 };
 
 use crate::backend::FftExecutionCache;
@@ -16,6 +16,14 @@ use crate::{
 };
 
 impl FftBackend for CpuBackend {
+    fn validate_fft_read_input(
+        &self,
+        op: &'static str,
+        input: &TensorRead<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        validate_host_fft_read_input(op, input)
+    }
+
     fn execute_fft(
         &mut self,
         input: &Tensor,
@@ -343,9 +351,55 @@ pub(crate) fn validate_host_fft_input(
     op: &'static str,
     input: &Tensor,
 ) -> tenferro_tensor::Result<()> {
-    let placement = tensor_placement(input);
+    validate_host_fft_placement(op, input.placement(), input.is_backend_buffer())
+}
+
+pub(crate) fn validate_host_fft_read_input(
+    op: &'static str,
+    input: &TensorRead<'_>,
+) -> tenferro_tensor::Result<()> {
+    match input {
+        TensorRead::Tensor(tensor) => validate_host_fft_input(op, tensor),
+        TensorRead::View(view) => validate_host_fft_view_input(op, view),
+    }
+}
+
+fn validate_host_fft_view_input(
+    op: &'static str,
+    view: &TensorView<'_>,
+) -> tenferro_tensor::Result<()> {
+    match view {
+        TensorView::F32(view) => {
+            validate_host_fft_placement(op, view.placement(), view.backend_buffer().is_some())
+        }
+        TensorView::F64(view) => {
+            validate_host_fft_placement(op, view.placement(), view.backend_buffer().is_some())
+        }
+        TensorView::I32(view) => {
+            validate_host_fft_placement(op, view.placement(), view.backend_buffer().is_some())
+        }
+        TensorView::I64(view) => {
+            validate_host_fft_placement(op, view.placement(), view.backend_buffer().is_some())
+        }
+        TensorView::Bool(view) => {
+            validate_host_fft_placement(op, view.placement(), view.backend_buffer().is_some())
+        }
+        TensorView::C32(view) => {
+            validate_host_fft_placement(op, view.placement(), view.backend_buffer().is_some())
+        }
+        TensorView::C64(view) => {
+            validate_host_fft_placement(op, view.placement(), view.backend_buffer().is_some())
+        }
+    }
+}
+
+fn validate_host_fft_placement(
+    op: &'static str,
+    placement: &Placement,
+    is_backend_buffer: bool,
+) -> tenferro_tensor::Result<()> {
     let is_device = matches!(placement.memory_kind, MemoryKind::Device);
-    if !is_device && !input.is_backend_buffer() {
+    if !is_device && !is_backend_buffer {
         return Ok(());
     }
 
@@ -362,10 +416,6 @@ pub(crate) fn validate_host_fft_input(
              download the tensor to CPU before FFT"
         ),
     ))
-}
-
-fn tensor_placement(input: &Tensor) -> &Placement {
-    input.placement()
 }
 
 fn execute_c2c<T>(

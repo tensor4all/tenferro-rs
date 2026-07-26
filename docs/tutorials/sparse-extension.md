@@ -56,13 +56,13 @@ as graph inputs so AD can see them.
 
 ## Traced Contract
 
-For traced execution, use `SparseCooTracedTensor` and register the sparse
-runtime before executing the compiled graph:
+For traced execution, use `SparseCooTracedTensor` and install the sparse
+extension modules before executing the compiled graph:
 
 ```rust
-use tenferro_cpu::CpuBackend;
-use tenferro_ext_sparse::{register_runtime, sparse_matmul, SparseCooTracedTensor};
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_ext_sparse::{extension_modules, sparse_matmul, SparseCooTracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
 
 let coords = Tensor::from_vec_col_major(vec![2, 1], vec![0_i64, 0])?;
@@ -80,23 +80,29 @@ let out = sparse_matmul(&left, &right)?;
 
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(out.values())?;
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.register_extension(register_runtime)?;
-let values = executor.run(&program)?;
+let backend = CpuBackend::new();
+let mut builder = Runtime::builder();
+builder.register_engine(runtime_engine_registration(&backend)?)?;
+for module in extension_modules::<CpuBackend>(runtime_engine_id()?)? {
+    builder.install_extension_module(module)?;
+}
+let runtime = builder.build()?;
+let mut outputs = runtime.run_compiled(&program, &[])?;
+let values = outputs.remove(0);
 ```
 
 ## AD Rules
 
-With the `autodiff` feature enabled, `sparse_ad_rules()` registers JVP and VJP
-rules for sparse-sparse matmul. The derivatives are with respect to the dense
-nonzero value tensors, not the fixed coordinates:
+With the `autodiff` feature enabled, `sparse_semantic_ad_rules()` registers
+JVP and VJP rules for sparse-sparse matmul. The derivatives are with respect
+to the dense nonzero value tensors, not the fixed coordinates:
 
 ```rust
 use tenferro_ad::AdContext;
-use tenferro_ext_sparse::sparse_ad_rules;
+use tenferro_ext_sparse::sparse_semantic_ad_rules;
 
 let ad = AdContext::builder()
-    .with_extension_rules(sparse_ad_rules()?)
+    .with_semantic_extension_rules(sparse_semantic_ad_rules()?)?
     .build()?;
 let loss = out.values().reduce_sum(Some(&[0]))?;
 let grad_left_values = ad.grad(&loss, left.values())?;

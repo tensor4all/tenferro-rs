@@ -98,6 +98,20 @@ fn unavailable_managed_affinity_keeps_auto_compatible_and_rejects_explicit_place
     ));
 }
 
+#[test]
+fn unregistered_external_placement_error_preserves_the_request() {
+    let requested = CpuPlacement::NumaNode(NumaNodeId::new(12));
+    let error = CpuPlacementError::UnregisteredExternalPlacement { requested };
+
+    assert!(matches!(
+        &error,
+        CpuPlacementError::UnregisteredExternalPlacement {
+            requested: actual
+        } if *actual == requested
+    ));
+    assert!(error.to_string().contains("12"));
+}
+
 fn two_node_fixture() -> CpuTopology {
     CpuTopology::from_discovered(
         cpu_set([8, 9, 12, 13]),

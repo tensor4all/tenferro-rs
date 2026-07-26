@@ -526,6 +526,10 @@ impl BufferPool {
         CacheStats {
             entries: stats.buffers,
             retained_bytes: stats.capacity_bytes,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            clears: 0,
         }
     }
 

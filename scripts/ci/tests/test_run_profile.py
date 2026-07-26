@@ -64,6 +64,31 @@ class RunProfileTests(unittest.TestCase):
             ),
         )
 
+    def test_fmt_profile_covers_workspace_and_standalone_extensions(self) -> None:
+        self.assertEqual(
+            commands_for("fmt"),
+            (
+                "cargo fmt --all --check",
+                "cargo fmt --manifest-path ext/tropical/Cargo.toml --all --check",
+                "cargo fmt --manifest-path ext/sparse/Cargo.toml --all --check",
+            ),
+        )
+
+    def test_clippy_profile_matches_hosted_ci_contract(self) -> None:
+        self.assertEqual(
+            commands_for("clippy"),
+            (
+                "cargo clippy --workspace --all-targets -- -D warnings "
+                "-D clippy::missing_errors_doc -D clippy::missing_panics_doc",
+                "cargo clippy --manifest-path ext/tropical/Cargo.toml --all-targets "
+                "-- -D warnings -D clippy::missing_errors_doc "
+                "-D clippy::missing_panics_doc",
+                "cargo clippy --manifest-path ext/sparse/Cargo.toml --all-targets "
+                "-- -D warnings -D clippy::missing_errors_doc "
+                "-D clippy::missing_panics_doc",
+            ),
+        )
+
     def test_hosted_profiles_use_cargo_ci_profile_not_release(self) -> None:
         for name in (
             "workspace-faer",
@@ -93,6 +118,8 @@ class RunProfileTests(unittest.TestCase):
         self.assertEqual(
             expanded,
             (
+                "fmt",
+                "clippy",
                 "workspace-faer",
                 "workspace-blas",
                 "blas-inject",
@@ -142,8 +169,15 @@ class RunProfileTests(unittest.TestCase):
     def test_fast_preflight_delegates_profiles_without_redefining_them(self) -> None:
         source = (ROOT / "scripts" / "check-pr-fast.sh").read_text()
         self.assertIn("--ci-profile", source)
+        self.assertIn("python3 scripts/ci/run_profile.py fmt", source)
         self.assertIn('python3 scripts/ci/run_profile.py "${profile_args[@]}"', source)
         self.assertNotIn("cargo nextest run --workspace", source)
+
+    def test_fast_preflight_runs_ci_parity_clippy_for_code_changes(self) -> None:
+        source = (ROOT / "scripts" / "check-pr-fast.sh").read_text()
+        self.assertIn('if [[ "${change_class}" == "code" ]]; then', source)
+        self.assertIn("python3 scripts/ci/run_profile.py clippy", source)
+        self.assertIn("has_ci_profile clippy || has_ci_profile full", source)
 
     def test_fast_preflight_avoids_bash4_only_mapfile(self) -> None:
         source = (ROOT / "scripts" / "check-pr-fast.sh").read_text()

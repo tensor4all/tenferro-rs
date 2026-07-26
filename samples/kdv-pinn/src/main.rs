@@ -33,8 +33,8 @@ use network::Mlp;
 use optimizer::{step_decay_lr, Adam};
 use sampler::Sampler;
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::{runtime_engine_registration, CpuBackend};
+use tenferro_runtime::{CompiledGraph, DType, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
 
 /// Return the value following the given command-line `flag`, if present.
@@ -49,6 +49,22 @@ fn arg_value(flag: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn cpu_runtime() -> Result<Runtime, Box<dyn std::error::Error>> {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder.register_engine(runtime_engine_registration(&backend)?)?;
+    Ok(builder.build()?)
+}
+
+fn run_single(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> tenferro_runtime::Result<Tensor> {
+    let mut outputs = runtime.run_compiled(program, inputs)?;
+    Ok(outputs.remove(0))
 }
 
 const N_IC: usize = 128;
@@ -120,7 +136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|g| compiler.compile_with_input_specs(g, &specs))
         .collect::<tenferro_runtime::Result<Vec<_>>>()?;
 
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let runtime = cpu_runtime()?;
     let sampler = Sampler::new(-5.0, 5.0, 0.0, 1.0);
     let mut opt = Adam::new(LR);
 
@@ -131,25 +147,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let (x_ic_tensor, u_ic_tensor) = sampler.initial(N_IC, &mut rng);
         let (x_bc_tensor, t_bc_tensor, u_bc_tensor) = sampler.boundary(N_BC, &mut rng);
 
-        let mut bindings: Vec<(&TracedTensor, &Tensor)> = Vec::new();
-        for (p, t) in net.parameters().iter().zip(params.iter()) {
-            bindings.push((*p, t));
-        }
-        bindings.push((&x_col, &x_col_tensor));
-        bindings.push((&t_col, &t_col_tensor));
-        bindings.push((&x_ic, &x_ic_tensor));
-        bindings.push((&u_ic_true, &u_ic_tensor));
-        bindings.push((&x_bc, &x_bc_tensor));
-        bindings.push((&t_bc, &t_bc_tensor));
-        bindings.push((&u_bc_true, &u_bc_tensor));
+        let mut inputs: Vec<&Tensor> = Vec::with_capacity(params.len() + 7);
+        inputs.extend(params.iter());
+        inputs.extend([
+            &x_col_tensor,
+            &t_col_tensor,
+            &x_ic_tensor,
+            &u_ic_tensor,
+            &x_bc_tensor,
+            &t_bc_tensor,
+            &u_bc_tensor,
+        ]);
 
-        let loss_tensor = executor.run_with_inputs(&loss_program, &bindings)?;
+        let loss_tensor = run_single(&runtime, &loss_program, &inputs)?;
         final_loss = loss_tensor.as_slice::<f64>().expect("loss data")[0];
         loss_history.push(final_loss);
 
         let mut grads = Vec::new();
         for program in &grad_programs {
-            grads.push(executor.run_with_inputs(program, &bindings)?);
+            grads.push(run_single(&runtime, program, &inputs)?);
         }
 
         opt.set_lr(step_decay_lr(epoch, EPOCHS, LR));
@@ -192,16 +208,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t_eval_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], vec![0.5_f64; N_EVAL])?;
     let u_true_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], u_true_data)?;
 
-    let mut eval_bindings: Vec<(&TracedTensor, &Tensor)> = net
-        .parameters()
-        .iter()
-        .zip(params.iter())
-        .map(|(p, t)| (*p, t))
-        .collect();
-    eval_bindings.push((&x_eval, &x_eval_tensor));
-    eval_bindings.push((&t_eval, &t_eval_tensor));
+    let mut eval_inputs: Vec<&Tensor> = Vec::with_capacity(params.len() + 2);
+    eval_inputs.extend(params.iter());
+    eval_inputs.push(&x_eval_tensor);
+    eval_inputs.push(&t_eval_tensor);
 
-    let u_pred = executor.run_with_inputs(&eval_program, &eval_bindings)?;
+    let u_pred = run_single(&runtime, &eval_program, &eval_inputs)?;
     let pred = u_pred.as_slice::<f64>().expect("predicted solution data");
     let truth = u_true_tensor.as_slice::<f64>().expect("true solution data");
     let l2_error = pred
@@ -219,16 +231,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for frame in 0..N_FRAMES {
             let t = frame as f64 / (N_FRAMES as f64 - 1.0);
             let t_eval_tensor = Tensor::from_vec_col_major(vec![N_EVAL, 1], vec![t; N_EVAL])?;
-            let mut frame_bindings: Vec<(&TracedTensor, &Tensor)> = net
-                .parameters()
-                .iter()
-                .zip(params.iter())
-                .map(|(p, t)| (*p, t))
-                .collect();
-            frame_bindings.push((&x_eval, &x_eval_tensor));
-            frame_bindings.push((&t_eval, &t_eval_tensor));
+            let mut frame_inputs: Vec<&Tensor> = Vec::with_capacity(params.len() + 2);
+            frame_inputs.extend(params.iter());
+            frame_inputs.push(&x_eval_tensor);
+            frame_inputs.push(&t_eval_tensor);
 
-            let u_pred = executor.run_with_inputs(&eval_program, &frame_bindings)?;
+            let u_pred = run_single(&runtime, &eval_program, &frame_inputs)?;
             let pred = u_pred
                 .as_slice::<f64>()
                 .expect("predicted frame data")

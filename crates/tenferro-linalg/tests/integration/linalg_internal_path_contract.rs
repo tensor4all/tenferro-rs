@@ -18,16 +18,17 @@ fn source_section<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
 }
 
 #[test]
-fn eager_extension_registration_preserves_typed_source_errors() {
+fn eager_extension_execution_uses_direct_context_without_legacy_registration() {
     let source = crate_source("src/eager_ext.rs");
     let registration = source_section(
         &source,
-        ".register_extension(register_runtime)",
-        "apply_eager(Arc::new",
+        "fn apply_linalg_eager",
+        "/// Singular value decomposition",
     );
 
-    assert!(registration.contains("Error::runtime_state_source("));
-    assert!(!registration.contains("Error::Internal"));
+    assert!(registration.contains("apply_eager_with_extension_context("));
+    assert!(registration.contains("execute_linalg_extension_reads("));
+    assert!(!registration.contains(".register_extension("));
     assert!(!registration.contains("to_string()"));
 }
 

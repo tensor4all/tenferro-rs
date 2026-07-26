@@ -35,6 +35,14 @@ impl ExtensionOp for RuntimeOnlyExtension {
         1
     }
 
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
     fn infer_output_meta(
         &self,
         ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
@@ -52,7 +60,7 @@ fn rejects_i64_dtype_before_emitting_mlir() {
         .compile_with_input_specs(&y, &[(&x, DType::I64, &[2])])
         .unwrap();
 
-    let err = lower_to_stablehlo(&program).unwrap_err();
+    let err = lower_to_stablehlo(program.program()).unwrap_err();
 
     assert!(matches!(
         err,
@@ -73,7 +81,7 @@ fn rejects_dynamic_upper_bound_extents() {
         .compile_with_input_specs(&y, &[(&data, DType::F64, &[4]), (&size, DType::F64, &[])])
         .unwrap();
 
-    let err = lower_to_stablehlo(&program).unwrap_err();
+    let err = lower_to_stablehlo(program.program()).unwrap_err();
 
     assert!(matches!(
         err,
@@ -94,7 +102,7 @@ fn rejects_unsupported_static_op() {
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
         .unwrap();
 
-    let err = lower_to_stablehlo(&program).unwrap_err();
+    let err = lower_to_stablehlo(program.program()).unwrap_err();
 
     assert!(matches!(err, Error::UnsupportedOp { op: "Maximum", .. }));
 }
@@ -109,7 +117,7 @@ fn rejects_extension_without_standard_op_lowering() {
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
         .unwrap();
 
-    let err = lower_to_stablehlo(&program).unwrap_err();
+    let err = lower_to_stablehlo(program.program()).unwrap_err();
 
     assert!(matches!(
         err,

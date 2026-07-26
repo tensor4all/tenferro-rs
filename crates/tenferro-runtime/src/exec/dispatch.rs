@@ -8,13 +8,13 @@ use tenferro_tensor::{
 use super::{
     collect_tensor_refs, constant_tensor, execute_extension_instruction, get, get_read,
     resolve_tensor_shape_exprs, DispatchMode, ExecInstruction, ExecOp, ExecSlot,
+    ExtensionExecutionDispatch,
 };
-use crate::extension_runtime::ExtensionExecutor;
 use crate::scalar_semantics::dynamic_truncate_size;
 
 type BackendDispatchFn = for<'a> fn(
     &mut dyn BackendSession,
-    &[Option<ExecSlot<'a>>],
+    &[Option<ExecSlot<'_>>],
     &ExecInstruction,
 ) -> Result<Tensor>;
 
@@ -23,7 +23,7 @@ type FfiDispatchFn<B> = fn(
     &mut [Option<ExecSlot<'_>>],
     &ExecInstruction,
     DispatchMode,
-    Option<&mut ExtensionExecutor<B>>,
+    Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<()>;
 
 pub(super) trait HostExecution: TensorBackendOps + TensorDeviceTransfer {}
@@ -286,7 +286,7 @@ pub(super) fn execute_ffi_dispatch<B: TensorBackend + 'static>(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     mode: DispatchMode,
-    extension_executor: Option<&mut ExtensionExecutor<B>>,
+    extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<()> {
     let Some(entry) = ffi_dispatch_entry::<B>(&inst.op) else {
         return Err(Error::Internal(format!(
@@ -294,7 +294,7 @@ pub(super) fn execute_ffi_dispatch<B: TensorBackend + 'static>(
             inst.op
         )));
     };
-    (entry.execute)(backend, slots, inst, mode, extension_executor)
+    (entry.execute)(backend, slots, inst, mode, extension_dispatch)
 }
 
 fn dispatch_mismatch(expected: PrimitiveOpKind, op: &ExecOp) -> Error {
@@ -441,7 +441,7 @@ fn execute_dot_general_ffi<B: TensorBackend + 'static>(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     _mode: DispatchMode,
-    _extension_executor: Option<&mut ExtensionExecutor<B>>,
+    _extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<()> {
     let ExecOp::DotGeneral(config) = &inst.op else {
         return Err(ffi_dispatch_mismatch(FfiDispatchKey::DotGeneral, &inst.op));
@@ -460,7 +460,7 @@ fn execute_dot_general_with_conj_ffi<B: TensorBackend + 'static>(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     _mode: DispatchMode,
-    _extension_executor: Option<&mut ExtensionExecutor<B>>,
+    _extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<()> {
     let ExecOp::DotGeneralWithConj {
         config,
@@ -489,12 +489,12 @@ fn execute_extension_ffi<B: TensorBackend + 'static>(
     slots: &mut [Option<ExecSlot<'_>>],
     inst: &ExecInstruction,
     _mode: DispatchMode,
-    extension_executor: Option<&mut ExtensionExecutor<B>>,
+    extension_dispatch: Option<&mut ExtensionExecutionDispatch<'_>>,
 ) -> Result<()> {
     let ExecOp::Extension(ext) = &inst.op else {
         return Err(ffi_dispatch_mismatch(FfiDispatchKey::Extension, &inst.op));
     };
-    execute_extension_instruction(backend, slots, inst, ext.as_ref(), extension_executor)
+    execute_extension_instruction(backend, slots, inst, ext.as_ref(), extension_dispatch)
 }
 
 fn execute_transpose(

@@ -4,14 +4,14 @@ use std::collections::hash_map::DefaultHasher;
 use std::error::Error as StdError;
 use std::hash::{Hash, Hasher};
 use std::mem::size_of;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use computegraph::compile::{compile, CompiledProgram, Instruction};
 use computegraph::graph::GraphBuilder;
 use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{ValueKey, ValueRef};
-use tenferro_ad::extension::{adopt_untracked_eager_value, apply_eager};
+use tenferro_ad::extension::{adopt_untracked_eager_value, apply_eager_with_extension_context};
 use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
@@ -25,7 +25,7 @@ use crate::cache::{
     saturating_sum, vec_retained_bytes, EINSUM_EAGER_EXPANDED_PROGRAMS_CACHE,
     EINSUM_EXTENSION_FAMILY_ID,
 };
-use crate::extension::{register_runtime, EinsumExtensionOp};
+use crate::extension::{execute_einsum_extension_reads, EinsumExtensionOp};
 use crate::optimize::{
     default_auto_options, hash_einsum_plan_spec, plan_specs_equal, resolve_plan_spec,
     EinsumPlanSpec,
@@ -53,6 +53,27 @@ pub trait EagerEinsumExt {
     /// [`Error::Runtime`] for extension registration or backend execution
     /// failures.
     fn einsum_subscripts(&self, subscripts: &EinsumSubscripts) -> Result<EagerTensor>;
+}
+
+fn eager_cpu_extension_module() -> Result<Arc<dyn tenferro_runtime::ExtensionModule>> {
+    static MODULE: OnceLock<Arc<dyn tenferro_runtime::ExtensionModule>> = OnceLock::new();
+    if let Some(module) = MODULE.get() {
+        return Ok(Arc::clone(module));
+    }
+
+    let engine_id = tenferro_cpu::runtime_engine_id().map_err(eager_runtime_config_error)?;
+    let module = crate::extension::extension_module::<tenferro_cpu::CpuBackend>(engine_id)
+        .map_err(eager_runtime_config_error)?;
+    let _ = MODULE.set(Arc::clone(&module));
+    Ok(MODULE.get().cloned().unwrap_or(module))
+}
+
+fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> Error {
+    Error::Runtime(tenferro_runtime::Error::runtime_state_source(
+        "tenferro_einsum::eager_extension_module",
+        ErrorPhase::Execution,
+        source,
+    ))
 }
 
 impl EagerEinsumExt for [&EagerTensor] {
@@ -175,19 +196,17 @@ pub fn einsum_subscripts(
         return Ok(result);
     }
 
-    if let Some(first) = inputs.first() {
-        first
-            .runtime()
-            .register_extension(register_runtime)
-            .map_err(|error| runtime_extension_error("einsum", ErrorKind::RuntimeState, error))?;
-    }
-
     let op = Arc::new(EinsumExtensionOp::with_output_shape_hint(
         subscripts.clone(),
         output_shape_hint,
         EinsumPlanSpec::Auto(default_auto_options()),
     ));
-    let mut outputs = apply_eager(op, inputs)?;
+    let execute_op = Arc::clone(&op);
+    let module = eager_cpu_extension_module()?;
+    let mut outputs =
+        apply_eager_with_extension_context(op, inputs, module, move |_op, input_reads, ctx| {
+            execute_einsum_extension_reads(&execute_op, input_reads, ctx)
+        })?;
     outputs.pop().ok_or_else(|| {
         Error::Runtime(tenferro_runtime::Error::MissingInput(
             "einsum extension produced no eager output".into(),
@@ -575,22 +594,11 @@ fn execute_eager_einsum_program(
                 instr.outputs.len()
             )));
         }
-        let input_values: Vec<EagerTensor> = instr
+        let input_refs: Vec<&EagerTensor> = instr
             .inputs
             .iter()
-            .map(|&slot| {
-                slots
-                    .get(slot)
-                    .and_then(Option::as_ref)
-                    .cloned()
-                    .ok_or_else(|| {
-                        runtime_missing(format!(
-                            "expanded eager einsum missing value for slot {slot}"
-                        ))
-                    })
-            })
+            .map(|&slot| slot_tensor(&slots, slot))
             .collect::<Result<_>>()?;
-        let input_refs: Vec<&EagerTensor> = input_values.iter().collect();
         let output =
             tenferro_ad::extension::apply_standard_op(instr.operation.clone(), &input_refs)?;
         slots[instr.outputs[0]] = Some(output);

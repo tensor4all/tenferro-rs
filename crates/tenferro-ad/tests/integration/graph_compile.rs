@@ -1,61 +1,6 @@
-use std::num::NonZeroUsize;
-use std::sync::Arc;
-
-use tenferro_runtime::extension::{apply, ExtensionOp};
-use tenferro_runtime::SymDim;
+use tenferro_ops::{dim_expr::DimExpr, shape_extent::ShapeExtent};
 use tenferro_runtime::{CompilerOptions, OptimizerConfig};
 use tenferro_runtime::{DType, GraphCompiler, TracedTensor};
-
-#[derive(Clone)]
-struct ConstantDebugExtension {
-    payload: usize,
-}
-
-impl std::fmt::Debug for ConstantDebugExtension {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("ConstantDebugExtension")
-    }
-}
-
-impl ExtensionOp for ConstantDebugExtension {
-    fn family_id(&self) -> &'static str {
-        "tenferro-tests.graph_compile_constant_debug.v1"
-    }
-
-    fn payload_hash(&self, hasher: &mut dyn std::hash::Hasher) {
-        hasher.write_u64(0);
-    }
-
-    fn payload_eq(&self, other: &dyn ExtensionOp) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<ConstantDebugExtension>()
-            .is_some_and(|other| self.payload == other.payload)
-    }
-
-    fn clone_arc(&self) -> Arc<dyn ExtensionOp> {
-        Arc::new(self.clone())
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn input_count(&self) -> usize {
-        1
-    }
-
-    fn output_count(&self) -> usize {
-        1
-    }
-
-    fn infer_output_meta(
-        &self,
-        ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
-    ) -> tenferro_tensor::Result<Vec<(DType, Vec<SymDim>)>> {
-        Ok(vec![(ctx.input_dtype(0)?, ctx.input_shape(0)?.to_vec())])
-    }
-}
 
 #[test]
 fn graph_compiler_compiles_without_backend() {
@@ -67,7 +12,33 @@ fn graph_compiler_compiles_without_backend() {
 
     assert_eq!(program.input_count(), 1);
     assert_eq!(program.output_count(), 1);
-    assert_eq!(compiler.compile_cache_len(), 1);
+}
+
+#[test]
+fn graph_compiler_default_inputs_use_concrete_extent_identity() {
+    let x2 = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y2 = (&x2 + &x2).unwrap();
+    let x3 = TracedTensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
+    let y3 = (&x3 + &x3).unwrap();
+
+    let mut compiler = GraphCompiler::new();
+    let program2 = compiler.compile(&y2).unwrap();
+    let program3 = compiler.compile(&y3).unwrap();
+
+    assert_ne!(
+        program2.program().semantic_fingerprint(),
+        program3.program().semantic_fingerprint()
+    );
+    assert!(!program2.program().semantic_eq(program3.program()));
+
+    let input = program2.program().inputs()[0];
+    let metadata = program2.program().value_metadata(input).unwrap();
+    assert_eq!(metadata.shape(), &[ShapeExtent::Exact(DimExpr::Const(2))]);
+    let input = program3.program().inputs()[0];
+    let metadata = program3.program().value_metadata(input).unwrap();
+    assert_eq!(metadata.shape(), &[ShapeExtent::Exact(DimExpr::Const(3))]);
+    assert_eq!(program2.bindings().iter().next().unwrap().1.shape(), &[2]);
+    assert_eq!(program3.bindings().iter().next().unwrap().1.shape(), &[3]);
 }
 
 #[test]
@@ -81,7 +52,9 @@ fn graph_compiler_validates_placeholder_specs() {
         .unwrap();
 
     assert_eq!(program.input_count(), 1);
-    assert_eq!(program.input_specs()[0].shape(), &[3]);
+    let input = program.program().inputs()[0];
+    let metadata = program.program().value_metadata(input).unwrap();
+    assert_eq!(metadata.shape(), &[ShapeExtent::Exact(DimExpr::Const(3))]);
 
     let err = compiler
         .compile_with_input_specs(&y, &[(&x, DType::F32, &[3])])
@@ -105,36 +78,20 @@ fn graph_program_input_accessors_report_compiled_contract() {
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[4])])
         .unwrap();
     let program = std::hint::black_box(program);
-    let input = std::hint::black_box(&program.input_specs()[0]);
+    let input = std::hint::black_box(program.program().inputs()[0]);
+    let metadata = program.program().value_metadata(input).unwrap();
 
     assert_eq!(std::hint::black_box(&program).input_count(), 1);
     assert_eq!(std::hint::black_box(&program).output_count(), 1);
-    assert_eq!(input.dtype(), DType::F64);
-    assert_eq!(input.shape(), &[4]);
+    assert_eq!(metadata.dtype(), DType::F64);
+    assert_eq!(metadata.shape(), &[ShapeExtent::Exact(DimExpr::Const(4))]);
 }
 
 #[test]
-fn graph_compiler_cache_is_bounded_and_reports_stats() {
-    let mut compiler = GraphCompiler::new();
-    compiler.set_compile_cache_capacity(NonZeroUsize::new(1).unwrap());
-
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let y = (&x + &x).unwrap();
-    let _ = compiler.compile(&y).unwrap();
-    let _ = compiler.compile(&x.neg().unwrap()).unwrap();
-
-    let stats = compiler.cache_stats();
-    assert_eq!(compiler.compile_cache_capacity().get(), 1);
-    assert_eq!(stats.compile.entries, 1);
-    assert!(stats.compile.retained_bytes > 0);
-}
-
-#[test]
-fn graph_compiler_compiler_options_setter_clears_compile_cache() {
+fn graph_compiler_compiler_options_setter_updates_options() {
     let mut compiler = GraphCompiler::new();
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let _ = compiler.compile(&x.neg().unwrap()).unwrap();
-    assert_eq!(compiler.compile_cache_len(), 1);
 
     let options = CompilerOptions {
         optimizer: OptimizerConfig {
@@ -145,60 +102,6 @@ fn graph_compiler_compiler_options_setter_clears_compile_cache() {
     compiler.set_compiler_options(options);
 
     assert_eq!(compiler.compiler_options(), options);
-    assert_eq!(compiler.compile_cache_len(), 0);
-}
-
-#[test]
-fn graph_compiler_cache_distinguishes_symbolic_input_shapes() {
-    let mut compiler = GraphCompiler::new();
-    compiler.set_compile_cache_capacity(NonZeroUsize::new(4).unwrap());
-
-    let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let y = (&x + &x).unwrap();
-
-    let _ = compiler
-        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
-        .unwrap();
-    let _ = compiler
-        .compile_with_input_specs(&y, &[(&x, DType::F64, &[3])])
-        .unwrap();
-
-    assert_eq!(compiler.compile_cache_len(), 2);
-}
-
-#[test]
-fn graph_compiler_cache_distinguishes_dtypes() {
-    let mut compiler = GraphCompiler::new();
-    compiler.set_compile_cache_capacity(NonZeroUsize::new(4).unwrap());
-
-    let x_f64 = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let y_f64 = (&x_f64 + &x_f64).unwrap();
-    let x_f32 = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-    let y_f32 = (&x_f32 + &x_f32).unwrap();
-
-    let _ = compiler.compile(&y_f64).unwrap();
-    let _ = compiler.compile(&y_f32).unwrap();
-
-    assert_eq!(compiler.compile_cache_len(), 2);
-}
-
-#[test]
-fn graph_compiler_cache_distinguishes_extension_payload_eq_despite_hash_collision() {
-    let mut compiler = GraphCompiler::new();
-    compiler.set_compile_cache_capacity(NonZeroUsize::new(4).unwrap());
-
-    let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let y1 = apply(Arc::new(ConstantDebugExtension { payload: 1 }), &[&x])
-        .unwrap()
-        .remove(0);
-    let y2 = apply(Arc::new(ConstantDebugExtension { payload: 2 }), &[&x])
-        .unwrap()
-        .remove(0);
-
-    let _ = compiler.compile(&y1).unwrap();
-    let _ = compiler.compile(&y2).unwrap();
-
-    assert_eq!(compiler.compile_cache_len(), 2);
 }
 
 #[test]

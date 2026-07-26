@@ -1,7 +1,7 @@
+use crate::ad::ADRuleKind;
 use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueRef};
 use tenferro_tensor::{DType, DotGeneralConfig};
-use tidu::ADRuleKind;
 
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;

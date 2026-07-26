@@ -19,6 +19,8 @@ fn linalg_ad_support_manifest_covers_all_dispatch_arms_in_order() {
         LinalgAdOpKind::Cholesky,
         LinalgAdOpKind::Lu,
         LinalgAdOpKind::LuFactor,
+        LinalgAdOpKind::SignDetFromLuFactor,
+        LinalgAdOpKind::LogAbsDetFromLuFactor,
         LinalgAdOpKind::LuSolvePrepared,
         LinalgAdOpKind::FullPivLu,
         LinalgAdOpKind::FullPivLuSolve,
@@ -62,6 +64,24 @@ fn linalg_ad_support_manifest_marks_partial_decomposition_outputs() {
     assert_output_status(lu_factor, "packed_lu", LinalgAdRuleSupport::Unsupported);
     assert_output_status(lu_factor, "pivots", LinalgAdRuleSupport::NonDifferentiable);
     assert_output_status(lu_factor, "parity", LinalgAdRuleSupport::NonDifferentiable);
+
+    let signdet = linalg_ad_support(LinalgAdOpKind::SignDetFromLuFactor);
+    assert_eq!(
+        signdet.linearize,
+        LinalgAdRuleSupport::SupportedViaLinearize
+    );
+    assert_output_status(signdet, "sign", LinalgAdRuleSupport::SupportedViaLinearize);
+
+    let logabsdet = linalg_ad_support(LinalgAdOpKind::LogAbsDetFromLuFactor);
+    assert_eq!(
+        logabsdet.linearize,
+        LinalgAdRuleSupport::SupportedViaLinearize
+    );
+    assert_output_status(
+        logabsdet,
+        "logabsdet",
+        LinalgAdRuleSupport::SupportedViaLinearize,
+    );
 
     let eig = linalg_ad_support(LinalgAdOpKind::Eig);
     assert_eq!(eig.linearize, LinalgAdRuleSupport::PartiallySupported);
@@ -174,6 +194,20 @@ fn linalg_ad_support_manifest_separates_user_modes_from_rule_routes() {
 
     let svd_vals = linalg_ad_support(LinalgAdOpKind::SvdVals);
     assert_eq!(svd_vals.vjp.route, LinalgAdRoute::LinearizeThenTranspose);
+
+    let logabsdet = linalg_ad_support(LinalgAdOpKind::LogAbsDetFromLuFactor);
+    assert_eq!(logabsdet.vjp.route, LinalgAdRoute::LinearizeThenTranspose);
+    assert_eq!(
+        logabsdet.custom_linear_transpose_rule,
+        LinalgAdRuleSupport::Unsupported
+    );
+
+    let signdet = linalg_ad_support(LinalgAdOpKind::SignDetFromLuFactor);
+    assert_eq!(signdet.vjp.route, LinalgAdRoute::LinearizeThenTranspose);
+    assert_eq!(
+        signdet.custom_linear_transpose_rule,
+        LinalgAdRuleSupport::Unsupported
+    );
 
     let triangular_solve = linalg_ad_support(LinalgAdOpKind::TriangularSolve);
     assert_eq!(

@@ -12,9 +12,9 @@ execution hook and one combined AD rule trait to explicit capabilities:
   host/reference execution.
 - `HostReferenceRuntime<B>` adapts that optional capability into a registered
   runtime when an owner deliberately chooses reference execution.
-- `ExtensionAdRule` was split into `ExtensionLinearizeRule`,
-  `ExtensionLinearTransposeRule`, and `ExtensionPrimalVjpRule`.
-- `ExtensionRuleSet` now stores and checks duplicates per AD role.
+- `ExtensionAdRule` was split into `SemanticLinearizeRule`,
+  `SemanticLinearTransposeRule`, and `SemanticPrimalVjpRule`.
+- `SemanticExtensionRuleSet` now stores and checks duplicates per AD role.
 - Extension transpose dispatch uses linear-transpose rules for linearized
   helper ops and primal-VJP rules only for primary primal fallback.
 

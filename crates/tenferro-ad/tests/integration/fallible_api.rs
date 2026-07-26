@@ -7,7 +7,6 @@ use tenferro_tensor::{Error as TensorError, Tensor};
 #[test]
 fn eager_public_tensor_accessors_are_fallible_source_contract() {
     let eager_source = include_str!("../../src/eager.rs");
-    let eager_builder_source = include_str!("../../src/eager_builder.rs");
 
     for forbidden in [
         "pub fn data(&self) -> &Tensor",
@@ -25,15 +24,6 @@ fn eager_public_tensor_accessors_are_fallible_source_contract() {
         assert!(
             !eager_source.contains(forbidden),
             "eager public API must not expose infallible tensor access/import path: {forbidden}"
-        );
-    }
-    for forbidden in [
-        "pub struct EagerPrimitiveBuilder",
-        "pub fn tensor(&self, id: LocalValueId) -> Arc<Tensor>",
-    ] {
-        assert!(
-            !eager_builder_source.contains(forbidden),
-            "eager primitive builder must stay internal and fallible: {forbidden}"
         );
     }
 }
@@ -104,12 +94,12 @@ fn eager_runtime_lock_scopes_are_bounded_source_contract() {
         })
         .expect("missing EagerRuntime::exec_outputs source section");
     assert!(
-        exec_outputs.contains("exec_outputs_with_optional_extension_lock("),
-        "exec_outputs should centralize backend/extension lock ordering and avoid extension locks for standard ops"
+        exec_outputs.contains("exec_outputs_with_runtime("),
+        "exec_outputs should centralize backend/runtime lock ordering and avoid runtime extension access for standard ops"
     );
 
     let lock_helper = source
-        .split_once("fn exec_outputs_with_optional_extension_lock")
+        .split_once("fn exec_outputs_with_runtime")
         .and_then(|(_, rest)| rest.split_once("#[cfg(test)]").map(|(body, _)| body))
         .expect("missing eager runtime lock helper source section");
     assert!(

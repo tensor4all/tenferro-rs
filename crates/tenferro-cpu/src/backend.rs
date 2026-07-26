@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,23 +12,25 @@ use crate::arbiter::{
     ResourcePermit,
 };
 use crate::buffer_pool::{BufferPool, BufferPoolStats, PoolScalar};
+use crate::dot_runtime::{CpuProviderBundle, CpuProviderBundleInstallError};
 use crate::engine::{CpuEngine, EngineResources};
 use crate::placement::{
     resolve_placement, resolve_placement_with_affinity, CpuEngineConstructionError,
     ResolvedCpuExecution,
 };
+use crate::provider::{
+    CpuExecutionContext, CpuOperationEntry, ParallelMode, TblisGeneralContractionProvider,
+};
 use crate::{
-    discover_cpu_topology, CpuId, CpuPlacement, CpuPlacementError, CpuSet, CpuTopology,
-    CpuTopologyError, NumaNodeId, ResolvedCpuPlacement,
+    discover_cpu_topology, CpuDomainId, CpuDomainOwnership, CpuExecutorAffinity,
+    CpuExecutorShutdown, CpuId, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee, CpuSet,
+    CpuTopology, CpuTopologyError, ExternalCpuDomain, NumaNodeId, ResolvedCpuPlacement,
 };
 use crate::{
     Buffer, CacheStats, Tensor, TensorRank, TensorRead, TensorScalar, TensorValue, TensorWrite,
     TypedTensor, TypedTensorView, TypedTensorViewMut,
 };
-use tenferro_tensor::backend::{
-    dot_general_accum_via_temp, grouped_gemm_via_sequential, validate_dot_general_accumulation,
-    validate_grouped_gemm, ElementwiseFusionPlan, GroupedGemmConfig,
-};
+use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::SharedTensorAllocationDomain;
 use tenferro_tensor::{
     AllocationDomainId, BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost,
@@ -45,6 +47,55 @@ use super::{
     analytic, copy_tensor_read_into, elementwise, gemm, indexing, materialize_tensor_read,
     reduction, structural, CpuContext,
 };
+
+pub(crate) fn tag_fresh_output(output: &mut Tensor, domain: CpuDomainId) {
+    macro_rules! tag {
+        ($tensor:expr) => {{
+            $tensor.set_cpu_affinity(Some(domain));
+        }};
+    }
+    match output {
+        Tensor::F32(tensor) => tag!(tensor),
+        Tensor::F64(tensor) => tag!(tensor),
+        Tensor::I32(tensor) => tag!(tensor),
+        Tensor::I64(tensor) => tag!(tensor),
+        Tensor::Bool(tensor) => tag!(tensor),
+        Tensor::C32(tensor) => tag!(tensor),
+        Tensor::C64(tensor) => tag!(tensor),
+    }
+}
+
+pub(crate) trait FreshCpuOutput {
+    fn tag_fresh(&mut self, domain: CpuDomainId);
+}
+
+impl FreshCpuOutput for Tensor {
+    fn tag_fresh(&mut self, domain: CpuDomainId) {
+        tag_fresh_output(self, domain);
+    }
+}
+
+impl<T, R: TensorRank> FreshCpuOutput for TypedTensor<T, R> {
+    fn tag_fresh(&mut self, domain: CpuDomainId) {
+        self.set_cpu_affinity(Some(domain));
+    }
+}
+
+impl<T: FreshCpuOutput> FreshCpuOutput for Option<T> {
+    fn tag_fresh(&mut self, domain: CpuDomainId) {
+        if let Some(output) = self {
+            output.tag_fresh(domain);
+        }
+    }
+}
+
+impl<T: FreshCpuOutput> FreshCpuOutput for Vec<T> {
+    fn tag_fresh(&mut self, domain: CpuDomainId) {
+        for output in self {
+            output.tag_fresh(domain);
+        }
+    }
+}
 
 #[derive(Debug, Default, Clone)]
 struct CpuSessionProfileEntry {
@@ -178,7 +229,7 @@ pub enum CpuBackendKind {
     Blas,
 }
 
-/// Optional provider policy for `dot_general` contractions.
+/// Construction-time provider policy for `dot_general` contractions.
 ///
 /// This is separate from [`CpuBackendKind`]: backend kind selects the complete
 /// base CPU provider, while this policy can opt contraction paths into TBLIS
@@ -189,13 +240,9 @@ pub enum CpuBackendKind {
 /// ```
 /// use tenferro_cpu::{CpuBackend, DotGeneralProvider};
 ///
-/// let backend = CpuBackend::new().with_dot_general_provider(
-///     DotGeneralProvider::TblisIfAvailable,
-/// );
-/// assert_eq!(
-///     backend.dot_general_provider(),
-///     DotGeneralProvider::TblisIfAvailable
-/// );
+/// let backend = CpuBackend::new()
+///     .with_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
+/// let _ = backend.provider_bundle();
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum DotGeneralProvider {
@@ -208,12 +255,6 @@ pub enum DotGeneralProvider {
     /// Require TBLIS. Unavailable TBLIS or unsupported contraction layouts are
     /// reported as errors instead of falling back.
     TblisRequired,
-}
-
-impl DotGeneralProvider {
-    fn tries_tblis(self) -> bool {
-        !matches!(self, Self::Base)
-    }
 }
 
 impl CpuBackendKind {
@@ -263,6 +304,7 @@ impl CpuBackendKind {
 /// assert!(matches!(
 ///     mode,
 ///     CpuExecutionMode::Managed
+///         | CpuExecutionMode::ExternalManaged
 ///         | CpuExecutionMode::ProviderDefaultExclusive
 ///         | CpuExecutionMode::Compatibility
 /// ));
@@ -271,10 +313,67 @@ impl CpuBackendKind {
 pub enum CpuExecutionMode {
     /// tenferro owns a pinned Rayon engine for the resolved CPU placement.
     Managed,
+    /// The application supplied and owns the selected CPU domain executor.
+    ExternalManaged,
     /// An external provider owns worker placement under a process-wide permit.
     ProviderDefaultExclusive,
     /// A legacy unpinned Rayon context is used because managed affinity is unavailable.
     Compatibility,
+}
+
+/// Failure to construct an externally managed CPU-domain registry.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_cpu::ExternalCpuDomainRegistryError;
+///
+/// let error = ExternalCpuDomainRegistryError::EmptyRegistry;
+/// assert!(error.to_string().contains("at least one"));
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ExternalCpuDomainRegistryError {
+    /// No external domain descriptor was supplied.
+    #[error("externally managed CPU registry must contain at least one domain")]
+    EmptyRegistry,
+    /// More than one descriptor used the same caller-stable domain ID.
+    #[error("CPU domain ID {id:?} is registered more than once")]
+    DuplicateDomainId {
+        /// Duplicate caller-supplied identity.
+        id: CpuDomainId,
+    },
+    /// More than one descriptor claimed the same placement identity.
+    #[error("CPU placement {placement:?} is registered more than once")]
+    DuplicatePlacementIdentity {
+        /// Duplicate NUMA-node or all-allowed identity.
+        placement: CpuPlacement,
+    },
+    /// A declared CPU is outside the process-allowed CPU set.
+    #[error("CPU domain {domain:?} declares process-disallowed CPU {cpu}")]
+    CpuOutsideAllowedSet {
+        /// Domain containing the invalid CPU declaration.
+        domain: CpuDomainId,
+        /// CPU absent from the process affinity set.
+        cpu: CpuId,
+    },
+    /// The selected default domain ID was not supplied.
+    #[error("default CPU domain {default_domain:?} is not registered")]
+    MissingDefaultDomain {
+        /// Missing caller-selected default identity.
+        default_domain: CpuDomainId,
+    },
+    /// An exact all-allowed declaration did not equal the process-allowed set.
+    #[error(
+        "exact all-allowed CPU domain {domain:?} declares {declared:?}, but the process allows {allowed:?}"
+    )]
+    ExactAllAllowedMismatch {
+        /// Domain with the inconsistent all-allowed declaration.
+        domain: CpuDomainId,
+        /// CPUs declared by the external descriptor.
+        declared: CpuSet,
+        /// CPUs allowed by the current process affinity mask.
+        allowed: CpuSet,
+    },
 }
 
 /// Errors returned while constructing a [`CpuBackend`].
@@ -305,6 +404,9 @@ pub enum CpuBackendError {
         #[source]
         source: CpuPlacementError,
     },
+    /// Externally managed domain registry validation failed.
+    #[error(transparent)]
+    ExternalRegistry(#[from] ExternalCpuDomainRegistryError),
 }
 
 impl CpuBackendError {
@@ -328,6 +430,7 @@ impl CpuBackendError {
         match self {
             Self::Tensor(_) => None,
             Self::Placement { source, .. } => Some(source),
+            Self::ExternalRegistry(_) => None,
         }
     }
 }
@@ -336,11 +439,18 @@ impl From<CpuBackendError> for crate::Error {
     fn from(error: CpuBackendError) -> Self {
         match error {
             CpuBackendError::Tensor(error) => error,
+            CpuBackendError::ExternalRegistry(source) => Self::extension(
+                "CpuBackend::from_external_managed_domains",
+                "cpu",
+                crate::ErrorKind::Validation(crate::ValidationKind::InvalidArgument),
+                source,
+            ),
             CpuBackendError::Placement { op, source } => match source {
                 CpuPlacementError::TopologyDiscovery { .. }
                 | CpuPlacementError::ManagedAffinityUnavailable { .. }
                 | CpuPlacementError::NumaDiscoveryUnavailable { .. }
-                | CpuPlacementError::UnknownNumaNode { .. } => {
+                | CpuPlacementError::UnknownNumaNode { .. }
+                | CpuPlacementError::UnregisteredExternalPlacement { .. } => {
                     Self::runtime_state_source(op, source)
                 }
                 CpuPlacementError::ExternalProviderAffinityUnmanaged { .. } => {
@@ -376,7 +486,14 @@ pub struct CpuExecutionInfo {
     requested_placement: CpuPlacement,
     resolved_placement: Option<ResolvedCpuPlacement>,
     topology: CpuTopology,
+    domain_id: CpuDomainId,
+    domain_cpus: CpuSet,
     worker_count: usize,
+    thread_budget: usize,
+    placement_guarantee: CpuPlacementGuarantee,
+    domain_ownership: CpuDomainOwnership,
+    executor_affinity: CpuExecutorAffinity,
+    executor_shutdown: CpuExecutorShutdown,
     provider_diagnostic: &'static str,
 }
 
@@ -419,7 +536,7 @@ impl CpuExecutionInfo {
         self.requested_placement
     }
 
-    /// Return the concrete CPU placement when tenferro owns worker affinity.
+    /// Return the concrete managed placement or external placement declaration.
     ///
     /// # Examples
     ///
@@ -443,7 +560,31 @@ impl CpuExecutionInfo {
         &self.topology
     }
 
-    /// Return the worker count of the selected native execution context.
+    /// Return the coordinator-stable identity of the selected CPU domain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let id = tenferro_cpu::CpuBackend::new().execution_info().domain_id();
+    /// let _ = id.as_u64();
+    /// ```
+    pub fn domain_id(&self) -> CpuDomainId {
+        self.domain_id
+    }
+
+    /// Return the resolved or caller-declared logical CPUs of the selected domain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let info = tenferro_cpu::CpuBackend::new().execution_info();
+    /// assert!(!info.domain_cpus().is_empty());
+    /// ```
+    pub fn domain_cpus(&self) -> &CpuSet {
+        &self.domain_cpus
+    }
+
+    /// Return the worker count of the selected domain executor.
     ///
     /// # Examples
     ///
@@ -453,6 +594,78 @@ impl CpuExecutionInfo {
     /// ```
     pub fn worker_count(&self) -> usize {
         self.worker_count
+    }
+
+    /// Return the maximum number of participating threads requested for this domain.
+    ///
+    /// This can be smaller than [`Self::worker_count`] for an externally
+    /// supplied executor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let info = tenferro_cpu::CpuBackend::new().execution_info();
+    /// assert!(info.thread_budget() >= 1);
+    /// assert!(info.thread_budget() <= info.worker_count());
+    /// ```
+    pub fn thread_budget(&self) -> usize {
+        self.thread_budget
+    }
+
+    /// Return whether the selected placement is exact or advisory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let guarantee = tenferro_cpu::CpuBackend::new()
+    ///     .execution_info()
+    ///     .placement_guarantee();
+    /// let _ = format!("{guarantee:?}");
+    /// ```
+    pub fn placement_guarantee(&self) -> CpuPlacementGuarantee {
+        self.placement_guarantee
+    }
+
+    /// Return whether tenferro or the application owns the selected domain.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let ownership = tenferro_cpu::CpuBackend::new()
+    ///     .execution_info()
+    ///     .domain_ownership();
+    /// let _ = format!("{ownership:?}");
+    /// ```
+    pub fn domain_ownership(&self) -> CpuDomainOwnership {
+        self.domain_ownership
+    }
+
+    /// Return the selected executor's worker-affinity claim.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let affinity = tenferro_cpu::CpuBackend::new()
+    ///     .execution_info()
+    ///     .executor_affinity();
+    /// let _ = format!("{affinity:?}");
+    /// ```
+    pub fn executor_affinity(&self) -> CpuExecutorAffinity {
+        self.executor_affinity
+    }
+
+    /// Return who owns shutdown of the selected executor.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let shutdown = tenferro_cpu::CpuBackend::new()
+    ///     .execution_info()
+    ///     .executor_shutdown();
+    /// let _ = format!("{shutdown:?}");
+    /// ```
+    pub fn executor_shutdown(&self) -> CpuExecutorShutdown {
+        self.executor_shutdown
     }
 
     /// Return a human-readable provider description for logs.
@@ -472,7 +685,13 @@ impl CpuExecutionInfo {
     }
 }
 
-fn provider_diagnostic(kind: CpuBackendKind) -> &'static str {
+fn provider_diagnostic(kind: CpuBackendKind, ownership: CpuDomainOwnership) -> &'static str {
+    if ownership == CpuDomainOwnership::ExternalManaged {
+        return match kind {
+            CpuBackendKind::Faer => "faer (externally managed CPU executor)",
+            CpuBackendKind::Blas => "BLAS/LAPACK (externally managed CPU executor)",
+        };
+    }
     match kind {
         CpuBackendKind::Faer => "faer (tenferro-managed Rayon affinity)",
         CpuBackendKind::Blas => {
@@ -529,20 +748,6 @@ fn ensure_cpu_backend_kind_available(kind: CpuBackendKind, op: &'static str) -> 
     }
 }
 
-#[cfg(not(feature = "cpu-tblis-provider"))]
-pub(crate) fn tblis_required_unavailable(op: &'static str) -> crate::Error {
-    crate::Error::invalid_argument(
-        op,
-        "configuration",
-        "DotGeneralProvider::TblisRequired requires cpu-tblis or cpu-tblis-linked".to_string(),
-    )
-}
-
-#[cfg(feature = "cpu-tblis-provider")]
-pub(crate) fn tblis_required_not_applicable(op: &'static str) -> crate::Error {
-    crate::Error::invalid_argument(op, "configuration", "DotGeneralProvider::TblisRequired could not execute this contraction with TBLIS; the TBLIS runtime may be unavailable or the adapter could not build a safe plan".to_string())
-}
-
 fn constructor_tensor_error(op: &'static str, error: crate::Error) -> CpuBackendError {
     CpuBackendError::Tensor(match error {
         crate::Error::Validation { source, .. } => crate::Error::validation(op, source),
@@ -561,76 +766,178 @@ pub(super) fn unavailable_cpu_backend_kind(kind: CpuBackendKind, op: &'static st
     )
 }
 
-struct CpuBackendState {
-    topology: CpuTopology,
+struct ManagedEngineRegistry {
     node_engines: Mutex<BTreeMap<NumaNodeId, Arc<CpuEngine>>>,
+    node_domain_ids: BTreeMap<NumaNodeId, CpuDomainId>,
     all_allowed: OnceLock<Arc<CpuEngine>>,
     all_allowed_build: Mutex<()>,
     base_engine: Arc<CpuEngine>,
+    thread_budget: usize,
+}
+
+struct ExternalEngineRegistry {
+    by_id: BTreeMap<CpuDomainId, Arc<CpuEngine>>,
+    by_node: BTreeMap<NumaNodeId, Arc<CpuEngine>>,
+    all_allowed: Option<Arc<CpuEngine>>,
+    default_domain: CpuDomainId,
+}
+
+enum CpuEngineRegistry {
+    ManagedLazy(ManagedEngineRegistry),
+    ExternalPrebuilt(ExternalEngineRegistry),
+}
+
+struct CpuBackendState {
+    topology: CpuTopology,
+    engines: CpuEngineRegistry,
     arbiter: ResourceArbiter,
     kind: CpuBackendKind,
-    thread_budget: usize,
     buffer_limit: AtomicUsize,
 }
 
 impl CpuBackendState {
-    fn engine_for(
+    fn managed_engine_for(
         &self,
         placement: &ResolvedCpuPlacement,
-    ) -> Result<Arc<CpuEngine>, crate::CpuContextError> {
+        requested: CpuPlacement,
+    ) -> Result<Arc<CpuEngine>, CpuPlacementError> {
+        let CpuEngineRegistry::ManagedLazy(registry) = &self.engines else {
+            return Err(CpuPlacementError::InternalState {
+                requested,
+                backend: self.kind,
+                message: "managed placement requested from an external engine registry",
+            });
+        };
         match placement {
             ResolvedCpuPlacement::NumaNode { id, .. } => {
-                let mut engines = self
+                let mut engines = registry
                     .node_engines
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if let Some(engine) = engines.get(id) {
                     return Ok(Arc::clone(engine));
                 }
-                let engine = Arc::new(CpuEngine::new(
-                    placement.clone(),
-                    self.thread_budget,
-                    self.buffer_limit.load(Ordering::Relaxed),
-                )?);
+                let Some(domain_id) = registry.node_domain_ids.get(id).copied() else {
+                    return Err(CpuPlacementError::InternalState {
+                        requested,
+                        backend: self.kind,
+                        message: "managed NUMA node has no coordinator-stable domain ID",
+                    });
+                };
+                let engine = Arc::new(
+                    CpuEngine::new_managed(
+                        domain_id,
+                        placement.clone(),
+                        registry.thread_budget,
+                        self.buffer_limit.load(Ordering::Relaxed),
+                    )
+                    .map_err(|error| {
+                        CpuPlacementError::EngineConstruction {
+                            requested,
+                            backend: self.kind,
+                            source: CpuEngineConstructionError::Context(error),
+                        }
+                    })?,
+                );
                 engines.insert(*id, Arc::clone(&engine));
                 Ok(engine)
             }
             ResolvedCpuPlacement::AllAllowed { .. } => {
-                if let Some(engine) = self.all_allowed.get() {
+                if let Some(engine) = registry.all_allowed.get() {
                     return Ok(Arc::clone(engine));
                 }
-                let _build = self
+                let _build = registry
                     .all_allowed_build
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if let Some(engine) = self.all_allowed.get() {
+                if let Some(engine) = registry.all_allowed.get() {
                     return Ok(Arc::clone(engine));
                 }
-                let engine = Arc::new(CpuEngine::new(
-                    placement.clone(),
-                    self.thread_budget,
-                    self.buffer_limit.load(Ordering::Relaxed),
-                )?);
-                let _ = self.all_allowed.set(Arc::clone(&engine));
+                let engine = Arc::new(
+                    CpuEngine::new_managed(
+                        CpuDomainId::new(0),
+                        placement.clone(),
+                        registry.thread_budget,
+                        self.buffer_limit.load(Ordering::Relaxed),
+                    )
+                    .map_err(|error| {
+                        CpuPlacementError::EngineConstruction {
+                            requested,
+                            backend: self.kind,
+                            source: CpuEngineConstructionError::Context(error),
+                        }
+                    })?,
+                );
+                let _ = registry.all_allowed.set(Arc::clone(&engine));
                 Ok(engine)
             }
         }
     }
 
-    fn initialized_engines(&self, op: &'static str) -> crate::Result<Vec<Arc<CpuEngine>>> {
-        let mut engines = vec![Arc::clone(&self.base_engine)];
-        if let Some(engine) = self.all_allowed.get() {
-            engines.push(Arc::clone(engine));
+    fn managed_base_engine(
+        &self,
+        requested: CpuPlacement,
+    ) -> Result<Arc<CpuEngine>, CpuPlacementError> {
+        match &self.engines {
+            CpuEngineRegistry::ManagedLazy(registry) => Ok(Arc::clone(&registry.base_engine)),
+            CpuEngineRegistry::ExternalPrebuilt(_) => Err(CpuPlacementError::InternalState {
+                requested,
+                backend: self.kind,
+                message: "managed compatibility placement requested from an external registry",
+            }),
         }
-        engines.extend(
-            self.node_engines
-                .lock()
-                .map_err(|_| poisoned_cpu_lock(op, "CPU engine registry"))?
-                .values()
-                .cloned(),
-        );
-        engines.sort_unstable_by_key(|engine| Arc::as_ptr(engine) as usize);
-        engines.dedup_by(|left, right| Arc::ptr_eq(left, right));
+    }
+
+    fn external_engine_for(
+        &self,
+        requested: CpuPlacement,
+    ) -> Result<Arc<CpuEngine>, CpuPlacementError> {
+        let CpuEngineRegistry::ExternalPrebuilt(registry) = &self.engines else {
+            return Err(CpuPlacementError::InternalState {
+                requested,
+                backend: self.kind,
+                message: "external placement requested from a managed engine registry",
+            });
+        };
+        let engine = match requested {
+            CpuPlacement::Auto => registry.by_id.get(&registry.default_domain),
+            CpuPlacement::NumaNode(id) => registry.by_node.get(&id),
+            CpuPlacement::AllAllowed => registry.all_allowed.as_ref(),
+        };
+        engine
+            .cloned()
+            .ok_or(CpuPlacementError::UnregisteredExternalPlacement { requested })
+    }
+
+    fn is_external(&self) -> bool {
+        matches!(&self.engines, CpuEngineRegistry::ExternalPrebuilt(_))
+    }
+
+    fn initialized_engines(&self, op: &'static str) -> crate::Result<Vec<Arc<CpuEngine>>> {
+        let mut engines = match &self.engines {
+            CpuEngineRegistry::ManagedLazy(registry) => {
+                let mut engines = vec![Arc::clone(&registry.base_engine)];
+                if let Some(engine) = registry.all_allowed.get() {
+                    engines.push(Arc::clone(engine));
+                }
+                engines.extend(
+                    registry
+                        .node_engines
+                        .lock()
+                        .map_err(|_| poisoned_cpu_lock(op, "CPU engine registry"))?
+                        .values()
+                        .cloned(),
+                );
+                engines
+            }
+            CpuEngineRegistry::ExternalPrebuilt(registry) => {
+                registry.by_id.values().cloned().collect()
+            }
+        };
+        if engines.len() > 1 {
+            engines.sort_unstable_by_key(|engine| Arc::as_ptr(engine) as usize);
+            engines.dedup_by(|left, right| Arc::ptr_eq(left, right));
+        }
         Ok(engines)
     }
 }
@@ -669,7 +976,7 @@ pub struct CpuBackend {
     requested: CpuPlacement,
     resolved: ResolvedCpuExecution,
     engine: Arc<CpuEngine>,
-    dot_general_provider: DotGeneralProvider,
+    provider_bundle: CpuProviderBundle,
     allocation_domain: Option<Arc<dyn SharedTensorAllocationDomain>>,
 }
 
@@ -684,11 +991,25 @@ fn resolve_discovered_topology(
     })
 }
 
+fn coordinator_node_domain_ids(topology: &CpuTopology) -> BTreeMap<NumaNodeId, CpuDomainId> {
+    topology
+        .nodes()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, node)| {
+            u64::try_from(index)
+                .ok()
+                .and_then(|index| index.checked_add(1))
+                .map(|id| (node.id(), CpuDomainId::new(id)))
+        })
+        .collect()
+}
+
 impl fmt::Debug for CpuBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CpuBackend")
             .field("kind", &self.kind())
-            .field("dot_general_provider", &self.dot_general_provider)
+            .field("provider_bundle", &self.provider_bundle)
             .field("requested_placement", &self.requested)
             .field("resolved_execution", &self.resolved)
             .field("engine_placement", &self.engine.placement())
@@ -731,31 +1052,39 @@ impl CpuBackend {
                 cpus: topology.allowed_cpus().clone(),
             };
             let engine = Arc::new(
-                CpuEngine::new(engine_placement, thread_budget, max_retained_capacity_bytes)
-                    .map_err(|error| CpuPlacementError::EngineConstruction {
-                        requested: CpuPlacement::Auto,
-                        backend: kind,
-                        source: CpuEngineConstructionError::Context(error),
-                    })?,
+                CpuEngine::new_managed(
+                    CpuDomainId::new(0),
+                    engine_placement,
+                    thread_budget,
+                    max_retained_capacity_bytes,
+                )
+                .map_err(|error| CpuPlacementError::EngineConstruction {
+                    requested: CpuPlacement::Auto,
+                    backend: kind,
+                    source: CpuEngineConstructionError::Context(error),
+                })?,
             );
             let all_allowed = OnceLock::new();
             let _ = all_allowed.set(Arc::clone(&engine));
             Ok(Self {
                 shared: Arc::new(CpuBackendState {
+                    engines: CpuEngineRegistry::ManagedLazy(ManagedEngineRegistry {
+                        node_engines: Mutex::new(BTreeMap::new()),
+                        node_domain_ids: coordinator_node_domain_ids(&topology),
+                        all_allowed,
+                        all_allowed_build: Mutex::new(()),
+                        base_engine: Arc::clone(&engine),
+                        thread_budget,
+                    }),
                     topology,
-                    node_engines: Mutex::new(BTreeMap::new()),
-                    all_allowed,
-                    all_allowed_build: Mutex::new(()),
-                    base_engine: Arc::clone(&engine),
                     arbiter: ResourceArbiter::global(),
                     kind,
-                    thread_budget,
                     buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
                 }),
                 requested: CpuPlacement::Auto,
                 resolved,
                 engine,
-                dot_general_provider: DotGeneralProvider::Base,
+                provider_bundle: CpuProviderBundle::standard(kind, kind == CpuBackendKind::Blas),
                 allocation_domain: None,
             })
         }
@@ -798,26 +1127,30 @@ impl CpuBackend {
             cpus: topology.allowed_cpus().clone(),
         };
         let base_engine = Arc::new(CpuEngine::from_context(
+            CpuDomainId::new(0),
             placement,
             ctx,
             max_retained_capacity_bytes,
         ));
         Self {
             shared: Arc::new(CpuBackendState {
+                engines: CpuEngineRegistry::ManagedLazy(ManagedEngineRegistry {
+                    node_engines: Mutex::new(BTreeMap::new()),
+                    node_domain_ids: coordinator_node_domain_ids(&topology),
+                    all_allowed: OnceLock::new(),
+                    all_allowed_build: Mutex::new(()),
+                    base_engine: Arc::clone(&base_engine),
+                    thread_budget: base_engine.domain().thread_budget().get(),
+                }),
                 topology,
-                node_engines: Mutex::new(BTreeMap::new()),
-                all_allowed: OnceLock::new(),
-                all_allowed_build: Mutex::new(()),
-                base_engine: Arc::clone(&base_engine),
                 arbiter: ResourceArbiter::global(),
                 kind,
-                thread_budget: base_engine.context().num_threads(),
                 buffer_limit: AtomicUsize::new(max_retained_capacity_bytes),
             }),
             requested: CpuPlacement::Auto,
             resolved,
             engine: base_engine,
-            dot_general_provider: DotGeneralProvider::Base,
+            provider_bundle: CpuProviderBundle::standard(kind, kind == CpuBackendKind::Blas),
             allocation_domain: None,
         }
     }
@@ -844,6 +1177,277 @@ impl CpuBackend {
             );
             Self::from_context(context)
         })
+    }
+
+    /// Create one coordinator from caller-owned CPU domain executors.
+    ///
+    /// The descriptors are moved into prebuilt engines. `Auto` selects
+    /// `default_domain`; explicit placement requests are registry-only and
+    /// never construct a managed context or thread pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::num::NonZeroUsize;
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{
+    ///     discover_cpu_topology, CpuBackend, CpuBackendError, CpuContext,
+    ///     CpuExecutionMode, CpuPlacementGuarantee, CpuProviderBundleInstallError,
+    ///     ExternalCpuDomain, ResolvedCpuPlacement,
+    /// };
+    /// use tenferro_tensor::CpuDomainId;
+    ///
+    /// let topology = discover_cpu_topology()?;
+    /// let id = CpuDomainId::new(7);
+    /// let domain = ExternalCpuDomain::new(
+    ///     id,
+    ///     ResolvedCpuPlacement::AllAllowed {
+    ///         cpus: topology.allowed_cpus().clone(),
+    ///     },
+    ///     Arc::new(CpuContext::with_threads(1)?),
+    ///     NonZeroUsize::new(1).unwrap(),
+    ///     CpuPlacementGuarantee::AdvisoryDeclared,
+    /// )?;
+    /// match CpuBackend::from_external_managed_domains(id, [domain]) {
+    ///     Ok(backend) => assert_eq!(
+    ///         backend.execution_info().execution_mode(),
+    ///         CpuExecutionMode::ExternalManaged,
+    ///     ),
+    ///     Err(CpuBackendError::Tensor(error)) => assert!(
+    ///         std::error::Error::source(&error)
+    ///             .and_then(|source| source.downcast_ref::<CpuProviderBundleInstallError>())
+    ///             .is_some(),
+    ///         "an uncontrolled compiled provider must retain its typed source",
+    ///     ),
+    ///     Err(error) => return Err(error.into()),
+    /// }
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuBackendError::Placement`] when process topology discovery
+    /// fails. Returns [`CpuBackendError::ExternalRegistry`] for an empty
+    /// registry, duplicate domain or placement identity, a CPU outside the
+    /// process-allowed set, a missing default domain, or an exact
+    /// [`ResolvedCpuPlacement::AllAllowed`] declaration that differs from the
+    /// process-allowed CPU set. Returns [`CpuBackendError::Tensor`] with a
+    /// [`CpuProviderBundleInstallError`] source when the compiled standard
+    /// provider cannot satisfy an external domain contract. Applications that
+    /// supply controlled providers can use
+    /// [`CpuBackend::from_external_managed_domains_with_provider_bundle`].
+    pub fn from_external_managed_domains(
+        default_domain: CpuDomainId,
+        domains: impl IntoIterator<Item = ExternalCpuDomain>,
+    ) -> Result<Self, CpuBackendError> {
+        let op = "CpuBackend::from_external_managed_domains";
+        let kind = CpuBackendKind::default_compiled();
+        let topology = resolve_discovered_topology(kind, discover_cpu_topology())
+            .map_err(|source| CpuBackendError::placement(op, source))?;
+        Self::from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
+            default_domain,
+            domains,
+            topology,
+            ResourceArbiter::global(),
+            CpuProviderBundle::standard(kind, false),
+        )
+    }
+
+    /// Create one coordinator from caller-owned CPU domain executors and an
+    /// immutable provider bundle.
+    ///
+    /// Domain registry construction and provider compatibility validation are
+    /// atomic: no backend is returned unless `provider_bundle` satisfies every
+    /// supplied domain. The bundle currently selects `dot_general` operation-
+    /// family providers; linalg operation-family selection still follows the
+    /// compiled [`CpuBackendKind`] and is not replaced by this API.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::num::NonZeroUsize;
+    /// use std::sync::Arc;
+    /// use tenferro_cpu::{
+    ///     discover_cpu_topology, CpuBackend, CpuBackendKind, CpuContext,
+    ///     CpuExecutionMode, CpuPlacementGuarantee, CpuProviderBundle,
+    ///     ExternalCpuDomain, ResolvedCpuPlacement,
+    /// };
+    /// use tenferro_tensor::CpuDomainId;
+    ///
+    /// let topology = discover_cpu_topology()?;
+    /// let id = CpuDomainId::new(7);
+    /// let domain = ExternalCpuDomain::new(
+    ///     id,
+    ///     ResolvedCpuPlacement::AllAllowed {
+    ///         cpus: topology.allowed_cpus().clone(),
+    ///     },
+    ///     Arc::new(CpuContext::with_threads(1)?),
+    ///     NonZeroUsize::new(1).unwrap(),
+    ///     CpuPlacementGuarantee::AdvisoryDeclared,
+    /// )?;
+    /// let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer).build()?;
+    /// let backend = CpuBackend::from_external_managed_domains_with_provider_bundle(
+    ///     id,
+    ///     [domain],
+    ///     bundle.clone(),
+    /// )?;
+    /// assert_eq!(
+    ///     backend.execution_info().execution_mode(),
+    ///     CpuExecutionMode::ExternalManaged,
+    /// );
+    /// assert!(backend.provider_bundle().shares_identity_with(&bundle));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the same topology and registry errors as
+    /// [`CpuBackend::from_external_managed_domains`]. Provider incompatibility
+    /// is returned as [`CpuBackendError::Tensor`]. Calling
+    /// [`std::error::Error::source`] on that value yields the typed
+    /// [`CpuProviderBundleInstallError`], whose own source is the rejected
+    /// [`crate::CpuProviderDomainError`].
+    pub fn from_external_managed_domains_with_provider_bundle(
+        default_domain: CpuDomainId,
+        domains: impl IntoIterator<Item = ExternalCpuDomain>,
+        provider_bundle: CpuProviderBundle,
+    ) -> Result<Self, CpuBackendError> {
+        let op = "CpuBackend::from_external_managed_domains_with_provider_bundle";
+        let kind = CpuBackendKind::default_compiled();
+        let topology = resolve_discovered_topology(kind, discover_cpu_topology())
+            .map_err(|source| CpuBackendError::placement(op, source))?;
+        Self::from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
+            default_domain,
+            domains,
+            topology,
+            ResourceArbiter::global(),
+            provider_bundle,
+        )
+    }
+
+    fn from_external_managed_domains_with_topology_arbiter_and_provider_bundle(
+        default_domain: CpuDomainId,
+        domains: impl IntoIterator<Item = ExternalCpuDomain>,
+        topology: CpuTopology,
+        arbiter: ResourceArbiter,
+        provider_bundle: CpuProviderBundle,
+    ) -> Result<Self, CpuBackendError> {
+        let domains: Vec<_> = domains.into_iter().collect();
+        if domains.is_empty() {
+            return Err(ExternalCpuDomainRegistryError::EmptyRegistry.into());
+        }
+
+        let mut domain_ids = BTreeSet::new();
+        let mut node_ids = BTreeSet::new();
+        let mut has_all_allowed = false;
+        for domain in &domains {
+            if !domain_ids.insert(domain.id()) {
+                return Err(
+                    ExternalCpuDomainRegistryError::DuplicateDomainId { id: domain.id() }.into(),
+                );
+            }
+            match domain.placement() {
+                ResolvedCpuPlacement::NumaNode { id, .. } => {
+                    if !node_ids.insert(*id) {
+                        return Err(ExternalCpuDomainRegistryError::DuplicatePlacementIdentity {
+                            placement: CpuPlacement::NumaNode(*id),
+                        }
+                        .into());
+                    }
+                }
+                ResolvedCpuPlacement::AllAllowed { cpus } => {
+                    if has_all_allowed {
+                        return Err(ExternalCpuDomainRegistryError::DuplicatePlacementIdentity {
+                            placement: CpuPlacement::AllAllowed,
+                        }
+                        .into());
+                    }
+                    has_all_allowed = true;
+                    if domain.placement_guarantee() == CpuPlacementGuarantee::ExactDeclared
+                        && cpus != topology.allowed_cpus()
+                    {
+                        return Err(ExternalCpuDomainRegistryError::ExactAllAllowedMismatch {
+                            domain: domain.id(),
+                            declared: cpus.clone(),
+                            allowed: topology.allowed_cpus().clone(),
+                        }
+                        .into());
+                    }
+                }
+            }
+            if let Some(cpu) = domain
+                .cpus()
+                .as_slice()
+                .iter()
+                .copied()
+                .find(|cpu| !topology.allowed_cpus().contains(*cpu))
+            {
+                return Err(ExternalCpuDomainRegistryError::CpuOutsideAllowedSet {
+                    domain: domain.id(),
+                    cpu,
+                }
+                .into());
+            }
+        }
+        if !domain_ids.contains(&default_domain) {
+            return Err(
+                ExternalCpuDomainRegistryError::MissingDefaultDomain { default_domain }.into(),
+            );
+        }
+
+        let buffer_limit = crate::buffer_pool::DEFAULT_MAX_RETAINED_CAPACITY_BYTES;
+        let mut by_id = BTreeMap::new();
+        let mut by_node = BTreeMap::new();
+        let mut all_allowed = None;
+        for domain in domains {
+            let id = domain.id();
+            let placement = domain.placement().clone();
+            let engine = Arc::new(CpuEngine::from_external(domain, buffer_limit));
+            match placement {
+                ResolvedCpuPlacement::NumaNode { id, .. } => {
+                    by_node.insert(id, Arc::clone(&engine));
+                }
+                ResolvedCpuPlacement::AllAllowed { .. } => {
+                    all_allowed = Some(Arc::clone(&engine));
+                }
+            }
+            by_id.insert(id, engine);
+        }
+        let Some(engine) = by_id.get(&default_domain).cloned() else {
+            return Err(
+                ExternalCpuDomainRegistryError::MissingDefaultDomain { default_domain }.into(),
+            );
+        };
+        let resolved = ResolvedCpuExecution::ExternalManaged(engine.placement().clone());
+        let kind = CpuBackendKind::default_compiled();
+        let backend = Self {
+            shared: Arc::new(CpuBackendState {
+                topology,
+                engines: CpuEngineRegistry::ExternalPrebuilt(ExternalEngineRegistry {
+                    by_id,
+                    by_node,
+                    all_allowed,
+                    default_domain,
+                }),
+                arbiter,
+                kind,
+                buffer_limit: AtomicUsize::new(buffer_limit),
+            }),
+            requested: CpuPlacement::Auto,
+            resolved,
+            engine,
+            provider_bundle,
+            allocation_domain: None,
+        };
+        backend
+            .validate_provider_bundle_for_domains(&backend.provider_bundle)
+            .map_err(|source| {
+                CpuBackendError::Tensor(crate::Error::backend_source(
+                    "CpuBackend ExternalManaged provider validation",
+                    source,
+                ))
+            })?;
+        Ok(backend)
     }
 
     /// Create a CPU backend using the selected compiled provider.
@@ -1026,9 +1630,9 @@ impl CpuBackend {
 
     /// Clone this backend coordinator with a specific CPU placement request.
     ///
-    /// Explicit placement is supported for faer/native execution. External
-    /// BLAS providers accept only [`CpuPlacement::Auto`] because tenferro does
-    /// not control their worker affinity.
+    /// Managed explicit placement is supported for faer/native execution.
+    /// Externally managed coordinators resolve explicit requests only to
+    /// matching registered domains and never construct a fallback engine.
     ///
     /// # Examples
     ///
@@ -1059,6 +1663,17 @@ impl CpuBackend {
         requested: CpuPlacement,
         managed_affinity_available: bool,
     ) -> Result<Self, CpuPlacementError> {
+        if self.shared.is_external() {
+            let engine = self.shared.external_engine_for(requested)?;
+            return Ok(Self {
+                shared: Arc::clone(&self.shared),
+                requested,
+                resolved: ResolvedCpuExecution::ExternalManaged(engine.placement().clone()),
+                engine,
+                provider_bundle: self.provider_bundle.clone(),
+                allocation_domain: self.allocation_domain.clone(),
+            });
+        }
         let resolved = resolve_placement_with_affinity(
             self.kind(),
             requested,
@@ -1070,13 +1685,20 @@ impl CpuBackend {
                 shared: Arc::clone(&self.shared),
                 requested,
                 resolved,
-                engine: Arc::clone(&self.shared.base_engine),
-                dot_general_provider: self.dot_general_provider,
+                engine: self.shared.managed_base_engine(requested)?,
+                provider_bundle: self.provider_bundle.clone(),
                 allocation_domain: self.allocation_domain.clone(),
             });
         }
         let engine_placement = match &resolved {
             ResolvedCpuExecution::Managed(placement) => placement.clone(),
+            ResolvedCpuExecution::ExternalManaged(_) => {
+                return Err(CpuPlacementError::InternalState {
+                    requested,
+                    backend: self.kind(),
+                    message: "managed resolver returned an external execution mode",
+                });
+            }
             ResolvedCpuExecution::ProviderDefaultExclusive => ResolvedCpuPlacement::AllAllowed {
                 cpus: self.shared.topology.allowed_cpus().clone(),
             },
@@ -1088,19 +1710,15 @@ impl CpuBackend {
                 });
             }
         };
-        let engine = self.shared.engine_for(&engine_placement).map_err(|error| {
-            CpuPlacementError::EngineConstruction {
-                requested,
-                backend: self.kind(),
-                source: CpuEngineConstructionError::Context(error),
-            }
-        })?;
+        let engine = self
+            .shared
+            .managed_engine_for(&engine_placement, requested)?;
         Ok(Self {
             shared: Arc::clone(&self.shared),
             requested,
             resolved,
             engine,
-            dot_general_provider: self.dot_general_provider,
+            provider_bundle: self.provider_bundle.clone(),
             allocation_domain: self.allocation_domain.clone(),
         })
     }
@@ -1118,9 +1736,9 @@ impl CpuBackend {
         self.requested
     }
 
-    /// Return the concrete managed placement, if tenferro owns worker affinity.
+    /// Return the concrete managed placement or external placement declaration.
     ///
-    /// External-provider and compatibility contexts return `None`.
+    /// Provider-default-exclusive and compatibility contexts return `None`.
     ///
     /// # Examples
     ///
@@ -1138,7 +1756,8 @@ impl CpuBackend {
     /// ```
     pub fn resolved_placement(&self) -> Option<&ResolvedCpuPlacement> {
         match &self.resolved {
-            ResolvedCpuExecution::Managed(placement) => Some(placement),
+            ResolvedCpuExecution::Managed(placement)
+            | ResolvedCpuExecution::ExternalManaged(placement) => Some(placement),
             ResolvedCpuExecution::Compatibility
             | ResolvedCpuExecution::ProviderDefaultExclusive => None,
         }
@@ -1157,7 +1776,7 @@ impl CpuBackend {
         &self.shared.topology
     }
 
-    /// Report whether this public provider kind accepts a placement request.
+    /// Report whether this coordinator can resolve a placement request.
     ///
     /// # Examples
     ///
@@ -1167,7 +1786,11 @@ impl CpuBackend {
     /// assert!(CpuBackend::new().supports_placement(CpuPlacement::Auto));
     /// ```
     pub fn supports_placement(&self, placement: CpuPlacement) -> bool {
-        resolve_placement(self.kind(), placement, &self.shared.topology).is_ok()
+        if self.shared.is_external() {
+            self.shared.external_engine_for(placement).is_ok()
+        } else {
+            resolve_placement(self.kind(), placement, &self.shared.topology).is_ok()
+        }
     }
 
     /// Return a snapshot suitable for diagnostics and placement reporting.
@@ -1179,10 +1802,22 @@ impl CpuBackend {
     /// assert_eq!(backend.execution_info().backend_kind(), backend.kind());
     /// ```
     pub fn execution_info(&self) -> CpuExecutionInfo {
+        let domain = self.engine.domain();
+        let capabilities = domain.executor_capabilities();
+        let (executor_affinity, executor_shutdown) =
+            if domain.ownership() == CpuDomainOwnership::ExternalManaged {
+                (
+                    CpuExecutorAffinity::CallerDeclaredUnverified,
+                    CpuExecutorShutdown::CallerOwned,
+                )
+            } else {
+                (capabilities.affinity, capabilities.shutdown)
+            };
         CpuExecutionInfo {
             backend_kind: self.kind(),
             execution_mode: match &self.resolved {
                 ResolvedCpuExecution::Managed(_) => CpuExecutionMode::Managed,
+                ResolvedCpuExecution::ExternalManaged(_) => CpuExecutionMode::ExternalManaged,
                 ResolvedCpuExecution::ProviderDefaultExclusive => {
                     CpuExecutionMode::ProviderDefaultExclusive
                 }
@@ -1191,8 +1826,15 @@ impl CpuBackend {
             requested_placement: self.requested,
             resolved_placement: self.resolved_placement().cloned(),
             topology: self.shared.topology.clone(),
-            worker_count: self.num_threads(),
-            provider_diagnostic: provider_diagnostic(self.kind()),
+            domain_id: domain.id(),
+            domain_cpus: domain.cpus().clone(),
+            worker_count: capabilities.worker_count.get(),
+            thread_budget: domain.thread_budget().get(),
+            placement_guarantee: domain.placement_guarantee(),
+            domain_ownership: domain.ownership(),
+            executor_affinity,
+            executor_shutdown,
+            provider_diagnostic: provider_diagnostic(self.kind(), domain.ownership()),
         }
     }
 
@@ -1207,7 +1849,7 @@ impl CpuBackend {
 
     #[cfg(test)]
     pub(crate) fn context_id_for_test(&self) -> usize {
-        Arc::as_ptr(&self.engine.context_arc()) as usize
+        Arc::as_ptr(self.engine.domain().executor()) as *const () as usize
     }
 
     /// Return the runtime CPU provider selected by this backend.
@@ -1224,23 +1866,91 @@ impl CpuBackend {
         self.shared.kind
     }
 
-    /// Return the selected `dot_general` provider policy.
+    /// Return the immutable CPU provider slots selected for this handle.
+    pub fn provider_bundle(&self) -> &CpuProviderBundle {
+        &self.provider_bundle
+    }
+
+    /// Return this backend with an immutable construction-time provider bundle.
+    ///
+    /// Existing clones retain their original bundle identity.
     ///
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::{CpuBackend, DotGeneralProvider};
-    ///
-    /// assert_eq!(
-    ///     CpuBackend::new().dot_general_provider(),
-    ///     DotGeneralProvider::Base
-    /// );
+    /// use tenferro_cpu::{CpuBackend, CpuBackendKind, CpuProviderBundle};
+    /// let bundle = CpuProviderBundle::builder(CpuBackendKind::Faer).build()?;
+    /// let backend = CpuBackend::new().with_provider_bundle(bundle.clone())?;
+    /// assert!(backend.provider_bundle().shares_identity_with(&bundle));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
-    pub fn dot_general_provider(&self) -> DotGeneralProvider {
-        self.dot_general_provider
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CpuProviderBundleInstallError::IncompatibleDomain`] if a
+    /// provider cannot satisfy one of this backend's resource-domain
+    /// contracts.
+    pub fn with_provider_bundle(
+        mut self,
+        bundle: CpuProviderBundle,
+    ) -> Result<Self, CpuProviderBundleInstallError> {
+        self.validate_provider_bundle_for_domains(&bundle)?;
+        self.provider_bundle = bundle;
+        Ok(self)
     }
 
-    /// Return this backend with a different `dot_general` provider policy.
+    fn validate_provider_bundle_for_domains(
+        &self,
+        bundle: &CpuProviderBundle,
+    ) -> Result<(), CpuProviderBundleInstallError> {
+        let allowed = self.shared.topology.allowed_cpus();
+        let validate_engine = |engine: &CpuEngine| {
+            let domain = engine.domain();
+            bundle.validate_for_domain(
+                domain.id(),
+                domain.thread_budget(),
+                domain.placement_guarantee(),
+                domain.cpus(),
+                allowed,
+            )
+        };
+
+        match &self.shared.engines {
+            CpuEngineRegistry::ExternalPrebuilt(registry) => {
+                for engine in registry.by_id.values() {
+                    validate_engine(engine)?;
+                }
+            }
+            CpuEngineRegistry::ManagedLazy(registry) => {
+                validate_engine(&registry.base_engine)?;
+
+                // A placed clone retains the installed bundle. Validate every
+                // lazily constructible managed NUMA domain now rather than
+                // allowing a later `for_placement` call to bypass the bundle
+                // contract.
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                for node in self.shared.topology.nodes() {
+                    let Some(domain_id) = registry.node_domain_ids.get(&node.id()).copied() else {
+                        continue;
+                    };
+                    let budget =
+                        std::num::NonZeroUsize::new(registry.thread_budget.min(node.cpus().len()))
+                            .expect("usable topology nodes have non-empty CPU sets");
+                    bundle.validate_for_domain(
+                        domain_id,
+                        budget,
+                        CpuPlacementGuarantee::ExactDeclared,
+                        node.cpus(),
+                        allowed,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Return this backend with a standard bundle configured by the legacy
+    /// `dot_general` provider policy.
     ///
     /// # Examples
     ///
@@ -1250,64 +1960,34 @@ impl CpuBackend {
     /// let backend = CpuBackend::new().with_dot_general_provider(
     ///     DotGeneralProvider::TblisIfAvailable,
     /// );
-    /// assert_eq!(
-    ///     backend.dot_general_provider(),
-    ///     DotGeneralProvider::TblisIfAvailable
-    /// );
+    /// let _ = backend.provider_bundle();
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the standard CPU provider bundle builder is missing a
+    /// mandatory built-in provider slot, which indicates an internal provider
+    /// registration bug.
     pub fn with_dot_general_provider(mut self, provider: DotGeneralProvider) -> Self {
-        self.dot_general_provider = provider;
+        let builder = CpuProviderBundle::builder(self.kind());
+        let builder = if self.resolved == ResolvedCpuExecution::ProviderDefaultExclusive {
+            builder.provider_default_compatibility()
+        } else {
+            builder
+        };
+        self.provider_bundle = match provider {
+            DotGeneralProvider::Base => builder,
+            DotGeneralProvider::TblisIfAvailable => builder
+                .prefer_general_contraction_provider(Arc::new(TblisGeneralContractionProvider)),
+            DotGeneralProvider::TblisRequired => builder
+                .require_general_contraction_provider(Arc::new(TblisGeneralContractionProvider)),
+        }
+        .build()
+        .expect("standard CPU provider bundle always has mandatory slots");
         self
     }
 
-    /// Update the `dot_general` provider policy.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::{CpuBackend, DotGeneralProvider};
-    ///
-    /// let mut backend = CpuBackend::new();
-    /// backend.set_dot_general_provider(DotGeneralProvider::TblisRequired);
-    /// assert_eq!(
-    ///     backend.dot_general_provider(),
-    ///     DotGeneralProvider::TblisRequired
-    /// );
-    /// ```
-    pub fn set_dot_general_provider(&mut self, provider: DotGeneralProvider) {
-        self.dot_general_provider = provider;
-    }
-
-    fn with_base_dot_general_provider<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        let saved = self.dot_general_provider;
-        self.dot_general_provider = DotGeneralProvider::Base;
-        let result = f(self);
-        self.dot_general_provider = saved;
-        result
-    }
-
-    #[cfg(feature = "cpu-tblis-provider")]
-    fn tblis_not_applicable<T>(
-        &self,
-        op: &'static str,
-        value: Option<T>,
-    ) -> crate::Result<Option<T>> {
-        if value.is_some() || self.dot_general_provider != DotGeneralProvider::TblisRequired {
-            return Ok(value);
-        }
-        Err(tblis_required_not_applicable(op))
-    }
-
-    #[cfg(not(feature = "cpu-tblis-provider"))]
-    fn tblis_unavailable_for_required<T>(&self, op: &'static str) -> crate::Result<Option<T>> {
-        if self.dot_general_provider == DotGeneralProvider::TblisRequired {
-            Err(tblis_required_unavailable(op))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Return the number of threads in this backend's CPU context.
+    /// Return the selected CPU domain's thread budget.
     ///
     /// # Examples
     ///
@@ -1318,7 +1998,7 @@ impl CpuBackend {
     /// assert_eq!(backend.num_threads(), 2);
     /// ```
     pub fn num_threads(&self) -> usize {
-        self.engine.context().num_threads()
+        self.engine.domain().thread_budget().get()
     }
 
     /// Number of retained typed host buffers currently held by this backend.
@@ -1404,6 +2084,10 @@ impl CpuBackend {
         Ok(CacheStats {
             entries: stats.buffers,
             retained_bytes: stats.capacity_bytes,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            clears: 0,
         })
     }
 
@@ -1505,6 +2189,30 @@ impl CpuBackend {
         Ok(())
     }
 
+    pub(crate) fn runtime_cache_stats(
+        &self,
+    ) -> crate::Result<tenferro_runtime::runtime::CacheStats> {
+        let resources = lock_engine_resources(&self.engine, "CpuBackend::runtime_cache_stats")?;
+        let buffers = resources.buffers.cache_stats();
+        let gemm = tenferro_tensor::RuntimeCacheControl::stats(&resources.gemm_analysis_cache);
+        Ok(tenferro_runtime::runtime::CacheStats {
+            entries: buffers.entries.saturating_add(gemm.entries),
+            retained_bytes: buffers.retained_bytes.saturating_add(gemm.retained_bytes),
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+            clears: 0,
+        })
+    }
+
+    pub(crate) fn clear_runtime_caches(&self) -> crate::Result<()> {
+        let mut resources =
+            lock_engine_resources(&self.engine, "CpuBackend::clear_runtime_caches")?;
+        resources.buffers.clear();
+        tenferro_tensor::RuntimeCacheControl::clear(&mut resources.gemm_analysis_cache);
+        Ok(())
+    }
+
     /// Run a closure in this backend's CPU execution scope.
     ///
     /// # Examples
@@ -1522,99 +2230,115 @@ impl CpuBackend {
     /// Panics when re-entered while another CPU backend execution is active on
     /// the current thread or managed Rayon scope. This includes direct nesting
     /// and backend calls from parallel child tasks; either could violate CPU or
-    /// provider exclusivity.
+    /// provider exclusivity. For an externally managed domain, it also panics
+    /// with the executor's typed diagnostic when synchronous executor entry
+    /// fails because this convenience method cannot return a `Result`.
     pub fn install<R: Send>(&self, op: impl FnOnce() -> R + Send) -> R {
         let owner = inherited_or_new_execution_owner();
-        let _permit = self.acquire_execution_permit(owner);
-        self.engine
-            .context()
-            .install_with_execution_owner(owner, op)
-    }
-
-    fn install_with_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
-        let ctx = self.engine.context_arc();
-        let owner = inherited_or_new_execution_owner();
         let permit = self.acquire_execution_permit(owner);
-        ctx.install_with_execution_owner(owner, || {
-            self.with_execution_resources(&permit, |resources| {
-                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                op(buffers.get_mut())
-            })
-        })
-    }
-
-    // Selected when the BLAS provider is active; default Faer-only builds keep
-    // it dormant.
-    #[allow(dead_code)]
-    fn run_with_pool<R>(&mut self, op: impl FnOnce(&mut BufferPool) -> R) -> R {
-        let owner = inherited_or_new_execution_owner();
-        with_execution_owner(owner, || {
-            let permit = self.acquire_execution_permit(owner);
-            self.with_execution_resources(&permit, |resources| {
-                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                op(buffers.get_mut())
-            })
-        })
-    }
-
-    fn linalg_with_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
-        match self.kind() {
-            CpuBackendKind::Faer => self.install_with_pool(op),
-            CpuBackendKind::Blas => self.run_with_pool(op),
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        match entry.enter(ParallelMode::Sequential, |_| op()) {
+            Ok(result) => result,
+            Err(error) => panic!("CpuBackend::install executor failed: {error}"),
         }
     }
 
-    /// Run an external linalg implementation with this backend's buffer pool.
+    fn try_install<R: Send>(
+        &self,
+        op: impl FnOnce() -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let owner = inherited_or_new_execution_owner();
+        let permit = self.acquire_execution_permit(owner);
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let mode = entry.preferred_engine_mode();
+        entry
+            .enter(mode, |context| context.with_native_parallelism(op))
+            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
+    }
+
+    fn try_install_fresh<R: FreshCpuOutput + Send>(
+        &self,
+        op: impl FnOnce() -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let domain = self.engine.domain().id();
+        let mut output = self.try_install(op)?;
+        output.tag_fresh(domain);
+        Ok(output)
+    }
+
+    fn install_with_pool_unmarked<R: Send>(
+        &mut self,
+        op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let owner = inherited_or_new_execution_owner();
+        let permit = self.acquire_execution_permit(owner);
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let mode = entry.preferred_engine_mode();
+        entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| {
+                    self.with_execution_resources(&permit, |resources| {
+                        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                        op(buffers.get_mut())
+                    })
+                })
+            })
+            .map_err(|error| crate::Error::backend_source("CPU tensor execution", error))?
+    }
+
+    fn install_with_pool<R: FreshCpuOutput + Send>(
+        &mut self,
+        op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let domain = self.engine.domain().id();
+        let mut output = self.install_with_pool_unmarked(op)?;
+        output.tag_fresh(domain);
+        Ok(output)
+    }
+
+    /// Run an external linalg implementation with one borrowed execution
+    /// context and this backend's buffer pool.
     ///
     /// This is exposed for operation-family crates that own their backend
     /// implementation while still sharing the CPU backend's allocation pool.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_cpu::CpuBackend;
+    /// let mut backend = CpuBackend::new();
+    /// backend.with_linalg_pool(|context, _pool| {
+    ///     assert!(context.thread_budget().get() >= 1);
+    ///     Ok(())
+    /// })?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::BackendSource`] with a
+    /// [`crate::CpuDomainExecutorError`] source when authoritative executor
+    /// admission fails. Errors returned by the operation-family closure are
+    /// propagated unchanged.
     #[doc(hidden)]
-    pub fn with_linalg_pool<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
-        self.linalg_with_pool(op)
-    }
-
-    /// Clone the CPU context used by external linalg implementations.
-    #[cfg(feature = "cpu-faer")]
-    #[doc(hidden)]
-    pub fn linalg_context(&self) -> Arc<CpuContext> {
-        self.engine.context_arc()
-    }
-
-    // Selected when the Faer provider handles cached GEMM execution; some
-    // feature combinations compile only the uncached or BLAS path.
-    #[allow(dead_code)]
-    fn install_with_pool_and_gemm_cache<R: Send>(
+    pub fn with_linalg_pool<R: Send>(
         &mut self,
-        gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
-        op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R + Send,
-    ) -> R {
-        let ctx = self.engine.context_arc();
+        op: impl FnOnce(&CpuExecutionContext<'_>, &mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
         let owner = inherited_or_new_execution_owner();
         let permit = self.acquire_execution_permit(owner);
-        ctx.install_with_execution_owner(owner, || {
-            self.with_execution_resources(&permit, |resources| {
-                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                op(buffers.get_mut(), gemm_analysis_cache)
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let mode = entry.preferred_linalg_mode(self.kind());
+        entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| {
+                    self.with_execution_resources(&permit, |resources| {
+                        let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
+                        op(context, buffers.get_mut())
+                    })
+                })
             })
-        })
-    }
-
-    // Selected when the BLAS provider handles cached GEMM execution; default
-    // Faer-only builds keep it dormant.
-    #[allow(dead_code)]
-    fn run_with_pool_and_gemm_cache<R>(
-        &mut self,
-        gemm_analysis_cache: &mut gemm::GemmAnalysisCache,
-        op: impl FnOnce(&mut BufferPool, &mut gemm::GemmAnalysisCache) -> R,
-    ) -> R {
-        let owner = inherited_or_new_execution_owner();
-        with_execution_owner(owner, || {
-            let permit = self.acquire_execution_permit(owner);
-            self.with_execution_resources(&permit, |resources| {
-                let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
-                op(buffers.get_mut(), gemm_analysis_cache)
-            })
-        })
+            .map_err(|error| crate::Error::backend_source("CPU linalg execution", error))?
     }
 
     fn with_execution_resources<R>(
@@ -1637,7 +2361,8 @@ impl CpuBackend {
 
     fn acquire_execution_permit(&self, owner: ResourceOwner) -> ResourcePermit {
         match &self.resolved {
-            ResolvedCpuExecution::Managed(placement) => self
+            ResolvedCpuExecution::Managed(placement)
+            | ResolvedCpuExecution::ExternalManaged(placement) => self
                 .shared
                 .arbiter
                 .acquire_recovering(placement.cpus().clone(), owner),
@@ -1649,6 +2374,25 @@ impl CpuBackend {
                 .shared
                 .arbiter
                 .acquire_provider_exclusive_recovering(owner),
+        }
+    }
+
+    #[cfg(test)]
+    fn try_acquire_execution_permit_for_test(
+        &self,
+    ) -> Result<Option<ResourcePermit>, crate::arbiter::ResourceArbiterError> {
+        match &self.resolved {
+            ResolvedCpuExecution::Managed(placement)
+            | ResolvedCpuExecution::ExternalManaged(placement) => {
+                self.shared.arbiter.try_acquire(placement.cpus().clone())
+            }
+            ResolvedCpuExecution::Compatibility => self
+                .shared
+                .arbiter
+                .try_acquire(self.shared.topology.allowed_cpus().clone()),
+            ResolvedCpuExecution::ProviderDefaultExclusive => {
+                self.shared.arbiter.try_acquire_provider_exclusive()
+            }
         }
     }
 }
@@ -1889,7 +2633,7 @@ impl TensorStructural for CpuBackend {
     }
 
     fn copy_read_into(&mut self, src: TensorRead<'_>, dst: TensorWrite<'_>) -> crate::Result<()> {
-        self.install(|| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
+        self.try_install(|| copy_tensor_read_into("CpuBackend::copy_read_into", src, dst))
     }
 
     fn transpose(&mut self, input: &Tensor, perm: &[usize]) -> crate::Result<Tensor> {
@@ -1901,11 +2645,20 @@ impl TensorStructural for CpuBackend {
     }
 
     fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| structural::reshape(input, shape))
+        self.try_install(|| structural::reshape(input, shape))
     }
 
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        self.install_with_pool(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
+        let materializes = matches!(&input, TensorRead::View(_));
+        if materializes {
+            self.install_with_pool(|buffers| {
+                structural::reshape_read_with_pool(buffers, input, shape)
+            })
+        } else {
+            self.install_with_pool_unmarked(|buffers| {
+                structural::reshape_read_with_pool(buffers, input, shape)
+            })
+        }
     }
 
     fn broadcast_in_dim(
@@ -1967,7 +2720,7 @@ impl TensorStructural for CpuBackend {
 
 impl TensorReduction for CpuBackend {
     fn reduce_sum(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_sum(input, axes))
+        self.try_install_fresh(|| reduction::reduce_sum(input, axes))
     }
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -1975,7 +2728,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_prod(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_prod(input, axes))
+        self.try_install_fresh(|| reduction::reduce_prod(input, axes))
     }
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -1983,7 +2736,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_max(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_max(input, axes))
+        self.try_install_fresh(|| reduction::reduce_max(input, axes))
     }
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -1991,7 +2744,7 @@ impl TensorReduction for CpuBackend {
     }
 
     fn reduce_min(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.install(|| reduction::reduce_min(input, axes))
+        self.try_install_fresh(|| reduction::reduce_min(input, axes))
     }
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
@@ -2006,8 +2759,7 @@ impl TensorDot for CpuBackend {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        let mut cache = gemm::GemmAnalysisCache::default();
-        BackendCachedDot::dot_general_cached(self, &mut cache, None, lhs, rhs, config)
+        self.run_backend_session_cached(None, move |session| session.dot_general(lhs, rhs, config))
     }
 
     fn dot_general_read(
@@ -2016,73 +2768,8 @@ impl TensorDot for CpuBackend {
         rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        let mut cache = gemm::GemmAnalysisCache::default();
-        if self.dot_general_provider.tries_tblis() {
-            #[cfg(feature = "cpu-tblis-provider")]
-            {
-                let direct = self.run_with_pool_and_gemm_cache(&mut cache, |buffers, _cache| {
-                    gemm::dot_general_tblis_read_cached(buffers, &lhs, &rhs, config)
-                })?;
-                if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
-                    return Ok(result);
-                }
-            }
-            #[cfg(not(feature = "cpu-tblis-provider"))]
-            {
-                if let Some(result) =
-                    self.tblis_unavailable_for_required::<Tensor>("dot_general")?
-                {
-                    return Ok(result);
-                }
-            }
-        }
-        let direct = match self.kind() {
-            CpuBackendKind::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    let ctx = self.engine.context_arc();
-                    self.install_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
-                        gemm::dot_general_faer_read_cached(
-                            buffers,
-                            cache,
-                            None,
-                            ctx.as_ref(),
-                            &lhs,
-                            &rhs,
-                            config,
-                        )
-                    })?
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    return Err(unavailable_cpu_backend_kind(self.kind(), "dot_general"));
-                }
-            }
-            CpuBackendKind::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    self.run_with_pool_and_gemm_cache(&mut cache, |buffers, cache| {
-                        gemm::dot_general_blas_read_cached(buffers, cache, None, &lhs, &rhs, config)
-                    })?
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    return Err(unavailable_cpu_backend_kind(self.kind(), "dot_general"));
-                }
-            }
-        };
-        if let Some(result) = direct {
-            return Ok(result);
-        }
-
-        let (lhs, rhs) = self.install_with_pool(|buffers| {
-            Ok::<_, crate::Error>((
-                materialize_tensor_read(buffers, "dot_general", lhs)?,
-                materialize_tensor_read(buffers, "dot_general", rhs)?,
-            ))
-        })?;
-        self.with_base_dot_general_provider(|this| {
-            BackendCachedDot::dot_general_cached(this, &mut cache, None, &lhs, &rhs, config)
+        self.run_backend_session_cached(None, move |session| {
+            session.dot_general_read(lhs, rhs, config)
         })
     }
 
@@ -2093,8 +2780,9 @@ impl TensorDot for CpuBackend {
         config: &DotGeneralConfig,
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        let accumulation = DotGeneralAccumulation::overwrite(lhs.dtype())?;
-        self.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
+        self.run_backend_session_cached(None, move |session| {
+            session.dot_general_read_into(lhs, rhs, config, out)
+        })
     }
 
     fn dot_general_read_into_accum(
@@ -2105,17 +2793,9 @@ impl TensorDot for CpuBackend {
         accumulation: DotGeneralAccumulation,
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        let mut cache = gemm::GemmAnalysisCache::default();
-        BackendCachedDot::dot_general_read_into_accum_cached(
-            self,
-            &mut cache,
-            None,
-            lhs,
-            rhs,
-            config,
-            accumulation,
-            out,
-        )
+        self.run_backend_session_cached(None, move |session| {
+            session.dot_general_read_into_accum(lhs, rhs, config, accumulation, out)
+        })
     }
 
     fn dot_general_with_conj(
@@ -2126,10 +2806,9 @@ impl TensorDot for CpuBackend {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
-        let mut cache = gemm::GemmAnalysisCache::default();
-        BackendCachedDot::dot_general_with_conj_cached(
-            self, &mut cache, None, lhs, rhs, config, lhs_conj, rhs_conj,
-        )
+        self.run_backend_session_cached(None, move |session| {
+            session.dot_general_with_conj(lhs, rhs, config, lhs_conj, rhs_conj)
+        })
     }
 }
 
@@ -2142,139 +2821,9 @@ impl BackendCachedDot for CpuBackend {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        if self.dot_general_provider.tries_tblis() {
-            #[cfg(feature = "cpu-tblis-provider")]
-            {
-                let direct = self.run_with_pool(|buffers| match (lhs, rhs) {
-                    (Tensor::F32(a), Tensor::F32(b)) => {
-                        gemm::dot_general_tblis_cached(buffers, a, b, config)
-                            .map(|result| result.map(Tensor::F32))
-                    }
-                    (Tensor::F64(a), Tensor::F64(b)) => {
-                        gemm::dot_general_tblis_cached(buffers, a, b, config)
-                            .map(|result| result.map(Tensor::F64))
-                    }
-                    (Tensor::C32(a), Tensor::C32(b)) => {
-                        gemm::dot_general_tblis_cached(buffers, a, b, config)
-                            .map(|result| result.map(Tensor::C32))
-                    }
-                    (Tensor::C64(a), Tensor::C64(b)) => {
-                        gemm::dot_general_tblis_cached(buffers, a, b, config)
-                            .map(|result| result.map(Tensor::C64))
-                    }
-                    _ if lhs.dtype() == rhs.dtype() => Ok(None),
-                    _ => Err(crate::Error::dtype_mismatch(
-                        "dot_general",
-                        lhs.dtype(),
-                        rhs.dtype(),
-                    )),
-                })?;
-                if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
-                    return Ok(result);
-                }
-            }
-            #[cfg(not(feature = "cpu-tblis-provider"))]
-            {
-                if let Some(result) =
-                    self.tblis_unavailable_for_required::<Tensor>("dot_general")?
-                {
-                    return Ok(result);
-                }
-            }
-        }
-        match self.kind() {
-            CpuBackendKind::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    let ctx = self.engine.context_arc();
-                    self.install_with_pool_and_gemm_cache(cache, |buffers, cache| {
-                        match (lhs, rhs) {
-                            (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_faer_cached(
-                                buffers,
-                                cache,
-                                cache_slot,
-                                ctx.as_ref(),
-                                a,
-                                b,
-                                config,
-                            )
-                            .map(Tensor::F32),
-                            (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_faer_cached(
-                                buffers,
-                                cache,
-                                cache_slot,
-                                ctx.as_ref(),
-                                a,
-                                b,
-                                config,
-                            )
-                            .map(Tensor::F64),
-                            (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_faer_cached(
-                                buffers,
-                                cache,
-                                cache_slot,
-                                ctx.as_ref(),
-                                a,
-                                b,
-                                config,
-                            )
-                            .map(Tensor::C32),
-                            (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_faer_cached(
-                                buffers,
-                                cache,
-                                cache_slot,
-                                ctx.as_ref(),
-                                a,
-                                b,
-                                config,
-                            )
-                            .map(Tensor::C64),
-                            _ => Err(crate::Error::dtype_mismatch(
-                                "dot_general",
-                                lhs.dtype(),
-                                rhs.dtype(),
-                            )),
-                        }
-                    })
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    Err(unavailable_cpu_backend_kind(self.kind(), "dot_general"))
-                }
-            }
-            CpuBackendKind::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    self.run_with_pool_and_gemm_cache(cache, |buffers, cache| match (lhs, rhs) {
-                        (Tensor::F32(a), Tensor::F32(b)) => {
-                            gemm::dot_general_blas_cached(buffers, cache, cache_slot, a, b, config)
-                                .map(Tensor::F32)
-                        }
-                        (Tensor::F64(a), Tensor::F64(b)) => {
-                            gemm::dot_general_blas_cached(buffers, cache, cache_slot, a, b, config)
-                                .map(Tensor::F64)
-                        }
-                        (Tensor::C32(a), Tensor::C32(b)) => {
-                            gemm::dot_general_blas_cached(buffers, cache, cache_slot, a, b, config)
-                                .map(Tensor::C32)
-                        }
-                        (Tensor::C64(a), Tensor::C64(b)) => {
-                            gemm::dot_general_blas_cached(buffers, cache, cache_slot, a, b, config)
-                                .map(Tensor::C64)
-                        }
-                        _ => Err(crate::Error::dtype_mismatch(
-                            "dot_general",
-                            lhs.dtype(),
-                            rhs.dtype(),
-                        )),
-                    })
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    Err(unavailable_cpu_backend_kind(self.kind(), "dot_general"))
-                }
-            }
-        }
+        self.run_backend_session_cached(Some(cache), move |session| {
+            session.dot_general_cached(cache_slot, lhs, rhs, config)
+        })
     }
 
     fn dot_general_with_conj_cached(
@@ -2287,163 +2836,9 @@ impl BackendCachedDot for CpuBackend {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
-        if self.dot_general_provider.tries_tblis() {
-            #[cfg(feature = "cpu-tblis-provider")]
-            {
-                let direct = self.run_with_pool(|buffers| match (lhs, rhs) {
-                    (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_tblis_with_conj_cached(
-                        buffers, a, b, config, lhs_conj, rhs_conj,
-                    )
-                    .map(|result| result.map(Tensor::F32)),
-                    (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_tblis_with_conj_cached(
-                        buffers, a, b, config, lhs_conj, rhs_conj,
-                    )
-                    .map(|result| result.map(Tensor::F64)),
-                    (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_tblis_with_conj_cached(
-                        buffers, a, b, config, lhs_conj, rhs_conj,
-                    )
-                    .map(|result| result.map(Tensor::C32)),
-                    (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_tblis_with_conj_cached(
-                        buffers, a, b, config, lhs_conj, rhs_conj,
-                    )
-                    .map(|result| result.map(Tensor::C64)),
-                    _ if lhs.dtype() == rhs.dtype() => Ok(None),
-                    _ => Err(crate::Error::dtype_mismatch(
-                        "dot_general",
-                        lhs.dtype(),
-                        rhs.dtype(),
-                    )),
-                })?;
-                if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
-                    return Ok(result);
-                }
-            }
-            #[cfg(not(feature = "cpu-tblis-provider"))]
-            {
-                if let Some(result) =
-                    self.tblis_unavailable_for_required::<Tensor>("dot_general")?
-                {
-                    return Ok(result);
-                }
-            }
-        }
-        match self.kind() {
-            CpuBackendKind::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    let ctx = self.engine.context_arc();
-                    self.install_with_pool_and_gemm_cache(cache, |buffers, cache| {
-                        match (lhs, rhs) {
-                            (Tensor::F32(a), Tensor::F32(b)) => {
-                                gemm::dot_general_faer_with_conj_cached(
-                                    buffers,
-                                    cache,
-                                    cache_slot,
-                                    ctx.as_ref(),
-                                    a,
-                                    b,
-                                    config,
-                                    lhs_conj,
-                                    rhs_conj,
-                                )
-                                .map(Tensor::F32)
-                            }
-                            (Tensor::F64(a), Tensor::F64(b)) => {
-                                gemm::dot_general_faer_with_conj_cached(
-                                    buffers,
-                                    cache,
-                                    cache_slot,
-                                    ctx.as_ref(),
-                                    a,
-                                    b,
-                                    config,
-                                    lhs_conj,
-                                    rhs_conj,
-                                )
-                                .map(Tensor::F64)
-                            }
-                            (Tensor::C32(a), Tensor::C32(b)) => {
-                                gemm::dot_general_faer_with_conj_cached(
-                                    buffers,
-                                    cache,
-                                    cache_slot,
-                                    ctx.as_ref(),
-                                    a,
-                                    b,
-                                    config,
-                                    lhs_conj,
-                                    rhs_conj,
-                                )
-                                .map(Tensor::C32)
-                            }
-                            (Tensor::C64(a), Tensor::C64(b)) => {
-                                gemm::dot_general_faer_with_conj_cached(
-                                    buffers,
-                                    cache,
-                                    cache_slot,
-                                    ctx.as_ref(),
-                                    a,
-                                    b,
-                                    config,
-                                    lhs_conj,
-                                    rhs_conj,
-                                )
-                                .map(Tensor::C64)
-                            }
-                            _ => Err(crate::Error::dtype_mismatch(
-                                "dot_general",
-                                lhs.dtype(),
-                                rhs.dtype(),
-                            )),
-                        }
-                    })
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    Err(unavailable_cpu_backend_kind(self.kind(), "dot_general"))
-                }
-            }
-            CpuBackendKind::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    self.run_with_pool_and_gemm_cache(cache, |buffers, cache| match (lhs, rhs) {
-                        (Tensor::F32(a), Tensor::F32(b)) => {
-                            gemm::dot_general_blas_with_conj_cached(
-                                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
-                            )
-                            .map(Tensor::F32)
-                        }
-                        (Tensor::F64(a), Tensor::F64(b)) => {
-                            gemm::dot_general_blas_with_conj_cached(
-                                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
-                            )
-                            .map(Tensor::F64)
-                        }
-                        (Tensor::C32(a), Tensor::C32(b)) => {
-                            gemm::dot_general_blas_with_conj_cached(
-                                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
-                            )
-                            .map(Tensor::C32)
-                        }
-                        (Tensor::C64(a), Tensor::C64(b)) => {
-                            gemm::dot_general_blas_with_conj_cached(
-                                buffers, cache, cache_slot, a, b, config, lhs_conj, rhs_conj,
-                            )
-                            .map(Tensor::C64)
-                        }
-                        _ => Err(crate::Error::dtype_mismatch(
-                            "dot_general",
-                            lhs.dtype(),
-                            rhs.dtype(),
-                        )),
-                    })
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    Err(unavailable_cpu_backend_kind(self.kind(), "dot_general"))
-                }
-            }
-        }
+        self.run_backend_session_cached(Some(cache), move |session| {
+            session.dot_general_with_conj_cached(cache_slot, lhs, rhs, config, lhs_conj, rhs_conj)
+        })
     }
 
     fn dot_general_read_into_accum_cached(
@@ -2454,125 +2849,32 @@ impl BackendCachedDot for CpuBackend {
         rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
         accumulation: DotGeneralAccumulation,
-        mut out: TensorWrite<'_>,
+        out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        validate_dot_general_accumulation(&lhs, &rhs, config, accumulation, &out, "dot_general")?;
-        if self.dot_general_provider.tries_tblis() {
-            #[cfg(feature = "cpu-tblis-provider")]
-            {
-                let direct = gemm::dot_general_tblis_read_into_accum_cached(
-                    &lhs,
-                    &rhs,
-                    config,
-                    accumulation,
-                    &mut out,
-                )?;
-                if direct {
-                    return Ok(());
-                }
-                self.tblis_not_applicable::<()>("dot_general", None)?;
-            }
-            #[cfg(not(feature = "cpu-tblis-provider"))]
-            {
-                self.tblis_unavailable_for_required::<()>("dot_general")?;
-            }
-        }
-        let direct = match self.kind() {
-            CpuBackendKind::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    let ctx = self.engine.context_arc();
-                    self.install_with_pool_and_gemm_cache(cache, |_buffers, cache| {
-                        gemm::dot_general_faer_read_into_accum_cached(
-                            cache,
-                            cache_slot,
-                            ctx.as_ref(),
-                            &lhs,
-                            &rhs,
-                            config,
-                            accumulation,
-                            &mut out,
-                        )
-                    })?
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    return Err(unavailable_cpu_backend_kind(self.kind(), "dot_general"));
-                }
-            }
-            CpuBackendKind::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    self.run_with_pool_and_gemm_cache(cache, |buffers, cache| {
-                        gemm::dot_general_blas_read_into_accum_cached(
-                            buffers,
-                            cache,
-                            cache_slot,
-                            &lhs,
-                            &rhs,
-                            config,
-                            accumulation,
-                            &mut out,
-                        )
-                    })?
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    return Err(unavailable_cpu_backend_kind(self.kind(), "dot_general"));
-                }
-            }
-        };
-        if direct {
-            return Ok(());
-        }
-
-        self.with_base_dot_general_provider(|this| {
-            dot_general_accum_via_temp(this, lhs, rhs, config, accumulation, out)
+        self.run_backend_session_cached(Some(cache), move |session| {
+            session.dot_general_read_into_accum_cached(
+                cache_slot,
+                lhs,
+                rhs,
+                config,
+                accumulation,
+                out,
+            )
         })
     }
 
     fn grouped_gemm_cached(
         &mut self,
-        _cache: &mut Self::RuntimeCache,
-        _cache_slot: Option<usize>,
+        cache: &mut Self::RuntimeCache,
+        cache_slot: Option<usize>,
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
         config: &GroupedGemmConfig<'_>,
-        mut out: TensorWrite<'_>,
+        out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        validate_grouped_gemm(&lhs, &rhs, &out, config, "grouped_gemm")?;
-        let direct = match self.kind() {
-            CpuBackendKind::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    let ctx = self.engine.context_arc();
-                    self.install_with_pool(|_buffers| {
-                        gemm::grouped_gemm_faer_cached(ctx.as_ref(), &lhs, &rhs, config, &mut out)
-                    })?
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    return Err(unavailable_cpu_backend_kind(self.kind(), "grouped_gemm"));
-                }
-            }
-            CpuBackendKind::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    self.run_with_pool(|_buffers| {
-                        gemm::grouped_gemm_blas_cached(&lhs, &rhs, config, &mut out)
-                    })?
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    return Err(unavailable_cpu_backend_kind(self.kind(), "grouped_gemm"));
-                }
-            }
-        };
-        if direct {
-            return Ok(());
-        }
-
-        grouped_gemm_via_sequential(self, lhs, rhs, config, out)
+        self.run_backend_session_cached(Some(cache), move |session| {
+            session.grouped_gemm_cached(cache_slot, lhs, rhs, config, out)
+        })
     }
 }
 
@@ -2700,22 +3002,26 @@ impl CpuBackend {
         cache: Option<&mut gemm::GemmAnalysisCache>,
         f: impl FnOnce(&mut dyn BackendSession) -> R + Send,
     ) -> R {
-        let ctx = self.engine.context_arc();
-        let kind = self.kind();
-        let dot_general_provider = self.dot_general_provider;
+        let providers = self.provider_bundle.clone();
         let owner = inherited_or_new_execution_owner();
         let permit = self.acquire_execution_permit(owner);
-        let run = || {
+        let entry = CpuOperationEntry::new(self.engine.domain(), &permit);
+        let enter_managed_session = entry.supports_infallible_session_entry()
+            && !matches!(
+                &self.resolved,
+                ResolvedCpuExecution::ProviderDefaultExclusive
+            );
+        let run = |entered| {
             self.with_execution_resources(&permit, |resources| {
                 let mut buffers = BufferPoolLoan::new(&mut resources.buffers);
                 let cache = cache.unwrap_or(&mut resources.gemm_analysis_cache);
                 let session_started = Instant::now();
                 let mut session = CpuExecSession {
-                    ctx: ctx.as_ref(),
+                    entry,
+                    entered,
                     buffers: buffers.get_mut(),
                     gemm_analysis_cache: cache,
-                    kind,
-                    dot_general_provider,
+                    providers: &providers,
                 };
                 record_cpu_session_profile(
                     "with_backend_session_cached.session_construct",
@@ -2730,9 +3036,10 @@ impl CpuBackend {
                 result
             })
         };
-        match kind {
-            CpuBackendKind::Faer => ctx.install_with_execution_owner(owner, run),
-            CpuBackendKind::Blas => with_execution_owner(owner, run),
+        if enter_managed_session {
+            entry.enter_managed_session(|context| run(Some(context)))
+        } else {
+            with_execution_owner(owner, || run(None))
         }
     }
 }
@@ -2806,7 +3113,7 @@ where
         src: &TypedTensorView<'_, T, R>,
         dst: &mut TypedTensorViewMut<'_, T, R>,
     ) -> crate::Result<()> {
-        self.install(|| structural::typed_copy_view_into(src, dst, "CpuBackend::copy_into"))
+        self.try_install(|| structural::typed_copy_view_into(src, dst, "CpuBackend::copy_into"))
     }
 }
 
@@ -2846,9 +3153,17 @@ impl TensorFusion for CpuBackend {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<TensorValue>> {
-        self.install_with_pool(|buffers| {
-            elementwise::broadcast_multiply_value_with_pool(
-                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+        let domain = self.engine.domain().id();
+        self.install_with_pool_unmarked(|buffers| {
+            elementwise::broadcast_multiply_value_with_pool_in_domain(
+                buffers,
+                lhs,
+                lhs_shape,
+                lhs_dims,
+                rhs,
+                rhs_shape,
+                rhs_dims,
+                Some(domain),
             )
         })
     }

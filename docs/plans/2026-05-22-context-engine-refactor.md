@@ -568,7 +568,7 @@ In `tenferro/src/lib.rs`:
 
 ```rust
 pub mod graph;
-pub use graph::{GraphCompiler, GraphCompilerCacheStats, GraphProgram, GraphProgramInput};
+pub use graph::{GraphCompiler, GraphCompilerCacheStats, GraphProgram, LegacyInputDescriptor};
 ```
 
 Do not remove `Engine` yet; that happens after all call sites migrate.
@@ -630,11 +630,11 @@ use crate::exec::ExecProgram;
 #[derive(Clone, Debug)]
 pub struct GraphProgram {
     pub(crate) exec: ExecProgram,
-    pub(crate) inputs: Vec<GraphProgramInput>,
+    pub(crate) inputs: Vec<LegacyInputDescriptor>,
 }
 
 #[derive(Clone, Debug)]
-pub struct GraphProgramInput {
+pub struct LegacyInputDescriptor {
     pub(crate) key: TensorInputKey,
     pub(crate) dtype: DType,
     pub(crate) shape: Vec<usize>,
@@ -643,7 +643,7 @@ pub struct GraphProgramInput {
 }
 
 impl GraphProgram {
-    pub(crate) fn new(exec: ExecProgram, inputs: Vec<GraphProgramInput>) -> Self {
+    pub(crate) fn new(exec: ExecProgram, inputs: Vec<LegacyInputDescriptor>) -> Self {
         Self { exec, inputs }
     }
 
@@ -655,12 +655,12 @@ impl GraphProgram {
         self.exec.output_slots.len()
     }
 
-    pub fn input_specs(&self) -> &[GraphProgramInput] {
+    pub fn input_specs(&self) -> &[LegacyInputDescriptor] {
         &self.inputs
     }
 }
 
-impl GraphProgramInput {
+impl LegacyInputDescriptor {
     pub fn dtype(&self) -> DType {
         self.dtype
     }
@@ -869,9 +869,9 @@ pub fn cache_stats(&self) -> GraphExecutorCacheStats;
 
 Input resolution rules:
 
-- `run()` uses `GraphProgramInput::default_tensor` for every program input.
+- `run()` uses `LegacyInputDescriptor::default_tensor` for every program input.
 - Missing default tensor returns `Error::UnboundPlaceholder`.
-- `run_with_inputs()` validates placeholder key, dtype, and shape against `GraphProgramInput`.
+- `run_with_inputs()` validates placeholder key, dtype, and shape against `LegacyInputDescriptor`.
 - Duplicate bindings return `Error::DuplicateBinding`.
 - Data-carrying leaves must not be rebound, preserving current `UnexpectedBinding` behavior.
 
@@ -1039,7 +1039,7 @@ fn traced_einsum_uses_compiler_for_static_graph_build_and_executor_for_run() {
     let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
 
     let mut compiler = GraphCompiler::new();
-    let out = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+    let out = legacy_einsum(&mut legacy_compiler, &[&a, &b], "ij,jk->ik").unwrap();
     assert!(compiler.cache_stats().static_einsum_plans.entries > 0);
     assert!(compiler.cache_stats().einsum_parse.entries > 0);
 
@@ -1056,7 +1056,7 @@ fn symbolic_einsum_reuses_executor_runtime_plan_cache() {
     let b = TracedTensor::input_symbolic_shape(tenferro::DType::F64, 2);
 
     let mut compiler = GraphCompiler::new();
-    let out = einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+    let out = legacy_einsum(&mut legacy_compiler, &[&a, &b], "ij,jk->ik").unwrap();
     let program = compiler
         .compile_with_input_specs(&out, &[(&a, tenferro::DType::F64, &[2, 3]), (&b, tenferro::DType::F64, &[3, 2])])
         .unwrap();

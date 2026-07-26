@@ -1,8 +1,9 @@
 use crate::ad::context::ShapeGuardContext;
+use crate::ad::ADRuleKind;
 use crate::dim_expr::DimExpr;
-use crate::ext_op::{ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionOp};
+use crate::ext_op::ExtensionOp;
 use crate::std_tensor_op::StdTensorOp;
-use crate::{ExtensionRuleSet, SymDim, TensorMeta};
+use crate::{SymDim, TensorMeta};
 use computegraph::graph::{Graph, GraphBuilder};
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use computegraph::GraphOperation;
@@ -13,7 +14,6 @@ use std::sync::Arc;
 use tenferro_tensor::{
     CompareDir, DType, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig,
 };
-use tidu::{ADRuleKind, ADRuleResult, Primitive};
 
 use crate::input_key::TensorInputKey;
 
@@ -449,7 +449,7 @@ fn test_std_tensor_op_linearize_add_delegates_to_ad_module() {
         ValueKey::Input(TensorInputKey::User { id: 11 }),
     ];
 
-    let result = StdTensorOp::add()
+    let result = StdTensorOp::Add
         .jvp_rule(
             &mut builder,
             &primal_in,
@@ -482,7 +482,7 @@ fn test_std_tensor_op_transpose_rule_add_fans_out_cotangent() {
         ValueRef::External(ValueKey::Input(TensorInputKey::User { id: 11 })),
     ];
 
-    let result = StdTensorOp::add()
+    let result = StdTensorOp::Add
         .transpose_rule(
             &mut builder,
             &[Some(ct)],
@@ -1031,7 +1031,7 @@ fn test_std_tensor_op_elementwise_special_cases_are_covered() {
     assert_eq!(abs_graph.operations()[0].operation, StdTensorOp::Sign);
     assert_eq!(abs_graph.operations()[1].operation, StdTensorOp::Mul);
 
-    let (sign_result, sign_graph) = run_linearize_case(StdTensorOp::Sign, 0, 0, &[true]);
+    let (sign_result, sign_graph) = run_linearize_case(StdTensorOp::Sign, 1, 0, &[true]);
     assert!(sign_result[0].is_some());
     assert_eq!(sign_graph.operations().len(), 2);
     assert_eq!(sign_graph.operations()[0].operation, StdTensorOp::Neg);

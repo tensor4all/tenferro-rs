@@ -62,7 +62,7 @@ fn eager_generated_constant_and_shape_outputs_are_uploaded_before_backend_ops() 
     let tensor_path = source_section(
         &eager_exec,
         "fn exec_standard_op_on_tensors",
-        "pub(crate) fn exec_op_on_tensors_with_extension_executor",
+        "pub(crate) fn exec_op_on_tensors_with_runtime",
     );
     assert_ordered_needles(
         "exec_standard_op_on_tensors",
@@ -113,14 +113,6 @@ fn eager_ad_seed_and_missing_tangent_zeroes_are_uploaded() {
     assert!(eager_one_like.contains(".upload_host_tensor(&host)"));
     assert!(!eager_one_like.contains(".exp("));
 
-    let eager_builder = ad_source("eager_builder.rs");
-    let builder_zero_like = source_section(
-        &eager_builder,
-        "fn zero_like_tensor<B: TensorBackend>",
-        "fn eager_builder_zero_like_end_marker_not_present",
-    );
-    assert!(builder_zero_like.contains(".upload_host_tensor(&host)"));
-
-    let backward = ad_source("eager/backward.rs");
-    assert!(backward.contains("zero_like_tensor(base.as_ref(), backend)"));
+    assert!(!eager.contains("tidu::"));
+    assert!(!eager.contains("ShapeGuardContext::with_global_metadata()"));
 }

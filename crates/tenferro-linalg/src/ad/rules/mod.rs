@@ -27,10 +27,10 @@ use tenferro_ops::ad::context::{resolve_and_guard, ShapeGuardContext};
 pub(crate) use tenferro_ops::ad::support::{
     conjugate_linear_if_dtype_complex, conjugate_primal_if_dtype_complex,
 };
-use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::ad::{ADRuleError, ADRuleKind, ADRuleResult};
+use tenferro_ops::dim_expr::{DimExpr, DimExprEvalError};
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_tensor::DType;
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 mod solve;
 mod support;
@@ -63,7 +63,18 @@ fn primal_input_shape(
         {
             Ok(Some(DimExpr::from_concrete(&concrete)))
         } else {
-            Ok(Some(DimExpr::input_shape(0, exact_shape.len())))
+            let mut shape = Vec::<DimExpr>::with_capacity(exact_shape.len());
+            for (axis, dim) in exact_shape.iter().enumerate() {
+                if let Some(equal_axis) = exact_shape[..axis]
+                    .iter()
+                    .position(|candidate| candidate == dim)
+                {
+                    shape.push(shape[equal_axis].clone());
+                } else {
+                    shape.push(DimExpr::InputDim { input_idx: 0, axis });
+                }
+            }
+            Ok(Some(shape))
         };
     }
 
@@ -93,6 +104,23 @@ fn invalid_dim_expr(op: &'static str, err: impl std::fmt::Display) -> ADRuleErro
     )
 }
 
+/// Resolve concrete rectangular dimensions, or recognize a structurally
+/// square symbolic matrix without inventing concrete extent values.
+fn concrete_rectangular_dims(
+    m: &DimExpr,
+    n: &DimExpr,
+    ctx: &mut ShapeGuardContext,
+    op: &'static str,
+) -> ADRuleResult<Option<(usize, usize)>> {
+    match resolve_and_guard(m, n, ctx) {
+        Ok(dimensions) => Ok(Some(dimensions)),
+        Err(
+            DimExprEvalError::InputOutOfBounds { .. } | DimExprEvalError::AxisOutOfBounds { .. },
+        ) => Ok(None),
+        Err(error) => Err(invalid_dim_expr(op, error)),
+    }
+}
+
 pub(crate) fn linearize_lu(
     builder: &mut dyn PrimitiveRuleBuilder,
     primal_in: &[ValueKey<StdTensorOp>],
@@ -115,32 +143,104 @@ pub(crate) fn linearize_lu(
     };
     let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_lu");
-    let (m_size, n_size) =
-        resolve_and_guard(m, n, ctx).map_err(|err| invalid_dim_expr("linearize_lu", err))?;
-    let k_size = m_size.min(n_size);
+    let concrete_dims = concrete_rectangular_dims(m, n, ctx, "linearize_lu")?;
+    let k = DimExpr::min(m.clone(), n.clone());
     let rank = input_shape.len();
     let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let p = ValueRef::External(primal_out[0].clone());
     let l = ValueRef::External(primal_out[1].clone());
     let u = ValueRef::External(primal_out[2].clone());
-    let l_square = if m_size == k_size {
-        l.clone()
-    } else {
-        ValueRef::Local(augment_unit_lower_to_square_fixed(
-            builder,
-            l.clone(),
-            SquareAugmentSpec::new(dtype, m_size, k_size, batch_shape, rank),
-        ))
-    };
-    let u_square = if k_size == n_size {
-        u.clone()
-    } else {
-        ValueRef::Local(augment_upper_to_square_fixed(
-            builder,
-            u.clone(),
-            SquareAugmentSpec::new(dtype, k_size, n_size, batch_shape, rank),
-        ))
-    };
+    let (l_square, u_square, symbolic_l_selector, symbolic_u_selector_t) =
+        if let Some((m_size, n_size)) = concrete_dims {
+            let l_square = if m_size > n_size {
+                ValueRef::Local(augment_unit_lower_to_square_fixed(
+                    builder,
+                    l.clone(),
+                    SquareAugmentSpec::new(dtype, m_size, n_size, batch_shape, rank),
+                ))
+            } else {
+                l.clone()
+            };
+            let u_square = if n_size > m_size {
+                ValueRef::Local(augment_upper_to_square_fixed(
+                    builder,
+                    u.clone(),
+                    SquareAugmentSpec::new(dtype, m_size, n_size, batch_shape, rank),
+                ))
+            } else {
+                u.clone()
+            };
+            (l_square, u_square, None, None)
+        } else {
+            let l_selector = leading_column_selector_symbolic(
+                builder,
+                dtype,
+                k.clone(),
+                m.clone(),
+                batch_shape,
+                l.clone(),
+            );
+            let u_selector = leading_column_selector_symbolic(
+                builder,
+                dtype,
+                k,
+                n.clone(),
+                batch_shape,
+                u.clone(),
+            );
+            let strict_lower = fixed_unary(builder, StdTensorOp::Tril { k: -1 }, l.clone());
+            let strict_lower_square = matmul_fixed(
+                builder,
+                ValueRef::Local(strict_lower),
+                ValueRef::Local(l_selector),
+                rank,
+            );
+            let identity_m = leading_column_selector_symbolic(
+                builder,
+                dtype,
+                m.clone(),
+                m.clone(),
+                batch_shape,
+                l.clone(),
+            );
+            let l_square = fixed_add(
+                builder,
+                ValueRef::Local(strict_lower_square),
+                ValueRef::Local(identity_m),
+            );
+            let u_selector_t = transpose_matrix_fixed(builder, ValueRef::Local(u_selector), rank);
+            let embedded_u = matmul_fixed(builder, ValueRef::Local(u_selector_t), u.clone(), rank);
+            let leading_identity = matmul_fixed(
+                builder,
+                ValueRef::Local(u_selector_t),
+                ValueRef::Local(u_selector),
+                rank,
+            );
+            let identity_n = leading_column_selector_symbolic(
+                builder,
+                dtype,
+                n.clone(),
+                n.clone(),
+                batch_shape,
+                u.clone(),
+            );
+            let trailing_identity = fixed_sub(
+                builder,
+                ValueRef::Local(identity_n),
+                ValueRef::Local(leading_identity),
+            );
+            let u_square = fixed_add(
+                builder,
+                ValueRef::Local(embedded_u),
+                ValueRef::Local(trailing_identity),
+            );
+            (
+                ValueRef::Local(l_square),
+                ValueRef::Local(u_square),
+                Some(l_selector),
+                Some(u_selector_t),
+            )
+        };
 
     let pd_a = matmul_linear(builder, p, ValueRef::Local(da), vec![false, true], rank);
     let la = builder.add_operation(
@@ -177,14 +277,20 @@ pub(crate) fn linearize_lu(
             vec![false, true],
             rank,
         );
-        Some(if n_size > k_size {
-            take_leading_cols_linear(
+        Some(match (concrete_dims, symbolic_u_selector_t) {
+            (Some((m_size, n_size)), _) if n_size > m_size => take_leading_cols_linear(
                 builder,
                 dl_full,
-                LeadingMatrixSlice::new(k_size, n_size, dtype, batch_shape, l.clone(), rank),
-            )
-        } else {
-            dl_full
+                LeadingMatrixSlice::new(m_size, n_size, dtype, batch_shape, l.clone(), rank),
+            ),
+            (None, Some(selector_t)) => matmul_linear(
+                builder,
+                ValueRef::Local(dl_full),
+                ValueRef::Local(selector_t),
+                vec![true, false],
+                rank,
+            ),
+            _ => dl_full,
         })
     } else {
         None
@@ -198,20 +304,132 @@ pub(crate) fn linearize_lu(
             vec![true, false],
             rank,
         );
-        Some(if m_size > k_size {
-            take_leading_rows_linear(
+        Some(match (concrete_dims, symbolic_l_selector) {
+            (Some((m_size, n_size)), _) if m_size > n_size => take_leading_rows_linear(
                 builder,
                 du_full,
-                LeadingMatrixSlice::new(k_size, m_size, dtype, batch_shape, u.clone(), rank),
-            )
-        } else {
-            du_full
+                LeadingMatrixSlice::new(n_size, m_size, dtype, batch_shape, u.clone(), rank),
+            ),
+            (None, Some(selector)) => matmul_linear(
+                builder,
+                ValueRef::Local(selector),
+                ValueRef::Local(du_full),
+                vec![false, true],
+                rank,
+            ),
+            _ => du_full,
         })
     } else {
         None
     };
 
     Ok(vec![None, dl, du, None])
+}
+
+pub(crate) fn linearize_logabsdet_from_lu_factor(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    let Some((trace, dtype)) = linearize_logdet_trace(
+        builder,
+        primal_in,
+        tangent_in,
+        ctx,
+        "linearize_logabsdet_from_lu_factor",
+    )?
+    else {
+        return Ok(vec![None]);
+    };
+    Ok(vec![Some(convert_linear_to_dtype(
+        builder,
+        trace,
+        dtype,
+        real_values_dtype(dtype),
+    ))])
+}
+
+pub(crate) fn linearize_signdet_from_lu_factor(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    primal_out: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+) -> ADRuleResult<Vec<Option<LocalValueId>>> {
+    if !ctx.is_value_active_in_linearize(&primal_out[0]) {
+        return Ok(vec![None]);
+    }
+    let Some((trace, dtype)) = linearize_logdet_trace(
+        builder,
+        primal_in,
+        tangent_in,
+        ctx,
+        "linearize_signdet_from_lu_factor",
+    )?
+    else {
+        return Ok(vec![None]);
+    };
+    if !matches!(dtype, DType::C32 | DType::C64) {
+        return Ok(vec![None]);
+    }
+
+    let real_dtype = real_values_dtype(dtype);
+    let trace_real = convert_linear_to_dtype(builder, trace, dtype, real_dtype);
+    let trace_real_as_complex = convert_linear_to_dtype(builder, trace_real, real_dtype, dtype);
+    let phase_trace = linear_sub(builder, trace, trace_real_as_complex);
+    Ok(vec![Some(hadamard_fixed_linear(
+        builder,
+        ValueRef::External(primal_out[0].clone()),
+        phase_trace,
+    ))])
+}
+
+fn linearize_logdet_trace(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    primal_in: &[ValueKey<StdTensorOp>],
+    tangent_in: &[Option<LocalValueId>],
+    ctx: &mut ShapeGuardContext,
+    op_name: &'static str,
+) -> ADRuleResult<Option<(LocalValueId, DType)>> {
+    let Some(da) = tangent_in[0] else {
+        return Ok(None);
+    };
+
+    let Some(input_shape) = primal_matrix_input_shape(ctx, primal_in)? else {
+        return Ok(None);
+    };
+    let input_shape = input_shape.as_slice();
+    let (rows, cols, _batch_shape) = matrix_shape_parts(input_shape, op_name);
+    let concrete_dims = concrete_rectangular_dims(rows, cols, ctx, op_name)?;
+    if concrete_dims.is_none() && rows != cols {
+        return Err(ADRuleError::invalid_input(
+            format!("tenferro-linalg.{op_name}"),
+            ADRuleKind::Jvp,
+            "determinant differentiation requires a provably square matrix",
+        ));
+    }
+    if concrete_dims.is_some_and(|(rows_size, cols_size)| rows_size != cols_size) {
+        return Ok(None);
+    }
+
+    let rank = input_shape.len();
+    let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
+    let solved = solve_in_graph(
+        builder,
+        ValueRef::External(primal_in[0].clone()),
+        ValueRef::Local(da),
+        rank,
+    );
+    let diagonal = extract_diag_linear(builder, solved);
+    let trace = builder.add_operation(
+        StdTensorOp::ReduceSum { axes: vec![0] },
+        vec![ValueRef::Local(diagonal)],
+        OperationRole::Linearized {
+            active_mask: vec![true],
+        },
+    )[0];
+    Ok(Some((trace, dtype)))
 }
 
 pub(crate) fn linearize_full_piv_lu(
@@ -230,9 +448,15 @@ pub(crate) fn linearize_full_piv_lu(
     };
     let input_shape = input_shape.as_slice();
     let (rows, cols, _batch_shape) = matrix_shape_parts(input_shape, "linearize_full_piv_lu");
-    let (rows_size, cols_size) = resolve_and_guard(rows, cols, ctx)
-        .map_err(|err| invalid_dim_expr("linearize_full_piv_lu", err))?;
-    if rows_size != cols_size {
+    let concrete_dims = concrete_rectangular_dims(rows, cols, ctx, "linearize_full_piv_lu")?;
+    if concrete_dims.is_none() && rows != cols {
+        return Err(ADRuleError::invalid_input(
+            "tenferro-linalg.linearize_full_piv_lu",
+            ADRuleKind::Jvp,
+            "full-pivot LU differentiation requires provably equal symbolic matrix dimensions",
+        ));
+    }
+    if concrete_dims.is_some_and(|(rows_size, cols_size)| rows_size != cols_size) {
         return Ok(vec![None, None, None, None, None]);
     }
 
@@ -438,8 +662,7 @@ pub(crate) fn linearize_svd(
     };
     let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_svd");
-    let (m_size, n_size) =
-        resolve_and_guard(m, n, ctx).map_err(|err| invalid_dim_expr("linearize_svd", err))?;
+    let concrete_dims = concrete_rectangular_dims(m, n, ctx, "linearize_svd")?;
     let matrix_rank = input_shape.len();
     let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let k = DimExpr::min(m.clone(), n.clone());
@@ -464,7 +687,10 @@ pub(crate) fn linearize_svd(
         vec![true, false],
         matrix_rank,
     );
-    let ds = s_active.then(|| extract_diag_linear(builder, ds_mat));
+    let ds = s_active.then(|| {
+        let ds = extract_diag_linear(builder, ds_mat);
+        convert_linear_to_dtype(builder, ds, dtype, s_dtype)
+    });
 
     if !u_active && !vt_active {
         return Ok(vec![None, ds, None]);
@@ -488,43 +714,53 @@ pub(crate) fn linearize_svd(
     let s_diff = fixed_sub(builder, ValueRef::Local(s_dim), ValueRef::Local(s_dim_t));
     let s_gap = fixed_mul(builder, ValueRef::Local(s_sum), ValueRef::Local(s_diff));
     let s_gap_sq = fixed_mul(builder, ValueRef::Local(s_gap), ValueRef::Local(s_gap));
-    let eps_sq = fixed_scale(
+    let eps_sq = fixed_scale_with_dtype(
         builder,
         ValueRef::Local(ones_mat),
         eps * eps,
         matrix_shape(k.clone(), k.clone(), batch_shape),
+        s_dtype,
     );
     let safe_gap = fixed_add(builder, ValueRef::Local(s_gap_sq), ValueRef::Local(eps_sq));
     let f = fixed_div(builder, ValueRef::Local(s_gap), ValueRef::Local(safe_gap));
+    let s_dim_linear_dtype =
+        convert_fixed_ref_to_dtype(builder, ValueRef::Local(s_dim), s_dtype, dtype);
+    let s_dim_t_linear_dtype =
+        convert_fixed_ref_to_dtype(builder, ValueRef::Local(s_dim_t), s_dtype, dtype);
+    let f_linear_dtype = convert_fixed_ref_to_dtype(builder, ValueRef::Local(f), s_dtype, dtype);
 
     let du = if u_active {
         let s_ones = one_like_fixed(builder, s_dtype, s.clone(), matrix_rank - 1);
         let s_sq = fixed_mul(builder, s.clone(), s.clone());
-        let s_eps_sq = fixed_scale(
+        let s_eps_sq = fixed_scale_with_dtype(
             builder,
             ValueRef::Local(s_ones),
             eps * eps,
             vector_shape(k.clone(), batch_shape),
+            s_dtype,
         );
         let safe_s_sq = fixed_add(builder, ValueRef::Local(s_sq), ValueRef::Local(s_eps_sq));
         let s_inv = fixed_div(builder, s.clone(), ValueRef::Local(safe_s_sq));
         let s_inv_mat = embed_diag_fixed(builder, ValueRef::Local(s_inv));
+        let s_inv_mat =
+            convert_fixed_ref_to_dtype(builder, ValueRef::Local(s_inv_mat), s_dtype, dtype);
 
         let ds_h = adjoint_matrix_linear(builder, ds_mat, matrix_rank, dtype);
         let anti_hermitian = linear_sub(builder, ds_mat, ds_h);
         // Matches JAX's complex gauge correction: 0.5 * (dS - dS^H) * diag(1 / s).
-        let d_udv_diag = hadamard_fixed_linear(builder, ValueRef::Local(s_inv_mat), anti_hermitian);
-        let d_udv_diag = linear_scale(
+        let d_udv_diag = hadamard_fixed_linear(builder, s_inv_mat, anti_hermitian);
+        let d_udv_diag = linear_scale_with_dtype(
             builder,
             d_udv_diag,
             0.5,
             matrix_shape(k.clone(), k.clone(), batch_shape),
+            dtype,
         );
 
-        let dss = hadamard_fixed_linear(builder, ValueRef::Local(s_dim), ds_mat);
+        let dss = hadamard_fixed_linear(builder, s_dim_linear_dtype.clone(), ds_mat);
         let dss_h = adjoint_matrix_linear(builder, dss, matrix_rank, dtype);
         let du_inner_sum = linear_add(builder, dss, dss_h);
-        let du_inner = hadamard_fixed_linear(builder, ValueRef::Local(f), du_inner_sum);
+        let du_inner = hadamard_fixed_linear(builder, f_linear_dtype.clone(), du_inner_sum);
         let du_inner = linear_add(builder, du_inner, d_udv_diag);
         let mut du = matmul_linear(
             builder,
@@ -534,7 +770,7 @@ pub(crate) fn linearize_svd(
             matrix_rank,
         );
 
-        if m_size > n_size {
+        if concrete_dims.is_none_or(|(m_size, n_size)| m_size > n_size) {
             let d_av = matmul_linear(
                 builder,
                 ValueRef::Local(da),
@@ -563,7 +799,9 @@ pub(crate) fn linearize_svd(
                 matrix_shape(m, &k, batch_shape),
                 vector_to_matrix_broadcast_dims(batch_shape.len()),
             );
-            let correction = linear_div_fixed(builder, proj, ValueRef::Local(s_broadcast));
+            let s_broadcast =
+                convert_fixed_ref_to_dtype(builder, ValueRef::Local(s_broadcast), s_dtype, dtype);
+            let correction = linear_div_fixed(builder, proj, s_broadcast);
             du = linear_add(builder, du, correction);
         }
         Some(du)
@@ -572,10 +810,10 @@ pub(crate) fn linearize_svd(
     };
 
     let dvt = if vt_active {
-        let sds = hadamard_fixed_linear(builder, ValueRef::Local(s_dim_t), ds_mat);
+        let sds = hadamard_fixed_linear(builder, s_dim_t_linear_dtype, ds_mat);
         let sds_h = adjoint_matrix_linear(builder, sds, matrix_rank, dtype);
         let dv_inner_sum = linear_add(builder, sds, sds_h);
-        let dv_inner = hadamard_fixed_linear(builder, ValueRef::Local(f), dv_inner_sum);
+        let dv_inner = hadamard_fixed_linear(builder, f_linear_dtype, dv_inner_sum);
         let mut dv = matmul_linear(
             builder,
             ValueRef::Local(v),
@@ -584,7 +822,7 @@ pub(crate) fn linearize_svd(
             matrix_rank,
         );
 
-        if n_size > m_size {
+        if concrete_dims.is_none_or(|(m_size, n_size)| n_size > m_size) {
             let da_h = adjoint_matrix_linear(builder, da, matrix_rank, dtype);
             let d_ahu = matmul_linear(
                 builder,
@@ -614,7 +852,9 @@ pub(crate) fn linearize_svd(
                 matrix_shape(n, &k, batch_shape),
                 vector_to_matrix_broadcast_dims(batch_shape.len()),
             );
-            let correction = linear_div_fixed(builder, proj, ValueRef::Local(s_broadcast));
+            let s_broadcast =
+                convert_fixed_ref_to_dtype(builder, ValueRef::Local(s_broadcast), s_dtype, dtype);
+            let correction = linear_div_fixed(builder, proj, s_broadcast);
             dv = linear_add(builder, dv, correction);
         }
 
@@ -669,7 +909,14 @@ pub(crate) fn linearize_svd_values(
         vec![true, false],
         matrix_rank,
     );
-    Ok(vec![Some(extract_diag_linear(builder, ds_mat))])
+    let values_dtype = real_values_dtype(dtype);
+    let ds = extract_diag_linear(builder, ds_mat);
+    Ok(vec![Some(convert_linear_to_dtype(
+        builder,
+        ds,
+        dtype,
+        values_dtype,
+    ))])
 }
 
 pub(crate) fn linearize_eigh(
@@ -750,11 +997,12 @@ pub(crate) fn linearize_eigh(
     );
     let diff = fixed_sub(builder, ValueRef::Local(w_row), ValueRef::Local(w_col));
     let diff_sq = fixed_mul(builder, ValueRef::Local(diff), ValueRef::Local(diff));
-    let eps_sq = fixed_scale(
+    let eps_sq = fixed_scale_with_dtype(
         builder,
         ValueRef::Local(ones_mat),
         eps * eps,
         matrix_shape(n.clone(), n.clone(), batch_shape),
+        w_dtype,
     );
     let safe_diff = fixed_add(builder, ValueRef::Local(diff_sq), ValueRef::Local(eps_sq));
     let f = fixed_div(builder, ValueRef::Local(diff), ValueRef::Local(safe_diff));
@@ -821,7 +1069,22 @@ pub(crate) fn linearize_eigh_values(
         matrix_rank,
     );
 
-    Ok(vec![Some(extract_diag_linear(builder, projected))])
+    let values_dtype = real_values_dtype(dtype);
+    let dw = extract_diag_linear(builder, projected);
+    Ok(vec![Some(convert_linear_to_dtype(
+        builder,
+        dw,
+        dtype,
+        values_dtype,
+    ))])
+}
+
+fn real_values_dtype(dtype: DType) -> DType {
+    match dtype {
+        DType::C64 => DType::F64,
+        DType::C32 => DType::F32,
+        other => other,
+    }
 }
 
 pub(crate) fn linearize_cholesky(
@@ -885,7 +1148,13 @@ pub(crate) fn linearize_cholesky(
         },
     )[0];
     let diag_s = extract_diag_linear(builder, s);
-    let half_diag = linear_scale(builder, diag_s, 0.5, vector_shape(n.clone(), batch_shape));
+    let half_diag = linear_scale_with_dtype(
+        builder,
+        diag_s,
+        0.5,
+        vector_shape(n.clone(), batch_shape),
+        dtype,
+    );
     let half_diag_mat = embed_diag_linear(builder, half_diag);
     let phi_s = linear_add(builder, strict_lower, half_diag_mat);
     let dl = matmul_linear(
@@ -921,14 +1190,13 @@ pub(crate) fn linearize_qr(
     };
     let input_shape = input_shape.as_slice();
     let (m, n, batch_shape) = matrix_shape_parts(input_shape, "linearize_qr");
-    let (m_size, n_size) =
-        resolve_and_guard(m, n, ctx).map_err(|err| invalid_dim_expr("linearize_qr", err))?;
+    let concrete_dims = concrete_rectangular_dims(m, n, ctx, "linearize_qr")?;
     let matrix_rank = input_shape.len();
     let dtype = ctx.dtype_of(&ValueRef::External(primal_in[0].clone()))?;
     let q = ValueRef::External(primal_out[0].clone());
     let r = ValueRef::External(primal_out[1].clone());
 
-    if n_size > m_size {
+    if let Some((m_size, n_size)) = concrete_dims.filter(|(m_size, n_size)| n_size > m_size) {
         let qh = adjoint_matrix_fixed(builder, q.clone(), matrix_rank, dtype);
         let leading_selector =
             leading_column_selector_fixed(builder, dtype, m_size, n_size, batch_shape, r.clone());
@@ -980,8 +1248,13 @@ pub(crate) fn linearize_qr(
             },
         )[0];
         let sym_diag = extract_diag_linear(builder, sym);
-        let half_sym_diag =
-            linear_scale(builder, sym_diag, 0.5, vector_shape(m.clone(), batch_shape));
+        let half_sym_diag = linear_scale_with_dtype(
+            builder,
+            sym_diag,
+            0.5,
+            vector_shape(m.clone(), batch_shape),
+            dtype,
+        );
         let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
         let dr_leading_hat = linear_add(builder, upper, half_sym_diag_mat);
 
@@ -1073,6 +1346,129 @@ pub(crate) fn linearize_qr(
         return Ok(vec![dq, dr]);
     }
 
+    if concrete_dims.is_none() {
+        let k = DimExpr::min(m.clone(), n.clone());
+        let qh = adjoint_matrix_fixed(builder, q.clone(), matrix_rank, dtype);
+        let leading_selector = leading_column_selector_symbolic(
+            builder,
+            dtype,
+            k.clone(),
+            n.clone(),
+            batch_shape,
+            r.clone(),
+        );
+        let leading_selector_t =
+            transpose_matrix_fixed(builder, ValueRef::Local(leading_selector), matrix_rank);
+        let da_leading = matmul_linear(
+            builder,
+            ValueRef::Local(da),
+            ValueRef::Local(leading_selector_t),
+            vec![true, false],
+            matrix_rank,
+        );
+        let r_leading = matmul_fixed(
+            builder,
+            r.clone(),
+            ValueRef::Local(leading_selector_t),
+            matrix_rank,
+        );
+        let r_leading_h =
+            adjoint_matrix_fixed(builder, ValueRef::Local(r_leading), matrix_rank, dtype);
+        let da_leading_h = adjoint_matrix_linear(builder, da_leading, matrix_rank, dtype);
+        let dx_rinv_h = builder.add_operation(
+            linalg_std_op(LinalgOp::TriangularSolve {
+                left_side: true,
+                lower: true,
+                transpose_a: false,
+                unit_diagonal: false,
+            }),
+            vec![ValueRef::Local(r_leading_h), ValueRef::Local(da_leading_h)],
+            OperationRole::Linearized {
+                active_mask: vec![false, true],
+            },
+        )[0];
+        let dx_rinv = adjoint_matrix_linear(builder, dx_rinv_h, matrix_rank, dtype);
+        let qt_dx_rinv = matmul_linear(
+            builder,
+            ValueRef::Local(qh),
+            ValueRef::Local(dx_rinv),
+            vec![false, true],
+            matrix_rank,
+        );
+        let qt_dx_rinv_h = adjoint_matrix_linear(builder, qt_dx_rinv, matrix_rank, dtype);
+        let sym = linear_add(builder, qt_dx_rinv, qt_dx_rinv_h);
+        let upper = builder.add_operation(
+            StdTensorOp::Triu { k: 1 },
+            vec![ValueRef::Local(sym)],
+            OperationRole::Linearized {
+                active_mask: vec![true],
+            },
+        )[0];
+        let sym_diag = extract_diag_linear(builder, sym);
+        let half_sym_diag =
+            linear_scale_with_dtype(builder, sym_diag, 0.5, vector_shape(k, batch_shape), dtype);
+        let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
+        let dr_leading_hat = linear_add(builder, upper, half_sym_diag_mat);
+
+        let dq = if q_active {
+            let q_dr_leading_hat = matmul_linear(
+                builder,
+                q.clone(),
+                ValueRef::Local(dr_leading_hat),
+                vec![false, true],
+                matrix_rank,
+            );
+            Some(linear_sub(builder, dx_rinv, q_dr_leading_hat))
+        } else {
+            None
+        };
+        let dr = if r_active {
+            let qt_da = matmul_linear(
+                builder,
+                ValueRef::Local(qh),
+                ValueRef::Local(da),
+                vec![false, true],
+                matrix_rank,
+            );
+            let omega = linear_sub(builder, qt_dx_rinv, dr_leading_hat);
+            let omega_r = matmul_linear(
+                builder,
+                ValueRef::Local(omega),
+                r.clone(),
+                vec![true, false],
+                matrix_rank,
+            );
+            let base = linear_sub(builder, qt_da, omega_r);
+            let base_leading = matmul_linear(
+                builder,
+                ValueRef::Local(base),
+                ValueRef::Local(leading_selector_t),
+                vec![true, false],
+                matrix_rank,
+            );
+            let desired_leading = matmul_linear(
+                builder,
+                ValueRef::Local(dr_leading_hat),
+                ValueRef::Local(r_leading),
+                vec![true, false],
+                matrix_rank,
+            );
+            let leading_correction = linear_sub(builder, desired_leading, base_leading);
+            let full_correction = matmul_linear(
+                builder,
+                ValueRef::Local(leading_correction),
+                ValueRef::Local(leading_selector),
+                vec![true, false],
+                matrix_rank,
+            );
+            Some(linear_add(builder, base, full_correction))
+        } else {
+            None
+        };
+
+        return Ok(vec![dq, dr]);
+    }
+
     let r_h = adjoint_matrix_fixed(builder, r.clone(), matrix_rank, dtype);
     let da_h = adjoint_matrix_linear(builder, da, matrix_rank, dtype);
     let dx_rinv_h = builder.add_operation(
@@ -1106,7 +1502,13 @@ pub(crate) fn linearize_qr(
         },
     )[0];
     let sym_diag = extract_diag_linear(builder, sym);
-    let half_sym_diag = linear_scale(builder, sym_diag, 0.5, vector_shape(n.clone(), batch_shape));
+    let half_sym_diag = linear_scale_with_dtype(
+        builder,
+        sym_diag,
+        0.5,
+        vector_shape(n.clone(), batch_shape),
+        dtype,
+    );
     let half_sym_diag_mat = embed_diag_linear(builder, half_sym_diag);
     let dr_hat = linear_add(builder, upper, half_sym_diag_mat);
 

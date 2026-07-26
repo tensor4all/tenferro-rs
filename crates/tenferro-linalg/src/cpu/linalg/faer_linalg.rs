@@ -7,7 +7,7 @@ use num_complex::{Complex32, Complex64};
 use std::ops::Range;
 
 use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
-use tenferro_cpu::CpuContext;
+use tenferro_cpu::CpuExecutionContext;
 use tenferro_tensor::{Tensor, TypedTensor, TypedTensorView};
 
 pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
@@ -15,34 +15,34 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
 
     fn parity_one() -> Self;
     fn cholesky_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self>>;
     fn lu_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
     fn lu_factor_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<i32>, TypedTensor<Self>)>;
     fn full_piv_lu_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
     fn full_piv_lu_solve_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
         transpose_a: bool,
     ) -> tenferro_tensor::Result<TypedTensor<Self>>;
     fn solve_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
@@ -51,7 +51,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
     // Mirrors triangular-solve math flags directly at the scalar backend boundary.
     #[allow(clippy::too_many_arguments)]
     fn triangular_solve_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
@@ -61,28 +61,28 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         unit_diagonal: bool,
     ) -> tenferro_tensor::Result<TypedTensor<Self>>;
     fn svd_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
         full: bool,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
     fn svd_values_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>>;
     fn qr_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
     fn eigh_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
     fn eigh_values_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>>;
@@ -101,7 +101,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         col_stride: isize,
     ) -> MatRef<'a, Self>;
     fn svd_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         m: usize,
@@ -110,7 +110,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
     fn qr_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         m: usize,
@@ -118,20 +118,20 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
     fn eigh_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
     fn cholesky_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
     ) -> tenferro_tensor::Result<Vec<Self>>;
     fn lu_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         m: usize,
@@ -139,7 +139,7 @@ pub(crate) trait FaerLinalg: Copy + Clone + PoolScalar {
         placement: &tenferro_tensor::Placement,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>>;
     fn full_piv_lu_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
@@ -1017,7 +1017,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn cholesky_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
@@ -1031,7 +1031,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn cholesky_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         _buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
@@ -1041,7 +1041,7 @@ macro_rules! impl_faer_linalg_for_real {
         let mut mem = MemBuffer::new(
             faer::linalg::cholesky::llt::factor::cholesky_in_place_scratch::<Self>(
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -1049,7 +1049,7 @@ macro_rules! impl_faer_linalg_for_real {
         faer::linalg::cholesky::llt::factor::cholesky_in_place(
             l.as_mut(),
             Default::default(),
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -1058,7 +1058,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn lu_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
@@ -1068,7 +1068,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn lu_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         _buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         m: usize,
@@ -1084,7 +1084,7 @@ macro_rules! impl_faer_linalg_for_real {
             faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, Self>(
                 m,
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -1093,7 +1093,7 @@ macro_rules! impl_faer_linalg_for_real {
             lu.as_mut(),
             &mut perm,
             &mut perm_inv,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -1125,7 +1125,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn lu_factor_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<i32>, TypedTensor<Self>)> {
@@ -1139,7 +1139,7 @@ macro_rules! impl_faer_linalg_for_real {
             faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, Self>(
                 m,
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -1148,7 +1148,7 @@ macro_rules! impl_faer_linalg_for_real {
             lu.as_mut(),
             &mut perm,
             &mut perm_inv,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -1168,7 +1168,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn full_piv_lu_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
@@ -1178,7 +1178,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn full_piv_lu_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         _buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
@@ -1194,7 +1194,7 @@ macro_rules! impl_faer_linalg_for_real {
             faer::linalg::lu::full_pivoting::factor::lu_in_place_scratch::<usize, Self>(
                 n,
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -1205,7 +1205,7 @@ macro_rules! impl_faer_linalg_for_real {
             &mut row_perm_inv,
             &mut col_perm,
             &mut col_perm_inv,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -1232,7 +1232,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn full_piv_lu_solve_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
@@ -1254,7 +1254,7 @@ macro_rules! impl_faer_linalg_for_real {
             faer::linalg::lu::full_pivoting::factor::lu_in_place_scratch::<usize, Self>(
                 n,
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -1265,7 +1265,7 @@ macro_rules! impl_faer_linalg_for_real {
             &mut row_perm_inv,
             &mut col_perm,
             &mut col_perm_inv,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         );
@@ -1289,7 +1289,7 @@ macro_rules! impl_faer_linalg_for_real {
             faer::linalg::lu::full_pivoting::solve::solve_in_place_scratch::<usize, Self>(
                 n,
                 b_cols,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
             ),
         );
         let stack = MemStack::new(&mut mem);
@@ -1300,7 +1300,7 @@ macro_rules! impl_faer_linalg_for_real {
                 row_perm_ref,
                 col_perm_ref,
                 rhs,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
             );
         } else {
@@ -1310,7 +1310,7 @@ macro_rules! impl_faer_linalg_for_real {
                 row_perm_ref,
                 col_perm_ref,
                 rhs,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
             );
         }
@@ -1318,7 +1318,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn solve_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
@@ -1338,7 +1338,7 @@ macro_rules! impl_faer_linalg_for_real {
             faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, Self>(
                 n,
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -1347,7 +1347,7 @@ macro_rules! impl_faer_linalg_for_real {
             lu.as_mut(),
             &mut row_perm,
             &mut row_perm_inv,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         );
@@ -1364,12 +1364,12 @@ macro_rules! impl_faer_linalg_for_real {
             faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place_scratch::<
                 usize,
                 Self,
-            >(n, b_cols, ctx.faer_par())
+            >(n, b_cols, ctx.faer_parallelism())
         } else {
             faer::linalg::lu::partial_pivoting::solve::solve_in_place_scratch::<usize, Self>(
                 n,
                 b_cols,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
             )
         });
         let stack = MemStack::new(&mut mem);
@@ -1379,7 +1379,7 @@ macro_rules! impl_faer_linalg_for_real {
                 lu.as_ref(),
                 row_perm_ref,
                 rhs,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
             );
         } else {
@@ -1388,7 +1388,7 @@ macro_rules! impl_faer_linalg_for_real {
                 lu.as_ref(),
                 row_perm_ref,
                 rhs,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
             );
         }
@@ -1396,7 +1396,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn triangular_solve_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
@@ -1421,56 +1421,56 @@ macro_rules! impl_faer_linalg_for_real {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, false, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, true, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, false, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
             }
@@ -1487,56 +1487,56 @@ macro_rules! impl_faer_linalg_for_real {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, false, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, true, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, false, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
             }
@@ -1547,7 +1547,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn svd_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
         full: bool,
@@ -1558,7 +1558,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn svd_values_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
@@ -1571,7 +1571,7 @@ macro_rules! impl_faer_linalg_for_real {
             n,
             faer::linalg::svd::ComputeSvdVectors::No,
             faer::linalg::svd::ComputeSvdVectors::No,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             Default::default(),
         ));
         let stack = MemStack::new(&mut mem);
@@ -1580,7 +1580,7 @@ macro_rules! impl_faer_linalg_for_real {
             s.as_mut(),
             None,
             None,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -1590,7 +1590,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn qr_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
@@ -1600,7 +1600,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn eigh_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
@@ -1610,7 +1610,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn eigh_values_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
@@ -1620,7 +1620,7 @@ macro_rules! impl_faer_linalg_for_real {
         let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<Self>(
             n,
             faer::linalg::evd::ComputeEigenvectors::No,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             Default::default(),
         ));
         let stack = MemStack::new(&mut mem);
@@ -1628,7 +1628,7 @@ macro_rules! impl_faer_linalg_for_real {
             mat,
             values.as_mut(),
             None,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -1653,7 +1653,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn svd_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         m: usize,
@@ -1678,7 +1678,7 @@ macro_rules! impl_faer_linalg_for_real {
             n,
             vectors,
             vectors,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             Default::default(),
         ));
         let stack = MemStack::new(&mut mem);
@@ -1687,7 +1687,7 @@ macro_rules! impl_faer_linalg_for_real {
             s.as_mut(),
             Some(u.as_mut()),
             Some(v.as_mut()),
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -1713,7 +1713,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn qr_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         m: usize,
@@ -1731,7 +1731,7 @@ macro_rules! impl_faer_linalg_for_real {
                 m,
                 n,
                 block_size,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -1739,7 +1739,7 @@ macro_rules! impl_faer_linalg_for_real {
         faer::linalg::qr::no_pivoting::factor::qr_in_place(
             qr.as_mut(),
             coeff.as_mut(),
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         );
@@ -1757,7 +1757,7 @@ macro_rules! impl_faer_linalg_for_real {
             coeff.as_ref(),
             Conj::No,
             q.as_mut(),
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
         );
         let q = tensor_from_vec_with_template(
@@ -1775,7 +1775,7 @@ macro_rules! impl_faer_linalg_for_real {
     }
 
     fn eigh_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
@@ -1786,7 +1786,7 @@ macro_rules! impl_faer_linalg_for_real {
         let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<Self>(
             n,
             faer::linalg::evd::ComputeEigenvectors::Yes,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             Default::default(),
         ));
         let stack = MemStack::new(&mut mem);
@@ -1794,7 +1794,7 @@ macro_rules! impl_faer_linalg_for_real {
             mat,
             values.as_mut(),
             Some(vectors.as_mut()),
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -1840,7 +1840,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn cholesky_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self>> {
@@ -1854,7 +1854,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn cholesky_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         _buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
@@ -1875,7 +1875,7 @@ macro_rules! impl_faer_linalg_for_complex {
         let mut mem = MemBuffer::new(
             faer::linalg::cholesky::llt::factor::cholesky_in_place_scratch::<$faer_complex>(
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -1883,7 +1883,7 @@ macro_rules! impl_faer_linalg_for_complex {
         faer::linalg::cholesky::llt::factor::cholesky_in_place(
             l.as_mut(),
             Default::default(),
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -1892,7 +1892,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn lu_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
@@ -1902,7 +1902,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn lu_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         _buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         m: usize,
@@ -1929,7 +1929,7 @@ macro_rules! impl_faer_linalg_for_complex {
             faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
                 m,
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -1938,7 +1938,7 @@ macro_rules! impl_faer_linalg_for_complex {
             lu.as_mut(),
             &mut perm,
             &mut perm_inv,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -1969,7 +1969,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn lu_factor_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         _buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<(TypedTensor<Self>, TypedTensor<i32>, TypedTensor<Self>)> {
@@ -1987,7 +1987,7 @@ macro_rules! impl_faer_linalg_for_complex {
             faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
                 m,
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -1996,7 +1996,7 @@ macro_rules! impl_faer_linalg_for_complex {
             lu.as_mut(),
             &mut perm,
             &mut perm_inv,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -2016,7 +2016,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn full_piv_lu_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
@@ -2026,7 +2026,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn full_piv_lu_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         _buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
@@ -2053,7 +2053,7 @@ macro_rules! impl_faer_linalg_for_complex {
             faer::linalg::lu::full_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
                 n,
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -2064,7 +2064,7 @@ macro_rules! impl_faer_linalg_for_complex {
             &mut row_perm_inv,
             &mut col_perm,
             &mut col_perm_inv,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -2092,7 +2092,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn full_piv_lu_solve_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
@@ -2118,7 +2118,7 @@ macro_rules! impl_faer_linalg_for_complex {
             faer::linalg::lu::full_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
                 n,
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -2129,7 +2129,7 @@ macro_rules! impl_faer_linalg_for_complex {
             &mut row_perm_inv,
             &mut col_perm,
             &mut col_perm_inv,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         );
@@ -2162,7 +2162,7 @@ macro_rules! impl_faer_linalg_for_complex {
             faer::linalg::lu::full_pivoting::solve::solve_in_place_scratch::<usize, $faer_complex>(
                 n,
                 b_cols,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
             ),
         );
         let stack = MemStack::new(&mut mem);
@@ -2173,7 +2173,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 row_perm_ref,
                 col_perm_ref,
                 rhs,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
             );
         } else {
@@ -2183,7 +2183,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 row_perm_ref,
                 col_perm_ref,
                 rhs,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
             );
         }
@@ -2191,7 +2191,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn solve_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
@@ -2215,7 +2215,7 @@ macro_rules! impl_faer_linalg_for_complex {
             faer::linalg::lu::partial_pivoting::factor::lu_in_place_scratch::<usize, $faer_complex>(
                 n,
                 n,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -2224,7 +2224,7 @@ macro_rules! impl_faer_linalg_for_complex {
             lu.as_mut(),
             &mut row_perm,
             &mut row_perm_inv,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         );
@@ -2243,12 +2243,12 @@ macro_rules! impl_faer_linalg_for_complex {
             faer::linalg::lu::partial_pivoting::solve::solve_transpose_in_place_scratch::<
                 usize,
                 $faer_complex,
-            >(n, b_cols, ctx.faer_par())
+            >(n, b_cols, ctx.faer_parallelism())
         } else {
             faer::linalg::lu::partial_pivoting::solve::solve_in_place_scratch::<
                 usize,
                 $faer_complex,
-            >(n, b_cols, ctx.faer_par())
+            >(n, b_cols, ctx.faer_parallelism())
         });
         let stack = MemStack::new(&mut mem);
         if transpose_a {
@@ -2257,7 +2257,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 lu.as_ref(),
                 row_perm_ref,
                 rhs,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
             );
         } else {
@@ -2266,7 +2266,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 lu.as_ref(),
                 row_perm_ref,
                 rhs,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
             );
         }
@@ -2274,7 +2274,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn triangular_solve_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         a: &TypedTensor<Self>,
         b: &TypedTensor<Self>,
@@ -2303,56 +2303,56 @@ macro_rules! impl_faer_linalg_for_complex {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, false, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, true, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, false, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
             }
@@ -2373,56 +2373,56 @@ macro_rules! impl_faer_linalg_for_complex {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, false, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (false, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat.transpose(),
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, true, false) => {
                     faer::linalg::triangular_solve::solve_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, true, true) => {
                     faer::linalg::triangular_solve::solve_unit_lower_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, false, false) => {
                     faer::linalg::triangular_solve::solve_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
                 (true, false, true) => {
                     faer::linalg::triangular_solve::solve_unit_upper_triangular_in_place(
                         a_mat,
                         rhs,
-                        ctx.faer_par(),
+                        ctx.faer_parallelism(),
                     );
                 }
             }
@@ -2433,7 +2433,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn svd_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
         full: bool,
@@ -2444,7 +2444,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn svd_values_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
@@ -2457,7 +2457,7 @@ macro_rules! impl_faer_linalg_for_complex {
             n,
             faer::linalg::svd::ComputeSvdVectors::No,
             faer::linalg::svd::ComputeSvdVectors::No,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             Default::default(),
         ));
         let stack = MemStack::new(&mut mem);
@@ -2466,7 +2466,7 @@ macro_rules! impl_faer_linalg_for_complex {
             s.as_mut(),
             None,
             None,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -2481,7 +2481,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn qr_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
@@ -2491,7 +2491,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn eigh_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<Vec<TypedTensor<Self>>> {
@@ -2501,7 +2501,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn eigh_values_2d(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         input: &TypedTensor<Self>,
     ) -> tenferro_tensor::Result<TypedTensor<Self::Real>> {
@@ -2511,7 +2511,7 @@ macro_rules! impl_faer_linalg_for_complex {
         let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<$faer_complex>(
             n,
             faer::linalg::evd::ComputeEigenvectors::No,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             Default::default(),
         ));
         let stack = MemStack::new(&mut mem);
@@ -2519,7 +2519,7 @@ macro_rules! impl_faer_linalg_for_complex {
             mat,
             values.as_mut(),
             None,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -2559,7 +2559,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn svd_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         m: usize,
@@ -2595,7 +2595,7 @@ macro_rules! impl_faer_linalg_for_complex {
             n,
             vectors,
             vectors,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             Default::default(),
         ));
         let stack = MemStack::new(&mut mem);
@@ -2604,7 +2604,7 @@ macro_rules! impl_faer_linalg_for_complex {
             s.as_mut(),
             Some(u.as_mut()),
             Some(v.as_mut()),
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -2633,7 +2633,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn qr_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         m: usize,
@@ -2662,7 +2662,7 @@ macro_rules! impl_faer_linalg_for_complex {
                 m,
                 n,
                 block_size,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ),
         );
@@ -2670,7 +2670,7 @@ macro_rules! impl_faer_linalg_for_complex {
         faer::linalg::qr::no_pivoting::factor::qr_in_place(
             qr.as_mut(),
             coeff.as_mut(),
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         );
@@ -2688,7 +2688,7 @@ macro_rules! impl_faer_linalg_for_complex {
             coeff.as_ref(),
             Conj::No,
             q.as_mut(),
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
         );
         let q = tensor_from_vec_with_template(
@@ -2706,7 +2706,7 @@ macro_rules! impl_faer_linalg_for_complex {
     }
 
     fn eigh_core(
-        ctx: &CpuContext,
+        ctx: &CpuExecutionContext<'_>,
         buffers: &mut BufferPool,
         mat: MatRef<'_, Self>,
         n: usize,
@@ -2728,7 +2728,7 @@ macro_rules! impl_faer_linalg_for_complex {
         let mut mem = MemBuffer::new(faer::linalg::evd::self_adjoint_evd_scratch::<$faer_complex>(
             n,
             faer::linalg::evd::ComputeEigenvectors::Yes,
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             Default::default(),
         ));
         let stack = MemStack::new(&mut mem);
@@ -2736,7 +2736,7 @@ macro_rules! impl_faer_linalg_for_complex {
             mat,
             values.as_mut(),
             Some(vectors.as_mut()),
-            ctx.faer_par(),
+            ctx.faer_parallelism(),
             stack,
             Default::default(),
         )
@@ -2783,7 +2783,7 @@ impl_faer_linalg_for_complex!(
 );
 
 pub(crate) fn cholesky<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
@@ -2801,7 +2801,7 @@ pub(crate) fn cholesky<T: FaerLinalg>(
 }
 
 pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &[T],
     n: usize,
@@ -2819,7 +2819,7 @@ pub(crate) fn cholesky_compact_data<T: FaerLinalg>(
 }
 
 pub(crate) fn lu<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -2856,7 +2856,7 @@ pub(crate) fn lu<T: FaerLinalg>(
 }
 
 pub(crate) fn lu_factor<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<(TypedTensor<T>, TypedTensor<i32>, TypedTensor<T>)> {
@@ -2924,7 +2924,7 @@ pub(crate) fn lu_factor<T: FaerLinalg>(
 }
 
 pub(crate) fn full_piv_lu<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -2965,7 +2965,7 @@ pub(crate) fn full_piv_lu<T: FaerLinalg>(
 }
 
 pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -2996,7 +2996,7 @@ pub(crate) fn full_piv_lu_solve<T: FaerLinalg>(
 }
 
 pub(crate) fn solve<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -3029,7 +3029,7 @@ pub(crate) fn solve<T: FaerLinalg>(
 // Keeps triangular-solve operands and flags explicit at the CPU backend boundary.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn triangular_solve<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     a: &TypedTensor<T>,
     b: &TypedTensor<T>,
@@ -3073,7 +3073,7 @@ pub(crate) fn triangular_solve<T: FaerLinalg>(
 }
 
 pub(crate) fn svd<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -3104,7 +3104,7 @@ pub(crate) fn svd<T: FaerLinalg>(
 }
 
 pub(crate) fn svd_full<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -3135,7 +3135,7 @@ pub(crate) fn svd_full<T: FaerLinalg>(
 }
 
 pub(crate) fn svd_values<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
@@ -3156,7 +3156,7 @@ pub(crate) fn svd_values<T: FaerLinalg>(
 }
 
 pub(crate) fn qr<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -3182,7 +3182,7 @@ pub(crate) fn qr<T: FaerLinalg>(
 }
 
 pub(crate) fn eigh<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -3207,7 +3207,7 @@ pub(crate) fn eigh<T: FaerLinalg>(
 }
 
 pub(crate) fn eigh_values<T: FaerLinalg>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> tenferro_tensor::Result<TypedTensor<T::Real>> {
@@ -3269,7 +3269,7 @@ fn matrix_dims_view<T: 'static>(
 }
 
 pub(crate) fn svd_view<T: FaerLinalg + 'static>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -3281,7 +3281,7 @@ pub(crate) fn svd_view<T: FaerLinalg + 'static>(
 }
 
 pub(crate) fn qr_view<T: FaerLinalg + 'static>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -3293,7 +3293,7 @@ pub(crate) fn qr_view<T: FaerLinalg + 'static>(
 }
 
 pub(crate) fn eigh_view<T: FaerLinalg + 'static>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -3313,7 +3313,7 @@ pub(crate) fn eigh_view<T: FaerLinalg + 'static>(
 }
 
 pub(crate) fn cholesky_view<T: FaerLinalg + 'static>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<TypedTensor<T>> {
@@ -3337,7 +3337,7 @@ pub(crate) fn cholesky_view<T: FaerLinalg + 'static>(
 }
 
 pub(crate) fn lu_view<T: FaerLinalg + 'static>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -3350,7 +3350,7 @@ pub(crate) fn lu_view<T: FaerLinalg + 'static>(
 }
 
 pub(crate) fn full_piv_lu_view<T: FaerLinalg + 'static>(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     view: TypedTensorView<'_, T>,
 ) -> tenferro_tensor::Result<Vec<TypedTensor<T>>> {
@@ -3372,7 +3372,7 @@ pub(crate) fn full_piv_lu_view<T: FaerLinalg + 'static>(
 macro_rules! impl_eig_real_2d {
     ($name:ident, $real:ty, $complex:ty, $real_eig_to_complex_outputs:ident) => {
         fn $name(
-            ctx: &CpuContext,
+            ctx: &CpuExecutionContext<'_>,
             buffers: &mut BufferPool,
             input: &TypedTensor<$real>,
         ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
@@ -3385,7 +3385,7 @@ macro_rules! impl_eig_real_2d {
                 n,
                 faer::linalg::evd::ComputeEigenvectors::No,
                 faer::linalg::evd::ComputeEigenvectors::Yes,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ));
             let stack = MemStack::new(&mut mem);
@@ -3395,7 +3395,7 @@ macro_rules! impl_eig_real_2d {
                 s_im.as_mut(),
                 None,
                 Some(u_real.as_mut()),
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
                 Default::default(),
             )
@@ -3418,7 +3418,7 @@ macro_rules! impl_eig_real_2d {
 macro_rules! impl_eig_values_real_2d {
     ($name:ident, $real:ty, $complex:ty, $real_eig_to_complex_values:ident) => {
         fn $name(
-            ctx: &CpuContext,
+            ctx: &CpuExecutionContext<'_>,
             buffers: &mut BufferPool,
             input: &TypedTensor<$real>,
         ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
@@ -3430,7 +3430,7 @@ macro_rules! impl_eig_values_real_2d {
                 n,
                 faer::linalg::evd::ComputeEigenvectors::No,
                 faer::linalg::evd::ComputeEigenvectors::No,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ));
             let stack = MemStack::new(&mut mem);
@@ -3440,7 +3440,7 @@ macro_rules! impl_eig_values_real_2d {
                 s_im.as_mut(),
                 None,
                 None,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
                 Default::default(),
             )
@@ -3462,7 +3462,7 @@ macro_rules! impl_eig_complex_2d {
         $vec_from_mat:ident
     ) => {
         fn $name(
-            ctx: &CpuContext,
+            ctx: &CpuExecutionContext<'_>,
             buffers: &mut BufferPool,
             input: &TypedTensor<$complex>,
         ) -> tenferro_tensor::Result<Vec<TypedTensor<$complex>>> {
@@ -3474,7 +3474,7 @@ macro_rules! impl_eig_complex_2d {
                 n,
                 faer::linalg::evd::ComputeEigenvectors::No,
                 faer::linalg::evd::ComputeEigenvectors::Yes,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ));
             let stack = MemStack::new(&mut mem);
@@ -3483,7 +3483,7 @@ macro_rules! impl_eig_complex_2d {
                 s.as_mut(),
                 None,
                 Some(u.as_mut()),
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
                 Default::default(),
             )
@@ -3514,7 +3514,7 @@ macro_rules! impl_eig_values_complex_2d {
         $vec_from_diag:ident
     ) => {
         fn $name(
-            ctx: &CpuContext,
+            ctx: &CpuExecutionContext<'_>,
             buffers: &mut BufferPool,
             input: &TypedTensor<$complex>,
         ) -> tenferro_tensor::Result<TypedTensor<$complex>> {
@@ -3525,7 +3525,7 @@ macro_rules! impl_eig_values_complex_2d {
                 n,
                 faer::linalg::evd::ComputeEigenvectors::No,
                 faer::linalg::evd::ComputeEigenvectors::No,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 Default::default(),
             ));
             let stack = MemStack::new(&mut mem);
@@ -3534,7 +3534,7 @@ macro_rules! impl_eig_values_complex_2d {
                 s.as_mut(),
                 None,
                 None,
-                ctx.faer_par(),
+                ctx.faer_parallelism(),
                 stack,
                 Default::default(),
             )
@@ -3595,7 +3595,7 @@ impl_eig_values_complex_2d!(
 );
 
 pub(crate) fn eig(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
@@ -3670,7 +3670,7 @@ pub(crate) fn eig(
 }
 
 pub(crate) fn eig_values(
-    ctx: &CpuContext,
+    ctx: &CpuExecutionContext<'_>,
     buffers: &mut BufferPool,
     input: &Tensor,
 ) -> tenferro_tensor::Result<Tensor> {

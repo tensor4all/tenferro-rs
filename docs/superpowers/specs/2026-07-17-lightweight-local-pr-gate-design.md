@@ -42,10 +42,14 @@ hosted CI.
 
 ### Code or unknown changes
 
-The gate runs formatting, whitespace checks, relevant documentation snippet checks,
-and one or more contributor-selected focused verification commands. At least one
-`--test COMMAND` is required. These commands use the default incremental dev/test
-profiles unless the contributor deliberately requests another profile.
+The gate runs whitespace checks, relevant documentation snippet checks, the
+CI-parity formatting and clippy command groups, and one or more
+contributor-selected focused verification commands. At least one `--test
+COMMAND` or `--ci-profile NAME` is required. Focused test commands use the
+default incremental dev/test profiles unless the contributor deliberately
+requests another profile. The formatting and clippy command groups cover the
+root workspace and the standalone tropical and sparse extension manifests
+because those manifests are outside the root Cargo workspace.
 
 Manual coverage review remains required for code or unknown changes. The review
 confirms that new branches, errors, dtypes, ranks, shapes, devices, and AD paths
@@ -89,7 +93,7 @@ GitHub-hosted CI remains responsible for:
 - complete workspace tests and doctests;
 - coverage generation and threshold enforcement;
 - BLAS and extension feature variants;
-- clippy and documentation-site validation;
+- formatting and clippy replay and documentation-site validation;
 - CUDA/PJRT archive and GPU execution; and
 - clean-build behavior with incremental compilation disabled.
 

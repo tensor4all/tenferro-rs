@@ -253,7 +253,7 @@ transfer-counter, capability-error, and numerical-residual assertions.
 | `TypedTensor<T, R>` | Fixed-dtype runtime tensor with optional compile-time rank; host access still requires explicit download for CUDA buffers. |
 | `Tensor` | Main concrete CUDA value for backend execution |
 | `EagerTensor` | Wraps CUDA-resident `Tensor` values when using an `EagerRuntime` with `CudaBackend` |
-| `TracedTensor` | Graphs can be executed by `GraphExecutor<CudaBackend>` for supported ops |
+| `TracedTensor` | Graphs can be compiled with `GraphCompiler` and executed by a runtime with registered GPU engines for supported ops |
 
 CUDA coverage is about backend dispatch. It is not the same as AD coverage.
 

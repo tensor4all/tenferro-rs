@@ -1,4 +1,5 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueRef};
+use num_complex::{Complex32, Complex64};
 use tenferro_ops::ad::{support as ad_support, PrimitiveRuleBuilder};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
@@ -161,13 +162,14 @@ pub(super) fn convert_fixed_ref_to_dtype(
     )
 }
 
-pub(super) fn fixed_scale(
+pub(super) fn fixed_scale_with_dtype(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: ValueRef<StdTensorOp>,
     factor: f64,
     shape: Vec<DimExpr>,
+    dtype: DType,
 ) -> LocalValueId {
-    let constant = broadcast_scalar_constant(builder, factor, shape);
+    let constant = broadcast_scalar_constant_with_dtype(builder, factor, shape, dtype);
     builder.add_operation(
         StdTensorOp::Mul,
         vec![ValueRef::Local(constant), input],
@@ -175,16 +177,28 @@ pub(super) fn fixed_scale(
     )[0]
 }
 
-fn broadcast_scalar_constant(
+fn broadcast_scalar_constant_with_dtype(
     builder: &mut dyn PrimitiveRuleBuilder,
     factor: f64,
     shape: Vec<DimExpr>,
+    dtype: DType,
 ) -> LocalValueId {
-    let constant = builder.add_operation(
-        StdTensorOp::constant(factor),
-        vec![],
-        OperationRole::Primary,
-    )[0];
+    let op = match dtype {
+        DType::F64 => StdTensorOp::constant(factor),
+        DType::F32 => StdTensorOp::constant(factor as f32),
+        DType::C64 => StdTensorOp::constant(Complex64::new(factor, 0.0)),
+        DType::C32 => StdTensorOp::constant(Complex32::new(factor as f32, 0.0)),
+        DType::I32 | DType::I64 | DType::Bool => StdTensorOp::constant(factor),
+    };
+    broadcast_scalar_constant_with_op(builder, op, shape)
+}
+
+fn broadcast_scalar_constant_with_op(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    op: StdTensorOp,
+    shape: Vec<DimExpr>,
+) -> LocalValueId {
+    let constant = builder.add_operation(op, vec![], OperationRole::Primary)[0];
     if shape.is_empty() {
         return constant;
     }
@@ -249,13 +263,14 @@ pub(super) fn linear_neg(
     linear_unary(builder, StdTensorOp::Neg, input)
 }
 
-pub(super) fn linear_scale(
+pub(super) fn linear_scale_with_dtype(
     builder: &mut dyn PrimitiveRuleBuilder,
     input: LocalValueId,
     factor: f64,
     shape: Vec<DimExpr>,
+    dtype: DType,
 ) -> LocalValueId {
-    let constant = broadcast_scalar_constant(builder, factor, shape);
+    let constant = broadcast_scalar_constant_with_dtype(builder, factor, shape, dtype);
     builder.add_operation(
         StdTensorOp::Mul,
         vec![ValueRef::Local(constant), ValueRef::Local(input)],
@@ -474,7 +489,7 @@ pub(super) fn self_adjoint_from_lower_linear(
     } else {
         let diag_h = conjugate_linear_if_dtype_complex(builder, diag, dtype);
         let diag_sum = linear_add(builder, diag, diag_h);
-        linear_scale(builder, diag_sum, 0.5, diag_shape)
+        linear_scale_with_dtype(builder, diag_sum, 0.5, diag_shape, dtype)
     };
     let diag_mat = embed_diag_linear(builder, diag);
     linear_add(builder, offdiag, diag_mat)
@@ -583,6 +598,51 @@ pub(super) fn leading_column_selector_fixed(
         vec![0; rank],
         pad_vec(rank, 1, (total_cols - leading_cols) as i64),
     )
+}
+
+pub(super) fn leading_column_selector_symbolic(
+    builder: &mut dyn PrimitiveRuleBuilder,
+    dtype: DType,
+    leading_cols: DimExpr,
+    total_cols: DimExpr,
+    batch_shape: &[DimExpr],
+    anchor: ValueRef<StdTensorOp>,
+) -> LocalValueId {
+    let one = ad_support::one_like(builder, dtype, anchor.clone(), 0);
+    let ones = builder.add_operation(
+        StdTensorOp::BroadcastInDim {
+            shape: vector_shape(leading_cols.clone(), batch_shape),
+            dims: vec![],
+        },
+        vec![ValueRef::Local(one)],
+        OperationRole::Primary,
+    )[0];
+    let identity = fixed_unary(
+        builder,
+        StdTensorOp::EmbedDiag {
+            axis_a: 0,
+            axis_b: 1,
+        },
+        ValueRef::Local(ones),
+    );
+    let zero = ad_support::zero_like(builder, dtype, anchor, 0);
+    let trailing_cols = DimExpr::sub(total_cols, leading_cols.clone());
+    let zeros = builder.add_operation(
+        StdTensorOp::BroadcastInDim {
+            shape: matrix_shape(leading_cols, trailing_cols, batch_shape),
+            dims: vec![],
+        },
+        vec![ValueRef::Local(zero)],
+        OperationRole::Primary,
+    )[0];
+    builder.add_operation(
+        StdTensorOp::Concatenate {
+            axis: 1,
+            input_count: 2,
+        },
+        vec![ValueRef::Local(identity), ValueRef::Local(zeros)],
+        OperationRole::Primary,
+    )[0]
 }
 
 pub(super) fn trailing_column_selector_fixed(
@@ -796,11 +856,12 @@ mod tests {
 
     use computegraph::graph::{Graph, GraphBuilder};
     use computegraph::types::ValueRef;
+    use tenferro_ops::dim_expr::DimExpr;
     use tenferro_ops::input_key::TensorInputKey;
     use tenferro_ops::std_tensor_op::StdTensorOp;
     use tenferro_tensor::DType;
 
-    use super::{identity_matrix_fixed, one_like_fixed};
+    use super::{identity_matrix_fixed, leading_column_selector_symbolic, one_like_fixed};
 
     fn op_kind_name(op: &StdTensorOp) -> &'static str {
         match op {
@@ -879,6 +940,35 @@ mod tests {
         assert_eq!(
             op_kind_histogram(&graph),
             BTreeMap::from([("BroadcastInDim", 1), ("Constant", 1), ("EmbedDiag", 1)])
+        );
+    }
+
+    #[test]
+    fn symbolic_leading_selector_broadcasts_scalar_constants_once() {
+        let mut builder = GraphBuilder::<StdTensorOp>::new();
+        let anchor = builder.add_input(TensorInputKey::User { id: 3 });
+
+        let selector = leading_column_selector_symbolic(
+            &mut builder,
+            DType::F64,
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: 1,
+            },
+            DimExpr::InputDim {
+                input_idx: 0,
+                axis: 0,
+            },
+            &[],
+            ValueRef::Local(anchor),
+        );
+        let graph = builder.build();
+
+        assert!(graph.values()[selector].producer.is_some());
+        assert_eq!(
+            op_kind_histogram(&graph).get("BroadcastInDim"),
+            Some(&2),
+            "selector constants must remain scalar until their one required broadcast"
         );
     }
 }

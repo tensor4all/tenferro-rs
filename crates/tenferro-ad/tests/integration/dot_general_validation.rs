@@ -1,7 +1,6 @@
 use crate::support;
-use support::RunTraced;
+use support::{cpu_runtime, RunTraced};
 
-use tenferro_cpu::CpuBackend;
 use tenferro_runtime::traced::TracedTensor;
 use tenferro_runtime::{Error as RuntimeError, ErrorPhase};
 use tenferro_tensor::{
@@ -79,8 +78,8 @@ fn traced_dot_general_accepts_valid_config() {
         rhs_batch_dims: vec![],
     };
     let c = a.dot_general(&b, config).unwrap();
-    let mut engine = tenferro_runtime::GraphExecutor::new(CpuBackend::new());
-    let result = c.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = c.run_with(&engine).unwrap();
     let data = result.as_slice::<f64>().unwrap();
     assert_eq!(data.len(), 4);
 }
@@ -276,8 +275,8 @@ fn traced_dot_general_accepts_batched_valid_config() {
         rhs_batch_dims: vec![1, 2],
     };
     let c = a.dot_general(&b, config).unwrap();
-    let mut engine = tenferro_runtime::GraphExecutor::new(CpuBackend::new());
-    let result = c.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = c.run_with(&engine).unwrap();
     let data = result.as_slice::<f64>().unwrap();
     assert_eq!(data.len(), 4);
 }

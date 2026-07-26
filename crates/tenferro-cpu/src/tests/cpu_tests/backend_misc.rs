@@ -8,6 +8,7 @@ fn opaque_backend_placement() -> Placement {
     Placement {
         memory_kind: MemoryKind::Device,
         device: None,
+        cpu_affinity: None,
     }
 }
 
@@ -748,6 +749,7 @@ fn cpu_structural_read_direct_helpers_preserve_view_placement() {
     input.set_placement(tenferro_tensor::Placement {
         memory_kind: tenferro_tensor::MemoryKind::PinnedHost,
         device: None,
+        cpu_affinity: None,
     });
 
     let transpose = crate::structural::transpose_read_with_pool(
@@ -861,7 +863,7 @@ fn cpu_structural_read_direct_helpers_cover_zero_stride_empty_and_rank_zero() {
     )
     .unwrap();
     assert_eq!(empty.shape(), &[0, 3, 2]);
-    assert_eq!(empty.as_slice::<f64>().unwrap(), &[]);
+    assert_eq!(empty.as_slice::<f64>().unwrap(), &[] as &[f64]);
 
     let scalar_storage = [42.5_f64];
     let scalar = tenferro_tensor::TypedTensorView::from_slice([], [], 0, &scalar_storage).unwrap();
@@ -871,7 +873,7 @@ fn cpu_structural_read_direct_helpers_cover_zero_stride_empty_and_rank_zero() {
         &[],
     )
     .unwrap();
-    assert_eq!(scalar.shape(), &[]);
+    assert_eq!(scalar.shape(), &[] as &[usize]);
     assert_eq!(scalar.as_slice::<f64>().unwrap(), &[42.5]);
 }
 
@@ -1087,7 +1089,7 @@ fn cpu_view_materialization_handles_empty_and_rank_zero_views() {
     )
     .unwrap();
     assert_eq!(empty.shape(), &[0, 3]);
-    assert_eq!(empty.as_slice().unwrap(), &[]);
+    assert_eq!(empty.as_slice().unwrap(), &[] as &[f64]);
 
     let scalar_storage = [42.5_f64];
     let scalar = tenferro_tensor::TypedTensorView::from_col_major(&[], &scalar_storage).unwrap();
@@ -1097,7 +1099,7 @@ fn cpu_view_materialization_handles_empty_and_rank_zero_views() {
         "rank_zero_materialize",
     )
     .unwrap();
-    assert_eq!(scalar.shape(), &[]);
+    assert_eq!(scalar.shape(), &[] as &[usize]);
     assert_eq!(scalar.as_slice().unwrap(), &[42.5]);
 }
 
@@ -1127,6 +1129,7 @@ fn cpu_view_materialization_preserves_static_rank_and_placement() {
     placed.set_placement(tenferro_tensor::Placement {
         memory_kind: tenferro_tensor::MemoryKind::PinnedHost,
         device: None,
+        cpu_affinity: None,
     });
     let placed = crate::structural::typed_materialize_view_with_pool(
         &mut buffers,
@@ -1154,6 +1157,7 @@ fn cpu_view_materialization_rejects_backend_buffer_with_caller_operation_name() 
                 kind: tenferro_tensor::DeviceKind::Gpu(tenferro_tensor::GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
+            cpu_affinity: None,
         },
     )
     .unwrap();
@@ -1330,7 +1334,7 @@ fn test_with_linalg_pool_reports_poison_after_panic() {
     assert_eq!(backend.buffer_pool_len().unwrap(), 1);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        backend.with_linalg_pool::<()>(|_| panic!("forced linalg panic"));
+        let _ = backend.with_linalg_pool::<()>(|_, _| panic!("forced linalg panic"));
     }));
 
     assert!(result.is_err());

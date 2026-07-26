@@ -336,6 +336,10 @@ pub(crate) struct CutensorHandle {
 // SAFETY: The handle is an opaque cuTENSOR handle used through FFI calls that
 // take `&self`; higher-level backend access serializes mutable use.
 unsafe impl Send for CutensorHandle {}
+// SAFETY: cuTENSOR calls receive explicit handle, descriptor, plan, workspace,
+// and stream arguments. The loaded library vtable is immutable, and callers pass
+// operation-local descriptor/plan values for each launch.
+unsafe impl Sync for CutensorHandle {}
 
 impl CutensorHandle {
     pub(crate) fn load() -> crate::Result<Self> {

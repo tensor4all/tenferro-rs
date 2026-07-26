@@ -26,7 +26,7 @@
 //! ```
 //! use tenferro_cpu::CpuBackend;
 //! use tenferro_ext_tropical::traced::tropical_dot_general;
-//! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+//! use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 //!
 //! let a = TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 //! let b = TracedTensor::from_vec_col_major(vec![2, 2], vec![10.0_f64, 20.0, 30.0, 40.0]).unwrap();
@@ -34,8 +34,13 @@
 //!
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&out).unwrap();
-//! let mut executor = GraphExecutor::new(CpuBackend::new());
-//! let value = executor.run(&program).unwrap();
+//! let backend = CpuBackend::new();
+//! let mut builder = Runtime::builder();
+//! builder
+//!     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+//!     .unwrap();
+//! let runtime = builder.build().unwrap();
+//! let value = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 //! assert_eq!(value.as_slice::<f64>().unwrap(), &[23.0, 24.0, 43.0, 44.0]);
 //! ```
 
@@ -46,9 +51,9 @@ mod extension;
 pub mod newtype;
 pub mod traced;
 
-pub use extension::register_runtime;
+pub use extension::extension_modules;
 #[cfg(feature = "autodiff")]
-pub use extension::tropical_ad_rules;
+pub use extension::tropical_semantic_ad_rules;
 pub use newtype::{MaxMul, MaxPlus, MinPlus};
 
 /// Tropical semiring flavor used by traced and future fused tropical ops.

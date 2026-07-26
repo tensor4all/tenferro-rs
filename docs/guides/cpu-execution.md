@@ -113,6 +113,14 @@ from the selected node. Applications that require memory locality must arrange
 allocation/first-touch or OS memory policy separately and measure the result on
 their deployment topology.
 
+Fresh CPU results record the selected execution domain in
+`Placement::cpu_affinity`. This is routing and locality metadata: it identifies
+the domain that produced the result and can guide later scheduling. It is not
+proof that the storage was allocated by that domain, that its pages are pinned
+or resident there, or that an allocation-domain owner changed. Metadata-only
+views and reshapes retain their storage metadata, while caller-owned `_into`
+destinations are never retagged.
+
 The reduced worker budget is spread deterministically over the logical CPU IDs
 in a domain. This is not a promise to prefer physical cores over SMT siblings;
 tenferro does not currently infer core/sibling topology for that selection.
@@ -125,10 +133,12 @@ faer GEMM work execute inside the selected fixed Rayon engine. With the default
 is that node's process-visible CPU set.
 
 For a BLAS backend, a graph keeps one exclusive coordinator permit. Native
-tenferro segments enter the pinned all-allowed Rayon engine, while BLAS/LAPACK
-provider calls execute outside that Rayon pool. Thus an elementwise operation
-adjacent to BLAS does not run on an unconstrained global Rayon pool, and the
-provider is not nested inside tenferro's Rayon workers.
+tenferro segments and BLAS/LAPACK provider calls both cross the selected domain
+executor exactly once. The BLAS call runs inside that admitted operation
+region, but the provider runtime owns its worker fan-out; it does not use the
+executor's Rayon team as BLAS workers. Thus an elementwise operation adjacent
+to BLAS does not run on an unconstrained global Rayon pool, and no provider path
+bypasses domain admission.
 
 Supported Host instructions, native instructions, and session-capable GEMM FFI
 instructions share one backend session. Extension runtimes that cannot execute

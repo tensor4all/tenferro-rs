@@ -2,18 +2,13 @@
 
 // Run with: cargo test --features cuda -- --ignored
 
-use crate::support;
-use support::RunTraced;
-use tenferro_gpu::{download_tensor, gpu_available, upload_tensor, CudaBackend};
-use tenferro_runtime::{GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_ad::{EagerRuntime, EagerTensor};
+use tenferro_gpu::{gpu_available, upload_tensor, CudaBackend};
+use tenferro_runtime::{Tensor, TypedTensor};
+use tenferro_tensor::TensorDeviceTransfer;
 
 fn f32_tensor(shape: Vec<usize>, data: Vec<f32>) -> Tensor {
     Tensor::F32(TypedTensor::from_vec_col_major(shape, data).unwrap())
-}
-
-fn upload_traced(backend: &CudaBackend, tensor: &Tensor) -> TracedTensor {
-    TracedTensor::from_tensor_concrete_shape(upload_tensor(backend.runtime(), tensor).unwrap())
-        .unwrap()
 }
 
 #[test]
@@ -27,17 +22,21 @@ fn test_f32_gpu_fusion_chain_e2e() {
     let b_host = f32_tensor(vec![3], vec![0.5, -1.0, 2.0]);
     let c_host = f32_tensor(vec![3], vec![0.1, 0.1, 0.1]);
 
-    let gpu_backend = CudaBackend::new(0).unwrap();
-    let a = upload_traced(&gpu_backend, &a_host);
-    let b = upload_traced(&gpu_backend, &b_host);
-    let c = upload_traced(&gpu_backend, &c_host);
-    let mut engine = GraphExecutor::new(gpu_backend);
-
+    let upload_backend = CudaBackend::new(0).unwrap();
+    let a_device = upload_tensor(upload_backend.runtime(), &a_host).unwrap();
+    let b_device = upload_tensor(upload_backend.runtime(), &b_host).unwrap();
+    let c_device = upload_tensor(upload_backend.runtime(), &c_host).unwrap();
+    let ctx = EagerRuntime::with_cuda_backend(upload_backend);
+    let a = EagerTensor::from_tensor_in(a_device, ctx.clone()).unwrap();
+    let b = EagerTensor::from_tensor_in(b_device, ctx.clone()).unwrap();
+    let c = EagerTensor::from_tensor_in(c_device, ctx.clone()).unwrap();
     let sum = a.add(&b).unwrap();
-    let result_traced = sum.mul(&c).unwrap();
+    let result = sum.mul(&c).unwrap().materialized().unwrap();
 
-    let result = result_traced.run_with(&mut engine).unwrap();
-    let result = download_tensor(engine.backend().runtime(), &result).unwrap();
+    let result = ctx
+        .with_backend_mut(|backend| backend.download_to_host(result.as_ref()))
+        .unwrap()
+        .unwrap();
     let values = result
         .as_slice::<f32>()
         .expect("expected downloaded F32 tensor");

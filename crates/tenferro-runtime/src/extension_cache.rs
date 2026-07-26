@@ -184,10 +184,47 @@ struct ExtensionCacheEntry {
     value: Box<dyn ExtensionCacheValue>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct ExtensionCacheEventStats {
+    hits: u64,
+    misses: u64,
+    evictions: u64,
+    clears: u64,
+}
+
+impl ExtensionCacheEventStats {
+    fn to_cache_stats(self, entries: usize, retained_bytes: usize) -> CacheStats {
+        CacheStats {
+            entries,
+            retained_bytes,
+            hits: self.hits,
+            misses: self.misses,
+            evictions: self.evictions,
+            clears: self.clears,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FamilyEventStats {
+    family_id: &'static str,
+    stats: ExtensionCacheEventStats,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CacheEventStats {
+    family_id: &'static str,
+    cache_name: &'static str,
+    stats: ExtensionCacheEventStats,
+}
+
 /// Bounded type-erased cache storage owned by an extension executor.
 pub struct ExtensionCacheStore {
     limits: ExtensionCacheLimits,
     entries: LruCache<ExtensionCacheKey, ExtensionCacheEntry>,
+    events: ExtensionCacheEventStats,
+    family_events: Vec<FamilyEventStats>,
+    cache_events: Vec<CacheEventStats>,
 }
 
 impl fmt::Debug for ExtensionCacheStore {
@@ -219,6 +256,9 @@ impl ExtensionCacheStore {
         Self {
             entries: LruCache::new(limits.max_entries()),
             limits,
+            events: ExtensionCacheEventStats::default(),
+            family_events: Vec::new(),
+            cache_events: Vec::new(),
         }
     }
 
@@ -229,6 +269,11 @@ impl ExtensionCacheStore {
 
     /// Resize the store and evict least-recently-used entries if needed.
     pub fn set_limits(&mut self, limits: ExtensionCacheLimits) {
+        while self.entries.len() > limits.max_entries().get() {
+            if let Some((key, _)) = self.entries.pop_lru() {
+                self.record_eviction(&key);
+            }
+        }
         self.entries.resize(limits.max_entries());
         self.limits = limits;
     }
@@ -248,7 +293,7 @@ impl ExtensionCacheStore {
     where
         T: Any + Send + Sync + 'static,
     {
-        self.entries.put(
+        self.put_entry(
             key,
             ExtensionCacheEntry {
                 value: Box::new(FixedRetainedBytes {
@@ -293,7 +338,7 @@ impl ExtensionCacheStore {
         T: Any + Send + Sync + 'static,
         F: Fn(&T) -> usize + Send + Sync + 'static,
     {
-        self.entries.put(
+        self.put_entry(
             key,
             ExtensionCacheEntry {
                 value: Box::new(DynamicRetainedBytes {
@@ -309,9 +354,24 @@ impl ExtensionCacheStore {
     where
         T: Any + Send + Sync + 'static,
     {
-        self.entries
-            .get(key)
-            .and_then(|entry| entry.value.as_any().downcast_ref::<T>())
+        let Self {
+            entries,
+            events,
+            family_events,
+            cache_events,
+            ..
+        } = self;
+        let Some(entry) = entries.get(key) else {
+            record_miss(events, family_events, cache_events, key);
+            return None;
+        };
+        if entry.value.as_any().is::<T>() {
+            record_hit(events, family_events, cache_events, key);
+            entry.value.as_any().downcast_ref::<T>()
+        } else {
+            record_miss(events, family_events, cache_events, key);
+            None
+        }
     }
 
     /// Get a mutable typed cache entry, updating its LRU position.
@@ -319,13 +379,29 @@ impl ExtensionCacheStore {
     where
         T: Any + Send + Sync + 'static,
     {
-        self.entries
-            .get_mut(key)
-            .and_then(|entry| entry.value.as_any_mut().downcast_mut::<T>())
+        let Self {
+            entries,
+            events,
+            family_events,
+            cache_events,
+            ..
+        } = self;
+        let Some(entry) = entries.get_mut(key) else {
+            record_miss(events, family_events, cache_events, key);
+            return None;
+        };
+        if entry.value.as_any().is::<T>() {
+            record_hit(events, family_events, cache_events, key);
+            entry.value.as_any_mut().downcast_mut::<T>()
+        } else {
+            record_miss(events, family_events, cache_events, key);
+            None
+        }
     }
 
     /// Clear entries selected by `selector`.
     pub fn clear_selected(&mut self, selector: ExtensionCacheSelector) {
+        self.record_clear(selector);
         if selector == ExtensionCacheSelector::All {
             self.entries.clear();
             return;
@@ -344,25 +420,212 @@ impl ExtensionCacheStore {
 
     /// Clear every extension cache entry.
     pub fn clear(&mut self) {
+        self.record_clear(ExtensionCacheSelector::All);
         self.entries.clear();
     }
 
     /// Return cache-style stats for entries selected by `selector`.
     pub fn stats(&self, selector: ExtensionCacheSelector) -> CacheStats {
-        CacheStats {
-            entries: self
-                .entries
-                .iter()
-                .filter(|(key, _)| selector.matches(key))
-                .count(),
-            retained_bytes: self
-                .entries
-                .iter()
-                .filter(|(key, _)| selector.matches(key))
-                .map(|(_, entry)| entry.value.retained_bytes())
-                .fold(0usize, usize::saturating_add),
+        let entries = self
+            .entries
+            .iter()
+            .filter(|(key, _)| selector.matches(key))
+            .count();
+        let retained_bytes = self
+            .entries
+            .iter()
+            .filter(|(key, _)| selector.matches(key))
+            .map(|(_, entry)| entry.value.retained_bytes())
+            .fold(0usize, usize::saturating_add);
+        self.event_stats(selector)
+            .to_cache_stats(entries, retained_bytes)
+    }
+
+    fn put_entry(&mut self, key: ExtensionCacheKey, entry: ExtensionCacheEntry) {
+        if let Some((removed_key, _)) = self.entries.push(key, entry) {
+            if removed_key != key {
+                self.record_eviction(&removed_key);
+            }
         }
     }
+
+    fn event_stats(&self, selector: ExtensionCacheSelector) -> ExtensionCacheEventStats {
+        match selector {
+            ExtensionCacheSelector::All => self.events,
+            ExtensionCacheSelector::Family { family_id } => {
+                family_event_stats(&self.family_events, family_id)
+                    .copied()
+                    .unwrap_or_default()
+            }
+            ExtensionCacheSelector::Cache {
+                family_id,
+                cache_name,
+            } => cache_event_stats(&self.cache_events, family_id, cache_name)
+                .copied()
+                .unwrap_or_default(),
+        }
+    }
+
+    fn record_eviction(&mut self, key: &ExtensionCacheKey) {
+        record_eviction(
+            &mut self.events,
+            &mut self.family_events,
+            &mut self.cache_events,
+            key,
+        );
+    }
+
+    fn record_clear(&mut self, selector: ExtensionCacheSelector) {
+        self.ensure_event_scopes_for_current_entries(selector);
+        self.events.clears = self.events.clears.saturating_add(1);
+        match selector {
+            ExtensionCacheSelector::All => {
+                for scoped in &mut self.family_events {
+                    scoped.stats.clears = scoped.stats.clears.saturating_add(1);
+                }
+                for scoped in &mut self.cache_events {
+                    scoped.stats.clears = scoped.stats.clears.saturating_add(1);
+                }
+            }
+            ExtensionCacheSelector::Family { family_id } => {
+                self.record_family_clear(family_id);
+                for scoped in &mut self.cache_events {
+                    if scoped.family_id == family_id {
+                        scoped.stats.clears = scoped.stats.clears.saturating_add(1);
+                    }
+                }
+            }
+            ExtensionCacheSelector::Cache {
+                family_id,
+                cache_name,
+            } => {
+                self.record_family_clear(family_id);
+                self.record_cache_clear(family_id, cache_name);
+            }
+        }
+    }
+
+    fn ensure_event_scopes_for_current_entries(&mut self, selector: ExtensionCacheSelector) {
+        let keys: Vec<_> = self
+            .entries
+            .iter()
+            .map(|(key, _)| *key)
+            .filter(|key| selector.matches(key))
+            .collect();
+        for key in keys {
+            ensure_family_event_stats(&mut self.family_events, key.family_id);
+            ensure_cache_event_stats(&mut self.cache_events, key.family_id, key.cache_name);
+        }
+    }
+
+    fn record_family_clear(&mut self, family_id: &'static str) {
+        let stats = ensure_family_event_stats(&mut self.family_events, family_id);
+        stats.clears = stats.clears.saturating_add(1);
+    }
+
+    fn record_cache_clear(&mut self, family_id: &'static str, cache_name: &'static str) {
+        let stats = ensure_cache_event_stats(&mut self.cache_events, family_id, cache_name);
+        stats.clears = stats.clears.saturating_add(1);
+    }
+}
+
+fn family_event_stats<'a>(
+    events: &'a [FamilyEventStats],
+    family_id: &'static str,
+) -> Option<&'a ExtensionCacheEventStats> {
+    events
+        .iter()
+        .find(|event| event.family_id == family_id)
+        .map(|event| &event.stats)
+}
+
+fn cache_event_stats<'a>(
+    events: &'a [CacheEventStats],
+    family_id: &'static str,
+    cache_name: &'static str,
+) -> Option<&'a ExtensionCacheEventStats> {
+    events
+        .iter()
+        .find(|event| event.family_id == family_id && event.cache_name == cache_name)
+        .map(|event| &event.stats)
+}
+
+fn ensure_family_event_stats<'a>(
+    events: &'a mut Vec<FamilyEventStats>,
+    family_id: &'static str,
+) -> &'a mut ExtensionCacheEventStats {
+    if let Some(index) = events.iter().position(|event| event.family_id == family_id) {
+        return &mut events[index].stats;
+    }
+    events.push(FamilyEventStats {
+        family_id,
+        stats: ExtensionCacheEventStats::default(),
+    });
+    &mut events
+        .last_mut()
+        .expect("just-pushed family event stats")
+        .stats
+}
+
+fn ensure_cache_event_stats<'a>(
+    events: &'a mut Vec<CacheEventStats>,
+    family_id: &'static str,
+    cache_name: &'static str,
+) -> &'a mut ExtensionCacheEventStats {
+    if let Some(index) = events
+        .iter()
+        .position(|event| event.family_id == family_id && event.cache_name == cache_name)
+    {
+        return &mut events[index].stats;
+    }
+    events.push(CacheEventStats {
+        family_id,
+        cache_name,
+        stats: ExtensionCacheEventStats::default(),
+    });
+    &mut events
+        .last_mut()
+        .expect("just-pushed cache event stats")
+        .stats
+}
+
+fn record_hit(
+    events: &mut ExtensionCacheEventStats,
+    family_events: &mut Vec<FamilyEventStats>,
+    cache_events: &mut Vec<CacheEventStats>,
+    key: &ExtensionCacheKey,
+) {
+    events.hits = events.hits.saturating_add(1);
+    let family = ensure_family_event_stats(family_events, key.family_id);
+    family.hits = family.hits.saturating_add(1);
+    let cache = ensure_cache_event_stats(cache_events, key.family_id, key.cache_name);
+    cache.hits = cache.hits.saturating_add(1);
+}
+
+fn record_miss(
+    events: &mut ExtensionCacheEventStats,
+    family_events: &mut Vec<FamilyEventStats>,
+    cache_events: &mut Vec<CacheEventStats>,
+    key: &ExtensionCacheKey,
+) {
+    events.misses = events.misses.saturating_add(1);
+    let family = ensure_family_event_stats(family_events, key.family_id);
+    family.misses = family.misses.saturating_add(1);
+    let cache = ensure_cache_event_stats(cache_events, key.family_id, key.cache_name);
+    cache.misses = cache.misses.saturating_add(1);
+}
+
+fn record_eviction(
+    events: &mut ExtensionCacheEventStats,
+    family_events: &mut Vec<FamilyEventStats>,
+    cache_events: &mut Vec<CacheEventStats>,
+    key: &ExtensionCacheKey,
+) {
+    events.evictions = events.evictions.saturating_add(1);
+    let family = ensure_family_event_stats(family_events, key.family_id);
+    family.evictions = family.evictions.saturating_add(1);
+    let cache = ensure_cache_event_stats(cache_events, key.family_id, key.cache_name);
+    cache.evictions = cache.evictions.saturating_add(1);
 }
 
 impl Default for ExtensionCacheStore {

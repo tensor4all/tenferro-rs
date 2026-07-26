@@ -280,7 +280,7 @@ tests compile and pass, while the CUDA tests marked `ignored` remain
 hardware-dependent and were not run.
 
 The committed-head repository-rules review then identified two documentation
-quality issues in the public surface: the four `GraphCompilerEinsumExt` methods
+quality issues in the public surface: the four `TraceContextEinsumExt` methods
 had concrete `# Errors` text but no method-specific summary before the section,
 and several tensor-error doctests relied on imports or type aliases that a
 reviewer could not verify from the example alone. The methods now describe

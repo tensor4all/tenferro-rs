@@ -192,6 +192,82 @@ fn cpu_crate_rejects_ambiguous_explicit_provider_features() {
 }
 
 #[test]
+fn provider_inject_call_through_is_owned_by_the_registered_integration_fixture() {
+    let lib = source("crates/tenferro-cpu/src/lib.rs");
+    let gemm_tests = source("crates/tenferro-cpu/src/gemm/tests.rs");
+    let provider_tests = source("crates/tenferro-cpu/src/provider/tests.rs");
+    let profile = source("scripts/ci/run_profile.py");
+
+    assert!(
+        lib.contains(r#"#[cfg(all(test, not(feature = "provider-inject")))]"#),
+        "the broad unit suite must not call unregistered injected BLAS symbols"
+    );
+    assert!(
+        lib.contains(r#"all(test, feature = "provider-inject")"#)
+            && lib.contains("allow(dead_code, unused_imports)"),
+        "the intentionally smaller provider-inject unit target must document its expected unused helpers"
+    );
+    for direct_test_source in [gemm_tests, provider_tests] {
+        assert!(
+            direct_test_source.contains(
+                r#"#[cfg(all(feature = "cpu-blas", not(feature = "provider-inject")))]"#
+            ),
+            "direct BLAS unit tests must defer provider-inject call-through coverage to its fixture"
+        );
+    }
+    assert!(
+        profile
+            .contains(r#"--features "cpu-blas,provider-inject" --test integration inject_tests"#),
+        "the provider-inject CI profile must run the fixture that registers every FFI symbol"
+    );
+}
+
+#[test]
+fn provider_capabilities_require_wired_per_call_controls() {
+    let provider = source("crates/tenferro-cpu/src/provider.rs");
+    let capabilities = source("crates/tenferro-cpu/src/provider_capability.rs");
+
+    assert_eq!(
+        provider.matches("fn execution_capabilities(&self)").count(),
+        7,
+        "three provider traits and four built-in providers must classify execution explicitly",
+    );
+    assert!(
+        capabilities.contains("thread_local_setter_wired")
+            && capabilities.contains("process_global_set_restore_wired")
+            && capabilities.contains("binary_thread_local_control_wired"),
+        "probe fixtures must distinguish local controls from OpenBLAS global set-and-restore",
+    );
+    let openblas = capabilities
+        .split_once("fn classify_openblas")
+        .expect("OpenBLAS classification should be explicit")
+        .1
+        .split_once("fn classify_accelerate")
+        .expect("Accelerate classification should follow OpenBLAS")
+        .0;
+    assert!(openblas.contains("uncontrolled_external_capabilities()"));
+    assert!(
+        !openblas.contains("PerCallUpperBound"),
+        "OpenBLAS global set-and-restore must never claim per-call count control",
+    );
+    let builtin = capabilities
+        .split_once("fn builtin_blas_execution_capabilities")
+        .expect("built-in BLAS capability function should exist")
+        .1
+        .split_once("pub(crate) fn validate_provider_for_domain")
+        .expect("domain validation should follow built-in classification")
+        .0;
+    assert!(
+        builtin.contains("uncontrolled_external_capabilities()"),
+        "until sound provider-specific controls are implemented, built-in BLAS must remain conservative",
+    );
+    assert!(
+        capabilities.contains("domain_cpus == process_allowed_cpus"),
+        "exact external-worker placement may use only the process-wide domain exception",
+    );
+}
+
+#[test]
 fn tblis_runtime_panic_bridge_is_temporary_and_does_not_replace_the_global_hook() {
     let tblis = source("crates/tenferro-cpu/src/gemm/tblis_gemm.rs");
 

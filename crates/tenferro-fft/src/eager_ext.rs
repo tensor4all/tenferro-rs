@@ -1,15 +1,15 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use tenferro_ad::error::{Error, Result};
-use tenferro_ad::extension::apply_eager;
+use tenferro_ad::extension::apply_eager_with_extension_context;
 use tenferro_ad::{EagerBackend, EagerTensor};
-use tenferro_runtime::ErrorPhase;
+use tenferro_runtime::{ErrorPhase, ExtensionModule};
 use tenferro_tensor::{DType, Tensor};
 
 use crate::{
-    fft_op_name, prepare_runtime_fft_op, register_runtime, require_runtime_dtype,
-    runtime_forward_fft_operation, FftBackend, FftExecutionCache, FftNorm, FftOperation,
-    FftPlanSpec,
+    execute_fft_extension_reads, extension_module, fft_op_name, prepare_runtime_fft_op,
+    require_runtime_dtype, runtime_forward_fft_operation, FftBackend, FftExecutionCache, FftNorm,
+    FftOperation, FftPlanSpec,
 };
 
 /// FFT extension methods for [`EagerTensor`].
@@ -170,17 +170,41 @@ fn apply_eager_fft(
         norm,
     )?;
 
-    input
-        .runtime()
-        .register_extension(register_runtime)
-        .map_err(|source| Error::runtime_state_source(op_name, ErrorPhase::GraphBuild, source))?;
-    let mut outputs = apply_eager(Arc::new(op), &[input])?.into_iter();
+    let op = Arc::new(op);
+    let execute_op = Arc::clone(&op);
+    let module = eager_cpu_extension_module()?;
+    let mut outputs =
+        apply_eager_with_extension_context(op, &[input], module, move |_op, input_reads, ctx| {
+            execute_fft_extension_reads(&execute_op, input_reads, ctx)
+        })?
+        .into_iter();
     match (outputs.next(), outputs.next()) {
         (Some(output), None) => Ok(output),
         _ => Err(Error::Internal(
             "FFT eager extension returned an unexpected number of outputs".into(),
         )),
     }
+}
+
+fn eager_cpu_extension_module() -> Result<Arc<dyn ExtensionModule>> {
+    static MODULE: OnceLock<Arc<dyn ExtensionModule>> = OnceLock::new();
+    if let Some(module) = MODULE.get() {
+        return Ok(Arc::clone(module));
+    }
+
+    let engine_id = tenferro_cpu::runtime_engine_id().map_err(eager_runtime_config_error)?;
+    let module = extension_module::<tenferro_cpu::CpuBackend>(engine_id)
+        .map_err(eager_runtime_config_error)?;
+    let _ = MODULE.set(Arc::clone(&module));
+    Ok(MODULE.get().cloned().unwrap_or(module))
+}
+
+fn eager_runtime_config_error(source: tenferro_runtime::RuntimeConfigError) -> Error {
+    Error::runtime_state_source(
+        "tenferro_fft::eager_extension_module",
+        ErrorPhase::Execution,
+        source,
+    )
 }
 
 impl FftBackend for EagerBackend {

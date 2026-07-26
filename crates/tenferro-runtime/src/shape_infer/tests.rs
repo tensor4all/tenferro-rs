@@ -332,10 +332,6 @@ fn promote_dtypes_fold() {
 fn ordered_ops_reject_complex_dtypes() {
     let cases = [
         (
-            StdTensorOp::Compare(tenferro_tensor::CompareDir::Eq),
-            vec![DType::C64, DType::C64],
-        ),
-        (
             StdTensorOp::Compare(tenferro_tensor::CompareDir::Lt),
             vec![DType::C64, DType::C64],
         ),
@@ -355,6 +351,17 @@ fn ordered_ops_reject_complex_dtypes() {
         assert!(message.contains("complex"), "{op:?}: {message}");
         assert!(message.contains("total order"), "{op:?}: {message}");
     }
+}
+
+#[test]
+fn equality_compare_accepts_complex_dtypes() {
+    let dtype = infer_output_dtype(
+        &StdTensorOp::Compare(tenferro_tensor::CompareDir::Eq),
+        &[DType::C64, DType::C64],
+    )
+    .unwrap();
+
+    assert_eq!(dtype, DType::Bool);
 }
 
 #[test]

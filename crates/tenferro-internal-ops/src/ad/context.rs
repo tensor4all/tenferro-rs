@@ -8,6 +8,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 #[cfg(feature = "autodiff")]
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
@@ -16,11 +17,9 @@ use computegraph::graph::Graph;
 use computegraph::types::{ValueKey, ValueRef};
 use tenferro_tensor::DType;
 
-use crate::dim_expr::{DimExpr, DimExprEvalError};
 #[cfg(feature = "autodiff")]
-use crate::ext_op::{
-    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionPrimalVjpRule, ExtensionRuleSet,
-};
+use crate::ad::{ADRuleError, ADRuleKind, ExtensionAdDispatcher};
+use crate::dim_expr::{DimExpr, DimExprEvalError};
 use crate::shape_extent::ShapeExtent;
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;
@@ -31,8 +30,19 @@ type GlobalMetadataMap = HashMap<ValueKey<StdTensorOp>, GlobalMetadataEntry>;
 
 #[derive(Clone, Debug)]
 struct GlobalMetadataEntry {
+    stack: Vec<GlobalMetadataRegistration>,
+}
+
+#[derive(Clone, Debug)]
+struct GlobalMetadataRegistration {
+    token: u64,
     meta: TensorMeta,
-    scoped_refs: usize,
+}
+
+#[derive(Clone, Debug)]
+struct ScopedGlobalMetadataRegistration {
+    key: ValueKey<StdTensorOp>,
+    token: u64,
 }
 
 /// Error returned when the process-global AD metadata registry is unavailable.
@@ -98,12 +108,12 @@ pub enum ShapeGuardError {
 pub type ShapeGuardResult<T> = Result<T, ShapeGuardFailure>;
 
 #[cfg(feature = "autodiff")]
-impl From<ShapeGuardFailure> for tidu::ADRuleError {
+impl From<ShapeGuardFailure> for ADRuleError {
     fn from(err: ShapeGuardFailure) -> Self {
         err.record_for_ad_boundary();
-        tidu::ADRuleError::invalid_input(
+        ADRuleError::invalid_input(
             "tenferro.shape_guard",
-            tidu::ADRuleKind::Jvp,
+            ADRuleKind::Jvp,
             err.typed_source().to_string(),
         )
     }
@@ -193,16 +203,18 @@ impl Eq for ShapeGuardFailure {}
 
 /// Global metadata registry.
 ///
-/// Stored as `Mutex<MetadataMap>` directly: writes insert in place (O(1)),
-/// and reads lock briefly for targeted key lookups. `ShapeGuardContext::metadata_of`
-/// reaches into the registry lazily via [`lookup_global_metadata`] and caches the
-/// result into the context's local map.
+/// Stored as a tokenized stack per value key: duplicate scoped registrations
+/// shadow older metadata while they are live, and dropping scopes in any order
+/// removes only the matching token. `ShapeGuardContext::metadata_of` reaches into
+/// the registry lazily via [`lookup_global_metadata`] and caches the result into
+/// the context's local map.
 ///
 /// Earlier designs either cloned the whole map up-front into each AD
 /// `ShapeGuardContext` or kept the map in an `Arc` and cloned on every write.
 /// Both variants were quadratic across the monotonically growing registry and
 /// dominated oracle_replay runtime.
 static GLOBAL_METADATA: OnceLock<Mutex<GlobalMetadataMap>> = OnceLock::new();
+static NEXT_GLOBAL_METADATA_TOKEN: AtomicU64 = AtomicU64::new(0);
 
 fn global_metadata_registry() -> &'static Mutex<GlobalMetadataMap> {
     GLOBAL_METADATA.get_or_init(|| Mutex::new(HashMap::new()))
@@ -215,12 +227,12 @@ fn global_metadata_registry() -> &'static Mutex<GlobalMetadataMap> {
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct GlobalMetadataScope {
-    keys: Vec<ValueKey<StdTensorOp>>,
+    registrations: Vec<ScopedGlobalMetadataRegistration>,
 }
 
 impl Drop for GlobalMetadataScope {
     fn drop(&mut self) {
-        release_scoped_global_metadata(&self.keys);
+        release_scoped_global_metadata(&self.registrations);
     }
 }
 
@@ -380,7 +392,7 @@ pub struct ShapeGuardContext {
     #[cfg(feature = "autodiff")]
     deferred_shape_error: Arc<Mutex<Option<ShapeGuardError>>>,
     #[cfg(feature = "autodiff")]
-    extension_rules: Option<ExtensionRuleSet>,
+    extension_ad_dispatcher: Option<Arc<dyn ExtensionAdDispatcher>>,
     #[cfg(feature = "autodiff")]
     active_value_keys: Option<std::sync::Arc<std::collections::HashSet<ValueKey<StdTensorOp>>>>,
     #[cfg(feature = "autodiff")]
@@ -431,22 +443,20 @@ impl ShapeGuardContext {
         self.shape_sources.get(&tensor_id)
     }
 
-    /// Use an explicit extension AD rule set for this context.
-    ///
-    /// Extension AD lookup is context-owned: a context without an attached rule
-    /// set has no extension AD rules.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_ops::{ExtensionRuleSet, ShapeGuardContext};
-    ///
-    /// let _ctx = ShapeGuardContext::default().with_extension_rules(ExtensionRuleSet::new());
-    /// ```
+    #[doc(hidden)]
     #[cfg(feature = "autodiff")]
-    pub fn with_extension_rules(mut self, rules: ExtensionRuleSet) -> Self {
-        self.extension_rules = Some(rules);
+    pub fn with_extension_ad_dispatcher(
+        mut self,
+        dispatcher: Arc<dyn ExtensionAdDispatcher>,
+    ) -> Self {
+        self.extension_ad_dispatcher = Some(dispatcher);
         self
+    }
+
+    #[doc(hidden)]
+    #[cfg(feature = "autodiff")]
+    pub(crate) fn extension_ad_dispatcher(&self) -> Option<Arc<dyn ExtensionAdDispatcher>> {
+        self.extension_ad_dispatcher.as_ref().map(Arc::clone)
     }
 
     #[cfg(feature = "autodiff")]
@@ -493,46 +503,6 @@ impl ShapeGuardContext {
         self.transpose_primal_outputs_used
     }
 
-    /// Look up an extension linearize rule using this context's ownership policy.
-    ///
-    /// Contexts without an explicit rule set have no extension AD rules.
-    #[doc(hidden)]
-    #[cfg(feature = "autodiff")]
-    pub(crate) fn extension_linearize_rule_for(
-        &self,
-        family_id: &str,
-    ) -> Option<Arc<dyn ExtensionLinearizeRule>> {
-        self.extension_rules
-            .as_ref()
-            .and_then(|rules| rules.lookup_linearize(family_id))
-    }
-
-    /// Look up an extension linear-transpose rule using this context's
-    /// ownership policy.
-    #[doc(hidden)]
-    #[cfg(feature = "autodiff")]
-    pub(crate) fn extension_linear_transpose_rule_for(
-        &self,
-        family_id: &str,
-    ) -> Option<Arc<dyn ExtensionLinearTransposeRule>> {
-        self.extension_rules
-            .as_ref()
-            .and_then(|rules| rules.lookup_linear_transpose(family_id))
-    }
-
-    /// Look up an extension direct primal-VJP rule using this context's
-    /// ownership policy.
-    #[doc(hidden)]
-    #[cfg(feature = "autodiff")]
-    pub(crate) fn extension_primal_vjp_rule_for(
-        &self,
-        family_id: &str,
-    ) -> Option<Arc<dyn ExtensionPrimalVjpRule>> {
-        self.extension_rules
-            .as_ref()
-            .and_then(|rules| rules.lookup_primal_vjp(family_id))
-    }
-
     /// Returns the guards recorded so far.
     ///
     /// # Examples
@@ -565,7 +535,7 @@ impl ShapeGuardContext {
     /// Take the first typed shape-guard failure recorded while crossing an AD
     /// callback boundary.
     ///
-    /// `tidu` currently exposes only a message-bearing callback error. AD
+    /// AD callbacks expose only a message-bearing error. AD
     /// frontends call this after the callback returns and attach the typed
     /// value to their public runtime error.
     #[doc(hidden)]
@@ -886,7 +856,10 @@ pub fn lookup_global_metadata(
     let guard = global_metadata_registry()
         .lock()
         .map_err(|_| MetadataRegistryError::LockPoisoned)?;
-    Ok(guard.get(key).map(|entry| entry.meta.clone()))
+    Ok(guard
+        .get(key)
+        .and_then(|entry| entry.stack.last())
+        .map(|registration| registration.meta.clone()))
 }
 
 #[doc(hidden)]
@@ -904,35 +877,40 @@ where
     let mut guard = global_metadata_registry()
         .lock()
         .map_err(|_| MetadataRegistryError::LockPoisoned)?;
-    let mut keys = Vec::new();
+    let mut registrations = Vec::new();
     for (key, meta) in entries {
-        let entry = guard.entry(key.clone()).or_insert(GlobalMetadataEntry {
-            meta: meta.clone(),
-            scoped_refs: 0,
-        });
-        entry.meta = meta;
-        entry.scoped_refs += 1;
-        keys.push(key);
+        let token = NEXT_GLOBAL_METADATA_TOKEN.fetch_add(1, AtomicOrdering::Relaxed);
+        let entry = guard
+            .entry(key.clone())
+            .or_insert_with(|| GlobalMetadataEntry { stack: Vec::new() });
+        entry.stack.push(GlobalMetadataRegistration { token, meta });
+        registrations.push(ScopedGlobalMetadataRegistration { key, token });
     }
-    Ok(GlobalMetadataScope { keys })
+    Ok(GlobalMetadataScope { registrations })
 }
 
-fn release_scoped_global_metadata(keys: &[ValueKey<StdTensorOp>]) {
+fn release_scoped_global_metadata(registrations: &[ScopedGlobalMetadataRegistration]) {
     let Ok(mut guard) = global_metadata_registry().lock() else {
         // Drop cannot return an error. Failing closed here avoids reading or
         // mutating data from a poisoned registry at the cost of leaking entries
         // until process exit.
         return;
     };
-    for key in keys {
-        let should_remove = if let Some(entry) = guard.get_mut(key) {
-            entry.scoped_refs = entry.scoped_refs.saturating_sub(1);
-            entry.scoped_refs == 0
+    for registration in registrations {
+        let should_remove = if let Some(entry) = guard.get_mut(&registration.key) {
+            if let Some(position) = entry
+                .stack
+                .iter()
+                .rposition(|candidate| candidate.token == registration.token)
+            {
+                entry.stack.remove(position);
+            }
+            entry.stack.is_empty()
         } else {
             false
         };
         if should_remove {
-            guard.remove(key);
+            guard.remove(&registration.key);
         }
     }
 }

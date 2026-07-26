@@ -15,25 +15,25 @@ fn einsum_eager_prototypes_are_not_public_api() {
 }
 
 #[test]
-fn einsum_vjp_broadcast_active_mask_matches_dynamic_inputs() {
+fn einsum_vjp_broadcast_uses_semantic_shape_metadata() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/extension.rs");
     let source = std::fs::read_to_string(root).expect("read einsum extension source");
     let section = source
-        .split_once("fn broadcast_einsum_vjp_to_input_shape")
+        .split_once("fn semantic_broadcast_einsum_vjp")
         .and_then(|(_, rest)| {
-            rest.split_once("fn project_repeated_labels_to_diagonal")
+            rest.split_once("fn semantic_project_repeated_labels")
                 .map(|(body, _)| body)
         })
-        .expect("broadcast_einsum_vjp_to_input_shape source section should exist");
+        .expect("semantic_broadcast_einsum_vjp source section should exist");
 
     assert!(
-        section.contains("let source_count = shape_sources.len();")
-            && section.contains("std::iter::repeat_n(false, source_count)"),
-        "einsum VJP broadcast should build active_mask from the actual inputs"
+        section.contains("CoreSemanticOp::BroadcastInDim")
+            && section.contains("semantic_project_repeated_labels"),
+        "einsum VJP broadcast should use semantic shape metadata and preserve repeated labels"
     );
     assert!(
         !section.contains("active_mask: vec![true, false]"),
-        "einsum VJP broadcast must not use a fixed two-input active_mask when rank-0 inputs omit shape_source"
+        "semantic einsum VJP broadcast must not reintroduce a fixed legacy active mask"
     );
 }
 
@@ -103,15 +103,19 @@ fn gpu_dependency_is_owned_by_opt_in_backend_features() {
 }
 
 #[test]
-fn eager_extension_registration_preserves_typed_source_errors() {
+fn eager_extension_execution_uses_direct_context_without_legacy_registration() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/eager_ad.rs");
     let source = std::fs::read_to_string(root).expect("read eager tensor source");
-    let registration = source
-        .split_once(".register_extension(register_runtime)")
-        .and_then(|(_, rest)| rest.split_once("let op =").map(|(body, _)| body))
-        .expect("eager extension registration source section");
+    let section = source
+        .split_once("pub fn einsum_subscripts")
+        .and_then(|(_, rest)| {
+            rest.split_once("fn try_direct_binary_dot_general")
+                .map(|(body, _)| body)
+        })
+        .expect("eager einsum execution source section");
 
-    assert!(registration.contains("runtime_extension_error("));
-    assert!(!registration.contains("Error::Internal"));
-    assert!(!registration.contains("to_string()"));
+    assert!(section.contains("apply_eager_with_extension_context("));
+    assert!(section.contains("execute_einsum_extension_reads("));
+    assert!(!section.contains(".register_extension("));
+    assert!(!section.contains("to_string()"));
 }

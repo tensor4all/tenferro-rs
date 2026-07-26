@@ -14,6 +14,15 @@
 //! # Ok::<(), tenferro_tensor::Error>(())
 //! ```
 
+// `provider-inject` unit tests deliberately omit the broad default-backend
+// suite below because no fixture has registered its FFI symbols. That makes
+// private helpers referenced only by the broad suite appear unused in this one
+// test build; call-through coverage lives in the registered integration test.
+#![cfg_attr(
+    all(test, feature = "provider-inject"),
+    allow(dead_code, unused_imports)
+)]
+
 #[cfg(not(any(feature = "cpu-faer", feature = "cpu-blas")))]
 compile_error!(
     "enable at least one fallback CPU backend: cpu-faer or cpu-blas; cpu-tblis is an optional contraction provider"
@@ -51,12 +60,19 @@ compile_error!(
 compile_error!("provider-inject cannot be combined with explicit BLAS provider features");
 
 pub mod affinity;
+mod affinity_policy;
 mod analytic;
 mod arbiter;
 pub mod backend;
 mod buffer_pool;
 mod capability;
 pub mod context;
+// INVARIANT: Task 2 stages crate-private stack adapters here before Task 3 wires
+// them into CpuContext.
+#[allow(dead_code)]
+mod domain_executor;
+#[allow(dead_code)]
+mod dot_runtime;
 mod elementwise;
 mod engine;
 mod exec_session;
@@ -66,7 +82,11 @@ mod indexing_alloc;
 #[cfg(feature = "provider-inject")]
 pub mod inject;
 mod placement;
+pub mod provider;
+mod provider_capability;
 mod reduction;
+mod resource_domain;
+mod runtime_adapter;
 mod structural;
 mod topology;
 
@@ -91,16 +111,37 @@ extern crate tblis_src as _;
 pub use affinity::{
     available_parallelism, process_cpu_affinity, process_cpu_affinity_count, CpuAffinityError,
 };
+pub use affinity_policy::{
+    resolve_cpu_affinity, resolve_cpu_affinity_with_override, CpuAffinityInput,
+    CpuAffinityInputError, CpuAffinityPolicy, CpuAffinityResolutionError, CpuAffinitySelection,
+    CpuAffinitySelectionReason,
+};
 pub use backend::{
     CpuBackend, CpuBackendError, CpuBackendKind, CpuExecutionInfo, CpuExecutionMode,
-    DotGeneralProvider,
+    DotGeneralProvider, ExternalCpuDomainRegistryError,
 };
 pub use buffer_pool::BufferPoolStats;
 pub use capability::cpu_capabilities;
 pub use context::{CpuContext, CpuContextError};
-pub use placement::{
-    CpuEngineConstructionError, CpuPlacement, CpuPlacementError, ResolvedCpuPlacement,
+pub use domain_executor::{
+    CpuDomainExecutor, CpuDomainExecutorCapabilities, CpuDomainExecutorError, CpuExecutorAffinity,
+    CpuExecutorReentrancy, CpuExecutorShutdown, CpuInnerParallelism, ScopedCpuJob, ScopedCpuJobs,
 };
+pub use dot_runtime::{
+    CpuProviderBundle, CpuProviderBundleBuildError, CpuProviderBundleBuilder,
+    CpuProviderBundleInstallError, CpuProviderSlot, GeneralContractionPolicy,
+};
+pub use placement::{
+    CpuEngineConstructionError, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee,
+    ResolvedCpuPlacement,
+};
+pub use provider::{CpuExecutionContext, ParallelMode};
+pub use provider_capability::{
+    CpuPlacementControl, CpuProviderDomainError, CpuProviderExecutionCapabilities,
+    CpuThreadCountControl,
+};
+pub use resource_domain::{CpuDomainOwnership, ExternalCpuDomain, ExternalCpuDomainError};
+pub use runtime_adapter::{runtime_engine_id, runtime_engine_registration, runtime_hardware_class};
 pub use topology::{
     discover_cpu_topology, CpuId, CpuNode, CpuSet, CpuSetError, CpuTopology, CpuTopologyError,
     NumaNodeId,
@@ -384,6 +425,7 @@ pub(crate) fn default_placement() -> Placement {
     Placement {
         memory_kind: MemoryKind::UnpinnedHost,
         device: None,
+        cpu_affinity: None,
     }
 }
 
@@ -399,5 +441,9 @@ pub(crate) fn flat_to_multi(mut flat: usize, shape: &[usize], out: &mut [usize])
     }
 }
 
-#[cfg(test)]
+// `provider-inject` owns call-through coverage in the serialized integration
+// fixture, which registers every BLAS symbol before the first operation.  The
+// broad unit suite selects the compiled default backend and therefore must not
+// call an intentionally unregistered injected symbol.
+#[cfg(all(test, not(feature = "provider-inject")))]
 mod tests;

@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::cell::Cell;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,10 +14,38 @@ use tenferro_tensor::{
 
 use crate::LinalgBackend;
 
+thread_local! {
+    static OBSERVED_OPERATION_ENTRY_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+pub(super) struct ObservedOperationEntryGuard;
+
+pub(super) fn enter_observed_operation_scope() -> ObservedOperationEntryGuard {
+    OBSERVED_OPERATION_ENTRY_DEPTH.with(|depth| depth.set(depth.get() + 1));
+    ObservedOperationEntryGuard
+}
+
+impl Drop for ObservedOperationEntryGuard {
+    fn drop(&mut self) {
+        OBSERVED_OPERATION_ENTRY_DEPTH.with(|depth| depth.set(depth.get() - 1));
+    }
+}
+
 #[derive(Debug, Default)]
-struct AccessCounts {
-    reads: AtomicUsize,
-    writes: AtomicUsize,
+pub(super) struct AccessCounts {
+    pub(super) reads: AtomicUsize,
+    pub(super) writes: AtomicUsize,
+    pub(super) allocations: AtomicUsize,
+    pub(super) outside_entry: AtomicUsize,
+}
+
+impl AccessCounts {
+    fn observe_entry(&self) {
+        let outside = OBSERVED_OPERATION_ENTRY_DEPTH.with(|depth| depth.get() == 0);
+        if outside {
+            self.outside_entry.fetch_add(1, Ordering::Relaxed);
+        }
+    }
 }
 
 struct FakeManagedBuffer<T> {
@@ -55,6 +84,7 @@ impl<T: Copy + Send + Sync + 'static> BackendBuffer<T> for FakeManagedBuffer<T> 
     }
 
     fn map_read(&self) -> Result<HostReadGuard<'_, T>, HostAccessError> {
+        self.counts.observe_entry();
         if self.gpu_busy.load(Ordering::Relaxed) {
             return Err(HostAccessError::GpuAccessInProgress);
         }
@@ -69,6 +99,7 @@ impl<T: Copy + Send + Sync + 'static> BackendBuffer<T> for FakeManagedBuffer<T> 
     }
 
     fn map_write(&self) -> Result<HostWriteGuard<'_, T>, HostAccessError> {
+        self.counts.observe_entry();
         if self.gpu_busy.load(Ordering::Relaxed) {
             return Err(HostAccessError::GpuAccessInProgress);
         }
@@ -91,14 +122,14 @@ impl<T: Copy + Send + Sync + 'static> BackendBuffer<T> for FakeManagedBuffer<T> 
 }
 
 #[derive(Debug)]
-struct FakeDomain {
+pub(super) struct FakeDomain {
     id: AllocationDomainId,
     next_allocation: AtomicU64,
-    counts: Arc<AccessCounts>,
+    pub(super) counts: Arc<AccessCounts>,
 }
 
 impl FakeDomain {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             id: AllocationDomainId::fresh(),
             next_allocation: AtomicU64::new(1),
@@ -110,7 +141,7 @@ impl FakeDomain {
         AllocationId::from_backend_id(self.next_allocation.fetch_add(1, Ordering::Relaxed))
     }
 
-    fn tensor<T: Copy + Send + Sync + 'static>(
+    pub(super) fn tensor<T: Copy + Send + Sync + 'static>(
         &self,
         shape: &[usize],
         values: Vec<T>,
@@ -139,6 +170,7 @@ impl FakeDomain {
             Placement {
                 memory_kind,
                 device: None,
+                cpu_affinity: None,
             },
         )
         .unwrap()
@@ -163,6 +195,8 @@ impl SharedTensorAllocationDomain for FakeDomain {
     }
 
     fn allocate(&self, dtype: DType, shape: &[usize]) -> tenferro_tensor::Result<Tensor> {
+        self.counts.observe_entry();
+        self.counts.allocations.fetch_add(1, Ordering::Relaxed);
         let len = Self::element_count(shape)?;
         Ok(match dtype {
             DType::F32 => Tensor::F32(self.tensor(shape, vec![0.0_f32; len])),
@@ -223,6 +257,7 @@ fn domain_bound_backend_preserves_host_owned_and_read_cholesky() {
 fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
     let domain = FakeDomain::new();
     let mut backend = backend(&domain);
+    let selected = backend.execution_info().domain_id();
 
     macro_rules! check_real {
         ($scalar:ty, $variant:ident) => {{
@@ -242,6 +277,9 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
             };
             assert_eq!(output.allocation_domain(), Some(domain.id));
             assert_ne!(output.allocation_id(), input_id);
+            assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
+            assert_eq!(output.placement().device, None);
+            assert_eq!(output.placement().cpu_affinity, Some(selected));
             let Buffer::Backend(buffer) = output.buffer() else {
                 panic!("expected backend output")
             };
@@ -264,6 +302,9 @@ fn fake_managed_cholesky_covers_all_cpu_dtypes_and_guarded_output() {
             };
             assert_eq!(output.allocation_domain(), Some(domain.id));
             assert_ne!(output.allocation_id(), input_id);
+            assert_eq!(output.placement().memory_kind, MemoryKind::Managed);
+            assert_eq!(output.placement().device, None);
+            assert_eq!(output.placement().cpu_affinity, Some(selected));
             let Buffer::Backend(buffer) = output.buffer() else {
                 panic!("expected backend output")
             };

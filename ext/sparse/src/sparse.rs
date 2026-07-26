@@ -295,14 +295,12 @@ pub(crate) fn validate_coordinates(
     }
     let mut entries = Vec::with_capacity(coord_shape[1]);
     for pair in coordinates.as_slice::<i64>()?.chunks_exact(2) {
-        let row =
-            usize::try_from(pair[0]).map_err(|_| {
-                Error::invalid_argument(OP, "coordinates", "negative sparse row coordinate")
-            })?;
-        let col =
-            usize::try_from(pair[1]).map_err(|_| {
-                Error::invalid_argument(OP, "coordinates", "negative sparse column coordinate")
-            })?;
+        let row = usize::try_from(pair[0]).map_err(|_| {
+            Error::invalid_argument(OP, "coordinates", "negative sparse row coordinate")
+        })?;
+        let col = usize::try_from(pair[1]).map_err(|_| {
+            Error::invalid_argument(OP, "coordinates", "negative sparse column coordinate")
+        })?;
         if row >= shape[0] || col >= shape[1] {
             return Err(Error::invalid_argument(
                 OP,
@@ -320,7 +318,11 @@ pub(crate) fn validate_value_tensor(values: &Tensor, nnz: usize) -> Result<()> {
         return Err(Error::dtype_mismatch(OP, DType::F64, values.dtype()));
     }
     if values.shape() != [nnz] {
-        return Err(Error::shape_mismatch(OP, vec![nnz], values.shape().to_vec()));
+        return Err(Error::shape_mismatch(
+            OP,
+            vec![nnz],
+            values.shape().to_vec(),
+        ));
     }
     Ok(())
 }
@@ -335,7 +337,9 @@ pub(crate) fn validate_traced_values(values: &TracedTensor, nnz: usize) -> Runti
     }
     if values.rank != 1 {
         return Err(RuntimeError::TensorRuntime(Error::rank_mismatch(
-            OP, 1, values.rank,
+            OP,
+            1,
+            values.rank,
         )));
     }
     if let Some(shape) = values.try_concrete_shape() {

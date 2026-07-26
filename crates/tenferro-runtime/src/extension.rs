@@ -20,10 +20,10 @@ use std::sync::Arc;
 
 use computegraph::graph::GraphBuilder;
 use computegraph::types::{OperationRole, ValueRef};
+use computegraph::GraphOperation;
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::SymDim;
-use tenferro_tensor::{Tensor, TensorBackend};
 
 use crate::checkpoint::CheckpointNode;
 use crate::error::{Error, ErrorPhase, Result};
@@ -38,43 +38,17 @@ type ExpandedOutputMetas = Vec<(tenferro_tensor::DType, Vec<SymDim>)>;
 
 pub use crate::compiler::CompilerOptions;
 #[doc(hidden)]
-pub use crate::compiler::{compile_std_to_exec, compile_std_to_exec_with_options};
-#[doc(hidden)]
-pub use crate::exec::{ExecInstruction, ExecOp, ExecOutputExtents, ExecOutputShapes, ExecProgram};
-#[doc(hidden)]
 pub use crate::shape_infer::{
     infer_output_dtype, infer_output_extents, infer_output_shapes, promote_dtype,
     promote_dtype_div_like, promote_dtype_for_binary_op, promote_dtypes,
 };
-pub use tenferro_ops::ext_op::{ExtensionOp, HostReference};
+pub use tenferro_ops::ext_op::ExtensionOp;
 pub use tenferro_ops::ExtensionFamilyId;
 
 pub use crate::extension_cache::{
     ExtensionCacheKey, ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore,
 };
-pub use crate::extension_runtime::{
-    ExtensionExecutionContext, ExtensionExecutor, ExtensionRegistry, ExtensionRuntime,
-    ExtensionRuntimeRegistryError, HostReferenceRuntime,
-};
-
-/// Execute a lowered core program with caller-owned backend runtime cache state.
-///
-/// This owner-scoped hook is for operation-family runtimes that expand an
-/// extension into core tensor operations and need to run that lowered program
-/// while preserving the runtime cache owned by the outer graph executor.
-#[doc(hidden)]
-pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
-    backend: &mut B,
-    program: &ExecProgram,
-    inputs: Vec<Tensor>,
-    backend_cache: &mut B::RuntimeCache,
-) -> Result<Vec<Tensor>> {
-    crate::exec::ensure_core_exec_program(
-        program,
-        "extension::execute_lowered_program_with_backend_cache",
-    )?;
-    crate::exec::eval_exec_ir_with_backend_cache(backend, program, inputs, backend_cache)
-}
+pub use crate::extension_execution_context::ExtensionExecutionContext;
 
 /// Apply an extension op in the traced graph.
 ///
@@ -86,8 +60,8 @@ pub fn execute_lowered_program_with_backend_cache<B: TensorBackend + 'static>(
 /// `inputs.len()` must equal `op.input_count()`, and each input's
 /// `shape_hint` must be present (i.e. the extension must be used on
 /// tensors whose rank is known at graph-build time). For symbolic-shape
-/// composition, bind the placeholder tensors via
-/// [`crate::GraphExecutor::run_with_inputs`] at evaluation time.
+/// composition, pass concrete tensors to [`crate::Runtime::run_compiled`] at
+/// evaluation time.
 ///
 /// # Examples
 ///
@@ -176,6 +150,80 @@ pub fn apply(op: Arc<dyn ExtensionOp>, inputs: &[&TracedTensor]) -> Result<Vec<T
                         "extension family {:?} produced unknown output shape metadata",
                         op.family_id()
                     ),
+                )
+            })?;
+            Ok((meta.dtype, shape))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    traced_outputs_from_analysis(inputs, graph, &outputs, output_metas, analysis)
+}
+
+/// Apply a core standard op in the traced graph.
+///
+/// This is an internal crate-boundary helper used by eager AD recording to keep
+/// a semantic traced graph beside the existing eager trace. Extension ops
+/// must use [`apply`] instead.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ops::std_tensor_op::StdTensorOp;
+/// use tenferro_runtime::{extension, TracedTensor};
+///
+/// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+/// let outputs = extension::apply_standard_op(StdTensorOp::Neg, &[&x])?;
+/// assert_eq!(outputs.len(), 1);
+/// # Ok::<(), tenferro_runtime::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] with `InvalidArgument` when the op is an
+/// extension op, receives the wrong number of traced inputs, or produces
+/// metadata without a known output bound. Metadata-analysis and registry
+/// failures are returned as typed runtime errors with their source preserved.
+#[doc(hidden)]
+pub fn apply_standard_op(op: StdTensorOp, inputs: &[&TracedTensor]) -> Result<Vec<TracedTensor>> {
+    if matches!(op, StdTensorOp::Extension(_)) {
+        return Err(Error::invalid_argument(
+            "extension::apply_standard_op",
+            ErrorPhase::GraphBuild,
+            "op",
+            "Extension ops must be passed to extension::apply",
+        ));
+    }
+    let expected = op.input_count();
+    if inputs.len() != expected {
+        return Err(Error::invalid_argument(
+            "extension::apply_standard_op",
+            ErrorPhase::GraphBuild,
+            "inputs",
+            format!("op expects {expected} inputs, got {}", inputs.len()),
+        ));
+    }
+
+    let mut builder = GraphBuilder::<StdTensorOp>::new();
+    for input in inputs {
+        builder.add_parent(input.graph.clone());
+    }
+    let op_inputs: Vec<ValueRef<StdTensorOp>> = inputs
+        .iter()
+        .map(|t| ValueRef::External(t.graph.values()[t.val].key.clone()))
+        .collect();
+    let outputs = builder.add_operation(op, op_inputs, OperationRole::Primary);
+    builder.set_outputs(outputs.clone());
+    let graph = Arc::new(builder.build());
+    let analysis = register_scoped_graph_analysis(graph.as_ref(), std::iter::empty())?;
+    let output_metas = outputs
+        .iter()
+        .map(|&output| {
+            let meta = registered_meta(&graph.values()[output].key)?;
+            let shape = meta.bound_shape().ok_or_else(|| {
+                Error::invalid_argument(
+                    "extension::apply_standard_op",
+                    ErrorPhase::Compile,
+                    "output_metadata",
+                    "standard op produced unknown output shape metadata",
                 )
             })?;
             Ok((meta.dtype, shape))

@@ -1,7 +1,7 @@
 use std::fmt;
 
 use tenferro_runtime::ExtensionCacheStore;
-use tenferro_tensor::{Tensor, TensorBackend};
+use tenferro_tensor::{Tensor, TensorBackend, TensorRead};
 
 use crate::{FftPlanCache, FftPlanSpec};
 
@@ -93,24 +93,39 @@ impl<'a> FftExecutionCache<'a> {
 /// accepts_fft_backend(&mut backend);
 /// ```
 ///
-/// A generic tensor backend without this explicit capability cannot register
-/// the FFT runtime:
+/// A generic tensor backend without this explicit capability cannot build
+/// the FFT extension module:
 ///
 /// ```compile_fail
-/// use tenferro_runtime::ExtensionExecutor;
 /// use tenferro_tensor::{Tensor, TensorBackend};
 /// use tenferro_fft::{FftNorm, TensorFftExt};
 ///
-/// fn register_without_fft_capability<B: TensorBackend + 'static>(
-///     executor: &mut ExtensionExecutor<B>,
-///     backend: &mut B,
-///     input: &Tensor,
-/// ) {
-///     tenferro_fft::register_runtime(executor).unwrap();
+/// fn use_without_fft_capability<B: TensorBackend + 'static>(backend: &mut B, input: &Tensor) {
+///     let _module =
+///         tenferro_fft::extension_module::<B>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap();
 ///     let _ = input.fft(None, -1, FftNorm::Backward, backend);
 /// }
 /// ```
 pub trait FftBackend: TensorBackend {
+    /// Validate a borrowed runtime input before the extension read path
+    /// materializes it into a compact tensor.
+    ///
+    /// Backends that can materialize their own placement may keep the default
+    /// no-op. CPU overrides this to report device inputs as unsupported FFT
+    /// placement errors instead of leaking a generic host-materialization error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_tensor::Error::Unsupported`] when this backend cannot
+    /// consume the borrowed input placement without an explicit transfer.
+    fn validate_fft_read_input(
+        &self,
+        _op: &'static str,
+        _input: &TensorRead<'_>,
+    ) -> tenferro_tensor::Result<()> {
+        Ok(())
+    }
+
     /// Execute one validated FFT request on `input`'s existing placement.
     ///
     /// # Errors

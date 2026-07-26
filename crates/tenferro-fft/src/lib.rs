@@ -20,7 +20,7 @@
 //! ```
 //! use num_complex::Complex64;
 //! use tenferro_cpu::CpuBackend;
-//! use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+//! use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 //! use tenferro_fft::{FftNorm, TracedTensorFftExt};
 //!
 //! let x = TracedTensor::from_vec_col_major(
@@ -37,9 +37,17 @@
 //!
 //! let mut compiler = GraphCompiler::new();
 //! let program = compiler.compile(&y).unwrap();
-//! let mut executor = GraphExecutor::new(CpuBackend::new());
-//! executor.register_extension(tenferro_fft::register_runtime).unwrap();
-//! let out = executor.run(&program).unwrap();
+//! let backend = CpuBackend::new();
+//! let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+//! let mut builder = Runtime::builder();
+//! builder
+//!     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+//!     .unwrap();
+//! builder
+//!     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+//!     .unwrap();
+//! let runtime = builder.build().unwrap();
+//! let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 //! assert_eq!(out.shape(), &[4]);
 //! assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(10.0, 0.0));
 //! ```
@@ -95,25 +103,19 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
-#[cfg(feature = "autodiff")]
-use tenferro_ad::extension::{
-    ExtensionLinearTransposeRule, ExtensionLinearizeRule, ExtensionPrimalVjpRule,
-    ExtensionRegistryError, ExtensionRuleSet,
+use tenferro_ad::semantic_extension::{
+    AdValue, SemanticAdError, SemanticExtensionRegistryError, SemanticExtensionRuleSet,
+    SemanticLinearTransposeRequest, SemanticLinearTransposeRule, SemanticLinearizeRequest,
+    SemanticLinearizeResult, SemanticLinearizeRule, SemanticPrimalVjpRequest,
+    SemanticPrimalVjpRule,
 };
 use tenferro_extension_macros::define_extension_runtime;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ad::{transpose_input::TransposeInputRef, PrimitiveRuleBuilder};
-#[cfg(feature = "autodiff")]
-use tenferro_ops::std_tensor_op::StdTensorOp;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ShapeGuardContext;
 use tenferro_ops::SymDim;
-use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOp, HostReference};
+use tenferro_runtime::extension::{apply, ExtensionExecutionContext, ExtensionOp};
+#[cfg(feature = "autodiff")]
+use tenferro_runtime::program::{CoreSemanticOp, ProgramValue, SemanticProgramBuilder};
 use tenferro_runtime::{Error, ErrorPhase, Result, TracedTensor};
 use tenferro_tensor::{CacheStats, DType, ErrorKind, Tensor, TensorRead, ValidationError};
-#[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 mod backend;
 mod cache;
@@ -815,6 +817,14 @@ impl ExtensionOp for FftOp {
         1
     }
 
+    fn semantic_effects(&self) -> tenferro_ops::ext_op::ExtensionEffectDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> tenferro_ops::ext_op::ExtensionAliasDeclaration<'_> {
+        tenferro_ops::ext_op::ExtensionAliasDeclaration::AllFresh
+    }
+
     fn infer_output_meta(
         &self,
         ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
@@ -882,40 +892,6 @@ impl ExtensionOp for FftOp {
 
         Ok(vec![(output_dtype, out_shape)])
     }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-impl HostReference for FftOp {
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        execute_host_fft_op(self, inputs)
-    }
-}
-
-fn execute_host_fft_op(op: &FftOp, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-    if inputs.len() != 1 {
-        return Err(tenferro_tensor::Error::invalid_argument(
-            "tenferro-fft",
-            "inputs",
-            format!("expected 1 input, got {}", inputs.len()),
-        ));
-    }
-    let input = inputs[0];
-    let spec = validated_fft_plan_spec(
-        fft_op_name(op.operation),
-        op.operation,
-        input.dtype(),
-        input.shape(),
-        op.n,
-        op.axis,
-        op.norm,
-    )?;
-    cpu::validate_host_fft_input(fft_op_name(op.operation), input)?;
-    let mut plans = FftPlanCache::with_capacity(NonZeroUsize::MIN);
-    let output = cpu::execute_fft_with_plans(input, &spec, &mut plans)?;
-    Ok(vec![output])
 }
 
 fn execute_concrete_fft_op<B: FftBackend>(
@@ -1144,272 +1120,205 @@ fn tensor_unsupported_dtype(
 struct FftAdRule;
 
 #[cfg(feature = "autodiff")]
-impl ExtensionLinearizeRule for FftAdRule {
+impl SemanticLinearizeRule for FftAdRule {
     fn family_id(&self) -> &'static str {
         FFT_EXTENSION_FAMILY_ID
     }
 
     fn linearize(
         &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        _primal_in: &[ValueKey<StdTensorOp>],
-        _primal_out: &[ValueKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValueId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let fft_op = fft_payload(op, ADRuleKind::Jvp)?;
+        request: SemanticLinearizeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<SemanticLinearizeResult, SemanticAdError> {
+        let fft_op = semantic_fft_payload(request.op(), SemanticAdRuleKind::Linearize)?;
         if !fft_op.operation.is_c2c() {
-            return Err(ADRuleError::unsupported(
-                fft_ad_family_id(fft_op.operation),
-                ADRuleKind::Jvp,
+            return Err(semantic_fft_unsupported(
+                fft_op.operation,
+                SemanticAdRuleKind::Linearize,
             ));
         }
-
-        match tangent_in[0] {
-            Some(dx) => {
-                let outputs = builder.add_operation(
-                    StdTensorOp::Extension(Arc::new(fft_op.clone())),
-                    vec![ValueRef::Local(dx)],
-                    OperationRole::Linearized {
-                        active_mask: vec![true],
-                    },
-                );
-                Ok(vec![Some(outputs[0])])
+        let tangent = match request.tangent_inputs()[0] {
+            AdValue::Absent => AdValue::Absent,
+            AdValue::Value(tangent) => {
+                AdValue::Value(builder.add_extension(Arc::new(fft_op.clone()), &[tangent])?[0])
             }
-            None => Ok(vec![None]),
-        }
+        };
+        Ok(SemanticLinearizeResult::new([tangent], []))
     }
 }
 
 #[cfg(feature = "autodiff")]
-impl ExtensionLinearTransposeRule for FftAdRule {
+impl SemanticLinearTransposeRule for FftAdRule {
     fn family_id(&self) -> &'static str {
         FFT_EXTENSION_FAMILY_ID
     }
 
     fn linear_transpose(
         &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[tidu::PrimitiveTransposeInput<StdTensorOp>],
-        active_mask: &[bool],
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let inputs: Vec<_> = inputs.iter().map(TransposeInputRef::new).collect();
-        transpose_fft_adjoint_from_transpose_inputs(
-            op,
+        request: SemanticLinearTransposeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        Ok([semantic_fft_adjoint(
+            request.op(),
+            request.cotangent_outputs()[0],
+            request.active_inputs()[0],
+            request.primal_inputs()[0],
             builder,
-            cotangent_out,
-            &inputs,
-            active_mask,
-            ctx,
-        )
+        )?]
+        .into())
     }
 }
 
 #[cfg(feature = "autodiff")]
-impl ExtensionPrimalVjpRule for FftAdRule {
+impl SemanticPrimalVjpRule for FftAdRule {
     fn family_id(&self) -> &'static str {
         FFT_EXTENSION_FAMILY_ID
     }
 
     fn primal_vjp(
         &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[ValueRef<StdTensorOp>],
-        ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        transpose_fft_adjoint(op, builder, cotangent_out, inputs, None, ctx)
+        request: SemanticPrimalVjpRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        Ok([semantic_fft_adjoint(
+            request.op(),
+            request.cotangent_outputs()[0],
+            request.active_inputs()[0],
+            request.primal_inputs()[0],
+            builder,
+        )?]
+        .into())
     }
 }
 
 #[cfg(feature = "autodiff")]
-fn transpose_fft_adjoint(
-    op: &dyn ExtensionOp,
-    builder: &mut dyn PrimitiveRuleBuilder,
-    cotangent_out: &[Option<LocalValueId>],
-    inputs: &[ValueRef<StdTensorOp>],
-    active_mask: Option<&[bool]>,
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let Some((adjoint, fft_op)) = emit_c2c_adjoint(op, builder, cotangent_out, active_mask)? else {
-        return Ok(vec![None]);
-    };
-    let restored = restore_c2c_adjoint_input_length(builder, adjoint, inputs, fft_op, ctx)?;
-    Ok(vec![Some(restored)])
+#[derive(Clone, Copy)]
+enum SemanticAdRuleKind {
+    Linearize,
+    Transpose,
 }
 
 #[cfg(feature = "autodiff")]
-fn transpose_fft_adjoint_from_transpose_inputs(
+fn semantic_fft_payload(
     op: &dyn ExtensionOp,
-    builder: &mut dyn PrimitiveRuleBuilder,
-    cotangent_out: &[Option<LocalValueId>],
-    inputs: &[TransposeInputRef<'_>],
-    active_mask: &[bool],
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-    let Some((adjoint, fft_op)) = emit_c2c_adjoint(op, builder, cotangent_out, Some(active_mask))?
-    else {
-        return Ok(vec![None]);
-    };
-    let restored = restore_c2c_adjoint_input_length_from_transpose_input(
-        builder, adjoint, inputs, fft_op, ctx,
-    )?;
-    Ok(vec![Some(restored)])
+    role: SemanticAdRuleKind,
+) -> std::result::Result<&FftOp, SemanticAdError> {
+    op.as_any().downcast_ref::<FftOp>().ok_or_else(|| {
+        semantic_fft_unsupported_family(
+            FFT_EXTENSION_FAMILY_ID,
+            role,
+            "FFT semantic AD received an incompatible extension payload",
+        )
+    })
 }
 
 #[cfg(feature = "autodiff")]
-fn emit_c2c_adjoint<'a>(
-    op: &'a dyn ExtensionOp,
-    builder: &mut dyn PrimitiveRuleBuilder,
-    cotangent_out: &[Option<LocalValueId>],
-    active_mask: Option<&[bool]>,
-) -> ADRuleResult<Option<(LocalValueId, &'a FftOp)>> {
-    let fft_op = fft_payload(op, ADRuleKind::Transpose)?;
+fn semantic_fft_adjoint(
+    op: &dyn ExtensionOp,
+    cotangent: AdValue,
+    active: bool,
+    primal_input: ProgramValue,
+    builder: &mut SemanticProgramBuilder,
+) -> std::result::Result<AdValue, SemanticAdError> {
+    if !active {
+        return Ok(AdValue::Absent);
+    }
+    let AdValue::Value(cotangent) = cotangent else {
+        return Ok(AdValue::Absent);
+    };
+    let fft_op = semantic_fft_payload(op, SemanticAdRuleKind::Transpose)?;
     if !fft_op.operation.is_c2c() {
-        return Err(ADRuleError::unsupported(
-            fft_ad_family_id(fft_op.operation),
-            ADRuleKind::Transpose,
+        return Err(semantic_fft_unsupported(
+            fft_op.operation,
+            SemanticAdRuleKind::Transpose,
         ));
     }
-    if active_mask.is_some_and(|mask| !mask.first().copied().unwrap_or(false)) {
-        return Ok(None);
-    }
-
-    let Some(ct) = cotangent_out.first().copied().flatten() else {
-        return Ok(None);
-    };
     let adjoint_op = fft_op
         .c2c_adjoint()
-        .ok_or_else(|| ADRuleError::unsupported(FFT_EXTENSION_FAMILY_ID, ADRuleKind::Transpose))?;
-    let outputs = builder.add_operation(
-        StdTensorOp::Extension(Arc::new(adjoint_op)),
-        vec![ValueRef::Local(ct)],
-        OperationRole::Linearized {
-            active_mask: vec![true],
-        },
-    );
-    Ok(Some((outputs[0], fft_op)))
+        .ok_or_else(|| semantic_fft_unsupported(fft_op.operation, SemanticAdRuleKind::Transpose))?;
+    let adjoint = builder.add_extension(Arc::new(adjoint_op), &[cotangent])?[0];
+    restore_semantic_c2c_adjoint_input_length(builder, adjoint, primal_input, fft_op)
+        .map(AdValue::Value)
 }
 
 #[cfg(feature = "autodiff")]
-fn restore_c2c_adjoint_input_length(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    adjoint: LocalValueId,
-    inputs: &[ValueRef<StdTensorOp>],
+fn restore_semantic_c2c_adjoint_input_length(
+    builder: &mut SemanticProgramBuilder,
+    adjoint: ProgramValue,
+    primal_input: ProgramValue,
     fft_op: &FftOp,
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<LocalValueId> {
+) -> std::result::Result<ProgramValue, SemanticAdError> {
     let Some(transform_len) = fft_op.n else {
         return Ok(adjoint);
     };
-    let Some(input) = inputs.first() else {
-        return Err(ADRuleError::invalid_input(
-            FFT_EXTENSION_FAMILY_ID,
-            ADRuleKind::Transpose,
-            "FFT transpose rule expected one primal input",
-        ));
-    };
-    if ctx
-        .shape_of(input)
-        .ok()
-        .and_then(|shape| shape.get(fft_op.axis).and_then(SymDim::constant_value))
-        == Some(transform_len)
-    {
+    let input_len = builder
+        .value_metadata(primal_input)?
+        .shape()
+        .get(fft_op.axis)
+        .and_then(|extent| extent.as_exact())
+        .and_then(|dim| match dim {
+            tenferro_ops::dim_expr::DimExpr::Const(value) => Some(*value),
+            _ => None,
+        });
+    if input_len == Some(transform_len) {
         return Ok(adjoint);
     }
 
-    let size = builder.add_operation(
-        StdTensorOp::ShapeOf { axis: fft_op.axis },
-        vec![input.clone()],
-        OperationRole::Linearized {
-            active_mask: vec![false],
-        },
-    )[0];
-    let truncated = builder.add_operation(
-        StdTensorOp::DynamicTruncate { axis: fft_op.axis },
-        vec![ValueRef::Local(adjoint), ValueRef::Local(size)],
-        OperationRole::Linearized {
-            active_mask: vec![true, false],
-        },
-    )[0];
-    let padded = builder.add_operation(
-        StdTensorOp::PadToMatch { axis: fft_op.axis },
-        vec![ValueRef::Local(truncated), input.clone()],
-        OperationRole::Linearized {
-            active_mask: vec![true, false],
-        },
-    )[0];
-    Ok(padded)
+    let size = builder.add_op(
+        CoreSemanticOp::ShapeOf { axis: fft_op.axis },
+        &[primal_input],
+    )?[0];
+    let truncated = builder.add_op(
+        CoreSemanticOp::DynamicTruncate { axis: fft_op.axis },
+        &[adjoint, size],
+    )?[0];
+    Ok(builder.add_op(
+        CoreSemanticOp::PadToMatch { axis: fft_op.axis },
+        &[truncated, primal_input],
+    )?[0])
 }
 
 #[cfg(feature = "autodiff")]
-fn restore_c2c_adjoint_input_length_from_transpose_input(
-    builder: &mut dyn PrimitiveRuleBuilder,
-    adjoint: LocalValueId,
-    inputs: &[TransposeInputRef<'_>],
-    fft_op: &FftOp,
-    ctx: &mut ShapeGuardContext,
-) -> ADRuleResult<LocalValueId> {
-    let Some(transform_len) = fft_op.n else {
-        return Ok(adjoint);
-    };
-    let Some(input) = inputs.first() else {
-        return Err(ADRuleError::invalid_input(
-            FFT_EXTENSION_FAMILY_ID,
-            ADRuleKind::Transpose,
-            "FFT transpose rule expected one primal input",
-        ));
-    };
-    let metadata = input.metadata_value();
-    if ctx
-        .shape_of(&metadata)
-        .ok()
-        .and_then(|shape| shape.get(fft_op.axis).and_then(SymDim::constant_value))
-        == Some(transform_len)
-    {
-        return Ok(adjoint);
-    }
-
-    let shape_source = input.shape_source_value(FFT_EXTENSION_FAMILY_ID, 0)?;
-    let size = builder.add_operation(
-        StdTensorOp::ShapeOf { axis: fft_op.axis },
-        vec![shape_source.clone()],
-        OperationRole::Linearized {
-            active_mask: vec![false],
-        },
-    )[0];
-    let truncated = builder.add_operation(
-        StdTensorOp::DynamicTruncate { axis: fft_op.axis },
-        vec![ValueRef::Local(adjoint), ValueRef::Local(size)],
-        OperationRole::Linearized {
-            active_mask: vec![true, false],
-        },
-    )[0];
-    let padded = builder.add_operation(
-        StdTensorOp::PadToMatch { axis: fft_op.axis },
-        vec![ValueRef::Local(truncated), shape_source],
-        OperationRole::Linearized {
-            active_mask: vec![true, false],
-        },
-    )[0];
-    Ok(padded)
+fn semantic_fft_unsupported(operation: FftOperation, role: SemanticAdRuleKind) -> SemanticAdError {
+    semantic_fft_unsupported_family(
+        fft_ad_family_id(operation),
+        role,
+        "FFT operation has no semantic AD rule",
+    )
 }
 
-/// Return the explicit FFT extension AD rule set.
+#[cfg(feature = "autodiff")]
+fn semantic_fft_unsupported_family(
+    family_id: &'static str,
+    role: SemanticAdRuleKind,
+    message: impl Into<String>,
+) -> SemanticAdError {
+    SemanticAdError::Unsupported {
+        family_id,
+        role: match role {
+            SemanticAdRuleKind::Linearize => {
+                tenferro_ad::semantic_extension::SemanticAdRuleRole::Linearize
+            }
+            SemanticAdRuleKind::Transpose => {
+                tenferro_ad::semantic_extension::SemanticAdRuleRole::LinearTranspose
+            }
+        },
+        message: message.into(),
+    }
+}
+
+/// Return the semantic-program FFT extension AD rule set.
 #[cfg(feature = "autodiff")]
 ///
 /// # Errors
 ///
-/// Returns [`ExtensionRegistryError::MalformedFamilyId`] if the FFT family
-/// identifier is invalid, or [`ExtensionRegistryError::DuplicateRule`] if a
-/// rule for the family and role is already registered.
-pub fn ad_rules() -> std::result::Result<ExtensionRuleSet, ExtensionRegistryError> {
-    ExtensionRuleSet::new()
+/// Returns [`SemanticExtensionRegistryError::MalformedFamilyId`] if the FFT
+/// family identifier is invalid, or
+/// [`SemanticExtensionRegistryError::DuplicateRule`] if a rule for the family
+/// and role is already registered.
+pub fn semantic_ad_rules(
+) -> std::result::Result<SemanticExtensionRuleSet, SemanticExtensionRegistryError> {
+    SemanticExtensionRuleSet::new()
         .with_linearize(Arc::new(FftAdRule))?
         .with_linear_transpose(Arc::new(FftAdRule))?
         .with_primal_vjp(Arc::new(FftAdRule))
@@ -1442,11 +1351,18 @@ fn execute_fft_extension<B: FftBackend + 'static>(
     Ok(vec![output])
 }
 
-fn execute_fft_extension_reads<B: FftBackend + 'static>(
+pub(crate) fn execute_fft_extension_reads<B: FftBackend + 'static>(
     op: &FftOp,
     inputs: &[TensorRead<'_>],
     ctx: &mut ExtensionExecutionContext<'_, B>,
 ) -> tenferro_tensor::Result<Vec<Tensor>> {
+    let op_name = fft_op_name(op.operation);
+    {
+        let backend = ctx.backend_mut();
+        for input in inputs {
+            backend.validate_fft_read_input(op_name, input)?;
+        }
+    }
     // FFT capabilities consume compact tensors on their existing placement;
     // materialization uses the explicitly selected backend session.
     let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
@@ -1466,7 +1382,6 @@ define_extension_runtime! {
     op_type = FftOp,
     execute = execute_fft_extension,
     execute_reads = execute_fft_extension_reads,
-    register_fn = register_runtime,
     backend_bound = FftBackend,
 }
 
@@ -1480,7 +1395,7 @@ define_extension_runtime! {
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]).unwrap();
@@ -1488,9 +1403,17 @@ define_extension_runtime! {
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let mut executor = GraphExecutor::new(CpuBackend::new());
-/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
-/// let out = executor.run(&program).unwrap();
+/// let backend = CpuBackend::new();
+/// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+/// let mut builder = Runtime::builder();
+/// builder
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .unwrap();
+/// builder
+///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .unwrap();
+/// let runtime = builder.build().unwrap();
+/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
 fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Result<TracedTensor> {
@@ -1505,7 +1428,7 @@ fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Re
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(vec![2], vec![Complex64::new(3.0, 0.0), Complex64::new(-1.0, 0.0)]).unwrap();
@@ -1513,9 +1436,17 @@ fn fft(input: &TracedTensor, n: Option<usize>, axis: isize, norm: FftNorm) -> Re
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let mut executor = GraphExecutor::new(CpuBackend::new());
-/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
-/// let out = executor.run(&program).unwrap();
+/// let backend = CpuBackend::new();
+/// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+/// let mut builder = Runtime::builder();
+/// builder
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .unwrap();
+/// builder
+///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .unwrap();
+/// let runtime = builder.build().unwrap();
+/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(1.0, 0.0));
 /// ```
 fn ifft(
@@ -1538,7 +1469,7 @@ fn ifft(
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
@@ -1546,9 +1477,17 @@ fn ifft(
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let mut executor = GraphExecutor::new(CpuBackend::new());
-/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
-/// let out = executor.run(&program).unwrap();
+/// let backend = CpuBackend::new();
+/// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+/// let mut builder = Runtime::builder();
+/// builder
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .unwrap();
+/// builder
+///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .unwrap();
+/// let runtime = builder.build().unwrap();
+/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 /// assert_eq!(out.shape(), &[2]);
 /// assert_eq!(out.as_slice::<Complex64>().unwrap()[0], Complex64::new(3.0, 0.0));
 /// ```
@@ -1572,7 +1511,7 @@ fn rfft(
 /// ```
 /// use num_complex::Complex64;
 /// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+/// use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 /// use tenferro_fft::{FftNorm, TracedTensorFftExt};
 ///
 /// let spectrum = TracedTensor::from_vec_col_major(
@@ -1584,9 +1523,17 @@ fn rfft(
 ///
 /// let mut compiler = GraphCompiler::new();
 /// let program = compiler.compile(&y).unwrap();
-/// let mut executor = GraphExecutor::new(CpuBackend::new());
-/// executor.register_extension(tenferro_fft::register_runtime).unwrap();
-/// let out = executor.run(&program).unwrap();
+/// let backend = CpuBackend::new();
+/// let engine_id = tenferro_cpu::runtime_engine_id().unwrap();
+/// let mut builder = Runtime::builder();
+/// builder
+///     .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+///     .unwrap();
+/// builder
+///     .install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id).unwrap())
+///     .unwrap();
+/// let runtime = builder.build().unwrap();
+/// let out = runtime.run_compiled(&program, &[]).unwrap().pop().unwrap();
 /// assert_eq!(out.as_slice::<f64>().unwrap(), &[1.0, 2.0]);
 /// ```
 fn irfft(
@@ -1774,13 +1721,6 @@ fn fft_ad_family_id(operation: FftOperation) -> &'static str {
         FftOperation::R2cFull | FftOperation::R2cOnesided => "tenferro-fft.rfft.v1",
         FftOperation::C2r => "tenferro-fft.irfft.v1",
     }
-}
-
-#[cfg(feature = "autodiff")]
-fn fft_payload(op: &dyn ExtensionOp, rule: ADRuleKind) -> ADRuleResult<&FftOp> {
-    op.as_any()
-        .downcast_ref::<FftOp>()
-        .ok_or_else(|| ADRuleError::unsupported(FFT_EXTENSION_FAMILY_ID, rule))
 }
 
 fn output_shape_c2c(
@@ -1990,69 +1930,130 @@ mod tests {
 
     #[cfg(feature = "autodiff")]
     #[test]
-    fn fft_transpose_rule_respects_inactive_linearized_input() {
-        let rule = FftAdRule;
-        let op = FftOp::new(FftOperation::C2cForward, 0, None, FftNorm::Backward);
-        let mut builder = computegraph::graph::GraphBuilder::<StdTensorOp>::new();
-        let cotangent = builder.add_input(tenferro_ops::input_key::TensorInputKey::User { id: 0 });
-        let result = rule
-            .linear_transpose(
-                &op,
-                &mut builder,
-                &[Some(cotangent)],
-                &[],
-                &[false],
-                &mut ShapeGuardContext::default(),
+    fn fft_semantic_rules_emit_extension_first_jvp_and_length_restoring_transpose() {
+        use tenferro_ops::dim_expr::DimExpr;
+        use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef, SemanticProgramBuilder};
+
+        let fft_op = FftOp::new(FftOperation::C2cForward, 0, Some(2), FftNorm::Backward);
+        let mut source = SemanticProgramBuilder::new();
+        let source_input = source
+            .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(4)]))
+            .unwrap();
+        let source_output = source
+            .add_extension(Arc::new(fft_op), &[source_input])
+            .unwrap()[0];
+        let source = source.finish(&[source_output]).unwrap();
+        let operation = source.program.operations().next().unwrap();
+
+        let rules = semantic_ad_rules().unwrap();
+        let mut destination = SemanticProgramBuilder::new();
+        let primal = destination
+            .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(4)]))
+            .unwrap();
+        let tangent = destination
+            .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(4)]))
+            .unwrap();
+        let primal_output = destination
+            .add_extension(
+                Arc::new(FftOp::new(
+                    FftOperation::C2cForward,
+                    0,
+                    Some(2),
+                    FftNorm::Backward,
+                )),
+                &[primal],
+            )
+            .unwrap()[0];
+        let linearized = rules
+            .linearize_operation(
+                operation,
+                &[primal],
+                &[primal_output],
+                &[AdValue::Value(tangent)],
+                &[true],
+                &mut destination,
             )
             .unwrap();
-
-        assert_eq!(result, vec![None]);
-        assert!(builder.build().operations().is_empty());
+        let AdValue::Value(tangent_output) = linearized.tangent_outputs()[0] else {
+            panic!("FFT tangent must be active");
+        };
+        let cotangent_inputs = rules
+            .linear_transpose_operation(
+                operation,
+                &[primal],
+                &[primal_output],
+                &[AdValue::Value(tangent_output)],
+                &[true],
+                linearized.residuals(),
+                &mut destination,
+            )
+            .unwrap();
+        let AdValue::Value(cotangent_input) = cotangent_inputs[0] else {
+            panic!("FFT cotangent must be active");
+        };
+        let frozen = destination
+            .finish(&[tangent_output, cotangent_input])
+            .unwrap();
+        let operations: Vec<_> = frozen.program.operations().collect();
+        assert!(
+            operations
+                .iter()
+                .filter(|operation| matches!(operation.op(), SemanticOpRef::Extension(_)))
+                .count()
+                >= 3
+        );
+        assert!(operations.iter().any(|operation| matches!(
+            operation.op(),
+            SemanticOpRef::Core(CoreSemanticOp::DynamicTruncate { axis: 0 })
+        )));
+        assert!(operations.iter().any(|operation| matches!(
+            operation.op(),
+            SemanticOpRef::Core(CoreSemanticOp::PadToMatch { axis: 0 })
+        )));
     }
 
     #[cfg(feature = "autodiff")]
     #[test]
-    fn fft_transpose_rule_uses_metadata_for_linear_only_matching_length() {
-        let rule = FftAdRule;
-        let op = FftOp::new(FftOperation::C2cForward, 0, Some(4), FftNorm::Backward);
-        let active_key = ValueKey::Input(tenferro_ops::input_key::TensorInputKey::User { id: 1 });
-        let mut ctx = ShapeGuardContext::default();
-        ctx.insert_metadata(
-            active_key.clone(),
-            tenferro_ops::TensorMeta::exact(DType::C64, vec![SymDim::from(4usize)]),
-        );
+    fn fft_semantic_rules_run_through_whole_program_jvp_and_vjp() {
+        use tenferro_ad::AdContext;
+        use tenferro_ops::dim_expr::DimExpr;
+        use tenferro_runtime::program::{ProgramInputSpec, SemanticOpRef, SemanticProgramBuilder};
 
-        let mut builder = computegraph::graph::GraphBuilder::<StdTensorOp>::new();
-        let cotangent = builder.add_input(tenferro_ops::input_key::TensorInputKey::User { id: 0 });
-        let result = rule
-            .linear_transpose(
-                &op,
-                &mut builder,
-                &[Some(cotangent)],
-                &[tidu::PrimitiveTransposeInput::Linear {
-                    key: active_key.clone(),
-                    primal: None,
-                }],
-                &[true],
-                &mut ctx,
+        let mut builder = SemanticProgramBuilder::new();
+        let input = builder
+            .input(ProgramInputSpec::new(DType::C64, [DimExpr::Const(4)]))
+            .unwrap();
+        let output = builder
+            .add_extension(
+                Arc::new(FftOp::new(
+                    FftOperation::C2cForward,
+                    0,
+                    Some(2),
+                    FftNorm::Backward,
+                )),
+                &[input],
             )
+            .unwrap()[0];
+        let source = builder.finish(&[output]).unwrap();
+        let ad = AdContext::builder()
+            .with_semantic_extension_rules(semantic_ad_rules().unwrap())
+            .unwrap()
+            .build()
             .unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert!(result[0].is_some());
-        let active_ref = ValueRef::External(active_key);
-        let graph = builder.build();
-        assert!(graph
-            .operations()
-            .iter()
-            .all(|node| !node.inputs.iter().any(|input| input == &active_ref)));
-        assert!(graph.operations().iter().all(|node| {
-            !matches!(
-                node.operation,
-                StdTensorOp::ShapeOf { .. }
-                    | StdTensorOp::DynamicTruncate { .. }
-                    | StdTensorOp::PadToMatch { .. }
-            )
-        }));
+        let jvp = ad.jvp_program(&source, &[true]).unwrap();
+        assert_eq!(jvp.derivative_input_indices(), &[Some(1)]);
+        assert!(matches!(
+            jvp.frozen().program.operations().last().unwrap().op(),
+            SemanticOpRef::Extension(op) if op.family_id() == FFT_EXTENSION_FAMILY_ID
+        ));
+
+        let vjp = ad.vjp_program(&source, &[true], &[true]).unwrap();
+        assert_eq!(vjp.derivative_output_indices(), &[Some(0)]);
+        assert!(vjp.frozen().program.operations().any(|operation| matches!(
+            operation.op(),
+            SemanticOpRef::Core(CoreSemanticOp::PadToMatch { axis: 0 })
+                | SemanticOpRef::Core(CoreSemanticOp::DynamicTruncate { axis: 0 })
+        )));
     }
 }

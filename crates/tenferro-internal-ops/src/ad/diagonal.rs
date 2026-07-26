@@ -2,9 +2,9 @@ use crate::ad::context::ShapeGuardContext;
 use crate::ad::support::linear_transpose_input_active;
 use crate::ad::transpose_input::TransposeInputRef;
 use crate::ad::PrimitiveRuleBuilder;
+use crate::ad::{ADRuleError, ADRuleKind, ADRuleResult};
 use computegraph::types::{LocalValueId, OperationRole, ValueRef};
 use tenferro_tensor::PadConfig;
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::std_tensor_op::StdTensorOp;
 use crate::sym_dim::SymDim;

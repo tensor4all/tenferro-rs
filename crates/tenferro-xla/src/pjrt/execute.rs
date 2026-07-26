@@ -3,7 +3,9 @@ use std::mem;
 use std::ptr;
 use std::slice;
 
-use tenferro_runtime::GraphProgram;
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::shape_extent::ShapeExtent;
+use tenferro_runtime::program::{ProgramValue, SemanticProgram};
 use tenferro_tensor::{DType, Tensor, TypedTensor};
 
 use crate::layout::col_major_byte_strides;
@@ -20,7 +22,7 @@ struct TensorSpec {
 
 pub(crate) fn run_many_with_inputs(
     plugin: &PjrtPlugin,
-    program: &GraphProgram,
+    program: &SemanticProgram,
     inputs: &[&Tensor],
 ) -> Result<Vec<Tensor>> {
     validate_inputs(program, inputs)?;
@@ -60,31 +62,32 @@ pub(crate) fn run_many_with_inputs(
         .collect()
 }
 
-fn validate_inputs(program: &GraphProgram, inputs: &[&Tensor]) -> Result<()> {
-    if inputs.len() != program.input_specs().len() {
+fn validate_inputs(program: &SemanticProgram, inputs: &[&Tensor]) -> Result<()> {
+    if inputs.len() != program.inputs().len() {
         return Err(Error::InvalidProgram {
             message: format!(
                 "PJRT execution expected {} inputs, got {}",
-                program.input_specs().len(),
+                program.inputs().len(),
                 inputs.len()
             ),
         });
     }
-    for (index, (spec, input)) in program.input_specs().iter().zip(inputs).enumerate() {
-        if spec.dtype() != input.dtype() {
+    for (index, (&value, input)) in program.inputs().iter().zip(inputs).enumerate() {
+        let spec = semantic_tensor_spec(program, value, "ProgramInput", index, "PJRT input")?;
+        if spec.dtype != input.dtype() {
             return Err(Error::InvalidProgram {
                 message: format!(
                     "PJRT input {index} expected dtype {:?}, got {:?}",
-                    spec.dtype(),
+                    spec.dtype,
                     input.dtype()
                 ),
             });
         }
-        if spec.shape() != input.shape() {
+        if spec.shape != input.shape() {
             return Err(Error::InvalidProgram {
                 message: format!(
                     "PJRT input {index} expected shape {:?}, got {:?}",
-                    spec.shape(),
+                    spec.shape,
                     input.shape()
                 ),
             });
@@ -94,87 +97,60 @@ fn validate_inputs(program: &GraphProgram, inputs: &[&Tensor]) -> Result<()> {
     Ok(())
 }
 
-fn output_specs(program: &GraphProgram) -> Result<Vec<TensorSpec>> {
-    let view = program.lowering_view();
-    let mut slots: Vec<Option<TensorSpec>> = vec![None; view.slot_count()];
-    if program.input_specs().len() != view.input_slots().len() {
-        return Err(Error::InvalidProgram {
-            message: format!(
-                "PJRT input spec count {} does not match input slot count {}",
-                program.input_specs().len(),
-                view.input_slots().len()
-            ),
-        });
-    }
-    for (index, (input, &input_slot)) in program
-        .input_specs()
+fn output_specs(program: &SemanticProgram) -> Result<Vec<TensorSpec>> {
+    program
+        .outputs()
         .iter()
-        .zip(view.input_slots().iter())
         .enumerate()
-    {
-        let slots_len = slots.len();
-        let Some(slot_ref) = slots.get_mut(input_slot) else {
-            return Err(Error::InvalidProgram {
-                message: format!(
-                    "PJRT input {index} slot {input_slot} is outside slot table length {slots_len}"
-                ),
-            });
-        };
-        *slot_ref = Some(TensorSpec {
-            dtype: input.dtype(),
-            shape: input.shape().to_vec(),
-        });
-    }
-    for inst in view.instructions() {
-        let output_slot = match inst.output_slots() {
-            [slot] => *slot,
-            _ => {
-                return Err(Error::UnsupportedOp {
-                    op: inst.op_name(),
-                    reason: "multiple outputs are not part of the initial PJRT execution subset",
-                });
-            }
-        };
-        validate_supported_dtype(inst.dtype(), "PJRT output")?;
-        let input_shapes = inst
-            .input_slots()
-            .iter()
-            .map(|&slot| {
-                slots
-                    .get(slot)
-                    .and_then(Option::as_ref)
-                    .map(|spec| spec.shape.as_slice())
-                    .ok_or_else(|| Error::InvalidProgram {
-                        message: format!("PJRT input slot {slot} is not populated"),
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let shape = crate::lowering::shape::static_output_shape(inst, 0, &input_shapes)?;
-        let slots_len = slots.len();
-        let Some(slot_ref) = slots.get_mut(output_slot) else {
-            return Err(Error::InvalidProgram {
-                message: format!(
-                    "PJRT output slot {output_slot} is outside slot table length {slots_len}"
-                ),
-            });
-        };
-        *slot_ref = Some(TensorSpec {
-            dtype: inst.dtype(),
-            shape,
-        });
-    }
-    view.output_slots()
-        .iter()
-        .map(|&slot| {
-            slots
-                .get(slot)
-                .and_then(Option::as_ref)
-                .cloned()
-                .ok_or_else(|| Error::InvalidProgram {
-                    message: format!("PJRT output slot {slot} is not populated"),
-                })
+        .map(|(index, &value)| {
+            semantic_tensor_spec(program, value, "ProgramOutput", index, "PJRT output")
         })
         .collect()
+}
+
+fn semantic_tensor_spec(
+    program: &SemanticProgram,
+    value: ProgramValue,
+    op: &'static str,
+    output_index: usize,
+    context: &'static str,
+) -> Result<TensorSpec> {
+    let metadata = program
+        .value_metadata(value)
+        .map_err(|source| Error::InvalidProgram {
+            message: format!("{context} semantic metadata is unavailable: {source}"),
+        })?;
+    validate_supported_dtype(metadata.dtype(), context)?;
+    let shape = metadata
+        .shape()
+        .iter()
+        .enumerate()
+        .map(|(axis, extent)| match extent {
+            ShapeExtent::Exact(DimExpr::Const(value)) => Ok(*value),
+            ShapeExtent::Exact(_) => Err(Error::NonStaticShape {
+                op,
+                output_index,
+                axis,
+                kind: "symbolic",
+            }),
+            ShapeExtent::UpperBound(_) => Err(Error::NonStaticShape {
+                op,
+                output_index,
+                axis,
+                kind: "an upper bound",
+            }),
+            ShapeExtent::Unknown => Err(Error::NonStaticShape {
+                op,
+                output_index,
+                axis,
+                kind: "unknown",
+            }),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(TensorSpec {
+        dtype: metadata.dtype(),
+        shape,
+    })
 }
 
 fn validate_supported_dtype(dtype: DType, context: &'static str) -> Result<()> {

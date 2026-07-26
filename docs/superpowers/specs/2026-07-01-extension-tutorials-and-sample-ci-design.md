@@ -115,7 +115,7 @@ The sparse contraction is bilinear in the values:
 dC = contract(dA, B) + contract(A, dB)
 ```
 
-The extension crate should register AD rules through `ExtensionRuleSet`.
+The extension crate should register AD rules through `SemanticExtensionRuleSet`.
 
 The JVP rule should emit a sparse-contract JVP extension op that accepts the
 primal values plus any active tangent values and returns one output tangent

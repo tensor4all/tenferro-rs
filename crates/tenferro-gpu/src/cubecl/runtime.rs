@@ -1,6 +1,7 @@
 //! CubeCL CUDA runtime initialization and synchronization.
 
 use std::fmt;
+use std::sync::Arc;
 
 use cubecl::client::ComputeClient;
 use cubecl::stream_id::StreamId;
@@ -31,24 +32,33 @@ pub fn gpu_available() -> bool {
 /// let _sync: fn(&CudaRuntime) -> tenferro_tensor::Result<()> =
 ///     CudaRuntime::synchronize;
 /// ```
+#[derive(Clone)]
 pub struct CudaRuntime {
+    inner: Arc<CudaRuntimeState>,
+}
+
+struct CudaRuntimeState {
     client: ComputeClient<CubeclCudaRuntime>,
     device_ordinal: usize,
     primary_context: CudaPrimaryContext,
 }
 
+// SAFETY: `CudaRuntimeState` owns a retained CUDA primary context and a CubeCL
+// client for one device ordinal. Methods set the context current before raw CUDA
+// calls, and backend/executor layers serialize mutating tensor execution.
+unsafe impl Send for CudaRuntimeState {}
+// SAFETY: Shared state access exposes immutable runtime handles; synchronization
+// and stream queries use explicit CUDA/CubeCL handles and do not mutate Rust
+// aliasing-visible fields.
+unsafe impl Sync for CudaRuntimeState {}
+
 impl fmt::Debug for CudaRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CudaRuntime")
-            .field("device_ordinal", &self.device_ordinal)
+            .field("device_ordinal", &self.inner.device_ordinal)
             .finish_non_exhaustive()
     }
 }
-
-// SAFETY: CUDA primary contexts and CubeCL clients are owned handles. Backend
-// methods set the context current before raw CUDA-library calls, and
-// higher-level eager execution serializes backend access through a mutex.
-unsafe impl Send for CudaRuntime {}
 
 struct CudaPrimaryContext {
     cuda_device: CUdevice,
@@ -120,14 +130,16 @@ impl CudaRuntime {
         let device = CudaDevice::new(device_ordinal);
         let client = CubeclCudaRuntime::client(&device);
         Ok(Self {
-            client,
-            device_ordinal,
-            primary_context,
+            inner: Arc::new(CudaRuntimeState {
+                client,
+                device_ordinal,
+                primary_context,
+            }),
         })
     }
 
     pub(crate) fn client(&self) -> &ComputeClient<CubeclCudaRuntime> {
-        &self.client
+        &self.inner.client
     }
 
     /// Return the CUDA device ordinal that this runtime targets.
@@ -140,30 +152,16 @@ impl CudaRuntime {
     /// let _device_ordinal: fn(&CudaRuntime) -> usize = CudaRuntime::device_ordinal;
     /// ```
     pub fn device_ordinal(&self) -> usize {
-        self.device_ordinal
+        self.inner.device_ordinal
     }
 
     #[doc(hidden)]
     pub fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
-        // INVARIANT: CUDA ordinals are device identifiers; bad ordinals are
-        // reported by CUDA instead of indexing memory in tenferro.
-        cudarc::runtime::result::device::set(self.device_ordinal as i32)
-            .map_err(|err| crate::Error::backend_source(op, err))?;
-        unsafe { cudarc::driver::result::ctx::set_current(self.primary_context.context()) }
-            .map_err(|err| crate::Error::backend_source(op, err))
+        self.inner.set_current_cuda_context(op)
     }
 
     pub(crate) fn raw_cuda_stream(&self) -> crate::Result<u64> {
-        self.client
-            .with_server(|server| {
-                server
-                    .raw_stream(StreamId::current())
-                    .map(|stream| stream as u64)
-                    .map_err(|err| crate::Error::backend_source("raw_cuda_stream", err))
-            })
-            .ok_or_else(|| {
-                crate::Error::runtime_state("raw_cuda_stream", "CubeCL server is unavailable")
-            })?
+        self.inner.raw_cuda_stream()
     }
 
     /// Block the current thread until work submitted to the current CUDA stream completes.
@@ -183,6 +181,34 @@ impl CudaRuntime {
     /// current stream, or [`crate::Error::BackendSource`] when CUDA context or
     /// stream synchronization fails.
     pub fn synchronize(&self) -> crate::Result<()> {
+        self.inner.synchronize()
+    }
+}
+
+impl CudaRuntimeState {
+    fn set_current_cuda_context(&self, op: &'static str) -> crate::Result<()> {
+        // INVARIANT: CUDA ordinals are device identifiers; bad ordinals are
+        // reported by CUDA instead of indexing memory in tenferro.
+        cudarc::runtime::result::device::set(self.device_ordinal as i32)
+            .map_err(|err| crate::Error::backend_source(op, err))?;
+        unsafe { cudarc::driver::result::ctx::set_current(self.primary_context.context()) }
+            .map_err(|err| crate::Error::backend_source(op, err))
+    }
+
+    fn raw_cuda_stream(&self) -> crate::Result<u64> {
+        self.client
+            .with_server(|server| {
+                server
+                    .raw_stream(StreamId::current())
+                    .map(|stream| stream as u64)
+                    .map_err(|err| crate::Error::backend_source("raw_cuda_stream", err))
+            })
+            .ok_or_else(|| {
+                crate::Error::runtime_state("raw_cuda_stream", "CubeCL server is unavailable")
+            })?
+    }
+
+    fn synchronize(&self) -> crate::Result<()> {
         const OP: &str = "cubecl_runtime_synchronize";
         self.set_current_cuda_context(OP)?;
         let stream = self.raw_cuda_stream()? as usize as cudaStream_t;
@@ -191,7 +217,7 @@ impl CudaRuntime {
     }
 }
 
-impl Drop for CudaRuntime {
+impl Drop for CudaRuntimeState {
     fn drop(&mut self) {
         // Drop cannot surface errors, but the runtime must not release the
         // primary context while queued kernels may still reference it.

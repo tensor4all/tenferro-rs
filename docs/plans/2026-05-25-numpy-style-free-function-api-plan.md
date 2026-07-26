@@ -853,7 +853,7 @@ fn traced_tensor_namespace_exposes_einsum() {
     let mut compiler = tenferro::GraphCompiler::new();
     let a = tenferro::TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
     let b = tenferro::TracedTensor::from_vec_col_major(vec![2, 2], vec![1.0_f64; 4]);
-    let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik").unwrap();
+    let y = tenferro_einsum::traced_tensor::legacy_einsum(&mut legacy_compiler, &[&a, &b], "ij,jk->ik").unwrap();
     assert_eq!(y.rank, 2);
 }
 ```
@@ -962,7 +962,7 @@ let z = tenferro::tensor::add(&x, &y, &mut backend)?;
 let z = tenferro::eager_tensor::add(&x, &y)?;
 let z = tenferro::traced_tensor::add(&x, &y);
 let y = tenferro_linalg::traced_tensor::svd(&x);
-let y = tenferro_einsum::traced_tensor::einsum(&mut compiler, &[&a, &b], "ij,jk->ik")?;
+let y = tenferro_einsum::traced_tensor::legacy_einsum(&mut legacy_compiler, &[&a, &b], "ij,jk->ik")?;
 ```
 
 Do not add `tenferro::linalg`, `tenferro::einsum`, or `tenferro::fft`.

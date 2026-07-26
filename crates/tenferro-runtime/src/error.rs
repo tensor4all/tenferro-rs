@@ -231,6 +231,10 @@ pub enum Error {
     #[error("placeholder {input_key} has no runtime input binding")]
     UnboundPlaceholder { input_key: String },
 
+    /// The number of ordered tensors supplied to a compiled graph is invalid.
+    #[error("compiled graph expects {expected} ordered inputs, got {actual}")]
+    GraphInputCountMismatch { expected: usize, actual: usize },
+
     /// The same placeholder was bound more than once in the `bindings` slice.
     #[error("placeholder {input_key} was bound more than once")]
     DuplicateBinding { input_key: String },
@@ -248,6 +252,17 @@ pub enum Error {
     PlaceholderShapeMismatch {
         expected: Vec<usize>,
         actual: Vec<usize>,
+    },
+
+    /// A binding tensor dimension exceeds a semantic input's declared bound.
+    #[error("binding dimension {axis} exceeds semantic input upper bound {bound}: got {actual}")]
+    PlaceholderShapeBoundExceeded {
+        /// Axis whose runtime extent exceeded the bound.
+        axis: usize,
+        /// Evaluated upper bound.
+        bound: usize,
+        /// Runtime extent.
+        actual: usize,
     },
 
     /// A binding tensor's rank does not match an `input_symbolic_shape`
@@ -614,6 +629,9 @@ impl Error {
             | Self::DuplicateBinding { .. }
             | Self::ContextMismatch { .. } => ErrorKind::RuntimeState,
             Self::NonScalarGrad { .. } => ErrorKind::Validation(ValidationKind::InvalidArgument),
+            Self::GraphInputCountMismatch { .. } => {
+                ErrorKind::Validation(ValidationKind::InvalidArgument)
+            }
             Self::Unsupported { .. } | Self::UnsupportedAdRule { .. } => ErrorKind::Unsupported,
             Self::AdRuleSource { .. } => ErrorKind::Validation(ValidationKind::InvalidArgument),
             Self::TensorRuntime(error) => error.kind(),
@@ -622,7 +640,7 @@ impl Error {
             Self::PlaceholderDtypeMismatch { .. } => {
                 ErrorKind::Validation(ValidationKind::DTypeMismatch)
             }
-            Self::PlaceholderShapeMismatch { .. } => {
+            Self::PlaceholderShapeMismatch { .. } | Self::PlaceholderShapeBoundExceeded { .. } => {
                 ErrorKind::Validation(ValidationKind::ShapeMismatch)
             }
             Self::PlaceholderRankMismatch { .. } => {
@@ -672,6 +690,7 @@ impl Error {
             Self::PlaceholderDtypeMismatch { .. }
             | Self::PlaceholderShapeMismatch { .. }
             | Self::PlaceholderRankMismatch { .. }
+            | Self::GraphInputCountMismatch { .. }
             | Self::UnexpectedBinding { .. }
             | Self::UnboundPlaceholder { .. }
             | Self::DuplicateBinding { .. } => Some(ErrorPhase::Execution),

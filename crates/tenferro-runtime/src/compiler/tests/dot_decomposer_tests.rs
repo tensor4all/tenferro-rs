@@ -16,6 +16,7 @@ fn dot_general_exec_instr(
             lhs_batch_dims,
             rhs_batch_dims,
         }),
+        semantic_operation_index: None,
         input_slots,
         output_slots: vec![output_slot],
         dtype: DType::F64,
@@ -198,6 +199,7 @@ fn test_dot_decomposer_preserves_upper_bound_extents_in_merge_reshape() {
     let truncate_shape = dim_shape(&[5, 3, 4]);
     let truncated_lhs = ExecInstruction {
         op: ExecOp::DynamicTruncate { axis: 0 },
+        semantic_operation_index: None,
         input_slots: vec![0, 1],
         output_slots: vec![2],
         dtype: DType::F64,

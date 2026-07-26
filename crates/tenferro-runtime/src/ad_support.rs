@@ -21,11 +21,12 @@ pub use crate::metadata::{
     register_scoped_value_metadata, registered_meta, tensor_meta_from_tensor,
     RegisteredGraphAnalysis,
 };
+use crate::program::FrozenProgram;
 use crate::shape_constraint::ConstraintScopeChain;
 pub use crate::shape_constraint::ShapeConstraintScope;
 use crate::sym_dim::SymDim;
 use crate::traced::{next_input_key, next_traced_id, TracedTensor};
-use crate::{Error, Result};
+use crate::{CompiledGraph, Error, GraphCompiler, Result};
 
 /// Opaque, persistent shape-constraint history transferred across AD graphs.
 ///
@@ -300,6 +301,22 @@ pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
     tensor.resolve_roots()
 }
 
+/// Compile a traced tensor as an AD source program.
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] for invalid graph metadata or shape
+/// constraints, [`Error::RuntimeState`] for missing/inconsistent metadata or
+/// cache state, and [`Error::Internal`] when the graph violates a compiler
+/// invariant. Extension lowering failures retain their typed
+/// [`Error::Extension`] source.
+pub fn compile_ad_source(
+    compiler: &mut GraphCompiler,
+    output: &TracedTensor,
+) -> Result<CompiledGraph> {
+    compiler.compile_ad_source(output)
+}
+
 ///
 /// # Errors
 ///
@@ -352,6 +369,15 @@ pub fn checkpoint_tensor(tensor: &mut TracedTensor, data: Arc<Tensor>) -> Result
 
 pub fn allocate_input_key() -> TensorInputKey {
     next_input_key()
+}
+
+pub fn allocate_shape_tensor_id() -> u64 {
+    next_traced_id()
+}
+
+pub fn frozen_input_tensor(frozen: &FrozenProgram, input_index: usize) -> Option<Arc<Tensor>> {
+    let input = *frozen.program.inputs().get(input_index)?;
+    frozen.bindings.tensor_for_input(input)
 }
 
 ///

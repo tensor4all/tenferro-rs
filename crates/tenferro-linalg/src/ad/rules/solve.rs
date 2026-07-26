@@ -1,10 +1,10 @@
 use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
 use tenferro_ops::ad::context::ShapeGuardContext;
 use tenferro_ops::ad::PrimitiveRuleBuilder;
+use tenferro_ops::ad::{ADRuleError, ADRuleKind, ADRuleResult};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult};
 
 use crate::extension::LinalgOp;
 
@@ -494,16 +494,10 @@ pub(crate) fn transpose_lu_solve_prepared(
             ),
         ));
     }
-    if active_mask[1] || active_mask[2] {
-        return Err(invalid_input(
-            "lu_solve_prepared",
-            ADRuleKind::Transpose,
-            "packed LU and pivot cotangents are unsupported; differentiate with respect to the original matrix or RHS",
-        ));
-    }
-
     let mut result = vec![None, None, None, None];
     if active_mask[0] || active_mask[3] {
+        // Packed LU may be an active intermediate when `solve` is lowered
+        // through factorization. Pivot/parity slots are fixed residuals.
         let rank = ctx.rank_of(&inputs[0])?;
         let rhs_rank = ctx.rank_of(&inputs[3])?;
         validate_matrix_operands("lu_solve_prepared", ADRuleKind::Transpose, rank, rhs_rank)?;

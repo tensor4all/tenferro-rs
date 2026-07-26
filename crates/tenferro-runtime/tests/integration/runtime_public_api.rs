@@ -1,10 +1,73 @@
 use tenferro_cpu::CpuBackend;
+use tenferro_ops::dim_expr::DimExpr;
 use tenferro_runtime::{
-    DType, DotGeneralConfig, Error, ErrorPhase, GatherConfig, GraphCompiler, GraphExecutor,
-    PadConfig, ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TensorRead, TensorValue,
+    CompiledGraph, DType, DotGeneralConfig, Error, ErrorPhase, GatherConfig, GraphCompiler,
+    PadConfig, Runtime, ScatterConfig, SliceConfig, Tensor, TensorOpsExt, TensorValue,
     TracedTensor,
 };
 use tenferro_tensor::{Error as TensorError, ValidationError};
+
+fn cpu_runtime() -> Runtime {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .unwrap();
+    builder.build().unwrap()
+}
+
+fn run_compiled_one(program: &CompiledGraph, inputs: &[&Tensor]) -> Tensor {
+    let mut outputs = cpu_runtime().run_compiled(program, inputs).unwrap();
+    assert_eq!(outputs.len(), 1);
+    outputs.pop().unwrap()
+}
+
+#[test]
+fn runtime_prepared_compiled_graph_runs_repeated_inputs() {
+    let runtime = cpu_runtime();
+    let x = TracedTensor::input_concrete_shape(DType::F64, &[2]).unwrap();
+    let y = (&x + &x).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
+        .unwrap();
+    let first = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let second = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
+
+    let prepared = runtime.prepare_compiled(&program, &[&first]).unwrap();
+
+    let mut outputs = runtime.run_prepared(&prepared, &[&first]).unwrap();
+    assert_eq!(
+        outputs.pop().unwrap().as_slice::<f64>().unwrap(),
+        &[2.0, 4.0]
+    );
+    let mut outputs = runtime.run_prepared(&prepared, &[&second]).unwrap();
+    assert_eq!(
+        outputs.pop().unwrap().as_slice::<f64>().unwrap(),
+        &[6.0, 8.0]
+    );
+
+    let other_runtime = cpu_runtime();
+    assert!(other_runtime.run_prepared(&prepared, &[&first]).is_err());
+}
+
+#[test]
+fn runtime_prepared_execution_hot_path_keeps_input_metadata_inline() {
+    let source = include_str!("../../src/runtime/execution.rs");
+
+    assert!(
+        source.contains("type RuntimeInputRefs<'a> = SmallVec"),
+        "Runtime::run_prepared should keep short input reference lists inline"
+    );
+    assert!(
+        source.contains("type RuntimeInputShapes<'a> = SmallVec"),
+        "Runtime::run_prepared should keep short input shape lists inline"
+    );
+    assert!(
+        !source.contains("inputs.to_vec()"),
+        "Runtime::run_prepared should not allocate a heap Vec just to copy input refs"
+    );
+}
 
 #[test]
 fn runtime_crate_exposes_traced_graph_execution_api() {
@@ -13,11 +76,32 @@ fn runtime_crate_exposes_traced_graph_execution_api() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
-    let out = GraphExecutor::new(CpuBackend::default())
-        .run(&program)
-        .unwrap();
+    let out = run_compiled_one(&program, &[]);
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
+}
+
+#[test]
+fn runtime_program_api_is_public_read_only_and_bounded_debug() {
+    use tenferro_runtime::program::{
+        CoreSemanticOp, ProgramInputSpec, SemanticProgramBuilder, SemanticTransform,
+    };
+
+    fn accepts_transform_object(_: &dyn SemanticTransform) {}
+
+    let mut builder = SemanticProgramBuilder::new();
+    let input = builder
+        .input(ProgramInputSpec::new(DType::F64, [DimExpr::Const(2)]))
+        .unwrap();
+    let output = builder.add_op(CoreSemanticOp::Neg, &[input]).unwrap()[0];
+    let frozen = builder.finish(&[output]).unwrap();
+    let operation = frozen.program.operations().next().unwrap();
+
+    assert_eq!(frozen.program.inputs(), &[input]);
+    assert_eq!(frozen.program.outputs(), &[output]);
+    assert!(format!("{operation:?}").len() < 256);
+    assert!(format!("{:?}", frozen.program).len() < 256);
+    let _ = accepts_transform_object;
 }
 
 #[test]
@@ -97,7 +181,7 @@ fn traced_tensor_methods_cover_structural_surface() {
     fn run(output: &TracedTensor) -> Tensor {
         let mut compiler = GraphCompiler::new();
         let program = compiler.compile(output).unwrap();
-        GraphExecutor::new(CpuBackend::new()).run(&program).unwrap()
+        run_compiled_one(&program, &[])
     }
 
     let vector = TracedTensor::from_vec_col_major(vec![4], vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
@@ -258,7 +342,7 @@ fn traced_shape_packing_rejects_symbolic_shapes_as_graph_build_errors() {
 }
 
 #[test]
-fn graph_executor_runs_elementwise_and_reduction_with_borrowed_inputs() {
+fn runtime_runs_elementwise_and_reduction_with_ordered_inputs() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap().reduce_sum(Some(&[0])).unwrap();
     let mut compiler = GraphCompiler::new();
@@ -266,11 +350,8 @@ fn graph_executor_runs_elementwise_and_reduction_with_borrowed_inputs() {
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
 
-    let out = executor
-        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
-        .unwrap();
+    let out = cpu_runtime().run_compiled(&program, &[&input]).unwrap();
 
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].as_slice::<f64>().unwrap(), &[6.0]);
@@ -280,7 +361,8 @@ fn graph_executor_runs_elementwise_and_reduction_with_borrowed_inputs() {
 #[test]
 fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
-    let y = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y_data = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let y = TracedTensor::from_tensor_concrete_shape(y_data.clone()).unwrap();
 
     let z = (&x + &y).unwrap();
 
@@ -289,9 +371,7 @@ fn traced_broadcast_binary_accepts_symbolic_same_rank_input() {
         .compile_with_input_specs(&z, &[(&x, DType::F64, &[2])])
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap();
-    let out = GraphExecutor::new(CpuBackend::new())
-        .run_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
-        .unwrap();
+    let out = run_compiled_one(&program, &[&input, &y_data]);
 
     assert_eq!(out.as_slice::<f64>().unwrap(), &[4.0, 6.0]);
 }
@@ -306,7 +386,7 @@ fn traced_reduction_with_too_many_axes_returns_error_without_rank_underflow() {
 }
 
 #[test]
-fn graph_executor_runs_dot_general_with_borrowed_inputs() {
+fn runtime_runs_dot_general_with_ordered_inputs() {
     let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let product = lhs
@@ -331,16 +411,9 @@ fn graph_executor_runs_dot_general_with_borrowed_inputs() {
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let rhs_data =
         Tensor::from_vec_col_major(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
 
-    let out = executor
-        .run_many_with_input_reads(
-            &program,
-            &[
-                (&lhs, TensorRead::from_tensor(&lhs_data)),
-                (&rhs, TensorRead::from_tensor(&rhs_data)),
-            ],
-        )
+    let out = cpu_runtime()
+        .run_compiled(&program, &[&lhs_data, &rhs_data])
         .unwrap();
 
     assert_eq!(out.len(), 1);
@@ -349,7 +422,7 @@ fn graph_executor_runs_dot_general_with_borrowed_inputs() {
 }
 
 #[test]
-fn graph_executor_can_return_final_transpose_as_lazy_value() {
+fn runtime_can_return_final_transpose_as_lazy_value() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
     let y = (&x + &x).unwrap().transpose(&[1, 0]).unwrap();
     let mut compiler = GraphCompiler::new();
@@ -358,18 +431,15 @@ fn graph_executor_can_return_final_transpose_as_lazy_value() {
         .unwrap();
     let input =
         Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
 
-    let compact = executor
-        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
-        .unwrap();
+    let compact = cpu_runtime().run_compiled(&program, &[&input]).unwrap();
     assert_eq!(
         compact[0].as_slice::<f64>().unwrap(),
         &[2.0, 6.0, 10.0, 4.0, 8.0, 12.0]
     );
 
-    let values = executor
-        .run_many_values_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
+    let values = cpu_runtime()
+        .run_compiled_values(&program, &[&input])
         .unwrap();
 
     assert_eq!(values.len(), 1);
@@ -381,25 +451,10 @@ fn graph_executor_can_return_final_transpose_as_lazy_value() {
         }
         TensorValue::Tensor(_) => panic!("final transpose should stay as a lazy owned view"),
     }
-    assert_eq!(
-        executor
-            .materialize_value(&values[0])
-            .unwrap()
-            .as_slice::<f64>()
-            .unwrap(),
-        &[2.0, 6.0, 10.0, 4.0, 8.0, 12.0]
-    );
 }
 
 #[test]
-fn graph_executor_public_helpers_and_borrowed_input_errors_are_covered() {
-    let mut executor = GraphExecutor::<CpuBackend>::default();
-    executor.extension_executor_mut().clear_caches();
-    assert_eq!(executor.cache_stats().extensions.entries, 0);
-    executor.reclaim_outputs(vec![
-        Tensor::from_vec_col_major(vec![1], vec![0.0_f64]).unwrap()
-    ]);
-
+fn runtime_ordered_input_errors_are_covered() {
     let x = TracedTensor::input_symbolic_shape(DType::F64, 1).unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
@@ -407,55 +462,28 @@ fn graph_executor_public_helpers_and_borrowed_input_errors_are_covered() {
         .compile_with_input_specs(&y, &[(&x, DType::F64, &[2])])
         .unwrap();
     let input = Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
+    let runtime = cpu_runtime();
 
-    let out = executor
-        .run_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&input))])
-        .unwrap();
+    let out = run_compiled_one(&program, &[&input]);
     assert_eq!(out.as_slice::<f64>().unwrap(), &[2.0, 4.0]);
 
-    let unbound = executor
-        .run_many_with_input_reads(&program, &[])
-        .unwrap_err();
+    let unbound = runtime.run_compiled(&program, &[]).unwrap_err();
     assert!(matches!(unbound, Error::UnboundPlaceholder { .. }));
 
-    let concrete = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
-    let unexpected = executor
-        .run_many_with_input_reads(&program, &[(&concrete, TensorRead::from_tensor(&input))])
+    let extra = runtime
+        .run_compiled(&program, &[&input, &input])
         .unwrap_err();
-    assert!(matches!(unexpected, Error::UnexpectedBinding { .. }));
-
-    let duplicate = executor
-        .run_many_with_input_reads(
-            &program,
-            &[
-                (&x, TensorRead::from_tensor(&input)),
-                (&x, TensorRead::from_tensor(&input)),
-            ],
-        )
-        .unwrap_err();
-    assert!(matches!(duplicate, Error::DuplicateBinding { .. }));
+    assert!(matches!(extra, Error::GraphInputCountMismatch { .. }));
 
     let f32_input = Tensor::from_vec_col_major(vec![2], vec![1.0_f32, 2.0]).unwrap();
-    let dtype = executor
-        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&f32_input))])
-        .unwrap_err();
+    let dtype = runtime.run_compiled(&program, &[&f32_input]).unwrap_err();
     assert!(matches!(dtype, Error::PlaceholderDtypeMismatch { .. }));
 
     let rank_input = Tensor::from_vec_col_major(vec![1, 2], vec![1.0_f64, 2.0]).unwrap();
-    let rank = executor
-        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&rank_input))])
-        .unwrap_err();
+    let rank = runtime.run_compiled(&program, &[&rank_input]).unwrap_err();
     assert!(matches!(rank, Error::PlaceholderRankMismatch { .. }));
 
     let shape_input = Tensor::from_vec_col_major(vec![3], vec![1.0_f64, 2.0, 3.0]).unwrap();
-    let shape = executor
-        .run_many_with_input_reads(&program, &[(&x, TensorRead::from_tensor(&shape_input))])
-        .unwrap_err();
+    let shape = runtime.run_compiled(&program, &[&shape_input]).unwrap_err();
     assert!(matches!(shape, Error::PlaceholderShapeMismatch { .. }));
-
-    let multi = compiler
-        .compile_many(&[&concrete, &concrete.neg().unwrap()])
-        .unwrap();
-    let output_count = executor.run(&multi).unwrap_err();
-    assert!(output_count.to_string().contains("expected 1 output"));
 }

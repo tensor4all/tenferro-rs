@@ -315,8 +315,8 @@ pub fn tropical_einsum_subscripts_with_argmax(
     }
 
     let shapes: Vec<&[usize]> = inputs.iter().map(|tensor| tensor.shape()).collect();
-    let tree = ContractionTree::optimize(subscripts, &shapes)
-        .map_err(|err| from_einsum_error(OP, err))?;
+    let tree =
+        ContractionTree::optimize(subscripts, &shapes).map_err(|err| from_einsum_error(OP, err))?;
     if tree.step_count() != 1 {
         return Err(invalid_config(format!(
             "only one pairwise contraction step is supported, got {}",

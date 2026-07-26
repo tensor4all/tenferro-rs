@@ -1,35 +1,28 @@
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::extension::{ExecInstruction, ExecOp, ExecProgram};
-use tenferro_runtime::{DType, GraphExecutor, Tensor, TypedTensor};
+use tenferro_runtime::{DType, GraphCompiler, Tensor, TracedTensor, TypedTensor};
+
+use crate::support::{run_compiled_one, runtime_from_cpu_backend};
 
 #[test]
-fn eval_exec_ir_non_consuming_preserves_caller_inputs() {
-    let program = ExecProgram {
-        instructions: vec![ExecInstruction {
-            op: ExecOp::Add,
-            input_slots: vec![0, 1],
-            output_slots: vec![2],
-            dtype: DType::F64,
-            output_shapes: vec![vec![]].into(),
-            output_extents: vec![vec![]].into(),
-            last_use: vec![true, true],
-        }],
-        input_slots: vec![0, 1],
-        output_slots: vec![2],
-        n_slots: 3,
-        shape_guards: Vec::new(),
-    };
-
+fn graph_execution_with_borrowed_inputs_preserves_caller_tensors() {
+    let lhs_value = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
+    let rhs_value = TracedTensor::input_symbolic_shape(DType::F64, 0).unwrap();
+    let sum = (&lhs_value + &rhs_value).unwrap();
+    let mut compiler = GraphCompiler::new();
+    let program = compiler
+        .compile_with_input_specs(
+            &sum,
+            &[(&lhs_value, DType::F64, &[]), (&rhs_value, DType::F64, &[])],
+        )
+        .unwrap();
     let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![2.0]).unwrap());
     let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![], vec![3.0]).unwrap());
-    let inputs = vec![lhs, rhs];
 
-    let mut engine = GraphExecutor::new(CpuBackend::with_threads(1).unwrap());
-    let outputs = engine
-        .eval_exec_ir_non_consuming(&program, &inputs)
-        .expect("non-consuming eval should succeed");
+    let runtime = runtime_from_cpu_backend(&CpuBackend::with_threads(1).unwrap());
+    let output = run_compiled_one(&runtime, &program, &[&lhs, &rhs])
+        .expect("borrowed graph execution should succeed");
 
-    assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[5.0]);
-    assert_eq!(inputs[0].as_slice::<f64>().unwrap(), &[2.0]);
-    assert_eq!(inputs[1].as_slice::<f64>().unwrap(), &[3.0]);
+    assert_eq!(output.as_slice::<f64>().unwrap(), &[5.0]);
+    assert_eq!(lhs.as_slice::<f64>().unwrap(), &[2.0]);
+    assert_eq!(rhs.as_slice::<f64>().unwrap(), &[3.0]);
 }

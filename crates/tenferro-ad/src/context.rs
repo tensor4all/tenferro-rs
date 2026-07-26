@@ -2,10 +2,18 @@
 
 use std::sync::Arc;
 
-use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
+use tenferro_runtime::program::FrozenProgram;
 use tenferro_runtime::{CacheStats, Result, TracedTensor};
 
-use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits};
+// SemanticCompatDispatcher removed in Unification 7.
+// Extension AD is handled exclusively by SemanticExtensionRuleSet.
+use crate::semantic_extension::{SemanticExtensionRegistryError, SemanticExtensionRuleSet};
+use crate::semantic_transform::{
+    semantic_jvp, semantic_vjp, SemanticAdProgram, SemanticAdTransformError,
+};
+use crate::transform_cache::{
+    AdTransformCache, AdTransformCacheLimits, SemanticAdTransformCacheKey,
+};
 
 /// Stats for caches owned by an [`AdContext`].
 ///
@@ -37,11 +45,14 @@ pub struct AdContextCacheStats {
 /// use tenferro_ad::AdContext;
 ///
 /// let ad = AdContext::builder().build().unwrap();
-/// assert!(ad.extension_rules().lookup_linearize("example.missing.v1").is_none());
+/// assert!(ad
+///     .semantic_extension_rules()
+///     .lookup_linearize("example.missing.v1")
+///     .is_none());
 /// ```
 #[derive(Clone, Debug)]
 pub struct AdContext {
-    extension_rules: ExtensionRuleSet,
+    semantic_extension_rules: SemanticExtensionRuleSet,
     ad_transform_cache: Arc<AdTransformCache>,
 }
 
@@ -59,7 +70,17 @@ impl AdContext {
         AdContextBuilder::default()
     }
 
-    /// Return the extension rules owned by this context.
+    pub(crate) fn with_rules_and_transform_cache(
+        semantic_extension_rules: SemanticExtensionRuleSet,
+        ad_transform_cache: Arc<AdTransformCache>,
+    ) -> Self {
+        Self {
+            semantic_extension_rules,
+            ad_transform_cache,
+        }
+    }
+
+    /// Return semantic-program extension AD rules owned by this context.
     ///
     /// # Examples
     ///
@@ -67,14 +88,91 @@ impl AdContext {
     /// use tenferro_ad::AdContext;
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// assert!(!ad.extension_rules().is_linearize_registered("example.missing.v1"));
+    /// assert!(ad
+    ///     .semantic_extension_rules()
+    ///     .lookup_linearize("example.missing.v1")
+    ///     .is_none());
     /// ```
-    pub fn extension_rules(&self) -> &ExtensionRuleSet {
-        &self.extension_rules
+    pub fn semantic_extension_rules(&self) -> &SemanticExtensionRuleSet {
+        &self.semantic_extension_rules
     }
 
-    pub(crate) fn extension_rule_set(&self) -> ExtensionRuleSet {
-        self.extension_rules.clone()
+    /// Transform a frozen semantic program into its forward-mode derivative.
+    ///
+    /// `active_inputs` follows source-program input order. Active tangent
+    /// seeds are appended after all primal inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticAdTransformError::ActivityArity`] when
+    /// `active_inputs` has the wrong length,
+    /// [`SemanticAdTransformError::Extension`] when an extension rule rejects
+    /// the transform, or the corresponding `Query`, `Build`, `Finish`, or
+    /// `Cache` variant when program import, construction, finalization, or
+    /// cache access fails.
+    pub fn jvp_program(
+        &self,
+        input: &FrozenProgram,
+        active_inputs: &[bool],
+    ) -> std::result::Result<SemanticAdProgram, SemanticAdTransformError> {
+        let key = SemanticAdTransformCacheKey::jvp(input, active_inputs);
+        if let Some(cached) = self
+            .ad_transform_cache
+            .get_semantic(&key, input)
+            .map_err(SemanticAdTransformError::Cache)?
+        {
+            return cached
+                .as_ref()
+                .with_input_prefix_bindings_from(input)
+                .map_err(SemanticAdTransformError::from);
+        }
+        let transformed = semantic_jvp(input, active_inputs, &self.semantic_extension_rules)?;
+        self.ad_transform_cache
+            .put_semantic(key, input, Arc::new(transformed.clone()))
+            .map_err(SemanticAdTransformError::Cache)?;
+        Ok(transformed)
+    }
+
+    /// Transform a frozen semantic program into its reverse-mode derivative.
+    ///
+    /// `active_inputs` selects requested primal-input cotangents and
+    /// `active_outputs` selects primal outputs that receive appended seeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SemanticAdTransformError::ActivityArity`] when either activity
+    /// mask has the wrong length,
+    /// [`SemanticAdTransformError::Extension`] when an extension rule rejects
+    /// the transform, or the corresponding `Query`, `Build`, `Finish`, or
+    /// `Cache` variant when program import, construction, finalization, or
+    /// cache access fails.
+    pub fn vjp_program(
+        &self,
+        input: &FrozenProgram,
+        active_inputs: &[bool],
+        active_outputs: &[bool],
+    ) -> std::result::Result<SemanticAdProgram, SemanticAdTransformError> {
+        let key = SemanticAdTransformCacheKey::vjp(input, active_inputs, active_outputs);
+        if let Some(cached) = self
+            .ad_transform_cache
+            .get_semantic(&key, input)
+            .map_err(SemanticAdTransformError::Cache)?
+        {
+            return cached
+                .as_ref()
+                .with_input_prefix_bindings_from(input)
+                .map_err(SemanticAdTransformError::from);
+        }
+        let transformed = semantic_vjp(
+            input,
+            active_inputs,
+            active_outputs,
+            &self.semantic_extension_rules,
+        )?;
+        self.ad_transform_cache
+            .put_semantic(key, input, Arc::new(transformed.clone()))
+            .map_err(SemanticAdTransformError::Cache)?;
+        Ok(transformed)
     }
 
     pub(crate) fn ad_transform_cache(&self) -> Arc<AdTransformCache> {
@@ -232,7 +330,7 @@ impl AdContext {
         crate::traced::grad_with_rules_and_cache(
             output,
             wrt,
-            &self.extension_rules,
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -266,7 +364,7 @@ impl AdContext {
         crate::traced::grad_optional_with_rules_and_cache(
             output,
             wrt,
-            &self.extension_rules,
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -303,7 +401,7 @@ impl AdContext {
             output,
             wrt,
             tangent,
-            &self.extension_rules,
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -339,7 +437,7 @@ impl AdContext {
             output,
             wrt,
             tangent,
-            &self.extension_rules,
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -381,7 +479,7 @@ impl AdContext {
             output,
             wrt,
             cotangent,
-            &self.extension_rules,
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -417,7 +515,7 @@ impl AdContext {
             output,
             wrt,
             cotangent,
-            &self.extension_rules,
+            &self.semantic_extension_rules,
             Some(self.ad_transform_cache.as_ref()),
         )
     }
@@ -431,11 +529,14 @@ impl AdContext {
 /// use tenferro_ad::AdContextBuilder;
 ///
 /// let ad = AdContextBuilder::new().build().unwrap();
-/// assert!(ad.extension_rules().lookup_linearize("example.missing.v1").is_none());
+/// assert!(ad
+///     .semantic_extension_rules()
+///     .lookup_linearize("example.missing.v1")
+///     .is_none());
 /// ```
 #[derive(Clone, Debug, Default)]
 pub struct AdContextBuilder {
-    extension_rule_sets: Vec<ExtensionRuleSet>,
+    semantic_extension_rules: SemanticExtensionRuleSet,
 }
 
 impl AdContextBuilder {
@@ -452,26 +553,26 @@ impl AdContextBuilder {
         Self::default()
     }
 
-    /// Include an owned extension rule set.
+    /// Include an owned semantic-program extension AD rule set.
     ///
-    /// # Examples
+    /// # Errors
     ///
-    /// ```rust
-    /// use tenferro_ad::{AdContext, extension::ExtensionRuleSet};
-    ///
-    /// let _ad = AdContext::builder()
-    ///     .with_extension_rules(ExtensionRuleSet::new())
-    ///     .build()
-    ///     .unwrap();
-    /// ```
-    pub fn with_extension_rules(mut self, rules: ExtensionRuleSet) -> Self {
-        self.extension_rule_sets.push(rules);
-        self
+    /// Returns [`SemanticExtensionRegistryError::MalformedFamilyId`] when a
+    /// family identifier is invalid, or
+    /// [`SemanticExtensionRegistryError::DuplicateRule`] when the same family
+    /// and role were already supplied.
+    pub fn with_semantic_extension_rules(
+        mut self,
+        rules: SemanticExtensionRuleSet,
+    ) -> std::result::Result<Self, SemanticExtensionRegistryError> {
+        self.semantic_extension_rules.merge(rules)?;
+        Ok(self)
     }
 
     /// Build the context.
     ///
-    /// Duplicate extension family registrations are rejected.
+    /// Semantic extension rules have already been validated and merged by
+    /// [`Self::with_semantic_extension_rules`].
     ///
     /// # Examples
     ///
@@ -479,21 +580,20 @@ impl AdContextBuilder {
     /// use tenferro_ad::AdContext;
     ///
     /// let ad = AdContext::builder().build().unwrap();
-    /// assert!(ad.extension_rules().lookup_linearize("example.missing.v1").is_none());
+    /// assert!(ad
+    ///     .semantic_extension_rules()
+    ///     .lookup_linearize("example.missing.v1")
+    ///     .is_none());
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`ExtensionRegistryError::MalformedFamilyId`] for an invalid
-    /// family identifier or [`ExtensionRegistryError::DuplicateRule`] when
-    /// two supplied rule sets register the same role and family.
-    pub fn build(self) -> std::result::Result<AdContext, ExtensionRegistryError> {
-        let mut extension_rules = ExtensionRuleSet::new();
-        for rules in self.extension_rule_sets {
-            extension_rules.merge(rules)?;
-        }
+    /// The error type is [`std::convert::Infallible`], so this finalization step
+    /// never returns `Err` after semantic rule registration. It retains a
+    /// `Result` so callers can compose it with the fallible registration step.
+    pub fn build(self) -> std::result::Result<AdContext, std::convert::Infallible> {
         Ok(AdContext {
-            extension_rules,
+            semantic_extension_rules: self.semantic_extension_rules,
             ad_transform_cache: Arc::new(AdTransformCache::new()),
         })
     }

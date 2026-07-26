@@ -1,40 +1,104 @@
-use crate::buffer_pool::BufferPool;
+use crate::buffer_pool::{BufferPool, PoolScalar};
 use crate::{Tensor, TensorRead, TensorValue, TensorWrite};
-use tenferro_tensor::backend::{
-    dot_general_accum_via_temp, grouped_gemm_via_sequential, validate_dot_general_accumulation,
-    validate_grouped_gemm, ElementwiseFusionPlan, GroupedGemmConfig,
-};
+use tenferro_tensor::backend::{ElementwiseFusionPlan, GroupedGemmConfig};
 use tenferro_tensor::{
-    CompareDir, DotGeneralConfig, GatherConfig, PadConfig, ScatterConfig, SliceConfig,
+    Buffer, CompareDir, ContractionScalar, DType, DotGeneralConfig, GatherConfig, PadConfig,
+    ScatterConfig, SliceConfig, TypedTensor,
 };
 use tenferro_tensor::{
     DotGeneralAccumulation, SessionCachedDot, TensorAnalytic, TensorBuffer, TensorDeviceTransfer,
     TensorDot, TensorElementwise, TensorFusion, TensorIndexing, TensorReduction, TensorStructural,
 };
 
-use super::backend::reclaim_typed;
+use super::backend::{reclaim_typed, tag_fresh_output, FreshCpuOutput};
+use super::provider::{CpuExecutionContext, CpuOperationEntry};
+use super::CpuProviderBundle;
 use super::{
     analytic, copy_tensor_read_into, elementwise, gemm, indexing, materialize_tensor_read,
-    reduction, structural, CpuContext,
+    reduction, structural,
 };
-use super::{CpuBackendKind, DotGeneralProvider};
 
 pub(crate) struct CpuExecSession<'a> {
-    #[cfg_attr(feature = "cpu-blas", allow(dead_code))]
-    pub(crate) ctx: &'a CpuContext,
+    pub(crate) entry: CpuOperationEntry<'a>,
+    pub(crate) entered: Option<CpuExecutionContext<'a>>,
     pub(crate) buffers: &'a mut BufferPool,
     pub(crate) gemm_analysis_cache: &'a mut gemm::GemmAnalysisCache,
-    pub(crate) kind: CpuBackendKind,
-    pub(crate) dot_general_provider: DotGeneralProvider,
+    pub(crate) providers: &'a CpuProviderBundle,
+}
+
+fn pooled_zero_tensor<T>(
+    buffers: &mut BufferPool,
+    shape: Vec<usize>,
+) -> crate::Result<TypedTensor<T>>
+where
+    T: PoolScalar + Clone + 'static,
+{
+    let element_count =
+        tenferro_tensor::validate::checked_shape_product("dot_general", "output", &shape)?;
+    TypedTensor::from_buffer_col_major(
+        shape,
+        Buffer::Host(T::pool_acquire_zeroed(buffers, element_count)),
+        crate::default_placement(),
+    )
+}
+
+fn allocate_dot_output(
+    buffers: &mut BufferPool,
+    dtype: DType,
+    shape: Vec<usize>,
+) -> crate::Result<Tensor> {
+    match dtype {
+        DType::F32 => pooled_zero_tensor(buffers, shape).map(Tensor::F32),
+        DType::F64 => pooled_zero_tensor(buffers, shape).map(Tensor::F64),
+        DType::C32 => pooled_zero_tensor(buffers, shape).map(Tensor::C32),
+        DType::C64 => pooled_zero_tensor(buffers, shape).map(Tensor::C64),
+        dtype => Err(crate::Error::unsupported_dtype(
+            "dot_general",
+            dtype,
+            "CPU contraction providers support floating and complex dtypes",
+        )),
+    }
 }
 
 impl CpuExecSession<'_> {
-    fn run_native<R: Send>(&mut self, op: impl FnOnce(&mut BufferPool) -> R + Send) -> R {
+    fn run_native<R: Send>(
+        &mut self,
+        op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
         let buffers = &mut *self.buffers;
-        match self.kind {
-            CpuBackendKind::Faer => op(buffers),
-            CpuBackendKind::Blas => self.ctx.install(|| op(buffers)),
+        if let Some(context) = self.entered {
+            return context.with_native_parallelism(|| op(buffers));
         }
+        let mode = self.entry.preferred_engine_mode();
+        self.entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| op(buffers))
+            })
+            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
+    }
+
+    fn run_native_fresh<R: FreshCpuOutput + Send>(
+        &mut self,
+        op: impl FnOnce(&mut BufferPool) -> crate::Result<R> + Send,
+    ) -> crate::Result<R> {
+        let buffers = &mut *self.buffers;
+        if let Some(context) = self.entered {
+            return context.with_native_parallelism(|| {
+                let mut output = op(buffers)?;
+                output.tag_fresh(context.domain_id());
+                Ok(output)
+            });
+        }
+        let mode = self.entry.preferred_engine_mode();
+        self.entry
+            .enter(mode, |context| {
+                context.with_native_parallelism(|| {
+                    let mut output = op(buffers)?;
+                    output.tag_fresh(context.domain_id());
+                    Ok(output)
+                })
+            })
+            .map_err(|error| crate::Error::backend_source("CPU native execution", error))?
     }
 }
 
@@ -60,11 +124,11 @@ impl TensorDeviceTransfer for CpuExecSession<'_> {
     }
 }
 
-/// Simple delegation: no dtype dispatch, no install.
+/// Simple delegation that reuses an entered managed session when available.
 macro_rules! delegate {
     ($name:ident($($arg:ident : $ty:ty),*) => $body:expr) => {
         fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
-            self.run_native(|_| $body)
+            self.run_native_fresh(|_| $body)
         }
     };
 }
@@ -73,17 +137,17 @@ macro_rules! delegate {
 macro_rules! delegate_with_pool {
     ($name:ident($($arg:ident : $ty:ty),*) => $callee:path) => {
         fn $name(&mut self, $($arg: $ty),*) -> crate::Result<Tensor> {
-            self.run_native(|buffers| $callee(buffers, $($arg),*))
+            self.run_native_fresh(|buffers| $callee(buffers, $($arg),*))
         }
     };
 }
 
 impl TensorElementwise for CpuExecSession<'_> {
-    // Elementwise — direct delegation, no install
+    // Elementwise — direct delegation within the current session scope.
     delegate_with_pool!(add(lhs: &Tensor, rhs: &Tensor) => elementwise::add_with_pool);
 
     fn add_read(&mut self, lhs: TensorRead<'_>, rhs: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.run_native(|buffers| elementwise::add_read_with_pool(buffers, lhs, rhs))
+        self.run_native_fresh(|buffers| elementwise::add_read_with_pool(buffers, lhs, rhs))
     }
 
     delegate_with_pool!(sub(lhs: &Tensor, rhs: &Tensor) => elementwise::sub_with_pool);
@@ -141,7 +205,7 @@ impl TensorAnalytic for CpuExecSession<'_> {
 impl TensorStructural for CpuExecSession<'_> {
     // Structural
     fn to_contiguous_read(&mut self, input: TensorRead<'_>) -> crate::Result<Tensor> {
-        self.run_native(|buffers| {
+        self.run_native_fresh(|buffers| {
             materialize_tensor_read(buffers, "CpuBackend::to_contiguous_read", input)
         })
     }
@@ -152,12 +216,22 @@ impl TensorStructural for CpuExecSession<'_> {
 
     delegate_with_pool!(transpose(input: &Tensor, perm: &[usize]) => structural::transpose_with_pool);
     fn transpose_read(&mut self, input: TensorRead<'_>, perm: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
+        self.run_native_fresh(|buffers| structural::transpose_read_with_pool(buffers, input, perm))
     }
 
-    delegate!(reshape(input: &Tensor, shape: &[usize]) => structural::reshape(input, shape));
+    fn reshape(&mut self, input: &Tensor, shape: &[usize]) -> crate::Result<Tensor> {
+        self.run_native(|_| structural::reshape(input, shape))
+    }
+
     fn reshape_read(&mut self, input: TensorRead<'_>, shape: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
+        let materializes = matches!(&input, TensorRead::View(_));
+        if materializes {
+            self.run_native_fresh(|buffers| {
+                structural::reshape_read_with_pool(buffers, input, shape)
+            })
+        } else {
+            self.run_native(|buffers| structural::reshape_read_with_pool(buffers, input, shape))
+        }
     }
 
     delegate_with_pool!(broadcast_in_dim(input: &Tensor, shape: &[usize], dims: &[usize]) => structural::broadcast_in_dim_with_pool);
@@ -167,7 +241,7 @@ impl TensorStructural for CpuExecSession<'_> {
         shape: &[usize],
         dims: &[usize],
     ) -> crate::Result<Tensor> {
-        self.run_native(|buffers| {
+        self.run_native_fresh(|buffers| {
             structural::broadcast_in_dim_read_with_pool(buffers, input, shape, dims)
         })
     }
@@ -184,68 +258,92 @@ impl TensorReduction for CpuExecSession<'_> {
     delegate!(reduce_sum(input: &Tensor, axes: &[usize]) => reduction::reduce_sum(input, axes));
 
     fn reduce_sum_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| reduction::reduce_sum_read(buffers, input, axes))
+        self.run_native_fresh(|buffers| reduction::reduce_sum_read(buffers, input, axes))
     }
 
     delegate!(reduce_prod(input: &Tensor, axes: &[usize]) => reduction::reduce_prod(input, axes));
 
     fn reduce_prod_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| reduction::reduce_prod_read(buffers, input, axes))
+        self.run_native_fresh(|buffers| reduction::reduce_prod_read(buffers, input, axes))
     }
 
     delegate!(reduce_max(input: &Tensor, axes: &[usize]) => reduction::reduce_max(input, axes));
 
     fn reduce_max_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| reduction::reduce_max_read(buffers, input, axes))
+        self.run_native_fresh(|buffers| reduction::reduce_max_read(buffers, input, axes))
     }
 
     delegate!(reduce_min(input: &Tensor, axes: &[usize]) => reduction::reduce_min(input, axes));
 
     fn reduce_min_read(&mut self, input: TensorRead<'_>, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| reduction::reduce_min_read(buffers, input, axes))
+        self.run_native_fresh(|buffers| reduction::reduce_min_read(buffers, input, axes))
     }
 }
 
 impl CpuExecSession<'_> {
-    fn with_base_dot_general_provider<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
-        let saved = self.dot_general_provider;
-        self.dot_general_provider = DotGeneralProvider::Base;
-        let result = f(self);
-        self.dot_general_provider = saved;
-        result
-    }
-
-    #[cfg(feature = "cpu-tblis-provider")]
-    fn tblis_not_applicable<T>(
-        &self,
-        op: &'static str,
-        value: Option<T>,
-    ) -> crate::Result<Option<T>> {
-        if value.is_some() || self.dot_general_provider != DotGeneralProvider::TblisRequired {
-            return Ok(value);
+    fn execute_dot_allocated(
+        &mut self,
+        cache_slot: Option<usize>,
+        lhs: TensorRead<'_>,
+        rhs: TensorRead<'_>,
+        config: &DotGeneralConfig,
+        lhs_conj: bool,
+        rhs_conj: bool,
+    ) -> crate::Result<Tensor> {
+        let dtype = lhs.dtype();
+        if rhs.dtype() != dtype {
+            return Err(crate::Error::dtype_mismatch(
+                "dot_general",
+                dtype,
+                rhs.dtype(),
+            ));
         }
-        Err(super::backend::tblis_required_not_applicable(op))
-    }
-
-    #[cfg(not(feature = "cpu-tblis-provider"))]
-    fn tblis_unavailable_for_required<T>(&self, op: &'static str) -> crate::Result<Option<T>> {
-        if self.dot_general_provider == DotGeneralProvider::TblisRequired {
-            Err(super::backend::tblis_required_unavailable(op))
-        } else {
-            Ok(None)
-        }
+        let output_shape = tenferro_tensor::backend::dot_general_output_shape(
+            lhs.shape(),
+            rhs.shape(),
+            config,
+            "dot_general",
+        )?;
+        self.providers.preflight_dot_general(&self.entry)?;
+        let mut output = allocate_dot_output(self.buffers, dtype, output_shape)?;
+        let accumulation = DotGeneralAccumulation {
+            lhs_conj,
+            rhs_conj,
+            alpha: ContractionScalar::one(dtype)?,
+            beta: ContractionScalar::zero(dtype)?,
+        };
+        self.providers.execute_dot_general_into_scoped(
+            &self.entry,
+            self.entered.as_ref(),
+            self.buffers,
+            self.gemm_analysis_cache,
+            cache_slot,
+            lhs,
+            rhs,
+            config,
+            accumulation,
+            TensorWrite::from_tensor(&mut output),
+        )?;
+        tag_fresh_output(&mut output, self.entry.domain_id());
+        Ok(output)
     }
 }
 
 impl TensorDot for CpuExecSession<'_> {
-    // GEMM — dtype dispatch, pool + ctx
     fn dot_general(
         &mut self,
         lhs: &Tensor,
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        self.dot_general_cached(None, lhs, rhs, config)
+        self.execute_dot_allocated(
+            None,
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            config,
+            false,
+            false,
+        )
     }
 
     fn dot_general_read(
@@ -254,84 +352,7 @@ impl TensorDot for CpuExecSession<'_> {
         rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        match self.dot_general_provider {
-            DotGeneralProvider::Base => {}
-            DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
-                #[cfg(feature = "cpu-tblis-provider")]
-                {
-                    let direct =
-                        gemm::dot_general_tblis_read_cached(self.buffers, &lhs, &rhs, config)?;
-                    if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
-                        return Ok(result);
-                    }
-                }
-                #[cfg(not(feature = "cpu-tblis-provider"))]
-                {
-                    if let Some(result) =
-                        self.tblis_unavailable_for_required::<Tensor>("dot_general")?
-                    {
-                        return Ok(result);
-                    }
-                }
-            }
-        }
-
-        let direct = match self.kind {
-            CpuBackendKind::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    gemm::dot_general_faer_read_cached(
-                        self.buffers,
-                        self.gemm_analysis_cache,
-                        None,
-                        self.ctx,
-                        &lhs,
-                        &rhs,
-                        config,
-                    )?
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    return Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "dot_general",
-                    ));
-                }
-            }
-            CpuBackendKind::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    gemm::dot_general_blas_read_cached(
-                        self.buffers,
-                        self.gemm_analysis_cache,
-                        None,
-                        &lhs,
-                        &rhs,
-                        config,
-                    )?
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    return Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "dot_general",
-                    ));
-                }
-            }
-        };
-        if let Some(result) = direct {
-            return Ok(result);
-        }
-
-        let (lhs, rhs) = self.run_native(|buffers| {
-            Ok::<_, crate::Error>((
-                materialize_tensor_read(buffers, "dot_general", lhs)?,
-                materialize_tensor_read(buffers, "dot_general", rhs)?,
-            ))
-        })?;
-        self.with_base_dot_general_provider(|this| {
-            this.dot_general_cached(None, &lhs, &rhs, config)
-        })
+        self.execute_dot_allocated(None, lhs, rhs, config, false, false)
     }
 
     fn dot_general_read_into(
@@ -353,8 +374,11 @@ impl TensorDot for CpuExecSession<'_> {
         accumulation: DotGeneralAccumulation,
         out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        SessionCachedDot::dot_general_read_into_accum_cached(
-            self,
+        self.providers.execute_dot_general_into_scoped(
+            &self.entry,
+            self.entered.as_ref(),
+            self.buffers,
+            self.gemm_analysis_cache,
             None,
             lhs,
             rhs,
@@ -372,7 +396,14 @@ impl TensorDot for CpuExecSession<'_> {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
-        self.dot_general_with_conj_cached(None, lhs, rhs, config, lhs_conj, rhs_conj)
+        self.execute_dot_allocated(
+            None,
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            config,
+            lhs_conj,
+            rhs_conj,
+        )
     }
 }
 
@@ -384,166 +415,14 @@ impl SessionCachedDot for CpuExecSession<'_> {
         rhs: &Tensor,
         config: &DotGeneralConfig,
     ) -> crate::Result<Tensor> {
-        match self.dot_general_provider {
-            DotGeneralProvider::Base => {}
-            DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
-                #[cfg(feature = "cpu-tblis-provider")]
-                {
-                    let direct = match (lhs, rhs) {
-                        (Tensor::F32(a), Tensor::F32(b)) => {
-                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
-                                .map(|result| result.map(Tensor::F32))
-                        }
-                        (Tensor::F64(a), Tensor::F64(b)) => {
-                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
-                                .map(|result| result.map(Tensor::F64))
-                        }
-                        (Tensor::C32(a), Tensor::C32(b)) => {
-                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
-                                .map(|result| result.map(Tensor::C32))
-                        }
-                        (Tensor::C64(a), Tensor::C64(b)) => {
-                            gemm::dot_general_tblis_cached(self.buffers, a, b, config)
-                                .map(|result| result.map(Tensor::C64))
-                        }
-                        _ if lhs.dtype() == rhs.dtype() => Ok(None),
-                        _ => Err(crate::Error::dtype_mismatch(
-                            "dot_general",
-                            lhs.dtype(),
-                            rhs.dtype(),
-                        )),
-                    }?;
-                    if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
-                        return Ok(result);
-                    }
-                }
-                #[cfg(not(feature = "cpu-tblis-provider"))]
-                {
-                    if let Some(result) =
-                        self.tblis_unavailable_for_required::<Tensor>("dot_general")?
-                    {
-                        return Ok(result);
-                    }
-                }
-            }
-        }
-
-        match self.kind {
-            CpuBackendKind::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    match (lhs, rhs) {
-                        (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_faer_cached(
-                            self.buffers,
-                            self.gemm_analysis_cache,
-                            cache_slot,
-                            self.ctx,
-                            a,
-                            b,
-                            config,
-                        )
-                        .map(Tensor::F32),
-                        (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_faer_cached(
-                            self.buffers,
-                            self.gemm_analysis_cache,
-                            cache_slot,
-                            self.ctx,
-                            a,
-                            b,
-                            config,
-                        )
-                        .map(Tensor::F64),
-                        (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_faer_cached(
-                            self.buffers,
-                            self.gemm_analysis_cache,
-                            cache_slot,
-                            self.ctx,
-                            a,
-                            b,
-                            config,
-                        )
-                        .map(Tensor::C32),
-                        (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_faer_cached(
-                            self.buffers,
-                            self.gemm_analysis_cache,
-                            cache_slot,
-                            self.ctx,
-                            a,
-                            b,
-                            config,
-                        )
-                        .map(Tensor::C64),
-                        _ => Err(crate::Error::dtype_mismatch(
-                            "dot_general",
-                            lhs.dtype(),
-                            rhs.dtype(),
-                        )),
-                    }
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "dot_general",
-                    ))
-                }
-            }
-            CpuBackendKind::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    match (lhs, rhs) {
-                        (Tensor::F32(a), Tensor::F32(b)) => gemm::dot_general_blas_cached(
-                            self.buffers,
-                            self.gemm_analysis_cache,
-                            cache_slot,
-                            a,
-                            b,
-                            config,
-                        )
-                        .map(Tensor::F32),
-                        (Tensor::F64(a), Tensor::F64(b)) => gemm::dot_general_blas_cached(
-                            self.buffers,
-                            self.gemm_analysis_cache,
-                            cache_slot,
-                            a,
-                            b,
-                            config,
-                        )
-                        .map(Tensor::F64),
-                        (Tensor::C32(a), Tensor::C32(b)) => gemm::dot_general_blas_cached(
-                            self.buffers,
-                            self.gemm_analysis_cache,
-                            cache_slot,
-                            a,
-                            b,
-                            config,
-                        )
-                        .map(Tensor::C32),
-                        (Tensor::C64(a), Tensor::C64(b)) => gemm::dot_general_blas_cached(
-                            self.buffers,
-                            self.gemm_analysis_cache,
-                            cache_slot,
-                            a,
-                            b,
-                            config,
-                        )
-                        .map(Tensor::C64),
-                        _ => Err(crate::Error::dtype_mismatch(
-                            "dot_general",
-                            lhs.dtype(),
-                            rhs.dtype(),
-                        )),
-                    }
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "dot_general",
-                    ))
-                }
-            }
-        }
+        self.execute_dot_allocated(
+            cache_slot,
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            config,
+            false,
+            false,
+        )
     }
 
     fn dot_general_with_conj_cached(
@@ -555,225 +434,14 @@ impl SessionCachedDot for CpuExecSession<'_> {
         lhs_conj: bool,
         rhs_conj: bool,
     ) -> crate::Result<Tensor> {
-        match self.dot_general_provider {
-            DotGeneralProvider::Base => {}
-            DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
-                #[cfg(feature = "cpu-tblis-provider")]
-                {
-                    let direct = match (lhs, rhs) {
-                        (Tensor::F32(a), Tensor::F32(b)) => {
-                            gemm::dot_general_tblis_with_conj_cached(
-                                self.buffers,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(|result| result.map(Tensor::F32))
-                        }
-                        (Tensor::F64(a), Tensor::F64(b)) => {
-                            gemm::dot_general_tblis_with_conj_cached(
-                                self.buffers,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(|result| result.map(Tensor::F64))
-                        }
-                        (Tensor::C32(a), Tensor::C32(b)) => {
-                            gemm::dot_general_tblis_with_conj_cached(
-                                self.buffers,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(|result| result.map(Tensor::C32))
-                        }
-                        (Tensor::C64(a), Tensor::C64(b)) => {
-                            gemm::dot_general_tblis_with_conj_cached(
-                                self.buffers,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(|result| result.map(Tensor::C64))
-                        }
-                        _ if lhs.dtype() == rhs.dtype() => Ok(None),
-                        _ => Err(crate::Error::dtype_mismatch(
-                            "dot_general",
-                            lhs.dtype(),
-                            rhs.dtype(),
-                        )),
-                    }?;
-                    if let Some(result) = self.tblis_not_applicable("dot_general", direct)? {
-                        return Ok(result);
-                    }
-                }
-                #[cfg(not(feature = "cpu-tblis-provider"))]
-                {
-                    if let Some(result) =
-                        self.tblis_unavailable_for_required::<Tensor>("dot_general")?
-                    {
-                        return Ok(result);
-                    }
-                }
-            }
-        }
-        match self.kind {
-            CpuBackendKind::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    match (lhs, rhs) {
-                        (Tensor::F32(a), Tensor::F32(b)) => {
-                            gemm::dot_general_faer_with_conj_cached(
-                                self.buffers,
-                                self.gemm_analysis_cache,
-                                cache_slot,
-                                self.ctx,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(Tensor::F32)
-                        }
-                        (Tensor::F64(a), Tensor::F64(b)) => {
-                            gemm::dot_general_faer_with_conj_cached(
-                                self.buffers,
-                                self.gemm_analysis_cache,
-                                cache_slot,
-                                self.ctx,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(Tensor::F64)
-                        }
-                        (Tensor::C32(a), Tensor::C32(b)) => {
-                            gemm::dot_general_faer_with_conj_cached(
-                                self.buffers,
-                                self.gemm_analysis_cache,
-                                cache_slot,
-                                self.ctx,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(Tensor::C32)
-                        }
-                        (Tensor::C64(a), Tensor::C64(b)) => {
-                            gemm::dot_general_faer_with_conj_cached(
-                                self.buffers,
-                                self.gemm_analysis_cache,
-                                cache_slot,
-                                self.ctx,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(Tensor::C64)
-                        }
-                        _ => Err(crate::Error::dtype_mismatch(
-                            "dot_general",
-                            lhs.dtype(),
-                            rhs.dtype(),
-                        )),
-                    }
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "dot_general",
-                    ))
-                }
-            }
-            CpuBackendKind::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    match (lhs, rhs) {
-                        (Tensor::F32(a), Tensor::F32(b)) => {
-                            gemm::dot_general_blas_with_conj_cached(
-                                self.buffers,
-                                self.gemm_analysis_cache,
-                                cache_slot,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(Tensor::F32)
-                        }
-                        (Tensor::F64(a), Tensor::F64(b)) => {
-                            gemm::dot_general_blas_with_conj_cached(
-                                self.buffers,
-                                self.gemm_analysis_cache,
-                                cache_slot,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(Tensor::F64)
-                        }
-                        (Tensor::C32(a), Tensor::C32(b)) => {
-                            gemm::dot_general_blas_with_conj_cached(
-                                self.buffers,
-                                self.gemm_analysis_cache,
-                                cache_slot,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(Tensor::C32)
-                        }
-                        (Tensor::C64(a), Tensor::C64(b)) => {
-                            gemm::dot_general_blas_with_conj_cached(
-                                self.buffers,
-                                self.gemm_analysis_cache,
-                                cache_slot,
-                                a,
-                                b,
-                                config,
-                                lhs_conj,
-                                rhs_conj,
-                            )
-                            .map(Tensor::C64)
-                        }
-                        _ => Err(crate::Error::dtype_mismatch(
-                            "dot_general",
-                            lhs.dtype(),
-                            rhs.dtype(),
-                        )),
-                    }
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "dot_general",
-                    ))
-                }
-            }
-        }
+        self.execute_dot_allocated(
+            cache_slot,
+            TensorRead::from_tensor(lhs),
+            TensorRead::from_tensor(rhs),
+            config,
+            lhs_conj,
+            rhs_conj,
+        )
     }
 
     fn dot_general_read_into_accum_cached(
@@ -783,85 +451,20 @@ impl SessionCachedDot for CpuExecSession<'_> {
         rhs: TensorRead<'_>,
         config: &DotGeneralConfig,
         accumulation: DotGeneralAccumulation,
-        mut out: TensorWrite<'_>,
+        out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        validate_dot_general_accumulation(&lhs, &rhs, config, accumulation, &out, "dot_general")?;
-        match self.dot_general_provider {
-            DotGeneralProvider::Base => {}
-            DotGeneralProvider::TblisIfAvailable | DotGeneralProvider::TblisRequired => {
-                #[cfg(feature = "cpu-tblis-provider")]
-                {
-                    let direct = gemm::dot_general_tblis_read_into_accum_cached(
-                        &lhs,
-                        &rhs,
-                        config,
-                        accumulation,
-                        &mut out,
-                    )?;
-                    if direct {
-                        return Ok(());
-                    }
-                    self.tblis_not_applicable::<()>("dot_general", None)?;
-                }
-                #[cfg(not(feature = "cpu-tblis-provider"))]
-                {
-                    self.tblis_unavailable_for_required::<()>("dot_general")?;
-                }
-            }
-        }
-        let direct = match self.kind {
-            CpuBackendKind::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    gemm::dot_general_faer_read_into_accum_cached(
-                        self.gemm_analysis_cache,
-                        cache_slot,
-                        self.ctx,
-                        &lhs,
-                        &rhs,
-                        config,
-                        accumulation,
-                        &mut out,
-                    )?
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    return Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "dot_general",
-                    ));
-                }
-            }
-            CpuBackendKind::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    gemm::dot_general_blas_read_into_accum_cached(
-                        self.buffers,
-                        self.gemm_analysis_cache,
-                        cache_slot,
-                        &lhs,
-                        &rhs,
-                        config,
-                        accumulation,
-                        &mut out,
-                    )?
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    return Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "dot_general",
-                    ));
-                }
-            }
-        };
-        if direct {
-            return Ok(());
-        }
-
-        self.with_base_dot_general_provider(|this| {
-            dot_general_accum_via_temp(this, lhs, rhs, config, accumulation, out)
-        })
+        self.providers.execute_dot_general_into_scoped(
+            &self.entry,
+            self.entered.as_ref(),
+            self.buffers,
+            self.gemm_analysis_cache,
+            cache_slot,
+            lhs,
+            rhs,
+            config,
+            accumulation,
+            out,
+        )
     }
 
     fn grouped_gemm_cached(
@@ -870,42 +473,16 @@ impl SessionCachedDot for CpuExecSession<'_> {
         lhs: TensorRead<'_>,
         rhs: TensorRead<'_>,
         config: &GroupedGemmConfig<'_>,
-        mut out: TensorWrite<'_>,
+        out: TensorWrite<'_>,
     ) -> crate::Result<()> {
-        validate_grouped_gemm(&lhs, &rhs, &out, config, "grouped_gemm")?;
-        let direct = match self.kind {
-            CpuBackendKind::Faer => {
-                #[cfg(feature = "cpu-faer")]
-                {
-                    gemm::grouped_gemm_faer_cached(self.ctx, &lhs, &rhs, config, &mut out)?
-                }
-                #[cfg(not(feature = "cpu-faer"))]
-                {
-                    return Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "grouped_gemm",
-                    ));
-                }
-            }
-            CpuBackendKind::Blas => {
-                #[cfg(feature = "cpu-blas")]
-                {
-                    gemm::grouped_gemm_blas_cached(&lhs, &rhs, config, &mut out)?
-                }
-                #[cfg(not(feature = "cpu-blas"))]
-                {
-                    return Err(super::backend::unavailable_cpu_backend_kind(
-                        self.kind,
-                        "grouped_gemm",
-                    ));
-                }
-            }
-        };
-        if direct {
-            return Ok(());
-        }
-
-        grouped_gemm_via_sequential(self, lhs, rhs, config, out)
+        self.providers.execute_grouped_gemm_scoped(
+            &self.entry,
+            self.entered.as_ref(),
+            lhs,
+            rhs,
+            config,
+            out,
+        )
     }
 }
 
@@ -917,7 +494,7 @@ impl TensorIndexing for CpuExecSession<'_> {
         start_indices: &Tensor,
         config: &GatherConfig,
     ) -> crate::Result<Tensor> {
-        self.run_native(|buffers| {
+        self.run_native_fresh(|buffers| {
             indexing::gather_with_pool(buffers, operand, start_indices, config)
         })
     }
@@ -927,10 +504,10 @@ impl TensorIndexing for CpuExecSession<'_> {
     delegate_with_pool!(dynamic_update_slice(operand: &Tensor, update: &Tensor, starts: &Tensor) => indexing::dynamic_update_slice_with_pool);
     delegate_with_pool!(pad(input: &Tensor, config: &PadConfig) => indexing::try_pad_with_pool);
     fn concatenate(&mut self, inputs: &[&Tensor], axis: usize) -> crate::Result<Tensor> {
-        self.run_native(|buffers| indexing::try_concatenate_with_pool(buffers, inputs, axis))
+        self.run_native_fresh(|buffers| indexing::try_concatenate_with_pool(buffers, inputs, axis))
     }
     fn reverse(&mut self, input: &Tensor, axes: &[usize]) -> crate::Result<Tensor> {
-        self.run_native(|buffers| indexing::reverse_with_pool(buffers, input, axes))
+        self.run_native_fresh(|buffers| indexing::reverse_with_pool(buffers, input, axes))
     }
 }
 
@@ -954,7 +531,9 @@ impl TensorFusion for CpuExecSession<'_> {
         inputs: &[&Tensor],
         plan: &ElementwiseFusionPlan,
     ) -> crate::Result<Option<Vec<Tensor>>> {
-        self.run_native(|buffers| elementwise::elementwise_fusion_with_pool(buffers, inputs, plan))
+        self.run_native_fresh(|buffers| {
+            elementwise::elementwise_fusion_with_pool(buffers, inputs, plan)
+        })
     }
 
     fn execute_broadcast_multiply(
@@ -966,7 +545,7 @@ impl TensorFusion for CpuExecSession<'_> {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<Tensor>> {
-        self.run_native(|buffers| {
+        self.run_native_fresh(|buffers| {
             elementwise::broadcast_multiply_read_with_pool(
                 buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
             )
@@ -982,39 +561,21 @@ impl TensorFusion for CpuExecSession<'_> {
         rhs_shape: &[usize],
         rhs_dims: &[usize],
     ) -> crate::Result<Option<TensorValue>> {
+        let domain = self.entry.domain_id();
         self.run_native(|buffers| {
-            elementwise::broadcast_multiply_value_with_pool(
-                buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
+            elementwise::broadcast_multiply_value_with_pool_in_domain(
+                buffers,
+                lhs,
+                lhs_shape,
+                lhs_dims,
+                rhs,
+                rhs_shape,
+                rhs_dims,
+                Some(domain),
             )
         })
     }
 }
 
-#[cfg(all(test, feature = "cpu-blas"))]
-mod tests {
-    use super::*;
-    use crate::{process_cpu_affinity, CpuSet};
-
-    #[test]
-    fn blas_session_native_scope_enters_the_pinned_rayon_engine() {
-        let allowed = process_cpu_affinity().expect("Linux test requires process affinity");
-        let cpus = CpuSet::new([allowed.as_slice()[0]]).unwrap();
-        let context = CpuContext::with_pinned_cpus(cpus, 1).unwrap();
-        let mut buffers = BufferPool::new();
-        let mut gemm_analysis_cache = gemm::GemmAnalysisCache::default();
-        let mut session = CpuExecSession {
-            ctx: &context,
-            buffers: &mut buffers,
-            gemm_analysis_cache: &mut gemm_analysis_cache,
-            kind: CpuBackendKind::Blas,
-            dot_general_provider: DotGeneralProvider::Base,
-        };
-
-        assert!(rayon::current_thread_index().is_none());
-        assert_eq!(
-            session.run_native(|_| rayon::current_thread_index()),
-            Some(0)
-        );
-        assert!(rayon::current_thread_index().is_none());
-    }
-}
+#[cfg(test)]
+mod tests;

@@ -2,10 +2,12 @@ use std::num::NonZeroUsize;
 
 use tenferro_ad::{AdContext, AdTransformCacheLimits, EagerRuntime, EagerTensor, Tensor};
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, TracedTensor};
+
+use crate::support::{cpu_runtime, run_compiled_one};
 
 #[test]
-fn compiler_clear_caches_clears_compile_entries() {
+fn compiler_clear_caches_clears_extension_entries() {
     let mut compiler = GraphCompiler::new();
 
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
@@ -13,13 +15,12 @@ fn compiler_clear_caches_clears_compile_entries() {
     let _ = compiler.compile(&y).expect("compile");
 
     let before = compiler.cache_stats();
-    assert!(before.compile.entries > 0);
+    assert_eq!(before.entries, 0);
 
     compiler.clear_caches();
 
     let after = compiler.cache_stats();
-    assert_eq!(after.compile.entries, 0);
-    assert_eq!(after.extensions.entries, 0);
+    assert_eq!(after.entries, 0);
 }
 
 #[test]
@@ -28,16 +29,16 @@ fn executor_clear_caches_leaves_no_extension_entries_without_extensions() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
     let program = compiler.compile(&y).expect("compile");
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let executor = cpu_runtime();
 
-    let _ = executor.run(&program).expect("run");
+    let _ = run_compiled_one(&executor, &program, &[]).expect("run");
 
-    let before = executor.cache_stats();
+    let before = executor.cache_stats().expect("cache stats");
     assert_eq!(before.extensions.entries, 0);
 
-    executor.clear_caches();
+    executor.clear_caches().expect("clear caches");
 
-    let after = executor.cache_stats();
+    let after = executor.cache_stats().expect("cache stats");
     assert_eq!(after.extensions.entries, 0);
 }
 
@@ -47,14 +48,15 @@ fn executor_clear_caches_clears_executor_owned_runtime_caches() {
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).expect("compile");
-    let mut executor = GraphExecutor::new(CpuBackend::new());
+    let executor = cpu_runtime();
 
-    let _ = executor.run(&program).expect("run");
-    executor.clear_caches();
+    let _ = run_compiled_one(&executor, &program, &[]).expect("run");
+    executor.clear_caches().expect("clear caches");
 
-    let after = executor.cache_stats();
+    let after = executor.cache_stats().expect("cache stats");
     assert_eq!(after.extensions.entries, 0);
-    assert_eq!(after.backend.entries, 0);
+    assert_eq!(after.engines.entries, 0);
+    assert_eq!(after.prepared_plans.entries, 0);
 }
 
 #[test]
@@ -145,4 +147,42 @@ fn ad_context_traced_vjp_reuses_transform_cache() {
 
     let _ = ad.vjp(&y, &x, &seed).unwrap();
     assert_eq!(ad.ad_transform_cache_stats().unwrap(), after_first);
+}
+
+#[test]
+fn eager_backward_shape_churn_keeps_transform_cache_shape_specific() {
+    struct Fixture {
+        x: EagerTensor,
+        loss: EagerTensor,
+    }
+
+    fn tensor(shape: Vec<usize>, seed: usize) -> Tensor {
+        let len = shape.iter().product();
+        let data = (0..len)
+            .map(|index| ((index * 23 + seed * 41 + 17) % 997) as f64 / 997.0 - 0.5)
+            .collect();
+        Tensor::from_vec_col_major(shape, data).unwrap()
+    }
+
+    fn fixture(ctx: &std::sync::Arc<EagerRuntime>, shape: Vec<usize>, seed: usize) -> Fixture {
+        let x = EagerTensor::requires_grad_in(tensor(shape.clone(), seed), ctx.clone()).unwrap();
+        let weight = EagerTensor::from_tensor_in(tensor(shape, seed + 1000), ctx.clone()).unwrap();
+        let loss = x.mul(&weight).unwrap().mul(&x).unwrap();
+        let axes: Vec<_> = (0..loss.shape().len()).collect();
+        let loss = loss.reduce_sum(Some(&axes)).unwrap();
+        Fixture { x, loss }
+    }
+
+    let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    let fixtures = [
+        fixture(&ctx, vec![8, 4, 10], 0),
+        fixture(&ctx, vec![10, 4, 12], 1),
+    ];
+
+    for fixture in &fixtures {
+        ctx.clear_grads().unwrap();
+        fixture.loss.backward().unwrap();
+        let grad = fixture.x.grad().unwrap().unwrap();
+        assert_eq!(grad.shape(), fixture.x.shape());
+    }
 }

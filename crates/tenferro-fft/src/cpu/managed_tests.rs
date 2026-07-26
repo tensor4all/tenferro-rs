@@ -117,6 +117,7 @@ impl FakeDomain {
             Placement {
                 memory_kind: MemoryKind::Managed,
                 device: None,
+                cpu_affinity: None,
             },
         )
         .unwrap()

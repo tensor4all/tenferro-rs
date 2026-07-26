@@ -110,6 +110,128 @@ fn store_stats_saturate_retained_bytes() {
 }
 
 #[test]
+fn store_stats_track_hits_misses_evictions_and_clears() {
+    let mut store = ExtensionCacheStore::with_limits(limits(2));
+    let first = key(FAMILY_A, PLANS, 1);
+    let second = key(FAMILY_A, PLANS, 2);
+    let third = key(FAMILY_A, PLANS, 3);
+
+    assert!(store.get::<u64>(&first).is_none());
+    store.put(first, 1_u64, 8);
+    store.put(second, 2_u64, 8);
+    assert_eq!(store.get::<u64>(&first), Some(&1));
+    assert!(store.get::<String>(&first).is_none());
+    store.put(third, 3_u64, 8);
+
+    let stats = store.stats(ExtensionCacheSelector::All);
+    assert_eq!(stats.entries, 2);
+    assert_eq!(stats.hits, 1);
+    assert_eq!(stats.misses, 2);
+    assert_eq!(stats.evictions, 1);
+    assert_eq!(stats.clears, 0);
+
+    store.clear();
+    let stats = store.stats(ExtensionCacheSelector::All);
+    assert_eq!(stats.entries, 0);
+    assert_eq!(stats.hits, 1);
+    assert_eq!(stats.misses, 2);
+    assert_eq!(stats.evictions, 1);
+    assert_eq!(stats.clears, 1);
+}
+
+#[test]
+fn store_stats_scope_events_to_selected_family_and_cache() {
+    let mut store = ExtensionCacheStore::with_limits(limits(2));
+    let a_plan = key(FAMILY_A, PLANS, 1);
+    let a_buffer = key(FAMILY_A, BUFFERS, 1);
+    let b_plan = key(FAMILY_B, PLANS, 1);
+
+    store.put(a_plan, 1_u64, 8);
+    store.put(a_buffer, 2_u64, 16);
+    assert_eq!(store.get::<u64>(&a_plan), Some(&1));
+    assert!(store.get::<u64>(&b_plan).is_none());
+    assert!(store.get::<String>(&a_buffer).is_none());
+    store.put(b_plan, 3_u64, 32);
+
+    let all_stats = store.stats(ExtensionCacheSelector::All);
+    assert_eq!(all_stats.entries, 2);
+    assert_eq!(all_stats.hits, 1);
+    assert_eq!(all_stats.misses, 2);
+    assert_eq!(all_stats.evictions, 1);
+
+    let family_a_stats = store.stats(ExtensionCacheSelector::Family {
+        family_id: FAMILY_A,
+    });
+    assert_eq!(family_a_stats.entries, 1);
+    assert_eq!(family_a_stats.retained_bytes, 16);
+    assert_eq!(family_a_stats.hits, 1);
+    assert_eq!(family_a_stats.misses, 1);
+    assert_eq!(family_a_stats.evictions, 1);
+
+    let family_b_stats = store.stats(ExtensionCacheSelector::Family {
+        family_id: FAMILY_B,
+    });
+    assert_eq!(family_b_stats.entries, 1);
+    assert_eq!(family_b_stats.retained_bytes, 32);
+    assert_eq!(family_b_stats.hits, 0);
+    assert_eq!(family_b_stats.misses, 1);
+    assert_eq!(family_b_stats.evictions, 0);
+
+    let a_plan_stats = store.stats(ExtensionCacheSelector::Cache {
+        family_id: FAMILY_A,
+        cache_name: PLANS,
+    });
+    assert_eq!(a_plan_stats.entries, 0);
+    assert_eq!(a_plan_stats.hits, 1);
+    assert_eq!(a_plan_stats.misses, 0);
+    assert_eq!(a_plan_stats.evictions, 1);
+
+    let a_buffer_stats = store.stats(ExtensionCacheSelector::Cache {
+        family_id: FAMILY_A,
+        cache_name: BUFFERS,
+    });
+    assert_eq!(a_buffer_stats.entries, 1);
+    assert_eq!(a_buffer_stats.hits, 0);
+    assert_eq!(a_buffer_stats.misses, 1);
+    assert_eq!(a_buffer_stats.evictions, 0);
+
+    store.clear_selected(ExtensionCacheSelector::Family {
+        family_id: FAMILY_A,
+    });
+    assert_eq!(
+        store
+            .stats(ExtensionCacheSelector::Family {
+                family_id: FAMILY_A,
+            })
+            .clears,
+        1
+    );
+    assert_eq!(
+        store
+            .stats(ExtensionCacheSelector::Family {
+                family_id: FAMILY_B,
+            })
+            .clears,
+        0
+    );
+
+    let fresh_cache = key(FAMILY_A, BUFFERS, 99);
+    store.put(fresh_cache, 99_u64, 8);
+    store.clear_selected(ExtensionCacheSelector::Family {
+        family_id: FAMILY_A,
+    });
+    assert_eq!(
+        store
+            .stats(ExtensionCacheSelector::Cache {
+                family_id: FAMILY_A,
+                cache_name: BUFFERS,
+            })
+            .clears,
+        2
+    );
+}
+
+#[test]
 fn clear_selected_removes_only_matching_entries() {
     let mut store = ExtensionCacheStore::new();
     let a_plan = key(FAMILY_A, PLANS, 1);

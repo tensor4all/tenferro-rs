@@ -50,6 +50,17 @@ die() {
   exit 1
 }
 
+has_ci_profile() {
+  local wanted="$1"
+  local profile
+  for profile in "${CI_PROFILES[@]}"; do
+    if [[ "$profile" == "$wanted" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --base)
@@ -189,7 +200,7 @@ if [[ "$untracked_file_count" -gt 0 ]]; then
   fi
 fi
 if [[ "${change_class}" == "code" ]]; then
-  run cargo fmt --all --check
+  run python3 scripts/ci/run_profile.py fmt
 else
   log "cargo fmt: skipped for ${change_class} changes"
 fi
@@ -222,6 +233,16 @@ fi
 
 if [[ "${change_class}" != "docs-only" && "$focused_test_count" -eq 0 && "$ci_profile_count" -eq 0 ]]; then
   die "focused verification command required for ${change_class} changes; pass --test COMMAND or --ci-profile NAME"
+fi
+
+if [[ "${change_class}" == "code" ]]; then
+  if has_ci_profile clippy || has_ci_profile full; then
+    log "ci clippy: covered by selected profile"
+  elif [[ "$CI_PROFILE_DRY_RUN" -eq 1 ]]; then
+    python3 scripts/ci/run_profile.py --dry-run clippy
+  else
+    python3 scripts/ci/run_profile.py clippy
+  fi
 fi
 
 if [[ "$focused_test_count" -gt 0 ]]; then

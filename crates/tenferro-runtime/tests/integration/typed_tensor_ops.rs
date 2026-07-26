@@ -24,7 +24,7 @@ fn typed_tensor_reduction_and_structural_wrappers_preserve_values() {
     assert_close(row_sums.host_data().unwrap(), &[6.0, 15.0]);
 
     let total = x.reduce_sum(&[0, 1], &mut backend).unwrap();
-    assert_eq!(total.shape(), &[]);
+    assert!(total.shape().is_empty());
     assert_close(total.host_data().unwrap(), &[21.0]);
 
     let reshaped = x.reshape(&[3, 2], &mut backend).unwrap();

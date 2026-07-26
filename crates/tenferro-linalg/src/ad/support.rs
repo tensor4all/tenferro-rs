@@ -82,6 +82,8 @@ pub enum LinalgAdOpKind {
     Cholesky,
     Lu,
     LuFactor,
+    SignDetFromLuFactor,
+    LogAbsDetFromLuFactor,
     LuSolvePrepared,
     FullPivLu,
     FullPivLuSolve,
@@ -97,7 +99,7 @@ pub enum LinalgAdOpKind {
 }
 
 impl LinalgAdOpKind {
-    pub const COUNT: usize = 15;
+    pub const COUNT: usize = 17;
 
     /// Return the manifest index for this operation kind.
     ///
@@ -113,18 +115,20 @@ impl LinalgAdOpKind {
             Self::Cholesky => 0,
             Self::Lu => 1,
             Self::LuFactor => 2,
-            Self::LuSolvePrepared => 3,
-            Self::FullPivLu => 4,
-            Self::FullPivLuSolve => 5,
-            Self::Svd => 6,
-            Self::SvdVals => 7,
-            Self::Qr => 8,
-            Self::Eigh => 9,
-            Self::EighVals => 10,
-            Self::Eig => 11,
-            Self::EigVals => 12,
-            Self::TriangularSolve => 13,
-            Self::SvdFull => 14,
+            Self::SignDetFromLuFactor => 3,
+            Self::LogAbsDetFromLuFactor => 4,
+            Self::LuSolvePrepared => 5,
+            Self::FullPivLu => 6,
+            Self::FullPivLuSolve => 7,
+            Self::Svd => 8,
+            Self::SvdVals => 9,
+            Self::Qr => 10,
+            Self::Eigh => 11,
+            Self::EighVals => 12,
+            Self::Eig => 13,
+            Self::EigVals => 14,
+            Self::TriangularSolve => 15,
+            Self::SvdFull => 16,
         }
     }
 
@@ -134,6 +138,8 @@ impl LinalgAdOpKind {
             LinalgOp::Cholesky => Self::Cholesky,
             LinalgOp::Lu => Self::Lu,
             LinalgOp::LuFactor => Self::LuFactor,
+            LinalgOp::SignDetFromLuFactor => Self::SignDetFromLuFactor,
+            LinalgOp::LogAbsDetFromLuFactor => Self::LogAbsDetFromLuFactor,
             LinalgOp::LuSolvePrepared { .. } => Self::LuSolvePrepared,
             LinalgOp::FullPivLu => Self::FullPivLu,
             LinalgOp::FullPivLuSolve { .. } => Self::FullPivLuSolve,
@@ -271,6 +277,16 @@ static LU_FACTOR_OUTPUTS: [LinalgAdOutputSupport; 3] = [
     output(1, "pivots", LinalgAdRuleSupport::NonDifferentiable),
     output(2, "parity", LinalgAdRuleSupport::NonDifferentiable),
 ];
+static SIGNDET_FROM_LU_FACTOR_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
+    0,
+    "sign",
+    LinalgAdRuleSupport::SupportedViaLinearize,
+)];
+static LOGABSDET_FROM_LU_FACTOR_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
+    0,
+    "logabsdet",
+    LinalgAdRuleSupport::SupportedViaLinearize,
+)];
 static SOLUTION_OUTPUTS: [LinalgAdOutputSupport; 1] = [output(
     0,
     "solution",
@@ -370,6 +386,30 @@ static LINALG_AD_SUPPORT: [LinalgAdSupport; LinalgAdOpKind::COUNT] = [
         mode(LinalgAdRuleSupport::Unsupported, LinalgAdRoute::Unsupported),
         LinalgAdRuleSupport::Unsupported,
         &LU_FACTOR_OUTPUTS,
+        &[],
+    ),
+    support_entry(
+        LinalgAdOpKind::SignDetFromLuFactor,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &SIGNDET_FROM_LU_FACTOR_OUTPUTS,
+        &[],
+    ),
+    support_entry(
+        LinalgAdOpKind::LogAbsDetFromLuFactor,
+        LinalgAdRuleSupport::SupportedViaLinearize,
+        LinalgAdRuleSupport::Unsupported,
+        mode(
+            LinalgAdRuleSupport::SupportedViaLinearize,
+            LinalgAdRoute::LinearizeThenTranspose,
+        ),
+        LinalgAdRuleSupport::Unsupported,
+        &LOGABSDET_FROM_LU_FACTOR_OUTPUTS,
         &[],
     ),
     support_entry(

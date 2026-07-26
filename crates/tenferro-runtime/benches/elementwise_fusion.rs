@@ -1,6 +1,24 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{DType, GraphCompiler, GraphExecutor, Tensor, TensorRead, TracedTensor};
+#[cfg(feature = "__bench_unification_run_compiled_api")]
+use tenferro_runtime::Runtime;
+use tenferro_runtime::{DType, GraphCompiler, Tensor, TracedTensor};
+#[cfg(not(feature = "__bench_unification_run_compiled_api"))]
+use tenferro_runtime::{GraphExecutor, TensorRead};
+
+#[cfg(feature = "__bench_unification_run_compiled_api")]
+type CompiledProgram = tenferro_runtime::CompiledGraph;
+#[cfg(not(feature = "__bench_unification_run_compiled_api"))]
+type CompiledProgram = tenferro_runtime::GraphProgram;
+
+#[cfg(feature = "__bench_unification_run_compiled_api")]
+fn cpu_runtime() -> Runtime {
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&CpuBackend::new()).unwrap())
+        .unwrap();
+    builder.build().unwrap()
+}
 
 fn input_tensor(n: usize, scale: f64) -> Tensor {
     let data = (0..n)
@@ -9,7 +27,7 @@ fn input_tensor(n: usize, scale: f64) -> Tensor {
     Tensor::from_vec_col_major(vec![n], data).expect("benchmark tensor")
 }
 
-fn compile_add_mul(n: usize) -> (TracedTensor, TracedTensor, tenferro_runtime::GraphProgram) {
+fn compile_add_mul(n: usize) -> (TracedTensor, TracedTensor, CompiledProgram) {
     let a = TracedTensor::input_concrete_shape(DType::F64, &[n]).expect("a placeholder");
     let b = TracedTensor::input_concrete_shape(DType::F64, &[n]).expect("b placeholder");
     let sum = (&a + &b).expect("sum graph");
@@ -24,7 +42,7 @@ fn compile_add_mul(n: usize) -> (TracedTensor, TracedTensor, tenferro_runtime::G
 fn compile_broadcast_mul(
     rows: usize,
     cols: usize,
-) -> (TracedTensor, TracedTensor, tenferro_runtime::GraphProgram) {
+) -> (TracedTensor, TracedTensor, CompiledProgram) {
     let a = TracedTensor::input_concrete_shape(DType::F64, &[rows]).expect("a placeholder");
     let b = TracedTensor::input_concrete_shape(DType::F64, &[cols]).expect("b placeholder");
     let a_bc = a
@@ -47,7 +65,7 @@ fn compile_broadcast_mul(
 fn compile_broadcast_mul_add(
     rows: usize,
     cols: usize,
-) -> (TracedTensor, TracedTensor, tenferro_runtime::GraphProgram) {
+) -> (TracedTensor, TracedTensor, CompiledProgram) {
     let a = TracedTensor::input_concrete_shape(DType::F64, &[rows]).expect("a placeholder");
     let b = TracedTensor::input_concrete_shape(DType::F64, &[cols]).expect("b placeholder");
     let a_bc = a
@@ -76,8 +94,25 @@ fn bench_runtime_add_mul(c: &mut Criterion) {
         let b = input_tensor(n, 1.25);
         group.throughput(criterion::Throughput::Elements(n as u64));
         group.bench_function(BenchmarkId::new("segmented_graph", n), |bench| {
+            #[cfg(feature = "__bench_unification_run_compiled_api")]
+            let runtime = cpu_runtime();
+            #[cfg(feature = "__bench_unification_run_compiled_api")]
+            let prepared = runtime
+                .prepare_compiled(&program, &[&a, &b])
+                .expect("graph should prepare");
+            #[cfg(feature = "__bench_unification_run_compiled_api")]
+            {
+                black_box(&a_symbol);
+                black_box(&b_symbol);
+            }
+            #[cfg(not(feature = "__bench_unification_run_compiled_api"))]
             let mut executor = GraphExecutor::new(CpuBackend::new());
             bench.iter(|| {
+                #[cfg(feature = "__bench_unification_run_compiled_api")]
+                let out = runtime
+                    .run_prepared(black_box(&prepared), &[black_box(&a), black_box(&b)])
+                    .expect("graph run");
+                #[cfg(not(feature = "__bench_unification_run_compiled_api"))]
                 let out = executor
                     .run_with_input_reads(
                         black_box(&program),
@@ -105,8 +140,25 @@ fn bench_runtime_broadcast_mul(c: &mut Criterion) {
         group.bench_function(
             BenchmarkId::new("segmented_graph", format!("{rows}x{cols}")),
             |bench| {
+                #[cfg(feature = "__bench_unification_run_compiled_api")]
+                let runtime = cpu_runtime();
+                #[cfg(feature = "__bench_unification_run_compiled_api")]
+                let prepared = runtime
+                    .prepare_compiled(&program, &[&a, &b])
+                    .expect("graph should prepare");
+                #[cfg(feature = "__bench_unification_run_compiled_api")]
+                {
+                    black_box(&a_symbol);
+                    black_box(&b_symbol);
+                }
+                #[cfg(not(feature = "__bench_unification_run_compiled_api"))]
                 let mut executor = GraphExecutor::new(CpuBackend::new());
                 bench.iter(|| {
+                    #[cfg(feature = "__bench_unification_run_compiled_api")]
+                    let out = runtime
+                        .run_prepared(black_box(&prepared), &[black_box(&a), black_box(&b)])
+                        .expect("graph run");
+                    #[cfg(not(feature = "__bench_unification_run_compiled_api"))]
                     let out = executor
                         .run_with_input_reads(
                             black_box(&program),
@@ -135,8 +187,25 @@ fn bench_runtime_broadcast_mul_add(c: &mut Criterion) {
         group.bench_function(
             BenchmarkId::new("segmented_graph", format!("{rows}x{cols}")),
             |bench| {
+                #[cfg(feature = "__bench_unification_run_compiled_api")]
+                let runtime = cpu_runtime();
+                #[cfg(feature = "__bench_unification_run_compiled_api")]
+                let prepared = runtime
+                    .prepare_compiled(&program, &[&a, &b])
+                    .expect("graph should prepare");
+                #[cfg(feature = "__bench_unification_run_compiled_api")]
+                {
+                    black_box(&a_symbol);
+                    black_box(&b_symbol);
+                }
+                #[cfg(not(feature = "__bench_unification_run_compiled_api"))]
                 let mut executor = GraphExecutor::new(CpuBackend::new());
                 bench.iter(|| {
+                    #[cfg(feature = "__bench_unification_run_compiled_api")]
+                    let out = runtime
+                        .run_prepared(black_box(&prepared), &[black_box(&a), black_box(&b)])
+                        .expect("graph run");
+                    #[cfg(not(feature = "__bench_unification_run_compiled_api"))]
                     let out = executor
                         .run_with_input_reads(
                             black_box(&program),

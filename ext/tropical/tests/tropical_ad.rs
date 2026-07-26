@@ -3,23 +3,41 @@
 use tenferro_ad::AdContext;
 use tenferro_cpu::CpuBackend;
 use tenferro_ext_tropical::traced::tropical_dot_general_fused;
-use tenferro_ext_tropical::tropical_ad_rules;
 use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
-use tenferro_runtime::{Error, GraphCompiler, GraphExecutor, Tensor, TracedTensor};
+use tenferro_ext_tropical::{extension_modules, tropical_semantic_ad_rules};
+use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, Runtime, Tensor, TracedTensor};
+
+fn cpu_runtime_with_tropical() -> Runtime {
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    builder
+        .register_engine(tenferro_cpu::runtime_engine_registration(&backend).unwrap())
+        .unwrap();
+    for module in
+        extension_modules::<CpuBackend>(tenferro_cpu::runtime_engine_id().unwrap()).unwrap()
+    {
+        builder.install_extension_module(module).unwrap();
+    }
+    builder.build().unwrap()
+}
 
 fn run_traced(output: &TracedTensor) -> Tensor {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(output).expect("compile traced graph");
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_ext_tropical::register_runtime)
-        .expect("register tropical runtime");
-    executor.run(&program).expect("execute traced graph")
+    let runtime = cpu_runtime_with_tropical();
+    let mut outputs = runtime
+        .run_compiled(&program, &[])
+        .expect("execute traced graph");
+    assert_eq!(outputs.len(), 1);
+    outputs.remove(0)
 }
 
 fn tropical_ad() -> AdContext {
     AdContext::builder()
-        .with_extension_rules(tropical_ad_rules().expect("tropical AD rules"))
+        .with_semantic_extension_rules(
+            tropical_semantic_ad_rules().expect("tropical semantic AD rules"),
+        )
+        .unwrap()
         .build()
         .expect("AD context")
 }
@@ -195,7 +213,7 @@ fn finite_difference_gradient_matches_unique_winner_weighted_scalarization() {
 }
 
 #[test]
-fn tangent_shape_constraint_rejects_independent_tropical_tangent_mismatch() {
+fn jvp_rejects_independent_tropical_tangent_shape_mismatch() {
     let symbolic_matrix = |shape: Vec<usize>| {
         let len = shape.iter().product();
         TracedTensor::from_tensor_symbolic_shape(
@@ -219,19 +237,18 @@ fn tangent_shape_constraint_rejects_independent_tropical_tangent_mismatch() {
         .expect("matching independent tangent shape should compile");
 
     let mismatched_tangent = symbolic_matrix(vec![5, 3]);
-    let mismatched_jvp = tropical_ad()
+    let error = tropical_ad()
         .jvp(&output, &lhs, &mismatched_tangent)
-        .unwrap();
-    let error = GraphCompiler::new()
-        .compile(&mismatched_jvp)
-        .expect_err("mismatched tropical tangent axis must fail during compilation");
+        .expect_err("mismatched tropical tangent shape must fail during JVP seed validation");
     assert!(matches!(
-        error,
-        Error::ShapeConstraintViolation {
-            family: "tenferro-ext-tropical.einsum_jvp.v1",
+        &error,
+        Error::Validation {
+            op: "jvp",
+            phase: ErrorPhase::GraphBuild,
             ..
-        }
+        },
     ));
+    assert!(error.to_string().contains("seed input 2 shape mismatch"));
 }
 
 #[test]

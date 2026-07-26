@@ -91,7 +91,7 @@ tenferro-ad = "0.2"
 ```rust
 use tenferro_ad::TracedTensorAdExt;
 use tenferro_cpu::CpuBackend;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 
 fn assert_close(actual: &[f64], expected: &[f64]) {
     assert_eq!(actual.len(), expected.len());
@@ -107,8 +107,32 @@ fn assert_close(actual: &[f64], expected: &[f64]) {
 fn run(tensor: &TracedTensor) -> Result<tenferro_runtime::Tensor, tenferro_runtime::Error> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(tensor)?;
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.run(&program)
+    let backend = CpuBackend::new();
+    let mut builder = Runtime::builder();
+    let registration = tenferro_cpu::runtime_engine_registration(&backend).map_err(|source| {
+        tenferro_runtime::Error::runtime_state_source(
+            "tutorial_runtime",
+            tenferro_runtime::ErrorPhase::Execution,
+            source,
+        )
+    })?;
+    builder.register_engine(registration).map_err(|source| {
+        tenferro_runtime::Error::runtime_state_source(
+            "tutorial_runtime",
+            tenferro_runtime::ErrorPhase::Execution,
+            source,
+        )
+    })?;
+    let runtime = builder.build().map_err(|source| {
+        tenferro_runtime::Error::runtime_state_source(
+            "tutorial_runtime",
+            tenferro_runtime::ErrorPhase::Execution,
+            source,
+        )
+    })?;
+    let mut outputs = runtime.run_compiled(&program, &[])?;
+    assert_eq!(outputs.len(), 1);
+    Ok(outputs.remove(0))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -116,7 +140,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let y = (&x * &x)?.reduce_sum(Some(&[0]))?;
 
     let y_value = run(&y)?;
-    assert_eq!(y_value.shape(), &[]);
+    assert_eq!(y_value.shape(), &[] as &[usize]);
     assert_close(y_value.as_slice::<f64>().unwrap(), &[14.0]);
 
     let grad = y.grad(&x)?;
@@ -127,7 +151,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tangent = TracedTensor::from_vec_col_major(vec![3], vec![0.1_f64, 1.0, -2.0])?;
     let directional = y.jvp(&x, &tangent)?;
     let directional_value = run(&directional)?;
-    assert_eq!(directional_value.shape(), &[]);
+    assert_eq!(directional_value.shape(), &[] as &[usize]);
     assert_close(directional_value.as_slice::<f64>().unwrap(), &[-7.8]);
 
     Ok(())
@@ -187,7 +211,7 @@ tenferro-rs is for projects that want this kind of stack natively in Rust.
 | Fixed scalar type, ordinary tensor computation, no autodiff | `TypedTensor<T, R>` |
 | Runtime dtype selection or direct backend dispatch | `Tensor` with an explicit backend |
 | Immediate execution in one runtime, optionally with `backward()`, VJP, or JVP | `EagerTensor` and `EagerRuntime` |
-| Reusable graph transforms, including `grad`, VJP/JVP, and HVP-style composition | `TracedTensor`, `GraphCompiler`, and `GraphExecutor<B>` |
+| Reusable graph transforms, including `grad`, VJP/JVP, and HVP-style composition | `TracedTensor`, `GraphCompiler`, and `Runtime::run_compiled` |
 | CUDA or experimental WebGPU execution | The same tensor API plus explicit GPU upload/download and supported provider backend features |
 | Static-shaped StableHLO and PJRT plugin experiments | `GraphCompiler` plus `tenferro-xla` |
 

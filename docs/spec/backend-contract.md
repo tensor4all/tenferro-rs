@@ -28,9 +28,9 @@ CompiledProgram<StdTensorOp>
   ▼
 ExecProgram
   │
-  │ GraphExecutor::eval_exec_ir()
-  │   - owns backend runtime cache
-  │   - owns extension runtime registry/cache
+  │ Runtime::run_compiled()
+  │   - owns prepared-plan cache
+  │   - owns registered extension modules/cache owners
   │   - routes through segmented dispatch
   ▼
 internal exec dispatch
@@ -45,10 +45,10 @@ internal exec dispatch
 There is no in-process `StableHloProgram` / `StableHloOp` layer. The current
 runtime contract is centered on `ExecProgram`.
 
-The optional XLA path is a peer executor over a compiled `GraphProgram`
+The optional XLA path is a peer executor over a compiled `CompiledGraph`
 lowering view, not a native backend. `tenferro-xla` may inspect immutable
 lowering metadata, emit StableHLO, and load PJRT plugins at runtime, but it does
-not implement `TensorBackend` and does not participate in `GraphExecutor<B>`
+not implement `TensorBackend` and does not bypass `Runtime::run_compiled`
 dispatch.
 
 ---
@@ -105,7 +105,7 @@ input-count error therefore takes precedence over a guard expression's
 `MissingInput` evaluation error.
 
 The guarantee covers owned tensor and owned value-output execution, borrowed
-and non-consuming reads, every `GraphExecutor::run*` convenience wrapper,
+and non-consuming reads, `Runtime::run_compiled*` entry points,
 segmented execution, extension-owned core-program execution through the
 nonsegmented path, and programs with no instructions. Programs with no guards
 retain their previous behavior. Compiler-cache hits reuse semantic plans while
@@ -222,16 +222,17 @@ These stay as single-instruction boundaries in segmented execution:
 - `Extension`
 
 `DotGeneral` dispatches through `TensorBackend`. `Extension` dispatch routes
-through the registered `ExtensionRuntime` for the operation family; linalg,
-einsum, and FFT register those runtimes from their owning crates.
+through the installed `ExtensionModule` for the operation family; linalg,
+einsum, and FFT provide those modules from their owning crates.
 
 ---
 
 ## V. Segmented vs. Unsegmented Execution
 
-`GraphExecutor::eval_exec_ir()` is the public execution entry point for an
-`ExecProgram`. It carries the backend cache, extension runtime registry, and
-extension runtime cache required to preserve dispatch invariants.
+`Runtime::run_compiled` is the public execution entry point for a
+`CompiledGraph`. Runtime preparation owns backend selection, registered
+extension modules, and cache ownership required to preserve dispatch
+invariants.
 
 The segmented internal path groups fusible backend instructions:
 
@@ -253,10 +254,10 @@ Segmented execution exists to:
 - preserve the same observable behavior as unsegmented execution
 
 The unsegmented internal path evaluates one instruction at a time and is used
-for parity checks and narrow owner-scoped extension-runtime composition. It is
+for parity checks and narrow owner-scoped extension-module composition. It is
 not a general public execution surface. Extension instructions must run through
-a registered `ExtensionRuntime`; missing runtime registration is an error, not
-a fallback to optional host-reference execution.
+a registered `ExtensionModule`; missing module registration is an error, not
+a fallback to a host/reference path.
 
 The engine uses `last_use` metadata to reclaim buffers via
 `BackendSession::reclaim_buffer()` or `TensorBackend::reclaim_buffer()`.
@@ -287,7 +288,7 @@ execution. Backends may override `with_backend_session()` to install one shared
 execution scope, for example a CPU thread-pool context.
 
 Custom operation families do not add a second backend trait. They lower to
-`ExecOp::Extension` and dispatch through their registered `ExtensionRuntime`.
+`ExecOp::Extension` and dispatch through their installed `ExtensionModule`.
 The owning extension crate is responsible for deciding whether that runtime
 uses the active `TensorBackend`, a provider-specific library, or an internal
 implementation.

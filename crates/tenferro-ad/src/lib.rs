@@ -29,24 +29,27 @@
 //! assert_eq!(dx.rank, 0);
 //! ```
 
-mod ad_rule_error;
 mod context;
 mod eager;
 mod eager_backend;
-mod eager_builder;
 pub(crate) mod eager_exec;
 pub(crate) mod eager_ops;
 pub(crate) mod eager_ops_elementwise;
 pub mod extension;
+// semantic_compat removed in Unification 7.
+pub mod semantic_extension;
+pub mod semantic_transform;
 mod shape_packing;
 pub mod traced;
 mod transform_cache;
 
 pub use context::{AdContext, AdContextBuilder, AdContextCacheStats};
-pub use eager::{EagerNoGradGuard, EagerRuntime, EagerRuntimeCacheStats, EagerTensor};
+pub use eager::{
+    CpuPlacementBoundEager, EagerNoGradGuard, EagerRuntime, EagerRuntimeCacheStats, EagerTensor,
+};
 pub use eager_backend::EagerBackend;
 pub use shape_packing::EagerSliceBuilder;
-pub(crate) use tenferro_runtime::{extension_cache, extension_runtime, scalar_semantics};
+pub(crate) use tenferro_runtime::{extension_cache, scalar_semantics};
 pub use transform_cache::AdTransformCacheLimits;
 pub(crate) mod shape_infer {
     pub use tenferro_runtime::extension::{
@@ -67,8 +70,7 @@ pub mod error {
 
 pub(crate) mod metadata {
     pub use tenferro_runtime::ad_support::{
-        metadata_scopes_for_scope, push_metadata_scope, register_scoped_live_graph_metadata,
-        register_scoped_metadata_batch, register_scoped_value_metadata, tensor_meta_from_tensor,
-        GlobalMetadataScope,
+        metadata_scopes_for_scope, push_metadata_scope, register_scoped_metadata_batch,
+        register_scoped_value_metadata, tensor_meta_from_tensor, GlobalMetadataScope,
     };
 }

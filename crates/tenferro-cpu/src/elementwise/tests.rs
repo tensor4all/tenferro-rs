@@ -69,6 +69,41 @@ fn elementwise_fusion_validation_covers_descriptor_errors_and_empty_outputs() {
 }
 
 #[test]
+fn add_then_multiply_identity_fusion_uses_typed_specialization() {
+    use tenferro_tensor::backend::ElementwiseFusionInst;
+
+    let mut buffers = BufferPool::default();
+    let lhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![1.0, 2.0, 3.0]).unwrap();
+    let rhs = TypedTensor::<f64>::from_vec_col_major(vec![3], vec![10.0, 20.0, 30.0]).unwrap();
+    let input_views = [
+        typed_view(ELEMENTWISE_FUSION_OP, &lhs).unwrap(),
+        typed_view(ELEMENTWISE_FUSION_OP, &rhs).unwrap(),
+    ];
+    let plan = ElementwiseFusionPlan::new(
+        DType::F64,
+        2,
+        vec![3],
+        vec![
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Add, vec![0, 1]),
+            ElementwiseFusionInst::new(ElementwiseFusionOp::Multiply, vec![2, 0]),
+        ],
+    );
+
+    let outputs = try_typed_mul_add_specialization(
+        &mut buffers,
+        &input_views,
+        lhs.shape(),
+        &plan,
+        Tensor::F64,
+    )
+    .unwrap()
+    .expect("add-then-multiply identity plans should avoid generic fusion");
+
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0].as_slice::<f64>().unwrap(), &[11.0, 44.0, 99.0]);
+}
+
+#[test]
 fn rank_n_outer_product_fast_path_accepts_matrix_operands() {
     let mut buffers = BufferPool::default();
     let lhs_data = [1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];

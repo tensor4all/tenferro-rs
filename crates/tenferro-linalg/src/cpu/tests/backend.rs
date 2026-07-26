@@ -165,11 +165,12 @@ fn test_svd_unsupported_dtype_returns_error() {
 #[cfg(feature = "cpu-faer")]
 #[test]
 fn test_faer_svd_decomposition_failure_returns_error() {
-    let ctx = CpuContext::with_threads(1).unwrap();
-    let mut buffers = BufferPool::new();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
     let input = TypedTensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 0.0, 0.0, 1.0]).unwrap();
 
-    let err = faer_linalg::svd(&ctx, &mut buffers, &input).unwrap_err();
+    let err = backend
+        .with_linalg_pool(|context, buffers| faer_linalg::svd(context, buffers, &input))
+        .unwrap_err();
 
     assert!(err.to_string().contains("svd"), "unexpected error: {err}");
 }
@@ -177,13 +178,14 @@ fn test_faer_svd_decomposition_failure_returns_error() {
 #[cfg(feature = "cpu-faer")]
 #[test]
 fn test_faer_eig_decomposition_failure_returns_error() {
-    let ctx = CpuContext::with_threads(1).unwrap();
-    let mut buffers = BufferPool::new();
+    let mut backend = CpuBackend::with_threads(1).unwrap();
     let input = Tensor::F64(
         TypedTensor::from_vec_col_major(vec![2, 2], vec![f64::NAN, 0.0, 0.0, 1.0]).unwrap(),
     );
 
-    let err = faer_linalg::eig(&ctx, &mut buffers, &input).unwrap_err();
+    let err = backend
+        .with_linalg_pool(|context, buffers| faer_linalg::eig(context, buffers, &input))
+        .unwrap_err();
 
     assert!(err.to_string().contains("eig"), "unexpected error: {err}");
 }

@@ -2,8 +2,11 @@
 
 use num_complex::{Complex32, Complex64};
 use tenferro_cpu::CpuBackend;
-use tenferro_gpu::{webgpu_available, WebGpuBackend};
+use tenferro_gpu::{webgpu_available, webgpu_runtime_engine_registration, WebGpuBackend};
+use tenferro_runtime::{DType, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::{DotGeneralConfig, Tensor, TensorDeviceTransfer, TensorDot};
+
+type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 fn matmul2_col_major(lhs: &[Complex32], rhs: &[Complex32]) -> [Complex32; 4] {
     let a00 = lhs[0];
@@ -251,6 +254,44 @@ fn webgpu_dot_general_runs_rank2_f32_matmul_when_adapter_available() {
     for (actual, expected) in actual.iter().zip(expected) {
         assert!((actual - expected).abs() <= 1e-4);
     }
+}
+
+#[test]
+fn webgpu_runtime_run_compiled_rank2_f32_matmul_when_adapter_available() -> TestResult {
+    if !webgpu_available() {
+        return Ok(());
+    }
+
+    let mut backend = WebGpuBackend::new_default()?;
+    let mut builder = Runtime::builder();
+    builder.register_engine(webgpu_runtime_engine_registration(&backend)?)?;
+    let runtime = builder.build()?;
+
+    let lhs_input = TracedTensor::input_symbolic_shape(DType::F32, 2)?;
+    let rhs_input = TracedTensor::input_symbolic_shape(DType::F32, 2)?;
+    let output = lhs_input.matmul(&rhs_input)?;
+    let mut compiler = GraphCompiler::new();
+    let program = compiler.compile_with_input_specs(
+        &output,
+        &[
+            (&lhs_input, DType::F32, &[2, 3]),
+            (&rhs_input, DType::F32, &[3, 2]),
+        ],
+    )?;
+
+    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f32, 4.0, 2.0, 5.0, 3.0, 6.0])?;
+    let rhs = Tensor::from_vec_col_major(vec![3, 2], vec![7.0_f32, 9.0, 11.0, 8.0, 10.0, 12.0])?;
+    let gpu_lhs = backend.upload_host_tensor(&lhs)?;
+    let gpu_rhs = backend.upload_host_tensor(&rhs)?;
+
+    let outputs = runtime.run_compiled(&program, &[&gpu_lhs, &gpu_rhs])?;
+
+    assert_eq!(outputs.len(), 1);
+    let output = backend.download_to_host(&outputs[0])?;
+    assert_eq!(output.shape(), &[2, 2]);
+    let expected = [58.0_f32, 139.0, 64.0, 154.0];
+    assert_f32_close(output.as_slice::<f32>()?, &expected);
+    Ok(())
 }
 
 #[test]

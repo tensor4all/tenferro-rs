@@ -7,7 +7,7 @@ use strided_kernel::{
 
 use crate::{
     buffer_pool::{BufferPool, PoolScalar},
-    flat_to_multi,
+    flat_to_multi, ConjElem,
 };
 use tenferro_tensor::{
     DType, MemoryKind, Placement, Tensor, TensorRank, TensorRead, TensorView, TypedTensor,
@@ -239,6 +239,58 @@ where
     )
     .map_err(|err| crate::Error::backend_source(op, err))?;
     copy_into(&mut dst_view, &src_view).map_err(|err| crate::Error::backend_source(op, err))
+}
+
+pub(crate) fn typed_conjugate_view_into<T, R>(
+    src: &TypedTensorView<'_, T, R>,
+    dst: &mut TypedTensorViewMut<'_, T, R>,
+    op: &'static str,
+) -> crate::Result<()>
+where
+    T: Copy + Send + Sync + ConjElem + 'static,
+    R: TensorRank,
+{
+    if src.shape() != dst.shape() {
+        return Err(crate::Error::shape_mismatch(
+            op,
+            src.shape().to_vec(),
+            dst.shape().to_vec(),
+        ));
+    }
+    if let (Some(src_buffer), Some(dst_buffer)) = (src.backend_buffer(), dst.backend_buffer()) {
+        if Arc::ptr_eq(src_buffer, dst_buffer) {
+            return Err(crate::Error::invalid_argument(
+                op,
+                "configuration",
+                "CPU conjugating copy source and destination allocations must not alias",
+            ));
+        }
+    }
+    if src.backend_buffer().is_some() || dst.backend_buffer().is_some() {
+        return Err(cpu_backend_buffer_error(op));
+    }
+    validate_cpu_host_placement(op, "source", src.placement())?;
+    validate_cpu_host_placement(op, "destination", dst.placement())?;
+
+    let src_view: StridedView<'_, T, Identity> = StridedView::new(
+        src.host_storage()?,
+        src.shape(),
+        src.strides(),
+        src.offset(),
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))?;
+    let dst_shape = dst.shape().to_vec();
+    let dst_strides = dst.strides().to_vec();
+    let dst_offset = dst.offset();
+    let mut dst_view = StridedViewMut::new(
+        dst.host_storage_mut()?,
+        &dst_shape,
+        &dst_strides,
+        dst_offset,
+    )
+    .map_err(|err| crate::Error::backend_source(op, err))?;
+    map_into(&mut dst_view, &src_view, |value| value.conj_elem())
+        .map_err(|err| crate::Error::backend_source(op, err))
 }
 
 pub(crate) fn validate_cpu_host_placement(

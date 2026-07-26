@@ -1,13 +1,17 @@
+use std::sync::Arc;
+
 use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::ext_op::ExtensionOp;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_runtime::program::{ProgramInputSpec, SemanticProgramBuilder};
+use tenferro_runtime::{ErrorPhase, GraphCompiler, Runtime};
 use tenferro_tensor::DotGeneralConfig;
 use tenferro_tensor::{
     BackendSession, DType, PadConfig, SliceConfig, Tensor, TensorBackend, TensorRead, TypedTensor,
 };
 
 use crate::error::{Error, Result};
-use crate::extension_runtime::ExtensionExecutor;
 use crate::scalar_semantics::dynamic_truncate_size;
 use crate::shape_infer::promote_dtype_for_binary_op;
 
@@ -197,72 +201,105 @@ pub(crate) fn exec_dot_general_with_conj_on_tensor_reads<B: TensorBackend>(
 /// Execute a single [`StdTensorOp`] on concrete tensors.
 ///
 /// This core helper rejects extension ops because they require a runtime owner
-/// with a registered extension executor.
+/// with an installed extension module.
+#[cfg(test)]
 pub(crate) fn exec_op_on_tensors<B: TensorBackend>(
     op: &StdTensorOp,
     inputs: &[&Tensor],
     backend: &mut B,
 ) -> Result<Vec<Tensor>> {
     if let StdTensorOp::Extension(ext) = op {
-        return Err(missing_extension_executor_error(ext.as_ref()));
+        return Err(missing_extension_module_error(ext.as_ref()));
     }
 
     exec_standard_op_on_tensors(op, inputs, backend)
 }
 
-pub(crate) fn exec_op_on_tensors_with_extension_executor<B: TensorBackend + 'static>(
+pub(crate) fn exec_op_on_tensors_with_runtime<B: TensorBackend>(
     op: &StdTensorOp,
     inputs: &[&Tensor],
     backend: &mut B,
-    extension_executor: Option<&mut ExtensionExecutor<B>>,
+    runtime: Option<&Runtime>,
 ) -> Result<Vec<Tensor>> {
     if let StdTensorOp::Extension(ext) = op {
-        let Some(extension_executor) = extension_executor else {
-            return Err(missing_extension_executor_error(ext.as_ref()));
+        let Some(runtime) = runtime else {
+            return Err(missing_extension_module_error(ext.as_ref()));
         };
-        let outputs = extension_executor.execute(backend, ext.as_ref(), inputs);
-        return outputs.map_err(|err| extension_error(ext.as_ref(), err));
+        let _ = backend;
+        return execute_extension_op_via_runtime(Arc::clone(ext), inputs, runtime);
     }
 
     exec_standard_op_on_tensors(op, inputs, backend)
 }
 
-pub(crate) fn exec_op_on_tensor_reads_with_extension_executor<B: TensorBackend + 'static>(
+pub(crate) fn exec_op_on_tensor_reads_with_runtime<B: TensorBackend>(
     op: &StdTensorOp,
     inputs: &[TensorRead<'_>],
     backend: &mut B,
-    extension_executor: Option<&mut ExtensionExecutor<B>>,
+    runtime: Option<&Runtime>,
 ) -> Result<Vec<Tensor>> {
     if let StdTensorOp::Extension(ext) = op {
-        let Some(extension_executor) = extension_executor else {
-            return Err(missing_extension_executor_error(ext.as_ref()));
+        let Some(runtime) = runtime else {
+            return Err(missing_extension_module_error(ext.as_ref()));
         };
-        let outputs = extension_executor.execute_reads(backend, ext.as_ref(), inputs);
-        return outputs.map_err(|err| extension_error(ext.as_ref(), err));
+        let concrete_inputs =
+            backend.with_backend_session(|exec| concrete_tensor_reads(exec, inputs))?;
+        let input_refs: Vec<&Tensor> = concrete_inputs.iter().map(|input| input.tensor()).collect();
+        return execute_extension_op_via_runtime(Arc::clone(ext), &input_refs, runtime);
     }
 
     exec_standard_op_on_tensor_reads(op, inputs, backend)
 }
 
-fn extension_error(
-    ext: &dyn tenferro_ops::ext_op::ExtensionOp,
-    err: tenferro_tensor::Error,
-) -> Error {
-    Error::extension(
-        "extension",
-        tenferro_runtime::ErrorPhase::Execution,
-        ext.family_id(),
-        err.kind(),
-        err,
-    )
+fn execute_extension_op_via_runtime(
+    op: Arc<dyn ExtensionOp>,
+    inputs: &[&Tensor],
+    runtime: &Runtime,
+) -> Result<Vec<Tensor>> {
+    ensure_extension_module_family(op.as_ref(), runtime)?;
+    let mut builder = SemanticProgramBuilder::new();
+    let input_values = inputs
+        .iter()
+        .map(|tensor| {
+            let shape = tensor.shape().iter().copied().map(DimExpr::from);
+            builder
+                .input(ProgramInputSpec::new(tensor.dtype(), shape))
+                .map_err(|source| {
+                    Error::runtime_state_source(
+                        "extension",
+                        tenferro_runtime::ErrorPhase::Execution,
+                        source,
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let outputs = builder.add_extension(op, &input_values).map_err(|source| {
+        Error::runtime_state_source("extension", tenferro_runtime::ErrorPhase::Execution, source)
+    })?;
+    let frozen = builder.finish(&outputs).map_err(|source| {
+        Error::runtime_state_source("extension", tenferro_runtime::ErrorPhase::Execution, source)
+    })?;
+    let program = GraphCompiler::new().compile_frozen_program(&frozen)?;
+    runtime.run_compiled(&program, inputs)
 }
 
-fn missing_extension_executor_error(ext: &dyn tenferro_ops::ext_op::ExtensionOp) -> Error {
+fn ensure_extension_module_family(op: &dyn ExtensionOp, runtime: &Runtime) -> Result<()> {
+    let snapshot = runtime.snapshot().map_err(|source| {
+        Error::runtime_state_source("extension", ErrorPhase::Execution, source)
+    })?;
+    if snapshot.has_extension_family(op.family_id()) {
+        Ok(())
+    } else {
+        Err(missing_extension_module_error(op))
+    }
+}
+
+fn missing_extension_module_error(ext: &dyn tenferro_ops::ext_op::ExtensionOp) -> Error {
     Error::TensorRuntime(tenferro_tensor::Error::invalid_argument(
         "extension",
-        "executor",
+        "extension_module",
         format!(
-            "extension op for family_id {:?} requires an ExtensionExecutor; execute through EagerRuntime or register and pass the extension runtime owner",
+            "missing extension module for op family_id {:?}; install an ExtensionModule on the Runtime",
             ext.family_id()
         ),
     ))
@@ -600,7 +637,7 @@ pub(crate) fn exec_standard_op_on_tensor_reads_in_session(
             }
         }
         StdTensorOp::Extension(ext) => {
-            return Err(missing_extension_executor_error(ext.as_ref()));
+            return Err(missing_extension_module_error(ext.as_ref()));
         }
     };
     Ok(result)

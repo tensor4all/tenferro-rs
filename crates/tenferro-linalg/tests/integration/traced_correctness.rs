@@ -1,7 +1,8 @@
 use num_complex::Complex64;
-use tenferro_cpu::CpuBackend;
 use tenferro_linalg::TracedTensorLinalgExt;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, Tensor, TracedTensor, TypedTensor};
+use tenferro_runtime::{GraphCompiler, Tensor, TracedTensor, TypedTensor};
+
+use super::support;
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
     Tensor::F64(TypedTensor::from_vec_col_major(shape, data).unwrap())
@@ -18,11 +19,7 @@ fn get_c64_data(tensor: &Tensor) -> &[Complex64] {
 fn run_many(outputs: &[&TracedTensor]) -> Vec<Tensor> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile_many(outputs).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor
-        .register_extension(tenferro_linalg::register_runtime)
-        .unwrap();
-    executor.run_many(&program).unwrap()
+    support::run_all(&program, &[]).unwrap()
 }
 
 #[test]

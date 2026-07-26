@@ -3,43 +3,50 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
+use std::mem::{size_of, size_of_val};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use crate::extension_cache::{ExtensionCacheLimits, ExtensionCacheStore};
-use crate::extension_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError};
+use lru::LruCache;
+
+use crate::extension_cache::{ExtensionCacheLimits, ExtensionCacheSelector, ExtensionCacheStore};
 #[cfg(test)]
 use computegraph::graph::Graph;
 use computegraph::ValueKey;
 #[cfg(test)]
 use computegraph::ValueRef;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{CpuBackend, CpuBackendError, CpuPlacement};
 #[cfg(feature = "cuda")]
 use tenferro_gpu::CudaBackend;
 #[cfg(feature = "webgpu")]
 use tenferro_gpu::WebGpuBackend;
+#[cfg(test)]
 use tenferro_ops::input_key::TensorInputKey;
-use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_ops::ExtensionRuleSet;
-use tenferro_ops::ShapeGuardContext;
-use tenferro_runtime::ad_support::ones_tensor;
-use tenferro_runtime::ErrorPhase;
-use tenferro_tensor::BackendSessionHost;
+use tenferro_ops::{std_tensor_op::StdTensorOp, SymDim, TensorMeta};
+use tenferro_runtime::ad_support::{compile_ad_source, ones_tensor};
+use tenferro_runtime::program::{ProgramValueMetadata, SemanticFingerprint, SemanticProgram};
+use tenferro_runtime::{
+    CompiledGraph, CoreCapabilityBundle, EngineId, ErrorPhase, ExecutionContextIdentity,
+    ExtensionModule, GraphCompiler, HardwareClassId, PreparedCompiledGraph, RegistrationIdentity,
+    Runtime, RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, TracedTensor,
+};
+#[cfg(test)]
+use tenferro_tensor::TypedTensor;
+use tenferro_tensor::{BackendSession, BackendSessionHost};
 use tenferro_tensor::{
     CacheStats, DType, IntoShapeVec, Tensor, TensorBackend, TensorElementwise, TensorRead,
-    TensorScalar, TensorValue, TypedTensor,
+    TensorScalar, TensorValue,
 };
-use tidu::eager::{self, EagerInput, EagerOutput, KeySource, RecordedGraph, Recorder, Trace};
-use tidu::{ADRuleError, ADRuleKind, LinearizedGraph};
 
-use self::backward::TenferroBackwardCallbacks;
-use self::functional::{functional_jvp, functional_vjp_optional};
-use crate::eager_backend::EagerBackend;
+use crate::eager_backend::{
+    cpu_runtime_engine_id, cpu_runtime_engine_registration, cpu_runtime_hardware_class,
+    eager_runtime_for_backend, EagerBackend,
+};
 #[cfg(test)]
 use crate::eager_exec::exec_standard_op_on_tensor_reads_in_session;
-use crate::eager_exec::{
-    exec_op_on_tensor_reads_with_extension_executor, exec_op_on_tensors_with_extension_executor,
-};
+use crate::eager_exec::{exec_op_on_tensor_reads_with_runtime, exec_op_on_tensors_with_runtime};
 use crate::error::{ContextId, Error, Result};
 #[cfg(test)]
 use crate::metadata::push_metadata_scope;
@@ -47,16 +54,28 @@ use crate::metadata::{
     metadata_scopes_for_scope, register_scoped_metadata_batch, register_scoped_value_metadata,
     tensor_meta_from_tensor, GlobalMetadataScope,
 };
-use crate::traced::next_input_key;
-use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits, EagerAdTransformCacheKey};
+use crate::semantic_extension::SemanticExtensionRuleSet;
+use crate::traced::{derivative_trace_from_frozen_program, next_input_key};
+use crate::transform_cache::{AdTransformCache, AdTransformCacheLimits};
 
 use crate::AdContext;
 
-mod backward;
-mod functional;
-
 pub(crate) type GradSlot = Arc<Mutex<Option<Arc<Tensor>>>>;
 pub(crate) type WeakGradSlot = Weak<Mutex<Option<Arc<Tensor>>>>;
+
+#[derive(Clone, Debug)]
+pub(crate) struct EagerTrace;
+
+#[cfg(test)]
+pub(crate) static CPU_RUNTIME_SELECTION_REFRESHES: AtomicUsize = AtomicUsize::new(0);
+
+struct CpuRuntimeSelection {
+    snapshot: Arc<RuntimeConfigSnapshot>,
+    epoch: RuntimeEpoch,
+    engine_id: EngineId,
+    registration_identity: RegistrationIdentity,
+    capabilities: CoreCapabilityBundle,
+}
 
 #[derive(Debug, Default, Clone)]
 struct EagerOpProfileEntry {
@@ -72,10 +91,27 @@ thread_local! {
     static EAGER_OP_PROFILE_ENABLED_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
     #[cfg(test)]
     static EAGER_OP_PROFILE_PRINT_EVERY_OVERRIDE: RefCell<Option<Option<usize>>> = const { RefCell::new(None) };
+    #[cfg(test)]
+    static EAGER_SEMANTIC_VJP_ENABLED_OVERRIDE: RefCell<Option<bool>> = const { RefCell::new(None) };
 }
+
+#[cfg(test)]
+pub(crate) static EAGER_SEMANTIC_VJP_EXECUTIONS: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) fn eager_grad_recording_enabled() -> bool {
     EAGER_NO_GRAD_DEPTH.with(|depth| depth.get() == 0)
+}
+
+fn eager_semantic_vjp_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(value) = EAGER_SEMANTIC_VJP_ENABLED_OVERRIDE.with(|state| *state.borrow()) {
+        return value;
+    }
+
+    // Semantic eager VJP/JVP on by default (Unification 7).
+    // Set TENFERRO_EAGER_SEMANTIC_VJP=0 to disable.
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env::var("TENFERRO_EAGER_SEMANTIC_VJP").map_or(true, |v| v != "0"))
 }
 
 /// Scope guard that temporarily disables eager operation recording.
@@ -217,6 +253,111 @@ fn eager_op_profile_per_call_us(entry: &EagerOpProfileEntry) -> Option<f64> {
     (entry.calls != 0).then(|| entry.total_time.as_secs_f64() * 1.0e6 / entry.calls as f64)
 }
 
+fn build_eager_runtime_for_backend(backend: &EagerBackend) -> Runtime {
+    match eager_runtime_for_backend(backend) {
+        Ok(runtime) => runtime,
+        Err(source) => {
+            // INVARIANT: eager runtime construction uses fixed, private CPU
+            // identifiers and one storage class; failing here means the
+            // hard-coded registration contract has been broken.
+            panic!("fixed eager runtime configuration failed: {source}");
+        }
+    }
+}
+
+fn runtime_config_error(op: &'static str, source: RuntimeConfigError) -> Error {
+    Error::runtime_state_source(op, ErrorPhase::Execution, source)
+}
+
+fn runtime_state_source<E>(op: &'static str, source: E) -> Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    Error::runtime_state_source(op, ErrorPhase::Execution, source)
+}
+
+fn cpu_runtime_bridge_unsupported(message: impl Into<String>) -> Error {
+    Error::unsupported(
+        "CpuPlacementBoundEager::refresh_runtime_selection",
+        ErrorPhase::Execution,
+        message,
+    )
+}
+
+fn select_cpu_runtime(runtime: &Runtime) -> Result<CpuRuntimeSelection> {
+    let snapshot = runtime
+        .snapshot()
+        .map_err(|source| runtime_state_source("EagerRuntime::runtime_snapshot", source))?;
+    let engine_id = cpu_runtime_engine_id()
+        .map_err(|source| runtime_config_error("EagerRuntime::cpu_runtime_engine_id", source))?;
+    let expected_hardware = cpu_runtime_hardware_class().map_err(|source| {
+        runtime_config_error("EagerRuntime::cpu_runtime_hardware_class", source)
+    })?;
+    let engine = snapshot
+        .engine(&engine_id)
+        .ok_or_else(|| cpu_runtime_bridge_unsupported("missing CPU runtime engine"))?;
+    validate_cpu_runtime_engine(
+        engine.context_identity(),
+        engine.hardware_class(),
+        engine.capabilities(),
+        &expected_hardware,
+    )?;
+    let epoch = snapshot.epoch();
+    let registration_identity = engine.registration_identity();
+    let capabilities = engine.capabilities().clone();
+    Ok(CpuRuntimeSelection {
+        snapshot,
+        epoch,
+        engine_id,
+        registration_identity,
+        capabilities,
+    })
+}
+
+fn validate_cpu_runtime_engine(
+    context_identity: ExecutionContextIdentity,
+    hardware_class: &HardwareClassId,
+    capabilities: &CoreCapabilityBundle,
+    expected_hardware: &HardwareClassId,
+) -> Result<()> {
+    if context_identity != ExecutionContextIdentity::of::<CpuBackend>() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "CPU runtime context mismatch",
+        ));
+    }
+    if hardware_class != expected_hardware {
+        return Err(cpu_runtime_bridge_unsupported(
+            "CPU runtime hardware mismatch",
+        ));
+    }
+    if capabilities.elementwise().is_none() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "missing CPU runtime capability: elementwise",
+        ));
+    }
+    if capabilities.reduction().is_none() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "missing CPU runtime capability: reduction",
+        ));
+    }
+    if capabilities.indexing().is_none() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "missing CPU runtime capability: indexing",
+        ));
+    }
+    if capabilities.dot_general().is_none() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "missing CPU runtime capability: dot_general",
+        ));
+    }
+    if capabilities.layout().is_none() {
+        return Err(cpu_runtime_bridge_unsupported(
+            "missing CPU runtime capability: layout",
+        ));
+    }
+    Ok(())
+}
+
 /// Stats for caches owned by an [`EagerRuntime`].
 ///
 /// `retained_bytes` fields are logical payload estimates, not process RSS.
@@ -226,12 +367,163 @@ pub struct EagerRuntimeCacheStats {
     pub extensions: CacheStats,
     /// Eager AD transform memoization cache.
     pub ad_transforms: CacheStats,
+    /// Prepared eager derivative program cache.
+    pub prepared_derivatives: CacheStats,
 }
 
 #[cfg(test)]
 pub(crate) struct EagerGraphExecution {
     pub(crate) outputs: Vec<Arc<Tensor>>,
-    pub(crate) retained_values: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+}
+
+/// Placement-selected CPU view of one [`EagerRuntime`].
+///
+/// The view snapshots the runtime's CPU coordinator/provider bundle and the
+/// immutable runtime registration metadata when [`EagerRuntime::on_cpu`] is
+/// called. It holds no resource permit while idle and enters one backend
+/// session only while [`Self::with_eager_session`] runs. The session exposes
+/// core [`BackendSession`] operations on concrete [`Tensor`] values. This
+/// bridge deliberately does not expose the eager runtime's linalg, FFT, einsum,
+/// or extension-runtime registries.
+///
+/// The value is intentionally not `Clone`: mutable use makes concurrent
+/// session ownership explicit without adding another backend mutex.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_ad::EagerRuntime;
+/// use tenferro_cpu::CpuPlacement;
+///
+/// let runtime = EagerRuntime::new();
+/// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+/// assert_eq!(cpu.runtime_id(), runtime.id());
+/// # Ok::<(), tenferro_ad::Error>(())
+/// ```
+pub struct CpuPlacementBoundEager {
+    runtime: Arc<EagerRuntime>,
+    backend: CpuBackend,
+    snapshot: Arc<RuntimeConfigSnapshot>,
+    epoch: RuntimeEpoch,
+    engine_id: EngineId,
+    registration_identity: RegistrationIdentity,
+    capabilities: CoreCapabilityBundle,
+}
+
+impl fmt::Debug for CpuPlacementBoundEager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CpuPlacementBoundEager")
+            .field("runtime_id", &self.runtime.id())
+            .field("placement", &self.backend.placement())
+            .field("runtime_epoch", &self.epoch)
+            .field("engine_id", &self.engine_id)
+            .field("registration_identity", &self.registration_identity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CpuPlacementBoundEager {
+    fn refresh_runtime_selection(&mut self) -> Result<()> {
+        let current_epoch = self.runtime.runtime.epoch().map_err(|source| {
+            runtime_state_source("CpuPlacementBoundEager::refresh_runtime_selection", source)
+        })?;
+        if current_epoch == self.epoch {
+            return Ok(());
+        }
+
+        #[cfg(test)]
+        CPU_RUNTIME_SELECTION_REFRESHES.fetch_add(1, Ordering::SeqCst);
+
+        let selection = select_cpu_runtime(&self.runtime.runtime)?;
+        self.snapshot = selection.snapshot;
+        self.epoch = selection.epoch;
+        self.engine_id = selection.engine_id;
+        self.registration_identity = selection.registration_identity;
+        self.capabilities = selection.capabilities;
+        Ok(())
+    }
+
+    /// Return the identity of the original eager runtime.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuPlacement;
+    ///
+    /// let runtime = EagerRuntime::new();
+    /// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+    /// assert_eq!(cpu.runtime_id(), runtime.id());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn runtime_id(&self) -> ContextId {
+        self.runtime.id()
+    }
+
+    /// Return the placement requested when this view was created.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuPlacement;
+    ///
+    /// let runtime = EagerRuntime::new();
+    /// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+    /// assert_eq!(cpu.placement(), CpuPlacement::Auto);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    pub fn placement(&self) -> CpuPlacement {
+        self.backend.placement()
+    }
+
+    /// Enter one CPU backend session and run core operations through it.
+    ///
+    /// One call creates one backend session. Tenferro-managed CPU executors
+    /// enter once around the closure and core operations reuse that compatible
+    /// execution scope. The closure may borrow stack data and need not be
+    /// `'static`.
+    ///
+    /// This phase-2 bridge accepts only core [`BackendSession`] operations. It
+    /// does not lock or dispatch the eager runtime's linalg, FFT, einsum, or
+    /// extension registries.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::{EagerRuntime, Error};
+    /// use tenferro_cpu::CpuPlacement;
+    /// use tenferro_tensor::{Tensor, TensorElementwise};
+    ///
+    /// let runtime = EagerRuntime::new();
+    /// let mut cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+    /// let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f64])?;
+    /// let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f64])?;
+    /// let output = cpu.with_eager_session(|session| {
+    ///     TensorElementwise::add(session, &lhs, &rhs).map_err(Error::from)
+    /// })?;
+    /// assert_eq!(output.as_slice::<f64>().unwrap(), &[3.0]);
+    /// # Ok::<(), Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the callback's [`Error`] unchanged. Core backend operations may
+    /// report validation, unsupported capability, backend, or runtime-state
+    /// failures through that error.
+    ///
+    /// # Panics
+    ///
+    /// The existing CPU backend re-entry guard panics if the callback enters a
+    /// public `CpuBackend` or calls an ordinary `EagerTensor` operation on this
+    /// same runtime. Use only the borrowed `session` for work inside the scope.
+    pub fn with_eager_session<R: Send>(
+        &mut self,
+        f: impl FnOnce(&mut dyn BackendSession) -> Result<R> + Send,
+    ) -> Result<R> {
+        self.refresh_runtime_selection()?;
+        self.backend.with_backend_session(f)
+    }
 }
 
 /// Shared eager execution context for tensors on a backend.
@@ -254,19 +546,27 @@ pub(crate) struct EagerGraphExecution {
 /// ```
 pub struct EagerRuntime {
     id: ContextId,
+    runtime: Runtime,
     pub(crate) backend: Mutex<EagerBackend>,
-    pub(crate) extension_executor: Mutex<ExtensionExecutor<EagerBackend>>,
-    extension_rules: Option<ExtensionRuleSet>,
+    extension_install_lock: Mutex<()>,
+    pub(crate) extension_caches: Mutex<ExtensionCacheStore>,
+    semantic_extension_rules: SemanticExtensionRuleSet,
     grad_slots: Mutex<HashMap<ValueKey<StdTensorOp>, WeakGradSlot>>,
     value_records: Mutex<HashMap<ValueKey<StdTensorOp>, Weak<EagerTensorRecord>>>,
     value_ptr_records: Mutex<HashMap<usize, Weak<EagerTensorRecord>>>,
     ad_transform_cache: Arc<AdTransformCache>,
+    /// S2: prepared derivative programs keyed by semantic structure, wrt input,
+    /// and concrete bound input metadata. Avoids re-running freeze+AD
+    /// transform+compile_frozen on warm structure hits.
+    prepared_derivative_cache: Mutex<PreparedDerivativeCache>,
 }
 
 impl fmt::Debug for EagerRuntime {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug = f.debug_struct("EagerRuntime");
         debug.field("id", &self.id);
+        debug.field("runtime_id", &self.runtime.id());
+        debug.field("runtime_epoch", &self.runtime.epoch().ok());
         match self.backend.try_lock() {
             Ok(backend) => {
                 debug.field("backend", &*backend);
@@ -275,15 +575,26 @@ impl fmt::Debug for EagerRuntime {
                 debug.field("backend", &"<locked>");
             }
         }
-        match self.extension_executor.try_lock() {
-            Ok(executor) => {
-                debug.field("extension_executor", &*executor);
+        match self.extension_caches.try_lock() {
+            Ok(caches) => {
+                debug.field(
+                    "extension_cache_stats",
+                    &caches.stats(ExtensionCacheSelector::All),
+                );
             }
             Err(_) => {
-                debug.field("extension_executor", &"<locked>");
+                debug.field("extension_cache_stats", &"<locked>");
             }
         }
-        debug.field("has_extension_rules", &self.extension_rules.is_some());
+        match self.extension_install_lock.try_lock() {
+            Ok(_) => {
+                debug.field("extension_install_lock", &"<unlocked>");
+            }
+            Err(_) => {
+                debug.field("extension_install_lock", &"<locked>");
+            }
+        }
+        debug.field("semantic_extension_rules", &self.semantic_extension_rules);
         match self.grad_slots.try_lock() {
             Ok(slots) => {
                 debug.field("grad_slots_len", &slots.len());
@@ -316,6 +627,14 @@ impl fmt::Debug for EagerRuntime {
                 debug.field("ad_transform_cache_stats", &format_args!("{err}"));
             }
         }
+        match self.prepared_derivative_cache.try_lock() {
+            Ok(cache) => {
+                debug.field("prepared_derivative_cache_stats", &cache.stats());
+            }
+            Err(_) => {
+                debug.field("prepared_derivative_cache_stats", &"<locked>");
+            }
+        }
         debug.finish_non_exhaustive()
     }
 }
@@ -327,10 +646,30 @@ impl EagerRuntime {
         })
     }
 
-    fn lock_extension_executor(&self) -> Result<MutexGuard<'_, ExtensionExecutor<EagerBackend>>> {
-        self.extension_executor.lock().map_err(|_| {
+    fn lock_extension_caches(&self) -> Result<MutexGuard<'_, ExtensionCacheStore>> {
+        self.extension_caches.lock().map_err(|_| {
             Error::runtime_state(
-                "eager_extension_executor",
+                "eager_extension_caches",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            )
+        })
+    }
+
+    fn lock_extension_install(&self) -> Result<MutexGuard<'_, ()>> {
+        self.extension_install_lock.lock().map_err(|_| {
+            Error::runtime_state(
+                "eager_extension_install",
+                ErrorPhase::Execution,
+                "lock poisoned",
+            )
+        })
+    }
+
+    fn lock_prepared_derivative_cache(&self) -> Result<MutexGuard<'_, PreparedDerivativeCache>> {
+        self.prepared_derivative_cache.lock().map_err(|_| {
+            Error::runtime_state(
+                "prepared_derivative_cache",
                 ErrorPhase::Execution,
                 "lock poisoned",
             )
@@ -373,35 +712,74 @@ impl EagerRuntime {
         })
     }
 
-    fn from_backend(backend: EagerBackend) -> Self {
-        Self::from_backend_with_extension_rules(backend, None)
+    fn synchronize_runtime_registration_for_backend(&self, backend: &EagerBackend) -> Result<()> {
+        let engine_id = cpu_runtime_engine_id().map_err(|source| {
+            runtime_config_error("EagerRuntime::cpu_runtime_engine_id", source)
+        })?;
+        let snapshot = self
+            .runtime
+            .snapshot()
+            .map_err(|source| runtime_state_source("EagerRuntime::runtime_snapshot", source))?;
+        let has_cpu_engine = snapshot.engine(&engine_id).is_some();
+        match backend.cpu_snapshot() {
+            Some(backend) => {
+                let registration = cpu_runtime_engine_registration(&backend).map_err(|source| {
+                    runtime_config_error("EagerRuntime::cpu_runtime_engine_registration", source)
+                })?;
+                self.runtime
+                    .reconfigure(|edit| {
+                        if has_cpu_engine {
+                            edit.replace_engine(registration)?;
+                        } else {
+                            edit.register_engine(registration)?;
+                        }
+                        Ok(())
+                    })
+                    .map(|_| ())
+                    .map_err(|source| {
+                        runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
+                    })
+            }
+            None if has_cpu_engine => self
+                .runtime
+                .reconfigure(|edit| {
+                    edit.remove_engine(&engine_id)?;
+                    Ok(())
+                })
+                .map(|_| ())
+                .map_err(|source| {
+                    runtime_state_source("EagerRuntime::runtime_reconfiguration", source)
+                }),
+            None => Ok(()),
+        }
     }
 
-    fn from_backend_with_extension_rules(
-        backend: EagerBackend,
-        extension_rules: Option<ExtensionRuleSet>,
-    ) -> Self {
-        Self::from_backend_with_extension_rules_and_cache(
+    fn from_backend(backend: EagerBackend) -> Self {
+        Self::from_backend_with_rules_and_cache(
             backend,
-            extension_rules,
+            SemanticExtensionRuleSet::default(),
             Arc::new(AdTransformCache::new()),
         )
     }
 
-    fn from_backend_with_extension_rules_and_cache(
+    fn from_backend_with_rules_and_cache(
         backend: EagerBackend,
-        extension_rules: Option<ExtensionRuleSet>,
+        semantic_extension_rules: SemanticExtensionRuleSet,
         ad_transform_cache: Arc<AdTransformCache>,
     ) -> Self {
+        let runtime = build_eager_runtime_for_backend(&backend);
         Self {
             id: ContextId::fresh(),
+            runtime,
             backend: Mutex::new(backend),
-            extension_executor: Mutex::new(ExtensionExecutor::new()),
-            extension_rules,
+            extension_install_lock: Mutex::new(()),
+            extension_caches: Mutex::new(ExtensionCacheStore::new()),
+            semantic_extension_rules,
             grad_slots: Mutex::new(HashMap::new()),
             value_records: Mutex::new(HashMap::new()),
             value_ptr_records: Mutex::new(HashMap::new()),
             ad_transform_cache,
+            prepared_derivative_cache: Mutex::new(PreparedDerivativeCache::default()),
         }
     }
 
@@ -434,6 +812,62 @@ impl EagerRuntime {
         Arc::new(Self::from_backend(EagerBackend::cpu(backend)))
     }
 
+    /// Snapshot a placement-selected CPU handle from this eager runtime.
+    ///
+    /// The eager backend lock is held only long enough to verify the backend
+    /// kind and clone its CPU coordinator/provider snapshot. Placement
+    /// resolution happens after that guard is dropped. The returned value does
+    /// not hold a resource permit or a second runtime/backend mutex while idle.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuPlacement;
+    ///
+    /// let runtime = EagerRuntime::new();
+    /// let cpu = runtime.on_cpu(CpuPlacement::Auto)?;
+    /// assert_eq!(cpu.runtime_id(), runtime.id());
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::RuntimeState`] if the eager backend lock is poisoned,
+    /// [`Error::Unsupported`] if the runtime is not CPU-backed, or a typed
+    /// tensor runtime error retaining [`tenferro_cpu::CpuPlacementError`] when
+    /// the requested placement cannot be resolved.
+    pub fn on_cpu(self: &Arc<Self>, placement: CpuPlacement) -> Result<CpuPlacementBoundEager> {
+        let backend = {
+            let backend = self.lock_backend()?;
+            backend.cpu_snapshot().ok_or_else(|| {
+                Error::unsupported(
+                    "EagerRuntime::on_cpu",
+                    ErrorPhase::Execution,
+                    "the eager runtime is not CPU-backed",
+                )
+            })?
+        };
+        let selection = select_cpu_runtime(&self.runtime)?;
+        let backend = backend.for_placement(placement).map_err(|source| {
+            let error: tenferro_tensor::Error = CpuBackendError::Placement {
+                op: "EagerRuntime::on_cpu",
+                source,
+            }
+            .into();
+            Error::from(error)
+        })?;
+        Ok(CpuPlacementBoundEager {
+            runtime: Arc::clone(self),
+            backend,
+            snapshot: selection.snapshot,
+            epoch: selection.epoch,
+            engine_id: selection.engine_id,
+            registration_identity: selection.registration_identity,
+            capabilities: selection.capabilities,
+        })
+    }
+
     /// Create a shared CPU eager context with explicit AD extension rules.
     ///
     /// # Examples
@@ -447,9 +881,9 @@ impl EagerRuntime {
     /// assert_eq!(std::sync::Arc::strong_count(&ctx), 1);
     /// ```
     pub fn with_cpu_backend_and_ad_context(backend: CpuBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_extension_rules_and_cache(
+        Arc::new(Self::from_backend_with_rules_and_cache(
             EagerBackend::cpu(backend),
-            Some(ad.extension_rule_set()),
+            ad.semantic_extension_rules().clone(),
             ad.ad_transform_cache(),
         ))
     }
@@ -483,9 +917,9 @@ impl EagerRuntime {
     /// ```
     #[cfg(feature = "cuda")]
     pub fn with_cuda_backend_and_ad_context(backend: CudaBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_extension_rules_and_cache(
+        Arc::new(Self::from_backend_with_rules_and_cache(
             EagerBackend::cuda(backend),
-            Some(ad.extension_rule_set()),
+            ad.semantic_extension_rules().clone(),
             ad.ad_transform_cache(),
         ))
     }
@@ -519,9 +953,9 @@ impl EagerRuntime {
     /// ```
     #[cfg(feature = "webgpu")]
     pub fn with_webgpu_backend_and_ad_context(backend: WebGpuBackend, ad: &AdContext) -> Arc<Self> {
-        Arc::new(Self::from_backend_with_extension_rules_and_cache(
+        Arc::new(Self::from_backend_with_rules_and_cache(
             EagerBackend::webgpu(backend),
-            Some(ad.extension_rule_set()),
+            ad.semantic_extension_rules().clone(),
             ad.ad_transform_cache(),
         ))
     }
@@ -571,26 +1005,29 @@ impl EagerRuntime {
         EagerNoGradGuard { active: true }
     }
 
-    /// Register one extension runtime on this eager context.
+    /// Install or replace one extension module on this eager context's runtime.
+    ///
+    /// Eager extension wrappers call this as an idempotent "ensure installed"
+    /// step. The eager context serializes this path so parallel first-use of the
+    /// same extension family cannot publish over another thread's base snapshot.
     ///
     /// # Errors
     ///
-    /// Returns [`ExtensionRuntimeRegistryError::PoisonedLock`] when the
-    /// extension executor is unavailable, or propagates the callback's
-    /// [`ExtensionRuntimeRegistryError::MalformedFamilyId`] and
-    /// [`ExtensionRuntimeRegistryError::MissingHostReference`] failures.
-    pub fn register_extension(
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] when runtime
+    /// reconfiguration fails or the extension module transaction is invalid.
+    pub fn install_extension_module(
         &self,
-        register: impl FnOnce(
-            &mut ExtensionExecutor<EagerBackend>,
-        ) -> std::result::Result<(), ExtensionRuntimeRegistryError>,
-    ) -> std::result::Result<(), ExtensionRuntimeRegistryError> {
-        let mut executor = self.extension_executor.lock().map_err(|_| {
-            ExtensionRuntimeRegistryError::PoisonedLock {
-                name: "extension executor lock",
-            }
-        })?;
-        register(&mut executor)
+        module: Arc<dyn ExtensionModule>,
+    ) -> Result<RuntimeEpoch> {
+        let _install_guard = self.lock_extension_install()?;
+        self.runtime
+            .reconfigure(|edit| {
+                edit.replace_extension_module(module)?;
+                Ok(())
+            })
+            .map_err(|source| {
+                runtime_state_source("EagerRuntime::install_extension_module", source)
+            })
     }
 
     /// Clear generic extension runtime cache entries.
@@ -610,9 +1047,9 @@ impl EagerRuntime {
     /// # Errors
     ///
     /// Returns [`tenferro_runtime::Error::RuntimeState`] when the extension
-    /// executor lock is poisoned.
+    /// cache lock is poisoned.
     pub fn clear_extension_caches(&self) -> Result<()> {
-        self.lock_extension_executor()?.clear_caches();
+        self.lock_extension_caches()?.clear();
         Ok(())
     }
 
@@ -628,16 +1065,41 @@ impl EagerRuntime {
     /// ctx.clear_caches()?;
     /// assert_eq!(ctx.cache_stats()?.extensions.entries, 0);
     /// assert_eq!(ctx.cache_stats()?.ad_transforms.entries, 0);
+    /// assert_eq!(ctx.cache_stats()?.prepared_derivatives.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
     /// # Errors
     ///
     /// Returns [`tenferro_runtime::Error::RuntimeState`] when either the
-    /// extension executor or AD-transform cache is poisoned.
+    /// extension cache or AD-transform cache is poisoned.
     pub fn clear_caches(&self) -> Result<()> {
         self.clear_extension_caches()?;
         self.clear_ad_transform_caches()?;
+        self.clear_prepared_derivative_cache()?;
+        Ok(())
+    }
+
+    /// Clear prepared derivative program cache entries.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// ctx.clear_prepared_derivative_cache()?;
+    /// assert_eq!(ctx.cache_stats()?.prepared_derivatives.entries, 0);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the prepared
+    /// derivative cache lock is poisoned.
+    pub fn clear_prepared_derivative_cache(&self) -> Result<()> {
+        self.lock_prepared_derivative_cache()?.clear();
         Ok(())
     }
 
@@ -653,17 +1115,21 @@ impl EagerRuntime {
     /// let stats = ctx.cache_stats()?;
     /// assert_eq!(stats.extensions.entries, 0);
     /// assert_eq!(stats.ad_transforms.entries, 0);
+    /// assert_eq!(stats.prepared_derivatives.entries, 0);
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`tenferro_runtime::Error::RuntimeState`] when an executor or
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] when a cache or
     /// AD-transform cache lock is poisoned.
     pub fn cache_stats(&self) -> Result<EagerRuntimeCacheStats> {
         Ok(EagerRuntimeCacheStats {
-            extensions: self.lock_extension_executor()?.cache_stats(),
+            extensions: self
+                .lock_extension_caches()?
+                .stats(ExtensionCacheSelector::All),
             ad_transforms: self.ad_transform_cache.stats()?,
+            prepared_derivatives: self.lock_prepared_derivative_cache()?.stats(),
         })
     }
 
@@ -734,14 +1200,63 @@ impl EagerRuntime {
         self.ad_transform_cache.clear()
     }
 
+    /// Return prepared derivative cache retention limits.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_ad::EagerRuntime;
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// assert!(ctx.prepared_derivative_cache_limits()?.max_entries().get() > 0);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the prepared
+    /// derivative cache lock is poisoned.
+    pub fn prepared_derivative_cache_limits(&self) -> Result<AdTransformCacheLimits> {
+        Ok(self.lock_prepared_derivative_cache()?.limits())
+    }
+
+    /// Replace prepared derivative cache retention limits.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::num::NonZeroUsize;
+    /// use tenferro_ad::{AdTransformCacheLimits, EagerRuntime};
+    /// use tenferro_cpu::CpuBackend;
+    ///
+    /// let ctx = EagerRuntime::with_cpu_backend(CpuBackend::new());
+    /// let limits = AdTransformCacheLimits::new(NonZeroUsize::new(1).unwrap());
+    /// ctx.set_prepared_derivative_cache_limits(limits)?;
+    /// assert_eq!(ctx.prepared_derivative_cache_limits()?, limits);
+    /// # Ok::<(), tenferro_ad::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_runtime::Error::RuntimeState`] if the prepared
+    /// derivative cache lock is poisoned.
+    pub fn set_prepared_derivative_cache_limits(
+        &self,
+        limits: AdTransformCacheLimits,
+    ) -> Result<()> {
+        self.lock_prepared_derivative_cache()?.set_limits(limits);
+        Ok(())
+    }
+
     /// Return the extension cache retention limits.
     ///
     /// # Errors
     ///
     /// Returns [`tenferro_runtime::Error::RuntimeState`] if the extension
-    /// executor lock is poisoned.
+    /// cache lock is poisoned.
     pub fn extension_cache_limits(&self) -> Result<ExtensionCacheLimits> {
-        Ok(self.lock_extension_executor()?.cache_limits())
+        Ok(self.lock_extension_caches()?.limits())
     }
 
     /// Replace extension cache retention limits.
@@ -749,9 +1264,9 @@ impl EagerRuntime {
     /// # Errors
     ///
     /// Returns [`tenferro_runtime::Error::RuntimeState`] if the extension
-    /// executor lock is poisoned.
+    /// cache lock is poisoned.
     pub fn set_extension_cache_limits(&self, limits: ExtensionCacheLimits) -> Result<()> {
-        self.lock_extension_executor()?.set_cache_limits(limits);
+        self.lock_extension_caches()?.set_limits(limits);
         Ok(())
     }
 
@@ -781,13 +1296,13 @@ impl EagerRuntime {
     /// # Errors
     ///
     /// Returns [`tenferro_runtime::Error::RuntimeState`] if the extension
-    /// executor lock is poisoned before the closure can run.
+    /// cache lock is poisoned before the closure can run.
     pub fn with_extension_caches_mut<R>(
         &self,
         f: impl FnOnce(&mut ExtensionCacheStore) -> R,
     ) -> Result<R> {
-        let mut executor = self.lock_extension_executor()?;
-        Ok(f(executor.caches_mut()))
+        let mut caches = self.lock_extension_caches()?;
+        Ok(f(&mut caches))
     }
 
     /// Mutably borrow this runtime's backend.
@@ -815,7 +1330,20 @@ impl EagerRuntime {
     /// lock is poisoned before the closure can run.
     pub fn with_backend_mut<R>(&self, f: impl FnOnce(&mut EagerBackend) -> R) -> Result<R> {
         let mut backend = self.lock_backend()?;
-        Ok(f(&mut backend))
+        let result = f(&mut backend);
+        self.synchronize_runtime_registration_for_backend(&backend)?;
+        Ok(result)
+    }
+
+    pub(crate) fn with_backend_and_extension_caches_mut<R>(
+        &self,
+        f: impl FnOnce(&mut EagerBackend, &mut ExtensionCacheStore) -> tenferro_tensor::Result<R>,
+    ) -> Result<R> {
+        let mut backend = self.lock_backend()?;
+        let mut extension_caches = self.lock_extension_caches()?;
+        let result = f(&mut backend, &mut extension_caches).map_err(Error::from)?;
+        self.synchronize_runtime_registration_for_backend(&backend)?;
+        Ok(result)
     }
 
     pub(crate) fn materialize_value(&self, value: &TensorValue) -> Result<Tensor> {
@@ -852,42 +1380,27 @@ impl EagerRuntime {
         self.lock_backend()?.synchronize().map_err(Error::from)
     }
 
-    fn exec_outputs_with_optional_extension_lock<R>(
+    fn exec_outputs_with_runtime<R>(
         &self,
         lock_backend_section: &'static str,
-        lock_extensions_section: &'static str,
         exec_section: &'static str,
         op: &StdTensorOp,
-        execute: impl FnOnce(
-            &mut EagerBackend,
-            Option<&mut ExtensionExecutor<EagerBackend>>,
-        ) -> Result<R>,
+        execute: impl FnOnce(&mut EagerBackend, Option<&Runtime>) -> Result<R>,
     ) -> Result<R> {
+        // Lock ordering: eager execution holds the backend lock while standard
+        // ops run without runtime extension access; extension ops receive the
+        // runtime so extension cache locks are acquired only from that path.
         let mut backend = profile_eager_op_section(lock_backend_section, || self.lock_backend())?;
-        if matches!(op, StdTensorOp::Extension(_)) {
-            // Lock ordering: eager execution always acquires backend before
-            // extension_executor. Extension runtimes must not re-enter this
-            // same EagerRuntime while their callback is running.
-            let mut extension_executor = profile_eager_op_section(lock_extensions_section, || {
-                self.lock_extension_executor()
-            })?;
-            return profile_eager_op_section(exec_section, || {
-                execute(&mut backend, Some(&mut *extension_executor))
-            });
-        }
-
-        profile_eager_op_section(exec_section, || execute(&mut backend, None))
+        let runtime = matches!(op, StdTensorOp::Extension(_)).then_some(&self.runtime);
+        profile_eager_op_section(exec_section, || execute(&mut backend, runtime))
     }
 
     pub(crate) fn exec_outputs(&self, op: &StdTensorOp, inputs: &[&Tensor]) -> Result<Vec<Tensor>> {
-        self.exec_outputs_with_optional_extension_lock(
+        self.exec_outputs_with_runtime(
             "exec_outputs.lock_backend",
-            "exec_outputs.lock_extensions",
             "exec_outputs.exec_op",
             op,
-            |backend, extension_executor| {
-                exec_op_on_tensors_with_extension_executor(op, inputs, backend, extension_executor)
-            },
+            |backend, runtime| exec_op_on_tensors_with_runtime(op, inputs, backend, runtime),
         )
     }
 
@@ -896,19 +1409,11 @@ impl EagerRuntime {
         op: &StdTensorOp,
         inputs: &[TensorRead<'_>],
     ) -> Result<Vec<Tensor>> {
-        self.exec_outputs_with_optional_extension_lock(
+        self.exec_outputs_with_runtime(
             "exec_outputs_read.lock_backend",
-            "exec_outputs_read.lock_extensions",
             "exec_outputs_read.exec_op",
             op,
-            |backend, extension_executor| {
-                exec_op_on_tensor_reads_with_extension_executor(
-                    op,
-                    inputs,
-                    backend,
-                    extension_executor,
-                )
-            },
+            |backend, runtime| exec_op_on_tensor_reads_with_runtime(op, inputs, backend, runtime),
         )
     }
 
@@ -983,10 +1488,7 @@ impl EagerRuntime {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(EagerGraphExecution {
-            outputs,
-            retained_values: all_values,
-        })
+        Ok(EagerGraphExecution { outputs })
     }
 
     pub(crate) fn try_register_grad_slot(
@@ -1041,46 +1543,6 @@ impl EagerRuntime {
                 Ok(None)
             }
         }
-    }
-
-    pub(crate) fn value_record_by_tensor(
-        &self,
-        tensor: &Arc<Tensor>,
-    ) -> Result<Option<Arc<EagerTensorRecord>>> {
-        let ptr = tensor_ptr(tensor);
-        let mut records = self.lock_value_ptr_records()?;
-        let Some(record) = records.get(&ptr).cloned() else {
-            return Ok(None);
-        };
-        match record.upgrade() {
-            Some(record) => Ok(Some(record)),
-            None => {
-                records.remove(&ptr);
-                Ok(None)
-            }
-        }
-    }
-
-    pub(crate) fn cached_linearize_recorded_graph(
-        &self,
-        graph: &RecordedGraph<StdTensorOp>,
-        output_slots: &[usize],
-        ctx: &mut ShapeGuardContext,
-    ) -> tidu::ADRuleResult<Arc<LinearizedGraph<StdTensorOp>>> {
-        let key = EagerAdTransformCacheKey::new(graph, output_slots);
-        if let Some(linear) = self
-            .ad_transform_cache
-            .get_eager_linearized(&key)
-            .map_err(eager_ad_transform_cache_error)?
-        {
-            return Ok(linear);
-        }
-
-        let linear = Arc::new(graph.linearize(output_slots, ctx)?);
-        self.ad_transform_cache
-            .put_eager_linearized(key, Arc::clone(&linear))
-            .map_err(eager_ad_transform_cache_error)?;
-        Ok(linear)
     }
 
     /// Clear all live gradient slots tracked by this context.
@@ -1373,7 +1835,11 @@ impl EagerRuntime {
         validate_same_runtime(self, wrt, "vjp wrt")?;
         validate_same_runtime(self, cotangent, "vjp cotangent")?;
         validate_seed_tensor("vjp", output, cotangent)?;
-        functional_vjp_optional(self, output, wrt, cotangent)
+        // Unification 7: semantic path is the only VJP path.
+        match semantic_eager_vjp_optional(self, output, wrt, cotangent)? {
+            Some(result) => Ok(result),
+            None => Ok(None),
+        }
     }
 
     /// Forward-mode Jacobian-vector product for eager tensors.
@@ -1457,7 +1923,11 @@ impl EagerRuntime {
         validate_same_runtime(self, wrt, "jvp wrt")?;
         validate_same_runtime(self, tangent, "jvp tangent")?;
         validate_seed_tensor("jvp", wrt, tangent)?;
-        functional_jvp(self, output, wrt, tangent)
+        // Unification 7: semantic path is the only JVP path.
+        match semantic_eager_jvp_optional(self, output, wrt, tangent)? {
+            Some(result) => Ok(result),
+            None => Ok(None),
+        }
     }
 
     fn store_grads(
@@ -1499,6 +1969,468 @@ impl EagerRuntime {
 
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct PreparedDerivativeCacheKey {
+    semantic_fingerprint: SemanticFingerprint,
+    runtime_epoch: RuntimeEpoch,
+    wrt_input_index: usize,
+    input_metadata: Box<[ProgramValueMetadata]>,
+}
+
+/// Cached prepared derivative: program + index metadata.
+#[derive(Debug)]
+struct PreparedDerivative {
+    program: Arc<CompiledGraph>,
+    prepared: Arc<PreparedCompiledGraph>,
+    seed_input_index: usize,
+    derivative_output_index: usize,
+}
+
+#[derive(Debug)]
+struct PreparedDerivativeCache {
+    limits: AdTransformCacheLimits,
+    entries: LruCache<PreparedDerivativeCacheKey, PreparedDerivativeCacheEntry>,
+    stats: CacheStats,
+}
+
+impl PreparedDerivativeCache {
+    fn limits(&self) -> AdTransformCacheLimits {
+        self.limits
+    }
+
+    fn set_limits(&mut self, limits: AdTransformCacheLimits) {
+        self.limits = limits;
+        self.evict_to_limits();
+    }
+
+    fn clear(&mut self) {
+        let clears = self.stats.clears.saturating_add(1);
+        self.entries.clear();
+        self.stats = CacheStats {
+            clears,
+            ..CacheStats::empty()
+        };
+    }
+
+    fn stats(&self) -> CacheStats {
+        self.stats
+    }
+
+    fn get(&mut self, key: &PreparedDerivativeCacheKey) -> Option<Arc<PreparedDerivative>> {
+        match self.entries.get(key) {
+            Some(entry) => {
+                self.stats.hits = self.stats.hits.saturating_add(1);
+                Some(Arc::clone(&entry.value))
+            }
+            None => {
+                self.stats.misses = self.stats.misses.saturating_add(1);
+                None
+            }
+        }
+    }
+
+    fn insert(&mut self, key: PreparedDerivativeCacheKey, value: Arc<PreparedDerivative>) {
+        let retained_bytes = prepared_derivative_cache_entry_retained_bytes(&key, value.as_ref());
+        let entry = PreparedDerivativeCacheEntry {
+            value,
+            retained_bytes,
+        };
+        self.stats.retained_bytes = self.stats.retained_bytes.saturating_add(retained_bytes);
+        if let Some((_old_key, old_entry)) = self.entries.push(key, entry) {
+            self.stats.retained_bytes = self
+                .stats
+                .retained_bytes
+                .saturating_sub(old_entry.retained_bytes);
+        }
+        self.stats.entries = self.entries.len();
+        self.evict_to_limits();
+    }
+
+    fn evict_to_limits(&mut self) {
+        while self.entries.len() > self.limits.max_entries().get()
+            || self
+                .limits
+                .max_retained_bytes()
+                .is_some_and(|limit| self.stats.retained_bytes > limit.get())
+        {
+            let Some((_key, entry)) = self.entries.pop_lru() else {
+                break;
+            };
+            self.stats.retained_bytes = self
+                .stats
+                .retained_bytes
+                .saturating_sub(entry.retained_bytes);
+            self.stats.evictions = self.stats.evictions.saturating_add(1);
+        }
+        self.stats.entries = self.entries.len();
+    }
+}
+
+impl Default for PreparedDerivativeCache {
+    fn default() -> Self {
+        Self {
+            limits: AdTransformCacheLimits::default(),
+            entries: LruCache::unbounded(),
+            stats: CacheStats::empty(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PreparedDerivativeCacheEntry {
+    value: Arc<PreparedDerivative>,
+    retained_bytes: usize,
+}
+
+fn prepared_derivative_cache_entry_retained_bytes(
+    key: &PreparedDerivativeCacheKey,
+    value: &PreparedDerivative,
+) -> usize {
+    size_of::<PreparedDerivativeCacheKey>()
+        .saturating_add(
+            key.input_metadata
+                .len()
+                .saturating_mul(size_of::<ProgramValueMetadata>()),
+        )
+        .saturating_add(size_of::<PreparedDerivative>())
+        .saturating_add(compiled_graph_retained_bytes(value.program.as_ref()))
+        .saturating_add(prepared_compiled_graph_retained_bytes(
+            value.prepared.as_ref(),
+            value.program.as_ref(),
+        ))
+}
+
+fn prepared_compiled_graph_retained_bytes(
+    prepared: &PreparedCompiledGraph,
+    derivative_program: &CompiledGraph,
+) -> usize {
+    size_of_val(prepared).saturating_add(compiled_graph_retained_bytes(derivative_program))
+}
+
+fn compiled_graph_retained_bytes(program: &CompiledGraph) -> usize {
+    size_of::<CompiledGraph>()
+        .saturating_add(size_of_val(program.input_keys()))
+        .saturating_add(program.bindings().len().saturating_mul(size_of::<usize>()))
+        .saturating_add(semantic_program_retained_bytes(program.program()))
+}
+
+fn semantic_program_retained_bytes(program: &SemanticProgram) -> usize {
+    size_of::<SemanticProgram>()
+        .saturating_add(size_of_val(program.inputs()))
+        .saturating_add(size_of_val(program.outputs()))
+        .saturating_add(
+            program
+                .operations()
+                .len()
+                .saturating_mul(size_of::<usize>()),
+        )
+        .saturating_add(
+            program
+                .shape_guards()
+                .len()
+                .saturating_mul(size_of::<usize>()),
+        )
+}
+
+fn semantic_eager_vjp_optional(
+    ctx: &Arc<EagerRuntime>,
+    output: &EagerTensor,
+    wrt: &EagerTensor,
+    cotangent: &EagerTensor,
+) -> Result<Option<Option<EagerTensor>>> {
+    if !eager_semantic_vjp_enabled() {
+        return Ok(None);
+    }
+    let (Some(output_trace), Some(wrt_trace)) =
+        (output.semantic_trace.as_ref(), wrt.semantic_trace.as_ref())
+    else {
+        return Ok(None);
+    };
+    let Some(wrt_key) = wrt_trace.input_key() else {
+        return Ok(None);
+    };
+    if !output_trace.has_attached_input_key(&wrt_key) {
+        return Ok(None);
+    }
+
+    // First compile the trace to get bindings and wrt_input_index.
+    // (The compile step is needed even for cache hits to extract tensor bindings.)
+    let mut compiler = GraphCompiler::new();
+    let source = compile_ad_source(&mut compiler, output_trace)?;
+    if source.output_count() != 1
+        || source.input_keys().len() != source.input_count()
+        || source.bindings().len() != source.input_count()
+    {
+        return Ok(None);
+    }
+    let Some(wrt_input_index) = source.input_key_index(&wrt_key) else {
+        return Ok(None);
+    };
+
+    // S2: check prepared-derivative cache before AD transform + compile_frozen.
+    let cache_key = PreparedDerivativeCacheKey {
+        semantic_fingerprint: source.program().semantic_fingerprint(),
+        runtime_epoch: ctx.runtime.epoch().map_err(|source| {
+            Error::runtime_state_source("semantic_eager_vjp", ErrorPhase::Execution, source)
+        })?,
+        wrt_input_index,
+        input_metadata: source.frozen_program().input_metadata_with_bound_shapes(),
+    };
+    let prepared = { ctx.lock_prepared_derivative_cache()?.get(&cache_key) };
+    let (seed_input_index, derivative_output_index, derivative_program, prepared_runtime) =
+        if let Some(prepared) = prepared {
+            (
+                prepared.seed_input_index,
+                prepared.derivative_output_index,
+                Arc::clone(&prepared.program),
+                Some(Arc::clone(&prepared.prepared)),
+            )
+        } else {
+            let mut active_inputs = vec![false; source.input_count()];
+            if let Some(active) = active_inputs.get_mut(wrt_input_index) {
+                *active = true;
+            } else {
+                return Ok(None);
+            }
+            let active_outputs = vec![true; source.output_count()];
+            let ad = AdContext::with_rules_and_transform_cache(
+                ctx.semantic_extension_rules.clone(),
+                Arc::clone(&ctx.ad_transform_cache),
+            );
+            let derivative = ad
+                .vjp_program(source.frozen_program(), &active_inputs, &active_outputs)
+                .map_err(|source| {
+                    Error::runtime_state_source(
+                        "semantic_eager_vjp",
+                        ErrorPhase::GraphBuild,
+                        source,
+                    )
+                })?;
+            let seed_input_index = derivative
+                .derivative_input_indices()
+                .first()
+                .copied()
+                .flatten();
+            let derivative_output_index = derivative
+                .derivative_output_indices()
+                .get(wrt_input_index)
+                .copied()
+                .flatten();
+            let (Some(seed_input_index), Some(derivative_output_index)) =
+                (seed_input_index, derivative_output_index)
+            else {
+                return Ok(Some(None));
+            };
+            let program = Arc::new(compiler.compile_frozen_program(derivative.frozen())?);
+            (seed_input_index, derivative_output_index, program, None)
+        };
+
+    let cotangent_tensor = cotangent.materialized_arc()?;
+    let input_count = derivative_program.input_count();
+    let mut owned_inputs = vec![None; input_count];
+    for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
+        let Some(slot) = owned_inputs.get_mut(source_input_index) else {
+            return Err(Error::Internal(format!(
+                "semantic eager VJP derivative program has no primal input slot {source_input_index}"
+            )));
+        };
+        *slot = Some(tensor.clone());
+    }
+    let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
+        return Err(Error::Internal(format!(
+            "semantic eager VJP seed input index {seed_input_index} is outside {} inputs",
+            owned_inputs.len()
+        )));
+    };
+    *slot = Some(cotangent_tensor.as_ref().clone());
+    let input_refs = owned_inputs
+        .iter()
+        .enumerate()
+        .map(|(index, tensor)| {
+            tensor.as_ref().ok_or_else(|| {
+                Error::Internal(format!(
+                    "semantic eager VJP derivative input {index} was not populated"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let prepared_runtime = if let Some(prepared_runtime) = prepared_runtime {
+        prepared_runtime
+    } else {
+        let prepared_runtime = Arc::new(
+            ctx.runtime
+                .prepare_compiled(&derivative_program, &input_refs)?,
+        );
+        let entry = Arc::new(PreparedDerivative {
+            program: Arc::clone(&derivative_program),
+            prepared: Arc::clone(&prepared_runtime),
+            seed_input_index,
+            derivative_output_index,
+        });
+        ctx.lock_prepared_derivative_cache()?
+            .insert(cache_key, entry);
+        prepared_runtime
+    };
+    let outputs = ctx.runtime.run_prepared(&prepared_runtime, &input_refs)?;
+    let Some(result) = outputs.get(derivative_output_index).cloned() else {
+        return Err(Error::Internal(format!(
+            "semantic eager VJP derivative output index {derivative_output_index} is outside {} outputs",
+            outputs.len()
+        )));
+    };
+    let cotangent_trace =
+        TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(&cotangent_tensor))?;
+    let semantic_trace = derivative_trace_from_frozen_program(
+        &source,
+        derivative_program.frozen_program(),
+        derivative_output_index,
+        &[(seed_input_index, Arc::clone(&cotangent_tensor))],
+        &[output_trace, wrt_trace, &cotangent_trace],
+        None,
+        "semantic_eager_vjp",
+    )?;
+
+    #[cfg(test)]
+    EAGER_SEMANTIC_VJP_EXECUTIONS.fetch_add(1, Ordering::Relaxed);
+
+    Ok(Some(Some(EagerTensor::new_result_arc_with_semantic_trace(
+        Arc::clone(ctx),
+        eager_val_key(),
+        Arc::new(result),
+        true,
+        None,
+        Some(semantic_trace),
+        Vec::new(),
+    )?)))
+}
+
+fn semantic_eager_jvp_optional(
+    ctx: &Arc<EagerRuntime>,
+    output: &EagerTensor,
+    wrt: &EagerTensor,
+    tangent: &EagerTensor,
+) -> Result<Option<Option<EagerTensor>>> {
+    if !eager_semantic_vjp_enabled() {
+        return Ok(None);
+    }
+    let (Some(output_trace), Some(wrt_trace)) =
+        (output.semantic_trace.as_ref(), wrt.semantic_trace.as_ref())
+    else {
+        return Ok(None);
+    };
+    let Some(wrt_key) = wrt_trace.input_key() else {
+        return Ok(None);
+    };
+    if !output_trace.has_attached_input_key(&wrt_key) {
+        return Ok(None);
+    }
+
+    let mut compiler = GraphCompiler::new();
+    let source = compile_ad_source(&mut compiler, output_trace)?;
+    if source.output_count() != 1
+        || source.input_keys().len() != source.input_count()
+        || source.bindings().len() != source.input_count()
+    {
+        return Ok(None);
+    }
+    let Some(wrt_input_index) = source.input_key_index(&wrt_key) else {
+        return Ok(None);
+    };
+
+    let mut active_inputs = vec![false; source.input_count()];
+    if let Some(active) = active_inputs.get_mut(wrt_input_index) {
+        *active = true;
+    } else {
+        return Ok(None);
+    }
+    let ad = AdContext::with_rules_and_transform_cache(
+        ctx.semantic_extension_rules.clone(),
+        Arc::clone(&ctx.ad_transform_cache),
+    );
+    let derivative = ad
+        .jvp_program(source.frozen_program(), &active_inputs)
+        .map_err(|source| {
+            Error::runtime_state_source("semantic_eager_jvp", ErrorPhase::GraphBuild, source)
+        })?;
+    // derivative_input_indices maps source input → derivative seed input.
+    let Some(seed_input_index) = derivative
+        .derivative_input_indices()
+        .get(wrt_input_index)
+        .copied()
+        .flatten()
+    else {
+        return Ok(Some(None));
+    };
+    // derivative_output_indices maps source output → derivative output.
+    // There is always exactly one source output (guarded above).
+    let Some(derivative_output_index) = derivative
+        .derivative_output_indices()
+        .first()
+        .copied()
+        .flatten()
+    else {
+        return Ok(Some(None));
+    };
+
+    let derivative_program = compiler.compile_frozen_program(derivative.frozen())?;
+    let tangent_tensor = tangent.materialized_arc()?;
+    let input_count = derivative_program.input_count();
+    let mut owned_inputs = vec![None; input_count];
+    for (source_input_index, (_, tensor)) in source.bindings().iter().enumerate() {
+        let Some(slot) = owned_inputs.get_mut(source_input_index) else {
+            return Err(Error::Internal(format!(
+                "semantic eager JVP derivative program has no primal input slot {source_input_index}"
+            )));
+        };
+        *slot = Some(tensor.clone());
+    }
+    let Some(slot) = owned_inputs.get_mut(seed_input_index) else {
+        return Err(Error::Internal(format!(
+            "semantic eager JVP seed input index {seed_input_index} is outside {} inputs",
+            owned_inputs.len()
+        )));
+    };
+    *slot = Some(tangent_tensor.as_ref().clone());
+    let input_refs = owned_inputs
+        .iter()
+        .enumerate()
+        .map(|(index, tensor)| {
+            tensor.as_ref().ok_or_else(|| {
+                Error::Internal(format!(
+                    "semantic eager JVP derivative input {index} was not populated"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let outputs = ctx.runtime.run_compiled(&derivative_program, &input_refs)?;
+    let Some(result) = outputs.get(derivative_output_index).cloned() else {
+        return Err(Error::Internal(format!(
+            "semantic eager JVP derivative output index {derivative_output_index} is outside {} outputs",
+            outputs.len()
+        )));
+    };
+    let tangent_trace = TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(&tangent_tensor))?;
+    let semantic_trace = derivative_trace_from_frozen_program(
+        &source,
+        derivative.frozen(),
+        derivative_output_index,
+        &[(seed_input_index, Arc::clone(&tangent_tensor))],
+        &[output_trace, wrt_trace, &tangent_trace],
+        None,
+        "semantic_eager_jvp",
+    )?;
+
+    Ok(Some(Some(EagerTensor::new_result_arc_with_semantic_trace(
+        Arc::clone(ctx),
+        eager_val_key(),
+        Arc::new(result),
+        true,
+        None,
+        Some(semantic_trace),
+        Vec::new(),
+    )?)))
 }
 
 fn validate_same_runtime(
@@ -1564,7 +2496,8 @@ pub struct EagerTensor {
     pub(crate) value: Arc<TensorValue>,
     materialized_cache: Arc<OnceLock<Arc<Tensor>>>,
     pub(crate) key: ValueKey<StdTensorOp>,
-    pub(crate) trace: Option<Trace<StdTensorOp>>,
+    pub(crate) trace: Option<EagerTrace>,
+    pub(crate) semantic_trace: Option<TracedTensor>,
     pub(crate) requires_grad: bool,
     grad_slot: GradSlot,
     pub(crate) metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
@@ -1576,11 +2509,23 @@ pub(crate) struct EagerTensorRecord {
     value: Arc<TensorValue>,
     materialized_cache: Arc<OnceLock<Arc<Tensor>>>,
     key: ValueKey<StdTensorOp>,
-    trace: Option<Trace<StdTensorOp>>,
+    trace: Option<EagerTrace>,
+    semantic_trace: Option<TracedTensor>,
     requires_grad: bool,
     grad_slot: GradSlot,
     metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ctx: Arc<EagerRuntime>,
+}
+
+struct EagerTensorParts {
+    ctx: Arc<EagerRuntime>,
+    key: ValueKey<StdTensorOp>,
+    requires_grad: bool,
+    trace: Option<EagerTrace>,
+    semantic_trace: Option<TracedTensor>,
+    value: Arc<TensorValue>,
+    metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    register_value: bool,
 }
 
 impl fmt::Debug for EagerTensor {
@@ -1591,6 +2536,7 @@ impl fmt::Debug for EagerTensor {
             .field("key", &self.key)
             .field("requires_grad", &self.requires_grad)
             .field("has_trace", &self.trace.is_some())
+            .field("has_semantic_trace", &self.semantic_trace.is_some())
             .field("ctx_id", &self.ctx_id())
             .finish_non_exhaustive()
     }
@@ -1670,39 +2616,23 @@ impl EagerTensor {
         requires_grad: bool,
     ) -> Result<Self> {
         let key = eager_val_key();
+        let tensor = Arc::new(tensor);
+        let semantic_trace = TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(&tensor))?;
         let metadata_scope =
-            register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(&tensor)).map_err(
-                |err| {
-                    Error::runtime_state_source("eager leaf metadata", ErrorPhase::GraphBuild, err)
-                },
-            )?;
-        Self::from_parts(
+            register_scoped_value_metadata(key.clone(), tensor_meta_from_tensor(tensor.as_ref()))
+                .map_err(|err| {
+                Error::runtime_state_source("eager leaf metadata", ErrorPhase::GraphBuild, err)
+            })?;
+        Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
-            None,
-            Arc::new(TensorValue::from_tensor_arc(Arc::new(tensor))),
-            metadata_scopes_for_scope(metadata_scope),
-            true,
-        )
-    }
-
-    pub(crate) fn new_result(
-        ctx: Arc<EagerRuntime>,
-        key: ValueKey<StdTensorOp>,
-        tensor: Tensor,
-        requires_grad: bool,
-        trace: Option<Trace<StdTensorOp>>,
-        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
-    ) -> Result<Self> {
-        Self::new_result_arc(
-            ctx,
-            key,
-            Arc::new(tensor),
-            requires_grad,
-            trace,
-            metadata_scopes,
-        )
+            trace: None,
+            semantic_trace: Some(semantic_trace),
+            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
+            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
+            register_value: true,
+        })
     }
 
     pub(crate) fn new_result_arc(
@@ -1710,18 +2640,60 @@ impl EagerTensor {
         key: ValueKey<StdTensorOp>,
         tensor: Arc<Tensor>,
         requires_grad: bool,
-        trace: Option<Trace<StdTensorOp>>,
+        trace: Option<EagerTrace>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        Self::from_parts(
+        Self::new_result_arc_with_semantic_trace(
+            ctx,
+            key,
+            tensor,
+            requires_grad,
+            trace,
+            None,
+            metadata_scopes,
+        )
+    }
+
+    pub(crate) fn new_result_arc_with_semantic_trace(
+        ctx: Arc<EagerRuntime>,
+        key: ValueKey<StdTensorOp>,
+        tensor: Arc<Tensor>,
+        requires_grad: bool,
+        trace: Option<EagerTrace>,
+        semantic_trace: Option<TracedTensor>,
+        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    ) -> Result<Self> {
+        Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
-            Arc::new(TensorValue::from_tensor_arc(tensor)),
+            semantic_trace,
+            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
             metadata_scopes,
-            true,
-        )
+            register_value: true,
+        })
+    }
+
+    pub(crate) fn new_unregistered_result_arc_with_semantic_trace(
+        ctx: Arc<EagerRuntime>,
+        key: ValueKey<StdTensorOp>,
+        tensor: Arc<Tensor>,
+        requires_grad: bool,
+        trace: Option<EagerTrace>,
+        semantic_trace: Option<TracedTensor>,
+        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    ) -> Result<Self> {
+        Self::from_parts(EagerTensorParts {
+            ctx,
+            key,
+            requires_grad,
+            trace,
+            semantic_trace,
+            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
+            metadata_scopes,
+            register_value: false,
+        })
     }
 
     pub(crate) fn new_result_value(
@@ -1729,29 +2701,33 @@ impl EagerTensor {
         key: ValueKey<StdTensorOp>,
         value: TensorValue,
         requires_grad: bool,
-        trace: Option<Trace<StdTensorOp>>,
+        trace: Option<EagerTrace>,
+        semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        Self::from_parts(
+        Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
-            Arc::new(value),
+            semantic_trace,
+            value: Arc::new(value),
             metadata_scopes,
-            true,
-        )
+            register_value: true,
+        })
     }
 
-    fn from_parts(
-        ctx: Arc<EagerRuntime>,
-        key: ValueKey<StdTensorOp>,
-        requires_grad: bool,
-        trace: Option<Trace<StdTensorOp>>,
-        value: Arc<TensorValue>,
-        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
-        register_value: bool,
-    ) -> Result<Self> {
+    fn from_parts(parts: EagerTensorParts) -> Result<Self> {
+        let EagerTensorParts {
+            ctx,
+            key,
+            requires_grad,
+            trace,
+            semantic_trace,
+            value,
+            metadata_scopes,
+            register_value,
+        } = parts;
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
             ctx.try_register_grad_slot(&key, &grad_slot)?;
@@ -1762,6 +2738,7 @@ impl EagerTensor {
             materialized_cache: Arc::clone(&materialized_cache),
             key: key.clone(),
             trace: trace.clone(),
+            semantic_trace: semantic_trace.clone(),
             requires_grad,
             grad_slot: Arc::clone(&grad_slot),
             metadata_scopes: metadata_scopes.clone(),
@@ -1776,6 +2753,7 @@ impl EagerTensor {
             materialized_cache,
             key,
             trace,
+            semantic_trace,
             requires_grad,
             grad_slot,
             metadata_scopes,
@@ -1785,10 +2763,21 @@ impl EagerTensor {
     }
 
     pub(crate) fn new_untracked_result(ctx: Arc<EagerRuntime>, tensor: Tensor) -> Result<Self> {
-        Self::new_result(ctx, eager_val_key(), tensor, false, None, Vec::new())
+        Ok(Self::new_untracked_value_result(
+            ctx,
+            TensorValue::from_tensor(tensor),
+        ))
     }
 
     pub(crate) fn new_untracked_value_result(ctx: Arc<EagerRuntime>, value: TensorValue) -> Self {
+        Self::new_untracked_value_result_with_semantic_trace(ctx, value, None)
+    }
+
+    pub(crate) fn new_untracked_value_result_with_semantic_trace(
+        ctx: Arc<EagerRuntime>,
+        value: TensorValue,
+        semantic_trace: Option<TracedTensor>,
+    ) -> Self {
         let value = Arc::new(value);
         let materialized_cache = Arc::new(OnceLock::new());
         let key = eager_val_key();
@@ -1798,6 +2787,7 @@ impl EagerTensor {
             materialized_cache: Arc::clone(&materialized_cache),
             key: key.clone(),
             trace: None,
+            semantic_trace: semantic_trace.clone(),
             requires_grad: false,
             grad_slot: Arc::clone(&grad_slot),
             metadata_scopes: Vec::new(),
@@ -1808,6 +2798,7 @@ impl EagerTensor {
             materialized_cache,
             key,
             trace: None,
+            semantic_trace,
             requires_grad: false,
             grad_slot,
             metadata_scopes: Vec::new(),
@@ -1822,6 +2813,7 @@ impl EagerTensor {
             materialized_cache: Arc::clone(&record.materialized_cache),
             key: record.key.clone(),
             trace: record.trace.clone(),
+            semantic_trace: record.semantic_trace.clone(),
             requires_grad: record.requires_grad,
             grad_slot: Arc::clone(&record.grad_slot),
             metadata_scopes: record.metadata_scopes.clone(),
@@ -1850,7 +2842,14 @@ impl EagerTensor {
     /// # Ok::<(), tenferro_ad::Error>(())
     /// ```
     pub fn detach(&self) -> Self {
-        Self::new_untracked_value_result(self.ctx.clone(), self.value.as_ref().clone())
+        let semantic_trace = self.value.as_tensor_arc().and_then(|tensor| {
+            TracedTensor::from_tensor_arc_symbolic_shape(Arc::clone(tensor)).ok()
+        });
+        Self::new_untracked_value_result_with_semantic_trace(
+            self.ctx.clone(),
+            self.value.as_ref().clone(),
+            semantic_trace,
+        )
     }
 
     /// Detach this tensor from its graph and re-register it in a different
@@ -2069,7 +3068,7 @@ impl EagerTensor {
 
     #[cfg(test)]
     fn debug_trace_saved_value_count(&self) -> Option<usize> {
-        self.trace.as_ref().map(|trace| trace.saved_values().len())
+        None
     }
 
     /// Return the opaque identifier of the context this tensor belongs to.
@@ -2132,8 +3131,9 @@ impl EagerTensor {
             }
         }
 
-        let mut recorder = Recorder::new(EagerTensorKeySource);
-        let graph_input_keys = recorder.fresh_input_keys::<StdTensorOp>(inputs.len());
+        let graph_input_keys = (0..inputs.len())
+            .map(|_| next_input_key())
+            .collect::<Vec<_>>();
         let graph = build_graph(&graph_input_keys)?;
         let initial_data = graph_input_keys
             .iter()
@@ -2154,11 +3154,12 @@ impl EagerTensor {
                 .outputs
                 .into_iter()
                 .map(|output| {
-                    Self::new_result_arc(
+                    Self::new_unregistered_result_arc_with_semantic_trace(
                         Arc::clone(&ctx),
                         eager_val_key(),
                         output,
                         false,
+                        None,
                         None,
                         Vec::new(),
                     )
@@ -2166,18 +3167,10 @@ impl EagerTensor {
                 .collect();
         }
 
-        let output_keys = graph
-            .outputs()
-            .iter()
-            .map(|&output_id| graph.values()[output_id].key.clone())
-            .collect();
-        let recorded_graph = RecordedGraph::new(Arc::clone(&graph), graph_input_keys, output_keys)
-            .map_err(eager_record_error)?;
-        let recorded = record_eager_recorded_graph_outputs(
-            &mut recorder,
-            recorded_graph,
+        let recorded = record_eager_graph_outputs(
+            graph.as_ref(),
+            &graph_input_keys,
             &execution.outputs,
-            execution.retained_values,
             inputs,
         )?;
         if recorded.traces.len() != execution.outputs.len() {
@@ -2198,14 +3191,16 @@ impl EagerTensor {
         recorded
             .traces
             .into_iter()
+            .zip(recorded.semantic_traces)
             .zip(execution.outputs)
-            .map(|(trace, output)| {
-                Self::new_result_arc(
+            .map(|((trace, semantic_trace), output)| {
+                Self::new_result_arc_with_semantic_trace(
                     Arc::clone(&ctx),
                     trace.key,
                     output,
                     trace.requires_grad,
                     trace.trace,
+                    semantic_trace,
                     metadata_scopes.clone(),
                 )
             })
@@ -2310,48 +3305,43 @@ impl EagerTensor {
         &self,
         seed: Arc<Tensor>,
     ) -> Result<HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>> {
-        let mut backend = self.ctx.lock_backend()?;
-        let mut extension_executor = self.ctx.lock_extension_executor()?;
-        let mut callbacks = TenferroBackwardCallbacks::with_runtime(
-            &mut *backend,
-            Some(&mut *extension_executor),
-            Some(self.ctx.as_ref()),
-            self.metadata_scopes.clone(),
-        );
-        let mut ad_ctx = ShapeGuardContext::with_global_metadata();
-        if let Some(extension_rules) = &self.ctx.extension_rules {
-            ad_ctx = ad_ctx.with_extension_rules(extension_rules.clone());
-        }
-        let cotangents_result = eager::backward(
-            &self.key,
-            self.trace.as_ref(),
+        let cotangent = EagerTensor::new_result_arc(
+            Arc::clone(&self.ctx),
+            eager_val_key(),
             seed,
-            &mut callbacks,
-            &mut ad_ctx,
-        );
-        let callback_typed_error = callbacks.take_typed_error();
-        let callback_error = callbacks.take_error();
-        drop(callbacks);
-        if let Some(err) = callback_typed_error {
-            return Err(err);
-        }
-        let cotangents = match (cotangents_result, callback_error) {
-            (_, Some(err)) => {
-                return Err(crate::ad_rule_error::ad_rule_error_with_context(
-                    "backward",
-                    err,
-                    &mut ad_ctx,
-                ));
-            }
-            (Err(err), None) => {
-                return Err(crate::ad_rule_error::ad_rule_error_with_context(
-                    "backward",
-                    err,
-                    &mut ad_ctx,
-                ));
-            }
-            (Ok(cotangents), None) => cotangents,
+            false,
+            None,
+            Vec::new(),
+        )?;
+        let candidate_keys = {
+            let mut slots = self.ctx.lock_grad_slots()?;
+            let mut keys = Vec::new();
+            slots.retain(|key, slot| {
+                if slot.upgrade().is_some() {
+                    keys.push(key.clone());
+                    true
+                } else {
+                    false
+                }
+            });
+            keys
         };
+
+        let mut cotangents = HashMap::new();
+        for key in candidate_keys {
+            let Some(record) = self.ctx.value_record(&key)? else {
+                continue;
+            };
+            if !record.requires_grad {
+                continue;
+            }
+            let wrt = EagerTensor::from_record(record);
+            let Some(grad) = self.ctx.vjp_optional(self, &wrt, &cotangent)? else {
+                continue;
+            };
+            cotangents.insert(key, grad.materialized_arc()?);
+        }
+        let mut backend = self.ctx.lock_backend()?;
         self.ctx.store_grads(&cotangents, &mut backend)?;
         Ok(cotangents)
     }
@@ -2361,25 +3351,15 @@ pub(crate) fn eager_val_key() -> ValueKey<StdTensorOp> {
     ValueKey::Input(next_input_key())
 }
 
-pub(crate) struct EagerTensorKeySource;
-
-impl KeySource<StdTensorOp> for EagerTensorKeySource {
-    fn fresh_input_key(&mut self) -> TensorInputKey {
-        next_input_key()
-    }
-}
-
-pub(crate) fn eager_value(tensor: &EagerTensor) -> Result<EagerInput<StdTensorOp>> {
-    Ok(EagerInput {
-        key: tensor.key.clone(),
-        trace: tensor.trace.clone(),
-        requires_grad: tensor.requires_grad,
-        data: tensor.materialized_arc()?,
-    })
+pub(crate) struct RecordedEagerTrace {
+    pub(crate) key: ValueKey<StdTensorOp>,
+    pub(crate) trace: Option<EagerTrace>,
+    pub(crate) requires_grad: bool,
 }
 
 pub(crate) struct RecordedEagerOutputs {
-    pub(crate) traces: Vec<EagerOutput<StdTensorOp>>,
+    pub(crate) traces: Vec<RecordedEagerTrace>,
+    pub(crate) semantic_traces: Vec<Option<TracedTensor>>,
     pub(crate) metadata_scope: Arc<GlobalMetadataScope>,
 }
 
@@ -2388,62 +3368,180 @@ pub(crate) fn record_eager_outputs(
     outputs: &[Arc<Tensor>],
     inputs: &[&EagerTensor],
 ) -> Result<RecordedEagerOutputs> {
-    let mut recorder = Recorder::new(EagerTensorKeySource);
-    let graph_input_keys = recorder.fresh_input_keys::<StdTensorOp>(inputs.len());
-    let graph =
-        RecordedGraph::from_primitive(op.clone(), graph_input_keys).map_err(eager_record_error)?;
-    let retained_values = graph
-        .output_keys()
+    let semantic_traces = record_semantic_eager_outputs(op, outputs.len(), inputs)?;
+    let output_metadata = outputs
         .iter()
-        .cloned()
-        .zip(outputs.iter().cloned())
-        .collect();
-    record_eager_recorded_graph_outputs(&mut recorder, graph, outputs, retained_values, inputs)
+        .map(|output| tensor_meta_from_tensor(output.as_ref()));
+    record_eager_outputs_from_metadata(output_metadata, semantic_traces, inputs)
 }
 
-pub(crate) fn record_eager_recorded_graph_outputs(
-    recorder: &mut Recorder<EagerTensorKeySource>,
-    graph: RecordedGraph<StdTensorOp>,
-    outputs: &[Arc<Tensor>],
-    retained_values: HashMap<ValueKey<StdTensorOp>, Arc<Tensor>>,
+pub(crate) fn record_eager_value_outputs(
+    op: &StdTensorOp,
+    outputs: &[&TensorValue],
     inputs: &[&EagerTensor],
 ) -> Result<RecordedEagerOutputs> {
-    let input_values: Vec<_> = inputs
+    let semantic_traces = record_semantic_eager_outputs(op, outputs.len(), inputs)?;
+    let output_metadata = outputs.iter().map(|output| tensor_meta_from_value(output));
+    record_eager_outputs_from_metadata(output_metadata, semantic_traces, inputs)
+}
+
+fn record_semantic_eager_outputs(
+    op: &StdTensorOp,
+    output_count: usize,
+    inputs: &[&EagerTensor],
+) -> Result<Vec<Option<TracedTensor>>> {
+    let Some(semantic_inputs) = inputs
         .iter()
-        .map(|tensor| eager_value(tensor))
-        .collect::<Result<_>>()?;
-    let traces = recorder
-        .record_graph(graph, &input_values, outputs, retained_values)
-        .map_err(eager_record_error)?;
+        .map(|input| input.semantic_trace.as_ref())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Ok(vec![None; output_count]);
+    };
+    let semantic_outputs = match op {
+        StdTensorOp::Extension(ext) => {
+            tenferro_runtime::extension::apply(Arc::clone(ext), &semantic_inputs)?
+        }
+        _ => tenferro_runtime::extension::apply_standard_op(op.clone(), &semantic_inputs)?,
+    };
+    if semantic_outputs.len() != output_count {
+        return Err(Error::Internal(format!(
+            "semantic eager recording expected {output_count} outputs for {op:?}, got {}",
+            semantic_outputs.len()
+        )));
+    }
+    Ok(semantic_outputs.into_iter().map(Some).collect())
+}
 
-    let mut registrations = Vec::new();
-    for trace in &traces {
-        if let Some(output) = outputs.get(trace.output_slot) {
-            registrations.push((trace.key.clone(), tensor_meta_from_tensor(output.as_ref())));
+#[cfg(test)]
+fn record_eager_graph_outputs(
+    graph: &Graph<StdTensorOp>,
+    graph_input_keys: &[TensorInputKey],
+    outputs: &[Arc<Tensor>],
+    inputs: &[&EagerTensor],
+) -> Result<RecordedEagerOutputs> {
+    let semantic_traces = record_semantic_eager_graph_outputs(graph, graph_input_keys, inputs)?;
+    let output_metadata = outputs
+        .iter()
+        .map(|output| tensor_meta_from_tensor(output.as_ref()));
+    record_eager_outputs_from_metadata(output_metadata, semantic_traces, inputs)
+}
+
+#[cfg(test)]
+fn record_semantic_eager_graph_outputs(
+    graph: &Graph<StdTensorOp>,
+    graph_input_keys: &[TensorInputKey],
+    inputs: &[&EagerTensor],
+) -> Result<Vec<Option<TracedTensor>>> {
+    let Some(semantic_inputs) = inputs
+        .iter()
+        .map(|input| input.semantic_trace.as_ref())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Ok(vec![None; graph.outputs().len()]);
+    };
+    if graph_input_keys.len() != semantic_inputs.len() {
+        return Err(Error::Internal(format!(
+            "semantic graph recording expected {} input keys, got {}",
+            semantic_inputs.len(),
+            graph_input_keys.len()
+        )));
+    }
+
+    let mut values = HashMap::new();
+    for (key, tensor) in graph_input_keys.iter().zip(semantic_inputs) {
+        values.insert(ValueKey::Input(key.clone()), tensor.clone());
+    }
+
+    for op_node in graph.operations() {
+        let input_values = op_node
+            .inputs
+            .iter()
+            .map(|input| {
+                let key = match input {
+                    ValueRef::Local(local_id) => &graph.values()[*local_id].key,
+                    ValueRef::External(key) => key,
+                };
+                values.get(key).cloned().ok_or_else(|| {
+                    Error::Internal(format!(
+                        "semantic graph recording missing value for {key:?}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let input_refs = input_values.iter().collect::<Vec<_>>();
+        let semantic_outputs = match &op_node.operation {
+            StdTensorOp::Extension(ext) => {
+                tenferro_runtime::extension::apply(Arc::clone(ext), &input_refs)?
+            }
+            op => tenferro_runtime::extension::apply_standard_op(op.clone(), &input_refs)?,
+        };
+        if semantic_outputs.len() != op_node.outputs.len() {
+            return Err(Error::Internal(format!(
+                "semantic graph recording expected {} outputs for {:?}, got {}",
+                op_node.outputs.len(),
+                op_node.operation,
+                semantic_outputs.len()
+            )));
+        }
+        for (output_id, output) in op_node.outputs.iter().copied().zip(semantic_outputs) {
+            values.insert(graph.values()[output_id].key.clone(), output);
         }
     }
 
-    if let Some(trace) = traces.iter().find_map(|output| output.trace.as_ref()) {
-        for (key, value) in trace.saved_values() {
-            registrations.push((key.clone(), tensor_meta_from_tensor(value.as_ref())));
-        }
+    graph
+        .outputs()
+        .iter()
+        .map(|&output_id| {
+            let key = &graph.values()[output_id].key;
+            values.get(key).cloned().map(Some).ok_or_else(|| {
+                Error::Internal(format!(
+                    "semantic graph recording missing output for {key:?}"
+                ))
+            })
+        })
+        .collect()
+}
+
+fn record_eager_outputs_from_metadata(
+    output_metadata: impl IntoIterator<Item = TensorMeta>,
+    semantic_traces: Vec<Option<TracedTensor>>,
+    inputs: &[&EagerTensor],
+) -> Result<RecordedEagerOutputs> {
+    let output_metadata = output_metadata.into_iter().collect::<Vec<_>>();
+    if semantic_traces.len() != output_metadata.len() {
+        return Err(Error::Internal(format!(
+            "eager recording expected {} semantic traces, got {}",
+            output_metadata.len(),
+            semantic_traces.len()
+        )));
     }
+    let requires_grad =
+        eager_grad_recording_enabled() && inputs.iter().any(|input| input.requires_grad);
+    let mut registrations = Vec::with_capacity(output_metadata.len());
+    let traces = output_metadata
+        .into_iter()
+        .map(|metadata| {
+            let key = eager_val_key();
+            registrations.push((key.clone(), metadata));
+            RecordedEagerTrace {
+                key,
+                trace: None,
+                requires_grad,
+            }
+        })
+        .collect();
 
     Ok(RecordedEagerOutputs {
         traces,
+        semantic_traces,
         metadata_scope: Arc::new(register_scoped_metadata_batch(registrations)?),
     })
 }
 
-fn eager_record_error(err: tidu::eager::EagerRecordError) -> Error {
-    Error::runtime_state_source("eager recording", ErrorPhase::GraphBuild, err)
-}
-
-fn eager_ad_transform_cache_error(message: impl ToString) -> ADRuleError {
-    ADRuleError::invalid_input(
-        "tenferro-ad.eager.transform-cache",
-        ADRuleKind::Jvp,
-        message.to_string(),
+fn tensor_meta_from_value(value: &TensorValue) -> TensorMeta {
+    TensorMeta::exact(
+        value.dtype(),
+        value.shape().iter().copied().map(SymDim::from).collect(),
     )
 }
 
@@ -2485,6 +3583,7 @@ pub(crate) fn exec_single_output_read(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn zero_like_tensor<B: TensorBackend>(
     input: &Tensor,
     backend: &mut B,

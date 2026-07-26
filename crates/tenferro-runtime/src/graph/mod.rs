@@ -12,16 +12,8 @@
 //! assert_eq!(program.output_count(), 1);
 //! ```
 
-pub(crate) mod cache;
 mod compiler;
-mod executor;
-mod lowering_view;
 mod program;
 
-pub use cache::{GraphCompilerCacheStats, GraphExecutorCacheStats};
 pub use compiler::GraphCompiler;
-pub use executor::GraphExecutor;
-pub use lowering_view::{
-    GraphInstructionView, GraphOpView, GraphProgramLoweringShapeError, GraphProgramLoweringView,
-};
-pub use program::{GraphProgram, GraphProgramInput};
+pub use program::CompiledGraph;

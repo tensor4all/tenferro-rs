@@ -1,12 +1,16 @@
 use std::path::PathBuf;
 
-use tenferro_runtime::{GraphCompiler, GraphOpView, TracedTensor};
+use tenferro_runtime::{CompiledGraph, GraphCompiler, TracedTensor};
 
 fn repo_file(path: &str) -> String {
+    std::fs::read_to_string(repo_path(path)).expect("source file must be readable")
+}
+
+fn repo_path(path: &str) -> PathBuf {
     let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     root.push("../..");
     root.push(path);
-    std::fs::read_to_string(root).expect("source file must be readable")
+    root
 }
 
 fn assert_no_panic_helpers(path: &str, source: &str) {
@@ -24,22 +28,103 @@ fn assert_no_panic_helpers(path: &str, source: &str) {
 }
 
 #[test]
-fn graph_program_exposes_read_only_lowering_view_for_owner_crates() {
+fn compiled_graph_is_the_semantic_artifact_boundary() {
+    fn accepts_compiled_graph(graph: &CompiledGraph) {
+        let _ = (
+            graph.program(),
+            graph.bindings(),
+            graph.input_count(),
+            graph.output_count(),
+        );
+    }
+
+    let _public_api: fn(&CompiledGraph) = accepts_compiled_graph;
+}
+
+#[test]
+fn compiled_graph_exposes_only_semantic_program_structure() {
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap();
     let y = (&x + &x).unwrap();
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
 
-    let view = program.lowering_view();
-    let instructions = view.instructions().collect::<Vec<_>>();
+    let operations = program.program().operations().collect::<Vec<_>>();
 
     assert_eq!(program.input_count(), 1);
     assert_eq!(program.output_count(), 1);
-    assert_eq!(view.input_slots().len(), 1);
-    assert_eq!(view.output_slots().len(), 1);
-    assert!(!instructions.is_empty());
-    assert!(matches!(instructions[0].op(), GraphOpView::Add));
-    assert_eq!(instructions[0].output_slots().len(), 1);
+    assert_eq!(program.program().inputs().len(), 1);
+    assert_eq!(program.program().outputs().len(), 1);
+    assert_eq!(operations.len(), 1);
+    assert_eq!(operations[0].outputs().len(), 1);
+}
+
+#[test]
+fn graph_executor_legacy_facade_is_not_public_surface() {
+    let lib = repo_file("crates/tenferro-runtime/src/lib.rs");
+    let graph_mod = repo_file("crates/tenferro-runtime/src/graph/mod.rs");
+    let graph_cache_path = repo_path("crates/tenferro-runtime/src/graph/cache.rs");
+    let graph_cache = std::fs::read_to_string(&graph_cache_path).unwrap_or_default();
+    let graph_compiler = repo_file("crates/tenferro-runtime/src/graph/compiler.rs");
+
+    assert!(
+        !lib.contains("GraphExecutor"),
+        "tenferro-runtime crate root must not export or document the retired GraphExecutor facade"
+    );
+    assert!(
+        !graph_mod.contains("pub use executor::GraphExecutor"),
+        "graph module must not re-export the retired GraphExecutor facade"
+    );
+    assert!(
+        !lib.contains("GraphExecutorCacheStats")
+            && !graph_mod.contains("GraphExecutorCacheStats")
+            && !graph_cache.contains("pub struct GraphExecutorCacheStats"),
+        "GraphExecutor-specific cache stats must not remain public after retiring the facade"
+    );
+    assert!(
+        !graph_cache_path.exists()
+            || (!graph_cache.contains("LegacyStagingCache")
+                && !graph_cache.contains("legacy_staging_cache")),
+        "legacy semantic staging cache module must be removed with the retired facade"
+    );
+    assert!(
+        !lib.contains("GraphCompilerCacheStats")
+            && !graph_mod.contains("GraphCompilerCacheStats")
+            && !graph_compiler.contains("compile_cache")
+            && !graph_compiler.contains("get_or_compile"),
+        "GraphCompiler must not retain the retired ExecProgram compile-cache API"
+    );
+}
+
+#[test]
+fn legacy_extension_executor_registry_is_not_public_surface() {
+    let lib = repo_file("crates/tenferro-runtime/src/lib.rs");
+    let extension = repo_file("crates/tenferro-runtime/src/extension.rs");
+    let extension_context = repo_file("crates/tenferro-runtime/src/extension_execution_context.rs");
+
+    for symbol in [
+        "ExtensionExecutor",
+        "ExtensionRegistry",
+        "ExtensionRuntime",
+        "ExtensionRuntimeRegistryError",
+        "HostReferenceRuntime",
+    ] {
+        assert!(
+            !lib.contains(symbol),
+            "tenferro-runtime crate root must not expose retired legacy extension symbol {symbol}"
+        );
+        assert!(
+            !extension.contains(symbol),
+            "tenferro-runtime::extension must not re-export retired legacy extension symbol {symbol}"
+        );
+    }
+    assert!(
+        !extension_context.contains("pub trait ExtensionRuntime")
+            && !extension_context.contains("pub struct ExtensionRegistry")
+            && !extension_context.contains("pub struct ExtensionExecutor")
+            && !extension_context.contains("pub struct HostReferenceRuntime")
+            && !extension_context.contains("pub enum ExtensionRuntimeRegistryError"),
+        "extension_execution_context.rs must only retain prepared-path context/cache helpers, not legacy executor API"
+    );
 }
 
 #[test]
@@ -177,4 +262,59 @@ fn traced_metadata_registration_is_fallible_without_panic_helpers() {
         !concatenate.contains(".expect("),
         "concatenate metadata registration must not panic"
     );
+}
+
+#[test]
+fn semantic_program_module_stays_opaque_and_dependency_neutral() {
+    for path in [
+        "crates/tenferro-runtime/src/program/bindings.rs",
+        "crates/tenferro-runtime/src/program/builder.rs",
+        "crates/tenferro-runtime/src/program/error.rs",
+        "crates/tenferro-runtime/src/program/identity.rs",
+        "crates/tenferro-runtime/src/program/import.rs",
+        "crates/tenferro-runtime/src/program/metadata.rs",
+        "crates/tenferro-runtime/src/program/mod.rs",
+        "crates/tenferro-runtime/src/program/op.rs",
+        "crates/tenferro-runtime/src/program/semantic.rs",
+        "crates/tenferro-runtime/src/program/transform.rs",
+        "crates/tenferro-runtime/src/program/value.rs",
+    ] {
+        let source = repo_file(path);
+        assert_no_panic_helpers(path, &source);
+        for forbidden in [
+            "crate::provider",
+            "crate::resource",
+            "crate::scheduler",
+            "crate::graph",
+            "crate::exec",
+            "crate::ad",
+            "tenferro_ad",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{path} must not depend on forbidden runtime/AD layer `{forbidden}`"
+            );
+        }
+    }
+
+    let values = repo_file("crates/tenferro-runtime/src/program/value.rs");
+    for exposed in ["pub slot:", "pub owner:", "pub nonce:"] {
+        assert!(
+            !values.contains(exposed),
+            "opaque program identities must not expose `{exposed}`"
+        );
+    }
+
+    let program = repo_file("crates/tenferro-runtime/src/program/semantic.rs");
+    for mutable_escape in [
+        "operations_mut",
+        "values_mut",
+        "outputs_mut",
+        "source_to_local",
+    ] {
+        assert!(
+            !program.contains(mutable_escape),
+            "frozen semantic program leaked `{mutable_escape}`"
+        );
+    }
 }

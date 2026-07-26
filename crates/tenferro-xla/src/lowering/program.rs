@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use computegraph::compile::compile;
@@ -6,16 +7,20 @@ use computegraph::materialize::materialize_merge;
 use computegraph::resolve::resolve;
 use computegraph::types::{ValueKey, ValueRef};
 use tenferro_ops::dim_expr::DimExpr;
+use tenferro_ops::ext_op::ExtensionStandardLowering;
 use tenferro_ops::input_key::TensorInputKey;
+use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_ops::std_tensor_op::StdTensorOp;
 use tenferro_ops::sym_dim::SymDim;
-use tenferro_runtime::{GraphInstructionView, GraphOpView, GraphProgram};
+use tenferro_runtime::program::{
+    CoreSemanticOp, ProgramInputSpec, ProgramValue, SemanticOpRef, SemanticOperationView,
+    SemanticProgram, SemanticProgramBuilder,
+};
 use tenferro_tensor::{DType, DotGeneralConfig};
 
 use crate::{Error, Result, StableHloModule};
 
 use super::emit::{format_usize_list, Emitter};
-use super::shape::static_output_shape;
 use super::types::{format_tensor_type, validate_dtype, TensorType};
 
 #[derive(Clone, Debug)]
@@ -24,50 +29,21 @@ struct Value {
     ty: TensorType,
 }
 
-pub(crate) fn lower_graph_program(program: &GraphProgram) -> Result<StableHloModule> {
-    let view = program.lowering_view();
-    if view.input_slots().len() != program.input_specs().len() {
-        return Err(Error::InvalidProgram {
-            message: format!(
-                "input slot count {} does not match input spec count {}",
-                view.input_slots().len(),
-                program.input_specs().len()
-            ),
-        });
-    }
-
-    let mut slots: Vec<Option<Value>> = vec![None; view.slot_count()];
-    let mut args = Vec::with_capacity(program.input_specs().len());
-    for (index, input) in program.input_specs().iter().enumerate() {
-        validate_dtype(input.dtype(), "program input")?;
-        let ty = TensorType::new(input.shape().to_vec(), input.dtype(), "program input")?;
+pub(crate) fn lower_semantic_program(program: &SemanticProgram) -> Result<StableHloModule> {
+    let mut inputs = Vec::with_capacity(program.inputs().len());
+    let mut args = Vec::with_capacity(program.inputs().len());
+    for (index, &input) in program.inputs().iter().enumerate() {
+        let ty = semantic_value_type(program, input, "Input", 0, "program input")?;
         let value = Value {
             name: format!("%arg{index}"),
             ty: ty.clone(),
         };
-        let slot = view.input_slots()[index];
-        let Some(slot_ref) = slots.get_mut(slot) else {
-            return Err(Error::InvalidProgram {
-                message: format!(
-                    "input slot {slot} is outside slot table length {}",
-                    view.slot_count()
-                ),
-            });
-        };
-        *slot_ref = Some(value);
         args.push(format!("%arg{index}: {}", format_tensor_type(&ty)));
+        inputs.push(value);
     }
 
     let mut emitter = Emitter::default();
-    for inst in view.instructions() {
-        lower_instruction(inst, &mut slots, &mut emitter)?;
-    }
-
-    let outputs = view
-        .output_slots()
-        .iter()
-        .map(|&slot| slot_value(&slots, slot).cloned())
-        .collect::<Result<Vec<_>>>()?;
+    let outputs = lower_semantic_operations(program, &inputs, &mut emitter)?;
 
     let return_types = outputs
         .iter()
@@ -115,118 +91,190 @@ pub(crate) fn lower_graph_program(program: &GraphProgram) -> Result<StableHloMod
     Ok(StableHloModule::new(text))
 }
 
-fn lower_instruction(
-    inst: GraphInstructionView<'_>,
-    slots: &mut [Option<Value>],
+fn lower_semantic_operations(
+    program: &SemanticProgram,
+    inputs: &[Value],
+    emitter: &mut Emitter,
+) -> Result<Vec<Value>> {
+    if program.inputs().len() != inputs.len() {
+        return Err(Error::InvalidProgram {
+            message: format!(
+                "semantic input count {} does not match supplied value count {}",
+                program.inputs().len(),
+                inputs.len()
+            ),
+        });
+    }
+    let mut values = HashMap::with_capacity(program.inputs().len());
+    for (&input, value) in program.inputs().iter().zip(inputs) {
+        if values.insert(input, value.clone()).is_some() {
+            return Err(Error::InvalidProgram {
+                message: "semantic input appears more than once".to_string(),
+            });
+        }
+    }
+    for operation in program.operations() {
+        lower_semantic_operation(program, operation, &mut values, emitter)?;
+    }
+    program
+        .outputs()
+        .iter()
+        .map(|output| {
+            values
+                .get(output)
+                .cloned()
+                .ok_or_else(|| Error::InvalidProgram {
+                    message: "semantic program output is unavailable".to_string(),
+                })
+        })
+        .collect()
+}
+
+fn lower_semantic_operation(
+    program: &SemanticProgram,
+    operation: SemanticOperationView<'_>,
+    values: &mut HashMap<ProgramValue, Value>,
     emitter: &mut Emitter,
 ) -> Result<()> {
-    let input_values = inst
-        .input_slots()
+    let input_values = operation
+        .inputs()
         .iter()
-        .map(|&slot| slot_value(slots, slot).cloned())
+        .map(|input| {
+            values
+                .get(input)
+                .cloned()
+                .ok_or_else(|| Error::InvalidProgram {
+                    message: "semantic operation input is unavailable".to_string(),
+                })
+        })
         .collect::<Result<Vec<_>>>()?;
-    let input_shapes = input_values
-        .iter()
-        .map(|value| value.ty.shape.as_slice())
-        .collect::<Vec<_>>();
-
-    if let GraphOpView::Extension { op } = inst.op() {
-        return lower_extension_instruction(op, inst, &input_values, slots, emitter);
+    if let SemanticOpRef::Extension(extension) = operation.op() {
+        let outputs =
+            lower_extension_operation(program, extension, operation, &input_values, emitter)?;
+        for (&output, value) in operation.outputs().iter().zip(outputs) {
+            if values.insert(output, value).is_some() {
+                return Err(Error::InvalidProgram {
+                    message: "semantic value has more than one producer".to_string(),
+                });
+            }
+        }
+        return Ok(());
     }
 
-    if inst.output_slots().len() != 1 {
+    if operation.outputs().len() != 1 {
         return Err(Error::UnsupportedOp {
-            op: inst.op_name(),
+            op: semantic_op_name(operation.op()),
             reason: "multiple outputs are not part of the initial XLA subset",
         });
     }
 
-    validate_dtype(inst.dtype(), "instruction output")?;
-    let output_shape = static_output_shape(inst, 0, &input_shapes)?;
-    let output_ty = TensorType::new(output_shape, inst.dtype(), "instruction output")?;
-    let value = match inst.op() {
-        GraphOpView::Constant { dtype, bytes } => {
-            lower_constant(dtype, bytes, &output_ty, emitter)?
+    let output = operation.outputs()[0];
+    let op_name = semantic_op_name(operation.op());
+    let output_ty = semantic_value_type(program, output, op_name, 0, "instruction output")?;
+    let value = match operation.op() {
+        SemanticOpRef::Core(CoreSemanticOp::Constant { dtype, bytes }) => {
+            lower_constant(*dtype, bytes, &output_ty, emitter)?
         }
-        GraphOpView::Add => {
+        SemanticOpRef::Core(CoreSemanticOp::Add) => {
             lower_same_type_binary("stablehlo.add", &input_values, &output_ty, emitter)?
         }
-        GraphOpView::Multiply => {
+        SemanticOpRef::Core(CoreSemanticOp::Mul) => {
             lower_same_type_binary("stablehlo.multiply", &input_values, &output_ty, emitter)?
         }
-        GraphOpView::Negate => lower_unary("stablehlo.negate", &input_values, &output_ty, emitter)?,
-        GraphOpView::Divide => {
+        SemanticOpRef::Core(CoreSemanticOp::Neg) => {
+            lower_unary("stablehlo.negate", &input_values, &output_ty, emitter)?
+        }
+        SemanticOpRef::Core(CoreSemanticOp::Div) => {
             lower_same_type_binary("stablehlo.divide", &input_values, &output_ty, emitter)?
         }
-        GraphOpView::Abs => lower_unary("stablehlo.abs", &input_values, &output_ty, emitter)?,
-        GraphOpView::Exp => {
+        SemanticOpRef::Core(CoreSemanticOp::Abs) => {
+            lower_unary("stablehlo.abs", &input_values, &output_ty, emitter)?
+        }
+        SemanticOpRef::Core(CoreSemanticOp::Exp) => {
             lower_unary("stablehlo.exponential", &input_values, &output_ty, emitter)?
         }
-        GraphOpView::Log => lower_unary("stablehlo.log", &input_values, &output_ty, emitter)?,
-        GraphOpView::Sin => lower_unary("stablehlo.sine", &input_values, &output_ty, emitter)?,
-        GraphOpView::Cos => lower_unary("stablehlo.cosine", &input_values, &output_ty, emitter)?,
-        GraphOpView::Tanh => lower_unary("stablehlo.tanh", &input_values, &output_ty, emitter)?,
-        GraphOpView::Sqrt => lower_unary("stablehlo.sqrt", &input_values, &output_ty, emitter)?,
-        GraphOpView::Rsqrt => lower_unary("stablehlo.rsqrt", &input_values, &output_ty, emitter)?,
-        GraphOpView::Pow => {
+        SemanticOpRef::Core(CoreSemanticOp::Log) => {
+            lower_unary("stablehlo.log", &input_values, &output_ty, emitter)?
+        }
+        SemanticOpRef::Core(CoreSemanticOp::Sin) => {
+            lower_unary("stablehlo.sine", &input_values, &output_ty, emitter)?
+        }
+        SemanticOpRef::Core(CoreSemanticOp::Cos) => {
+            lower_unary("stablehlo.cosine", &input_values, &output_ty, emitter)?
+        }
+        SemanticOpRef::Core(CoreSemanticOp::Tanh) => {
+            lower_unary("stablehlo.tanh", &input_values, &output_ty, emitter)?
+        }
+        SemanticOpRef::Core(CoreSemanticOp::Sqrt) => {
+            lower_unary("stablehlo.sqrt", &input_values, &output_ty, emitter)?
+        }
+        SemanticOpRef::Core(CoreSemanticOp::Rsqrt) => {
+            lower_unary("stablehlo.rsqrt", &input_values, &output_ty, emitter)?
+        }
+        SemanticOpRef::Core(CoreSemanticOp::Pow) => {
             lower_same_type_binary("stablehlo.power", &input_values, &output_ty, emitter)?
         }
-        GraphOpView::Expm1 => lower_unary(
+        SemanticOpRef::Core(CoreSemanticOp::Expm1) => lower_unary(
             "stablehlo.exponential_minus_one",
             &input_values,
             &output_ty,
             emitter,
         )?,
-        GraphOpView::Log1p => {
+        SemanticOpRef::Core(CoreSemanticOp::Log1p) => {
             lower_unary("stablehlo.log_plus_one", &input_values, &output_ty, emitter)?
         }
-        GraphOpView::Convert { to } => lower_convert(to, &input_values, &output_ty, emitter)?,
-        GraphOpView::Reshape => lower_reshape(&input_values, &output_ty, emitter)?,
-        GraphOpView::BroadcastInDim { dims } => {
+        SemanticOpRef::Core(CoreSemanticOp::Convert { to, .. }) => {
+            lower_convert(*to, &input_values, &output_ty, emitter)?
+        }
+        SemanticOpRef::Core(CoreSemanticOp::Reshape { .. }) => {
+            lower_reshape(&input_values, &output_ty, emitter)?
+        }
+        SemanticOpRef::Core(CoreSemanticOp::BroadcastInDim { dims, .. }) => {
             lower_broadcast_in_dim(dims, &input_values, &output_ty, emitter)?
         }
-        GraphOpView::Transpose { perm } => {
+        SemanticOpRef::Core(CoreSemanticOp::Transpose { perm }) => {
             lower_transpose(perm, &input_values, &output_ty, emitter)?
         }
-        GraphOpView::ReduceSum { axes } => {
+        SemanticOpRef::Core(CoreSemanticOp::ReduceSum { axes }) => {
             lower_reduce_sum(axes, &input_values, &output_ty, emitter)?
         }
-        GraphOpView::DotGeneral { config } => {
+        SemanticOpRef::Core(CoreSemanticOp::DotGeneral { config }) => {
             lower_dot_general(config, &input_values, &output_ty, emitter)?
         }
-        GraphOpView::Extension { .. } => {
+        SemanticOpRef::Extension(_) => {
             return Err(Error::InvalidProgram {
-                message: "extension instruction reached builtin lowering arm".to_string(),
+                message: "extension semantic operation reached builtin lowering arm".to_string(),
             });
         }
-        GraphOpView::Unsupported { name } => {
+        SemanticOpRef::Core(_) => {
             return Err(Error::UnsupportedOp {
-                op: name,
+                op: op_name,
+                reason: "operation is outside the initial StableHLO lowering subset",
+            });
+        }
+        _ => {
+            return Err(Error::UnsupportedOp {
+                op: op_name,
                 reason: "operation is outside the initial StableHLO lowering subset",
             });
         }
     };
 
-    let output_slot = inst.output_slots()[0];
-    let Some(slot_ref) = slots.get_mut(output_slot) else {
+    if values.insert(output, value).is_some() {
         return Err(Error::InvalidProgram {
-            message: format!(
-                "output slot {output_slot} is outside slot table length {}",
-                slots.len()
-            ),
+            message: "semantic value has more than one producer".to_string(),
         });
-    };
-    *slot_ref = Some(value);
+    }
     Ok(())
 }
 
-fn lower_extension_instruction(
+fn lower_extension_operation(
+    program: &SemanticProgram,
     op: &dyn tenferro_ops::ext_op::ExtensionOp,
-    inst: GraphInstructionView<'_>,
+    operation: SemanticOperationView<'_>,
     input_values: &[Value],
-    slots: &mut [Option<Value>],
     emitter: &mut Emitter,
-) -> Result<()> {
+) -> Result<Vec<Value>> {
     let input_dtypes = input_values
         .iter()
         .map(|value| value.ty.dtype)
@@ -258,7 +306,7 @@ fn lower_extension_instruction(
         })
         .collect::<Vec<_>>();
 
-    let Some(output_refs) = op
+    let output_refs = match op
         .lower_to_standard_ops(
             &mut builder,
             &input_refs,
@@ -266,20 +314,23 @@ fn lower_extension_instruction(
             &input_sym_shape_refs,
         )
         .map_err(|source| Error::ExtensionLowering { source })?
-    else {
-        return Err(Error::UnsupportedOp {
-            op: op.family_id(),
-            reason: "extension does not provide a standard-op lowering for exact static shapes",
-        });
+    {
+        ExtensionStandardLowering::Lowered(outputs) => outputs,
+        ExtensionStandardLowering::Unsupported => {
+            return Err(Error::UnsupportedOp {
+                op: op.family_id(),
+                reason: "extension does not provide a standard-op lowering for exact static shapes",
+            });
+        }
     };
 
-    if output_refs.len() != inst.output_slots().len() {
+    if output_refs.len() != operation.outputs().len() {
         return Err(Error::InvalidProgram {
             message: format!(
-                "extension family {:?} standard-op lowering returned {} outputs for {} output slots",
+                "extension family {:?} standard-op lowering returned {} outputs for {} semantic values",
                 op.family_id(),
                 output_refs.len(),
-                inst.output_slots().len()
+                operation.outputs().len()
             ),
         });
     }
@@ -337,84 +388,241 @@ fn lower_extension_instruction(
         sub_input_shapes.push(DimExpr::from_concrete(&input_value.ty.shape));
     }
 
-    let sub_program = tenferro_runtime::extension::compile_std_to_exec(
-        &compiled,
-        &sub_input_dtypes,
-        &sub_input_shapes,
-    )
-    .map_err(|err| Error::InvalidProgram {
-        message: format!(
-            "extension family {:?} standard-op lowering produced invalid graph: {err}",
-            op.family_id()
-        ),
-    })?;
-    let sub_view = sub_program.lowering_view();
-    let mut sub_slots: Vec<Option<Value>> = vec![None; sub_view.slot_count()];
-    for (sub_arg_idx, &sub_slot) in sub_view.input_slots().iter().enumerate() {
-        let input_idx = sub_input_indices[sub_arg_idx];
-        sub_slots[sub_slot] = Some(input_values[input_idx].clone());
-    }
-    for sub_inst in sub_view.instructions() {
-        lower_instruction(sub_inst, &mut sub_slots, emitter)?;
-    }
-
-    let sub_outputs = sub_view
-        .output_slots()
+    let sub_semantic =
+        build_standard_semantic_subprogram(&compiled, &sub_input_dtypes, &sub_input_shapes)?;
+    let sub_inputs = sub_input_indices
         .iter()
-        .map(|&slot| slot_value(&sub_slots, slot).cloned())
-        .collect::<Result<Vec<_>>>()?;
-    if sub_outputs.len() != inst.output_slots().len() {
+        .map(|&input_idx| input_values[input_idx].clone())
+        .collect::<Vec<_>>();
+    let sub_outputs = lower_semantic_operations(&sub_semantic, &sub_inputs, emitter)?;
+    if sub_outputs.len() != operation.outputs().len() {
         return Err(Error::InvalidProgram {
             message: format!(
-                "extension family {:?} standard-op lowering produced {} executable outputs for {} output slots",
+                "extension family {:?} standard-op lowering produced {} semantic outputs for {} outputs",
                 op.family_id(),
                 sub_outputs.len(),
-                inst.output_slots().len()
+                operation.outputs().len()
             ),
         });
     }
 
-    let parent_input_shapes = input_values
-        .iter()
-        .map(|value| value.ty.shape.as_slice())
-        .collect::<Vec<_>>();
-    for (output_idx, (&parent_slot, value)) in
-        inst.output_slots().iter().zip(sub_outputs).enumerate()
+    for (output_idx, (&output, value)) in operation.outputs().iter().zip(&sub_outputs).enumerate() {
+        let expected = semantic_value_type(
+            program,
+            output,
+            op.family_id(),
+            output_idx,
+            "extension output",
+        )?;
+        if value.ty != expected {
+            return Err(Error::InvalidProgram {
+                message: format!(
+                    "extension family {:?} standard-op lowering output {output_idx} type {:?} does not match expected {:?}",
+                    op.family_id(),
+                    value.ty,
+                    expected
+                ),
+            });
+        }
+    }
+    Ok(sub_outputs)
+}
+
+fn build_standard_semantic_subprogram(
+    compiled: &computegraph::compile::CompiledProgram<StdTensorOp>,
+    input_dtypes: &[DType],
+    input_shapes: &[Vec<DimExpr>],
+) -> Result<Arc<SemanticProgram>> {
+    if compiled.input_slots.len() != input_dtypes.len()
+        || compiled.input_slots.len() != input_shapes.len()
     {
-        let expected_shape = static_output_shape(inst, output_idx, &parent_input_shapes)?;
-        if value.ty.shape != expected_shape {
+        return Err(Error::InvalidProgram {
+            message: "extension standard-op input metadata count mismatch".to_string(),
+        });
+    }
+    let mut builder = SemanticProgramBuilder::new();
+    let mut values = vec![None; compiled.n_slots];
+    for (index, &slot) in compiled.input_slots.iter().enumerate() {
+        let value = builder
+            .input(ProgramInputSpec::new(
+                input_dtypes[index],
+                input_shapes[index].clone(),
+            ))
+            .map_err(semantic_build_error)?;
+        let Some(entry) = values.get_mut(slot) else {
             return Err(Error::InvalidProgram {
-                message: format!(
-                    "extension family {:?} standard-op lowering output {output_idx} shape {:?} does not match expected {:?}",
-                    op.family_id(),
-                    value.ty.shape,
-                    expected_shape
-                ),
-            });
-        }
-        validate_dtype(inst.dtype(), "extension output")?;
-        validate_dtype(value.ty.dtype, "extension output")?;
-        if value.ty.dtype != inst.dtype() {
-            return Err(Error::InvalidProgram {
-                message: format!(
-                    "extension family {:?} standard-op lowering output {output_idx} dtype {:?} does not match expected {:?}",
-                    op.family_id(),
-                    value.ty.dtype,
-                    inst.dtype()
-                ),
-            });
-        }
-        let Some(slot_ref) = slots.get_mut(parent_slot) else {
-            return Err(Error::InvalidProgram {
-                message: format!(
-                    "extension output slot {parent_slot} is outside slot table length {}",
-                    slots.len()
-                ),
+                message: "extension standard-op input slot is out of bounds".to_string(),
             });
         };
-        *slot_ref = Some(value);
+        *entry = Some(value);
     }
-    Ok(())
+    for instruction in &compiled.instructions {
+        let inputs = instruction
+            .inputs
+            .iter()
+            .map(|&slot| {
+                values
+                    .get(slot)
+                    .and_then(|value| *value)
+                    .ok_or_else(|| Error::InvalidProgram {
+                        message: "extension standard-op input is unavailable".to_string(),
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let core = CoreSemanticOp::try_from(&instruction.operation).map_err(|source| {
+            Error::InvalidProgram {
+                message: format!(
+                    "extension standard-op lowering returned a nested extension: {source}"
+                ),
+            }
+        })?;
+        let outputs = builder
+            .add_op(core, &inputs)
+            .map_err(semantic_build_error)?;
+        if outputs.len() != instruction.outputs.len() {
+            return Err(Error::InvalidProgram {
+                message: "extension standard-op output count mismatch".to_string(),
+            });
+        }
+        for (&slot, &output) in instruction.outputs.iter().zip(outputs.iter()) {
+            let Some(entry) = values.get_mut(slot) else {
+                return Err(Error::InvalidProgram {
+                    message: "extension standard-op output slot is out of bounds".to_string(),
+                });
+            };
+            if entry.replace(output).is_some() {
+                return Err(Error::InvalidProgram {
+                    message: "extension standard-op slot has multiple producers".to_string(),
+                });
+            }
+        }
+    }
+    let outputs = compiled
+        .output_slots
+        .iter()
+        .map(|&slot| {
+            values
+                .get(slot)
+                .and_then(|value| *value)
+                .ok_or_else(|| Error::InvalidProgram {
+                    message: "extension standard-op output is unavailable".to_string(),
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(builder
+        .finish(&outputs)
+        .map_err(|source| Error::InvalidProgram {
+            message: format!("extension semantic subprogram freeze failed: {source}"),
+        })?
+        .program)
+}
+
+fn semantic_build_error(source: tenferro_runtime::program::ProgramBuildError) -> Error {
+    Error::InvalidProgram {
+        message: format!("extension semantic subprogram build failed: {source}"),
+    }
+}
+
+fn semantic_value_type(
+    program: &SemanticProgram,
+    value: ProgramValue,
+    op: &'static str,
+    output_index: usize,
+    context: &'static str,
+) -> Result<TensorType> {
+    let metadata = program
+        .value_metadata(value)
+        .map_err(|source| Error::InvalidProgram {
+            message: format!("semantic value metadata is unavailable: {source}"),
+        })?;
+    validate_dtype(metadata.dtype(), context)?;
+    let shape = metadata
+        .shape()
+        .iter()
+        .enumerate()
+        .map(|(axis, extent)| match extent {
+            ShapeExtent::Exact(DimExpr::Const(value)) => Ok(*value),
+            ShapeExtent::Exact(_) => Err(Error::NonStaticShape {
+                op,
+                output_index,
+                axis,
+                kind: "symbolic",
+            }),
+            ShapeExtent::UpperBound(_) => Err(Error::NonStaticShape {
+                op,
+                output_index,
+                axis,
+                kind: "an upper bound",
+            }),
+            ShapeExtent::Unknown => Err(Error::NonStaticShape {
+                op,
+                output_index,
+                axis,
+                kind: "unknown",
+            }),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    TensorType::new(shape, metadata.dtype(), context)
+}
+
+fn semantic_op_name(op: SemanticOpRef<'_>) -> &'static str {
+    match op {
+        SemanticOpRef::Extension(extension) => extension.family_id(),
+        SemanticOpRef::Core(core) => match core {
+            CoreSemanticOp::Add => "Add",
+            CoreSemanticOp::Sub => "Sub",
+            CoreSemanticOp::Mul => "Multiply",
+            CoreSemanticOp::Neg => "Negate",
+            CoreSemanticOp::Conj => "Conj",
+            CoreSemanticOp::DotGeneral { .. } => "DotGeneral",
+            CoreSemanticOp::Transpose { .. } => "Transpose",
+            CoreSemanticOp::Reshape { .. } => "Reshape",
+            CoreSemanticOp::BroadcastInDim { .. } => "BroadcastInDim",
+            CoreSemanticOp::Convert { .. } => "Convert",
+            CoreSemanticOp::Constant { .. } => "Constant",
+            CoreSemanticOp::ReduceSum { .. } => "ReduceSum",
+            CoreSemanticOp::Div => "Divide",
+            CoreSemanticOp::Rem => "Remainder",
+            CoreSemanticOp::Abs => "Abs",
+            CoreSemanticOp::Sign => "Sign",
+            CoreSemanticOp::Maximum => "Maximum",
+            CoreSemanticOp::Minimum => "Minimum",
+            CoreSemanticOp::Compare(_) => "Compare",
+            CoreSemanticOp::Select => "Select",
+            CoreSemanticOp::Clamp => "Clamp",
+            CoreSemanticOp::Exp => "Exp",
+            CoreSemanticOp::Log => "Log",
+            CoreSemanticOp::Sin => "Sin",
+            CoreSemanticOp::Cos => "Cos",
+            CoreSemanticOp::Tanh => "Tanh",
+            CoreSemanticOp::Sqrt => "Sqrt",
+            CoreSemanticOp::Rsqrt => "Rsqrt",
+            CoreSemanticOp::Pow => "Pow",
+            CoreSemanticOp::Expm1 => "Expm1",
+            CoreSemanticOp::Log1p => "Log1p",
+            CoreSemanticOp::ExtractDiag { .. } => "ExtractDiag",
+            CoreSemanticOp::EmbedDiag { .. } => "EmbedDiag",
+            CoreSemanticOp::Tril { .. } => "Tril",
+            CoreSemanticOp::Triu { .. } => "Triu",
+            CoreSemanticOp::Gather(_) => "Gather",
+            CoreSemanticOp::GatherDynamicSliceSizes { .. } => "GatherDynamicSliceSizes",
+            CoreSemanticOp::Scatter(_) => "Scatter",
+            CoreSemanticOp::Slice(_) => "Slice",
+            CoreSemanticOp::DynamicSlice { .. } => "DynamicSlice",
+            CoreSemanticOp::DynamicUpdateSlice => "DynamicUpdateSlice",
+            CoreSemanticOp::Pad(_) => "Pad",
+            CoreSemanticOp::Concatenate { .. } => "Concatenate",
+            CoreSemanticOp::Reverse { .. } => "Reverse",
+            CoreSemanticOp::ShapeOf { .. } => "ShapeOf",
+            CoreSemanticOp::DynamicTruncate { .. } => "DynamicTruncate",
+            CoreSemanticOp::PadToMatch { .. } => "PadToMatch",
+            CoreSemanticOp::ReduceProd { .. } => "ReduceProd",
+            CoreSemanticOp::ReduceMax { .. } => "ReduceMax",
+            CoreSemanticOp::ReduceMin { .. } => "ReduceMin",
+            _ => "UnknownCoreSemanticOp",
+        },
+        _ => "UnknownSemanticOp",
+    }
 }
 
 fn lower_constant(
@@ -736,18 +944,6 @@ fn require_input_count(op: &'static str, inputs: &[Value], expected: usize) -> R
     Err(Error::InvalidProgram {
         message: format!("{op} expected {expected} inputs, got {}", inputs.len()),
     })
-}
-
-fn slot_value(slots: &[Option<Value>], slot: usize) -> Result<&Value> {
-    slots
-        .get(slot)
-        .ok_or_else(|| Error::InvalidProgram {
-            message: format!("slot {slot} is outside slot table length {}", slots.len()),
-        })?
-        .as_ref()
-        .ok_or_else(|| Error::InvalidProgram {
-            message: format!("slot {slot} has no value"),
-        })
 }
 
 fn format_float(value: f64) -> String {

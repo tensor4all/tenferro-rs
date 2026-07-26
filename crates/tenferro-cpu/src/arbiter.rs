@@ -42,6 +42,10 @@ pub(crate) fn inherited_or_new_execution_owner() -> ResourceOwner {
     ResourceOwner::fresh()
 }
 
+pub(crate) fn current_execution_owner() -> Option<ResourceOwner> {
+    EXECUTION_OWNER.with(Cell::get)
+}
+
 pub(crate) fn with_execution_owner<R>(owner: ResourceOwner, op: impl FnOnce() -> R) -> R {
     struct RestoreOwner(Option<ResourceOwner>);
 
@@ -64,6 +68,15 @@ pub(crate) fn register_worker_execution_scope(scope: Arc<ExecutionScopeState>) {
         debug_assert!(slot.is_none());
         *slot = Some(scope);
     });
+}
+
+pub(crate) fn worker_execution_scope_matches(scope: &Arc<ExecutionScopeState>) -> bool {
+    WORKER_EXECUTION_SCOPE.with(|current| {
+        current
+            .borrow()
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, scope))
+    })
 }
 
 #[cfg(test)]
@@ -318,6 +331,7 @@ impl ResourceArbiter {
                 return Ok(ResourcePermit {
                     inner: Arc::clone(&self.inner),
                     id,
+                    owner,
                     reentrant,
                 });
             }
@@ -367,6 +381,7 @@ impl ResourceArbiter {
         Ok(Some(ResourcePermit {
             inner: Arc::clone(&self.inner),
             id,
+            owner,
             reentrant,
         }))
     }
@@ -409,12 +424,17 @@ impl ResourceArbiter {
 pub(crate) struct ResourcePermit {
     inner: Arc<ArbiterInner>,
     id: u64,
+    owner: ResourceOwner,
     reentrant: bool,
 }
 
 impl ResourcePermit {
     pub(crate) fn is_reentrant(&self) -> bool {
         self.reentrant
+    }
+
+    pub(crate) fn owner(&self) -> ResourceOwner {
+        self.owner
     }
 }
 

@@ -65,24 +65,31 @@ fn derive_attribute_parser_rejects_unknown_and_wrong_typed_values() {
 }
 
 #[test]
-fn extension_runtime_macro_generates_runtime_impl_and_register_function() {
+fn extension_runtime_macro_generates_module_engine_and_prepared_op_without_register_function() {
     let tokens = expand_extension_runtime(syn::parse_quote! {
         runtime = TinyRuntime,
         family_id = TINY_EXTENSION_FAMILY_ID,
         op_type = TinyExtensionOp,
         execute = execute_tiny_extension,
         execute_reads = execute_tiny_extension_reads,
-        register_fn = register_tiny_runtime,
     });
     let source = tokens.to_string();
 
     assert!(source.contains("struct TinyRuntime"));
+    assert!(source.contains("struct TinyRuntimeModule"));
+    assert!(source.contains("struct TinyRuntimePlanningConfig"));
+    assert!(source.contains("struct TinyRuntimePreparedOperation"));
     assert!(source.contains("impl < B : tenferro_tensor :: TensorBackend + 'static >"));
-    assert!(source.contains("ExtensionRuntime < B >"));
+    assert!(source.contains("ExtensionEngine for TinyRuntime < B >"));
+    assert!(source.contains("ExtensionModule for TinyRuntimeModule < B >"));
+    assert!(source.contains("PreparedOperation for TinyRuntimePreparedOperation < B >"));
     assert!(source.contains("downcast_ref :: < TinyExtensionOp >"));
-    assert!(source.contains("execute_tiny_extension (op , inputs , ctx)"));
-    assert!(source.contains("execute_tiny_extension_reads (op , inputs , ctx)"));
-    assert!(source.contains("pub fn register_tiny_runtime"));
+    assert!(source.contains("ExtensionExecutionContext :: new"));
+    assert!(source.contains("execute_tiny_extension_reads"));
+    assert!(source.contains("& self . op"));
+    assert!(source.contains("pub fn extension_module"));
+    assert!(!source.contains("register_tiny_runtime"));
+    assert!(!source.contains("RuntimeConfigBuilder"));
 }
 
 #[test]
@@ -93,7 +100,6 @@ fn extension_runtime_macro_accepts_custom_backend_bound() {
         op_type = LinalgExtensionOp,
         execute = execute_linalg_extension,
         execute_reads = execute_linalg_extension_reads,
-        register_fn = register_runtime,
         backend_bound = crate::backend::LinalgBackend,
     });
     let source = tokens.to_string();
@@ -102,18 +108,39 @@ fn extension_runtime_macro_accepts_custom_backend_bound() {
 }
 
 #[test]
-fn extension_runtime_macro_generates_required_read_executor() {
+fn extension_runtime_macro_generates_required_prepared_read_executor() {
     let tokens = expand_extension_runtime(syn::parse_quote! {
         runtime = EinsumRuntime,
         family_id = EINSUM_EXTENSION_FAMILY_ID,
         op_type = EinsumExtensionOp,
         execute = execute_einsum_extension,
         execute_reads = execute_einsum_extension_reads,
-        register_fn = register_runtime,
     });
     let source = tokens.to_string();
 
-    assert!(source.contains("fn execute_reads"));
+    assert!(source.contains("fn execute"));
     assert!(source.contains("TensorRead < '_ >"));
-    assert!(source.contains("execute_einsum_extension_reads (op , inputs , ctx)"));
+    assert!(source.contains("execute_einsum_extension_reads"));
+    assert!(source.contains("& self . op"));
+}
+
+#[test]
+fn extension_runtime_macro_rejects_legacy_register_fn_argument() {
+    let err = match syn::parse_str::<super::RuntimeArgs>(
+        r#"
+        runtime = EinsumRuntime,
+        family_id = EINSUM_EXTENSION_FAMILY_ID,
+        op_type = EinsumExtensionOp,
+        execute = execute_einsum_extension,
+        execute_reads = execute_einsum_extension_reads,
+        register_fn = register_runtime,
+        "#,
+    ) {
+        Ok(_) => panic!("legacy register_fn argument must no longer be accepted"),
+        Err(err) => err,
+    };
+
+    assert!(err
+        .to_string()
+        .contains("unsupported define_extension_runtime argument"));
 }

@@ -533,7 +533,9 @@ fn test_direct_elementwise_helpers_cover_f32_c32_and_error_paths() {
 
     assert_ordered_complex_error(maximum(&lhs_c32, &rhs_c32), "maximum");
     assert_ordered_complex_error(minimum(&lhs_c32, &rhs_c32), "minimum");
-    assert_ordered_complex_error(compare(&lhs_c32, &rhs_c32, &CompareDir::Eq), "compare");
+    let cmp_c32 = compare(&lhs_c32, &rhs_c32, &CompareDir::Eq).unwrap();
+    assert!(!get_bool(&cmp_c32, &[0]));
+    assert!(!get_bool(&cmp_c32, &[1]));
 
     let select_c32 = select(&pred_bool, &lhs_c32, &rhs_c32).unwrap();
     assert_eq!(get_c32(&select_c32, &[0]), Complex32::new(1.0, 0.0));
@@ -852,6 +854,10 @@ fn test_direct_elementwise_helpers_cover_f64_c64_dispatch_and_mismatch_paths() {
     assert_c64_close(get_c64(&neg_c64, &[0]), Complex64::new(-3.0, -4.0));
     let conj_c64 = conj(&lhs_c64).unwrap();
     assert_c64_close(get_c64(&conj_c64, &[0]), Complex64::new(3.0, -4.0));
+
+    let cmp_c64 = compare(&lhs_c64, &lhs_c64, &CompareDir::Eq).unwrap();
+    assert!(get_bool(&cmp_c64, &[0]));
+    assert!(get_bool(&cmp_c64, &[1]));
 
     assert_ordered_complex_error(compare(&lhs_c64, &rhs_c64, &CompareDir::Lt), "compare");
     assert_ordered_complex_error(compare(&lhs_c64, &rhs_c64, &CompareDir::Le), "compare");

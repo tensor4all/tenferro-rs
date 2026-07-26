@@ -37,6 +37,31 @@ fn pjrt_execute_source() -> String {
 }
 
 #[test]
+fn xla_sources_depend_only_on_semantic_program_views() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let sources = [
+        lowering_program_source(),
+        pjrt_execute_source(),
+        fs::read_to_string(manifest_dir.join("src").join("lib.rs")).unwrap(),
+        fs::read_to_string(manifest_dir.join("src").join("executor.rs")).unwrap(),
+        fs::read_to_string(manifest_dir.join("src").join("lowering").join("mod.rs")).unwrap(),
+    ];
+
+    for forbidden in [
+        "GraphProgram",
+        "GraphInstructionView",
+        "GraphProgramLoweringView",
+        "ExecProgram",
+        "lowering_view",
+    ] {
+        assert!(
+            sources.iter().all(|source| !source.contains(forbidden)),
+            "XLA production sources must not depend on legacy execution view {forbidden}"
+        );
+    }
+}
+
+#[test]
 fn extension_lowering_input_ids_are_checked_before_usize_indexing() {
     let source = lowering_program_source();
 
@@ -61,10 +86,10 @@ fn pjrt_output_download_does_not_materialize_row_major_conversion_buffer() {
 }
 
 #[test]
-fn pjrt_output_specs_validate_slot_bounds_before_indexing() {
+fn pjrt_specs_use_semantic_metadata_without_slot_indexing() {
     let source = pjrt_execute_source();
     let section = source
-        .split_once("fn output_specs(program: &GraphProgram)")
+        .split_once("fn output_specs(program: &SemanticProgram)")
         .and_then(|(_, rest)| {
             rest.split_once("fn validate_supported_dtype")
                 .map(|(body, _)| body)
@@ -72,21 +97,18 @@ fn pjrt_output_specs_validate_slot_bounds_before_indexing() {
         .expect("PJRT output_specs source section should exist");
 
     assert!(
-        section.contains("program.input_specs().len() != view.input_slots().len()"),
-        "PJRT output_specs must validate input spec/slot count before zipping or indexing"
+        section.contains(".outputs()") && section.contains("semantic_tensor_spec(program, value"),
+        "PJRT output_specs must derive output contracts from semantic value metadata"
     );
     assert!(
-        !section.contains("view.input_slots()[index]"),
-        "PJRT output_specs must not index input_slots by input spec position without bounds checks"
+        section.contains(".value_metadata(value)"),
+        "PJRT tensor specs must use the checked semantic metadata accessor"
     );
     assert!(
-        !section.contains("inst.output_slots()[0]"),
-        "PJRT output_specs must not index output_slots[0] without get/get_mut validation"
-    );
-    assert!(
-        section.contains("slots.get_mut(input_slot)")
-            && section.contains("slots.get_mut(output_slot)"),
-        "PJRT output_specs should populate slots through checked get_mut calls"
+        !section.contains("lowering_view")
+            && !section.contains("input_slots")
+            && !section.contains("output_slots"),
+        "PJRT output specs must not reconstruct semantic metadata through execution slots"
     );
 }
 
@@ -121,8 +143,11 @@ fn pjrt_download_host_vec_owns_event_before_error_check() {
 fn extension_lowering_validates_every_output_dtype() {
     let source = lowering_program_source();
     let section = source
-        .split_once("fn lower_extension_instruction")
-        .and_then(|(_, rest)| rest.split_once("fn lower_constant").map(|(body, _)| body))
+        .split_once("fn lower_extension_operation")
+        .and_then(|(_, rest)| {
+            rest.split_once("fn build_standard_semantic_subprogram")
+                .map(|(body, _)| body)
+        })
         .expect("extension lowering source section should exist");
 
     assert!(
@@ -130,11 +155,11 @@ fn extension_lowering_validates_every_output_dtype() {
         "extension lowering must not restrict dtype validation to the first output"
     );
     assert!(
-        section.contains("validate_dtype(value.ty.dtype, \"extension output\")"),
-        "extension lowering should validate the actual dtype of every lowered extension output"
+        section.contains("semantic_value_type("),
+        "extension lowering should load and validate every semantic output type"
     );
     assert!(
-        section.contains("value.ty.dtype != inst.dtype()"),
-        "extension lowering should compare every lowered output dtype with the parent instruction dtype"
+        section.contains("if value.ty != expected"),
+        "extension lowering should compare every lowered output type with its semantic metadata"
     );
 }

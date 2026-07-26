@@ -327,7 +327,13 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
         .chain(config.lhs_batch_dims.iter())
         .copied()
         .collect();
-    let lhs_after_transpose = emit_transpose_if_needed(lhs, &lhs_target_perm, instr.dtype, builder);
+    let lhs_after_transpose = emit_transpose_if_needed(
+        lhs,
+        &lhs_target_perm,
+        instr.dtype,
+        instr.semantic_operation_index,
+        builder,
+    );
 
     let lhs_canon = if fi_l > 1 || ci_l > 1 {
         emit_merge_reshape(
@@ -339,6 +345,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
                 side: MergeSide::Lhs,
             },
             instr.dtype,
+            instr.semantic_operation_index,
             builder,
         )
     } else {
@@ -352,7 +359,13 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
         .chain(config.rhs_batch_dims.iter())
         .copied()
         .collect();
-    let rhs_after_transpose = emit_transpose_if_needed(rhs, &rhs_target_perm, instr.dtype, builder);
+    let rhs_after_transpose = emit_transpose_if_needed(
+        rhs,
+        &rhs_target_perm,
+        instr.dtype,
+        instr.semantic_operation_index,
+        builder,
+    );
 
     let rhs_canon = if fi_r > 1 || ci_r > 1 {
         emit_merge_reshape(
@@ -364,6 +377,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
                 side: MergeSide::Rhs,
             },
             instr.dtype,
+            instr.semantic_operation_index,
             builder,
         )
     } else {
@@ -416,6 +430,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
         } else {
             ExecOp::DotGeneral(canonical_config)
         },
+        semantic_operation_index: instr.semantic_operation_index,
         input_slots: vec![lhs_canon.slot, rhs_canon.slot],
         output_slots: vec![canonical_output_slot],
         dtype: instr.dtype,
@@ -449,6 +464,7 @@ fn decompose_dot(input: DotDecomposeInput<'_>, builder: &mut InstructionBuilder<
             op: ExecOp::Reshape {
                 shape: to_shape.clone(),
             },
+            semantic_operation_index: instr.semantic_operation_index,
             input_slots: vec![canonical_output_slot, lhs.slot, rhs.slot],
             output_slots: vec![instr.output_slots[0]],
             dtype: instr.dtype,
@@ -464,6 +480,7 @@ fn emit_transpose_if_needed(
     operand: OperandMeta<'_>,
     target_perm: &[usize],
     dtype: DType,
+    semantic_operation_index: Option<usize>,
     builder: &mut InstructionBuilder<'_>,
 ) -> EmittedOperand {
     let is_identity = target_perm.iter().enumerate().all(|(i, &p)| i == p);
@@ -487,6 +504,7 @@ fn emit_transpose_if_needed(
         op: ExecOp::Transpose {
             perm: target_perm.to_vec(),
         },
+        semantic_operation_index,
         input_slots: vec![operand.slot],
         output_slots: vec![out_slot],
         dtype,
@@ -505,6 +523,7 @@ fn emit_merge_reshape(
     operand: &EmittedOperand,
     spec: MergeReshapeSpec,
     dtype: DType,
+    semantic_operation_index: Option<usize>,
     builder: &mut InstructionBuilder<'_>,
 ) -> EmittedOperand {
     let to_shape = match spec.side {
@@ -519,6 +538,7 @@ fn emit_merge_reshape(
     let out_slot = builder.next_slot();
     builder.push(ExecInstruction {
         op: ExecOp::Reshape { shape: to_shape },
+        semantic_operation_index,
         input_slots: vec![operand.slot],
         output_slots: vec![out_slot],
         dtype,

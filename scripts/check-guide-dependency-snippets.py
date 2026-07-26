@@ -29,26 +29,35 @@ class GuideCase:
 
 EINSUM_SOURCE = r"""
 use tenferro_ad::{EagerRuntime, Tensor};
-use tenferro_cpu::CpuBackend;
-use tenferro_einsum::{EagerEinsumExt, GraphCompilerEinsumExt};
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_einsum::{EagerEinsumExt, TraceContextEinsumExt};
+use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_runtime::{GraphCompiler, Runtime, TraceContext};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let a = TracedTensor::from_vec_col_major(
+    let a = Tensor::from_vec_col_major(
         vec![2, 3],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     )?;
-    let b = TracedTensor::from_vec_col_major(
+    let b = Tensor::from_vec_col_major(
         vec![3, 2],
         vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
     )?;
 
-    let mut compiler = GraphCompiler::new();
-    let c = compiler.einsum(&[&a, &b], "ij,jk->ik")?;
-    let program = compiler.compile(&c)?;
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.register_extension(tenferro_einsum::register_runtime)?;
-    assert_eq!(executor.run(&program)?.shape(), &[2, 2]);
+    let mut trace = TraceContext::new();
+    let a_value = trace.input(ProgramInputSpec::new(a.dtype(), [2.into(), 3.into()]))?;
+    let b_value = trace.input(ProgramInputSpec::new(b.dtype(), [3.into(), 2.into()]))?;
+    let c = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
+    let graph = trace.finish(&[c])?;
+    let program = GraphCompiler::new().compile_traced_graph(&graph)?;
+    let backend = CpuBackend::new();
+    let engine_id = runtime_engine_id()?;
+    let mut runtime_builder = Runtime::builder();
+    runtime_builder.register_engine(runtime_engine_registration(&backend)?)?;
+    runtime_builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(engine_id)?)?;
+    let runtime = runtime_builder.build()?;
+    let mut outputs = runtime.run_compiled(&program, &[&a, &b])?;
+    assert_eq!(outputs.remove(0).shape(), &[2, 2]);
 
     let ctx = EagerRuntime::new();
     let u = ctx.variable_from(Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0])?)?;
@@ -78,7 +87,7 @@ fn max_abs_diff(lhs: &Tensor, rhs: &Tensor) -> f64 {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ad = AdContext::builder()
-        .with_extension_rules(tenferro_linalg::ad_rules()?)
+        .with_semantic_extension_rules(tenferro_linalg::semantic_ad_rules()?)?
         .build()?;
 
     let mut backend = CpuBackend::new();
@@ -152,9 +161,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 FFT_SOURCE = r"""
 use num_complex::Complex64;
 use tenferro_ad::AdContext;
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_fft::{FftNorm, TracedTensorFftExt};
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ad = AdContext::builder().build()?;
@@ -171,9 +180,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y)?;
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    executor.register_extension(tenferro_fft::register_runtime)?;
-    assert_eq!(executor.run(&program)?.shape(), &[4]);
+    let backend = CpuBackend::new();
+    let engine_id = runtime_engine_id()?;
+    let mut runtime_builder = Runtime::builder();
+    runtime_builder.register_engine(runtime_engine_registration(&backend)?)?;
+    runtime_builder.install_extension_module(tenferro_fft::extension_module::<CpuBackend>(engine_id)?)?;
+    let runtime = runtime_builder.build()?;
+    let mut outputs = runtime.run_compiled(&program, &[])?;
+    assert_eq!(outputs.remove(0).shape(), &[4]);
 
     Ok(())
 }
@@ -184,7 +198,12 @@ CASES = (
     GuideCase(
         name="einsum",
         guide_path="docs/guides/einsum.md",
-        required_deps=("tenferro-runtime", "tenferro-cpu", "tenferro-ad", "tenferro-einsum"),
+        required_deps=(
+            "tenferro-runtime",
+            "tenferro-cpu",
+            "tenferro-ad",
+            "tenferro-einsum",
+        ),
         required_features={"tenferro-einsum": ("autodiff",)},
         source=EINSUM_SOURCE,
     ),

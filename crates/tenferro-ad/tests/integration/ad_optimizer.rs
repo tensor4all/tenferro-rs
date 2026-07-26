@@ -1,8 +1,9 @@
 use tenferro_ad::TracedTensorAdExt;
-use tenferro_cpu::CpuBackend;
 use tenferro_ops::std_tensor_op::StdTensorOp;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, TracedTensor};
 use tenferro_tensor::Tensor;
+
+use crate::support::{cpu_runtime, run_compiled_one};
 
 fn f64_vec(data: Vec<f64>) -> TracedTensor {
     TracedTensor::from_vec_col_major(vec![data.len()], data).unwrap()
@@ -11,8 +12,8 @@ fn f64_vec(data: Vec<f64>) -> TracedTensor {
 fn eval_f64(tensor: &TracedTensor) -> Vec<f64> {
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(tensor).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    match executor.run(&program).unwrap() {
+    let executor = cpu_runtime();
+    match run_compiled_one(&executor, &program, &[]).unwrap() {
         Tensor::F64(tensor) => tensor.host_data().unwrap().to_vec(),
         other => panic!("expected f64 result, got {other:?}"),
     }
@@ -52,7 +53,7 @@ fn traced_jvp_optimizer_removes_identity_chain_before_compile() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&dy).unwrap();
-    assert_eq!(program.lowering_view().instructions().count(), 0);
+    assert_eq!(program.program().operations().count(), 0);
     assert_eq!(eval_f64(&dy), vec![0.25, -0.5]);
 }
 
@@ -73,7 +74,7 @@ fn traced_vjp_cotangent_accumulation_stays_bounded_before_compile() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&dx).unwrap();
-    let instruction_count = program.lowering_view().instructions().count();
+    let instruction_count = program.program().operations().count();
     assert!(
         instruction_count <= 3,
         "compiled accumulation graph should remain bounded, got {instruction_count} instructions"

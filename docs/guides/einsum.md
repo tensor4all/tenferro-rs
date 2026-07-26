@@ -6,7 +6,7 @@ execution uses `TensorEinsumExt` and `TypedTensorEinsumExt` for owned inputs,
 and `TensorReadEinsumExt` and `TypedTensorReadEinsumExt` for borrowed inputs;
 preallocated-output execution uses the matching `*IntoExt` traits;
 repeated-shape concrete workloads can use `ConcreteEinsumPlan`. Traced graph
-construction uses `GraphCompilerEinsumExt`;
+construction uses `TraceContextEinsumExt`;
 autodiff eager execution uses `EagerEinsumExt`; `tensordot` contraction sugar
 uses tensor extension traits. Compiled traced execution also requires explicit
 runtime registration for einsum extension ops.
@@ -181,29 +181,39 @@ assert_eq!(planned_out.as_slice::<f64>()?, &[140.0, 320.0]);
 ## Traced Matrix Multiply
 
 Use the traced route when einsum should be part of a graph compiled by
-`GraphCompiler` and executed by `GraphExecutor`.
+`GraphCompiler` and executed by `Runtime::run_compiled`.
 
 ```rust
-use tenferro_cpu::CpuBackend;
-use tenferro_einsum::GraphCompilerEinsumExt;
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
+use tenferro_einsum::TraceContextEinsumExt;
+use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_runtime::{GraphCompiler, Runtime, Tensor, TraceContext};
 
-let a = TracedTensor::from_vec_col_major(
+let a = Tensor::from_vec_col_major(
     vec![2, 3],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
-let b = TracedTensor::from_vec_col_major(
+let b = Tensor::from_vec_col_major(
     vec![3, 2],
     vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
 )?;
 
-let mut compiler = GraphCompiler::new();
-let c = compiler.einsum(&[&a, &b], "ij,jk->ik").unwrap();
-let program = compiler.compile(&c).unwrap();
+let mut trace = TraceContext::new();
+let a_value = trace.input(ProgramInputSpec::new(a.dtype(), [2.into(), 3.into()]))?;
+let b_value = trace.input(ProgramInputSpec::new(b.dtype(), [3.into(), 2.into()]))?;
+let c = trace.einsum(&[a_value, b_value], "ij,jk->ik")?;
+let graph = trace.finish(&[c])?;
+let program = GraphCompiler::new().compile_traced_graph(&graph)?;
 
-let mut executor = GraphExecutor::new(CpuBackend::new());
-executor.register_extension(tenferro_einsum::register_runtime).unwrap();
-let result = executor.run(&program).unwrap();
+let backend = CpuBackend::new();
+let mut builder = Runtime::builder();
+builder.register_engine(runtime_engine_registration(&backend)?)?;
+builder.install_extension_module(tenferro_einsum::extension_module::<CpuBackend>(
+    runtime_engine_id()?,
+)?)?;
+let runtime = builder.build()?;
+let mut outputs = runtime.run_compiled(&program, &[&a, &b])?;
+let result = outputs.remove(0);
 
 assert_eq!(result.shape(), &[2, 2]);
 assert_eq!(result.as_slice::<f64>().unwrap(), &[22.0, 28.0, 49.0, 64.0]);
@@ -249,9 +259,9 @@ right tensor. `TensorDotAxes::Axes` accepts explicit axis pairs, including
 negative axes.
 
 ```rust
-use tenferro_cpu::CpuBackend;
+use tenferro_cpu::{runtime_engine_id, runtime_engine_registration, CpuBackend};
 use tenferro_einsum::{TensorDotAxes, TracedTensorEinsumExt};
-use tenferro_runtime::{GraphCompiler, GraphExecutor, TracedTensor};
+use tenferro_runtime::{GraphCompiler, Runtime, TracedTensor};
 
 let lhs = TracedTensor::from_vec_col_major(
     vec![2, 3],
@@ -271,8 +281,19 @@ let out = lhs.tensordot(&rhs, TensorDotAxes::Count(1)).unwrap();
 assert_eq!(out.rank, 2);
 let mut compiler = GraphCompiler::new();
 let program = compiler.compile(&out).unwrap();
-let mut executor = GraphExecutor::new(CpuBackend::new());
-let result = executor.run(&program).unwrap();
+let backend = CpuBackend::new();
+let mut builder = Runtime::builder();
+builder
+    .register_engine(runtime_engine_registration(&backend).unwrap())
+    .unwrap();
+builder
+    .install_extension_module(
+        tenferro_einsum::extension_module::<CpuBackend>(runtime_engine_id().unwrap()).unwrap(),
+    )
+    .unwrap();
+let runtime = builder.build().unwrap();
+let mut outputs = runtime.run_compiled(&program, &[]).unwrap();
+let result = outputs.remove(0);
 
 assert_eq!(result.shape(), &[2, 4]);
 assert_eq!(
@@ -284,7 +305,7 @@ assert_eq!(
 ## Optimization Controls
 
 The default policy chooses an N-ary contraction order automatically. Advanced
-users can pass an explicit strategy through `GraphCompilerEinsumExt::einsum_with`.
+users can pass an explicit strategy through `TraceContextEinsumExt::einsum_with`.
 The public optimizer API is limited to the types needed to express that
 choice: `EinsumOptimize`, `ContractionTree`, `ContractionOptimizerOptions`,
 `Subscripts`, `NestedEinsum`, and `EinsumSubscripts`.
@@ -299,28 +320,40 @@ it requires concrete shapes and is converted to fixed contraction pairs when a
 concrete traced op is built.
 
 ```rust
-use tenferro_runtime::{GraphCompiler, TracedTensor};
-use tenferro_einsum::{EinsumOptimize, GraphCompilerEinsumExt};
+use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_runtime::{DType, TraceContext};
 
-let a = TracedTensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]);
-let b = TracedTensor::from_vec_col_major(vec![3, 2], vec![1.0_f64; 6]);
-
-let mut compiler = GraphCompiler::new();
-let c = compiler.einsum_with(
-    &[&a, &b],
+let mut trace = TraceContext::new();
+let a = trace.input(ProgramInputSpec::new(
+    DType::F64,
+    DimExpr::from_concrete(&[2, 3]),
+)).unwrap();
+let b = trace.input(ProgramInputSpec::new(
+    DType::F64,
+    DimExpr::from_concrete(&[3, 2]),
+)).unwrap();
+let c = trace.einsum_with(
+    &[a, b],
     "ij,jk->ik",
     EinsumOptimize::False,
 ).unwrap();
 
-assert_eq!(c.try_concrete_shape(), Some(vec![2, 2]));
+let graph = trace.finish(&[c]).unwrap();
+let metadata = graph
+    .program()
+    .value_metadata(graph.program().outputs()[0])
+    .unwrap();
+assert_eq!(metadata.shape().len(), 2);
 ```
 
 ## Cache Management
 
 Einsum uses the shared extension cache infrastructure from `tenferro-runtime`.
 Compile-time extension caches live on `GraphCompiler`; runtime
-contraction-plan and inner execution-program caches live on `GraphExecutor`
-and `EagerRuntime`.
+contraction-plan caches live on installed runtime cache owners and
+`EagerRuntime`.
 Einsum plan cache identity includes the planning policy or explicit path, not
 only the subscripts and shapes. Traced extension operation identity also includes
 those planner options and paths, so two calls with different policies are not

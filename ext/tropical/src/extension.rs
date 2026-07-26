@@ -1,34 +1,38 @@
 use std::any::Any;
 use std::collections::HashMap;
+use std::fmt;
 use std::hash::Hasher;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 #[cfg(feature = "autodiff")]
-use computegraph::types::{LocalValueId, OperationRole, ValueKey, ValueRef};
+use tenferro_ad::semantic_extension::{
+    AdValue, SemanticAdError, SemanticAdRuleRole, SemanticExtensionRegistryError,
+    SemanticExtensionRuleSet, SemanticLinearTransposeRequest, SemanticLinearTransposeRule,
+    SemanticLinearizeRequest, SemanticLinearizeResult, SemanticLinearizeRule,
+    SemanticPrimalVjpRequest, SemanticPrimalVjpRule,
+};
 use tenferro_einsum::Subscripts;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ad::{transpose_input::TransposeInputRef, PrimitiveRuleBuilder};
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ext_op::{ExtensionLinearTransposeRule, ExtensionLinearizeRule};
-use tenferro_ops::ext_op::{ExtensionOp, HostReference};
-#[cfg(feature = "autodiff")]
-use tenferro_ops::std_tensor_op::StdTensorOp;
-#[cfg(feature = "autodiff")]
-use tenferro_ops::ShapeGuardContext;
+use tenferro_ops::ext_op::{ExtensionAliasDeclaration, ExtensionEffectDeclaration, ExtensionOp};
 use tenferro_ops::SymDim;
 #[cfg(feature = "autodiff")]
-use tenferro_ops::{ExtensionRegistryError, ExtensionRuleSet};
-use tenferro_runtime::{ExtensionExecutor, ExtensionRuntimeRegistryError, HostReferenceRuntime};
+use tenferro_runtime::program::{ProgramValue, SemanticProgramBuilder};
+use tenferro_runtime::{
+    CoreCapabilityKind, EngineId, ErasedExecutionContext, Error as RuntimeError, ErrorPhase,
+    ExecutionContextIdentity, ExtensionCacheStore, ExtensionEngine, ExtensionModule,
+    ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest,
+    PrepareCapability, PrepareError, PreparedOperation, PreparedOperationBinding,
+    ProviderContractError, Result as RuntimeResult, RuntimeConfigError, SpecializationProjection,
+    UnsupportedReason,
+};
 #[cfg(feature = "autodiff")]
 use tenferro_tensor::TensorScalar;
-use tenferro_tensor::{DType, Tensor, TensorBackend};
-#[cfg(feature = "autodiff")]
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
+use tenferro_tensor::{DType, Tensor, TensorBackend, TensorRead};
 
 use crate::einsum::tropical_einsum_subscripts_with_argmax;
-use crate::error::unsupported_dtype;
 #[cfg(feature = "autodiff")]
 use crate::einsum::TropicalArgmaxStep;
+use crate::error::unsupported_dtype;
 use crate::TropicalKind;
 
 pub(crate) const TROPICAL_EINSUM_FAMILY_ID: &str = "tenferro-ext-tropical.einsum.v1";
@@ -41,55 +45,325 @@ fn invalid_config(op: &'static str, message: impl Into<String>) -> tenferro_tens
     tenferro_tensor::Error::invalid_argument(op, "configuration", message)
 }
 
-/// Register tropical extension runtimes on a graph or eager executor.
+struct TropicalReferenceEngine<B: TensorBackend + 'static> {
+    family_id: &'static str,
+    engine_id: EngineId,
+    _backend: PhantomData<fn() -> B>,
+}
+
+struct TropicalReferenceModule<B: TensorBackend + 'static> {
+    family_id: &'static str,
+    module_id: ExtensionModuleId,
+    engine_id: EngineId,
+    _backend: PhantomData<fn() -> B>,
+}
+
+#[derive(Debug)]
+struct TropicalReferencePlanningConfig {
+    family_id: &'static str,
+}
+
+struct TropicalReferencePreparedOperation<B: TensorBackend + 'static> {
+    family_id: &'static str,
+    binding: PreparedOperationBinding,
+    specialization: SpecializationProjection,
+    op: Arc<dyn ExtensionOp>,
+    _backend: PhantomData<fn() -> B>,
+}
+
+fn tropical_reference_module_supports(family_id: &'static str, op: &dyn ExtensionOp) -> bool {
+    match family_id {
+        TROPICAL_EINSUM_FAMILY_ID => op.as_any().is::<TropicalEinsumOp>(),
+        #[cfg(feature = "autodiff")]
+        TROPICAL_EINSUM_JVP_FAMILY_ID => op.as_any().is::<TropicalEinsumJvpOp>(),
+        #[cfg(feature = "autodiff")]
+        TROPICAL_EINSUM_VJP_FAMILY_ID => op.as_any().is::<TropicalEinsumVjpOp>(),
+        _ => false,
+    }
+}
+
+fn unsupported_tropical_reference_payload(family_id: &'static str) -> tenferro_tensor::Error {
+    tenferro_tensor::Error::unsupported(
+        "tropical_extension",
+        format!("family_id {family_id:?} has no tropical host-reference module payload"),
+    )
+}
+
+fn execute_tropical_reference_payload(
+    family_id: &'static str,
+    op: &dyn ExtensionOp,
+    inputs: &[&Tensor],
+) -> tenferro_tensor::Result<Vec<Tensor>> {
+    match family_id {
+        TROPICAL_EINSUM_FAMILY_ID => {
+            let op = op
+                .as_any()
+                .downcast_ref::<TropicalEinsumOp>()
+                .ok_or_else(|| unsupported_tropical_reference_payload(family_id))?;
+            let result = tropical_einsum_subscripts_with_argmax(op.kind, inputs, &op.subscripts)?;
+            Ok(vec![result.output])
+        }
+        #[cfg(feature = "autodiff")]
+        TROPICAL_EINSUM_JVP_FAMILY_ID => {
+            let op = op
+                .as_any()
+                .downcast_ref::<TropicalEinsumJvpOp>()
+                .ok_or_else(|| unsupported_tropical_reference_payload(family_id))?;
+            validate_tropical_jvp_inputs(inputs, &op.subscripts, &op.active_inputs)?;
+            let primal = tropical_einsum_subscripts_with_argmax(
+                op.kind,
+                &[inputs[0], inputs[1]],
+                &op.subscripts,
+            )?;
+            let step = single_argmax_step(&primal.argmax)?;
+            match primal.output.dtype() {
+                DType::F32 => {
+                    execute_jvp_typed::<f32>(inputs, &op.subscripts, step, &op.active_inputs)
+                        .map(|tensor| vec![tensor])
+                }
+                DType::F64 => {
+                    execute_jvp_typed::<f64>(inputs, &op.subscripts, step, &op.active_inputs)
+                        .map(|tensor| vec![tensor])
+                }
+                dtype => Err(unsupported_dtype("tropical_einsum_jvp", dtype)),
+            }
+        }
+        #[cfg(feature = "autodiff")]
+        TROPICAL_EINSUM_VJP_FAMILY_ID => {
+            let op = op
+                .as_any()
+                .downcast_ref::<TropicalEinsumVjpOp>()
+                .ok_or_else(|| unsupported_tropical_reference_payload(family_id))?;
+            validate_tropical_vjp_inputs(inputs, &op.subscripts, op.active_input)?;
+            let primal = tropical_einsum_subscripts_with_argmax(
+                op.kind,
+                &[inputs[0], inputs[1]],
+                &op.subscripts,
+            )?;
+            let step = single_argmax_step(&primal.argmax)?;
+            match inputs[op.active_input].dtype() {
+                DType::F32 => {
+                    execute_vjp_typed::<f32>(inputs, &op.subscripts, step, op.active_input)
+                        .map(|tensor| vec![tensor])
+                }
+                DType::F64 => {
+                    execute_vjp_typed::<f64>(inputs, &op.subscripts, step, op.active_input)
+                        .map(|tensor| vec![tensor])
+                }
+                dtype => Err(unsupported_dtype("tropical_einsum_vjp", dtype)),
+            }
+        }
+        _ => Err(unsupported_tropical_reference_payload(family_id)),
+    }
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for TropicalReferenceEngine<B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TropicalReferenceEngine")
+            .field("family_id", &self.family_id)
+            .field("engine_id", &self.engine_id)
+            .field("backend_type", &std::any::type_name::<B>())
+            .finish()
+    }
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for TropicalReferenceModule<B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TropicalReferenceModule")
+            .field("family_id", &self.family_id)
+            .field("module_id", &self.module_id)
+            .field("engine_id", &self.engine_id)
+            .field("backend_type", &std::any::type_name::<B>())
+            .finish()
+    }
+}
+
+impl<B: TensorBackend + 'static> fmt::Debug for TropicalReferencePreparedOperation<B> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TropicalReferencePreparedOperation")
+            .field("family_id", &self.family_id)
+            .field("binding", &self.binding)
+            .field("specialization", &self.specialization)
+            .field("backend_type", &std::any::type_name::<B>())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<B: TensorBackend + 'static> ExtensionEngine for TropicalReferenceEngine<B> {
+    fn family_id(&self) -> &'static str {
+        self.family_id
+    }
+
+    fn engine_id(&self) -> &EngineId {
+        &self.engine_id
+    }
+
+    fn context_identity(&self) -> ExecutionContextIdentity {
+        ExecutionContextIdentity::of::<B>()
+    }
+
+    fn prepare(
+        &self,
+        request: ExtensionPrepareRequest<'_>,
+    ) -> std::result::Result<PrepareCapability, PrepareError> {
+        if request.operation().family_id() != self.family_id {
+            return Err(PrepareError::ProviderContract {
+                source: ProviderContractError::WrongOperationFamily {
+                    expected: CoreCapabilityKind::Elementwise,
+                    operation: self.family_id,
+                },
+            });
+        }
+        if !tropical_reference_module_supports(self.family_id, request.operation()) {
+            return Ok(PrepareCapability::Unsupported(
+                UnsupportedReason::Operation {
+                    operation: self.family_id,
+                },
+            ));
+        }
+        Ok(PrepareCapability::Prepared(Arc::new(
+            TropicalReferencePreparedOperation::<B> {
+                family_id: self.family_id,
+                binding: request.binding().clone(),
+                specialization: request.specialization().clone(),
+                op: request.operation().clone_arc(),
+                _backend: PhantomData,
+            },
+        )))
+    }
+}
+
+impl ExtensionPlanningConfig for TropicalReferencePlanningConfig {
+    fn family_id(&self) -> &'static str {
+        self.family_id
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn payload_hash(&self, state: &mut dyn Hasher) {
+        state.write(self.family_id.as_bytes());
+    }
+
+    fn payload_eq(&self, other: &dyn ExtensionPlanningConfig) -> bool {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_some_and(|other| other.family_id == self.family_id)
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+}
+
+impl<B: TensorBackend + 'static> PreparedOperation for TropicalReferencePreparedOperation<B> {
+    fn binding(&self) -> &PreparedOperationBinding {
+        &self.binding
+    }
+
+    fn specialization(&self) -> &SpecializationProjection {
+        &self.specialization
+    }
+
+    fn retained_bytes(&self) -> usize {
+        0
+    }
+
+    fn execute(
+        &self,
+        context: &mut ErasedExecutionContext<'_>,
+        extension_caches: &mut ExtensionCacheStore,
+        inputs: &[TensorRead<'_>],
+    ) -> RuntimeResult<Vec<Tensor>> {
+        let backend = context
+            .downcast_mut::<B>(self.binding.context_identity())
+            .map_err(|source| {
+                RuntimeError::runtime_state_source("extension", ErrorPhase::Execution, source)
+            })?;
+        let mut ctx = tenferro_runtime::ExtensionExecutionContext::new(backend, extension_caches);
+        let materialized_inputs = ctx.backend_mut().with_backend_session(|exec| {
+            inputs
+                .iter()
+                .cloned()
+                .map(|input| exec.to_contiguous_read(input))
+                .collect::<tenferro_tensor::Result<Vec<_>>>()
+        })?;
+        let input_refs: Vec<&Tensor> = materialized_inputs.iter().collect();
+        Ok(execute_tropical_reference_payload(
+            self.family_id,
+            self.op.as_ref(),
+            &input_refs,
+        )?)
+    }
+}
+
+impl<B: TensorBackend + 'static> ExtensionModule for TropicalReferenceModule<B> {
+    fn module_id(&self) -> &ExtensionModuleId {
+        &self.module_id
+    }
+
+    fn configure(
+        &self,
+        registrar: &mut ExtensionModuleRegistrar<'_>,
+    ) -> std::result::Result<(), tenferro_runtime::ExtensionModuleError> {
+        registrar.register_engine(Arc::new(TropicalReferenceEngine::<B> {
+            family_id: self.family_id,
+            engine_id: self.engine_id.clone(),
+            _backend: PhantomData,
+        }))?;
+        registrar.register_planning_config(
+            self.engine_id.clone(),
+            Arc::new(TropicalReferencePlanningConfig {
+                family_id: self.family_id,
+            }),
+        )?;
+        Ok(())
+    }
+}
+
+fn reference_module<B: TensorBackend + 'static>(
+    family_id: &'static str,
+    engine_id: EngineId,
+) -> std::result::Result<Arc<dyn ExtensionModule>, RuntimeConfigError> {
+    Ok(Arc::new(TropicalReferenceModule::<B> {
+        family_id,
+        module_id: ExtensionModuleId::new(format!("{family_id}.module"))?,
+        engine_id,
+        _backend: PhantomData,
+    }))
+}
+
+/// Build tropical extension modules for one runtime engine.
 ///
-/// The runtime executor is intentionally thin: it delegates to each tropical
-/// extension op's optional host reference implementation.
 /// AD rules are registered separately through `tropical_ad_rules` when the
 /// `autodiff` feature is enabled.
 ///
 /// # Errors
 ///
-/// Returns [`tenferro_runtime::ExtensionRuntimeRegistryError`] if runtime
-/// registration fails.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::CpuBackend;
-/// use tenferro_runtime::GraphExecutor;
-///
-/// let mut executor = GraphExecutor::new(CpuBackend::new());
-/// executor
-///     .register_extension(tenferro_ext_tropical::register_runtime)
-///     .unwrap();
-/// assert!(executor
-///     .extension_executor()
-///     .registry()
-///     .contains("tenferro-ext-tropical.einsum.v1"));
-/// ```
-pub fn register_runtime<B: TensorBackend + 'static>(
-    executor: &mut ExtensionExecutor<B>,
-) -> Result<(), ExtensionRuntimeRegistryError> {
-    executor
-        .registry_mut()
-        .register(Arc::new(HostReferenceRuntime::<B>::new(
-            TROPICAL_EINSUM_FAMILY_ID,
-        )))?;
+/// Returns [`RuntimeConfigError`] when a generated module id is invalid.
+pub fn extension_modules<B: TensorBackend + 'static>(
+    engine_id: EngineId,
+) -> std::result::Result<Vec<Arc<dyn ExtensionModule>>, RuntimeConfigError> {
     #[cfg(feature = "autodiff")]
     {
-        executor
-            .registry_mut()
-            .register(Arc::new(HostReferenceRuntime::<B>::new(
-                TROPICAL_EINSUM_JVP_FAMILY_ID,
-            )))?;
-        executor
-            .registry_mut()
-            .register(Arc::new(HostReferenceRuntime::<B>::new(
-                TROPICAL_EINSUM_VJP_FAMILY_ID,
-            )))?;
+        Ok(vec![
+            reference_module::<B>(TROPICAL_EINSUM_FAMILY_ID, engine_id.clone())?,
+            reference_module::<B>(TROPICAL_EINSUM_JVP_FAMILY_ID, engine_id.clone())?,
+            reference_module::<B>(TROPICAL_EINSUM_VJP_FAMILY_ID, engine_id)?,
+        ])
     }
-    Ok(())
+    #[cfg(not(feature = "autodiff"))]
+    {
+        Ok(vec![reference_module::<B>(
+            TROPICAL_EINSUM_FAMILY_ID,
+            engine_id,
+        )?])
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,6 +408,14 @@ impl ExtensionOp for TropicalEinsumOp {
         1
     }
 
+    fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+        ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+        ExtensionAliasDeclaration::AllFresh
+    }
+
     fn infer_output_meta(
         &self,
         ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
@@ -148,17 +430,6 @@ impl ExtensionOp for TropicalEinsumOp {
             "tropical_einsum",
         )?;
         Ok(vec![meta])
-    }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-impl HostReference for TropicalEinsumOp {
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        let result = tropical_einsum_subscripts_with_argmax(self.kind, inputs, &self.subscripts)?;
-        Ok(vec![result.output])
     }
 }
 
@@ -216,6 +487,14 @@ impl ExtensionOp for TropicalEinsumJvpOp {
         1
     }
 
+    fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+        ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+        ExtensionAliasDeclaration::AllFresh
+    }
+
     fn infer_output_meta(
         &self,
         ctx: &mut tenferro_ops::ExtensionShapeContext<'_>,
@@ -244,34 +523,6 @@ impl ExtensionOp for TropicalEinsumJvpOp {
             ctx.require_same_shape(tangent_idx, active)?;
         }
         Ok(vec![primal])
-    }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-#[cfg(feature = "autodiff")]
-impl HostReference for TropicalEinsumJvpOp {
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        validate_tropical_jvp_inputs(inputs, &self.subscripts, &self.active_inputs)?;
-        let primal = tropical_einsum_subscripts_with_argmax(
-            self.kind,
-            &[inputs[0], inputs[1]],
-            &self.subscripts,
-        )?;
-        let step = single_argmax_step(&primal.argmax)?;
-        match primal.output.dtype() {
-            DType::F32 => {
-                execute_jvp_typed::<f32>(inputs, &self.subscripts, step, &self.active_inputs)
-                    .map(|tensor| vec![tensor])
-            }
-            DType::F64 => {
-                execute_jvp_typed::<f64>(inputs, &self.subscripts, step, &self.active_inputs)
-                    .map(|tensor| vec![tensor])
-            }
-            dtype => Err(unsupported_dtype("tropical_einsum_jvp", dtype)),
-        }
     }
 }
 
@@ -324,6 +575,14 @@ impl ExtensionOp for TropicalEinsumVjpOp {
 
     fn output_count(&self) -> usize {
         1
+    }
+
+    fn semantic_effects(&self) -> ExtensionEffectDeclaration<'_> {
+        ExtensionEffectDeclaration::Declared(&[])
+    }
+
+    fn semantic_aliases(&self) -> ExtensionAliasDeclaration<'_> {
+        ExtensionAliasDeclaration::AllFresh
     }
 
     fn infer_output_meta(
@@ -379,34 +638,6 @@ impl ExtensionOp for TropicalEinsumVjpOp {
             input_shapes[self.active_input].clone(),
         )])
     }
-
-    fn host_reference(&self) -> Option<&dyn HostReference> {
-        Some(self)
-    }
-}
-
-#[cfg(feature = "autodiff")]
-impl HostReference for TropicalEinsumVjpOp {
-    fn execute(&self, inputs: &[&Tensor]) -> tenferro_tensor::Result<Vec<Tensor>> {
-        validate_tropical_vjp_inputs(inputs, &self.subscripts, self.active_input)?;
-        let primal = tropical_einsum_subscripts_with_argmax(
-            self.kind,
-            &[inputs[0], inputs[1]],
-            &self.subscripts,
-        )?;
-        let step = single_argmax_step(&primal.argmax)?;
-        match inputs[self.active_input].dtype() {
-            DType::F32 => {
-                execute_vjp_typed::<f32>(inputs, &self.subscripts, step, self.active_input)
-                    .map(|tensor| vec![tensor])
-            }
-            DType::F64 => {
-                execute_vjp_typed::<f64>(inputs, &self.subscripts, step, self.active_input)
-                    .map(|tensor| vec![tensor])
-            }
-            dtype => Err(unsupported_dtype("tropical_einsum_vjp", dtype)),
-        }
-    }
 }
 
 #[cfg(feature = "autodiff")]
@@ -414,136 +645,320 @@ impl HostReference for TropicalEinsumVjpOp {
 struct TropicalEinsumAdRule;
 
 #[cfg(feature = "autodiff")]
-impl ExtensionLinearizeRule for TropicalEinsumAdRule {
+#[derive(Debug)]
+struct TropicalEinsumJvpTransposeRule;
+
+#[cfg(feature = "autodiff")]
+impl SemanticLinearizeRule for TropicalEinsumAdRule {
     fn family_id(&self) -> &'static str {
         TROPICAL_EINSUM_FAMILY_ID
     }
 
     fn linearize(
         &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        primal_in: &[ValueKey<StdTensorOp>],
-        _primal_out: &[ValueKey<StdTensorOp>],
-        tangent_in: &[Option<LocalValueId>],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let op = downcast_primal_op(op, ADRuleKind::Jvp)?;
-        validate_ad_supported(&op.subscripts, ADRuleKind::Jvp)?;
-        let active_inputs: Vec<usize> = tangent_in
+        request: SemanticLinearizeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<SemanticLinearizeResult, SemanticAdError> {
+        let op = semantic_primal_op(request.op(), SemanticAdRuleRole::Linearize)?;
+        validate_semantic_ad_supported(&op.subscripts, SemanticAdRuleRole::Linearize)?;
+        if !request.active_outputs()[0] {
+            return Ok(SemanticLinearizeResult::new([AdValue::Absent], []));
+        }
+        let active_inputs: Vec<usize> = request
+            .tangent_inputs()
             .iter()
             .enumerate()
-            .filter_map(|(idx, tangent)| tangent.is_some().then_some(idx))
+            .filter_map(|(index, tangent)| matches!(tangent, AdValue::Value(_)).then_some(index))
             .collect();
         if active_inputs.is_empty() {
-            return Ok(vec![None]);
+            return Ok(SemanticLinearizeResult::new([AdValue::Absent], []));
         }
-
-        let mut inputs = vec![
-            ValueRef::External(primal_in[0].clone()),
-            ValueRef::External(primal_in[1].clone()),
-        ];
-        for &active in &active_inputs {
-            // `active_inputs` is derived from `tangent_in.is_some()` above; keep
-            // this branch explicit so future audits do not classify it as a
-            // user-reachable unwrap.
-            let Some(tangent) = tangent_in.get(active).copied().flatten() else {
-                return Ok(vec![None]);
-            };
-            inputs.push(ValueRef::Local(tangent));
-        }
-        let active_mask = std::iter::repeat_n(false, 2)
-            .chain(std::iter::repeat_n(true, active_inputs.len()))
-            .collect();
-        let out = builder.add_operation(
-            StdTensorOp::Extension(Arc::new(TropicalEinsumJvpOp::new(
+        let mut inputs = request.primal_inputs().to_vec();
+        inputs.extend(active_inputs.iter().filter_map(|&index| {
+            request
+                .tangent_inputs()
+                .get(index)
+                .copied()
+                .and_then(AdValue::value)
+        }));
+        let tangent = builder.add_extension(
+            Arc::new(TropicalEinsumJvpOp::new(
                 op.kind,
                 op.subscripts.clone(),
                 active_inputs,
-            ))),
-            inputs,
-            OperationRole::Linearized { active_mask },
-        );
-        Ok(vec![Some(out[0])])
+            )),
+            &inputs,
+        )?[0];
+        Ok(SemanticLinearizeResult::new([AdValue::Value(tangent)], []))
     }
 }
 
 #[cfg(feature = "autodiff")]
-#[derive(Debug)]
-struct TropicalEinsumJvpAdRule;
+impl SemanticLinearTransposeRule for TropicalEinsumAdRule {
+    fn family_id(&self) -> &'static str {
+        TROPICAL_EINSUM_FAMILY_ID
+    }
+
+    fn linear_transpose(
+        &self,
+        request: SemanticLinearTransposeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_tropical_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.cotangent_outputs()[0],
+            request.active_inputs(),
+            builder,
+            SemanticAdRuleRole::LinearTranspose,
+        )
+    }
+}
 
 #[cfg(feature = "autodiff")]
-impl ExtensionLinearTransposeRule for TropicalEinsumJvpAdRule {
+impl SemanticLinearTransposeRule for TropicalEinsumJvpTransposeRule {
     fn family_id(&self) -> &'static str {
         TROPICAL_EINSUM_JVP_FAMILY_ID
     }
 
     fn linear_transpose(
         &self,
-        op: &dyn ExtensionOp,
-        builder: &mut dyn PrimitiveRuleBuilder,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[PrimitiveTransposeInput<StdTensorOp>],
-        active_mask: &[bool],
-        _ctx: &mut ShapeGuardContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        let op = downcast_jvp_op(op, ADRuleKind::Transpose)?;
-        validate_ad_supported(&op.subscripts, ADRuleKind::Transpose)?;
-        let inputs: Vec<_> = inputs.iter().map(TransposeInputRef::new).collect();
-        let Some(ct) = cotangent_out.first().copied().flatten() else {
-            return Ok(vec![None; op.input_count()]);
-        };
-        let lhs = inputs[0].fixed_value("tropical einsum VJP", 0)?;
-        let rhs = inputs[1].fixed_value("tropical einsum VJP", 1)?;
-
-        let mut result = vec![None; op.input_count()];
-        for (active_pos, &active_input) in op.active_inputs.iter().enumerate() {
-            let tangent_input_idx = 2 + active_pos;
-            if !active_mask.get(tangent_input_idx).copied().unwrap_or(false) {
-                continue;
-            }
-            let out = builder.add_operation(
-                StdTensorOp::Extension(Arc::new(TropicalEinsumVjpOp::new(
-                    op.kind,
-                    op.subscripts.clone(),
-                    active_input,
-                ))),
-                vec![lhs.clone(), rhs.clone(), ValueRef::Local(ct)],
-                OperationRole::Linearized {
-                    active_mask: vec![false, false, true],
-                },
-            );
-            result[tangent_input_idx] = Some(out[0]);
-        }
-        Ok(result)
+        request: SemanticLinearTransposeRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_tropical_jvp_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.cotangent_outputs()[0],
+            request.active_inputs(),
+            builder,
+            SemanticAdRuleRole::LinearTranspose,
+        )
     }
 }
 
-/// Build an explicit AD rule set for tropical traced einsum extensions.
-///
-/// The returned set is intended for `tenferro_ad::AdContext`. It registers
-/// the primal tropical einsum linearization rule and the transposed JVP rule
-/// used for reverse-mode cotangent routing.
+#[cfg(feature = "autodiff")]
+impl SemanticPrimalVjpRule for TropicalEinsumJvpTransposeRule {
+    fn family_id(&self) -> &'static str {
+        TROPICAL_EINSUM_JVP_FAMILY_ID
+    }
+
+    fn primal_vjp(
+        &self,
+        request: SemanticPrimalVjpRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_tropical_jvp_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.cotangent_outputs()[0],
+            request.active_inputs(),
+            builder,
+            SemanticAdRuleRole::PrimalVjp,
+        )
+    }
+}
+
+#[cfg(feature = "autodiff")]
+impl SemanticPrimalVjpRule for TropicalEinsumAdRule {
+    fn family_id(&self) -> &'static str {
+        TROPICAL_EINSUM_FAMILY_ID
+    }
+
+    fn primal_vjp(
+        &self,
+        request: SemanticPrimalVjpRequest<'_>,
+        builder: &mut SemanticProgramBuilder,
+    ) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+        semantic_tropical_vjp(
+            request.op(),
+            request.primal_inputs(),
+            request.cotangent_outputs()[0],
+            request.active_inputs(),
+            builder,
+            SemanticAdRuleRole::PrimalVjp,
+        )
+    }
+}
+
+/// Build semantic-program AD rules for tropical traced einsum extensions.
 ///
 /// # Errors
 ///
-/// Returns [`tenferro_ops::ExtensionRegistryError`] if rule registration into
-/// the fresh rule set fails.
+/// Returns [`SemanticExtensionRegistryError::MalformedFamilyId`] if the
+/// tropical family identifier is invalid, or
+/// [`SemanticExtensionRegistryError::DuplicateRule`] if a semantic rule role
+/// is already registered.
 ///
 /// # Examples
 ///
 /// ```
-/// let rules = tenferro_ext_tropical::tropical_ad_rules().unwrap();
-///
-/// assert!(rules.is_linearize_registered("tenferro-ext-tropical.einsum.v1"));
-/// assert!(rules.is_linear_transpose_registered("tenferro-ext-tropical.einsum_jvp.v1"));
+/// let rules = tenferro_ext_tropical::tropical_semantic_ad_rules().unwrap();
+/// assert!(rules
+///     .lookup_linearize("tenferro-ext-tropical.einsum.v1")
+///     .is_some());
+/// assert!(rules
+///     .lookup_linear_transpose("tenferro-ext-tropical.einsum.v1")
+///     .is_some());
+/// assert!(rules
+///     .lookup_linear_transpose("tenferro-ext-tropical.einsum_jvp.v1")
+///     .is_some());
+/// assert!(rules
+///     .lookup_primal_vjp("tenferro-ext-tropical.einsum_jvp.v1")
+///     .is_some());
+/// assert!(rules
+///     .lookup_primal_vjp("tenferro-ext-tropical.einsum.v1")
+///     .is_some());
 /// ```
 #[cfg(feature = "autodiff")]
-pub fn tropical_ad_rules() -> Result<ExtensionRuleSet, ExtensionRegistryError> {
-    let mut rules = ExtensionRuleSet::new();
-    rules.register_linearize(Arc::new(TropicalEinsumAdRule))?;
-    rules.register_linear_transpose(Arc::new(TropicalEinsumJvpAdRule))?;
-    Ok(rules)
+pub fn tropical_semantic_ad_rules(
+) -> Result<SemanticExtensionRuleSet, SemanticExtensionRegistryError> {
+    SemanticExtensionRuleSet::new()
+        .with_linearize(Arc::new(TropicalEinsumAdRule))?
+        .with_linear_transpose(Arc::new(TropicalEinsumAdRule))?
+        .with_linear_transpose(Arc::new(TropicalEinsumJvpTransposeRule))?
+        .with_primal_vjp(Arc::new(TropicalEinsumJvpTransposeRule))?
+        .with_primal_vjp(Arc::new(TropicalEinsumAdRule))
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_tropical_vjp(
+    op: &dyn ExtensionOp,
+    primal_inputs: &[ProgramValue],
+    cotangent: AdValue,
+    active_inputs: &[bool],
+    builder: &mut SemanticProgramBuilder,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+    let op = semantic_primal_op(op, role)?;
+    validate_semantic_ad_supported(&op.subscripts, role)?;
+    let AdValue::Value(cotangent) = cotangent else {
+        return Ok(vec![AdValue::Absent; op.input_count()].into_boxed_slice());
+    };
+    active_inputs
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(active_input, active)| {
+            if !active {
+                return Ok(AdValue::Absent);
+            }
+            let mut inputs = primal_inputs.to_vec();
+            inputs.push(cotangent);
+            let value = builder.add_extension(
+                Arc::new(TropicalEinsumVjpOp::new(
+                    op.kind,
+                    op.subscripts.clone(),
+                    active_input,
+                )),
+                &inputs,
+            )?[0];
+            Ok(AdValue::Value(value))
+        })
+        .collect()
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_primal_op(
+    op: &dyn ExtensionOp,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<&TropicalEinsumOp, SemanticAdError> {
+    op.as_any()
+        .downcast_ref::<TropicalEinsumOp>()
+        .ok_or_else(|| SemanticAdError::Unsupported {
+            family_id: TROPICAL_EINSUM_FAMILY_ID,
+            role,
+            message: "tropical einsum semantic AD received an incompatible payload".into(),
+        })
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_tropical_jvp_vjp(
+    op: &dyn ExtensionOp,
+    primal_inputs: &[ProgramValue],
+    cotangent: AdValue,
+    active_inputs: &[bool],
+    builder: &mut SemanticProgramBuilder,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<Box<[AdValue]>, SemanticAdError> {
+    let op = semantic_jvp_op(op, role)?;
+    validate_semantic_ad_supported(&op.subscripts, role)?;
+    if active_inputs.iter().take(2).any(|active| *active) {
+        return Err(SemanticAdError::Unsupported {
+            family_id: TROPICAL_EINSUM_JVP_FAMILY_ID,
+            role,
+            message: "tropical einsum JVP semantic AD supports transpose only for tangent inputs"
+                .into(),
+        });
+    }
+    let mut cotangent_inputs = vec![AdValue::Absent; op.input_count()];
+    let AdValue::Value(cotangent) = cotangent else {
+        return Ok(cotangent_inputs.into_boxed_slice());
+    };
+    for (active_pos, &active_input) in op.active_inputs.iter().enumerate() {
+        let tangent_input = 2 + active_pos;
+        if !active_inputs[tangent_input] {
+            continue;
+        }
+        let mut inputs = primal_inputs[..2].to_vec();
+        inputs.push(cotangent);
+        let value = builder.add_extension(
+            Arc::new(TropicalEinsumVjpOp::new(
+                op.kind,
+                op.subscripts.clone(),
+                active_input,
+            )),
+            &inputs,
+        )?[0];
+        cotangent_inputs[tangent_input] = AdValue::Value(value);
+    }
+    Ok(cotangent_inputs.into_boxed_slice())
+}
+
+#[cfg(feature = "autodiff")]
+fn semantic_jvp_op(
+    op: &dyn ExtensionOp,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<&TropicalEinsumJvpOp, SemanticAdError> {
+    op.as_any()
+        .downcast_ref::<TropicalEinsumJvpOp>()
+        .ok_or_else(|| SemanticAdError::Unsupported {
+            family_id: TROPICAL_EINSUM_JVP_FAMILY_ID,
+            role,
+            message: "tropical einsum JVP semantic AD received an incompatible payload".into(),
+        })
+}
+
+#[cfg(feature = "autodiff")]
+fn validate_semantic_ad_supported(
+    subscripts: &Subscripts,
+    role: SemanticAdRuleRole,
+) -> std::result::Result<(), SemanticAdError> {
+    let message = if subscripts.inputs.len() != 2 {
+        Some("tropical einsum AD supports only binary inputs")
+    } else if has_repeated_labels(&subscripts.output)
+        || subscripts
+            .inputs
+            .iter()
+            .any(|labels| has_repeated_labels(labels))
+    {
+        Some("tropical einsum AD does not support repeated labels")
+    } else if !subscripts.inputs[0]
+        .iter()
+        .any(|label| subscripts.inputs[1].contains(label) && !subscripts.output.contains(label))
+    {
+        Some("tropical einsum AD requires contracted modes")
+    } else {
+        None
+    };
+    if let Some(message) = message {
+        return Err(SemanticAdError::Unsupported {
+            family_id: TROPICAL_EINSUM_FAMILY_ID,
+            role,
+            message: message.into(),
+        });
+    }
+    Ok(())
 }
 
 fn infer_tropical_output_meta(
@@ -743,56 +1158,11 @@ fn validate_tropical_vjp_inputs(
 }
 
 #[cfg(feature = "autodiff")]
-fn validate_ad_supported(subscripts: &Subscripts, kind: ADRuleKind) -> ADRuleResult<()> {
-    if subscripts.inputs.len() != 2 {
-        return Err(ADRuleError::unsupported(
-            "tropical einsum AD supports only binary inputs",
-            kind,
-        ));
-    }
-    if has_repeated_labels(&subscripts.output)
-        || subscripts
-            .inputs
-            .iter()
-            .any(|labels| has_repeated_labels(labels))
-    {
-        return Err(ADRuleError::unsupported(
-            "tropical einsum AD does not support repeated labels",
-            kind,
-        ));
-    }
-    let has_contracted = subscripts.inputs[0]
-        .iter()
-        .any(|label| subscripts.inputs[1].contains(label) && !subscripts.output.contains(label));
-    if !has_contracted {
-        return Err(ADRuleError::unsupported(
-            "tropical einsum AD requires contracted modes",
-            kind,
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(feature = "autodiff")]
 fn has_repeated_labels(labels: &[u32]) -> bool {
     labels
         .iter()
         .enumerate()
         .any(|(idx, label)| labels[..idx].contains(label))
-}
-
-#[cfg(feature = "autodiff")]
-fn downcast_primal_op(op: &dyn ExtensionOp, kind: ADRuleKind) -> ADRuleResult<&TropicalEinsumOp> {
-    op.as_any()
-        .downcast_ref::<TropicalEinsumOp>()
-        .ok_or_else(|| ADRuleError::unsupported("tropical einsum payload type mismatch", kind))
-}
-
-#[cfg(feature = "autodiff")]
-fn downcast_jvp_op(op: &dyn ExtensionOp, kind: ADRuleKind) -> ADRuleResult<&TropicalEinsumJvpOp> {
-    op.as_any()
-        .downcast_ref::<TropicalEinsumJvpOp>()
-        .ok_or_else(|| ADRuleError::unsupported("tropical einsum JVP payload type mismatch", kind))
 }
 
 #[cfg(feature = "autodiff")]

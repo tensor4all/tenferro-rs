@@ -27,6 +27,7 @@ fn broadcast_with_shape(
             shape: dim_shape(shape),
             dims,
         },
+        semantic_operation_index: None,
         input_slots: vec![input],
         output_slots: vec![output],
         dtype: DType::F64,
@@ -39,6 +40,7 @@ fn broadcast_with_shape(
 fn multiply_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -> ExecInstruction {
     ExecInstruction {
         op: ExecOp::Multiply,
+        semantic_operation_index: None,
         input_slots: vec![lhs, rhs],
         output_slots: vec![output],
         dtype: DType::F64,
@@ -51,6 +53,7 @@ fn multiply_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -
 fn add_with_shape(lhs: usize, rhs: usize, output: usize, shape: &[usize]) -> ExecInstruction {
     ExecInstruction {
         op: ExecOp::Add,
+        semantic_operation_index: None,
         input_slots: vec![lhs, rhs],
         output_slots: vec![output],
         dtype: DType::F64,
@@ -66,6 +69,7 @@ fn broadcast(input: usize, output: usize, dims: Vec<usize>) -> ExecInstruction {
             shape: vec![DimExpr::Const(2), DimExpr::Const(2)],
             dims,
         },
+        semantic_operation_index: None,
         input_slots: vec![input],
         output_slots: vec![output],
         dtype: DType::F64,
@@ -82,6 +86,7 @@ fn broadcast(input: usize, output: usize, dims: Vec<usize>) -> ExecInstruction {
 fn multiply(lhs: usize, rhs: usize, output: usize) -> ExecInstruction {
     ExecInstruction {
         op: ExecOp::Multiply,
+        semantic_operation_index: None,
         input_slots: vec![lhs, rhs],
         output_slots: vec![output],
         dtype: DType::F64,

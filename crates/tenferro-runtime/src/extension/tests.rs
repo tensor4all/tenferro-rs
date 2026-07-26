@@ -1,7 +1,6 @@
 use computegraph::types::OperationRole;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tenferro_ops::{dim_expr::DimExpr, ShapeExtent};
-use tenferro_tensor::{DType, ValidationError};
+use tenferro_tensor::{DType, Tensor, ValidationError};
 
 use super::*;
 
@@ -96,45 +95,6 @@ fn apply_returns_error_for_output_metadata_count_mismatch() {
         }
         other => panic!("expected structured extension validation error, got {other:?}"),
     }
-}
-
-#[test]
-fn execute_lowered_program_with_backend_cache_rejects_nested_extension_ops() {
-    let ext = Arc::new(TestExtension {
-        input_count: 1,
-        output_count: 1,
-        inferred_outputs: 1,
-    });
-    let program = crate::exec::ExecProgram {
-        instructions: vec![crate::exec::ExecInstruction {
-            op: crate::exec::ExecOp::Extension(ext),
-            input_slots: vec![0],
-            output_slots: vec![1],
-            dtype: DType::F64,
-            output_shapes: vec![vec![DimExpr::Const(1)]].into(),
-            output_extents: vec![vec![ShapeExtent::exact(DimExpr::Const(1))]].into(),
-            last_use: vec![true],
-        }],
-        input_slots: vec![0],
-        output_slots: vec![1],
-        n_slots: 2,
-        shape_guards: Vec::new(),
-    };
-    let mut backend = tenferro_cpu::CpuBackend::new();
-    let mut backend_cache = Default::default();
-    let input = Tensor::from_vec_col_major(vec![1], vec![1.0_f64]).unwrap();
-
-    let err = execute_lowered_program_with_backend_cache(
-        &mut backend,
-        &program,
-        vec![input],
-        &mut backend_cache,
-    )
-    .unwrap_err();
-
-    let message = err.to_string();
-    assert!(message.contains("core ExecProgram"), "{message}");
-    assert!(message.contains("extension family_id"), "{message}");
 }
 
 #[test]
@@ -427,6 +387,41 @@ fn graph_analysis_resolves_unregistered_multi_output_parent_on_demand() {
             Some(vec![SymDim::from(3)])
         );
     }
+}
+
+#[test]
+fn standard_op_analysis_uses_const_exact_parent_metadata_for_shape_validation() {
+    let lhs = TracedTensor::from_tensor_arc_symbolic_shape(Arc::new(
+        Tensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap(),
+    ))
+    .unwrap();
+    let rhs = TracedTensor::from_tensor_arc_symbolic_shape(Arc::new(
+        Tensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap(),
+    ))
+    .unwrap();
+    let reshape = StdTensorOp::Reshape {
+        to_shape: vec![DimExpr::Const(2), DimExpr::Const(1)],
+    };
+    let lhs = apply_standard_op(reshape.clone(), &[&lhs])
+        .unwrap()
+        .remove(0);
+    let rhs = apply_standard_op(reshape, &[&rhs]).unwrap().remove(0);
+
+    let output = apply_standard_op(
+        StdTensorOp::Concatenate {
+            axis: 1,
+            input_count: 2,
+        },
+        &[&lhs, &rhs],
+    )
+    .unwrap()
+    .remove(0);
+
+    let meta = crate::metadata::registered_meta(&output.graph.values()[output.val].key).unwrap();
+    assert_eq!(
+        meta.bound_shape(),
+        Some(vec![SymDim::from(2), SymDim::from(2)])
+    );
 }
 
 #[test]

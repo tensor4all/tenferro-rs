@@ -190,6 +190,7 @@ fn cubecl_tensor_with_len(
                 kind: DeviceKind::Gpu(GpuBackendKind::Cuda),
                 ordinal: 0,
             }),
+            cpu_affinity: None,
         },
     )
 }

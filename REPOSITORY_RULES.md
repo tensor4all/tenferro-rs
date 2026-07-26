@@ -120,6 +120,11 @@ rules from `tensor4all-agent-rules`.
   because of an explicitly approved compatibility or trait constraint, document
   that reason near the wrapper and make failures visible rather than fabricating
   success.
+- Do not add public errors, helpers, validation branches, or synthetic test
+  seams for states unreachable through current supported APIs. Validate real
+  user and backend inputs, rely on proven internal invariants, and add future
+  failure contracts only when the corresponding input or state is introduced.
+  This does not permit panics or unchecked handling of reachable failures.
 - Public traced/eager helpers must validate rank and axis counts before
   computing output ranks or indexing shape arrays. Symbolic-shape traced values
   must not be forced through concrete-shape helpers unless the API explicitly
@@ -229,6 +234,75 @@ rules from `tensor4all-agent-rules`.
   one sharper general rule over many narrow bullets that future agents must
   reconcile.
 
+## Final Cross-Phase Multi-Agent Audit
+
+Repository-scale, multi-phase implementation programs require one final audit
+after every phase and its task-local reviews are complete, but before the
+umbrella issue or implementation branch is declared ready for integration.
+
+- Audit one exact candidate commit. Every report must name that commit, and an
+  auditor must not audit a lane whose implementation or task-local review it
+  performed. The lanes may run in batches when agent concurrency is limited.
+- Assign a distinct independent auditor to each required lane:
+  1. **Specification and architecture:** accepted issues, phase acceptance
+     criteria, eager/graph semantic parity, extension lowering, and migration
+     compatibility.
+  2. **Rust safety and resource lifecycle:** aliasing, unsafe boundaries,
+     lifetimes, permits, locks, buffers, caches, identifiers, and cleanup on
+     success, error, cancellation, and unwind.
+  3. **Performance and parallelism:** current-main baseline, eager fast path,
+     allocations and request/container overhead, nested fan-out, provider
+     worker ownership, thread-count and placement control, and CPU/GPU
+     synchronization.
+  4. **Public API and documentation:** facade boundaries, operation-family
+     traits, typed errors, feature combinations, runnable examples, online
+     parallelism documentation, and source/checker consistency.
+  5. **CPU and NUMA:** managed and external domains, strict versus advisory
+     placement, resource arbitration, faer/BLAS/strided behavior, multiple
+     sockets, re-entry, fairness, and failure recovery.
+  6. **GPU, XLA, and multi-GPU:** context/stream/event ownership,
+     backend-neutral artifacts, compiler and prepared-operation caches, device
+     placement, independent devices, and cross-device failure handling.
+- After all lane reports, a separate integration auditor must check
+  cross-phase invariants, duplicated or contradictory findings, and the
+  closure evidence.
+- Each lane report must record the candidate commit; relevant feature,
+  toolchain, and hardware configuration; inspected files, public contracts,
+  and issue acceptance criteria; fresh commands and complete result
+  classifications; findings classified as `Critical`, `Important`, or
+  `Minor`; and explicit limitations or skipped hardware paths. Performance
+  results must be classified as `PASS`, `FAIL`, or `INCONCLUSIVE`. Do not infer
+  a pass from an implementer's earlier run. Source scanners and mutation tests
+  support, but do not replace, call-path review and runtime tests.
+- Apply the existing [Public Boundary Safety Audits](#public-boundary-safety-audits),
+  [Unsafe Code Boundary](#unsafe-code-boundary),
+  [Performance And Layout Rules](#performance-and-layout-rules),
+  [Performance-Gated Experiment Protocol](#performance-gated-experiment-protocol),
+  [CPU Threading Contract](#cpu-threading-contract),
+  [GPU Backend Contract](#gpu-backend-contract),
+  [Documentation Policy](#documentation-policy), and
+  [Work Logs And Design Records](#work-logs-and-design-records) in the relevant
+  lanes instead of restating their detailed checklists here.
+- The final audit passes only when every `Critical` and `Important` finding is
+  fixed and independently re-reviewed; every `Minor` finding is fixed or has a
+  written rationale and accepted tracking issue; every required performance
+  gate is `PASS`; and the integration auditor reports no unresolved
+  cross-phase contradiction. `INCONCLUSIVE` blocks promotion until a valid
+  rerun or explicit accepted scope decision is recorded.
+- Environment-limited CPU, GPU, XLA, or multi-device paths must retain
+  reproducible diagnostics and an identified verification owner. The final
+  worklog must link every lane report, the integration report, the exact
+  candidate commit, and the final verification commands.
+- This gate supplements rather than replaces task-local TDD, specification
+  review, code-quality review, CI, and required performance gates.
+- Auditing is read-only: audit agents must not modify the candidate while
+  reviewing it. A finding fix creates a new exact candidate revision. Before
+  the audit can pass, every lane report must be refreshed to name and validate
+  that final revision: each auditor reviews the intervening diff, every
+  affected lane reruns its relevant evidence, and an unaffected lane may carry
+  earlier runtime evidence forward only with a recorded diff-impact rationale.
+  The separate integration auditor runs last against the same final revision.
+
 ## External Contribution Intake
 
 - Pull request creation is currently restricted to collaborators. External
@@ -270,7 +344,9 @@ rules from `tensor4all-agent-rules`.
   directly.
 - Users import operation crates directly, bring their extension traits into
   scope, and register runtimes explicitly when graph execution reaches an
-  extension family; for example `tenferro_einsum::GraphCompilerEinsumExt` plus
+  extension family; for example the direct
+  `tenferro_einsum::TraceContextEinsumExt` /
+  `tenferro_einsum::TracedTensorEinsumExt` operation surfaces plus
   `executor.register_extension(tenferro_einsum::register_runtime)`.
 - Extension runtime dispatch must fail explicitly when a runtime owner is
   available but the extension family is not registered. Do not silently fall
@@ -310,15 +386,15 @@ rules from `tensor4all-agent-rules`.
 
 ## Rule Source Of Truth
 
-- `Primitive::linearize` and `Primitive::transpose_rule` (in `tenferro-internal-ops/src/ad/`)
-  are the semantic source of truth for AD rules.
-- These are graph-level rules that add ops into a `GraphBuilder`.
-  `tidu::linearize` calls `linearize`; `tidu::linear_transpose` calls `transpose_rule`.
-- The canonical tenferro AD model is graph-level `linearize` plus
-  `transpose_rule`. Do not model tensor primitive AD by implementing
+- `SemanticProgram -> SemanticProgram` transforms in `tenferro-ad` are the
+  current semantic AD boundary. `tenferro-internal-ops` still owns the
+  primitive rule vocabulary used to implement those transforms.
+- The semantic transforms use the validation-preserving program builder rather
+  than exposing primitive graph keys or mutating a frozen program.
+- Do not model tensor primitive AD by implementing
   `chainrules_core::ReverseRule<StdTensorOp>` or `ForwardRule<StdTensorOp>`;
   those traits are value/tape-level interfaces and are not the standard
-  primitive-op rule surface in this repository.
+  semantic transform surface in this repository.
 - Avoid introducing ChainRules-style `frule`/`rrule` terminology for new
   tenferro AD APIs. Use `linearize` for JVP graph emission and
   `transpose_rule` for transposed linear graph emission. A future
@@ -726,6 +802,27 @@ Tests follow implementation ownership.
   thread counts. A single fixed-size speedup is not enough evidence for a
   performance-sensitive change.
 
+### Performance-Gated Experiment Protocol
+
+- Before running a candidate, record the baseline commit, candidate commit,
+  benchmark source, build profile, hardware and affinity configuration,
+  provider/thread settings, complete case list, comparison statistic,
+  acceptance threshold, repetition policy, and host-noise observables and
+  thresholds. Candidate results must not influence these choices.
+- Run the complete baseline/candidate suite as one paired experiment. Do not
+  selectively retry, omit, replace, or promote individual favorable cases.
+- If a predeclared host-noise or validity gate fails, classify the entire paired
+  experiment as `INCONCLUSIVE`. Reconsideration requires a complete paired
+  rerun under the same predeclared protocol, not a selective retry.
+- Record every measured case, confidence interval, validity observation, and
+  regression in the worklog. A negative or inconclusive primary result is
+  evidence and must not be rewritten as success because secondary cases
+  improved.
+- Promote a performance-gated change only when its predeclared primary gate and
+  all required non-regression/correctness gates pass. Do not relax thresholds,
+  redefine the primary metric, or add post-hoc exclusions after seeing the
+  candidate.
+
 ### Cache Ownership
 
 - Long-lived runtime/compiler caches must be owned by `Engine` or another
@@ -920,9 +1017,10 @@ Tests follow implementation ownership.
 - **Extension families**: extension crates cannot add inherent methods to
   external tensor types, so their canonical tensor-facing surface is extension
   traits (`TracedTensorLinalgExt`, `EagerEinsumExt`,
-  `GraphCompilerEinsumExt`, `TracedTensorFftExt`) re-exported at the crate
-  root. Do not expose public `traced_tensor` / `eager_tensor` module free
-  functions for standard operation families.
+  `TraceContextEinsumExt`, `TracedTensorEinsumExt`,
+  `TracedTensorFftExt`) re-exported at the crate root. Do not expose public
+  `traced_tensor` / `eager_tensor` module free functions for standard
+  operation families.
 - **No compatibility shims for operation-surface style changes**: when API
   compatibility is not explicitly required, remove old module functions instead
   of keeping wrappers beside the canonical method/associated-function or

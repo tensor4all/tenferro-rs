@@ -3,10 +3,8 @@
 //! Verifies faer GEMM dispatch, batched GEMM, and stride-aware input handling.
 
 use crate::support;
-use support::RunTraced;
-use tenferro_cpu::CpuBackend;
+use support::{cpu_runtime, RunTraced};
 use tenferro_runtime::traced::TracedTensor;
-use tenferro_runtime::GraphExecutor;
 use tenferro_tensor::{DotGeneralConfig, Tensor, TypedTensor};
 
 fn f64_tensor(shape: Vec<usize>, data: Vec<f64>) -> Tensor {
@@ -53,8 +51,8 @@ fn test_faer_gemm_basic_f64() {
     };
     let tc = ta.dot_general(&tb, config).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = tc.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = tc.run_with(&engine).unwrap();
     let data = get_f64_data(&result);
     // C = A*B = [[22,49],[28,64]] col-major: [22,28,49,64]
     assert_eq!(data, &[22.0, 28.0, 49.0, 64.0]);
@@ -75,8 +73,8 @@ fn test_faer_gemm_basic_f32() {
     };
     let tc = ta.dot_general(&tb, config).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = tc.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = tc.run_with(&engine).unwrap();
     let data = get_f32_data(&result);
     assert_eq!(data, &[22.0f32, 28.0, 49.0, 64.0]);
 }
@@ -105,8 +103,8 @@ fn test_faer_gemm_identity() {
     };
     let tc = ta.dot_general(&ti, config).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = tc.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = tc.run_with(&engine).unwrap();
     let data = get_f64_data(&result);
     let expected = get_f64_data(&a);
     assert_eq!(data, expected);
@@ -146,8 +144,8 @@ fn test_batched_gemm() {
     };
     let tc = ta.dot_general(&tb, config).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = tc.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = tc.run_with(&engine).unwrap();
 
     // Batch 0: C0 = A0*B0 = [[1*5+3*6, 1*7+3*8],[2*5+4*6, 2*7+4*8]]
     //             = [[23,31],[34,46]]
@@ -177,7 +175,7 @@ fn test_strided_input_via_transpose_and_dot_general() {
     let a = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     let b = f64_tensor(vec![3, 2], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
     let ta = TracedTensor::from_tensor_concrete_shape(a).unwrap();
     let tb = TracedTensor::from_tensor_concrete_shape(b).unwrap();
     let ta_t = ta.transpose(&[1, 0]).unwrap();
@@ -193,7 +191,7 @@ fn test_strided_input_via_transpose_and_dot_general() {
         )
         .unwrap();
 
-    let result = tc.run_with(&mut engine).unwrap();
+    let result = tc.run_with(&engine).unwrap();
     let data = get_f64_data(&result);
 
     // A^T = [[1,2,3],[4,5,6]]
@@ -219,8 +217,8 @@ fn test_vector_dot_product() {
     };
     let tc = tv.dot_general(&tw, config).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = tc.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = tc.run_with(&engine).unwrap();
     assert!(result.shape().is_empty());
     let data = get_f64_data(&result);
     // 1*4 + 2*5 + 3*6 = 32

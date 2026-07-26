@@ -48,17 +48,20 @@ def main() -> int:
     linalg_manifest = repo / "crates" / "tenferro-linalg" / "Cargo.toml"
     if not has_line(linalg_manifest, "autodiff = ["):
         findings.append("crates/tenferro-linalg/Cargo.toml is missing the autodiff feature")
-    optional_ad_dep = (
-        'tenferro-ad = { path = "../tenferro-ad", version = "0.1.0", default-features = false, optional = true }'
-    )
-    if not has_line(linalg_manifest, optional_ad_dep):
+    linalg_manifest_text = linalg_manifest.read_text(encoding="utf-8")
+    optional_ad_dep = 'tenferro-ad = { path = "../tenferro-ad"'
+    if (
+        optional_ad_dep not in linalg_manifest_text
+        or "default-features = false" not in linalg_manifest_text
+        or "optional = true" not in linalg_manifest_text
+    ):
         findings.append("tenferro-linalg must keep tenferro-ad optional")
 
     linalg_lib = repo / "crates" / "tenferro-linalg" / "src" / "lib.rs"
     for needle in [
         '#[cfg(feature = "autodiff")]\nmod ad;',
         '#[cfg(feature = "autodiff")]\nmod eager_ext;',
-        '#[cfg(feature = "autodiff")]\npub use ad::ad_rules;',
+        '#[cfg(feature = "autodiff")]\npub use ad::semantic_ad_rules;',
         '#[cfg(feature = "autodiff")]\npub use eager_ext::EagerTensorLinalgExt;',
     ]:
         if needle not in linalg_lib.read_text(encoding="utf-8"):

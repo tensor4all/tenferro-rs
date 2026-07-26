@@ -14,7 +14,6 @@ description = "Subscripts, contraction planning, concrete/traced/eager einsum AP
 [features]
 default = ["cpu-faer"]
 autodiff = [
-    "dep:tidu",
     "dep:tenferro-ad",
     "tenferro-internal-ops/autodiff",
 ]
@@ -74,7 +73,6 @@ tenferro-tensor = { path = "../tenferro-tensor", version = "0.2.0", default-feat
 tenferro-cpu = { path = "../tenferro-cpu", version = "0.2.0", default-features = false }
 tenferro-gpu = { path = "../tenferro-gpu", version = "0.2.0", default-features = false, optional = true }
 computegraph.workspace = true
-tidu = { workspace = true, optional = true }
 lru.workspace = true
 omeco.workspace = true
 smallvec.workspace = true
@@ -87,6 +85,11 @@ num-complex.workspace = true
 
 [[bench]]
 name = "einsum_cpu_bench"
+harness = false
+required-features = ["autodiff"]
+
+[[bench]]
+name = "changing_shape_prepare"
 harness = false
 required-features = ["autodiff"]
 

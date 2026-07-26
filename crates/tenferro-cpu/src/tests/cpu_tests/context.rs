@@ -131,15 +131,43 @@ fn cpu_install_accepts_send_state() {
 }
 
 #[test]
-fn cpu_backend_exec_session_uses_default_provider_scope() {
-    let mut backend = CpuBackend::with_threads(2).unwrap();
-    backend.with_backend_session(|_| {
-        #[cfg(feature = "cpu-blas")]
-        assert!(rayon::current_thread_index().is_none());
+fn cpu_backend_multi_operation_session_enters_executor_once() {
+    let context = Arc::new(CpuContext::with_threads(2).unwrap());
+    let mut backend = CpuBackend::from_context(Arc::clone(&context));
+    let lhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 2.0]).unwrap());
+    let rhs = Tensor::F64(TypedTensor::from_vec_col_major(vec![2], vec![3.0_f64, 4.0]).unwrap());
+    let before = context.executor_install_calls_for_test();
 
-        #[cfg(all(not(feature = "cpu-blas"), feature = "cpu-faer"))]
-        assert_eq!(rayon::current_num_threads(), 2);
+    backend.with_backend_session(|session| {
+        session.add(&lhs, &rhs).unwrap();
+        session.neg(&lhs).unwrap();
+        session.mul(&lhs, &rhs).unwrap();
+        session
+            .dot_general(
+                &lhs,
+                &rhs,
+                &DotGeneralConfig {
+                    lhs_contracting_dims: vec![0],
+                    rhs_contracting_dims: vec![0],
+                    lhs_batch_dims: vec![],
+                    rhs_batch_dims: vec![],
+                },
+            )
+            .unwrap();
     });
+
+    let install_delta = context.executor_install_calls_for_test() - before;
+    match backend.execution_info().execution_mode() {
+        crate::CpuExecutionMode::ProviderDefaultExclusive => assert_eq!(install_delta, 4),
+        _ => assert_eq!(install_delta, 1),
+    }
+
+    let before_standalone = context.executor_install_calls_for_test();
+    backend.add(&lhs, &rhs).unwrap();
+    assert_eq!(
+        context.executor_install_calls_for_test() - before_standalone,
+        1
+    );
 }
 
 #[test]
@@ -162,39 +190,6 @@ fn cpu_backend_from_context_shares_runtime_owner() {
     let b2 = CpuBackend::from_context(ctx);
     assert_eq!(b1.num_threads(), 3);
     assert_eq!(b2.num_threads(), 3);
-}
-
-#[cfg(feature = "cpu-faer")]
-#[test]
-fn cpu_context_faer_policy_is_seq_for_one_thread() {
-    let ctx = CpuContext::with_threads(1).unwrap();
-    assert!(matches!(ctx.faer_par(), faer::Par::Seq));
-}
-
-#[cfg(feature = "cpu-faer")]
-#[test]
-fn cpu_context_faer_policy_matches_configured_workers_outside_pool() {
-    let ctx = CpuContext::with_threads(2).unwrap();
-    assert_eq!(ctx.faer_par().degree(), 2);
-}
-
-#[cfg(feature = "cpu-faer")]
-#[test]
-fn cpu_context_faer_policy_matches_configured_workers_inside_context_pool() {
-    let ctx = CpuContext::with_threads(2).unwrap();
-    let par = ctx.install(|| ctx.faer_par());
-    assert_eq!(par.degree(), 2);
-}
-
-#[cfg(feature = "cpu-faer")]
-#[test]
-fn cpu_context_faer_policy_ignores_a_different_ambient_pool_size() {
-    let ctx = CpuContext::with_threads(2).unwrap();
-    let ambient = rayon::ThreadPoolBuilder::new()
-        .num_threads(3)
-        .build()
-        .unwrap();
-    assert_eq!(ambient.install(|| ctx.faer_par().degree()), 2);
 }
 
 #[test]

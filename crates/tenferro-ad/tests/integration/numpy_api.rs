@@ -6,10 +6,12 @@ use tenferro_ad::{EagerRuntime, EagerTensor};
 use tenferro_cpu::CpuBackend;
 use tenferro_ops::{ext_op::ExtensionOp, std_tensor_op::StdTensorOp, SymDim};
 use tenferro_runtime::{
-    CompareDir, DType, Error as RuntimeError, ErrorPhase, GraphCompiler, GraphExecutor, Tensor,
-    TensorOpsExt, TracedTensor, TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt,
+    CompareDir, DType, Error as RuntimeError, ErrorPhase, GraphCompiler, Tensor, TensorOpsExt,
+    TracedTensor, TypedTensor, TypedTensorMaskOpsExt, TypedTensorOpsExt,
 };
 use tenferro_tensor::ValidationError;
+
+use crate::support::{cpu_runtime, run_compiled_one};
 
 #[derive(Clone, Debug)]
 struct TestExtensionOp;
@@ -58,8 +60,8 @@ fn traced_add_uses_numpy_broadcasting_for_rank_padding_and_singletons() {
 
     let mut compiler = GraphCompiler::new();
     let program = compiler.compile(&y).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    let out = executor.run(&program).unwrap();
+    let executor = cpu_runtime();
+    let out = run_compiled_one(&executor, &program, &[]).unwrap();
 
     assert_eq!(out.shape(), &[3, 4]);
     assert_eq!(
@@ -102,8 +104,8 @@ fn traced_unary_methods_forward_to_distinct_primal_ops() {
     fn run(output: &TracedTensor) -> Tensor {
         let mut compiler = GraphCompiler::new();
         let program = compiler.compile(output).unwrap();
-        let mut executor = GraphExecutor::new(CpuBackend::new());
-        executor.run(&program).unwrap()
+        let executor = cpu_runtime();
+        run_compiled_one(&executor, &program, &[]).unwrap()
     }
 
     let x = TracedTensor::from_vec_col_major(vec![2], vec![1.0_f64, 4.0]).unwrap();
@@ -167,9 +169,9 @@ fn traced_compare_returns_bool_and_where_select_accepts_bool_condition() {
     let mut compiler = GraphCompiler::new();
     let cond_program = compiler.compile(&cond).unwrap();
     let selected_program = compiler.compile(&selected).unwrap();
-    let mut executor = GraphExecutor::new(CpuBackend::new());
-    let cond_out = executor.run(&cond_program).unwrap();
-    let selected_out = executor.run(&selected_program).unwrap();
+    let executor = cpu_runtime();
+    let cond_out = run_compiled_one(&executor, &cond_program, &[]).unwrap();
+    let selected_out = run_compiled_one(&executor, &selected_program, &[]).unwrap();
 
     assert_eq!(cond_out.dtype(), DType::Bool);
     assert_eq!(cond_out.as_slice::<bool>().unwrap(), &[true, false]);

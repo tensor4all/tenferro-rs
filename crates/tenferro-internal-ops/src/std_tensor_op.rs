@@ -1,12 +1,12 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-#[cfg(feature = "autodiff")]
+#[cfg(all(test, feature = "autodiff"))]
+use crate::ad::{ADRuleResult, PrimitiveTransposeInput};
+#[cfg(all(test, feature = "autodiff"))]
 use computegraph::types::{LocalValueId, OperationRole, ValueKey};
 use computegraph::GraphOperation;
 use num_complex::{Complex32, Complex64};
-#[cfg(feature = "autodiff")]
-use tidu::{ADRuleResult, Primitive, PrimitiveBuilder};
 
 use crate::dim_expr::DimExpr;
 use crate::ext_op::{ext_op_eq, hash_extension, ExtensionOp};
@@ -465,37 +465,6 @@ impl GraphOperation for StdTensorOp {
     }
 }
 
-#[cfg(feature = "autodiff")]
-impl Primitive for StdTensorOp {
-    type ADContext = crate::ad::context::ShapeGuardContext;
-
-    fn add() -> Self {
-        StdTensorOp::Add
-    }
-
-    fn jvp_rule(
-        &self,
-        builder: &mut impl PrimitiveBuilder<Self>,
-        primal_in: &[ValueKey<Self>],
-        primal_out: &[ValueKey<Self>],
-        tangent_in: &[Option<LocalValueId>],
-        ctx: &mut Self::ADContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        crate::ad::linearize(self, builder, primal_in, primal_out, tangent_in, ctx)
-    }
-
-    fn transpose_rule(
-        &self,
-        builder: &mut impl PrimitiveBuilder<Self>,
-        cotangent_out: &[Option<LocalValueId>],
-        inputs: &[tidu::PrimitiveTransposeInput<Self>],
-        mode: &OperationRole,
-        ctx: &mut Self::ADContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>> {
-        crate::ad::transpose_rule(self, builder, cotangent_out, inputs, mode, ctx)
-    }
-}
-
 #[cfg(all(test, feature = "autodiff"))]
 impl StdTensorOp {
     pub(crate) fn jvp_rule(
@@ -522,10 +491,10 @@ impl StdTensorOp {
             .map(|input| match input {
                 computegraph::ValueRef::Local(local_id) => {
                     let key = builder.global_key(*local_id).clone();
-                    tidu::PrimitiveTransposeInput::Residual(key)
+                    PrimitiveTransposeInput::Residual(key)
                 }
                 computegraph::ValueRef::External(key) => {
-                    tidu::PrimitiveTransposeInput::Residual(key.clone())
+                    PrimitiveTransposeInput::Residual(key.clone())
                 }
             })
             .collect::<Vec<_>>();

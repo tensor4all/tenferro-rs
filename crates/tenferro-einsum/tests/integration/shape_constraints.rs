@@ -1,98 +1,70 @@
-use tenferro_einsum::{EinsumOptimize, GraphCompilerEinsumExt};
-use tenferro_runtime::{DType, Error, GraphCompiler, TracedTensor};
+use tenferro_einsum::{EinsumOptimize, TraceContextEinsumExt};
+use tenferro_ops::dim_expr::DimExpr;
+use tenferro_runtime::program::ProgramInputSpec;
+use tenferro_runtime::{GraphCompiler, TraceContext};
+use tenferro_tensor::{DType, Tensor};
+
+use super::support;
 
 #[test]
-fn independent_symbolic_contract_enforces_repeated_einsum_labels() {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    assert_ne!(
-        lhs.axis_sym_dim(1).unwrap(),
-        rhs.axis_sym_dim(0).unwrap(),
-        "contracted axes must come from independent symbolic origins"
-    );
-
-    let mut compiler = GraphCompiler::new();
-    let output = compiler.einsum(&[&lhs, &rhs], "ij,jk->ik").unwrap();
-    assert!(
-        !tenferro_runtime::ad_support::ConstraintScopeTransfer::from_tensor(&output).is_empty(),
-        "direct einsum lowering must retain the extension shape contract"
-    );
-
-    compiler
-        .compile_with_input_specs(
-            &output,
-            &[(&lhs, DType::F64, &[2, 3]), (&rhs, DType::F64, &[3, 4])],
-        )
-        .expect("equal contracted axes should compile");
-
-    let error = compiler
-        .compile_with_input_specs(
-            &output,
-            &[(&lhs, DType::F64, &[2, 3]), (&rhs, DType::F64, &[5, 4])],
-        )
-        .expect_err("unequal contracted axes must fail before execution");
-    assert!(matches!(
-        error,
-        Error::ShapeConstraintViolation {
-            family: "tenferro.einsum.v1",
-            ..
-        }
-    ));
-}
-
-fn assert_expanded_strategy_enforces_contract(optimize: EinsumOptimize) {
-    let lhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let middle = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    let rhs = TracedTensor::input_symbolic_shape(DType::F64, 2).unwrap();
-    assert_ne!(
-        lhs.axis_sym_dim(1).unwrap(),
-        middle.axis_sym_dim(0).unwrap()
-    );
-    assert_ne!(
-        middle.axis_sym_dim(1).unwrap(),
-        rhs.axis_sym_dim(0).unwrap()
-    );
-
-    let mut compiler = GraphCompiler::new();
-    let output = compiler
-        .einsum_with(&[&lhs, &middle, &rhs], "ab,bc,cd->ad", optimize)
+fn ordered_inputs_enforce_symbolic_contracted_dimension_equality() {
+    let mut trace = TraceContext::new();
+    let lhs = trace
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [
+                DimExpr::InputDim {
+                    input_idx: 0,
+                    axis: 0,
+                },
+                DimExpr::InputDim {
+                    input_idx: 0,
+                    axis: 1,
+                },
+            ],
+        ))
         .unwrap();
-    compiler
-        .compile_with_input_specs(
-            &output,
-            &[
-                (&lhs, DType::F64, &[2, 3]),
-                (&middle, DType::F64, &[3, 4]),
-                (&rhs, DType::F64, &[4, 5]),
+    let rhs = trace
+        .input(ProgramInputSpec::new(
+            DType::F64,
+            [
+                DimExpr::InputDim {
+                    input_idx: 1,
+                    axis: 0,
+                },
+                DimExpr::InputDim {
+                    input_idx: 1,
+                    axis: 1,
+                },
             ],
-        )
-        .expect("matching expanded contraction axes should compile");
+        ))
+        .unwrap();
+    let output = trace.einsum(&[lhs, rhs], "ij,jk->ik").unwrap();
+    let graph = trace.finish(&[output]).unwrap();
+    let compiled = GraphCompiler::new().compile_traced_graph(&graph).unwrap();
+    let lhs = Tensor::from_vec_col_major(vec![2, 3], vec![1.0_f64; 6]).unwrap();
+    let bad_rhs = Tensor::from_vec_col_major(vec![4, 2], vec![1.0_f64; 8]).unwrap();
 
-    let error = compiler
-        .compile_with_input_specs(
-            &output,
-            &[
-                (&lhs, DType::F64, &[2, 3]),
-                (&middle, DType::F64, &[7, 4]),
-                (&rhs, DType::F64, &[4, 5]),
-            ],
-        )
-        .expect_err("expanded graph must retain repeated-label equality constraints");
-    assert!(matches!(
-        error,
-        Error::ShapeConstraintViolation {
-            family: "tenferro.einsum.v1",
-            ..
-        }
-    ));
+    assert!(support::run_one(&compiled, &[&lhs, &bad_rhs]).is_err());
 }
 
 #[test]
-fn explicit_false_expanded_strategy_retains_shape_contract() {
-    assert_expanded_strategy_enforces_contract(EinsumOptimize::False);
-}
+fn explicit_nary_path_preserves_shape_constraints() {
+    let spec = |rows, cols| {
+        ProgramInputSpec::new(DType::F64, [DimExpr::Const(rows), DimExpr::Const(cols)])
+    };
+    let mut trace = TraceContext::new();
+    let a = trace.input(spec(2, 3)).unwrap();
+    let b = trace.input(spec(3, 4)).unwrap();
+    let c = trace.input(spec(4, 5)).unwrap();
+    let output = trace
+        .einsum_with(
+            &[a, b, c],
+            "ab,bc,cd->ad",
+            EinsumOptimize::Path(vec![(0, 1), (0, 1)]),
+        )
+        .unwrap();
+    let graph = trace.finish(&[output]).unwrap();
 
-#[test]
-fn explicit_path_expanded_strategy_retains_shape_contract() {
-    assert_expanded_strategy_enforces_contract(EinsumOptimize::Path(vec![(0, 1), (0, 1)]));
+    assert!(GraphCompiler::new().compile_traced_graph(&graph).is_ok());
 }

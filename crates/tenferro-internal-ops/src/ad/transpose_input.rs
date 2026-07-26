@@ -1,5 +1,5 @@
+use crate::ad::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 use computegraph::types::{ValueKey, ValueRef};
-use tidu::{ADRuleError, ADRuleKind, ADRuleResult, PrimitiveTransposeInput};
 
 use crate::ad::context::ShapeGuardContext;
 use crate::dim_expr::DimExpr;

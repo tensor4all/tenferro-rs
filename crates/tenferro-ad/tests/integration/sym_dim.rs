@@ -1,8 +1,6 @@
 use crate::support;
-use support::RunTraced;
-use tenferro_cpu::CpuBackend;
+use support::{cpu_runtime, RunTraced};
 use tenferro_runtime::error::Error;
-use tenferro_runtime::GraphExecutor;
 use tenferro_runtime::{SymDim, Tensor, TracedTensor, TypedTensor};
 use tenferro_tensor::{ErrorKind, ValidationKind};
 
@@ -34,8 +32,8 @@ fn reshape_sym_uses_symbolic_input_axes() {
 
     assert_eq!(y.rank, 2);
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = y.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = y.run_with(&engine).unwrap();
     assert_eq!(result.shape(), &[6, 4]);
     assert_eq!(
         get_f64_data(&result),
@@ -59,8 +57,8 @@ fn reshape_sym_supports_mixed_usize_arithmetic() {
 
     assert_eq!(y.rank, 2);
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = y.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = y.run_with(&engine).unwrap();
     assert_eq!(result.shape(), &[4, 6]);
     assert_eq!(
         get_f64_data(&result),
@@ -106,8 +104,8 @@ fn sym_dim_sub_and_div_operators() {
     let b = sym_size(&x, 0) / 3usize;
     let y = x.reshape_sym(&[a, b]).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = y.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = y.run_with(&engine).unwrap();
     assert_eq!(result.shape(), &[3, 4]);
 }
 
@@ -123,8 +121,8 @@ fn sym_dim_sub_operator() {
     let b = sym_size(&x, 0) - 3usize;
     let y = x.reshape_sym(&[a, b]).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = y.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = y.run_with(&engine).unwrap();
     assert_eq!(result.shape(), &[2, 3]);
 }
 
@@ -141,8 +139,8 @@ fn sym_dim_usize_lhs_operators() {
     let b = sym_size(&x, 0) - 4usize;
     let y = x.reshape_sym(&[a, b]).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = y.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = y.run_with(&engine).unwrap();
     assert_eq!(result.shape(), &[3, 2]);
 }
 
@@ -159,8 +157,8 @@ fn sym_dim_usize_sub_and_div_lhs() {
     let b = 6usize / sym_size(&x, 1);
     let y = x.reshape_sym(&[a, b]).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = y.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = y.run_with(&engine).unwrap();
     assert_eq!(result.shape(), &[3, 2]);
 }
 
@@ -176,8 +174,8 @@ fn sym_dim_min_max_methods() {
     let b = sym_size(&x, 0).max(sym_size(&x, 1));
     let y = x.reshape_sym(&[a, b]).unwrap();
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
-    let result = y.run_with(&mut engine).unwrap();
+    let engine = cpu_runtime();
+    let result = y.run_with(&engine).unwrap();
     assert_eq!(result.shape(), &[2, 3]);
 }
 
@@ -192,14 +190,14 @@ fn reshape_sym_graph_reuse_with_different_shapes() {
         input.reshape_sym(&[total]).unwrap()
     }
 
-    let mut engine = GraphExecutor::new(CpuBackend::new());
+    let engine = cpu_runtime();
 
     // First execution: shape [2, 3]
     let data_a: Vec<f64> = (1..=6).map(|v| v as f64).collect();
     let x_a =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![2, 3], data_a.clone())).unwrap();
     let y_a = build_flatten(&x_a);
-    let result_a = y_a.run_with(&mut engine).unwrap();
+    let result_a = y_a.run_with(&engine).unwrap();
     assert_eq!(result_a.shape(), &[6]);
     assert_eq!(get_f64_data(&result_a), &data_a);
 
@@ -208,7 +206,7 @@ fn reshape_sym_graph_reuse_with_different_shapes() {
     let x_b =
         TracedTensor::from_tensor_concrete_shape(f64_tensor(vec![4, 5], data_b.clone())).unwrap();
     let y_b = build_flatten(&x_b);
-    let result_b = y_b.run_with(&mut engine).unwrap();
+    let result_b = y_b.run_with(&engine).unwrap();
     assert_eq!(result_b.shape(), &[20]);
     assert_eq!(get_f64_data(&result_b), &data_b);
 }
