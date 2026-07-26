@@ -339,15 +339,14 @@ integrate with and contribute back to them.
   Julia tensor-network ecosystem.
 - **Design heritage.** Operation semantics and AD rules living outside an
   all-in-one tensor type follow the Julia numerical-computing community
-  (ChainRules, OMEinsum). Autodiff builds on
-  [`tidu`](https://github.com/tensor4all/tidu-rs), a tensor4all crate for
-  `Primitive`-generic graph transforms that are not tied to tensors.
+  (ChainRules, OMEinsum). Autodiff is implemented by `tenferro-ad` and
+  `tenferro-internal-ops`, with extension families registering semantic AD
+  rules rather than embedding formulas in an all-in-one tensor type.
 - **JAX.** The traced-graph compilation and trace-then-transform autodiff
-  architecture follow JAX: `tidu`'s `linearize` / `linear_transpose`
-  decomposition, the `dot_general` contraction primitive and StableHLO-style
-  op vocabulary, the JAX-compatible einsum contraction-path format, and
-  individual AD-rule conventions such as the complex SVD gauge correction
-  and gradient seed conventions.
+  architecture follow JAX: linearize-then-transpose AD, the `dot_general`
+  contraction primitive and StableHLO-style op vocabulary, the JAX-compatible
+  einsum contraction-path format, and individual AD-rule conventions such as
+  the complex SVD gauge correction and gradient seed conventions.
 - **PyTorch.** Eager execution with `backward()` follows PyTorch's API
   shape. PyTorch's manual autograd formulas (`derivatives.yaml`,
   `FunctionsManual.cpp`, the `handle_r_to_c` convention) serve as comparison

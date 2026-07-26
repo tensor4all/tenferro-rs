@@ -78,10 +78,11 @@ Important distinctions:
 
 Responsibility boundary:
 
-- `tidu-rs` owns the `Primitive` contract
-- `tidu-rs` owns generic AD transforms that call `linearize` and
-  `transpose_rule`
-- tenferro owns the **concrete per-op derivative rules**
+- `tenferro-internal-ops` owns the core `StdTensorOp` primitive AD rule
+  vocabulary and registry.
+- `tenferro-ad` owns semantic AD transforms and extension-rule dispatch.
+- operation-family crates own their **concrete per-op derivative rules** and
+  oracle coverage.
 
 So this directory keeps the primitive vocabulary and cross-crate architecture,
 but not a standalone per-op transpose-rule manual. Detailed formulas are a
@@ -188,7 +189,8 @@ the runtime tensor and backend APIs described in
 ## V. Tenferro IR Vocabulary
 
 This section is about the graph-level vocabulary that `computegraph-rs`,
-`tidu-rs`, and tenferro's `StdTensorOp` layer talk about.
+`tenferro-internal-ops`, `tenferro-ad`, and tenferro's `StdTensorOp` layer talk
+about.
 
 These ops define the **Tenferro IR**. Core primitives map to
 `PrimitiveOpKind` descriptors in `tenferro-core-ops`; extension payloads are

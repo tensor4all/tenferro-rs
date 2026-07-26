@@ -64,7 +64,7 @@ relationship; the role is stated only on the first row.
 | `tenferro-linalg` | | [PyTorch](https://github.com/pytorch/pytorch) | Compatible (manual autograd formulas as comparison baselines; validated against torch-generated oracles) |
 | `tenferro-fft` | FFT extension | cubek-fft | Backend |
 | `tenferro-runtime` | Traced tensors, graph compile/exec | [JAX](https://github.com/jax-ml/jax) | Inspired (trace-then-transform program architecture) |
-| `tenferro-ad` | Eager and traced autodiff surfaces | [tidu](https://github.com/tensor4all/tidu-rs) | Backend (`Primitive`-generic `linearize` / `linear_transpose` transforms) |
+| `tenferro-ad` | Eager and traced autodiff surfaces | JAX / linearize-then-transpose AD literature | Inspired (semantic transform composition, gradient seed conventions) |
 | `tenferro-ad` | | [JAX](https://github.com/jax-ml/jax) | Inspired (transform composition, gradient seed conventions) |
 | `tenferro-ad` | | [PyTorch](https://github.com/pytorch/pytorch) | Inspired (eager `backward()` API shape) |
 | `tenferro-internal-ops` | Graph op vocabulary, core AD rules | [StableHLO](https://github.com/openxla/stablehlo) / JAX | Inspired (op semantics, e.g. indexing) |
@@ -82,5 +82,5 @@ are welcome.
 
 | Algorithm | Component(s) | Original references |
 | --- | --- | --- |
-| Linearize-then-transpose reverse-mode AD | `tidu`, `tenferro-ad` | A. Radul, A. Paszke, R. Frostig, M. J. Johnson, D. Maclaurin, "You Only Linearize Once: Tangents Transpose to Gradients", [POPL 2023](https://doi.org/10.1145/3571236), [arXiv:2204.10923](https://arxiv.org/abs/2204.10923) |
+| Linearize-then-transpose reverse-mode AD | `tenferro-ad`, `tenferro-internal-ops` | A. Radul, A. Paszke, R. Frostig, M. J. Johnson, D. Maclaurin, "You Only Linearize Once: Tangents Transpose to Gradients", [POPL 2023](https://doi.org/10.1145/3571236), [arXiv:2204.10923](https://arxiv.org/abs/2204.10923) |
 | `dot_general` batched contraction primitive | `tenferro-einsum` | [StableHLO specification](https://openxla.org/stablehlo/spec) (XLA lineage) |

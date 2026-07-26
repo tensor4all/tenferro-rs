@@ -109,11 +109,11 @@ rules from `tensor4all-agent-rules`.
   or `sin` as a shortcut for constants. Seed construction is dtype plumbing,
   not math dispatch; it must work consistently for all supported tensor dtypes
   or return an intentional typed limitation.
-- If the cleanest fix requires reshaping `tidu` AD-transform APIs used by
-  tenferro, make that upstream API cleanup the preferred repair path and
-  optimize for the long-term clean `tidu` contract first. Do not hide a
-  tenferro bug behind lossy `tidu` error categories or local compatibility
-  shims when a clearer `tidu` contract is the root-cause fix.
+- If the cleanest fix requires reshaping tenferro AD transform or rule APIs,
+  make that API cleanup the preferred repair path and optimize for the
+  long-term clean contract first. Do not hide a tenferro bug behind lossy error
+  categories or local compatibility shims when a clearer AD contract is the
+  root-cause fix.
 - Public cache, runtime, extension, and AD registry locks must not silently
   ignore poison by reporting empty/default state. If the method can return a
   `Result`, return a typed poison error. If a non-`Result` API must remain

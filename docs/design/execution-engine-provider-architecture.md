@@ -25,23 +25,19 @@ eager and compiled surfaces call the selected engine. Backend libraries remain
 replaceable behind smaller provider traits, while resource ownership stays
 with the engine.
 
-The active implementation directive after the 2026-07-25 restart continues
-through Phase 8 before opening a PR. The PR/CI/merge babysit starts only after
-Phase 8 and the AMD CPU/CUDA benchmark gate. Umbrella Phase 9 remains the
-separate multi-GPU scheduling phase. The exact-commit cross-phase audit
-described by the restart design runs before integration and is distinct from
-umbrella Phase 9.
+As of the post-U8 merge, the implementation on `main` includes semantic
+program artifacts, runtime preparation snapshots and caches, synchronous
+`Runtime::run_compiled` execution through registered engine bridges, CPU
+runtime registration, extension cache storage, semantic AD transforms, and the
+XLA compiled-graph public boundary.
 
-The Phase 7 local slice currently implements WebGPU runtime registration for
-the `dot_general` family and the runtime-owned tensor backend execution bridge,
-with `Runtime::run_compiled` evidence for rank-2 F32 matmul. CUDA runtime
-registration remains deferred until its backend can satisfy the common
-execution-bridge ownership contract without widening the Phase 7 slice.
+The production dispatch loop and per-op placement are not implemented yet and
+are tracked by #1456. Async `Runtime::submit`, `ExecutionHandle`, transfer
+provider registration, and event-domain scheduling are tracked by #1471 and
+must start from the production dispatch path rather than building a second
+metadata-only layer.
 
-The Phase 8 local slice moves XLA's public graph boundary to `CompiledGraph`
-helpers (`lower_compiled_to_stablehlo` and `XlaExecutor::run_compiled_*`) while
-keeping lower-level `SemanticProgram` entry points for operation crates and
-tests. Full runtime-owned `SubgraphCompiler` selection, one-node scheduled XLA
+Full runtime-owned `SubgraphCompiler` selection, one-node scheduled XLA
 subgraphs, and PJRT executable caching remain separate follow-up work.
 
 This document refines rather than immediately replaces the current contracts in:
@@ -303,9 +299,10 @@ keeping the compiler artifact backend-neutral:
   prepare through the runtime cache using the compiled graph's compiler
   options, validate the public input contract and semantic shape guards, and
   execute through the engine registration's erased tensor backend bridge.
-- `GraphExecutor<B>` remains a legacy compatibility executor. It restages from
-  the backend-neutral `CompiledGraph` and then executes through the same
-  runtime-owned preparation and engine bridge path.
+- The previous `GraphExecutor<B>` facade is retired. Public execution goes
+  through `Runtime::run_compiled` and `Runtime::run_compiled_values`, which
+  prepare from the backend-neutral `CompiledGraph` and execute through the
+  runtime-owned engine bridge.
 - `EngineRegistration::with_tensor_backend_executor` attaches that bridge to
   an engine registration. `tenferro-cpu::runtime_engine_registration` provides
   the CPU registration with direct core preparation capabilities, cache-owner

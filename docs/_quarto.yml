@@ -83,7 +83,7 @@ website:
               - architecture/tenferro-crates.md
               - architecture/computegraph.md
               - architecture/primitive-ad.md
-              - architecture/tidu.md
+              - architecture/semantic-ad.md
               - architecture/ad-pipeline.md
           - section: "Design Notes"
             contents:

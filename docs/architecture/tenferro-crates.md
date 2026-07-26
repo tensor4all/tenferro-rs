@@ -2,7 +2,7 @@
 
 **Repo:** tenferro-rs
 **Parent:** `../index.md`
-**Related:** `computegraph.md`, `primitive-ad.md`, `tidu.md`,
+**Related:** `computegraph.md`, `primitive-ad.md`, `semantic-ad.md`,
 `../spec/backend-contract.md`, `../spec/primitive-catalog.md`,
 `../spec/extension-op.md`
 

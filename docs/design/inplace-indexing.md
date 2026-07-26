@@ -146,8 +146,8 @@ Introduce explicit mutation tracking:
 - Add view+in-place conflict checks for tracked tensors.
 
 This mirrors the PyTorch safety model conceptually, while keeping tensor
-storage independent from the graph-level AD rules owned by `tidu` and
-tenferro's AD crates.
+storage independent from the graph-level AD rules owned by
+`tenferro-internal-ops` and the semantic AD surfaces in `tenferro-ad`.
 
 ## GPU Notes
 

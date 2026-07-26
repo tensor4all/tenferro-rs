@@ -1,246 +1,157 @@
 # AD Contract
 
-**Date:** 2026-06-10
+**Date:** 2026-07-26
 **Parent:** [`../index.md`](../index.md)
-**Related:** [`primitive-catalog.md`](primitive-catalog.md), [`../architecture/primitive-ad.md`](../architecture/primitive-ad.md), [`../architecture/tidu.md`](../architecture/tidu.md)
+**Related:** [`primitive-catalog.md`](primitive-catalog.md),
+[`../architecture/primitive-ad.md`](../architecture/primitive-ad.md),
+[`../architecture/semantic-ad.md`](../architecture/semantic-ad.md)
 
 ---
 
 ## Purpose
 
-This document is the normative specification for the AD trait contract that
-concrete primitives must satisfy. It owns the `Primitive` trait signature
-and the rules that `linearize` and `transpose_rule` must follow.
+This document is the normative specification for tenferro AD rule emission.
+Concrete primitive rules must satisfy this contract whether they are core
+`StdTensorOp` rules or semantic extension rules owned by operation-family
+crates.
 
-For the AD pipeline architecture (linearize, linear_transpose, higher-order AD),
-see [`../architecture/ad-pipeline.md`](../architecture/ad-pipeline.md).
-
-For the AD trait design rationale, see
+For the AD pipeline architecture, see
+[`../architecture/ad-pipeline.md`](../architecture/ad-pipeline.md). For the
+rule-structure rationale, see
 [`../architecture/primitive-ad.md`](../architecture/primitive-ad.md).
 
----
+## Core Primitive Rule Contract
 
-## Primitive trait (canonical signature)
-
-Defined in `tidu-rs/src/rules/primitive_op.rs`. Extends `GraphOperation` with
-the constraint `Self::InputKey: ADKey`.
+Core rules are defined in `tenferro-internal-ops/src/ad/` and registered by
+`PrimitiveOpKind`. The canonical internal rule trait is:
 
 ```rust
-pub trait Primitive: GraphOperation
-where
-    Self::InputKey: ADKey,
-{
-    type ADContext: Default;
+pub(crate) trait PrimitiveAdRule: Send + Sync {
+    fn kind(&self) -> PrimitiveOpKind;
 
-    /// Returns the addition operation used for cotangent accumulation.
-    /// tidu's `linear_transpose` emits `Op::add()` nodes when multiple cotangents
-    /// flow to the same value.
-    fn add() -> Self where Self: Sized;
-
-    /// Emit the JVP rule for this primitive.
-    fn jvp_rule(
+    fn linearize(
         &self,
-        builder: &mut impl PrimitiveBuilder<Self>,
-        primal_inputs: &[ValueKey<Self>],
-        primal_outputs: &[ValueKey<Self>],
-        tangent_inputs: &[Option<LocalValueId>],
-        ctx: &mut Self::ADContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>>
-    where
-        Self: Sized;
+        op: &StdTensorOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        primal_in: &[ValueKey<StdTensorOp>],
+        primal_out: &[ValueKey<StdTensorOp>],
+        tangent_in: &[Option<LocalValueId>],
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 
-    /// Emit the transpose rule for this linear primitive.
     fn transpose_rule(
         &self,
-        builder: &mut impl PrimitiveBuilder<Self>,
-        cotangent_outputs: &[Option<LocalValueId>],
-        inputs: &[PrimitiveTransposeInput<Self>],
-        role: &OperationRole,
-        ctx: &mut Self::ADContext,
-    ) -> ADRuleResult<Vec<Option<LocalValueId>>>
-    where
-        Self: Sized;
+        op: &StdTensorOp,
+        builder: &mut dyn PrimitiveRuleBuilder,
+        cotangent_out: &[Option<LocalValueId>],
+        inputs: &[TransposeInputRef<'_>],
+        mode: &OperationRole,
+        ctx: &mut ShapeGuardContext,
+    ) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 }
 ```
 
-`ADRuleResult<T>` is tidu's rule-emission result type. Rule failures must be
-reported through it instead of panicking or silently dropping derivative flow.
+`ADRuleResult<T>` is tenferro's rule-emission result type. Rule failures must
+be reported through typed `ADRuleError` values instead of panicking or silently
+dropping derivative flow.
 
-## ADKey trait (canonical signature)
+`PrimitiveRuleBuilder` is the only mutation surface available to core rules.
+Rules emit graph operations; they do not execute tensors, read runtime caches,
+or inspect backend state.
 
-Defined in `tidu-rs/src/rules/ad_key.rs`. Required bound on
-`Primitive::InputKey`.
+## Transpose Inputs
 
-```rust
-pub trait ADKey: Clone + Debug + Hash + Eq + Send + Sync + 'static {
-    /// Create a tangent input key derived from this key.
-    /// `pass` is a unique identifier for the `linearize` call.
-    fn tangent_of(&self, pass: DiffPassId) -> Self;
-}
-```
+Transpose rules receive typed `TransposeInputRef` values derived from
+`PrimitiveTransposeInput<StdTensorOp>` so they can distinguish fixed operands
+from active linear flow.
 
-`DiffPassId` is `u64`.
-
-## PrimitiveTransposeInput (canonical definition)
-
-Defined in `tidu-rs/src/rules/primitive_builder.rs`. `linear_transpose`
-passes these typed input references to primitive transpose rules so rules can
-distinguish residual operands from tangent-flow operands.
-
-```rust
-pub enum PrimitiveTransposeInput<Op: GraphOperation> {
-    Residual(ValueKey<Op>),
-    Linear {
-        key: ValueKey<Op>,
-        primal: Option<ValueKey<Op>>,
-    },
-}
-
-impl<Op: GraphOperation> PrimitiveTransposeInput<Op> {
-    pub fn key(&self) -> &ValueKey<Op>;
-    pub fn primal(&self) -> Option<&ValueKey<Op>>;
-    pub fn as_residual_value(&self) -> Option<PrimitiveValue<Op>>;
-}
-```
-
-`Residual` inputs are independent of the differentiated tangent flow and may be
-used as ordinary rule operands. `Linear` inputs belong to tangent flow; their
-`key` identifies the linearized value and `primal` identifies the corresponding
-primal value when tidu can recover one. Downstream primitive sets must not
-blindly convert a `Linear { primal: None, .. }` input into an ordinary residual
-operand, because doing so retains the tangent sweep in the transposed graph.
-
-## LinearizedGraph (canonical definition)
-
-Defined in `tidu-rs/src/linearized_graph.rs`. Returned by
-`tidu::linearize` (which internally calls `Primitive::jvp_rule`
-per operation node — note that `jvp_rule` itself returns
-`ADRuleResult<Vec<Option<LocalValueId>>>`, not `LinearizedGraph`; the graph is
-assembled by `linearize`).
-
-```rust
-use std::sync::Arc;
-
-pub struct LinearizedGraph<Op: GraphOperation> {
-    linear: Graph<Op>,
-    residual: Arc<Graph<Op>>,
-    tangent_inputs: Vec<(Op::InputKey, LocalValueId)>,
-    tangent_outputs: Vec<Option<LocalValueId>>,
-    linear_primals: Vec<Option<ValueKey<Op>>>,
-}
-
-impl<Op: GraphOperation> LinearizedGraph<Op> {
-    /// Borrow the strictly-linear graph representation.
-    pub fn as_graph(&self) -> &Graph<Op>;
-    /// Borrow the residual graph referenced by the linear graph.
-    pub fn residual_graph(&self) -> &Graph<Op>;
-    /// Consume this value and return the strictly-linear graph representation.
-    pub fn into_graph(self) -> Graph<Op>;
-    /// Consume this value and return both graph parts.
-    pub fn into_graphs(self) -> (Graph<Op>, Arc<Graph<Op>>);
-    pub fn tangent_inputs(&self) -> &[(Op::InputKey, LocalValueId)];
-    pub fn tangent_outputs(&self) -> &[Option<LocalValueId>];
-}
-```
-
-The strictly-linear graph is the only graph traversed by `linear_transpose`.
-The residual graph contains primal or metadata values referenced from that
-linear graph. Transform owners that cache VJP artifacts should retain the
-residual graph and optimized transposed graph, not the strictly-linear tangent
-sweep, unless they explicitly need to re-run `linear_transpose`.
+Residual or metadata inputs are independent of the differentiated tangent flow
+and may be used as ordinary rule operands. Linear inputs belong to tangent
+flow; their primal counterpart may be used only for metadata, runtime shape
+sources, or fixed coefficients that are independent of tangent flow. A linear
+input without a valid fixed/primal source must be rejected at that use site
+rather than smuggled into the residual graph.
 
 ## Rules
 
-1. **Closure**: `linearize` and `transpose_rule` must add only ops that
-   themselves implement `Primitive`. This is the sole closure requirement.
-   tenferro-rs is responsible for satisfying it.
+1. **Closure**: `linearize` and `transpose_rule` must add only operations that
+   remain in the supported tenferro semantic vocabulary. tenferro owns this
+   closure requirement for core rules; operation-family crates own it for
+   extension rules.
 
-2. **Cotangent accumulation**: when a value fans out to multiple consumers,
-   tidu's `linear_transpose` accumulates cotangents via `Op::add()`. This means
-   `Add` must implement `Primitive` and its linear_transpose rule must be the
-   identity (cotangent passes through to both inputs).
+2. **Cotangent accumulation**: fan-out cotangents are accumulated through
+   explicit `Add` graph nodes. `Add` must remain AD-supported, and its
+   transpose behavior must pass cotangents to both active inputs.
 
-3. **Linear ops**: an op whose `linearize` returns itself (identity tangent
-   map) only needs a `transpose_rule`. Examples: `Transpose`, `Reshape`,
-   `BroadcastInDim`.
+3. **Linear ops**: an op whose `linearize` is the identity tangent map only
+   needs a `transpose_rule`. Examples include metadata-only reshape,
+   transpose, and broadcast paths when their payloads preserve linear flow.
 
-4. **Primal reuse**: `linearize` may reference primal values via
-   `External(ValueKey)` in the graph builder. These are resolved
-   during `materialize_merge` so that shared primal computations are not
-   duplicated.
+4. **Primal reuse**: rule emission may reference primal values as fixed
+   operands through the graph/semantic builder when the emitted derivative
+   operation is independent of tangent flow. Shared primal computations should
+   be reused rather than duplicated.
 
-5. **Transpose input typing**: `transpose_rule` receives
-   `PrimitiveTransposeInput` values, not raw `ValueRef`s. Rules may use
-   residual inputs directly. Rules may use a linear input's `primal` only for
-   metadata, runtime shape sources, or fixed coefficients that are genuinely
-   independent of the tangent flow. A linear input without a primal counterpart
-   must be rejected at such a use site rather than smuggled into the residual
-   graph.
+5. **Shape-source discipline**: AD graph-emission rules must distinguish rank,
+   exact extents, conservative extents, and runtime shape sources. Exact-shape
+   requirements are appropriate only when constructing a concrete payload that
+   cannot represent runtime dimensions.
 
-6. **Extension AD boundary**: built-in AD is defined for `StdTensorOp`.
-   `StdTensorOp::Extension` may participate in AD only when its operation
-   family registers an extension AD rule. Missing extension rules must report
-   unsupported AD; they must not silently drop or zero gradients.
+6. **Extension AD boundary**: `StdTensorOp::Extension` may participate in AD
+   only when its operation family registers semantic extension AD rules in the
+   active `SemanticExtensionRuleSet`. Missing extension rules must report
+   unsupported AD.
 
 ## Mode Interpreters And Cacheability
 
-The AD trait contract has one derivative rule set. `jvp_rule` is the only
+The AD contract has one derivative rule model. `linearize` is the
 primitive-local derivative producer. `transpose_rule` applies only to linear
 flow that was already produced by linearization; it is not a separate primal
 reverse-mode derivative rule. Eager and traced execution choose different
-interpreters for the same rule set:
+interpreters for the same rule model:
 
-- **Traced transforms** operate on recorded graphs, then compile and execute a
-  materialized graph.
-- **Eager transforms** record each eager op as a small `RecordedGraph`.
-  tidu owns the eager forward and backward graph traversal. tenferro owns
-  concrete graph execution, public eager APIs, runtime state, extension rules,
-  and cache storage.
+- **Traced transforms** operate on frozen semantic programs, then compile and
+  execute the materialized derivative program.
+- **Eager transforms** record eager operations as small graphs/programs and
+  reuse the same context-owned transform machinery.
 - **Stateful eager reverse mode** (`backward()` and `backward_with(seed)`)
   accumulates reachable tracked leaves into gradient slots.
 - **Functional eager transforms** (`grad`, `vjp`, `jvp`) return ordinary eager
-  tensors and do not mutate gradient slots. When their derivative computation
-  depends on tracked eager values, the returned tensor remains traceable, so
-  transforms such as `jvp(grad(f))` can be expressed by composing eager calls.
+  tensors and do not mutate gradient slots.
 
 Rule emission must be deterministic for a fixed primitive payload, input and
-output metadata, active mask, requested output slots, AD context, and extension
-rule set. Rules must not read hidden runtime state or environment state to
-decide graph structure. That purity lets runtime owners safely memoize
-recorded-graph linearization through tidu's eager executor hook.
+output metadata, active masks, requested output slots, AD context, and
+extension rule set. Rules must not read hidden runtime state or environment
+state to decide graph structure.
 
-Primitive-local `jvp_rule` / linearization is the required derivative contract.
-`transpose_rule` transposes already-linear graph flow. High-level direct primal
-VJP or primary-transpose rules are optional escape hatches for cases where the
-generic `linearize -> linear_transpose -> optimize` path is incomplete or too
-slow; they are not the default obligation for making a primitive
-reverse-differentiable.
+Direct primal VJP rules are optional escape hatches for cases where the generic
+`linearize -> transpose_rule -> optimize` path is incomplete or too slow; they
+are not the default obligation for making a primitive reverse-differentiable.
 
 Symbolic zero propagation should remain symbolic until a rule must pass a real
-zero value to another primitive. At that forced-instantiation boundary, tenferro
-rules carry dtype, rank, and an anchor value as a `SymbolicZero` and instantiate
-it as a dtype-aware scalar zero plus shape-restoring broadcast when needed. Do
-not synthesize zeros through analytic operations or tensor buffers.
+zero value to another primitive. At that forced-instantiation boundary,
+tenferro rules carry dtype, rank, and an anchor value as `SymbolicZero`, then
+instantiate it as a dtype-aware scalar zero plus shape-restoring broadcast when
+needed. Do not synthesize zeros through analytic operations or tensor buffers.
 
 The same rule applies to AD-emitted scalar constants, one-like tensors, and
 identity matrices. Rule implementations must use semantic graph-emission
 helpers such as `tenferro_ops::ad::support::{constant_scalar, zero_like,
-one_like, identity_matrix}` rather than analytic identities. Graph-shape
-invariants discovered during AD-rule work must be guarded by CI-checkable
-structural tests, for example tests that reject analytic ops in constant or
-identity helper emission.
+one_like, identity_matrix}` rather than analytic identities.
 
 `AdContext` is the explicit owner for shared AD transform memoization. It owns
-the extension AD rules and a bounded AD transform cache used by
-context-driven traced transforms. Eager runtimes created with
+the extension AD rules and a bounded AD transform cache used by context-driven
+traced transforms. Eager runtimes created with
 `EagerRuntime::with_*_and_ad_context` share that same cache handle; eager
 runtimes created directly own a private cache. Direct `TracedTensorAdExt`
 methods remain stateless.
 
-The AD transform cache stores graph artifacts only: eager `RecordedGraph`
-linearization, traced JVP linearized/optimized graphs, and traced VJP residual
-graphs plus optimized transposed graphs. It must not keep the strictly-linear
-tangent sweep alive after a VJP transform has been transposed and optimized.
+The AD transform cache stores graph/program artifacts only: eager recorded
+graph transforms, traced JVP transformed programs, and traced VJP residual or
+transposed program artifacts. It must not keep tensor buffers, backend
+allocations, concrete execution outputs, or dead linear sweeps alive after the
+optimized derivative program has been built.
+
 The default retention policy is bounded by both entry count and logical
 retained bytes. Owners expose limits, stats, and clear APIs through `AdContext`
 and `EagerRuntime`; retained-byte stats are logical estimates and do not report
@@ -248,21 +159,20 @@ process RSS.
 
 Cache keys must be deterministic, structural, and metadata-only. Eager keys
 cover the recorded graph fingerprint and requested output slots. Traced keys
-cover root graph structure, output key, `wrt` input key, and traced input
-aliases. Rules whose emitted graph depends on additional metadata must make that
-metadata part of the cache key or bypass caching for the affected transform.
-Cached entries must not retain tensor buffers, backend allocations, or concrete
-execution outputs.
+cover semantic program fingerprints, input metadata, active inputs, active
+outputs, and aliases. Rules whose emitted program depends on additional
+metadata must make that metadata part of the cache key or bypass caching for
+the affected transform.
 
-The AD graph optimizer remains per-invocation apart from storing its final graph
-inside an owner-scoped transform-cache entry. Reachability, rewrite facts, and
-multi-output live masks are scratch data. Partial output pruning is legal only
-when the operation family explicitly opts in, currently through
+The AD graph optimizer remains per-invocation apart from storing its final
+program inside an owner-scoped transform-cache entry. Reachability, rewrite
+facts, and multi-output live masks are scratch data. Partial output pruning is
+legal only when the operation family explicitly opts in, currently through
 `ExtensionOp::prune_outputs`.
 
-## Complex AD convention
+## Complex AD Convention
 
-tenferro follows the tidu/JAX-style complex AD convention.
+tenferro follows the JAX-style complex AD convention.
 
 Forward mode treats complex primitives as real-linear maps. For a holomorphic
 elementwise map `f`, the JVP multiplies the tangent by the local derivative
@@ -349,9 +259,10 @@ indices unless a future design changes the contract. Out-of-bounds primal
 compatibility tests are valid, but they must not be interpreted as finite
 difference requirements for AD at those discontinuous boundaries.
 
-## Owned by this document
+## Owned By This Document
 
-- `Primitive` trait signature
+- Core `PrimitiveAdRule` rule-emission contract
+- Extension semantic AD boundary
 - Closure rule
 - Cotangent accumulation rule
 - Linear op rule
@@ -363,5 +274,5 @@ difference requirements for AD at those discontinuous boundaries.
 - Elementwise nondifferentiable boundary AD convention
 - Indexing AD bounds contract
 
-Other documents link here for the AD contract; they do not re-state
-these definitions.
+Other documents link here for the AD contract; they do not re-state these
+definitions.
