@@ -24,6 +24,11 @@ splitting the follow-up work into unrelated pull requests.
   transfer providers are registered by storage-class pair, and cross-storage
   linear execution calls the transfer provider from the production scheduled
   loop before dispatching the downstream operation.
+- #1468 linalg semantic AD cleanup: semantic linalg `linearize` now emits JVP
+  fragments directly into `SemanticProgramBuilder` instead of first recording
+  and replaying a legacy fragment. The remaining linalg recorded-fragment usage
+  is limited to reverse-mode construction paths that need a local linear
+  fragment to transpose.
 
 ## Current runtime boundary
 
@@ -58,7 +63,18 @@ cargo test -p tenferro-runtime prepared_program_is_binding_free_and_shares_stage
 cargo test -p tenferro-runtime preparation -- --nocapture
 cargo test -p tenferro-runtime --test integration runtime_execution -- --nocapture
 cargo test -p tenferro-ad --test integration runtime_execution -- --nocapture
+cargo test -p tenferro-linalg --test integration --features autodiff linalg_internal_path_contract::semantic_linalg_linearize_does_not_replay_recorded_legacy_fragments -- --nocapture
+cargo test -p tenferro-linalg --test integration --features autodiff ad_support_manifest:: -- --nocapture
+cargo test -p tenferro-linalg --test integration --features autodiff traced_ad_explicit:: -- --nocapture
+cargo test -p tenferro-linalg --test integration --features autodiff oracle_replay:: -- --nocapture
+RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_JOBS=64 cargo test -p tenferro-linalg --test integration --features autodiff oracle_replay::oracle_replays_supported_db_cases_when_requested -- --nocapture
 git diff --check
+```
+
+The full local oracle replay reported:
+
+```text
+ReplayRunSummary { total_records: 9585, supported_success_records: 2090, expected_error_records: 2, unsupported_records: 7493, skipped_by_filter_records: 0, replayed_success_records: 2090, replayed_expected_error_records: 2, parallel_jobs: 64 }
 ```
 
 ## Residual risks to carry forward
@@ -74,3 +90,7 @@ git diff --check
   controls, but their event counters remain coarse. This is not a blocker for
   #1478 because the generic runtime extension caches now have bounded retained
   bytes and observable statistics.
+- Linalg reverse-mode paths that rely on `linearize` followed by semantic
+  transposition still record a local linear fragment so the transpose
+  interpreter can traverse it backward. This is no longer used by semantic JVP
+  emission, and the numerical/oracle coverage above passed.

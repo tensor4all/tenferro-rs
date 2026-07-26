@@ -103,10 +103,12 @@ core graph sweep call semantic extension rules. That bridge is internal to
 `tenferro-internal-ops` and implemented only by `tenferro-ad`; family crates
 must not implement it directly.
 
-Some linalg semantic AD paths still reuse legacy rule-recording helpers behind
-the semantic rule surface. That is tracked by #1468. It is a cleanup of rule
-construction ownership, not a reason to reintroduce retired external AD-engine
-names as active dependencies or documentation sources of truth.
+The linalg semantic `linearize` rule emits directly into
+`SemanticProgramBuilder`. Reverse-mode linalg paths that are defined by
+linearize-then-transpose still record a local linear fragment so the semantic
+transpose interpreter can walk that fragment backward. That residual recording
+is a local transpose-construction detail, not an active external AD-engine
+dependency or documentation source of truth.
 
 ## Invariants
 
