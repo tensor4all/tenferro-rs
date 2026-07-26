@@ -42,6 +42,7 @@ The tropical and sparse extension tutorials are tested as standalone crates:
 ```bash
 cargo test --manifest-path ext/tropical/Cargo.toml --release --features autodiff
 cargo test --manifest-path ext/sparse/Cargo.toml --release --features autodiff
+cargo test --manifest-path ext/tenferro-cpu-tblis/Cargo.toml --release
 ```
 
 The KdV PINN sample is compile-checked separately:

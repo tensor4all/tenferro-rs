@@ -18,9 +18,7 @@ use crate::placement::{
     resolve_placement, resolve_placement_with_affinity, CpuEngineConstructionError,
     ResolvedCpuExecution,
 };
-use crate::provider::{
-    CpuExecutionContext, CpuOperationEntry, ParallelMode, TblisGeneralContractionProvider,
-};
+use crate::provider::{CpuExecutionContext, CpuOperationEntry, ParallelMode};
 use crate::{
     discover_cpu_topology, CpuDomainId, CpuDomainOwnership, CpuExecutorAffinity,
     CpuExecutorShutdown, CpuId, CpuPlacement, CpuPlacementError, CpuPlacementGuarantee, CpuSet,
@@ -227,34 +225,6 @@ pub enum CpuBackendKind {
     Faer,
     /// BLAS/LAPACK-backed CPU kernels.
     Blas,
-}
-
-/// Construction-time provider policy for `dot_general` contractions.
-///
-/// This is separate from [`CpuBackendKind`]: backend kind selects the complete
-/// base CPU provider, while this policy can opt contraction paths into TBLIS
-/// without changing non-contraction kernels or the fallback provider.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_cpu::{CpuBackend, DotGeneralProvider};
-///
-/// let backend = CpuBackend::new()
-///     .with_dot_general_provider(DotGeneralProvider::TblisIfAvailable);
-/// let _ = backend.provider_bundle();
-/// ```
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum DotGeneralProvider {
-    /// Use the selected base [`CpuBackendKind`] for all contractions.
-    #[default]
-    Base,
-    /// Try TBLIS first and fall back to the selected base provider when TBLIS
-    /// is unavailable or cannot safely build a plan.
-    TblisIfAvailable,
-    /// Require TBLIS. Unavailable TBLIS or unsupported contraction layouts are
-    /// reported as errors instead of falling back.
-    TblisRequired,
 }
 
 impl CpuBackendKind {
@@ -1947,44 +1917,6 @@ impl CpuBackend {
             }
         }
         Ok(())
-    }
-
-    /// Return this backend with a standard bundle configured by the legacy
-    /// `dot_general` provider policy.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_cpu::{CpuBackend, DotGeneralProvider};
-    ///
-    /// let backend = CpuBackend::new().with_dot_general_provider(
-    ///     DotGeneralProvider::TblisIfAvailable,
-    /// );
-    /// let _ = backend.provider_bundle();
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the standard CPU provider bundle builder is missing a
-    /// mandatory built-in provider slot, which indicates an internal provider
-    /// registration bug.
-    pub fn with_dot_general_provider(mut self, provider: DotGeneralProvider) -> Self {
-        let builder = CpuProviderBundle::builder(self.kind());
-        let builder = if self.resolved == ResolvedCpuExecution::ProviderDefaultExclusive {
-            builder.provider_default_compatibility()
-        } else {
-            builder
-        };
-        self.provider_bundle = match provider {
-            DotGeneralProvider::Base => builder,
-            DotGeneralProvider::TblisIfAvailable => builder
-                .prefer_general_contraction_provider(Arc::new(TblisGeneralContractionProvider)),
-            DotGeneralProvider::TblisRequired => builder
-                .require_general_contraction_provider(Arc::new(TblisGeneralContractionProvider)),
-        }
-        .build()
-        .expect("standard CPU provider bundle always has mandatory slots");
-        self
     }
 
     /// Return the selected CPU domain's thread budget.

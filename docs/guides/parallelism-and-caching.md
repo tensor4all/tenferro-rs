@@ -15,10 +15,10 @@ parallelism contract.
 ## CPU Backend Provider
 
 At least one CPU provider feature must be compiled. `cpu-faer` is the default.
-`cpu-blas` can be compiled by itself or together with `cpu-faer`. `cpu-tblis`
-is an optional `dot_general` contraction provider; it is additive and still
-requires at least one of `cpu-faer` or `cpu-blas` for fallback and linalg
-coverage.
+`cpu-blas` can be compiled by itself or together with `cpu-faer`. External CPU
+providers can replace optional provider bundle slots, such as the complete
+general `dot_general` contraction path, but still require at least one of
+`cpu-faer` or `cpu-blas` for fallback and linalg coverage.
 `blas-openblas`, `blas-accelerate`, and `blas-mkl` are explicit BLAS/LAPACK
 source-provider features that also enable `cpu-blas`; enable at most one of
 them in a single resolved Cargo feature graph.
@@ -35,9 +35,10 @@ current binary:
 This is the default provider for that backend instance. If multiple complete
 CPU providers are compiled, select `CpuBackendKind::Faer` or
 `CpuBackendKind::Blas` explicitly when a specific call path should use one of
-them. TBLIS is not a complete backend kind; opt into TBLIS `dot_general`
-attempts with `DotGeneralProvider::TblisIfAvailable` or require TBLIS with
-`DotGeneralProvider::TblisRequired`. Explicit base-provider selection returns a
+them. TBLIS is not a complete backend kind; the unpublished
+`ext/tenferro-cpu-tblis` crate demonstrates installing it as an external
+general-contraction provider through `CpuProviderBundleBuilder`. Explicit
+base-provider selection returns a
 configuration error if the requested provider was not compiled into the binary:
 
 ```rust
@@ -47,6 +48,20 @@ use tenferro_cpu::CpuBackendKind;
 let backend = CpuBackend::with_threads_and_kind(4, CpuBackendKind::Faer).unwrap();
 assert_eq!(backend.num_threads(), 4);
 assert_eq!(backend.kind(), CpuBackendKind::Faer);
+```
+
+An external provider installs through the provider bundle, not through a
+`tenferro-cpu` feature. The TBLIS example under `ext/tenferro-cpu-tblis` is not
+published from this repository; its `source-build` feature uses the local
+`third_party/t4a-tblis-src` path unless that source package is separately
+released in a later maintainer-approved release.
+
+The compiled source of truth is the crate-level doctest in
+`ext/tenferro-cpu-tblis/src/lib.rs` plus the provider behavior tests in
+`ext/tenferro-cpu-tblis/tests/provider.rs`:
+
+```bash
+cargo test --manifest-path ext/tenferro-cpu-tblis/Cargo.toml -- --nocapture
 ```
 
 ## CPU Thread Count
@@ -71,7 +86,8 @@ RAYON_NUM_THREADS=4 cargo run --release
 For `cpu-faer`, tenferro passes the `CpuContext` thread count to faer-backed
 kernels. A one-thread context uses sequential faer execution; a multi-thread
 context uses faer's Rayon parallelism with the requested thread count.
-For `cpu-tblis`, TBLIS owns its internal threading policy; `CpuBackend` thread
+The external TBLIS provider example clamps TBLIS calls to one thread while it
+owns the call, then restores the previous TBLIS setting. `CpuBackend` thread
 counts still apply to tenferro-owned CPU kernels and fallback paths.
 
 ## CPU Operation Parallelism
@@ -96,7 +112,7 @@ workers remain provider-owned and may fan out independently.
 | View materialization, transpose/permute, broadcast, convert, and diagonal extraction | `strided-kernel` copy/map kernels use the same selected native policy; layout fallback and linalg input materialization are included. |
 | `dot_general` through `cpu-faer` | faer receives `Par::rayon(n)` only for `Inner` execution whose selected executor advertises Rayon and whose validated budget is greater than one; otherwise it receives `Par::Seq`. |
 | GEMM and linalg through `cpu-blas` | Threading is owned by the linked BLAS/LAPACK provider, not Rayon. Configure the provider variables below. |
-| Supported `dot_general` contractions through `cpu-tblis` | TBLIS owns provider threading; unsupported TBLIS shapes fall back to the compiled faer/BLAS provider. |
+| Supported `dot_general` contractions through an external TBLIS provider | The example provider clamps TBLIS to one thread per call; unsupported TBLIS shapes fall back to the compiled faer/BLAS provider in preferred mode. |
 | Indexing, scatter/gather, slicing, padding, concatenation, reverse, triangular masks, and `embed_diagonal` | These are dedicated sequential CPU loops today because their per-output indexing patterns do not yet have a strided-kernel/backend-native parallel primitive. They still run inside the selected executor entry, and source comments mark the intentional sequential path. |
 
 CPU affine-strided copy, permutation, broadcast, map, zip-map, and axis
@@ -197,9 +213,8 @@ use tenferro_cpu::CpuBackend;
 let backend = CpuBackend::with_threads(1);
 ```
 
-For BLAS/LAPACK and TBLIS providers, apply the same rule to provider thread
-variables. For benchmarks, pin all relevant thread counts and report them with
-the result.
+For BLAS/LAPACK providers, apply the same rule to provider thread variables.
+For benchmarks, pin all relevant thread counts and report them with the result.
 
 ## Reuse Runtime State
 

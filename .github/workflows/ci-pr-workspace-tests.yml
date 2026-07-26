@@ -140,6 +140,7 @@ jobs:
           workspaces: |
             ext/tropical
             ext/sparse
+            ext/tenferro-cpu-tblis
             samples/kdv-pinn
       - name: Run extension profile
         if: needs.changes.outputs.run_extensions == 'true'

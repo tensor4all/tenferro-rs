@@ -60,16 +60,16 @@ implementation crates and should not be presented as user-facing API surfaces.
 
 `third_party/t4a-tblis-src` is stored in this repository but is not a tenferro
 workspace crate. It is a self-contained, independently versioned source-build
-and native-link provider prepared for a separate crates.io release. The root
-workspace excludes it and consumes it through the neutral `tblis-src`
-dependency alias with a path-plus-exact-version requirement.
+and native-link provider prepared for a future, separate crates.io release.
+Until that package is released, the root workspace excludes it and does not
+publish any crate that depends on it.
 
-`tenferro-cpu` always uses `tblis-ffi` for Rust declarations. Its
-`cpu-tblis-runtime` route enables the FFI crate's dynamic loader and does not
-depend on the source provider. Its `cpu-tblis-linked` route instead anchors
-`t4a-tblis-src` in the Rust crate graph with `build_from_source` and `static`,
-while leaving `tblis-ffi/dynamic_loading` disabled. This package is deployment
-glue, not a tenferro user-facing API surface or a new runtime layer.
+`tenferro-cpu` does not depend on `tblis-ffi` or `t4a-tblis-src`. The
+unpublished `ext/tenferro-cpu-tblis` crate is the external-provider example:
+it depends on `tblis-ffi`, optionally depends on the local
+`../../third_party/t4a-tblis-src` path for `source-build`, and installs only a
+general-contraction provider. All other CPU operations remain delegated to the
+selected `tenferro-cpu` base provider.
 
 ## III. Layering
 

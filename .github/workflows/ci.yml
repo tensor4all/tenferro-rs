@@ -109,6 +109,9 @@ jobs:
       - name: Run sparse extension clippy
         if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
         run: cargo clippy --manifest-path ext/sparse/Cargo.toml --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
+      - name: Run TBLIS CPU provider extension clippy
+        if: needs.policy.result == 'success' && needs.policy.outputs.run_rust == 'true'
+        run: cargo clippy --manifest-path ext/tenferro-cpu-tblis/Cargo.toml --all-targets -- -D warnings -D clippy::missing_errors_doc -D clippy::missing_panics_doc
       - name: Report clippy disposition
         if: always()
         env:
