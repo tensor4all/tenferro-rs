@@ -40,6 +40,32 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertGreaterEqual(text.count("needs.policy.result"), 6)
         self.assertIn("Change classification failed", text)
 
+    def test_oracle_replay_nightly_is_gated_by_recent_default_branch_commits(self) -> None:
+        text = read(".github/workflows/oracle-replay-nightly.yml")
+        self.assertIn("name: Oracle replay nightly", text)
+        self.assertIn("schedule:", text)
+        self.assertIn("workflow_dispatch:", text)
+        self.assertIn("fetch-depth: 0", text)
+        self.assertIn("git log --since=\"24 hours ago\"", text)
+        self.assertIn("run_oracle=true", text)
+        self.assertIn("run_oracle=false", text)
+        self.assertIn("github.event.inputs.force == 'true'", text)
+        self.assertIn("RUN_ORACLE_REPLAY=1", text)
+        self.assertIn("ORACLE_REPLAY_JOBS", text)
+        self.assertIn("oracle_replays_supported_db_cases_when_requested", text)
+        self.assertIn(
+            "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32",
+            text,
+        )
+        self.assertIn("prefix-key: v1-rust-oracle-replay-ubuntu22", text)
+        self.assertIn("shared-key: oracle-replay-autodiff", text)
+        self.assertIn("cache-all-crates: true", text)
+        self.assertIn("cache-workspace-crates: true", text)
+        self.assertIn("workspaces: . -> target", text)
+        self.assertIn("save-if: ${{ github.ref == 'refs/heads/main' }}", text)
+        self.assertIn("actions/upload-artifact@", text)
+        self.assertIn("Oracle replay not required", text)
+
     def test_heavy_workflow_has_explicit_noop_matrix_and_gate_contract(self) -> None:
         text = read(".github/workflows/ci-pr-workspace-tests.yml")
         self.assertIn('"backend":"not-required"', text)
