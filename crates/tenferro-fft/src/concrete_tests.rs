@@ -1,6 +1,7 @@
 use num_complex::Complex64;
 use std::num::NonZeroUsize;
 use tenferro_cpu::CpuBackend;
+use tenferro_runtime::ExtensionCacheLimits;
 use tenferro_tensor::{ErrorKind, Tensor, TensorRead, TensorView, TypedTensorView};
 
 use crate::{FftExecutor, FftNorm, FftPlanCache, TensorFftExt, TensorReadFftExt};
@@ -170,6 +171,20 @@ fn fft_plan_cache_is_bounded_lru_and_reports_known_retention() {
     assert_eq!(stats.clears, 1);
     cache.set_capacity(NonZeroUsize::MIN);
     assert_eq!(cache.capacity(), NonZeroUsize::MIN);
+}
+
+#[test]
+fn fft_plan_cache_exposes_full_extension_cache_limits() {
+    let mut cache = FftPlanCache::with_capacity(NonZeroUsize::new(8).unwrap());
+    let limits = ExtensionCacheLimits::new(NonZeroUsize::new(8).unwrap())
+        .with_max_retained_bytes(NonZeroUsize::new(1).unwrap());
+
+    cache.set_limits(limits);
+    assert_eq!(cache.limits(), limits);
+    cache.plan_f64(4, true);
+
+    assert_eq!(cache.stats().entries, 0);
+    assert_eq!(cache.stats().evictions, 1);
 }
 
 #[test]

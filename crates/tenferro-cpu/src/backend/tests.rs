@@ -144,7 +144,10 @@ fn native_kernel_modules_cannot_select_ambient_or_ad_hoc_execution_policies() {
     let provider = include_str!("../provider.rs");
     let native_modules = [
         ("analytic", include_str!("../analytic.rs")),
-        ("elementwise", include_str!("../elementwise.rs")),
+        (
+            "elementwise",
+            include_str!("../../../tenferro-internal-cpu-kernels/src/elementwise.rs"),
+        ),
         ("indexing", include_str!("../indexing.rs")),
         ("reduction", include_str!("../reduction.rs")),
         ("structural", include_str!("../structural.rs")),

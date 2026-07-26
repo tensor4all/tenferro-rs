@@ -9,7 +9,7 @@ Design rationale for each subsystem — *what* each layer does and *why*.
 - [Crate structure](../architecture/tenferro-crates.md)
 - [Computation graph](../architecture/computegraph.md)
 - [Primitive AD traits](../architecture/primitive-ad.md)
-- [tidu AD engine](../architecture/tidu.md)
+- [Semantic AD ownership](../architecture/semantic-ad.md)
 - [End-to-end AD pipeline](../architecture/ad-pipeline.md)
 
 ## Specification

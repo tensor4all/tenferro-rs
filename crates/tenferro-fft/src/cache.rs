@@ -89,9 +89,23 @@ impl FftPlanCache {
         self.store.limits().max_entries()
     }
 
+    /// Return complete cache retention limits.
+    pub fn limits(&self) -> ExtensionCacheLimits {
+        self.store.limits()
+    }
+
+    /// Replace complete cache retention limits.
+    pub fn set_limits(&mut self, limits: ExtensionCacheLimits) {
+        self.store.set_limits(limits);
+    }
+
     /// Resize the cache, evicting least-recently-used entries when necessary.
     pub fn set_capacity(&mut self, capacity: NonZeroUsize) {
-        self.store.set_limits(ExtensionCacheLimits::new(capacity));
+        let mut limits = ExtensionCacheLimits::new(capacity);
+        if let Some(max_retained_bytes) = self.store.limits().max_retained_bytes() {
+            limits = limits.with_max_retained_bytes(max_retained_bytes);
+        }
+        self.store.set_limits(limits);
     }
 
     /// Remove every retained backend plan or workspace.

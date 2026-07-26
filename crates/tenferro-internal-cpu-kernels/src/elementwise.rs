@@ -203,19 +203,133 @@ fn strided_fused_plan(plan: &ElementwiseFusionPlan) -> FusedPlan {
     }
 }
 
-pub(crate) trait Tier2Elem: Copy + Clone + One + Zero + Send + Sync {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SpecializedBinaryOp {
+    Add,
+    Multiply,
+}
+
+impl SpecializedBinaryOp {
+    fn from_fusion_op(op: ElementwiseFusionOp) -> Option<Self> {
+        match op {
+            ElementwiseFusionOp::Add => Some(Self::Add),
+            ElementwiseFusionOp::Multiply => Some(Self::Multiply),
+            _ => None,
+        }
+    }
+
+    fn apply<T: FusedScalar>(self, lhs: T, rhs: T) -> T {
+        match self {
+            Self::Add => lhs.fused_add(rhs),
+            Self::Multiply => lhs.fused_multiply(rhs),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TwoInputTailOperand {
+    Input(usize),
+    Intermediate,
+}
+
+impl TwoInputTailOperand {
+    fn from_value(value: usize) -> Option<Self> {
+        match value {
+            0 | 1 => Some(Self::Input(value)),
+            2 => Some(Self::Intermediate),
+            _ => None,
+        }
+    }
+
+    fn resolve<T: Copy>(self, inputs: [T; 2], intermediate: T) -> T {
+        match self {
+            Self::Input(index) => inputs[index],
+            Self::Intermediate => intermediate,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TwoInputBinaryTailPlan {
+    first_op: SpecializedBinaryOp,
+    first_inputs: [usize; 2],
+    tail_op: SpecializedBinaryOp,
+    tail_inputs: [TwoInputTailOperand; 2],
+}
+
+impl TwoInputBinaryTailPlan {
+    fn evaluate<T: FusedScalar>(self, input0: T, input1: T) -> T {
+        let inputs = [input0, input1];
+        let intermediate = self
+            .first_op
+            .apply(inputs[self.first_inputs[0]], inputs[self.first_inputs[1]]);
+        let lhs = self.tail_inputs[0].resolve(inputs, intermediate);
+        let rhs = self.tail_inputs[1].resolve(inputs, intermediate);
+        self.tail_op.apply(lhs, rhs)
+    }
+}
+
+fn classify_two_input_binary_tail_plan(
+    plan: &ElementwiseFusionPlan,
+) -> Option<TwoInputBinaryTailPlan> {
+    if plan.input_count() != 2
+        || plan.outputs() != [3]
+        || plan.ops().len() != 2
+        || !plan.input_views().iter().all(|view| view.is_identity())
+    {
+        return None;
+    }
+
+    let first = &plan.ops()[0];
+    let tail = &plan.ops()[1];
+    let first_op = SpecializedBinaryOp::from_fusion_op(first.op())?;
+    let tail_op = SpecializedBinaryOp::from_fusion_op(tail.op())?;
+    let first_inputs: [usize; 2] = first.inputs().try_into().ok()?;
+    if !matches!(first_inputs, [0, 1] | [1, 0]) {
+        return None;
+    }
+
+    let raw_tail_inputs: [usize; 2] = tail.inputs().try_into().ok()?;
+    let tail_inputs = [
+        TwoInputTailOperand::from_value(raw_tail_inputs[0])?,
+        TwoInputTailOperand::from_value(raw_tail_inputs[1])?,
+    ];
+    let intermediate_count = tail_inputs
+        .iter()
+        .filter(|input| matches!(input, TwoInputTailOperand::Intermediate))
+        .count();
+    let original_input_count = tail_inputs
+        .iter()
+        .filter(|input| matches!(input, TwoInputTailOperand::Input(_)))
+        .count();
+    if intermediate_count != 1 || original_input_count != 1 {
+        return None;
+    }
+
+    Some(TwoInputBinaryTailPlan {
+        first_op,
+        first_inputs,
+        tail_op,
+        tail_inputs,
+    })
+}
+
+#[doc(hidden)]
+pub trait Tier2Elem: Copy + Clone + One + Zero + Send + Sync {
     fn abs_elem(self) -> Self;
     fn sign_elem(self) -> Self;
 }
 
 // Keep ordering separate from abs/sign so complex tensors cannot silently pick
 // a magnitude ordering. Callers should compute abs/norm explicitly first.
-pub(crate) trait OrderedElem: Copy + Clone + Send + Sync {
+#[doc(hidden)]
+pub trait OrderedElem: Copy + Clone + Send + Sync {
     fn max_elem(self, other: Self) -> Self;
     fn min_elem(self, other: Self) -> Self;
 }
 
-pub(crate) trait CompareElem: Copy + Send + Sync {
+#[doc(hidden)]
+pub trait CompareElem: Copy + Send + Sync {
     fn compare_elem(self, other: Self, dir: &CompareDir) -> bool;
 }
 
@@ -463,11 +577,13 @@ fn with_test_pool<T>(f: impl FnOnce(&mut BufferPool) -> T) -> T {
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn add(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| add_with_pool(buffers, lhs, rhs))
 }
 
-pub(crate) fn add_with_pool(
+#[doc(hidden)]
+pub fn add_with_pool(
     buffers: &mut BufferPool,
     lhs: &Tensor,
     rhs: &Tensor,
@@ -503,7 +619,8 @@ pub(crate) fn add_with_pool(
     }
 }
 
-pub(crate) fn add_read_with_pool(
+#[doc(hidden)]
+pub fn add_read_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
@@ -638,11 +755,13 @@ pub(crate) fn add_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn sub(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| sub_with_pool(buffers, lhs, rhs))
 }
 
-pub(crate) fn sub_with_pool(
+#[doc(hidden)]
+pub fn sub_with_pool(
     buffers: &mut BufferPool,
     lhs: &Tensor,
     rhs: &Tensor,
@@ -678,7 +797,8 @@ pub(crate) fn sub_with_pool(
     }
 }
 
-pub(crate) fn sub_read_with_pool(
+#[doc(hidden)]
+pub fn sub_read_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
@@ -813,7 +933,8 @@ pub(crate) fn sub_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn mul(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| mul_with_pool(buffers, lhs, rhs))
 }
 
@@ -831,7 +952,8 @@ fn binary_read_with_pool(
     Err(read_pair_error(op, lhs, rhs))
 }
 
-pub(crate) fn mul_with_pool(
+#[doc(hidden)]
+pub fn mul_with_pool(
     buffers: &mut BufferPool,
     lhs: &Tensor,
     rhs: &Tensor,
@@ -867,7 +989,8 @@ pub(crate) fn mul_with_pool(
     }
 }
 
-pub(crate) fn mul_read_with_pool(
+#[doc(hidden)]
+pub fn mul_read_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
@@ -1016,7 +1139,8 @@ fn read_as_cpu_view(input: TensorRead<'_>) -> CpuReadView<'_> {
     }
 }
 
-pub(crate) fn elementwise_fusion_with_pool(
+#[doc(hidden)]
+pub fn elementwise_fusion_with_pool(
     buffers: &mut BufferPool,
     inputs: &[&Tensor],
     plan: &ElementwiseFusionPlan,
@@ -1173,7 +1297,7 @@ where
     T: Copy + Clone + FusedScalar + PoolScalar,
 {
     if let Some(outputs) =
-        try_typed_mul_add_specialization(buffers, input_views, shape, plan, wrap)?
+        try_typed_two_input_binary_tail_specialization(buffers, input_views, shape, plan, wrap)?
     {
         return Ok(Some(outputs));
     }
@@ -1202,7 +1326,7 @@ where
     ))
 }
 
-fn try_typed_mul_add_specialization<T>(
+fn try_typed_two_input_binary_tail_specialization<T>(
     buffers: &mut BufferPool,
     input_views: &[StridedView<'_, T>],
     shape: &[usize],
@@ -1212,70 +1336,23 @@ fn try_typed_mul_add_specialization<T>(
 where
     T: Copy + Clone + FusedScalar + PoolScalar,
 {
-    if plan.input_count() != 2
-        || input_views.len() != 2
-        || plan.outputs() != [3]
-        || plan.ops().len() != 2
-    {
+    let Some(classified) = classify_two_input_binary_tail_plan(plan) else {
+        return Ok(None);
+    };
+    if input_views.len() != 2 {
         return Ok(None);
     }
 
-    match (
-        plan.ops()[0].op(),
-        plan.ops()[0].inputs(),
-        plan.ops()[1].op(),
-        plan.ops()[1].inputs(),
-    ) {
-        (ElementwiseFusionOp::Multiply, [0, 1], ElementwiseFusionOp::Add, [2, 0] | [0, 2]) => {
-            // SAFETY: zip_map2_into overwrites every output element.
-            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
-            zip_map2_into(
-                &mut out.view_mut(),
-                &input_views[0],
-                &input_views[1],
-                |a, b| a.fused_multiply(b).fused_add(a),
-            )
-            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-            Ok(Some(vec![wrap(tensor_from_array(out))]))
-        }
-        (ElementwiseFusionOp::Multiply, [0, 1], ElementwiseFusionOp::Add, [2, 1] | [1, 2]) => {
-            // SAFETY: zip_map2_into overwrites every output element.
-            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
-            zip_map2_into(
-                &mut out.view_mut(),
-                &input_views[0],
-                &input_views[1],
-                |a, b| a.fused_multiply(b).fused_add(b),
-            )
-            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-            Ok(Some(vec![wrap(tensor_from_array(out))]))
-        }
-        (ElementwiseFusionOp::Add, [0, 1], ElementwiseFusionOp::Multiply, [2, 0] | [0, 2]) => {
-            // SAFETY: zip_map2_into overwrites every output element.
-            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
-            zip_map2_into(
-                &mut out.view_mut(),
-                &input_views[0],
-                &input_views[1],
-                |a, b| a.fused_add(b).fused_multiply(a),
-            )
-            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-            Ok(Some(vec![wrap(tensor_from_array(out))]))
-        }
-        (ElementwiseFusionOp::Add, [0, 1], ElementwiseFusionOp::Multiply, [2, 1] | [1, 2]) => {
-            // SAFETY: zip_map2_into overwrites every output element.
-            let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
-            zip_map2_into(
-                &mut out.view_mut(),
-                &input_views[0],
-                &input_views[1],
-                |a, b| a.fused_add(b).fused_multiply(b),
-            )
-            .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
-            Ok(Some(vec![wrap(tensor_from_array(out))]))
-        }
-        _ => Ok(None),
-    }
+    // SAFETY: zip_map2_into overwrites every output element.
+    let mut out = unsafe { typed_array_uninit_from_pool(buffers, shape) }?;
+    zip_map2_into(
+        &mut out.view_mut(),
+        &input_views[0],
+        &input_views[1],
+        |a, b| classified.evaluate(a, b),
+    )
+    .map_err(|err| crate::Error::backend_source(ELEMENTWISE_FUSION_OP, err))?;
+    Ok(Some(vec![wrap(tensor_from_array(out))]))
 }
 
 fn typed_fusion_input_view<'a, T>(
@@ -2149,7 +2226,8 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn broadcast_multiply_read_with_pool(
+#[doc(hidden)]
+pub fn broadcast_multiply_read_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     lhs_shape: &[usize],
@@ -2186,8 +2264,8 @@ pub(crate) fn broadcast_multiply_read_with_pool(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-pub(crate) fn broadcast_multiply_value_with_pool(
+#[doc(hidden)]
+pub fn broadcast_multiply_value_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     lhs_shape: &[usize],
@@ -2196,13 +2274,21 @@ pub(crate) fn broadcast_multiply_value_with_pool(
     rhs_shape: &[usize],
     rhs_dims: &[usize],
 ) -> crate::Result<Option<TensorValue>> {
-    broadcast_multiply_value_with_pool_in_domain(
-        buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims, None,
+    broadcast_multiply_value_with_pool_and_tag(
+        buffers,
+        lhs,
+        lhs_shape,
+        lhs_dims,
+        rhs,
+        rhs_shape,
+        rhs_dims,
+        |_| {},
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn broadcast_multiply_value_with_pool_in_domain(
+#[doc(hidden)]
+pub fn broadcast_multiply_value_with_pool_and_tag(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     lhs_shape: &[usize],
@@ -2210,7 +2296,7 @@ pub(crate) fn broadcast_multiply_value_with_pool_in_domain(
     rhs: TensorRead<'_>,
     rhs_shape: &[usize],
     rhs_dims: &[usize],
-    domain: Option<crate::CpuDomainId>,
+    mut tag_output: impl FnMut(&mut Tensor),
 ) -> crate::Result<Option<TensorValue>> {
     let lhs_view = read_as_cpu_view(lhs.clone());
     let rhs_view = read_as_cpu_view(rhs.clone());
@@ -2221,9 +2307,7 @@ pub(crate) fn broadcast_multiply_value_with_pool_in_domain(
                 buffers, &$lhs, lhs_shape, lhs_dims, &$rhs, rhs_shape, rhs_dims,
             )? {
                 let mut base = Tensor::$variant(out.base);
-                if let Some(domain) = domain {
-                    crate::backend::tag_fresh_output(&mut base, domain);
-                }
+                tag_output(&mut base);
                 return Ok(Some(lazy_outer_product_value(
                     base,
                     out.shape,
@@ -2258,8 +2342,8 @@ pub(crate) fn broadcast_multiply_value_with_pool_in_domain(
     let mut tensor = broadcast_multiply_read_with_pool(
         buffers, lhs, lhs_shape, lhs_dims, rhs, rhs_shape, rhs_dims,
     )?;
-    if let (Some(tensor), Some(domain)) = (&mut tensor, domain) {
-        crate::backend::tag_fresh_output(tensor, domain);
+    if let Some(tensor) = &mut tensor {
+        tag_output(tensor);
     }
     Ok(tensor.map(TensorValue::from_tensor))
 }
@@ -2279,11 +2363,13 @@ pub(crate) fn broadcast_multiply_value_with_pool_in_domain(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn div(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| div_with_pool(buffers, lhs, rhs))
 }
 
-pub(crate) fn div_with_pool(
+#[doc(hidden)]
+pub fn div_with_pool(
     buffers: &mut BufferPool,
     lhs: &Tensor,
     rhs: &Tensor,
@@ -2323,7 +2409,8 @@ pub(crate) fn div_with_pool(
     }
 }
 
-pub(crate) fn div_read_with_pool(
+#[doc(hidden)]
+pub fn div_read_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
@@ -2431,11 +2518,13 @@ pub(crate) fn div_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn rem(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn rem(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| rem_with_pool(buffers, lhs, rhs))
 }
 
-pub(crate) fn rem_with_pool(
+#[doc(hidden)]
+pub fn rem_with_pool(
     buffers: &mut BufferPool,
     lhs: &Tensor,
     rhs: &Tensor,
@@ -2453,7 +2542,8 @@ pub(crate) fn rem_with_pool(
     }
 }
 
-pub(crate) fn rem_read_with_pool(
+#[doc(hidden)]
+pub fn rem_read_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
@@ -2499,11 +2589,13 @@ pub(crate) fn rem_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn neg(input: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn neg(input: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| neg_with_pool(buffers, input))
 }
 
-pub(crate) fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_neg_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_neg_with_pool(buffers, t)?)),
@@ -2518,7 +2610,8 @@ pub(crate) fn neg_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
     }
 }
 
-pub(crate) fn neg_read_with_pool(
+#[doc(hidden)]
+pub fn neg_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -2582,11 +2675,13 @@ pub(crate) fn neg_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn conj(input: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn conj(input: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| conj_with_pool(buffers, input))
 }
 
-pub(crate) fn conj_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn conj_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_conj_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_conj_with_pool(buffers, t)?)),
@@ -2599,7 +2694,8 @@ pub(crate) fn conj_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate:
     }
 }
 
-pub(crate) fn conj_read_with_pool(
+#[doc(hidden)]
+pub fn conj_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -2652,11 +2748,13 @@ pub(crate) fn conj_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn abs(input: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn abs(input: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| abs_with_pool(buffers, input))
 }
 
-pub(crate) fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_abs_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_abs_with_pool(buffers, t)?)),
@@ -2671,7 +2769,8 @@ pub(crate) fn abs_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::
     }
 }
 
-pub(crate) fn abs_read_with_pool(
+#[doc(hidden)]
+pub fn abs_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -2724,11 +2823,13 @@ pub(crate) fn abs_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn sign(input: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn sign(input: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| sign_with_pool(buffers, input))
 }
 
-pub(crate) fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate::Result<Tensor> {
     match input {
         Tensor::F32(t) => Ok(Tensor::F32(typed_sign_with_pool(buffers, t)?)),
         Tensor::F64(t) => Ok(Tensor::F64(typed_sign_with_pool(buffers, t)?)),
@@ -2743,7 +2844,8 @@ pub(crate) fn sign_with_pool(buffers: &mut BufferPool, input: &Tensor) -> crate:
     }
 }
 
-pub(crate) fn sign_read_with_pool(
+#[doc(hidden)]
+pub fn sign_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
 ) -> crate::Result<Tensor> {
@@ -2807,11 +2909,13 @@ pub(crate) fn sign_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn maximum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| maximum_with_pool(buffers, lhs, rhs))
 }
 
-pub(crate) fn maximum_with_pool(
+#[doc(hidden)]
+pub fn maximum_with_pool(
     buffers: &mut BufferPool,
     lhs: &Tensor,
     rhs: &Tensor,
@@ -2835,7 +2939,8 @@ pub(crate) fn maximum_with_pool(
     }
 }
 
-pub(crate) fn maximum_read_with_pool(
+#[doc(hidden)]
+pub fn maximum_read_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
@@ -2884,11 +2989,13 @@ pub(crate) fn maximum_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn minimum(lhs: &Tensor, rhs: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| minimum_with_pool(buffers, lhs, rhs))
 }
 
-pub(crate) fn minimum_with_pool(
+#[doc(hidden)]
+pub fn minimum_with_pool(
     buffers: &mut BufferPool,
     lhs: &Tensor,
     rhs: &Tensor,
@@ -2912,7 +3019,8 @@ pub(crate) fn minimum_with_pool(
     }
 }
 
-pub(crate) fn minimum_read_with_pool(
+#[doc(hidden)]
+pub fn minimum_read_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
@@ -2961,11 +3069,13 @@ pub(crate) fn minimum_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) -> crate::Result<Tensor> {
     with_test_pool(|buffers| compare_with_pool(buffers, lhs, rhs, dir))
 }
 
-pub(crate) fn compare_with_pool(
+#[doc(hidden)]
+pub fn compare_with_pool(
     buffers: &mut BufferPool,
     lhs: &Tensor,
     rhs: &Tensor,
@@ -3003,7 +3113,8 @@ pub(crate) fn compare_with_pool(
     }
 }
 
-pub(crate) fn compare_read_with_pool(
+#[doc(hidden)]
+pub fn compare_read_with_pool(
     buffers: &mut BufferPool,
     lhs: TensorRead<'_>,
     rhs: TensorRead<'_>,
@@ -3071,11 +3182,13 @@ pub(crate) fn compare_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| select_with_pool(buffers, pred, on_true, on_false))
 }
 
-pub(crate) fn select_with_pool(
+#[doc(hidden)]
+pub fn select_with_pool(
     buffers: &mut BufferPool,
     pred: &Tensor,
     on_true: &Tensor,
@@ -3116,7 +3229,8 @@ pub(crate) fn select_with_pool(
     }
 }
 
-pub(crate) fn select_read_with_pool(
+#[doc(hidden)]
+pub fn select_read_with_pool(
     buffers: &mut BufferPool,
     pred: TensorRead<'_>,
     on_true: TensorRead<'_>,
@@ -3180,11 +3294,13 @@ pub(crate) fn select_read_with_pool(
 /// # Ok::<(), tenferro_tensor::Error>(())
 /// ```
 #[cfg(test)]
-pub(crate) fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
+#[doc(hidden)]
+pub fn clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) -> crate::Result<Tensor> {
     with_test_pool(|buffers| clamp_with_pool(buffers, input, lower, upper))
 }
 
-pub(crate) fn clamp_with_pool(
+#[doc(hidden)]
+pub fn clamp_with_pool(
     buffers: &mut BufferPool,
     input: &Tensor,
     lower: &Tensor,
@@ -3197,7 +3313,8 @@ pub(crate) fn clamp_with_pool(
     })
 }
 
-pub(crate) fn clamp_read_with_pool(
+#[doc(hidden)]
+pub fn clamp_read_with_pool(
     buffers: &mut BufferPool,
     input: TensorRead<'_>,
     lower: TensorRead<'_>,
@@ -3227,7 +3344,8 @@ pub(crate) fn clamp_read_with_pool(
     }
 }
 
-pub(crate) fn typed_add_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_add_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
@@ -3341,7 +3459,8 @@ where
     typed_binary_view_with_pool("add", buffers, lhs, rhs, |x, y| x.wrapping_add_elem(y))
 }
 
-pub(crate) fn typed_add_view_with_pool<T, L, R>(
+#[doc(hidden)]
+pub fn typed_add_view_with_pool<T, L, R>(
     buffers: &mut BufferPool,
     lhs: &TypedTensorView<'_, T, L>,
     rhs: &TypedTensorView<'_, T, R>,
@@ -3393,7 +3512,8 @@ where
     }
 }
 
-pub(crate) fn typed_sub_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_sub_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
@@ -3428,7 +3548,8 @@ where
     typed_binary_view_with_pool("sub", buffers, lhs, rhs, |x, y| x.wrapping_sub_elem(y))
 }
 
-pub(crate) fn typed_sub_view_with_pool<T, L, R>(
+#[doc(hidden)]
+pub fn typed_sub_view_with_pool<T, L, R>(
     buffers: &mut BufferPool,
     lhs: &TypedTensorView<'_, T, L>,
     rhs: &TypedTensorView<'_, T, R>,
@@ -3441,7 +3562,8 @@ where
     typed_binary_view_with_pool("sub", buffers, lhs, rhs, |x, y| x - y)
 }
 
-pub(crate) fn typed_mul_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_mul_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
@@ -3510,7 +3632,8 @@ where
     typed_binary_view_with_pool("mul", buffers, lhs, rhs, |x, y| x.wrapping_mul_elem(y))
 }
 
-pub(crate) fn typed_mul_view_with_pool<T, L, R>(
+#[doc(hidden)]
+pub fn typed_mul_view_with_pool<T, L, R>(
     buffers: &mut BufferPool,
     lhs: &TypedTensorView<'_, T, L>,
     rhs: &TypedTensorView<'_, T, R>,
@@ -3561,7 +3684,8 @@ where
     }
 }
 
-pub(crate) fn typed_div_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_div_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
@@ -3674,7 +3798,8 @@ where
     typed_binary_view_with_pool("rem", buffers, lhs, rhs, |x, y| x.wrapping_rem_elem(y))
 }
 
-pub(crate) fn typed_neg_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_neg_with_pool<T>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
@@ -3724,7 +3849,8 @@ where
     typed_wrapping_unary_with_pool("abs", buffers, input, |x| x.wrapping_abs_elem())
 }
 
-pub(crate) fn typed_conj_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_conj_with_pool<T>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
@@ -3740,7 +3866,8 @@ where
     Ok(tensor_from_array(out))
 }
 
-pub(crate) fn typed_abs_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_abs_with_pool<T>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
@@ -3791,7 +3918,8 @@ where
     Ok(tensor_from_array(out))
 }
 
-pub(crate) fn typed_sign_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_sign_with_pool<T>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
 ) -> crate::Result<TypedTensor<T>>
@@ -3817,7 +3945,8 @@ where
     typed_wrapping_unary_with_pool("sign", buffers, input, |x| x.signum_elem())
 }
 
-pub(crate) fn typed_maximum_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_maximum_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
@@ -3844,7 +3973,8 @@ where
     Ok(tensor_from_array(out))
 }
 
-pub(crate) fn typed_minimum_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_minimum_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
@@ -3871,7 +4001,8 @@ where
     Ok(tensor_from_array(out))
 }
 
-pub(crate) fn typed_compare_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_compare_with_pool<T>(
     buffers: &mut BufferPool,
     lhs: &TypedTensor<T>,
     rhs: &TypedTensor<T>,
@@ -3899,7 +4030,8 @@ where
     Ok(tensor_from_array(out))
 }
 
-pub(crate) fn typed_select_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_select_with_pool<T>(
     buffers: &mut BufferPool,
     pred: &TypedTensor<bool>,
     on_true: &TypedTensor<T>,
@@ -3935,7 +4067,8 @@ where
     Ok(tensor_from_array(out))
 }
 
-pub(crate) fn typed_clamp_with_pool<T>(
+#[doc(hidden)]
+pub fn typed_clamp_with_pool<T>(
     buffers: &mut BufferPool,
     input: &TypedTensor<T>,
     lower: &TypedTensor<T>,

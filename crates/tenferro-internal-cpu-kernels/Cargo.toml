@@ -1,0 +1,21 @@
+[package]
+name = "tenferro-internal-cpu-kernels"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Internal CPU kernel implementations and buffer pools for tenferro-cpu."
+
+[lib]
+name = "tenferro_internal_cpu_kernels"
+
+[dependencies]
+tenferro-tensor = { path = "../tenferro-tensor", version = "0.2.0" }
+num-complex.workspace = true
+num-traits.workspace = true
+strided-kernel.workspace = true
+thiserror.workspace = true

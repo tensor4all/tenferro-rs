@@ -2,7 +2,7 @@
 
 **Repo:** tenferro-rs
 **Parent:** `../index.md`
-**Related:** `computegraph.md`, `primitive-ad.md`, `tidu.md`,
+**Related:** `computegraph.md`, `primitive-ad.md`, `semantic-ad.md`,
 `../spec/backend-contract.md`, `../spec/primitive-catalog.md`,
 `../spec/extension-op.md`
 
@@ -37,7 +37,7 @@ stack. `tenferro-xla` is a peer executor over compiled static programs, not a
 |---|---|
 | `tenferro-tensor-core` | Rank/layout metadata, dtype tags, scalar trait, and host-only tensor adapters |
 | `tenferro-tensor` | Runtime `TypedTensor<T, R>`/`Tensor` values, typed views, backend traits, and backend-independent contracts |
-| `tenferro-cpu` | CPU backend, CPU execution sessions, CPU kernels, buffer pools, CPU provider selection, and the CPU runtime-registration preparation/execution adapter |
+| `tenferro-cpu` | Public CPU backend, CPU execution sessions, CPU execution context, provider selection, thread policy, public resource-pool controls, and the CPU runtime-registration preparation/execution adapter |
 | `tenferro-gpu` | CubeCL/CUDA backend and GPU transfer helpers |
 | `tenferro-runtime` | Concrete tensor helpers, traced tensors, graph compilation/execution, immutable runtime snapshots, preparation SPI/cache substrate, runtime-owned compiled-graph execution, scheduled-graph staging, extension runtime registration, and extension cache storage |
 | `tenferro-xla` | Experimental StableHLO lowering and runtime-loaded PJRT plugin support for static-shaped traced programs |
@@ -46,6 +46,7 @@ stack. `tenferro-xla` is a peer executor over compiled static programs, not a
 | `tenferro-linalg` | Linear algebra traced APIs, eager helpers, extension runtime, and optional linalg AD rules |
 | `tenferro-fft` | FFT extension runtime and public concrete/traced FFT APIs |
 | `tenferro-core-ops` | Internal core primitive operation catalog used by graph, runtime, and backend dispatch |
+| `tenferro-internal-cpu-kernels` | Internal CPU elementwise kernels and typed buffer-pool implementation reused by `tenferro-cpu` |
 | `tenferro-internal-ops` | Graph op vocabulary and AD rule implementations |
 | `tenferro-internal-extension-macros` | Procedural macros for extension-op registration |
 
@@ -91,7 +92,10 @@ Layer 2: tenferro-tensor
          backend traits, backend-independent contracts
 
          tenferro-cpu
-         CPU backend, CPU execution sessions, CPU kernels, buffer pools
+         public CPU backend and execution sessions
+
+         tenferro-internal-cpu-kernels
+         internal CPU elementwise kernels and buffer-pool implementation
 
          tenferro-gpu
          CubeCL/CUDA backend and GPU transfer helpers
@@ -120,8 +124,11 @@ runtime-owned execution bridge. It is not a runtime-to-CPU dependency:
 ```text
 tenferro-tensor           -> tenferro-tensor-core, tenferro-core-ops
 tenferro-cpu              -> tenferro-tensor
+tenferro-cpu              -> tenferro-internal-cpu-kernels
 tenferro-cpu              -> tenferro-runtime
 tenferro-gpu              -> tenferro-tensor, tenferro-core-ops
+tenferro-internal-cpu-kernels
+                           -> tenferro-tensor
 tenferro-internal-ops     -> tenferro-tensor, tenferro-core-ops,
                               tenferro-internal-extension-macros
 tenferro-runtime          -> tenferro-tensor, tenferro-core-ops,
@@ -167,9 +174,12 @@ Rules:
 - `tenferro-tensor` owns concrete runtime tensor values, arbitrary-stride typed
   views, backend traits, and backend-independent contracts.
 - `tenferro-cpu` owns `CpuBackend`, `CpuContext`, CPU execution sessions,
-  CPU kernels, buffer pools, CPU provider selection, and its narrow
-  runtime-registration adapters for preparation metadata and runtime-owned
-  execution.
+  CPU provider selection, thread policy, public resource-pool controls, and
+  its narrow runtime-registration adapters for preparation metadata and
+  runtime-owned execution.
+- `tenferro-internal-cpu-kernels` owns internal CPU elementwise kernels and the
+  typed buffer-pool implementation reused by `tenferro-cpu`. It exists as a
+  release-build reuse boundary and is not a user-facing API surface.
 - `tenferro-gpu` owns GPU backend implementation and transfer helpers.
 - `tenferro-runtime` owns graph construction, compilation, execution,
   immutable runtime snapshots/reconfiguration, preparation SPI/cache substrate,

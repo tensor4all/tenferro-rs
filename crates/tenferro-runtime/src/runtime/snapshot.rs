@@ -19,12 +19,13 @@ use super::extension::{
     ExtensionFamilyId, FrozenExtensionSlots,
 };
 use super::preparation::{PreparedEntryKey, PreparedProgram, PreparedProgramResult};
+use super::schedule::EventDomainId;
 use super::{
     CacheOwnerId, CoreCapabilityBundle, EngineId, EngineRegistration, ExecutionContextIdentity,
     ExecutionPolicy, ExtensionModule, ExtensionModuleError, ExtensionModuleId, HardwareClassId,
     InputSignature, PrepareOptions, RegistrationIdentity, RegistrationKey, RuntimeCacheError,
     RuntimeCacheStats, RuntimeConfigError, RuntimeEpoch, RuntimeId, RuntimeReconfigureError,
-    RuntimeStateError, StorageClass,
+    RuntimeStateError, StorageClass, TransferProvider,
 };
 
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
@@ -41,6 +42,7 @@ struct CandidateConfig {
     policy: ExecutionPolicy,
     engines: BTreeMap<EngineId, CandidateEngineRecord>,
     modules: BTreeMap<ExtensionModuleId, CandidateModuleRecord>,
+    transfers: BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>>,
 }
 
 impl CandidateConfig {
@@ -49,6 +51,7 @@ impl CandidateConfig {
             policy: default_execution_policy(),
             engines: BTreeMap::new(),
             modules: BTreeMap::new(),
+            transfers: BTreeMap::new(),
         }
     }
 
@@ -70,6 +73,7 @@ impl CandidateConfig {
             policy: snapshot.policy.clone(),
             engines,
             modules: snapshot.extensions.to_candidate_modules(),
+            transfers: snapshot.transfers.clone(),
         }
     }
 }
@@ -78,6 +82,7 @@ impl CandidateConfig {
 struct FrozenEngineSlot {
     registration: EngineRegistration,
     identity: RegistrationIdentity,
+    event_domain_id: EventDomainId,
 }
 
 impl fmt::Debug for FrozenEngineSlot {
@@ -86,6 +91,7 @@ impl fmt::Debug for FrozenEngineSlot {
             .debug_struct("FrozenEngineSlot")
             .field("engine_id", self.registration.engine_id())
             .field("registration_identity", &self.identity)
+            .field("event_domain_id", &self.event_domain_id)
             .field("context_identity", &self.registration.context_identity())
             .field("hardware_class", self.registration.hardware_class())
             .finish_non_exhaustive()
@@ -117,6 +123,7 @@ pub struct RuntimeConfigSnapshot {
     engines: Arc<[FrozenEngineSlot]>,
     engine_indices: BTreeMap<EngineId, usize>,
     extensions: FrozenExtensionSlots,
+    transfers: BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>>,
     cache_owners: Arc<[FrozenCacheOwner]>,
 }
 
@@ -144,6 +151,11 @@ impl RuntimeConfigSnapshot {
     /// Return the number of installed extension modules.
     pub fn extension_module_count(&self) -> usize {
         self.extensions.module_count()
+    }
+
+    /// Return the number of registered transfer providers.
+    pub fn transfer_provider_count(&self) -> usize {
+        self.transfers.len()
     }
 
     /// Return whether this snapshot contains an extension engine for a family.
@@ -180,6 +192,12 @@ impl RuntimeConfigSnapshot {
         engine_id: &EngineId,
     ) -> Option<ExtensionEngineSnapshotView<'_>> {
         self.extensions.slot_for_preparation(family_id, engine_id)
+    }
+
+    pub(super) fn transfers_for_execution(
+        &self,
+    ) -> BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>> {
+        self.transfers.clone()
     }
 
     #[cfg(test)]
@@ -234,6 +252,7 @@ impl fmt::Debug for RuntimeConfigSnapshot {
             .field("engine_count", &self.engines.len())
             .field("extension_module_count", &self.extensions.module_count())
             .field("extension_engine_count", &self.extensions.engine_count())
+            .field("transfer_provider_count", &self.transfers.len())
             .field("cache_owner_count", &self.cache_owners.len())
             .finish_non_exhaustive()
     }
@@ -537,6 +556,25 @@ impl Runtime {
         super::execution::run_prepared(self, prepared, inputs)
     }
 
+    /// Submit a compiled graph for asynchronous runtime-owned execution.
+    ///
+    /// Dropping the returned handle detaches the observer without blocking.
+    /// Use [`super::execution::ExecutionHandle::wait`] to observe completion.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same [`crate::PrepareError::InputSignature`],
+    /// [`crate::PrepareError::Specialization`],
+    /// [`crate::PrepareError::NoEligibleEngine`], and other preparation
+    /// failures as [`Self::run_compiled`] before the worker is submitted.
+    pub fn submit(
+        &self,
+        program: &CompiledGraph,
+        inputs: &[&Tensor],
+    ) -> crate::Result<super::execution::ExecutionHandle> {
+        super::execution::submit(self, program, inputs)
+    }
+
     /// Run a compiled graph and preserve lazy owned output views.
     ///
     /// # Examples
@@ -807,6 +845,30 @@ impl RuntimeConfigBuilder {
         Ok(self)
     }
 
+    /// Register a transfer provider keyed by source and destination storage
+    /// classes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::ConflictingRegistration`] if a different
+    /// provider is already registered for the same storage-class pair.
+    pub fn register_transfer_provider(
+        &mut self,
+        source: StorageClass,
+        destination: StorageClass,
+        provider: Arc<dyn TransferProvider>,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        let mut changed = false;
+        register_transfer_provider_candidate(
+            &mut self.candidate,
+            source,
+            destination,
+            provider,
+            &mut changed,
+        )?;
+        Ok(self)
+    }
+
     /// Replace an extension module transaction, installing it when absent.
     ///
     /// # Errors
@@ -875,6 +937,7 @@ impl fmt::Debug for RuntimeConfigBuilder {
             .field("execution_policy", &self.candidate.policy)
             .field("engine_count", &self.candidate.engines.len())
             .field("extension_module_count", &self.candidate.modules.len())
+            .field("transfer_provider_count", &self.candidate.transfers.len())
             .finish_non_exhaustive()
     }
 }
@@ -946,6 +1009,28 @@ impl RuntimeReconfiguration<'_> {
         Ok(self)
     }
 
+    /// Register a transfer provider in this reconfiguration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RuntimeConfigError::ConflictingRegistration`] if a different
+    /// provider is already registered for the same storage-class pair.
+    pub fn register_transfer_provider(
+        &mut self,
+        source: StorageClass,
+        destination: StorageClass,
+        provider: Arc<dyn TransferProvider>,
+    ) -> Result<&mut Self, RuntimeConfigError> {
+        register_transfer_provider_candidate(
+            self.candidate,
+            source,
+            destination,
+            provider,
+            self.changed,
+        )?;
+        Ok(self)
+    }
+
     /// Replace an extension module in this reconfiguration, installing when
     /// absent.
     ///
@@ -982,6 +1067,7 @@ impl fmt::Debug for RuntimeReconfiguration<'_> {
             .debug_struct("RuntimeReconfiguration")
             .field("engine_count", &self.candidate.engines.len())
             .field("extension_module_count", &self.candidate.modules.len())
+            .field("transfer_provider_count", &self.candidate.transfers.len())
             .field("changed", &*self.changed)
             .finish_non_exhaustive()
     }
@@ -1016,6 +1102,11 @@ impl<'a> EngineSnapshotView<'a> {
     /// Return the execution-context identity required by this slot.
     pub fn context_identity(&self) -> ExecutionContextIdentity {
         self.slot.registration.context_identity()
+    }
+
+    /// Return this engine's runtime event domain.
+    pub fn event_domain_id(&self) -> EventDomainId {
+        self.slot.event_domain_id
     }
 
     /// Return the hardware class for this slot.
@@ -1174,6 +1265,30 @@ fn remove_extension_module_candidate(
     Ok(())
 }
 
+fn register_transfer_provider_candidate(
+    candidate: &mut CandidateConfig,
+    source: StorageClass,
+    destination: StorageClass,
+    provider: Arc<dyn TransferProvider>,
+    changed: &mut bool,
+) -> Result<(), RuntimeConfigError> {
+    let key = (source, destination);
+    match candidate.transfers.get(&key) {
+        Some(existing) if Arc::ptr_eq(existing, &provider) => Ok(()),
+        Some(_) => Err(RuntimeConfigError::ConflictingRegistration {
+            key: RegistrationKey::TransferProvider {
+                source: key.0,
+                destination: key.1,
+            },
+        }),
+        None => {
+            candidate.transfers.insert(key, provider);
+            *changed = true;
+            Ok(())
+        }
+    }
+}
+
 fn validate_candidate(candidate: &CandidateConfig) -> Result<(), RuntimeConfigError> {
     let mut seen = BTreeMap::<(ExtensionFamilyId, EngineId), ExtensionModuleId>::new();
     for (module_id, module) in &candidate.modules {
@@ -1252,6 +1367,8 @@ fn freeze_candidate(
         let identity = record
             .identity
             .ok_or(RuntimeConfigError::IdentityExhausted)?;
+        let event_domain_index =
+            u32::try_from(index + 1).map_err(|_| RuntimeConfigError::IdentityExhausted)?;
         if let Some(owner) = record.registration.cache_owner.clone() {
             cache_owners.push(FrozenCacheOwner {
                 id: engine_cache_owner_id(&engine_id),
@@ -1270,6 +1387,7 @@ fn freeze_candidate(
         engines.push(FrozenEngineSlot {
             registration: record.registration,
             identity,
+            event_domain_id: EventDomainId::runtime_allocated(event_domain_index),
         });
     }
     let extensions = freeze_extension_slots(candidate.modules)?;
@@ -1287,6 +1405,7 @@ fn freeze_candidate(
         engines: engines.into(),
         engine_indices,
         extensions,
+        transfers: candidate.transfers,
         cache_owners: cache_owners.into(),
     })
 }

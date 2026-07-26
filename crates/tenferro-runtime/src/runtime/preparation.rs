@@ -21,6 +21,7 @@ use super::cache::{
     CacheLookup, CacheProduced, PreparedCacheKey, PreparedValue, RuntimeCacheSet, SharedRetention,
 };
 use super::extension::ExtensionFamilyId;
+use super::schedule::ScheduledGraph;
 use super::{
     CoreCapabilityKind, CorePrepareContext, DotGeneralPreparation, DotGeneralPrepareRequest,
     ElementwisePrepareRequest, ElementwiseRuntime, EngineId, ExecutionContextIdentity,
@@ -72,6 +73,7 @@ struct PreparedRootIdentity {
     resolved_planning: ResolvedPlanningKey,
     prepare_options: PrepareOptionsKey,
     operation_bindings: Box<[PreparedOperationBinding]>,
+    operation_placements: Box<[ResolvedProgramPlacement]>,
     extension_planning: Box<[ExtensionPlanningIdentity]>,
 }
 
@@ -91,6 +93,7 @@ impl fmt::Debug for PreparedRootIdentity {
             .field("resolved_planning", &self.resolved_planning)
             .field("prepare_options", &self.prepare_options)
             .field("operation_bindings", &self.operation_bindings.len())
+            .field("operation_placements", &self.operation_placements.len())
             .field("extension_planning", &self.extension_planning.len())
             .finish()
     }
@@ -185,6 +188,7 @@ pub(crate) struct PreparedProgramRoot {
     identity: Arc<PreparedRootIdentity>,
     semantic: Arc<SemanticProgram>,
     staging: Arc<ExecProgram>,
+    schedule: Arc<ScheduledGraph>,
     extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
     logical_retained_bytes: Option<usize>,
 }
@@ -196,16 +200,19 @@ impl PreparedProgramRoot {
         extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
     ) -> Self {
         let semantic = Arc::clone(&identity.semantic);
+        let schedule = Arc::new(ScheduledGraph::from_exec_program(&staging));
         let logical_retained_bytes = prepared_program_root_retained_bytes(
             &identity,
             &semantic,
             &staging,
+            &schedule,
             &extension_planning,
         );
         Self {
             identity,
             semantic,
             staging,
+            schedule,
             extension_planning,
             logical_retained_bytes,
         }
@@ -222,8 +229,20 @@ impl PreparedProgramRoot {
         &self.staging
     }
 
+    pub(crate) fn schedule(&self) -> &ScheduledGraph {
+        &self.schedule
+    }
+
     pub(crate) fn engine_id(&self) -> &EngineId {
         &self.identity.engine_id
+    }
+
+    pub(crate) fn resolved_placement(&self) -> &ResolvedProgramPlacement {
+        &self.identity.resolved_placement
+    }
+
+    pub(crate) fn operation_placements(&self) -> &[ResolvedProgramPlacement] {
+        &self.identity.operation_placements
     }
 
     pub(crate) fn epoch(&self) -> super::RuntimeEpoch {
@@ -238,6 +257,11 @@ impl PreparedProgramRoot {
     #[cfg(test)]
     pub(crate) fn staging_for_test(&self) -> &ExecProgram {
         &self.staging
+    }
+
+    #[cfg(test)]
+    pub(crate) fn schedule_for_test(&self) -> &ScheduledGraph {
+        &self.schedule
     }
 
     #[cfg(test)]
@@ -265,6 +289,7 @@ impl fmt::Debug for PreparedProgramRoot {
                 "staging_instruction_count",
                 &self.staging.instructions.len(),
             )
+            .field("scheduled_node_count", &self.schedule.nodes().len())
             .field("extension_planning", &self.extension_planning.len())
             .field("logical_retained_bytes", &self.logical_retained_bytes)
             .finish()
@@ -339,9 +364,6 @@ impl PreparedValue for PreparedProgram {
 #[derive(Clone)]
 struct PreparationContext {
     root_identity: Arc<PreparedRootIdentity>,
-    resolved_placement: ResolvedProgramPlacement,
-    planning: ResolvedPlanningConfig,
-    prepare_options_key: PrepareOptionsKey,
     operation_dispatch: Arc<[OperationDispatch]>,
     extension_planning: Arc<[Arc<dyn ExtensionPlanningConfig>]>,
 }
@@ -349,7 +371,16 @@ struct PreparationContext {
 #[derive(Clone)]
 struct OperationDispatch {
     binding: PreparedOperationBinding,
+    resolved_placement: ResolvedProgramPlacement,
+    planning: ResolvedPlanningConfig,
+    prepare_options_key: PrepareOptionsKey,
     provider: OperationProvider,
+}
+
+struct SelectedOperationDispatch {
+    dispatch: OperationDispatch,
+    extension_identity: Option<ExtensionPlanningIdentity>,
+    extension_config: Option<Arc<dyn ExtensionPlanningConfig>>,
 }
 
 #[derive(Clone)]
@@ -510,33 +541,29 @@ fn resolve_preparation_context(
     }
 
     let mut missing_extension_family = None;
-    for engine in candidates {
-        let Some(storage_class) = resolve_storage_class(&engine, &constraint) else {
-            continue;
-        };
-        let resolved_placement =
-            ResolvedProgramPlacement::new(engine.engine_id().clone(), storage_class);
-        let planning = ResolvedPlanningConfig::resolve(
-            snapshot.execution_policy(),
-            options,
-            engine.hardware_class().clone(),
-        );
-        let planning_key = ResolvedPlanningKey::from_config(&planning);
-        let prepare_options_key = PrepareOptionsKey::from_resolved(
-            resolved_placement.clone(),
-            planning.hard_workspace_limit_bytes(),
-            planning.planning_seed(),
-        );
+    let storage_candidates = candidate_storage_classes(&candidates, &constraint);
+    for storage_class in storage_candidates.iter().cloned() {
         if let Some(context) = build_operation_dispatch(
             runtime,
             snapshot,
             frozen,
             compiler_options,
-            &engine,
-            resolved_placement,
-            planning,
-            planning_key,
-            prepare_options_key,
+            &candidates,
+            storage_class,
+            options,
+            &mut missing_extension_family,
+        )? {
+            return Ok(context);
+        }
+    }
+    if constraint.storage_class().is_none() {
+        if let Some(context) = build_cross_storage_operation_dispatch(
+            runtime,
+            snapshot,
+            frozen,
+            compiler_options,
+            &candidates,
+            options,
             &mut missing_extension_family,
         )? {
             return Ok(context);
@@ -552,14 +579,31 @@ fn resolve_preparation_context(
     Err(Arc::new(PrepareError::NoEligibleEngine { constraint }))
 }
 
-fn resolve_storage_class(
-    engine: &super::EngineSnapshotView<'_>,
+fn candidate_storage_classes(
+    candidates: &[super::EngineSnapshotView<'_>],
     constraint: &ProgramPlacementConstraint,
-) -> Option<StorageClass> {
+) -> Vec<StorageClass> {
     match constraint.storage_class() {
-        Some(requested) if engine.storage_classes().contains(requested) => Some(requested.clone()),
-        Some(_) => None,
-        None => Some(engine.default_storage_class().clone()),
+        Some(requested) => {
+            if candidates
+                .iter()
+                .any(|engine| engine.storage_classes().contains(requested))
+            {
+                vec![requested.clone()]
+            } else {
+                Vec::new()
+            }
+        }
+        None => {
+            let mut classes = Vec::new();
+            for engine in candidates {
+                let storage = engine.default_storage_class();
+                if !classes.iter().any(|existing| existing == storage) {
+                    classes.push(storage.clone());
+                }
+            }
+            classes
+        }
     }
 }
 
@@ -569,86 +613,288 @@ fn build_operation_dispatch(
     snapshot: &Arc<super::RuntimeConfigSnapshot>,
     frozen: &FrozenProgram,
     compiler_options: CompilerOptions,
-    engine: &super::EngineSnapshotView<'_>,
-    resolved_placement: ResolvedProgramPlacement,
-    planning: ResolvedPlanningConfig,
-    planning_key: ResolvedPlanningKey,
-    prepare_options_key: PrepareOptionsKey,
+    candidates: &[super::EngineSnapshotView<'_>],
+    storage_class: StorageClass,
+    options: &PrepareOptions,
     missing_extension_family: &mut Option<ExtensionFamilyId>,
 ) -> PreparedProgramResult<Option<PreparationContext>> {
     let mut dispatch = Vec::with_capacity(frozen.program.operations().len());
     let mut bindings = Vec::with_capacity(frozen.program.operations().len());
+    let mut placements = Vec::with_capacity(frozen.program.operations().len());
     let mut extension_identities = Vec::new();
     let mut extension_planning = Vec::new();
 
     for operation in frozen.program.operations() {
-        let binding = match operation.op() {
-            SemanticOpRef::Core(_) => PreparedOperationBinding::new(
-                runtime.id(),
-                snapshot.epoch(),
-                engine.engine_id().clone(),
-                engine.registration_identity(),
-                engine.context_identity(),
+        let Some(selected) = select_operation_dispatch(
+            runtime,
+            snapshot,
+            candidates,
+            operation,
+            &storage_class,
+            options,
+            missing_extension_family,
+        )?
+        else {
+            return Ok(None);
+        };
+        bindings.push(selected.dispatch.binding.clone());
+        placements.push(selected.dispatch.resolved_placement.clone());
+        if let Some(identity) = selected.extension_identity {
+            extension_identities.push(identity);
+        }
+        if let Some(config) = selected.extension_config {
+            extension_planning.push(config);
+        }
+        dispatch.push(selected.dispatch);
+    }
+
+    let (primary_binding, primary_resolved_placement, primary_planning, primary_options_key) =
+        if let Some(primary) = dispatch.first() {
+            (
+                primary.binding.clone(),
+                primary.resolved_placement.clone(),
+                primary.planning.clone(),
+                primary.prepare_options_key.clone(),
+            )
+        } else {
+            let Some(engine) = candidates
+                .iter()
+                .find(|engine| engine.storage_classes().contains(&storage_class))
+            else {
+                return Ok(None);
+            };
+            let resolved_placement =
+                ResolvedProgramPlacement::new(engine.engine_id().clone(), storage_class.clone());
+            let planning = ResolvedPlanningConfig::resolve(
+                snapshot.execution_policy(),
+                options,
                 engine.hardware_class().clone(),
-            ),
-            SemanticOpRef::Extension(extension) => {
-                let Some(slot) = snapshot
-                    .extension_slot_for_preparation(extension.family_id(), engine.engine_id())
-                else {
-                    missing_extension_family.get_or_insert(extension.family_id());
-                    return Ok(None);
-                };
-                let config = Arc::clone(slot.config());
-                extension_identities.push(ExtensionPlanningIdentity {
-                    module_id: slot.module_id().clone(),
-                    family_id: slot.family_id(),
-                    engine_id: slot.engine_id().clone(),
-                    payload_fingerprint: extension_config_payload_fingerprint(config.as_ref()),
-                    config: Arc::clone(&config),
-                });
-                extension_planning.push(config);
+            );
+            let prepare_options_key = PrepareOptionsKey::from_resolved(
+                resolved_placement.clone(),
+                planning.hard_workspace_limit_bytes(),
+                planning.planning_seed(),
+            );
+            (
                 PreparedOperationBinding::new(
                     runtime.id(),
                     snapshot.epoch(),
-                    slot.engine_id().clone(),
-                    slot.registration_identity(),
-                    slot.context_identity(),
+                    engine.engine_id().clone(),
+                    engine.registration_identity(),
+                    engine.context_identity(),
                     engine.hardware_class().clone(),
-                )
-            }
+                ),
+                resolved_placement,
+                planning,
+                prepare_options_key,
+            )
         };
-        let Some(provider) = provider_for_operation(snapshot, engine, operation)? else {
-            return Ok(None);
-        };
-        bindings.push(binding.clone());
-        dispatch.push(OperationDispatch { binding, provider });
-    }
+    let planning_key = ResolvedPlanningKey::from_config(&primary_planning);
 
     let root_identity = Arc::new(PreparedRootIdentity {
         semantic_fingerprint: frozen.program.semantic_fingerprint(),
         semantic: Arc::clone(&frozen.program),
         runtime_id: runtime.id(),
         epoch: snapshot.epoch(),
-        resolved_placement: resolved_placement.clone(),
-        engine_id: engine.engine_id().clone(),
-        registration_identity: engine.registration_identity(),
-        context_identity: engine.context_identity(),
-        hardware_class: engine.hardware_class().clone(),
+        resolved_placement: primary_resolved_placement,
+        engine_id: primary_binding.engine_id().clone(),
+        registration_identity: primary_binding.registration_identity(),
+        context_identity: primary_binding.context_identity(),
+        hardware_class: primary_binding.hardware_class().clone(),
         compiler_options,
         resolved_planning: planning_key,
-        prepare_options: prepare_options_key.clone(),
+        prepare_options: primary_options_key,
         operation_bindings: bindings.into_boxed_slice(),
+        operation_placements: placements.into_boxed_slice(),
         extension_planning: extension_identities.into_boxed_slice(),
     });
 
     Ok(Some(PreparationContext {
         root_identity,
-        resolved_placement,
-        planning,
-        prepare_options_key,
         operation_dispatch: dispatch.into(),
         extension_planning: extension_planning.into(),
     }))
+}
+
+fn build_cross_storage_operation_dispatch(
+    runtime: &Runtime,
+    snapshot: &Arc<super::RuntimeConfigSnapshot>,
+    frozen: &FrozenProgram,
+    compiler_options: CompilerOptions,
+    candidates: &[super::EngineSnapshotView<'_>],
+    options: &PrepareOptions,
+    missing_extension_family: &mut Option<ExtensionFamilyId>,
+) -> PreparedProgramResult<Option<PreparationContext>> {
+    let mut dispatch = Vec::with_capacity(frozen.program.operations().len());
+    let mut bindings = Vec::with_capacity(frozen.program.operations().len());
+    let mut placements = Vec::with_capacity(frozen.program.operations().len());
+    let mut extension_identities = Vec::new();
+    let mut extension_planning = Vec::new();
+
+    for operation in frozen.program.operations() {
+        let Some(selected) = select_operation_dispatch_any_storage(
+            runtime,
+            snapshot,
+            candidates,
+            operation,
+            options,
+            missing_extension_family,
+        )?
+        else {
+            return Ok(None);
+        };
+        bindings.push(selected.dispatch.binding.clone());
+        placements.push(selected.dispatch.resolved_placement.clone());
+        if let Some(identity) = selected.extension_identity {
+            extension_identities.push(identity);
+        }
+        if let Some(config) = selected.extension_config {
+            extension_planning.push(config);
+        }
+        dispatch.push(selected.dispatch);
+    }
+
+    let Some(primary) = dispatch.first() else {
+        return Ok(None);
+    };
+    let planning_key = ResolvedPlanningKey::from_config(&primary.planning);
+    let primary_binding = primary.binding.clone();
+    let root_identity = Arc::new(PreparedRootIdentity {
+        semantic_fingerprint: frozen.program.semantic_fingerprint(),
+        semantic: Arc::clone(&frozen.program),
+        runtime_id: runtime.id(),
+        epoch: snapshot.epoch(),
+        resolved_placement: primary.resolved_placement.clone(),
+        engine_id: primary_binding.engine_id().clone(),
+        registration_identity: primary_binding.registration_identity(),
+        context_identity: primary_binding.context_identity(),
+        hardware_class: primary_binding.hardware_class().clone(),
+        compiler_options,
+        resolved_planning: planning_key,
+        prepare_options: primary.prepare_options_key.clone(),
+        operation_bindings: bindings.into_boxed_slice(),
+        operation_placements: placements.into_boxed_slice(),
+        extension_planning: extension_identities.into_boxed_slice(),
+    });
+
+    Ok(Some(PreparationContext {
+        root_identity,
+        operation_dispatch: dispatch.into(),
+        extension_planning: extension_planning.into(),
+    }))
+}
+
+fn select_operation_dispatch(
+    runtime: &Runtime,
+    snapshot: &Arc<super::RuntimeConfigSnapshot>,
+    candidates: &[super::EngineSnapshotView<'_>],
+    operation: SemanticOperationView<'_>,
+    storage_class: &StorageClass,
+    options: &PrepareOptions,
+    missing_extension_family: &mut Option<ExtensionFamilyId>,
+) -> PreparedProgramResult<Option<SelectedOperationDispatch>> {
+    for engine in candidates {
+        if !engine.storage_classes().contains(storage_class) {
+            continue;
+        }
+        let Some(provider) = provider_for_operation(snapshot, engine, operation)? else {
+            if let SemanticOpRef::Extension(extension) = operation.op() {
+                if !snapshot.has_extension_family(extension.family_id()) {
+                    missing_extension_family.get_or_insert(extension.family_id());
+                }
+            }
+            continue;
+        };
+        let resolved_placement =
+            ResolvedProgramPlacement::new(engine.engine_id().clone(), storage_class.clone());
+        let planning = ResolvedPlanningConfig::resolve(
+            snapshot.execution_policy(),
+            options,
+            engine.hardware_class().clone(),
+        );
+        let prepare_options_key = PrepareOptionsKey::from_resolved(
+            resolved_placement.clone(),
+            planning.hard_workspace_limit_bytes(),
+            planning.planning_seed(),
+        );
+        let (binding, extension_identity, extension_config) = match operation.op() {
+            SemanticOpRef::Core(_) => (
+                PreparedOperationBinding::new(
+                    runtime.id(),
+                    snapshot.epoch(),
+                    engine.engine_id().clone(),
+                    engine.registration_identity(),
+                    engine.context_identity(),
+                    engine.hardware_class().clone(),
+                ),
+                None,
+                None,
+            ),
+            SemanticOpRef::Extension(extension) => {
+                let Some(slot) = snapshot
+                    .extension_slot_for_preparation(extension.family_id(), engine.engine_id())
+                else {
+                    continue;
+                };
+                let config = Arc::clone(slot.config());
+                (
+                    PreparedOperationBinding::new(
+                        runtime.id(),
+                        snapshot.epoch(),
+                        slot.engine_id().clone(),
+                        slot.registration_identity(),
+                        slot.context_identity(),
+                        engine.hardware_class().clone(),
+                    ),
+                    Some(ExtensionPlanningIdentity {
+                        module_id: slot.module_id().clone(),
+                        family_id: slot.family_id(),
+                        engine_id: slot.engine_id().clone(),
+                        payload_fingerprint: extension_config_payload_fingerprint(config.as_ref()),
+                        config: Arc::clone(&config),
+                    }),
+                    Some(config),
+                )
+            }
+        };
+        return Ok(Some(SelectedOperationDispatch {
+            dispatch: OperationDispatch {
+                binding,
+                resolved_placement,
+                planning,
+                prepare_options_key,
+                provider,
+            },
+            extension_identity,
+            extension_config,
+        }));
+    }
+    Ok(None)
+}
+
+fn select_operation_dispatch_any_storage(
+    runtime: &Runtime,
+    snapshot: &Arc<super::RuntimeConfigSnapshot>,
+    candidates: &[super::EngineSnapshotView<'_>],
+    operation: SemanticOperationView<'_>,
+    options: &PrepareOptions,
+    missing_extension_family: &mut Option<ExtensionFamilyId>,
+) -> PreparedProgramResult<Option<SelectedOperationDispatch>> {
+    for engine in candidates {
+        let storage_class = engine.default_storage_class().clone();
+        if let Some(selected) = select_operation_dispatch(
+            runtime,
+            snapshot,
+            std::slice::from_ref(engine),
+            operation,
+            &storage_class,
+            options,
+            missing_extension_family,
+        )? {
+            return Ok(Some(selected));
+        }
+    }
+    Ok(None)
 }
 
 fn provider_for_operation(
@@ -788,15 +1034,7 @@ fn prepare_entry(
         .operations()
         .zip(context.operation_dispatch.iter())
     {
-        match prepare_operation(
-            operation,
-            dispatch,
-            signature,
-            &context.resolved_placement,
-            &context.planning,
-            &context.prepare_options_key,
-            &key.specialization,
-        )? {
+        match prepare_operation(operation, dispatch, signature, &key.specialization)? {
             super::PrepareCapability::Prepared(operation) => {
                 validate_prepared_operation(
                     operation.as_ref(),
@@ -857,17 +1095,14 @@ fn prepare_operation(
     operation: SemanticOperationView<'_>,
     dispatch: &OperationDispatch,
     signature: &InputSignature,
-    resolved_placement: &ResolvedProgramPlacement,
-    planning: &ResolvedPlanningConfig,
-    prepare_options_key: &PrepareOptionsKey,
     specialization: &SpecializationProjection,
 ) -> Result<super::PrepareCapability, PrepareError> {
     let core_context = CorePrepareContext::new(
         &dispatch.binding,
         signature,
-        resolved_placement,
-        planning,
-        prepare_options_key,
+        &dispatch.resolved_placement,
+        &dispatch.planning,
+        &dispatch.prepare_options_key,
         specialization,
     );
     match (&dispatch.provider, operation.op()) {
@@ -890,12 +1125,12 @@ fn prepare_operation(
             engine.prepare(ExtensionPrepareRequest::new(
                 extension,
                 &dispatch.binding,
-                resolved_placement,
+                &dispatch.resolved_placement,
                 dispatch.binding.hardware_class(),
-                planning,
+                &dispatch.planning,
                 config.as_ref(),
                 signature,
-                prepare_options_key,
+                &dispatch.prepare_options_key,
                 specialization,
             ))
         }
@@ -1123,6 +1358,7 @@ fn hash_root_identity_for_digest(identity: &PreparedRootIdentity, state: &mut im
     identity.resolved_planning.hash(state);
     identity.prepare_options.hash(state);
     identity.operation_bindings.hash(state);
+    identity.operation_placements.hash(state);
     for extension in &identity.extension_planning {
         extension.module_id.hash(state);
         extension.family_id.hash(state);
@@ -1144,6 +1380,7 @@ fn root_identity_exact_eq(left: &PreparedRootIdentity, right: &PreparedRootIdent
         && left.resolved_planning == right.resolved_planning
         && left.prepare_options == right.prepare_options
         && left.operation_bindings == right.operation_bindings
+        && left.operation_placements == right.operation_placements
         && left.semantic.semantic_eq(&right.semantic)
         && extension_planning_exact_eq(&left.extension_planning, &right.extension_planning)
 }
@@ -1196,6 +1433,10 @@ fn prepared_root_identity_key_retained_bytes(identity: &PreparedRootIdentity) ->
             .len()
             .checked_mul(size_of::<PreparedOperationBinding>())?,
         identity
+            .operation_placements
+            .len()
+            .checked_mul(size_of::<ResolvedProgramPlacement>())?,
+        identity
             .extension_planning
             .len()
             .checked_mul(size_of::<ExtensionPlanningIdentity>())?,
@@ -1206,6 +1447,7 @@ fn prepared_program_root_retained_bytes(
     identity: &PreparedRootIdentity,
     semantic: &SemanticProgram,
     staging: &ExecProgram,
+    schedule: &ScheduledGraph,
     extension_planning: &[Arc<dyn ExtensionPlanningConfig>],
 ) -> Option<usize> {
     checked_sum([
@@ -1213,6 +1455,7 @@ fn prepared_program_root_retained_bytes(
         prepared_root_identity_key_retained_bytes(identity)?,
         semantic.logical_retained_bytes()?,
         exec_program_retained_bytes(staging)?,
+        schedule.retained_bytes()?,
         extension_planning
             .len()
             .checked_mul(size_of::<Arc<dyn ExtensionPlanningConfig>>())?,

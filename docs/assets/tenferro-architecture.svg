@@ -105,8 +105,8 @@
   <!-- FOUNDATIONS (width 170) -->
   <text x="105" y="108" class="hdr">FOUNDATIONS</text>
   <rect x="20" y="120" width="170" height="52" rx="6" class="ext"/>
-  <text x="105" y="140" class="name">tidu-rs</text>
-  <text x="105" y="157" class="sub">linearize · linear_transpose</text>
+  <text x="105" y="140" class="name" style="font-size:12px">tenferro-internal-ops</text>
+  <text x="105" y="157" class="sub">StdTensorOp · AD rules</text>
   <rect x="20" y="196" width="170" height="52" rx="6" class="ext"/>
   <text x="105" y="216" class="name">computegraph-rs</text>
   <text x="105" y="233" class="sub">generic graph engine</text>

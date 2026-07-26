@@ -1,126 +1,83 @@
-# Primitive AD Contract
+# Primitive AD Rule Structure
 
-**Repo:** tidu-rs
+**Repo:** tenferro-rs
 **Parent:** `../index.md`
-**Depends on:** `computegraph-rs`
+**Related:** `semantic-ad.md`, `ad-pipeline.md`,
+`../spec/ad-contract.md`
 
 ---
 
-## I. Purpose
+## Purpose
 
-`tidu-rs` defines the AD trait (`Primitive`) that extends
-`computegraph::GraphOperation` with a cotangent-accumulation constructor plus
-JVP and transpose rules. It contains no concrete primitives.
+This page explains how tenferro represents primitive-local automatic
+differentiation rules after U8. The canonical signatures and normative rules
+live in [`../spec/ad-contract.md`](../spec/ad-contract.md).
 
-This is the counterpart of the AD behavior that JAX stores in
-`primitive_jvps` and `primitive_transposes`. The information is the same kind
-of information, but the representation is different:
+Core primitive AD rules are tenferro-owned. They live under
+`tenferro-internal-ops/src/ad/` and are registered by
+`PrimitiveOpKind`. The user-facing AD surfaces and semantic extension rule set
+live in `tenferro-ad`.
 
-- JAX: global registries keyed by primitive object
-- tenferro: methods on the concrete primitive type itself
+## Rule Kinds
 
----
+tenferro keeps the linearize-then-transpose model:
 
-## II. Primitive Trait
+- `linearize` emits the JVP graph for one primitive.
+- `transpose_rule` emits cotangent-input graph fragments for already-linear
+  primitive flow.
 
-`Primitive` extends `GraphOperation` with `add()` (cotangent accumulation
-constructor), `linearize` (JVP rule), and `transpose_rule` (VJP rule).
+Reverse-mode support is not always a direct transpose arm on the original
+primal op. Many primitives become reverse-differentiable by first applying
+`linearize` and then transposing the emitted linear graph. Direct primal VJP
+rules are reserved for cases where that generic route is incomplete or too
+expensive.
 
-Canonical trait signature: [`../spec/ad-contract.md`](../spec/ad-contract.md).
+## Core Rule Registry
 
-`add()` returns the primitive used by `tidu::linear_transpose` when multiple
-cotangent contributions flow to the same `ValueKey`. This keeps fan-out
-accumulation inside the generic linear_transpose pass without requiring a separate
-built-in `Dup` or `Add` primitive in `tidu`.
-
----
-
-## III. Linearization Rules
-
-A primitive's `linearize` must be linear in tangent inputs. It may:
-
-- reference primal inputs or outputs through `External(ValueKey)`
-- add primitives in `OperationRole::Linearized`
-- add `Conj` when required by linear_transpose semantics
-
-It must not introduce nonlinear dependence on tangent inputs.
-
-The intended mental model is close to JAX `linearize`:
-
-- JAX `linearize` applies a primitive's JVP rule and emits a new composition of
-  JAX primitives in a jaxpr
-- `Primitive::jvp_rule` emits a new composition of downstream concrete
-  primitives into a graph
-
----
-
-## IV. Transpose Rules
-
-A primitive's `transpose_rule` receives cotangent outputs and produces
-cotangent inputs. It must only add primitives that themselves implement
-`Primitive`.
-
-When linear_transpose encounters fan-out, `tidu` accumulates multiple reverse
-contributions by emitting `Primitive::add()` nodes. So every downstream
-primitive set used with `tidu` must provide an addition primitive suitable for
-cotangent accumulation.
-
----
-
-## V. ADKey Trait
-
-`tidu-rs` defines the `ADKey` trait that constrains `InputKey` for AD
-use. `tidu-rs` uses this trait to generate tangent input keys during
-`linearize`.
+The core registry maps each `PrimitiveOpKind` to a `PrimitiveAdRule`:
 
 ```rust
-pub type DiffPassId = u64;
-
-pub trait ADKey: Clone + Debug + Hash + Eq + Send + Sync + 'static {
-    /// Create a tangent input key derived from this key.
-    /// `pass` is a unique identifier for the `linearize` call.
-    fn tangent_of(&self, pass: DiffPassId) -> Self;
+pub(crate) trait PrimitiveAdRule: Send + Sync {
+    fn kind(&self) -> PrimitiveOpKind;
+    fn linearize(...) -> ADRuleResult<Vec<Option<LocalValueId>>>;
+    fn transpose_rule(...) -> ADRuleResult<Vec<Option<LocalValueId>>>;
 }
 ```
 
-`Primitive` requires `Self::InputKey: ADKey`
-(see [`../spec/ad-contract.md`](../spec/ad-contract.md) for the canonical
-`Primitive` trait signature).
+Rules emit graph operations through `PrimitiveRuleBuilder`. They may reference
+primal values, metadata values, and symbolic shape sources supplied by
+`ShapeGuardContext`, but they must not execute tensors or inspect backend
+runtime state.
 
-The concrete implementation of `ADKey` is the downstream implementor's
-choice. A typical pattern is a recursive enum:
+`None` in a tangent or cotangent slot means symbolic zero flow. Rules should
+keep zero flow symbolic until they must pass an actual value to another
+primitive, then instantiate it through dtype-aware semantic helpers such as
+`zero_like`, `one_like`, `constant_scalar`, or `identity_matrix`.
 
-```rust
-// tenferro-rs
-enum TensorInputKey {
-    User(String),
-    Tangent { of: Box<TensorInputKey>, pass: DiffPassId },
-}
-```
+## Transpose Inputs
 
-This gives debuggable keys like
-`Tangent { of: Tangent { of: User("x"), pass: 1 }, pass: 3 }` for
-higher-order AD.
+Transpose rules receive typed input references so they can distinguish fixed
+metadata/residual operands from active linear flow:
 
----
+- residual or metadata inputs may be used as fixed operands;
+- linear inputs belong to tangent flow;
+- a linear input's primal counterpart may be used only for metadata, runtime
+  shape sources, or fixed coefficients independent of tangent flow.
 
-## VI. Closure Responsibility
+Rules must not turn an active linear value into a residual operand to keep the
+forward tangent sweep alive in the transposed graph.
 
-`tidu-rs` defines the contract but does not enforce closure. The
-downstream implementor (e.g. tenferro-rs) is responsible for ensuring that
-the set of primitives reachable through `linearize` and `transpose_rule`
-is closed — i.e., every emitted op also implements `Primitive`.
+## Extension Rules
 
----
+Extension operation families register semantic rules through
+`SemanticExtensionRuleSet` in `tenferro-ad`. Family crates own their formulas
+and oracle coverage. The private bridge from core graph-rule dispatch to
+semantic extension rules is implemented by `tenferro-ad` only; extension
+families should not depend on it.
 
-## VII. Design Boundaries
+## Closure Responsibility
 
-```text
-tidu-rs owns:
-  - Primitive trait (`add` + `jvp_rule` + `transpose_rule`)
-  - AD transforms (`linearize`, `linear_transpose`)
-
-tidu-rs does NOT own:
-  - graph infrastructure → computegraph-rs
-  - concrete primitives → downstream (tenferro-rs)
-```
+All operations emitted by core or extension AD rules must remain in the
+supported tenferro semantic vocabulary. If a rule needs an operation outside
+that vocabulary, add the operation and its validation/oracle coverage first
+instead of smuggling backend-specific execution through AD rule code.

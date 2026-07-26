@@ -228,8 +228,12 @@ impl AdTransformCacheStore {
     }
 
     fn clear(&mut self) {
+        let clears = self.stats.clears.saturating_add(1);
         self.entries.clear();
-        self.stats = CacheStats::empty();
+        self.stats = CacheStats {
+            clears,
+            ..CacheStats::empty()
+        };
     }
 
     fn stats(&self) -> CacheStats {
@@ -241,14 +245,22 @@ impl AdTransformCacheStore {
         key: &SemanticAdTransformCacheKey,
         input: &FrozenProgram,
     ) -> Option<Arc<SemanticAdProgram>> {
-        self.entries
-            .get(&AdTransformCacheKey::Semantic(key.clone()))
+        let cache_key = AdTransformCacheKey::Semantic(key.clone());
+        let result = self
+            .entries
+            .get(&cache_key)
             .and_then(|entry| match &entry.entry {
                 AdTransformCacheEntry::Semantic(bucket) => bucket
                     .iter()
                     .find(|cached| cached.input.semantic_eq(input.program.as_ref()))
                     .map(|cached| Arc::clone(&cached.output)),
-            })
+            });
+        if result.is_some() {
+            self.stats.hits = self.stats.hits.saturating_add(1);
+        } else {
+            self.stats.misses = self.stats.misses.saturating_add(1);
+        }
+        result
     }
 
     fn put_semantic(
@@ -316,6 +328,7 @@ impl AdTransformCacheStore {
                 .stats
                 .retained_bytes
                 .saturating_sub(entry.retained_bytes);
+            self.stats.evictions = self.stats.evictions.saturating_add(1);
         }
         self.stats.entries = self.entries.len();
     }

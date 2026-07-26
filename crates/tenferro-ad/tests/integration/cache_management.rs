@@ -144,9 +144,21 @@ fn ad_context_traced_vjp_reuses_transform_cache() {
     let after_first = ad.ad_transform_cache_stats().unwrap();
     assert!(after_first.entries > 0);
     assert!(after_first.retained_bytes > 0);
+    assert_eq!(after_first.hits, 0);
+    assert_eq!(after_first.misses, 1);
 
     let _ = ad.vjp(&y, &x, &seed).unwrap();
-    assert_eq!(ad.ad_transform_cache_stats().unwrap(), after_first);
+    let after_second = ad.ad_transform_cache_stats().unwrap();
+    assert_eq!(after_second.entries, after_first.entries);
+    assert_eq!(after_second.retained_bytes, after_first.retained_bytes);
+    assert_eq!(after_second.hits, after_first.hits + 1);
+    assert_eq!(after_second.misses, after_first.misses);
+
+    ad.clear_ad_transform_caches().unwrap();
+    let after_clear = ad.ad_transform_cache_stats().unwrap();
+    assert_eq!(after_clear.entries, 0);
+    assert_eq!(after_clear.retained_bytes, 0);
+    assert_eq!(after_clear.clears, after_second.clears + 1);
 }
 
 #[test]

@@ -13,6 +13,7 @@ mod schedule;
 mod signature;
 mod snapshot;
 mod specialization;
+mod transfer;
 
 pub use cache::{PreparedPlanCacheLimits, PreparedPlanCacheStats, RuntimeCacheStats};
 pub use cache_owner::{
@@ -34,7 +35,7 @@ pub use error::{
     PlacementConstraintError, PrepareError, ProviderContractError, RankRequirement,
     RegistrationKey, RuntimeConfigError, RuntimeReconfigureError, SpecializationError,
 };
-pub use execution::PreparedCompiledGraph;
+pub use execution::{ExecutionHandle, PreparedCompiledGraph};
 pub use extension::{ExtensionModule, ExtensionModuleId, ExtensionModuleRegistrar};
 pub use extension_provider::{ExtensionEngine, ExtensionPlanningConfig, ExtensionPrepareRequest};
 pub use identity::{
@@ -46,6 +47,7 @@ pub use policy::{
     PrepareOptionsKey, ProgramPlacementConstraint, ResolvedPlanningConfig, ResolvedPlanningKey,
     ResolvedProgramPlacement, StorageClass,
 };
+pub use schedule::EventDomainId;
 pub use signature::{InputSignature, InputSignatureEntry};
 pub use snapshot::{
     EngineSnapshotView, Runtime, RuntimeConfigBuilder, RuntimeConfigSnapshot,
@@ -57,6 +59,7 @@ pub use specialization::{
     PlacementProjection, PlacementSpecialization, SpecializationProjection,
     SpecializationRequirements,
 };
+pub use transfer::{TransferProvider, TransferRequest};
 
 #[cfg(test)]
 mod tests;

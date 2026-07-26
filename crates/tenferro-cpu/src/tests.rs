@@ -641,6 +641,38 @@ fn diagonal_scatter_config() -> ScatterConfig {
     }
 }
 
+#[test]
+fn cpu_elementwise_kernels_live_in_internal_crate() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let cpu_manifest = std::fs::read_to_string(manifest_dir.join("Cargo.toml"))
+        .expect("tenferro-cpu manifest must be readable");
+    assert!(
+        cpu_manifest.contains("tenferro-internal-cpu-kernels"),
+        "tenferro-cpu must depend on the internal CPU kernel crate"
+    );
+    assert!(
+        !manifest_dir.join("src/elementwise.rs").exists(),
+        "elementwise kernels must not move back into the public tenferro-cpu crate"
+    );
+    assert!(
+        !manifest_dir.join("src/buffer_pool.rs").exists(),
+        "buffer pool implementation must not move back into the public tenferro-cpu crate"
+    );
+
+    let internal_dir = manifest_dir
+        .parent()
+        .expect("crate has workspace crates directory")
+        .join("tenferro-internal-cpu-kernels");
+    assert!(
+        internal_dir.join("src/elementwise.rs").exists(),
+        "internal CPU kernel crate must own elementwise kernels"
+    );
+    assert!(
+        internal_dir.join("src/buffer_pool.rs").exists(),
+        "internal CPU kernel crate must own the shared buffer pool"
+    );
+}
+
 #[path = "tests/cpu_tests/backend_misc.rs"]
 mod backend_misc;
 #[path = "tests/cpu_tests/basic_ops.rs"]

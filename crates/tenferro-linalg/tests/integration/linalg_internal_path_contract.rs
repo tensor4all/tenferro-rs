@@ -282,6 +282,25 @@ fn linalg_ad_has_prepared_solve_rules() {
 }
 
 #[test]
+fn semantic_linalg_linearize_does_not_replay_recorded_legacy_fragments() {
+    let source = crate_source("src/ad/semantic.rs");
+    let linearize_impl = source_section(
+        &source,
+        "impl SemanticLinearizeRule for LinalgAdRule",
+        "impl SemanticLinearTransposeRule for LinalgAdRule",
+    );
+
+    assert!(
+        linearize_impl.contains("SemanticRuleBuilder::with_seeds"),
+        "semantic linearize should emit directly into SemanticProgramBuilder"
+    );
+    assert!(
+        !linearize_impl.contains("RecordedBuilder::with_seed_count"),
+        "semantic linearize must not replay recorded legacy fragments"
+    );
+}
+
+#[test]
 fn prepared_solve_transpose_rule_keeps_matrix_cotangent_path() {
     let source = crate_source("src/ad/rules/solve.rs");
     let transpose_rule = source_section(

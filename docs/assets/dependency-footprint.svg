@@ -56,6 +56,18 @@
 <path fill="none" stroke="#546e7a" d="M498,-287.78C498,-287.78 498,-265.79 498,-265.79"/>
 <polygon fill="#546e7a" stroke="#546e7a" points="500.8,-265.79 498,-257.79 495.2,-265.79 500.8,-265.79"/>
 </g>
+<!-- tenferro&#45;tensor&#45;&gt;tenferro&#45;internal&#45;cpu&#45;kernels -->
+<g id="edge17" class="edge">
+<title>tenferro&#45;tensor&#45;&gt;tenferro&#45;internal&#45;cpu&#45;kernels</title>
+<path fill="none" stroke="#546e7a" d="M498,-324.22C498,-324.96 498,-325.37 498,-325.37 498,-325.37 498,-325.43 498,-325.43"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="495.2,-318.51 498,-326.51 500.8,-318.51 495.2,-318.51"/>
+</g>
+<!-- tenferro&#45;internal&#45;cpu&#45;kernels&#45;&gt;tenferro&#45;cpu -->
+<g id="edge18" class="edge">
+<title>tenferro&#45;internal&#45;cpu&#45;kernels&#45;&gt;tenferro&#45;cpu</title>
+<path fill="none" stroke="#546e7a" d="M621,-325.49C621,-325.49 621,-325.14 621,-325.14"/>
+<polygon fill="#546e7a" stroke="#546e7a" points="623.8,-332 621,-324 618.2,-332 623.8,-332"/>
+</g>
 <!-- tenferro&#45;cpu&#45;&gt;tenferro&#45;gpu -->
 <g id="edge4" class="edge">
 <title>tenferro&#45;cpu&#45;&gt;tenferro&#45;gpu</title>
@@ -171,6 +183,15 @@
 <g id="a_node6"><a xlink:href="index.html#tenferro-tensor" xlink:title="tenferro&#45;tensor" target="_parent">
 <path fill="#ecfdf5" stroke="black" d="M529.57,-324C529.57,-324 466.43,-324 466.43,-324 460.43,-324 454.43,-318 454.43,-312 454.43,-312 454.43,-300 454.43,-300 454.43,-294 460.43,-288 466.43,-288 466.43,-288 529.57,-288 529.57,-288 535.57,-288 541.57,-294 541.57,-300 541.57,-300 541.57,-312 541.57,-312 541.57,-318 535.57,-324 529.57,-324"/>
 <text xml:space="preserve" text-anchor="middle" x="498" y="-302.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;tensor</text>
+</a>
+</g>
+</g>
+<!-- tenferro&#45;cpu -->
+<g id="node20" class="node">
+<title>tenferro&#45;internal&#45;cpu&#45;kernels</title>
+<g id="a_node20"><a xlink:href="index.html#tenferro-internal-cpu-kernels" xlink:title="tenferro&#45;internal&#45;cpu&#45;kernels" target="_parent">
+<path fill="#ecfdf5" stroke="black" d="M646.66,-362C646.66,-362 465.34,-362 465.34,-362 459.34,-362 453.34,-356 453.34,-350 453.34,-350 453.34,-338 453.34,-338 453.34,-332 459.34,-326 465.34,-326 465.34,-326 646.66,-326 646.66,-326 652.66,-326 658.66,-332 658.66,-338 658.66,-338 658.66,-350 658.66,-350 658.66,-356 652.66,-362 646.66,-362"/>
+<text xml:space="preserve" text-anchor="middle" x="556" y="-340.4" font-family="IBM Plex Sans" font-size="12.00">tenferro&#45;internal&#45;cpu&#45;kernels</text>
 </a>
 </g>
 </g>

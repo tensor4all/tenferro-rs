@@ -278,6 +278,7 @@ impl fmt::Debug for CudaExtensionCache {
 }
 
 const DEFAULT_CUDA_EXTENSION_CACHE_MAX_ENTRIES: usize = 16;
+const DEFAULT_CUDA_EXTENSION_CACHE_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 
 struct CudaExtensionCacheEntry {
     value: Box<dyn Any + Send>,
@@ -286,28 +287,36 @@ struct CudaExtensionCacheEntry {
 
 struct CudaExtensionCacheInner {
     max_entries: NonZeroUsize,
+    max_retained_bytes: NonZeroUsize,
     entries: HashMap<TypeId, CudaExtensionCacheEntry>,
     order: VecDeque<TypeId>,
     retained_bytes: usize,
+    stats: CacheStats,
 }
 
 impl CudaExtensionCacheInner {
     fn new(max_entries: NonZeroUsize) -> Self {
         Self {
             max_entries,
+            max_retained_bytes: NonZeroUsize::new(DEFAULT_CUDA_EXTENSION_CACHE_RETAINED_BYTES)
+                .unwrap_or(NonZeroUsize::MIN),
             entries: HashMap::new(),
             order: VecDeque::new(),
             retained_bytes: 0,
+            stats: CacheStats::empty(),
         }
     }
 
     fn evict_to_limit(&mut self) {
-        while self.entries.len() > self.max_entries.get() {
+        while self.entries.len() > self.max_entries.get()
+            || self.retained_bytes > self.max_retained_bytes.get()
+        {
             let Some(type_id) = self.order.pop_front() else {
                 break;
             };
             if let Some(entry) = self.entries.remove(&type_id) {
                 self.retained_bytes = self.retained_bytes.saturating_sub(entry.retained_bytes);
+                self.stats.evictions = self.stats.evictions.saturating_add(1);
             }
         }
     }
@@ -328,6 +337,14 @@ impl CudaExtensionCacheInner {
             .map(|entry| entry.retained_bytes)
             .sum();
         self.evict_to_limit();
+    }
+
+    fn snapshot_stats(&self) -> CacheStats {
+        CacheStats {
+            entries: self.entries.len(),
+            retained_bytes: self.retained_bytes,
+            ..self.stats
+        }
     }
 }
 
@@ -399,6 +416,11 @@ impl CudaExtensionCache {
         inner.entries.clear();
         inner.order.clear();
         inner.retained_bytes = 0;
+        let clears = inner.stats.clears.saturating_add(1);
+        inner.stats = CacheStats {
+            clears,
+            ..CacheStats::empty()
+        };
         Ok(())
     }
 
@@ -408,14 +430,7 @@ impl CudaExtensionCache {
     /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
     pub fn stats(&self) -> crate::Result<CacheStats> {
         let inner = self.lock_inner()?;
-        Ok(CacheStats {
-            entries: inner.entries.len(),
-            retained_bytes: inner.retained_bytes,
-            hits: 0,
-            misses: 0,
-            evictions: 0,
-            clears: 0,
-        })
+        Ok(inner.snapshot_stats())
     }
 
     /// Return the configured entry bound.
@@ -426,6 +441,14 @@ impl CudaExtensionCache {
         Ok(self.lock_inner()?.max_entries)
     }
 
+    /// Return the configured logical retained-byte bound.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned.
+    pub fn max_retained_bytes(&self) -> crate::Result<NonZeroUsize> {
+        Ok(self.lock_inner()?.max_retained_bytes)
+    }
+
     /// Replace the entry bound and evict oldest entries if needed.
     /// # Errors
     ///
@@ -434,6 +457,19 @@ impl CudaExtensionCache {
     pub fn set_max_entries(&self, max_entries: NonZeroUsize) -> crate::Result<()> {
         let mut inner = self.lock_inner()?;
         inner.max_entries = max_entries;
+        inner.evict_to_limit();
+        Ok(())
+    }
+
+    /// Configure the logical retained-byte bound and evict oldest entries if
+    /// needed.
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the cache mutex is poisoned
+    /// while changing the bound.
+    pub fn set_max_retained_bytes(&self, max_retained_bytes: NonZeroUsize) -> crate::Result<()> {
+        let mut inner = self.lock_inner()?;
+        inner.max_retained_bytes = max_retained_bytes;
         inner.evict_to_limit();
         Ok(())
     }
@@ -464,7 +500,10 @@ impl CudaExtensionCache {
         let type_id = TypeId::of::<T>();
         let mut inner = self.lock_inner()?;
         if !inner.entries.contains_key(&type_id) {
+            inner.stats.misses = inner.stats.misses.saturating_add(1);
             inner.insert(type_id, init()?, std::mem::size_of::<T>());
+        } else {
+            inner.stats.hits = inner.stats.hits.saturating_add(1);
         }
         let value = inner
             .entries
@@ -616,6 +655,16 @@ impl CudaBackend {
         self.inner.extension_cache.max_entries()
     }
 
+    /// Return the CUDA extension cache logical retained-byte bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
+    /// poisoned.
+    pub fn cuda_extension_cache_max_retained_bytes(&self) -> crate::Result<NonZeroUsize> {
+        self.inner.extension_cache.max_retained_bytes()
+    }
+
     /// Configure the CUDA extension cache entry bound.
     ///
     /// # Errors
@@ -627,6 +676,21 @@ impl CudaBackend {
         max_entries: NonZeroUsize,
     ) -> crate::Result<()> {
         self.inner.extension_cache.set_max_entries(max_entries)
+    }
+
+    /// Configure the CUDA extension cache logical retained-byte bound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::RuntimeState`] if the extension cache mutex is
+    /// poisoned while changing the bound.
+    pub fn set_cuda_extension_cache_max_retained_bytes(
+        &self,
+        max_retained_bytes: NonZeroUsize,
+    ) -> crate::Result<()> {
+        self.inner
+            .extension_cache
+            .set_max_retained_bytes(max_retained_bytes)
     }
 
     fn transpose_typed<T>(

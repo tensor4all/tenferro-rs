@@ -3,6 +3,7 @@
 //! This module owns the private execution bridge used by
 //! `Runtime::run_compiled*`.
 
+use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -13,12 +14,16 @@ use tenferro_ops::shape_extent::ShapeExtent;
 use tenferro_tensor::{Tensor, TensorBackend, TensorRead, TensorValue};
 
 use crate::error::ErrorPhase;
-use crate::exec::{ExecProgram, ExecSlot, ExtensionExecutionDispatch};
+use crate::exec::{
+    DispatchMode, ExecInstruction, ExecProgram, ExecSlot, ExtensionExecutionDispatch,
+};
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::graph::CompiledGraph;
+use crate::runtime::schedule::{ScheduledGraph, ScheduledNode};
 use crate::runtime::{
     CacheOwnerError, CacheStats, InputSignature, PrepareError, PrepareOptions,
-    PreparedOperationHandle, Runtime, RuntimeCacheOwner,
+    PreparedOperationHandle, Runtime, RuntimeCacheOwner, StorageClass, TransferProvider,
+    TransferRequest,
 };
 use crate::{Error, Result};
 
@@ -26,6 +31,12 @@ type RuntimeInputRefs<'a> = SmallVec<[&'a Tensor; 8]>;
 type RuntimeInputReads<'a> = SmallVec<[TensorRead<'a>; 8]>;
 type RuntimeInputShapes<'a> = SmallVec<[&'a [usize]; 8]>;
 type RuntimeShapeScratch = SmallVec<[usize; 8]>;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum RuntimeOutputMode {
+    Tensor,
+    Value,
+}
 
 /// Runtime-prepared compiled graph execution handle.
 ///
@@ -38,7 +49,47 @@ pub struct PreparedCompiledGraph {
     epoch: super::RuntimeEpoch,
     program: CompiledGraph,
     prepared: Arc<super::preparation::PreparedProgram>,
-    executor: Arc<dyn ErasedTensorBackendExecutor>,
+    execution: Arc<PreparedExecutionEngines>,
+}
+
+/// Asynchronous runtime execution handle returned by [`Runtime::submit`].
+pub struct ExecutionHandle {
+    join: Option<thread::JoinHandle<Result<Vec<Tensor>>>>,
+}
+
+impl ExecutionHandle {
+    /// Wait for submitted work to finish and return its tensor outputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the submitted runtime execution [`Error`], including
+    /// [`ErrorKind::RuntimeState`](tenferro_tensor::ErrorKind::RuntimeState)
+    /// when the handle was already consumed or the worker panicked.
+    pub fn wait(mut self) -> Result<Vec<Tensor>> {
+        let Some(join) = self.join.take() else {
+            return Err(Error::runtime_state(
+                "ExecutionHandle::wait",
+                ErrorPhase::Execution,
+                "execution handle was already consumed",
+            ));
+        };
+        join.join().map_err(|payload| {
+            Error::runtime_state(
+                "ExecutionHandle::wait",
+                ErrorPhase::Execution,
+                panic_payload_message(payload),
+            )
+        })?
+    }
+}
+
+impl fmt::Debug for ExecutionHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExecutionHandle")
+            .field("pending", &self.join.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl fmt::Debug for PreparedCompiledGraph {
@@ -49,6 +100,16 @@ impl fmt::Debug for PreparedCompiledGraph {
             .field("epoch", &self.epoch)
             .field("program", &self.program)
             .finish_non_exhaustive()
+    }
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        format!("submitted execution panicked: {message}")
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        format!("submitted execution panicked: {message}")
+    } else {
+        "submitted execution panicked".to_string()
     }
 }
 
@@ -83,6 +144,25 @@ pub(super) trait ErasedTensorBackendExecutor: fmt::Debug + Send + Sync {
         program: &ExecProgram,
         operations: &[PreparedOperationHandle],
         inputs: &[&Tensor],
+    ) -> Result<Vec<TensorValue>>;
+    fn execute_slot_instruction<'input>(
+        &self,
+        instruction_index: usize,
+        instruction: &ExecInstruction,
+        operations: &[PreparedOperationHandle],
+        slots: &mut [Option<ExecSlot<'input>>],
+        output_mode: RuntimeOutputMode,
+        terminal_slots: &[bool],
+    ) -> Result<()>;
+    fn collect_slot_outputs<'input>(
+        &self,
+        program: &ExecProgram,
+        slots: &mut [Option<ExecSlot<'input>>],
+    ) -> Result<Vec<Tensor>>;
+    fn collect_slot_output_values<'input>(
+        &self,
+        program: &ExecProgram,
+        slots: &mut [Option<ExecSlot<'input>>],
     ) -> Result<Vec<TensorValue>>;
 }
 
@@ -418,6 +498,82 @@ where
         *borrowed_slot_workspace_capacity = slot_workspace.capacity();
         result
     }
+
+    fn execute_slot_instruction<'input>(
+        &self,
+        instruction_index: usize,
+        instruction: &ExecInstruction,
+        operations: &[PreparedOperationHandle],
+        slots: &mut [Option<ExecSlot<'input>>],
+        output_mode: RuntimeOutputMode,
+        terminal_slots: &[bool],
+    ) -> Result<()> {
+        let mut lease = self.lease_state("Runtime::run_compiled scheduled instruction")?;
+        let TensorBackendExecutorState {
+            backend,
+            backend_cache,
+            extension_caches,
+            ..
+        } = lease.state_mut();
+        let mut extension_dispatch = ExtensionExecutionDispatch {
+            operations,
+            caches: extension_caches,
+        };
+
+        if matches!(output_mode, RuntimeOutputMode::Value)
+            && backend.with_backend_session(|exec| {
+                crate::exec::try_execute_terminal_value_instruction(
+                    exec,
+                    slots,
+                    instruction,
+                    terminal_slots,
+                )
+            })?
+        {
+            // Already handled as a metadata-only TensorValue.
+        } else if crate::exec::is_host_instruction(instruction) {
+            crate::exec::execute_host_instruction(backend, slots, instruction)?;
+        } else if crate::exec::is_ffi_instruction(instruction) {
+            crate::exec::execute_ffi_instruction_cached(
+                backend,
+                backend_cache,
+                slots,
+                instruction,
+                DispatchMode::Unsegmented,
+                Some(instruction_index),
+                Some(&mut extension_dispatch),
+            )?;
+        } else {
+            let result = backend.with_backend_session(|exec| {
+                crate::exec::execute_backend_op(exec, slots, instruction)
+            })?;
+            slots[instruction.output_slots[0]] = Some(ExecSlot::Owned(result));
+        }
+        crate::exec::reclaim_last_use_inputs_backend(slots, instruction, backend);
+        Ok(())
+    }
+
+    fn collect_slot_outputs<'input>(
+        &self,
+        program: &ExecProgram,
+        slots: &mut [Option<ExecSlot<'input>>],
+    ) -> Result<Vec<Tensor>> {
+        let mut lease = self.lease_state("Runtime::run_compiled collect outputs")?;
+        let backend = &mut lease.state_mut().backend;
+        backend.with_backend_session(|exec| crate::exec::collect_outputs_from(program, slots, exec))
+    }
+
+    fn collect_slot_output_values<'input>(
+        &self,
+        program: &ExecProgram,
+        slots: &mut [Option<ExecSlot<'input>>],
+    ) -> Result<Vec<TensorValue>> {
+        let mut lease = self.lease_state("Runtime::run_compiled_values collect outputs")?;
+        let backend = &mut lease.state_mut().backend;
+        backend.with_backend_session(|exec| {
+            crate::exec::collect_output_values_from(program, slots, exec)
+        })
+    }
 }
 
 fn cache_owner_error(error: Error) -> CacheOwnerError {
@@ -435,6 +591,20 @@ fn cache_stats_from_tensor_stats(stats: tenferro_tensor::CacheStats) -> CacheSta
     }
 }
 
+#[derive(Debug)]
+struct PreparedExecutionEngines {
+    root: Arc<dyn ErasedTensorBackendExecutor>,
+    root_storage_class: StorageClass,
+    operations: Box<[PreparedOperationExecution]>,
+    transfers: BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>>,
+}
+
+#[derive(Debug)]
+struct PreparedOperationExecution {
+    executor: Arc<dyn ErasedTensorBackendExecutor>,
+    storage_class: StorageClass,
+}
+
 pub(super) fn run_compiled(
     runtime: &Runtime,
     program: &CompiledGraph,
@@ -443,8 +613,14 @@ pub(super) fn run_compiled(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let executor = execution_engine(runtime, prepared.root().as_ref())?;
-    executor.execute_tensor_refs(prepared.root().staging(), prepared.operations(), &inputs)
+    let execution = execution_engines(runtime, &prepared)?;
+    execute_scheduled_tensor_refs(
+        &execution,
+        prepared.root().staging(),
+        prepared.root().schedule(),
+        prepared.operations(),
+        &inputs,
+    )
 }
 
 pub(super) fn prepare_compiled(
@@ -455,14 +631,32 @@ pub(super) fn prepare_compiled(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let executor = execution_engine(runtime, prepared.root().as_ref())?;
+    let execution = Arc::new(execution_engines(runtime, &prepared)?);
     Ok(PreparedCompiledGraph {
         runtime_id: runtime.id(),
         epoch: prepared.root().epoch(),
         program: program.clone(),
         prepared,
-        executor,
+        execution,
     })
+}
+
+pub(super) fn submit(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> Result<ExecutionHandle> {
+    let inputs = resolve_input_refs(program, inputs)?
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let runtime = runtime.clone();
+    let program = program.clone();
+    let join = thread::spawn(move || {
+        let input_refs = inputs.iter().collect::<Vec<_>>();
+        run_compiled(&runtime, &program, &input_refs)
+    });
+    Ok(ExecutionHandle { join: Some(join) })
 }
 
 pub(super) fn run_prepared(
@@ -472,8 +666,10 @@ pub(super) fn run_prepared(
 ) -> Result<Vec<Tensor>> {
     validate_prepared_runtime(runtime, prepared, "Runtime::run_prepared")?;
     let inputs = resolve_input_refs(&prepared.program, inputs)?;
-    prepared.executor.execute_tensor_refs(
+    execute_scheduled_tensor_refs(
+        &prepared.execution,
         prepared.prepared.root().staging(),
+        prepared.prepared.root().schedule(),
         prepared.prepared.operations(),
         &inputs,
     )
@@ -487,8 +683,14 @@ pub(super) fn run_compiled_values(
     let inputs = resolve_input_refs(program, inputs)?;
     let signature = input_signature(&inputs)?;
     let prepared = prepare(runtime, program, &signature)?;
-    let executor = execution_engine(runtime, prepared.root().as_ref())?;
-    executor.execute_value_refs(prepared.root().staging(), prepared.operations(), &inputs)
+    let execution = execution_engines(runtime, &prepared)?;
+    execute_scheduled_value_refs(
+        &execution,
+        prepared.root().staging(),
+        prepared.root().schedule(),
+        prepared.operations(),
+        &inputs,
+    )
 }
 
 fn validate_prepared_runtime(
@@ -529,13 +731,14 @@ fn prepare(
         .map_err(prepare_error)
 }
 
-fn execution_engine(
+fn execution_engines(
     runtime: &Runtime,
-    root: &super::preparation::PreparedProgramRoot,
-) -> Result<Arc<dyn ErasedTensorBackendExecutor>> {
+    prepared: &Arc<super::preparation::PreparedProgram>,
+) -> Result<PreparedExecutionEngines> {
     let snapshot = runtime.snapshot().map_err(|source| {
         Error::runtime_state_source("Runtime::run_compiled", ErrorPhase::Execution, source)
     })?;
+    let root = prepared.root();
     if snapshot.epoch() != root.epoch() {
         return Err(Error::runtime_state(
             "Runtime::run_compiled",
@@ -547,26 +750,328 @@ fn execution_engine(
             ),
         ));
     }
-    let engine = snapshot.engine(root.engine_id()).ok_or_else(|| {
-        Error::runtime_state(
+    let storage_class = root.resolved_placement().storage_class();
+    let root_executor = execution_engine_from_snapshot(&snapshot, root.engine_id())?;
+    let operation_placements = root.operation_placements();
+    if operation_placements.len() != prepared.operations().len() {
+        return Err(Error::runtime_state(
             "Runtime::run_compiled",
             ErrorPhase::Execution,
             format!(
-                "prepared engine {:?} is no longer registered",
-                root.engine_id()
+                "prepared root has {} operation placements for {} operations",
+                operation_placements.len(),
+                prepared.operations().len()
             ),
+        ));
+    }
+    let mut operation_executors = Vec::with_capacity(prepared.operations().len());
+    for (operation, placement) in prepared.operations().iter().zip(operation_placements) {
+        let engine_id = operation.binding().engine_id();
+        let engine = snapshot.engine(engine_id).ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!("prepared operation engine {engine_id:?} is no longer registered"),
+            )
+        })?;
+        if !engine.storage_classes().contains(placement.storage_class()) {
+            return Err(Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "prepared operation engine {engine_id:?} does not support selected storage {:?}",
+                    placement.storage_class().as_str()
+                ),
+            ));
+        }
+        operation_executors.push(PreparedOperationExecution {
+            executor: execution_engine_from_snapshot(&snapshot, engine_id)?,
+            storage_class: placement.storage_class().clone(),
+        });
+    }
+    Ok(PreparedExecutionEngines {
+        root: root_executor,
+        root_storage_class: storage_class.clone(),
+        operations: operation_executors.into_boxed_slice(),
+        transfers: snapshot.transfers_for_execution(),
+    })
+}
+
+fn execution_engine_from_snapshot(
+    snapshot: &super::RuntimeConfigSnapshot,
+    engine_id: &super::EngineId,
+) -> Result<Arc<dyn ErasedTensorBackendExecutor>> {
+    let engine = snapshot.engine(engine_id).ok_or_else(|| {
+        Error::runtime_state(
+            "Runtime::run_compiled",
+            ErrorPhase::Execution,
+            format!("prepared engine {engine_id:?} is no longer registered"),
         )
     })?;
     engine.execution_engine().cloned().ok_or_else(|| {
         Error::runtime_state(
             "Runtime::run_compiled",
             ErrorPhase::Execution,
-            format!(
-                "engine {:?} has no runtime execution bridge",
-                root.engine_id()
-            ),
+            format!("engine {engine_id:?} has no runtime execution bridge"),
         )
     })
+}
+
+fn execute_scheduled_tensor_refs(
+    execution: &PreparedExecutionEngines,
+    program: &ExecProgram,
+    schedule: &ScheduledGraph,
+    operations: &[PreparedOperationHandle],
+    inputs: &[&Tensor],
+) -> Result<Vec<Tensor>> {
+    validate_exec_input_count(program, inputs.len())?;
+    crate::exec::validate_exec_program(program, "scheduled tensor executor")?;
+    schedule.validate_for_runtime()?;
+    let inputs = inputs
+        .iter()
+        .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
+        .collect();
+    execute_scheduled_slots(
+        execution,
+        program,
+        schedule,
+        operations,
+        inputs,
+        RuntimeOutputMode::Tensor,
+    )
+    .and_then(|mut slots| execution.root.collect_slot_outputs(program, &mut slots))
+}
+
+fn execute_scheduled_value_refs(
+    execution: &PreparedExecutionEngines,
+    program: &ExecProgram,
+    schedule: &ScheduledGraph,
+    operations: &[PreparedOperationHandle],
+    inputs: &[&Tensor],
+) -> Result<Vec<TensorValue>> {
+    validate_exec_input_count(program, inputs.len())?;
+    crate::exec::validate_exec_program(program, "scheduled value executor")?;
+    schedule.validate_for_runtime()?;
+    let inputs = inputs
+        .iter()
+        .map(|tensor| ExecSlot::Read(TensorRead::from_tensor(tensor)))
+        .collect();
+    execute_scheduled_slots(
+        execution,
+        program,
+        schedule,
+        operations,
+        inputs,
+        RuntimeOutputMode::Value,
+    )
+    .and_then(|mut slots| {
+        execution
+            .root
+            .collect_slot_output_values(program, &mut slots)
+    })
+}
+
+fn execute_scheduled_slots<'input>(
+    execution: &PreparedExecutionEngines,
+    program: &ExecProgram,
+    schedule: &ScheduledGraph,
+    operations: &[PreparedOperationHandle],
+    inputs: Vec<ExecSlot<'input>>,
+    output_mode: RuntimeOutputMode,
+) -> Result<Vec<Option<ExecSlot<'input>>>> {
+    let terminal_slots = if matches!(output_mode, RuntimeOutputMode::Value) {
+        crate::exec::terminal_output_slots(program)
+    } else {
+        Vec::new()
+    };
+    let mut slots = Vec::new();
+    let mut slot_storage = vec![None; program.n_slots];
+    let result = (|| {
+        crate::exec::initialize_exec_slots_in(program, inputs, &mut slots)?;
+        for &slot in &program.input_slots {
+            if let Some(storage) = slot_storage.get_mut(slot) {
+                *storage = Some(execution.root_storage_class.clone());
+            }
+        }
+        if schedule.nodes().len() != program.instructions.len() {
+            return Err(Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "scheduled graph has {} nodes for {} execution instructions",
+                    schedule.nodes().len(),
+                    program.instructions.len()
+                ),
+            ));
+        }
+        for (instruction_index, node) in schedule.nodes().iter().enumerate() {
+            match node {
+                ScheduledNode::Operation(_) => {
+                    let instruction = &program.instructions[instruction_index];
+                    let operation = instruction_execution(execution, instruction)?;
+                    ensure_instruction_inputs_in_storage(
+                        execution,
+                        instruction,
+                        operation.storage_class(),
+                        &mut slots,
+                        &mut slot_storage,
+                    )?;
+                    operation.executor().execute_slot_instruction(
+                        instruction_index,
+                        instruction,
+                        operations,
+                        &mut slots,
+                        output_mode,
+                        &terminal_slots,
+                    )?;
+                    for &slot in &instruction.output_slots {
+                        if let Some(storage) = slot_storage.get_mut(slot) {
+                            *storage = Some(operation.storage_class().clone());
+                        }
+                    }
+                    clear_last_use_storage(instruction, &mut slot_storage);
+                }
+                ScheduledNode::Transfer(_) => {
+                    return Err(Error::runtime_state(
+                        "Runtime::run_compiled",
+                        ErrorPhase::Execution,
+                        "transfer node execution is not implemented before U3",
+                    ));
+                }
+                ScheduledNode::Collective(_) => {
+                    return Err(Error::runtime_state(
+                        "Runtime::run_compiled",
+                        ErrorPhase::Execution,
+                        "collective node execution is not implemented",
+                    ));
+                }
+                ScheduledNode::Barrier(_) => {}
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        slots.clear();
+        return Err(error);
+    }
+    Ok(slots)
+}
+
+fn instruction_execution<'a>(
+    execution: &'a PreparedExecutionEngines,
+    instruction: &ExecInstruction,
+) -> Result<InstructionExecution<'a>> {
+    let Some(operation_index) = instruction.semantic_operation_index else {
+        return Ok(InstructionExecution {
+            executor: &execution.root,
+            storage_class: &execution.root_storage_class,
+        });
+    };
+    let operation = execution.operations.get(operation_index).ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "instruction references semantic operation {operation_index}, but prepared program has {} operations",
+                    execution.operations.len()
+                ),
+            )
+        })?;
+    Ok(InstructionExecution {
+        executor: operation.executor(),
+        storage_class: operation.storage_class(),
+    })
+}
+
+struct InstructionExecution<'a> {
+    executor: &'a Arc<dyn ErasedTensorBackendExecutor>,
+    storage_class: &'a StorageClass,
+}
+
+impl InstructionExecution<'_> {
+    fn executor(&self) -> &Arc<dyn ErasedTensorBackendExecutor> {
+        self.executor
+    }
+
+    fn storage_class(&self) -> &StorageClass {
+        self.storage_class
+    }
+}
+
+impl PreparedOperationExecution {
+    fn executor(&self) -> &Arc<dyn ErasedTensorBackendExecutor> {
+        &self.executor
+    }
+
+    fn storage_class(&self) -> &StorageClass {
+        &self.storage_class
+    }
+}
+
+fn ensure_instruction_inputs_in_storage<'input>(
+    execution: &PreparedExecutionEngines,
+    instruction: &ExecInstruction,
+    destination: &StorageClass,
+    slots: &mut [Option<ExecSlot<'input>>],
+    slot_storage: &mut [Option<StorageClass>],
+) -> Result<()> {
+    for &slot in &instruction.input_slots {
+        ensure_slot_in_storage(execution, slot, destination, slots, slot_storage)?;
+    }
+    Ok(())
+}
+
+fn ensure_slot_in_storage<'input>(
+    execution: &PreparedExecutionEngines,
+    slot: usize,
+    destination: &StorageClass,
+    slots: &mut [Option<ExecSlot<'input>>],
+    slot_storage: &mut [Option<StorageClass>],
+) -> Result<()> {
+    let source = slot_storage
+        .get(slot)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| tenferro_tensor::Error::MissingValue { slot })?;
+    if source == destination {
+        return Ok(());
+    }
+    let provider = execution
+        .transfers
+        .get(&(source.clone(), destination.clone()))
+        .ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "no transfer provider registered from {:?} to {:?}",
+                    source.as_str(),
+                    destination.as_str()
+                ),
+            )
+        })?;
+    let transferred = {
+        let value = slots
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| tenferro_tensor::Error::MissingValue { slot })?;
+        provider.transfer(TransferRequest::new(source, destination, value.as_read()))?
+    };
+    slots[slot] = Some(ExecSlot::Owned(transferred));
+    slot_storage[slot] = Some(destination.clone());
+    Ok(())
+}
+
+fn clear_last_use_storage(
+    instruction: &ExecInstruction,
+    slot_storage: &mut [Option<StorageClass>],
+) {
+    for (index, &slot) in instruction.input_slots.iter().enumerate() {
+        if instruction.last_use.get(index).copied().unwrap_or(false) {
+            if let Some(storage) = slot_storage.get_mut(slot) {
+                *storage = None;
+            }
+        }
+    }
 }
 
 fn input_signature(inputs: &[&Tensor]) -> Result<InputSignature> {

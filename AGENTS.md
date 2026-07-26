@@ -380,9 +380,9 @@ Internal: tenferro-core-ops  - Internal core primitive operation catalog
           tenferro-internal-extension-macros - Extension-op registration macros
 ```
 
-`tidu-rs` defines the generic `Primitive` AD contract, independent of any
-tensor type, and owns graph transforms such as `linearize` and
-`linear_transpose`.
+`tenferro-internal-ops/src/ad/` defines the core `StdTensorOp` primitive AD
+rules. `tenferro-ad` owns eager/traced AD surfaces, semantic extension AD
+rules, and context-owned AD transform caching.
 `tenferro-tensor-core` owns the lightweight host tensor data model.
 `tenferro-tensor` owns concrete dense runtime value types and
 backend-independent tensor contracts. `tenferro-cpu` owns CPU backend

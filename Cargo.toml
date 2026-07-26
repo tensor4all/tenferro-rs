@@ -3,6 +3,7 @@ members = [
     # v2 core crates
     "crates/tenferro-tensor-core",
     "crates/tenferro-tensor",
+    "crates/tenferro-internal-cpu-kernels",
     "crates/tenferro-cpu",
     "crates/tenferro-gpu",
     "crates/tenferro-runtime",

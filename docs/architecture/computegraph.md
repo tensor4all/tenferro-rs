@@ -14,7 +14,7 @@ compiling, and evaluating computation graphs.
 It is **AD-agnostic**. Automatic differentiation is not part of this crate.
 The graph infrastructure is equally usable for:
 
-- differentiable programming (via tidu-rs)
+- differentiable programming as the graph substrate used by tenferro AD
 - multi-tensor einsum (graph of binary contractions)
 - any DAG-structured computation
 
@@ -298,8 +298,8 @@ computegraph owns:
   - compilation cache
 
 computegraph does NOT own:
-  - AD transforms (linearize, linear_transpose) → tidu-rs
-  - AD traits (jvp_rule, transpose_rule) → tidu-rs
+  - AD rule registries or semantic AD transforms -> tenferro crates
+  - AD rule traits (linearize, transpose_rule) -> tenferro-internal-ops
   - concrete primitives → downstream (tenferro-rs)
   - backend-specific lowering (StableHLO) → downstream
 ```

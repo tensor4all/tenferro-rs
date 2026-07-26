@@ -64,7 +64,9 @@ mod affinity_policy;
 mod analytic;
 mod arbiter;
 pub mod backend;
-mod buffer_pool;
+pub(crate) mod buffer_pool {
+    pub use tenferro_internal_cpu_kernels::buffer_pool::*;
+}
 mod capability;
 pub mod context;
 // INVARIANT: Task 2 stages crate-private stack adapters here before Task 3 wires
@@ -73,7 +75,7 @@ pub mod context;
 mod domain_executor;
 #[allow(dead_code)]
 mod dot_runtime;
-mod elementwise;
+pub(crate) use tenferro_internal_cpu_kernels::elementwise;
 mod engine;
 mod exec_session;
 mod gemm;
@@ -152,9 +154,42 @@ pub use topology::{
 #[cfg(test)]
 pub(crate) use analytic::pow;
 #[cfg(test)]
-pub(crate) use elementwise::{
-    abs, add, clamp, compare, conj, div, maximum, minimum, mul, neg, rem, select, sign, sub,
-};
+macro_rules! test_elementwise_wrapper {
+    ($name:ident($($arg:ident: $ty:ty),*) => $with_pool:ident) => {
+        pub(crate) fn $name($($arg: $ty),*) -> crate::Result<Tensor> {
+            let mut buffers = BufferPool::new();
+            elementwise::$with_pool(&mut buffers, $($arg),*)
+        }
+    };
+}
+#[cfg(test)]
+test_elementwise_wrapper!(abs(input: &Tensor) => abs_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(add(lhs: &Tensor, rhs: &Tensor) => add_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(clamp(input: &Tensor, lower: &Tensor, upper: &Tensor) => clamp_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(compare(lhs: &Tensor, rhs: &Tensor, dir: &CompareDir) => compare_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(conj(input: &Tensor) => conj_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(div(lhs: &Tensor, rhs: &Tensor) => div_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(maximum(lhs: &Tensor, rhs: &Tensor) => maximum_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(minimum(lhs: &Tensor, rhs: &Tensor) => minimum_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(mul(lhs: &Tensor, rhs: &Tensor) => mul_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(neg(input: &Tensor) => neg_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(rem(lhs: &Tensor, rhs: &Tensor) => rem_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(select(pred: &Tensor, on_true: &Tensor, on_false: &Tensor) => select_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(sign(input: &Tensor) => sign_with_pool);
+#[cfg(test)]
+test_elementwise_wrapper!(sub(lhs: &Tensor, rhs: &Tensor) => sub_with_pool);
 #[cfg(test)]
 pub(crate) use indexing::{dynamic_slice, dynamic_update_slice, gather, pad, scatter};
 #[cfg(test)]
@@ -183,19 +218,8 @@ pub(crate) fn cpu_backend_buffer_error(op: &'static str) -> crate::Error {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CpuNumericalError {
-    #[error("{op} detected division by zero for dtype {dtype:?}")]
-    DivisionByZero { op: &'static str, dtype: DType },
     #[error("{op} received a negative integer exponent for dtype {dtype:?}")]
     NegativeIntegerExponent { op: &'static str, dtype: DType },
-}
-
-pub(crate) fn cpu_division_by_zero(op: &'static str, dtype: DType) -> crate::Error {
-    crate::Error::extension(
-        op,
-        "cpu",
-        ErrorKind::NumericalFailure,
-        CpuNumericalError::DivisionByZero { op, dtype },
-    )
 }
 
 pub(crate) fn cpu_negative_integer_exponent(op: &'static str, dtype: DType) -> crate::Error {

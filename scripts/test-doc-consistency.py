@@ -112,6 +112,8 @@ def test_architecture_svg_lists_cpu_crate_xla_boundary_and_background() -> None:
     assert '<rect width="100%" height="100%" fill="#ffffff"/>' in text
     assert "tenferro-cpu" in text
     assert "tenferro-xla" in text
+    assert "tenferro-internal-ops" in text
+    assert "tidu-rs" not in text
     assert "GraphProgram → StableHLO" in text
     assert "PJRT plugin" in text
     assert "tenferro-xla bridge" in text
@@ -393,6 +395,39 @@ def test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero()
     assert "floating-point and complex zero divisors" not in docs
 
 
+def test_active_ad_docs_use_current_semantic_ad_owner() -> None:
+    assert not (ROOT / "docs/architecture/tidu.md").exists()
+
+    active_docs = [
+        "AGENTS.md",
+        "README.md",
+        "REPOSITORY_RULES.md",
+        "docs/_quarto.yml",
+        "docs/PROVENANCE_AND_CITATION_POLICY.md",
+        "docs/architecture/ad-pipeline.md",
+        "docs/architecture/computegraph.md",
+        "docs/architecture/index.md",
+        "docs/architecture/primitive-ad.md",
+        "docs/architecture/semantic-ad.md",
+        "docs/architecture/tenferro-crates.md",
+        "docs/design/inplace-indexing.md",
+        "docs/design/testing.md",
+        "docs/internals/index.md",
+        "docs/spec/ad-contract.md",
+        "docs/spec/primitive-catalog.md",
+    ]
+    for relative in active_docs:
+        text = read(relative)
+        assert "architecture/tidu.md" not in text, relative
+        assert not re.search(r"\btidu(?:-rs)?\b", text, flags=re.IGNORECASE), relative
+
+    sidebar = read("docs/_quarto.yml")
+    assert "architecture/semantic-ad.md" in sidebar
+    semantic_ad = read("docs/architecture/semantic-ad.md")
+    assert "tenferro-internal-ops/src/ad/" in semantic_ad
+    assert "SemanticExtensionRuleSet" in semantic_ad
+
+
 def test_phase4_and_phase5_runtime_ownership_and_dependency_direction_are_canonical() -> None:
     rules = read("REPOSITORY_RULES.md")
     crates = read("docs/architecture/tenferro-crates.md")
@@ -421,7 +456,10 @@ def test_phase4_and_phase5_runtime_ownership_and_dependency_direction_are_canoni
     assert "Phase 5 common scheduled-graph checkpoint" in design
     assert "EngineRegistration::with_tensor_backend_executor" in design
     assert "tenferro-cpu::runtime_engine_registration" in design
-    assert "GraphExecutor<B>` remains a legacy compatibility executor" in design
+    assert "The previous `GraphExecutor<B>` facade is retired" in design
+    assert "metadata-only layer" in design
+    assert "#1456" in design and "#1471" in design
+    assert "GraphExecutor<B>` remains a legacy compatibility executor" not in design
     assert "Phase 4 now provides the immutable runtime snapshot and preparation substrate" in normalized_design
     assert re.search(r"\bprogram\s*:\s*&SemanticProgram\b", parameters)
     assert re.search(r"\boptions\s*:\s*CompilerOptions\b", parameters)
@@ -462,6 +500,7 @@ def main() -> int:
         test_removed_tensor_module_paths_do_not_compile,
         test_documentation_policy_matches_rendered_internals,
         test_traced_remainder_docs_distinguish_complex_unsupported_from_float_zero,
+        test_active_ad_docs_use_current_semantic_ad_owner,
         test_phase4_and_phase5_runtime_ownership_and_dependency_direction_are_canonical,
     ]:
         test()

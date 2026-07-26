@@ -5,7 +5,7 @@ use std::panic;
 use crate::cubecl::dispatch::{
     cubecl_shape_and_strides, typed_tensor_array_arg, typed_tensor_binding,
 };
-use crate::cubecl::CudaExtensionCache;
+use crate::cubecl::{CudaBackend, CudaExtensionCache};
 use crate::{
     Buffer, CubeclBuffer, DeviceId, DeviceKind, GpuBackendKind, MemoryKind, Placement, TypedTensor,
 };
@@ -67,6 +67,9 @@ fn cuda_extension_cache_reports_stats_and_clear() {
 
     let _usize = cache.get_or_try_init::<usize>(|| Ok(17)).unwrap();
     drop(_usize);
+    let _usize_again = cache.get_or_try_init::<usize>(|| Ok(23)).unwrap();
+    assert_eq!(*_usize_again, 17);
+    drop(_usize_again);
     let _string = cache
         .get_or_try_init::<String>(|| Ok("gpu".to_string()))
         .unwrap();
@@ -75,10 +78,15 @@ fn cuda_extension_cache_reports_stats_and_clear() {
     let stats = cache.stats().unwrap();
     assert_eq!(stats.entries, 2);
     assert!(stats.retained_bytes >= std::mem::size_of::<usize>());
+    assert_eq!(stats.hits, 1);
+    assert_eq!(stats.misses, 2);
 
     cache.clear().unwrap();
     assert!(cache.is_empty().unwrap());
-    assert_eq!(cache.stats().unwrap().entries, 0);
+    let stats = cache.stats().unwrap();
+    assert_eq!(stats.entries, 0);
+    assert_eq!(stats.retained_bytes, 0);
+    assert_eq!(stats.clears, 1);
 }
 
 #[test]
@@ -94,6 +102,7 @@ fn cuda_extension_cache_methods_report_poisoned_lock() {
     assert!(cache.stats().is_err());
     assert!(cache.clear().is_err());
     assert!(cache.max_entries().is_err());
+    assert!(cache.max_retained_bytes().is_err());
     assert!(cache.get_or_try_init::<usize>(|| Ok(17)).is_err());
 }
 
@@ -126,6 +135,39 @@ fn cuda_extension_cache_has_configurable_entry_bound() {
         .unwrap();
     assert_eq!(*value, 23);
     assert_eq!(usize_initializers, 2);
+}
+
+#[test]
+fn cuda_extension_cache_has_configurable_retained_byte_bound() {
+    let cache = CudaExtensionCache::with_max_entries(NonZeroUsize::new(8).unwrap());
+    let byte_limit = std::mem::size_of::<usize>().max(std::mem::size_of::<String>());
+    cache
+        .set_max_retained_bytes(NonZeroUsize::new(byte_limit).unwrap())
+        .unwrap();
+    assert_eq!(cache.max_retained_bytes().unwrap().get(), byte_limit,);
+
+    let value = cache.get_or_try_init::<usize>(|| Ok(17)).unwrap();
+    assert_eq!(*value, 17);
+    drop(value);
+
+    let value = cache
+        .get_or_try_init::<String>(|| Ok("gpu".to_string()))
+        .unwrap();
+    assert_eq!(value.as_str(), "gpu");
+    drop(value);
+
+    let stats = cache.stats().unwrap();
+    assert_eq!(stats.entries, 1);
+    assert!(stats.retained_bytes <= byte_limit);
+    assert_eq!(stats.evictions, 1);
+}
+
+#[test]
+fn cuda_backend_exposes_extension_cache_retained_byte_controls() {
+    let _getter: fn(&CudaBackend) -> crate::Result<NonZeroUsize> =
+        CudaBackend::cuda_extension_cache_max_retained_bytes;
+    let _setter: fn(&CudaBackend, NonZeroUsize) -> crate::Result<()> =
+        CudaBackend::set_cuda_extension_cache_max_retained_bytes;
 }
 
 #[test]

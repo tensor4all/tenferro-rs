@@ -25,23 +25,23 @@ eager and compiled surfaces call the selected engine. Backend libraries remain
 replaceable behind smaller provider traits, while resource ownership stays
 with the engine.
 
-The active implementation directive after the 2026-07-25 restart continues
-through Phase 8 before opening a PR. The PR/CI/merge babysit starts only after
-Phase 8 and the AMD CPU/CUDA benchmark gate. Umbrella Phase 9 remains the
-separate multi-GPU scheduling phase. The exact-commit cross-phase audit
-described by the restart design runs before integration and is distinct from
-umbrella Phase 9.
+As of the post-U8 merge, the implementation on `main` includes semantic
+program artifacts, runtime preparation snapshots and caches, synchronous
+`Runtime::run_compiled` execution through registered engine bridges, CPU
+runtime registration, extension cache storage, semantic AD transforms, and the
+XLA compiled-graph public boundary.
 
-The Phase 7 local slice currently implements WebGPU runtime registration for
-the `dot_general` family and the runtime-owned tensor backend execution bridge,
-with `Runtime::run_compiled` evidence for rank-2 F32 matmul. CUDA runtime
-registration remains deferred until its backend can satisfy the common
-execution-bridge ownership contract without widening the Phase 7 slice.
+#1456 adds the first production dispatch checkpoint: prepared programs retain a
+crate-private `ScheduledGraph`, synchronous `Runtime::run_compiled*` walks that
+schedule, and each semantic operation runs on its selected same-storage engine
+bridge. #1471 extends that production path with `Runtime::submit`,
+`ExecutionHandle`, runtime-allocated engine event domains, and a storage-class
+keyed transfer provider registry. Full asynchronous admission, device-native
+stream/queue integration, collectives, and real GPU transfer scheduling remain
+reserved follow-up work; they must extend this production dispatch path rather
+than building a second metadata-only layer.
 
-The Phase 8 local slice moves XLA's public graph boundary to `CompiledGraph`
-helpers (`lower_compiled_to_stablehlo` and `XlaExecutor::run_compiled_*`) while
-keeping lower-level `SemanticProgram` entry points for operation crates and
-tests. Full runtime-owned `SubgraphCompiler` selection, one-node scheduled XLA
+Full runtime-owned `SubgraphCompiler` selection, one-node scheduled XLA
 subgraphs, and PJRT executable caching remain separate follow-up work.
 
 This document refines rather than immediately replaces the current contracts in:
@@ -302,10 +302,20 @@ keeping the compiler artifact backend-neutral:
   synchronous runtime-owned execution path. They derive input signatures,
   prepare through the runtime cache using the compiled graph's compiler
   options, validate the public input contract and semantic shape guards, and
-  execute through the engine registration's erased tensor backend bridge.
-- `GraphExecutor<B>` remains a legacy compatibility executor. It restages from
-  the backend-neutral `CompiledGraph` and then executes through the same
-  runtime-owned preparation and engine bridge path.
+  execute the prepared root `ScheduledGraph`.
+- Same-storage per-operation placement is part of the synchronous execution
+  path: each semantic operation carries its prepared binding, and the scheduled
+  loop leases the erased tensor backend bridge for that operation's selected
+  engine.
+- Cross-storage per-operation placement is supported for linear production
+  execution when a transfer provider is registered for the source and
+  destination storage classes. The scheduled loop tracks each slot's current
+  storage class and calls the provider before dispatching an operation on a
+  different storage class. Missing providers remain typed runtime errors.
+- The previous `GraphExecutor<B>` facade is retired. Public execution goes
+  through `Runtime::run_compiled` and `Runtime::run_compiled_values`, which
+  prepare from the backend-neutral `CompiledGraph` and execute through the
+  runtime-owned schedule.
 - `EngineRegistration::with_tensor_backend_executor` attaches that bridge to
   an engine registration. `tenferro-cpu::runtime_engine_registration` provides
   the CPU registration with direct core preparation capabilities, cache-owner
@@ -690,8 +700,15 @@ workspace. All providers obey the engine-selected `ParallelMode`.
 ## Prepared Graphs and Common Execution
 
 `PreparedGraph` contains a common `ScheduledGraph` plus runtime-binding
-metadata. The schedule is shared by CPU, GPU, extension, transfer, and
-multi-device execution. Its nodes are conceptually:
+metadata. The production CPU/runtime path currently stores this state in the
+crate-private prepared-program root. Same-storage `Operation` nodes are already
+the synchronous `Runtime::run_compiled*` execution source. The post-U3
+substrate additionally tracks per-slot storage classes and invokes registered
+transfer providers on the production scheduled path when a downstream operation
+uses a different storage class. First-class `Transfer` nodes, `Collective`,
+cross-domain event scheduling, and full asynchronous admission remain reserved
+work. The schedule is shared by CPU, GPU, extension, transfer, and multi-device
+execution. Its nodes are conceptually:
 
 ```rust
 pub enum ScheduledNode {
@@ -706,10 +723,13 @@ pub enum ScheduledNode {
 ```
 
 The schedule also records value slots, the dependency DAG, buffer lifetimes,
-output bindings, and event dependencies. Each `PreparedOperation` is
-self-contained: it retains the resolved engine/provider and algorithm plan.
-There is one dynamic operation dispatch and no family-id, provider-registry, or
-capability lookup in the execution loop.
+output bindings, and event dependencies. Each prepared operation binding is
+self-contained enough for same-storage execution: it retains the resolved
+engine/provider and algorithm plan. The current extension hook is still the
+public `PreparedOperation::execute` trait method, so extension execution uses
+that prepared operation while avoiding family-id or provider-registry lookup in
+the scheduled loop. A narrower internal operation object can replace that hook
+only as a deliberate public-boundary cleanup.
 
 Provider code receives an `ErasedExecutionContext` and performs one safe
 `TypeId` check/downcast to its typed context. Preparation validates the same
@@ -725,9 +745,11 @@ completion dependency; the scheduler understands its buffer lifetime,
 ordering, failure, and resource requirements. A collective similarly has
 explicit participants, ordering, event-domain behavior, and communication
 resources. Provider registries may supply their implementations, but cannot
-hide them inside an opaque extension op. The initial refactor implements
-transfers and may leave collectives unavailable; reserving the core collective
-node prevents a later sharding design from bypassing common scheduling and
+hide them inside an opaque extension op. The current post-U3 substrate registers
+transfer providers by storage-class pair and calls them from the scheduled
+execution loop; promoting these calls to explicit `ScheduledTransfer` nodes is
+the next scheduler step. Reserving the core collective node prevents a later
+sharding design from bypassing common scheduling and
 lifetime rules.
 
 The common execution bridge is owned by `Runtime`; it is not generic over one
@@ -772,13 +794,13 @@ The ordinary synchronous convenience path is:
 let outputs = runtime.run(&semantic, inputs)?;
 ```
 
-`Runtime::submit` is the asynchronous primitive and returns an
-`ExecutionHandle`. `ExecutionHandle::wait` reports completion errors, and
-`run` is exactly `submit` plus `wait`. Pending outputs may feed more work in the
-same runtime without host synchronization. Dropping a handle does not cancel
-or wait for already submitted work. Eager GPU operations likewise return
-tensors carrying pending completion; host reads, explicit synchronization, or
-export observe completion and deferred errors.
+`Runtime::submit` is the asynchronous primitive for compiled graph execution
+and returns an `ExecutionHandle`. `ExecutionHandle::wait` reports completion
+errors. Dropping a handle detaches that observer and does not wait for already
+submitted work. The current implementation submits one prepared runtime
+execution worker and returns owned tensor outputs on wait. Pending-output
+composition, host synchronization hooks, and device-native stream/queue
+completion remain reserved for the full async scheduler.
 
 `Runtime::run` validates input metadata and shape guards, derives the
 `InputSignature`, looks up or creates a prepared specialization, acquires

@@ -318,7 +318,8 @@ fn backend_surface_no_longer_uses_forwarding_macro() {
 
 #[test]
 fn read_elementwise_and_analytic_paths_do_not_materialize_views() {
-    let elementwise_source = include_str!("../../src/elementwise.rs");
+    let elementwise_source =
+        include_str!("../../../tenferro-internal-cpu-kernels/src/elementwise.rs");
     let analytic_source = include_str!("../../src/analytic.rs");
 
     assert!(
@@ -436,7 +437,10 @@ fn cpu_public_ops_require_backend_owner() {
 
     for (module, source) in [
         ("analytic", include_str!("../../src/analytic.rs")),
-        ("elementwise", include_str!("../../src/elementwise.rs")),
+        (
+            "elementwise",
+            include_str!("../../../tenferro-internal-cpu-kernels/src/elementwise.rs"),
+        ),
         ("indexing", include_str!("../../src/indexing.rs")),
         ("structural", include_str!("../../src/structural.rs")),
     ] {
@@ -615,7 +619,8 @@ fn rust_public_function_scan_is_format_and_literal_independent() {
 #[test]
 fn install_pool_has_no_placeholder_construction_or_gemm_descriptor_clones() {
     let backend_source = include_str!("../../src/backend.rs");
-    let buffer_pool_source = include_str!("../../src/buffer_pool.rs");
+    let buffer_pool_source =
+        include_str!("../../../tenferro-internal-cpu-kernels/src/buffer_pool.rs");
     let gemm_source = include_str!("../../src/gemm/mod.rs");
     let exec_session_source = include_str!("../../src/exec_session.rs");
 

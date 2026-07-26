@@ -94,24 +94,24 @@ impl SemanticLinearizeRule for LinalgAdRule {
             .enumerate()
             .map(|(index, value)| value.map(|_| index))
             .collect();
-        let mut recorded = RecordedBuilder::with_seed_count(seed_values.len());
+        let mut emitted = SemanticRuleBuilder::with_seeds(
+            &seed_values,
+            &legacy.external_values,
+            &legacy.shape_sources,
+            builder,
+            SemanticAdRuleRole::Linearize,
+        );
         let tangent_outputs = LinalgAdRule
             .linearize(
                 op,
-                &mut recorded,
+                &mut emitted,
                 &legacy.input_keys,
                 &legacy.output_keys,
                 &tangent_inputs,
                 &mut legacy.context.clone(),
             )
             .map_err(|error| legacy_error(SemanticAdRuleRole::Linearize, error))?;
-        let locals = recorded.replay(
-            &seed_values,
-            &legacy.external_values,
-            &legacy.shape_sources,
-            builder,
-            SemanticAdRuleRole::Linearize,
-        )?;
+        let locals = emitted.finish()?;
         Ok(SemanticLinearizeResult::new(
             tangent_outputs.into_iter().map(|value| {
                 value
@@ -530,6 +530,93 @@ struct RecordedOperation {
     inputs: Vec<ValueRef<StdTensorOp>>,
     role: OperationRole,
     outputs: Vec<LocalValueId>,
+}
+
+struct SemanticRuleBuilder<'a, 'builder> {
+    next_local: usize,
+    locals: Vec<Option<ProgramValue>>,
+    external_values: &'a HashMap<ValueKey<StdTensorOp>, ProgramValue>,
+    shape_sources: &'a [ProgramValue],
+    builder: &'builder mut SemanticProgramBuilder,
+    role: SemanticAdRuleRole,
+    error: Option<SemanticAdError>,
+}
+
+impl<'a, 'builder> SemanticRuleBuilder<'a, 'builder> {
+    fn with_seeds(
+        seeds: &[Option<ProgramValue>],
+        external_values: &'a HashMap<ValueKey<StdTensorOp>, ProgramValue>,
+        shape_sources: &'a [ProgramValue],
+        builder: &'builder mut SemanticProgramBuilder,
+        role: SemanticAdRuleRole,
+    ) -> Self {
+        Self {
+            next_local: seeds.len(),
+            locals: seeds.to_vec(),
+            external_values,
+            shape_sources,
+            builder,
+            role,
+            error: None,
+        }
+    }
+
+    fn finish(self) -> Result<Vec<Option<ProgramValue>>, SemanticAdError> {
+        if let Some(error) = self.error {
+            Err(error)
+        } else {
+            Ok(self.locals)
+        }
+    }
+}
+
+impl PrimitiveRuleBuilder for SemanticRuleBuilder<'_, '_> {
+    fn add_operation(
+        &mut self,
+        operation: StdTensorOp,
+        inputs: Vec<ValueRef<StdTensorOp>>,
+        _role: OperationRole,
+    ) -> Vec<LocalValueId> {
+        let output_count = GraphOperation::output_count(&operation);
+        let outputs: Vec<_> = (self.next_local..self.next_local + output_count).collect();
+        self.next_local += output_count;
+        self.locals.resize(self.next_local, None);
+        if self.error.is_none() {
+            let emitted =
+                resolve_recorded_inputs(&inputs, self.external_values, &self.locals, self.role)
+                    .and_then(|resolved| {
+                        emit_recorded_operation(
+                            &operation,
+                            &resolved,
+                            self.shape_sources,
+                            self.builder,
+                            self.role,
+                        )
+                    });
+            match emitted {
+                Ok(values) => {
+                    if values.len() != outputs.len() {
+                        self.error = Some(semantic_internal(
+                            self.role,
+                            format!(
+                                "semantic linalg AD operation emitted {} outputs for {} slots",
+                                values.len(),
+                                outputs.len()
+                            ),
+                        ));
+                    } else {
+                        for (local, value) in outputs.iter().copied().zip(values.iter().copied()) {
+                            self.locals[local] = Some(value);
+                        }
+                    }
+                }
+                Err(error) => {
+                    self.error = Some(error);
+                }
+            }
+        }
+        outputs
+    }
 }
 
 struct RecordedBuilder {

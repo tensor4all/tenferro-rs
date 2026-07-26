@@ -3,7 +3,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+//! use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
 //!
 //! let mut pool = BufferPool::new();
 //! let mut buf = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 4) };
@@ -62,7 +62,7 @@ pub struct BufferPoolStats {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+/// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
 ///
 /// let mut pool = BufferPool::new();
 /// let buf = unsafe { <f32 as PoolScalar>::pool_acquire(&mut pool, 8) };
@@ -108,7 +108,7 @@ impl fmt::Debug for BufferPool {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+/// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
 ///
 /// let mut pool = BufferPool::new();
 /// let mut buf = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 2) };
@@ -129,7 +129,7 @@ pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
     /// The returned vector may contain uninitialized or stale elements. Reading
     /// any element before writing it is undefined behavior. Once acquired, the
     /// buffer is removed from pool retention accounting. When this is used
-    /// inside a [`crate::CpuBackend`] pool loan, retained buffers that are lost
+    /// inside a CPU backend pool loan, retained buffers that are lost
     /// during panic unwinding are replenished with empty replacement buffers of
     /// the same capacity. The partially initialized in-flight vector itself is
     /// not reinserted.
@@ -137,7 +137,7 @@ pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// let mut buf = unsafe { <f64 as PoolScalar>::pool_acquire(&mut pool, 2) };
@@ -155,7 +155,7 @@ pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// let buf = <f64 as PoolScalar>::pool_acquire_zeroed(&mut pool, 2);
@@ -170,7 +170,7 @@ pub trait PoolScalar: Copy + Sized + Send + Sync + private::Sealed {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// let buf = vec![1.0_f32; 4];
@@ -349,7 +349,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::BufferPool;
+    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::new();
     /// assert!(pool.is_empty());
@@ -366,7 +366,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::BufferPool;
+    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::with_max_retained_capacity_bytes(1024);
     /// assert_eq!(pool.max_retained_capacity_bytes(), 1024);
@@ -400,7 +400,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::BufferPool;
+    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::unbounded();
     /// assert_eq!(pool.max_retained_capacity_bytes(), usize::MAX);
@@ -414,7 +414,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::BufferPool;
+    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::with_max_retained_capacity_bytes(4096);
     /// assert_eq!(pool.max_retained_capacity_bytes(), 4096);
@@ -432,7 +432,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::with_max_retained_capacity_bytes(1024);
     /// <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(128));
@@ -450,7 +450,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// <f64 as PoolScalar>::pool_release(&mut pool, vec![0.0; 2]);
@@ -469,7 +469,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(2));
@@ -484,7 +484,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// <f32 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(4));
@@ -513,7 +513,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// <f32 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(4));
@@ -541,7 +541,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::BufferPool;
+    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
     ///
     /// let mut pool = BufferPool::new();
     /// let mut buf = pool.acquire_with_capacity::<f64>(4);
@@ -570,7 +570,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::BufferPool;
+    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
     ///
     /// let mut pool = BufferPool::new();
     /// let buf = pool.acquire_zeroed::<f32>(3);
@@ -585,7 +585,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::BufferPool;
+    /// use tenferro_internal_cpu_kernels::buffer_pool::BufferPool;
     ///
     /// let pool = BufferPool::new();
     /// assert!(pool.is_empty());
@@ -609,7 +609,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_cpu::linalg_interop::{BufferPool, PoolScalar};
+    /// use tenferro_internal_cpu_kernels::buffer_pool::{BufferPool, PoolScalar};
     ///
     /// let mut pool = BufferPool::new();
     /// <f64 as PoolScalar>::pool_release(&mut pool, Vec::with_capacity(8));
@@ -628,7 +628,8 @@ impl BufferPool {
         self.retained_capacity_bytes = 0;
     }
 
-    pub(crate) fn clear_in_flight_retained(&mut self) {
+    #[doc(hidden)]
+    pub fn clear_in_flight_retained(&mut self) {
         self.f64_in_flight.clear();
         self.f32_in_flight.clear();
         self.i32_in_flight.clear();
@@ -638,7 +639,8 @@ impl BufferPool {
         self.c32_in_flight.clear();
     }
 
-    pub(crate) fn replenish_in_flight_retained(&mut self) {
+    #[doc(hidden)]
+    pub fn replenish_in_flight_retained(&mut self) {
         replenish_in_flight_for(
             &mut self.f64_pool,
             &mut self.f64_in_flight,

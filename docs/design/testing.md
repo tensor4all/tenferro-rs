@@ -358,17 +358,19 @@ Notes:
   through linalg (e.g., SVD Hessians) is mathematically complex and deferred.
 - All linalg AD tests use central finite-difference verification
   (`eps = 1e-6`, `atol = 1e-4`).
-- `tenferro-linalg` AD rules depend on `tidu` rule interfaces and are tested
-  through crate-local helpers plus traced/eager integration coverage.
+- `tenferro-linalg` AD rules depend on tenferro semantic extension AD
+  interfaces and are tested through crate-local helpers plus traced/eager
+  integration coverage.
 
 ---
 
-### tidu / tenferro-ad
+### AD rule interfaces / tenferro-ad
 
-- `tidu`: generic primitive AD graph interfaces and transforms such as
-  `linearize` and `linear_transpose`
-- `tenferro-ad`: eager runtime, eager tensors, traced AD helper APIs, and
-  integration tests over tenferro tensors
+- `tenferro-internal-ops`: core primitive AD graph-rule interfaces and
+  `StdTensorOp` rule registry
+- `tenferro-ad`: semantic AD transforms, extension rule sets, AD transform
+  cache, eager runtime, eager tensors, traced AD helper APIs, and integration
+  tests over tenferro tensors
 
 ## Benchmark Tests (`tensor4all/benchmark_einsum`)
 
