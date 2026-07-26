@@ -151,7 +151,7 @@ fn replayable_norm_kind(record: &CaseRecord) -> Option<ReplayNormKind> {
     if is_complex_dtype(&record.dtype) {
         match kind {
             ReplayNormKind::Fro => Some(kind),
-            ReplayNormKind::Lp(p) if p == 2.0 => Some(kind),
+            ReplayNormKind::Lp(2.0) => Some(kind),
             _ => None,
         }
     } else {

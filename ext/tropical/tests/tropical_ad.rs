@@ -5,7 +5,7 @@ use tenferro_cpu::CpuBackend;
 use tenferro_ext_tropical::traced::tropical_dot_general_fused;
 use tenferro_ext_tropical::{einsum::tropical_einsum_with_argmax, TropicalKind};
 use tenferro_ext_tropical::{extension_modules, tropical_semantic_ad_rules};
-use tenferro_runtime::{Error, GraphCompiler, Runtime, Tensor, TracedTensor};
+use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, Runtime, Tensor, TracedTensor};
 
 fn cpu_runtime_with_tropical() -> Runtime {
     let backend = CpuBackend::new();
@@ -213,7 +213,7 @@ fn finite_difference_gradient_matches_unique_winner_weighted_scalarization() {
 }
 
 #[test]
-fn tangent_shape_constraint_rejects_independent_tropical_tangent_mismatch() {
+fn jvp_rejects_independent_tropical_tangent_shape_mismatch() {
     let symbolic_matrix = |shape: Vec<usize>| {
         let len = shape.iter().product();
         TracedTensor::from_tensor_symbolic_shape(
@@ -237,19 +237,18 @@ fn tangent_shape_constraint_rejects_independent_tropical_tangent_mismatch() {
         .expect("matching independent tangent shape should compile");
 
     let mismatched_tangent = symbolic_matrix(vec![5, 3]);
-    let mismatched_jvp = tropical_ad()
+    let error = tropical_ad()
         .jvp(&output, &lhs, &mismatched_tangent)
-        .unwrap();
-    let error = GraphCompiler::new()
-        .compile(&mismatched_jvp)
-        .expect_err("mismatched tropical tangent axis must fail during compilation");
+        .expect_err("mismatched tropical tangent shape must fail during JVP seed validation");
     assert!(matches!(
-        error,
-        Error::ShapeConstraintViolation {
-            family: "tenferro-ext-tropical.einsum_jvp.v1",
+        &error,
+        Error::Validation {
+            op: "jvp",
+            phase: ErrorPhase::GraphBuild,
             ..
-        }
+        },
     ));
+    assert!(error.to_string().contains("seed input 2 shape mismatch"));
 }
 
 #[test]

@@ -10,6 +10,7 @@ use num_complex::{Complex32, Complex64};
 use tenferro_ops::dim_expr::DimExpr;
 use tenferro_ops::input_key::TensorInputKey;
 use tenferro_ops::std_tensor_op::StdTensorOp;
+use tenferro_ops::ShapeRelation;
 use tenferro_tensor::{CacheStats, DType, Tensor, TensorScalar};
 
 use super::program::CompiledGraph;
@@ -19,8 +20,8 @@ use crate::compiler::{lower_scoped_dim_expr, CompilerOptions};
 use crate::error::{Error, Result};
 use crate::extension_cache::{ExtensionCacheSelector, ExtensionCacheStore};
 use crate::program::{
-    CoreSemanticOp, FrozenProgram, ProgramInputSpec, ProgramShapeRelation, SemanticProgramBuilder,
-    ShapeGuard as ProgramShapeGuard,
+    CoreSemanticOp, FrozenProgram, ProgramInputSpec, ProgramShapeRelation, SemanticOpRef,
+    SemanticProgramBuilder, ShapeGuard as ProgramShapeGuard,
 };
 use crate::shape_constraint::{discharge, LocalShapeConstraint, SlotScopedShapeConstraint};
 use crate::trace::TracedGraph;
@@ -203,6 +204,7 @@ impl GraphCompiler {
     }
 
     fn compile_frozen(&mut self, frozen: &FrozenProgram) -> Result<CompiledGraph> {
+        validate_bound_shape_guards(frozen)?;
         Ok(CompiledGraph::new(
             frozen.clone(),
             self.compiler_options,
@@ -562,12 +564,90 @@ impl GraphCompiler {
 
         let semantic =
             compile_materialized_semantic_program(&compiled, &descriptors, &scoped_constraints)?;
+        validate_bound_shape_guards(&semantic)?;
         Ok(CompiledGraph::new(
             semantic,
             self.compiler_options,
             input_keys,
         ))
     }
+}
+
+fn validate_bound_shape_guards(frozen: &FrozenProgram) -> Result<()> {
+    let Some(input_shapes) = bound_input_shapes(frozen) else {
+        return Ok(());
+    };
+    let input_shape_refs: Vec<_> = input_shapes.iter().map(Vec::as_slice).collect();
+    for operation in frozen.program.operations() {
+        let fallback_family = match operation.op() {
+            SemanticOpRef::Core(_) => "tenferro-runtime.core.v1",
+            SemanticOpRef::Extension(extension) => extension.family_id(),
+        };
+        for guard in operation.shape_guards() {
+            if guard.source_family().is_some() {
+                continue;
+            }
+            validate_bound_shape_guard(guard, fallback_family, &input_shape_refs)?;
+        }
+    }
+    Ok(())
+}
+
+fn bound_input_shapes(frozen: &FrozenProgram) -> Option<Vec<Vec<usize>>> {
+    frozen
+        .program
+        .inputs()
+        .iter()
+        .map(|&input| {
+            frozen
+                .bindings
+                .tensor_ref_for_input(input)
+                .map(|tensor| tensor.shape().to_vec())
+        })
+        .collect()
+}
+
+fn validate_bound_shape_guard(
+    guard: &ProgramShapeGuard,
+    fallback_family: &'static str,
+    input_shapes: &[&[usize]],
+) -> Result<()> {
+    let ProgramShapeRelation::Equal = guard.relation() else {
+        return Ok(());
+    };
+    let family = guard.source_family().unwrap_or(fallback_family);
+    let relation = ShapeRelation::Equal;
+    let lhs = evaluate_bound_shape_guard_expression(family, relation, guard.lhs(), input_shapes)?;
+    let rhs = evaluate_bound_shape_guard_expression(family, relation, guard.rhs(), input_shapes)?;
+    if lhs == rhs {
+        return Ok(());
+    }
+    Err(Error::ShapeConstraintViolation {
+        family,
+        instruction_index: None,
+        relation,
+        lhs_expr: format!("{:?}", guard.lhs()),
+        rhs_expr: format!("{:?}", guard.rhs()),
+        lhs_value: lhs,
+        rhs_value: rhs,
+    })
+}
+
+fn evaluate_bound_shape_guard_expression(
+    family: &'static str,
+    relation: ShapeRelation,
+    expression: &DimExpr,
+    input_shapes: &[&[usize]],
+) -> Result<usize> {
+    expression
+        .eval(input_shapes)
+        .map_err(|cause| Error::ShapeConstraintEvaluation {
+            family,
+            instruction_index: None,
+            relation,
+            expression: format!("{expression:?}"),
+            cause: cause.into(),
+        })
 }
 
 fn compile_materialized_semantic_program(

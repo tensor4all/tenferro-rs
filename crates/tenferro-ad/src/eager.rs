@@ -2464,6 +2464,17 @@ pub(crate) struct EagerTensorRecord {
     ctx: Arc<EagerRuntime>,
 }
 
+struct EagerTensorParts {
+    ctx: Arc<EagerRuntime>,
+    key: ValueKey<StdTensorOp>,
+    requires_grad: bool,
+    trace: Option<EagerTrace>,
+    semantic_trace: Option<TracedTensor>,
+    value: Arc<TensorValue>,
+    metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
+    register_value: bool,
+}
+
 impl fmt::Debug for EagerTensor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EagerTensor")
@@ -2559,16 +2570,16 @@ impl EagerTensor {
                 .map_err(|err| {
                 Error::runtime_state_source("eager leaf metadata", ErrorPhase::GraphBuild, err)
             })?;
-        Self::from_parts(
+        Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
-            None,
-            Some(semantic_trace),
-            Arc::new(TensorValue::from_tensor_arc(tensor)),
-            metadata_scopes_for_scope(metadata_scope),
-            true,
-        )
+            trace: None,
+            semantic_trace: Some(semantic_trace),
+            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
+            metadata_scopes: metadata_scopes_for_scope(metadata_scope),
+            register_value: true,
+        })
     }
 
     pub(crate) fn new_result_arc(
@@ -2599,16 +2610,16 @@ impl EagerTensor {
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        Self::from_parts(
+        Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
             semantic_trace,
-            Arc::new(TensorValue::from_tensor_arc(tensor)),
+            value: Arc::new(TensorValue::from_tensor_arc(tensor)),
             metadata_scopes,
-            true,
-        )
+            register_value: true,
+        })
     }
 
     pub(crate) fn new_result_value(
@@ -2620,28 +2631,29 @@ impl EagerTensor {
         semantic_trace: Option<TracedTensor>,
         metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
     ) -> Result<Self> {
-        Self::from_parts(
+        Self::from_parts(EagerTensorParts {
             ctx,
             key,
             requires_grad,
             trace,
             semantic_trace,
-            Arc::new(value),
+            value: Arc::new(value),
             metadata_scopes,
-            true,
-        )
+            register_value: true,
+        })
     }
 
-    fn from_parts(
-        ctx: Arc<EagerRuntime>,
-        key: ValueKey<StdTensorOp>,
-        requires_grad: bool,
-        trace: Option<EagerTrace>,
-        semantic_trace: Option<TracedTensor>,
-        value: Arc<TensorValue>,
-        metadata_scopes: Vec<Arc<GlobalMetadataScope>>,
-        register_value: bool,
-    ) -> Result<Self> {
+    fn from_parts(parts: EagerTensorParts) -> Result<Self> {
+        let EagerTensorParts {
+            ctx,
+            key,
+            requires_grad,
+            trace,
+            semantic_trace,
+            value,
+            metadata_scopes,
+            register_value,
+        } = parts;
         let grad_slot = Arc::new(Mutex::new(None));
         if requires_grad {
             ctx.try_register_grad_slot(&key, &grad_slot)?;
@@ -3401,8 +3413,7 @@ fn record_eager_outputs_from_semantic(
     let mut registrations = Vec::with_capacity(outputs.len());
     let traces = outputs
         .iter()
-        .enumerate()
-        .map(|(_output_slot, output)| {
+        .map(|output| {
             let key = eager_val_key();
             registrations.push((key.clone(), tensor_meta_from_tensor(output.as_ref())));
             RecordedEagerTrace {

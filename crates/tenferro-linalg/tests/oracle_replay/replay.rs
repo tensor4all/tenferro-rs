@@ -855,6 +855,12 @@ fn tensor_data_ordered_as_col_major<T: Clone>(
 
 fn row_major_to_col_major<T: Clone>(values: &[T], shape: &[usize]) -> Result<Vec<T>, String> {
     let total = checked_product(shape)?;
+    if values.len() != total {
+        return Err(format!(
+            "oracle tensor value length mismatch: expected {total}, got {}",
+            values.len()
+        ));
+    }
     if total == 0 {
         return Ok(Vec::new());
     }
@@ -877,7 +883,7 @@ fn row_major_to_col_major<T: Clone>(values: &[T], shape: &[usize]) -> Result<Vec
     }
 
     let mut result = values.to_vec();
-    for row_index in 0..total {
+    for (row_index, value) in values.iter().enumerate() {
         let mut remaining = row_index;
         let mut col_index = 0usize;
         for dim in 0..rank {
@@ -891,7 +897,7 @@ fn row_major_to_col_major<T: Clone>(values: &[T], shape: &[usize]) -> Result<Vec
                 )
                 .ok_or_else(|| "column-major offset overflow".to_string())?;
         }
-        result[col_index] = values[row_index].clone();
+        result[col_index] = value.clone();
     }
     Ok(result)
 }
@@ -1506,10 +1512,9 @@ fn optional_f64_kwarg(case: &CaseRecord, key: &str) -> Result<Option<f64>, Strin
     }
 }
 
-fn norm_arguments(
-    case: &CaseRecord,
-    rank: usize,
-) -> Result<(Option<f64>, Option<Vec<usize>>, bool), String> {
+type NormReplayArguments = (Option<f64>, Option<Vec<usize>>, bool);
+
+fn norm_arguments(case: &CaseRecord, rank: usize) -> Result<NormReplayArguments, String> {
     match case.op.as_str() {
         "norm" => norm_arguments_for_norm(case, rank),
         "vector_norm" => norm_arguments_for_vector_norm(case, rank),
@@ -1518,10 +1523,7 @@ fn norm_arguments(
     }
 }
 
-fn norm_arguments_for_norm(
-    case: &CaseRecord,
-    rank: usize,
-) -> Result<(Option<f64>, Option<Vec<usize>>, bool), String> {
+fn norm_arguments_for_norm(case: &CaseRecord, rank: usize) -> Result<NormReplayArguments, String> {
     let keepdim = bool_kwarg(case, "keepdim")?.unwrap_or(false);
     let dim = case
         .op_kwargs
@@ -1543,7 +1545,7 @@ fn norm_arguments_for_norm(
 fn norm_arguments_for_vector_norm(
     case: &CaseRecord,
     rank: usize,
-) -> Result<(Option<f64>, Option<Vec<usize>>, bool), String> {
+) -> Result<NormReplayArguments, String> {
     let keepdim = bool_kwarg(case, "keepdim")?.unwrap_or(false);
     let dim = case
         .op_kwargs
@@ -1563,7 +1565,7 @@ fn norm_arguments_for_vector_norm(
 fn norm_arguments_for_matrix_norm(
     case: &CaseRecord,
     rank: usize,
-) -> Result<(Option<f64>, Option<Vec<usize>>, bool), String> {
+) -> Result<NormReplayArguments, String> {
     if case.op_args.len() != 3 {
         return Err(format!(
             "{}: matrix_norm replay expects [ord, dim, keepdim] op_args",

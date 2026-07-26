@@ -394,7 +394,7 @@ struct ReadPathFallbackModule {
 }
 
 impl ReadPathFallbackModule {
-    fn new() -> Arc<dyn ExtensionModule> {
+    fn module() -> Arc<dyn ExtensionModule> {
         Arc::new(Self {
             module_id: ExtensionModuleId::new("tenferro-tests.read-path-fallback.module").unwrap(),
         })
@@ -430,7 +430,7 @@ fn eager_extension_dispatch_does_not_initialize_lazy_view_materialization_cache(
     let outputs = crate::extension::apply_eager_with_extension_context(
         Arc::new(ReadPathFallbackProbe),
         &[&x_t],
-        ReadPathFallbackModule::new(),
+        ReadPathFallbackModule::module(),
         |op, inputs, ctx| {
             op.as_any()
                 .downcast_ref::<ReadPathFallbackProbe>()

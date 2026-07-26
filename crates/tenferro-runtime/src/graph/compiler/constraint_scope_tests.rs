@@ -233,8 +233,16 @@ fn compile_many_clones_shared_constraint_scope_once() {
 #[test]
 fn constraint_scope_multi_output_keeps_other_live_and_prunes_all_dead() {
     let outputs = constrained_shapes(2, 7, 3);
-    let program = GraphCompiler::new().compile(&outputs[1]).unwrap();
-    assert_runtime_guard_violation(&program, "test.graph-scope", 7, 3, 7, 6);
+    let error = GraphCompiler::new().compile(&outputs[1]).unwrap_err();
+    assert!(matches!(
+        error,
+        Error::ShapeConstraintViolation {
+            family: "test.graph-scope",
+            lhs_value: 7,
+            rhs_value: 6,
+            ..
+        }
+    ));
 
     let mut unrelated = TracedTensor::from_vec_col_major(vec![1], vec![9.0_f64]).unwrap();
     unrelated.constraint_scopes =

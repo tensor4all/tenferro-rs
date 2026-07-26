@@ -760,7 +760,7 @@ impl ImportTransaction {
                 metadata
                     .shape()
                     .iter()
-                    .map(|extent| resolve_extent(extent))
+                    .map(&resolve_extent)
                     .collect::<Vec<_>>(),
             );
             let imported = transaction.next_value(destination.values.len(), destination.owner)?;
@@ -799,10 +799,7 @@ impl ImportTransaction {
                 let meta = source.values[output.slot as usize].clone();
                 let resolved = ProgramValueMetadata::from_extents(
                     meta.dtype(),
-                    meta.shape()
-                        .iter()
-                        .map(|extent| resolve_extent(extent))
-                        .collect::<Vec<_>>(),
+                    meta.shape().iter().map(&resolve_extent).collect::<Vec<_>>(),
                 );
                 transaction.values.push(resolved);
                 remap[output.slot as usize] = Some(imported);

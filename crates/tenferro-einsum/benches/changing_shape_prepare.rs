@@ -9,6 +9,7 @@ use tenferro_runtime::Tensor;
 
 const SHAPE_COUNT: usize = 129;
 const PREPARED_PLAN_DEFAULT_ENTRY_LIMIT: usize = 128;
+const _: () = assert!(SHAPE_COUNT > PREPARED_PLAN_DEFAULT_ENTRY_LIMIT);
 
 struct ShapeCase {
     lhs: EagerTensor,
@@ -79,7 +80,6 @@ fn run_shape_sequence(cases: &[ShapeCase]) {
 }
 
 fn bench_changing_shape_prepare(c: &mut Criterion) {
-    assert!(SHAPE_COUNT > PREPARED_PLAN_DEFAULT_ENTRY_LIMIT);
     let threads = bench_threads();
     let ctx = cpu_ctx(threads);
     let cases = shape_cases(&ctx);

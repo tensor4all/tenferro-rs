@@ -6,7 +6,7 @@ use tenferro_ext_sparse::{
     extension_modules, sparse_matmul, sparse_matmul_eager, sparse_semantic_ad_rules,
     SparseCooTensor, SparseCooTracedTensor,
 };
-use tenferro_runtime::{Error, GraphCompiler, Runtime, TracedTensor};
+use tenferro_runtime::{Error, ErrorPhase, GraphCompiler, Runtime, TracedTensor};
 use tenferro_tensor::Tensor;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -188,17 +188,18 @@ fn tangent_shape_constraint_rejects_independent_sparse_tangent_mismatch() -> Tes
     compiler.compile(&jvp)?;
 
     let mismatched_tangent = symbolic_values(4);
-    let mismatched_jvp = sparse_ad().jvp(output.values(), lhs.values(), &mismatched_tangent)?;
-    let error = GraphCompiler::new()
-        .compile(&mismatched_jvp)
-        .expect_err("mismatched sparse tangent axis must fail during compilation");
+    let error = sparse_ad()
+        .jvp(output.values(), lhs.values(), &mismatched_tangent)
+        .expect_err("mismatched sparse tangent shape must fail during JVP seed validation");
     assert!(matches!(
-        error,
-        Error::ShapeConstraintViolation {
-            family: "tenferro-ext-sparse.matmul_jvp.v1",
+        &error,
+        Error::Validation {
+            op: "jvp",
+            phase: ErrorPhase::GraphBuild,
             ..
-        }
+        },
     ));
+    assert!(error.to_string().contains("seed input 2 shape mismatch"));
     Ok(())
 }
 
@@ -236,17 +237,17 @@ fn cotangent_shape_constraint_rejects_sparse_vjp_output_nnz_mismatch() -> TestRe
         cotangent.axis_sym_dim(0)?,
         "output and cotangent must have independent symbolic origins"
     );
-    let vjp = sparse_ad().vjp(output.values(), lhs.values(), &cotangent)?;
-
-    let error = GraphCompiler::new()
-        .compile(&vjp)
-        .expect_err("mismatched sparse cotangent axis must fail during compilation");
+    let error = sparse_ad()
+        .vjp(output.values(), lhs.values(), &cotangent)
+        .expect_err("mismatched sparse cotangent shape must fail during VJP seed validation");
     assert!(matches!(
-        error,
-        Error::ShapeConstraintViolation {
-            family: "tenferro-ext-sparse.matmul_vjp.v1",
+        &error,
+        Error::Validation {
+            op: "vjp",
+            phase: ErrorPhase::GraphBuild,
             ..
-        }
+        },
     ));
+    assert!(error.to_string().contains("seed input 2 shape mismatch"));
     Ok(())
 }
