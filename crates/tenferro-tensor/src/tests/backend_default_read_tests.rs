@@ -1,5 +1,7 @@
 use crate::{
-    backend::{validate_grouped_gemm, GroupedGemmConfig, GroupedGemmJob},
+    backend::{
+        validate_dot_general_read_into, validate_grouped_gemm, GroupedGemmConfig, GroupedGemmJob,
+    },
     BackendCachedDot, BackendRuntimeCache, BackendSession, BackendSessionHost, CompareDir,
     ContractionScalar, DType, DotGeneralAccumulation, DotGeneralConfig, GatherConfig, PadConfig,
     ScatterConfig, SliceConfig, Tensor, TensorAnalytic, TensorBackend, TensorBuffer,
@@ -750,6 +752,32 @@ fn vector_contract_config() -> DotGeneralConfig {
         rhs_contracting_dims: vec![0],
         lhs_batch_dims: vec![],
         rhs_batch_dims: vec![],
+    }
+}
+
+#[test]
+fn dot_general_read_into_dtype_error_reports_output_as_actual() {
+    let lhs = Tensor::from_vec_col_major(vec![1], vec![1.0_f32]).unwrap();
+    let rhs = Tensor::from_vec_col_major(vec![1], vec![2.0_f32]).unwrap();
+    let mut out = Tensor::from_vec_col_major(vec![], vec![0.0_f64]).unwrap();
+    let err = validate_dot_general_read_into(
+        &TensorRead::from_tensor(&lhs),
+        &TensorRead::from_tensor(&rhs),
+        &vector_contract_config(),
+        &TensorWrite::from_tensor(&mut out),
+        "test_dot_general",
+    )
+    .unwrap_err();
+
+    match err {
+        crate::Error::Validation {
+            source: crate::ValidationError::DTypeMismatch { expected, actual },
+            ..
+        } => {
+            assert_eq!(expected, crate::core_dtype(DType::F32));
+            assert_eq!(actual, crate::core_dtype(DType::F64));
+        }
+        other => panic!("expected dtype mismatch, got {other:?}"),
     }
 }
 
