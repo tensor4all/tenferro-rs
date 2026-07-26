@@ -301,6 +301,15 @@ pub fn resolve_roots(tensor: &TracedTensor) -> Vec<Arc<Graph<StdTensorOp>>> {
     tensor.resolve_roots()
 }
 
+/// Compile a traced tensor as an AD source program.
+///
+/// # Errors
+///
+/// Returns [`Error::Validation`] for invalid graph metadata or shape
+/// constraints, [`Error::RuntimeState`] for missing/inconsistent metadata or
+/// cache state, and [`Error::Internal`] when the graph violates a compiler
+/// invariant. Extension lowering failures retain their typed
+/// [`Error::Extension`] source.
 pub fn compile_ad_source(
     compiler: &mut GraphCompiler,
     output: &TracedTensor,
