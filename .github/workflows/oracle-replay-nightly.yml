@@ -1,0 +1,107 @@
+name: Oracle replay nightly
+
+on:
+  schedule:
+    - cron: "37 17 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run oracle replay even when the checked ref has no commit in the last 24 hours"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-replay-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  recent-commits:
+    name: Check recent default-branch commits
+    runs-on: ubuntu-latest
+    outputs:
+      run_oracle: ${{ steps.recent.outputs.run_oracle }}
+      reason: ${{ steps.recent.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Check for commits in the last 24 hours
+        id: recent
+        env:
+          FORCE_RUN: ${{ github.event.inputs.force == 'true' }}
+        run: |
+          set -euo pipefail
+          recent_commit="$(git log --since="24 hours ago" --format=%H --max-count=1)"
+          if [ "${FORCE_RUN}" = true ]; then
+            echo "run_oracle=true" >> "${GITHUB_OUTPUT}"
+            echo "reason=manual force=true" >> "${GITHUB_OUTPUT}"
+          elif [ -n "${recent_commit}" ]; then
+            echo "run_oracle=true" >> "${GITHUB_OUTPUT}"
+            echo "reason=recent commit ${recent_commit}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "run_oracle=false" >> "${GITHUB_OUTPUT}"
+            echo "reason=no commits in the last 24 hours" >> "${GITHUB_OUTPUT}"
+          fi
+
+  oracle-replay:
+    name: Root-facade oracle replay
+    needs: recent-commits
+    if: always()
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: "4"
+      ORACLE_REPLAY_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.recent-commits.result == 'success' && needs.recent-commits.outputs.run_oracle == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.recent-commits.result == 'success' && needs.recent-commits.outputs.run_oracle == 'true'
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        if: needs.recent-commits.result == 'success' && needs.recent-commits.outputs.run_oracle == 'true'
+        with:
+          prefix-key: v1-rust-oracle-replay-ubuntu22
+          shared-key: oracle-replay-autodiff
+          cache-all-crates: true
+          cache-workspace-crates: true
+          workspaces: . -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Run root-facade oracle replay
+        if: needs.recent-commits.result == 'success' && needs.recent-commits.outputs.run_oracle == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p target/oracle-replay
+          RUST_TEST_THREADS=1 \
+            RUN_ORACLE_REPLAY=1 \
+            ORACLE_REPLAY_JOBS="${ORACLE_REPLAY_JOBS}" \
+            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" \
+            cargo test -p tenferro-linalg --features autodiff --test integration oracle_replays_supported_db_cases_when_requested -- --nocapture \
+            2>&1 | tee target/oracle-replay/oracle-replay.log
+      - name: Upload oracle replay log
+        if: always() && needs.recent-commits.result == 'success' && needs.recent-commits.outputs.run_oracle == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-replay-${{ github.run_id }}
+          path: target/oracle-replay/oracle-replay.log
+          if-no-files-found: warn
+      - name: Report oracle replay disposition
+        if: always()
+        env:
+          RECENT_RESULT: ${{ needs.recent-commits.result }}
+          RUN_ORACLE: ${{ needs.recent-commits.outputs.run_oracle }}
+          REASON: ${{ needs.recent-commits.outputs.reason }}
+        run: |
+          set -euo pipefail
+          if [ "${RECENT_RESULT}" != success ]; then
+            echo "Recent-commit gate failed: ${RECENT_RESULT}"
+            exit 1
+          fi
+          if [ "${RUN_ORACLE}" != true ]; then
+            echo "Oracle replay not required: ${REASON}"
+          else
+            echo "Oracle replay requested: ${REASON}"
+          fi
