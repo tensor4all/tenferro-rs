@@ -3,6 +3,7 @@
 //! This module owns the private execution bridge used by
 //! `Runtime::run_compiled*`.
 
+use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -21,7 +22,8 @@ use crate::graph::CompiledGraph;
 use crate::runtime::schedule::{ScheduledGraph, ScheduledNode};
 use crate::runtime::{
     CacheOwnerError, CacheStats, InputSignature, PrepareError, PrepareOptions,
-    PreparedOperationHandle, Runtime, RuntimeCacheOwner,
+    PreparedOperationHandle, Runtime, RuntimeCacheOwner, StorageClass, TransferProvider,
+    TransferRequest,
 };
 use crate::{Error, Result};
 
@@ -50,6 +52,45 @@ pub struct PreparedCompiledGraph {
     execution: Arc<PreparedExecutionEngines>,
 }
 
+/// Asynchronous runtime execution handle returned by [`Runtime::submit`].
+pub struct ExecutionHandle {
+    join: Option<thread::JoinHandle<Result<Vec<Tensor>>>>,
+}
+
+impl ExecutionHandle {
+    /// Wait for submitted work to finish and return its tensor outputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns the submitted runtime execution error, or a runtime-state error
+    /// if the worker panicked.
+    pub fn wait(mut self) -> Result<Vec<Tensor>> {
+        let Some(join) = self.join.take() else {
+            return Err(Error::runtime_state(
+                "ExecutionHandle::wait",
+                ErrorPhase::Execution,
+                "execution handle was already consumed",
+            ));
+        };
+        join.join().map_err(|payload| {
+            Error::runtime_state(
+                "ExecutionHandle::wait",
+                ErrorPhase::Execution,
+                panic_payload_message(payload),
+            )
+        })?
+    }
+}
+
+impl fmt::Debug for ExecutionHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExecutionHandle")
+            .field("pending", &self.join.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
 impl fmt::Debug for PreparedCompiledGraph {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -58,6 +99,16 @@ impl fmt::Debug for PreparedCompiledGraph {
             .field("epoch", &self.epoch)
             .field("program", &self.program)
             .finish_non_exhaustive()
+    }
+}
+
+fn panic_payload_message(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        format!("submitted execution panicked: {message}")
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        format!("submitted execution panicked: {message}")
+    } else {
+        "submitted execution panicked".to_string()
     }
 }
 
@@ -542,7 +593,15 @@ fn cache_stats_from_tensor_stats(stats: tenferro_tensor::CacheStats) -> CacheSta
 #[derive(Debug)]
 struct PreparedExecutionEngines {
     root: Arc<dyn ErasedTensorBackendExecutor>,
-    operations: Box<[Arc<dyn ErasedTensorBackendExecutor>]>,
+    root_storage_class: StorageClass,
+    operations: Box<[PreparedOperationExecution]>,
+    transfers: BTreeMap<(StorageClass, StorageClass), Arc<dyn TransferProvider>>,
+}
+
+#[derive(Debug)]
+struct PreparedOperationExecution {
+    executor: Arc<dyn ErasedTensorBackendExecutor>,
+    storage_class: StorageClass,
 }
 
 pub(super) fn run_compiled(
@@ -579,6 +638,24 @@ pub(super) fn prepare_compiled(
         prepared,
         execution,
     })
+}
+
+pub(super) fn submit(
+    runtime: &Runtime,
+    program: &CompiledGraph,
+    inputs: &[&Tensor],
+) -> Result<ExecutionHandle> {
+    let inputs = resolve_input_refs(program, inputs)?
+        .into_iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    let runtime = runtime.clone();
+    let program = program.clone();
+    let join = thread::spawn(move || {
+        let input_refs = inputs.iter().collect::<Vec<_>>();
+        run_compiled(&runtime, &program, &input_refs)
+    });
+    Ok(ExecutionHandle { join: Some(join) })
 }
 
 pub(super) fn run_prepared(
@@ -674,8 +751,20 @@ fn execution_engines(
     }
     let storage_class = root.resolved_placement().storage_class();
     let root_executor = execution_engine_from_snapshot(&snapshot, root.engine_id())?;
+    let operation_placements = root.operation_placements();
+    if operation_placements.len() != prepared.operations().len() {
+        return Err(Error::runtime_state(
+            "Runtime::run_compiled",
+            ErrorPhase::Execution,
+            format!(
+                "prepared root has {} operation placements for {} operations",
+                operation_placements.len(),
+                prepared.operations().len()
+            ),
+        ));
+    }
     let mut operation_executors = Vec::with_capacity(prepared.operations().len());
-    for operation in prepared.operations() {
+    for (operation, placement) in prepared.operations().iter().zip(operation_placements) {
         let engine_id = operation.binding().engine_id();
         let engine = snapshot.engine(engine_id).ok_or_else(|| {
             Error::runtime_state(
@@ -684,21 +773,26 @@ fn execution_engines(
                 format!("prepared operation engine {engine_id:?} is no longer registered"),
             )
         })?;
-        if !engine.storage_classes().contains(storage_class) {
+        if !engine.storage_classes().contains(placement.storage_class()) {
             return Err(Error::runtime_state(
                 "Runtime::run_compiled",
                 ErrorPhase::Execution,
                 format!(
-                    "prepared operation engine {engine_id:?} uses storage outside {:?}; transfer execution is not implemented yet",
-                    storage_class.as_str()
+                    "prepared operation engine {engine_id:?} does not support selected storage {:?}",
+                    placement.storage_class().as_str()
                 ),
             ));
         }
-        operation_executors.push(execution_engine_from_snapshot(&snapshot, engine_id)?);
+        operation_executors.push(PreparedOperationExecution {
+            executor: execution_engine_from_snapshot(&snapshot, engine_id)?,
+            storage_class: placement.storage_class().clone(),
+        });
     }
     Ok(PreparedExecutionEngines {
         root: root_executor,
+        root_storage_class: storage_class.clone(),
         operations: operation_executors.into_boxed_slice(),
+        transfers: snapshot.transfers_for_execution(),
     })
 }
 
@@ -790,8 +884,14 @@ fn execute_scheduled_slots<'input>(
         Vec::new()
     };
     let mut slots = Vec::new();
+    let mut slot_storage = vec![None; program.n_slots];
     let result = (|| {
         crate::exec::initialize_exec_slots_in(program, inputs, &mut slots)?;
+        for &slot in &program.input_slots {
+            if let Some(storage) = slot_storage.get_mut(slot) {
+                *storage = Some(execution.root_storage_class.clone());
+            }
+        }
         if schedule.nodes().len() != program.instructions.len() {
             return Err(Error::runtime_state(
                 "Runtime::run_compiled",
@@ -807,7 +907,15 @@ fn execute_scheduled_slots<'input>(
             match node {
                 ScheduledNode::Operation(_) => {
                     let instruction = &program.instructions[instruction_index];
-                    instruction_executor(execution, instruction)?.execute_slot_instruction(
+                    let operation = instruction_execution(execution, instruction)?;
+                    ensure_instruction_inputs_in_storage(
+                        execution,
+                        instruction,
+                        operation.storage_class(),
+                        &mut slots,
+                        &mut slot_storage,
+                    )?;
+                    operation.executor().execute_slot_instruction(
                         instruction_index,
                         instruction,
                         operations,
@@ -815,6 +923,12 @@ fn execute_scheduled_slots<'input>(
                         output_mode,
                         &terminal_slots,
                     )?;
+                    for &slot in &instruction.output_slots {
+                        if let Some(storage) = slot_storage.get_mut(slot) {
+                            *storage = Some(operation.storage_class().clone());
+                        }
+                    }
+                    clear_last_use_storage(instruction, &mut slot_storage);
                 }
                 ScheduledNode::Transfer(_) => {
                     return Err(Error::runtime_state(
@@ -842,23 +956,121 @@ fn execute_scheduled_slots<'input>(
     Ok(slots)
 }
 
-fn instruction_executor<'a>(
+fn instruction_execution<'a>(
     execution: &'a PreparedExecutionEngines,
     instruction: &ExecInstruction,
-) -> Result<&'a Arc<dyn ErasedTensorBackendExecutor>> {
+) -> Result<InstructionExecution<'a>> {
     let Some(operation_index) = instruction.semantic_operation_index else {
-        return Ok(&execution.root);
+        return Ok(InstructionExecution {
+            executor: &execution.root,
+            storage_class: &execution.root_storage_class,
+        });
     };
-    execution.operations.get(operation_index).ok_or_else(|| {
-        Error::runtime_state(
-            "Runtime::run_compiled",
-            ErrorPhase::Execution,
-            format!(
-                "instruction references semantic operation {operation_index}, but prepared program has {} operations",
-                execution.operations.len()
-            ),
-        )
+    let operation = execution.operations.get(operation_index).ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "instruction references semantic operation {operation_index}, but prepared program has {} operations",
+                    execution.operations.len()
+                ),
+            )
+        })?;
+    Ok(InstructionExecution {
+        executor: operation.executor(),
+        storage_class: operation.storage_class(),
     })
+}
+
+struct InstructionExecution<'a> {
+    executor: &'a Arc<dyn ErasedTensorBackendExecutor>,
+    storage_class: &'a StorageClass,
+}
+
+impl InstructionExecution<'_> {
+    fn executor(&self) -> &Arc<dyn ErasedTensorBackendExecutor> {
+        self.executor
+    }
+
+    fn storage_class(&self) -> &StorageClass {
+        self.storage_class
+    }
+}
+
+impl PreparedOperationExecution {
+    fn executor(&self) -> &Arc<dyn ErasedTensorBackendExecutor> {
+        &self.executor
+    }
+
+    fn storage_class(&self) -> &StorageClass {
+        &self.storage_class
+    }
+}
+
+fn ensure_instruction_inputs_in_storage<'input>(
+    execution: &PreparedExecutionEngines,
+    instruction: &ExecInstruction,
+    destination: &StorageClass,
+    slots: &mut [Option<ExecSlot<'input>>],
+    slot_storage: &mut [Option<StorageClass>],
+) -> Result<()> {
+    for &slot in &instruction.input_slots {
+        ensure_slot_in_storage(execution, slot, destination, slots, slot_storage)?;
+    }
+    Ok(())
+}
+
+fn ensure_slot_in_storage<'input>(
+    execution: &PreparedExecutionEngines,
+    slot: usize,
+    destination: &StorageClass,
+    slots: &mut [Option<ExecSlot<'input>>],
+    slot_storage: &mut [Option<StorageClass>],
+) -> Result<()> {
+    let source = slot_storage
+        .get(slot)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| tenferro_tensor::Error::MissingValue { slot })?;
+    if source == destination {
+        return Ok(());
+    }
+    let provider = execution
+        .transfers
+        .get(&(source.clone(), destination.clone()))
+        .ok_or_else(|| {
+            Error::runtime_state(
+                "Runtime::run_compiled",
+                ErrorPhase::Execution,
+                format!(
+                    "no transfer provider registered from {:?} to {:?}",
+                    source.as_str(),
+                    destination.as_str()
+                ),
+            )
+        })?;
+    let transferred = {
+        let value = slots
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| tenferro_tensor::Error::MissingValue { slot })?;
+        provider.transfer(TransferRequest::new(source, destination, value.as_read()))?
+    };
+    slots[slot] = Some(ExecSlot::Owned(transferred));
+    slot_storage[slot] = Some(destination.clone());
+    Ok(())
+}
+
+fn clear_last_use_storage(
+    instruction: &ExecInstruction,
+    slot_storage: &mut [Option<StorageClass>],
+) {
+    for (index, &slot) in instruction.input_slots.iter().enumerate() {
+        if instruction.last_use.get(index).copied().unwrap_or(false) {
+            if let Some(storage) = slot_storage.get_mut(slot) {
+                *storage = None;
+            }
+        }
+    }
 }
 
 fn input_signature(inputs: &[&Tensor]) -> Result<InputSignature> {

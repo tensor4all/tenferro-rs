@@ -73,6 +73,7 @@ struct PreparedRootIdentity {
     resolved_planning: ResolvedPlanningKey,
     prepare_options: PrepareOptionsKey,
     operation_bindings: Box<[PreparedOperationBinding]>,
+    operation_placements: Box<[ResolvedProgramPlacement]>,
     extension_planning: Box<[ExtensionPlanningIdentity]>,
 }
 
@@ -92,6 +93,7 @@ impl fmt::Debug for PreparedRootIdentity {
             .field("resolved_planning", &self.resolved_planning)
             .field("prepare_options", &self.prepare_options)
             .field("operation_bindings", &self.operation_bindings.len())
+            .field("operation_placements", &self.operation_placements.len())
             .field("extension_planning", &self.extension_planning.len())
             .finish()
     }
@@ -237,6 +239,10 @@ impl PreparedProgramRoot {
 
     pub(crate) fn resolved_placement(&self) -> &ResolvedProgramPlacement {
         &self.identity.resolved_placement
+    }
+
+    pub(crate) fn operation_placements(&self) -> &[ResolvedProgramPlacement] {
+        &self.identity.operation_placements
     }
 
     pub(crate) fn epoch(&self) -> super::RuntimeEpoch {
@@ -536,7 +542,7 @@ fn resolve_preparation_context(
 
     let mut missing_extension_family = None;
     let storage_candidates = candidate_storage_classes(&candidates, &constraint);
-    for storage_class in storage_candidates {
+    for storage_class in storage_candidates.iter().cloned() {
         if let Some(context) = build_operation_dispatch(
             runtime,
             snapshot,
@@ -544,6 +550,19 @@ fn resolve_preparation_context(
             compiler_options,
             &candidates,
             storage_class,
+            options,
+            &mut missing_extension_family,
+        )? {
+            return Ok(context);
+        }
+    }
+    if constraint.storage_class().is_none() {
+        if let Some(context) = build_cross_storage_operation_dispatch(
+            runtime,
+            snapshot,
+            frozen,
+            compiler_options,
+            &candidates,
             options,
             &mut missing_extension_family,
         )? {
@@ -601,6 +620,7 @@ fn build_operation_dispatch(
 ) -> PreparedProgramResult<Option<PreparationContext>> {
     let mut dispatch = Vec::with_capacity(frozen.program.operations().len());
     let mut bindings = Vec::with_capacity(frozen.program.operations().len());
+    let mut placements = Vec::with_capacity(frozen.program.operations().len());
     let mut extension_identities = Vec::new();
     let mut extension_planning = Vec::new();
 
@@ -618,6 +638,7 @@ fn build_operation_dispatch(
             return Ok(None);
         };
         bindings.push(selected.dispatch.binding.clone());
+        placements.push(selected.dispatch.resolved_placement.clone());
         if let Some(identity) = selected.extension_identity {
             extension_identities.push(identity);
         }
@@ -684,6 +705,75 @@ fn build_operation_dispatch(
         resolved_planning: planning_key,
         prepare_options: primary_options_key,
         operation_bindings: bindings.into_boxed_slice(),
+        operation_placements: placements.into_boxed_slice(),
+        extension_planning: extension_identities.into_boxed_slice(),
+    });
+
+    Ok(Some(PreparationContext {
+        root_identity,
+        operation_dispatch: dispatch.into(),
+        extension_planning: extension_planning.into(),
+    }))
+}
+
+fn build_cross_storage_operation_dispatch(
+    runtime: &Runtime,
+    snapshot: &Arc<super::RuntimeConfigSnapshot>,
+    frozen: &FrozenProgram,
+    compiler_options: CompilerOptions,
+    candidates: &[super::EngineSnapshotView<'_>],
+    options: &PrepareOptions,
+    missing_extension_family: &mut Option<ExtensionFamilyId>,
+) -> PreparedProgramResult<Option<PreparationContext>> {
+    let mut dispatch = Vec::with_capacity(frozen.program.operations().len());
+    let mut bindings = Vec::with_capacity(frozen.program.operations().len());
+    let mut placements = Vec::with_capacity(frozen.program.operations().len());
+    let mut extension_identities = Vec::new();
+    let mut extension_planning = Vec::new();
+
+    for operation in frozen.program.operations() {
+        let Some(selected) = select_operation_dispatch_any_storage(
+            runtime,
+            snapshot,
+            candidates,
+            operation,
+            options,
+            missing_extension_family,
+        )?
+        else {
+            return Ok(None);
+        };
+        bindings.push(selected.dispatch.binding.clone());
+        placements.push(selected.dispatch.resolved_placement.clone());
+        if let Some(identity) = selected.extension_identity {
+            extension_identities.push(identity);
+        }
+        if let Some(config) = selected.extension_config {
+            extension_planning.push(config);
+        }
+        dispatch.push(selected.dispatch);
+    }
+
+    let Some(primary) = dispatch.first() else {
+        return Ok(None);
+    };
+    let planning_key = ResolvedPlanningKey::from_config(&primary.planning);
+    let primary_binding = primary.binding.clone();
+    let root_identity = Arc::new(PreparedRootIdentity {
+        semantic_fingerprint: frozen.program.semantic_fingerprint(),
+        semantic: Arc::clone(&frozen.program),
+        runtime_id: runtime.id(),
+        epoch: snapshot.epoch(),
+        resolved_placement: primary.resolved_placement.clone(),
+        engine_id: primary_binding.engine_id().clone(),
+        registration_identity: primary_binding.registration_identity(),
+        context_identity: primary_binding.context_identity(),
+        hardware_class: primary_binding.hardware_class().clone(),
+        compiler_options,
+        resolved_planning: planning_key,
+        prepare_options: primary.prepare_options_key.clone(),
+        operation_bindings: bindings.into_boxed_slice(),
+        operation_placements: placements.into_boxed_slice(),
         extension_planning: extension_identities.into_boxed_slice(),
     });
 
@@ -778,6 +868,31 @@ fn select_operation_dispatch(
             extension_identity,
             extension_config,
         }));
+    }
+    Ok(None)
+}
+
+fn select_operation_dispatch_any_storage(
+    runtime: &Runtime,
+    snapshot: &Arc<super::RuntimeConfigSnapshot>,
+    candidates: &[super::EngineSnapshotView<'_>],
+    operation: SemanticOperationView<'_>,
+    options: &PrepareOptions,
+    missing_extension_family: &mut Option<ExtensionFamilyId>,
+) -> PreparedProgramResult<Option<SelectedOperationDispatch>> {
+    for engine in candidates {
+        let storage_class = engine.default_storage_class().clone();
+        if let Some(selected) = select_operation_dispatch(
+            runtime,
+            snapshot,
+            std::slice::from_ref(engine),
+            operation,
+            &storage_class,
+            options,
+            missing_extension_family,
+        )? {
+            return Ok(Some(selected));
+        }
     }
     Ok(None)
 }
@@ -1243,6 +1358,7 @@ fn hash_root_identity_for_digest(identity: &PreparedRootIdentity, state: &mut im
     identity.resolved_planning.hash(state);
     identity.prepare_options.hash(state);
     identity.operation_bindings.hash(state);
+    identity.operation_placements.hash(state);
     for extension in &identity.extension_planning {
         extension.module_id.hash(state);
         extension.family_id.hash(state);
@@ -1264,6 +1380,7 @@ fn root_identity_exact_eq(left: &PreparedRootIdentity, right: &PreparedRootIdent
         && left.resolved_planning == right.resolved_planning
         && left.prepare_options == right.prepare_options
         && left.operation_bindings == right.operation_bindings
+        && left.operation_placements == right.operation_placements
         && left.semantic.semantic_eq(&right.semantic)
         && extension_planning_exact_eq(&left.extension_planning, &right.extension_planning)
 }
@@ -1315,6 +1432,10 @@ fn prepared_root_identity_key_retained_bytes(identity: &PreparedRootIdentity) ->
             .operation_bindings
             .len()
             .checked_mul(size_of::<PreparedOperationBinding>())?,
+        identity
+            .operation_placements
+            .len()
+            .checked_mul(size_of::<ResolvedProgramPlacement>())?,
         identity
             .extension_planning
             .len()

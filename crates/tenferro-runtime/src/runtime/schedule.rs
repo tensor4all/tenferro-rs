@@ -15,11 +15,16 @@ use crate::error::ErrorPhase;
 use crate::exec::ExecProgram;
 use crate::Error;
 
+/// Opaque runtime event-domain identifier.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct EventDomainId(u32);
+pub struct EventDomainId(u32);
 
 impl EventDomainId {
     pub(crate) const CPU_BLOCKING: Self = Self(0);
+
+    pub(crate) fn runtime_allocated(value: u32) -> Self {
+        Self(value)
+    }
 
     #[cfg(test)]
     pub(crate) fn runtime_created_for_test(value: u32) -> Self {

@@ -234,8 +234,10 @@ einsum, and FFT provide those modules from their owning crates.
 extension modules, and cache ownership required to preserve dispatch
 invariants. The synchronous runtime path executes the prepared root schedule
 one node at a time and dispatches each semantic operation through the selected
-same-storage engine bridge. Placements that require transfers are rejected
-until the async/transfer scheduler is implemented.
+engine bridge. When a downstream operation uses a different storage class, the
+scheduled loop requires a registered transfer provider for the source and
+destination storage classes and materializes that slot before dispatch. Missing
+providers are runtime errors, not implicit host fallbacks.
 
 The segmented internal path groups fusible backend instructions:
 

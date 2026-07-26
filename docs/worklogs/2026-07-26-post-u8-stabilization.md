@@ -18,17 +18,24 @@ splitting the follow-up work into unrelated pull requests.
 - #1456 production dispatch checkpoint: prepared roots now retain a
   crate-private `ScheduledGraph`; `Runtime::run_compiled*` walks that schedule
   synchronously; same-storage semantic operations execute through their
-  selected engine bridge. Transfer-requiring placements are rejected until
-  #1471 supplies transfer execution.
+  selected engine bridge.
+- #1471 U3 substrate checkpoint: `Runtime::submit` returns an
+  `ExecutionHandle`, engine snapshots expose runtime-allocated event domains,
+  transfer providers are registered by storage-class pair, and cross-storage
+  linear execution calls the transfer provider from the production scheduled
+  loop before dispatching the downstream operation.
 
 ## Current runtime boundary
 
 - `CompiledGraph` remains backend-neutral.
 - Runtime preparation owns the semantic-to-prepared binding, cache ownership,
-  selected engine bindings, and schedule construction.
-- The synchronous scheduled executor is deliberately same-storage only.
-  `ScheduledTransfer`, event-domain bridging, async submit, and admission logic
-  remain #1471 scope.
+  selected engine bindings, selected operation placements, and schedule
+  construction.
+- The synchronous scheduled executor tracks each slot's current storage class.
+  Cross-storage handoff is supported only when a registered transfer provider
+  can materialize the slot for the downstream operation's storage class.
+- `ScheduledTransfer`, device-native event-domain bridging, pending-output
+  composition, and full admission logic remain later #1471 follow-up scope.
 - The extension execution hook is still the public
   `PreparedOperation::execute` trait method. This is compatible with the
   current extension architecture; narrowing it to an internal operation object
@@ -44,6 +51,9 @@ python3 scripts/test-doc-consistency.py
 python3 scripts/check-doc-snippets.py --root-dir . --check
 cargo test -p tenferro-runtime per_operation_placement_can_mix_same_storage_core_and_extension_engines -- --nocapture
 cargo test -p tenferro-runtime --test integration runtime_run_compiled_dispatches_same_storage_extension_on_selected_engine -- --nocapture
+cargo test -p tenferro-runtime --test integration runtime_run_compiled_transfers_between_storage_classes_on_scheduled_path -- --nocapture
+cargo test -p tenferro-runtime --test integration runtime_run_compiled_reports_missing_transfer_provider_for_cross_storage -- --nocapture
+cargo test -p tenferro-runtime --test integration runtime_submit_wait_uses_prepared_execution_path -- --nocapture
 cargo test -p tenferro-runtime prepared_program_is_binding_free_and_shares_staged_root -- --nocapture
 cargo test -p tenferro-runtime preparation -- --nocapture
 cargo test -p tenferro-runtime --test integration runtime_execution -- --nocapture
@@ -56,8 +66,11 @@ git diff --check
 - The scheduled executor currently leases a backend state per instruction and
   uses the unsegmented execution path. This is correct for #1456; #1464 and
   #1473 own evidence-backed fusion/performance restoration.
+- Cross-storage transfer currently rewrites the slot in place immediately
+  before the downstream operation. This covers the linear fake two-device
+  substrate; split-use buffer lifetime and explicit `ScheduledTransfer` nodes
+  remain future scheduler work.
 - CPU buffer-pool and GEMM analysis caches already expose ownership and limit
   controls, but their event counters remain coarse. This is not a blocker for
   #1478 because the generic runtime extension caches now have bounded retained
   bytes and observable statistics.
-- Cross-storage placement and transfer nodes must stay rejected until #1471.

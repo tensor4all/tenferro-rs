@@ -141,6 +141,13 @@ pub enum RegistrationKey {
         /// Local cache owner.
         owner: CacheOwnerId,
     },
+    /// A transfer provider keyed by source and destination storage classes.
+    TransferProvider {
+        /// Source storage class.
+        source: StorageClass,
+        /// Destination storage class.
+        destination: StorageClass,
+    },
 }
 
 /// Reports invalid execution-policy configuration.

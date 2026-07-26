@@ -73,12 +73,12 @@ pub use runtime::{
     CacheInFlightBehavior, CacheOwnerError, CacheOwnerFailure, CacheOwnerId, CoreCapabilityBundle,
     CoreCapabilityBundleBuilder, CoreCapabilityKind, CorePrepareContext, Determinism,
     DotGeneralPreparation, DotGeneralPrepareRequest, ElementwisePrepareRequest, ElementwiseRuntime,
-    EngineId, EngineRegistration, EngineSnapshotView, ErasedExecutionContext,
-    ExecutionContextIdentity, ExecutionContextMismatch, ExecutionPolicy, ExecutionPolicyError,
-    ExtensionEngine, ExtensionModule, ExtensionModuleError, ExtensionModuleId,
-    ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest, HardwareClassId,
-    IdentityError, IdentityKind, IndexingPrepareRequest, IndexingRuntime, InputSignature,
-    InputSignatureEntry, InputSignatureError, InputSpecializationProjection,
+    EngineId, EngineRegistration, EngineSnapshotView, ErasedExecutionContext, EventDomainId,
+    ExecutionContextIdentity, ExecutionContextMismatch, ExecutionHandle, ExecutionPolicy,
+    ExecutionPolicyError, ExtensionEngine, ExtensionModule, ExtensionModuleError,
+    ExtensionModuleId, ExtensionModuleRegistrar, ExtensionPlanningConfig, ExtensionPrepareRequest,
+    HardwareClassId, IdentityError, IdentityKind, IndexingPrepareRequest, IndexingRuntime,
+    InputSignature, InputSignatureEntry, InputSignatureError, InputSpecializationProjection,
     InputSpecializationRequirements, InputSpecializationRequirementsBuilder,
     InputSpecializationRequirementsError, LayoutClass, LayoutPrepareRequest, LayoutProjection,
     LayoutRuntime, LayoutSpecialization, PlacementConstraintError, PlacementProjection,
@@ -91,7 +91,7 @@ pub use runtime::{
     RuntimeCacheError, RuntimeCacheOwner, RuntimeCacheStats, RuntimeConfigBuilder,
     RuntimeConfigError, RuntimeConfigSnapshot, RuntimeEpoch, RuntimeId, RuntimeReconfiguration,
     RuntimeReconfigureError, RuntimeStateError, SpecializationError, SpecializationProjection,
-    SpecializationRequirements, StorageClass, UnsupportedReason,
+    SpecializationRequirements, StorageClass, TransferProvider, TransferRequest, UnsupportedReason,
 };
 #[doc(hidden)]
 pub use shape_constraint::ShapeGuard;
