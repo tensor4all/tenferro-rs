@@ -272,12 +272,18 @@ fn warmed_public_session_request_provider_dispatch_does_not_allocate() {
         for _ in 0..WARMUP {
             dispatch();
         }
-        count_repeated(&mut dispatch, ITERATIONS)
+        // Some coverage toolchains lazily allocate after the global allocator
+        // probe is enabled. The second back-to-back window must still prove
+        // steady-state provider dispatch is allocation-free.
+        let first_count = count_repeated(&mut dispatch, ITERATIONS);
+        let steady_count = count_repeated(&mut dispatch, ITERATIONS);
+        black_box(first_count);
+        steady_count
     });
 
     assert_eq!(count.allocations, 0);
     assert_eq!(count.bytes, 0);
-    assert_eq!(calls.load(Ordering::Relaxed), WARMUP + ITERATIONS);
+    assert_eq!(calls.load(Ordering::Relaxed), WARMUP + 2 * ITERATIONS);
     assert_eq!(black_box(output.as_slice::<f64>().unwrap()[0]), 6.0);
 }
 

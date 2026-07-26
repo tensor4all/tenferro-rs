@@ -22,8 +22,9 @@ For contributors, internal crate APIs are also available in the
   and runtime-loaded PJRT plugin support for static-shaped traced programs
 - [tenferro-tensor](./tenferro_tensor/index.html): dense runtime tensors,
   typed views, backend traits, and backend-independent contracts
-- [tenferro-cpu](./tenferro_cpu/index.html): CPU backend, CPU execution
-  sessions, CPU kernels, buffer pools, and CPU provider selection
+- [tenferro-cpu](./tenferro_cpu/index.html): public CPU backend, CPU execution
+  sessions, execution context, provider selection, thread policy, and
+  resource-pool controls
 - [tenferro-gpu](./tenferro_gpu/index.html): CubeCL/CUDA backend and GPU
   transfer helpers
 - [tenferro-einsum](./tenferro_einsum/index.html): subscripts,
@@ -43,6 +44,8 @@ are not the recommended application-facing API surface.
   data model, dtype tags, scalar traits, rank metadata, and metadata-only views
 - [tenferro-core-ops](./tenferro_core_ops/index.html): internal primitive
   operation catalog metadata
+- [tenferro-internal-cpu-kernels](./tenferro_internal_cpu_kernels/index.html):
+  internal CPU elementwise kernels and typed buffer-pool implementation
 - [tenferro-internal-ops](./tenferro_ops/index.html): graph operation
   vocabulary and AD rule implementations
 - [tenferro-internal-extension-macros](./tenferro_extension_macros/index.html):

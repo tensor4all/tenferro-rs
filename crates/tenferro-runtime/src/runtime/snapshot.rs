@@ -563,8 +563,10 @@ impl Runtime {
     ///
     /// # Errors
     ///
-    /// Returns the same input-resolution and preparation errors as
-    /// [`Self::run_compiled`] before the worker is submitted.
+    /// Returns the same [`crate::PrepareError::InputSignature`],
+    /// [`crate::PrepareError::Specialization`],
+    /// [`crate::PrepareError::NoEligibleEngine`], and other preparation
+    /// failures as [`Self::run_compiled`] before the worker is submitted.
     pub fn submit(
         &self,
         program: &CompiledGraph,

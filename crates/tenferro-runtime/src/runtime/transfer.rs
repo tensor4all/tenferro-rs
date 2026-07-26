@@ -10,8 +10,10 @@ pub trait TransferProvider: fmt::Debug + Send + Sync + 'static {
     ///
     /// # Errors
     ///
-    /// Returns a runtime or backend error when the provider cannot materialize
-    /// the destination tensor.
+    /// Returns a [`tenferro_tensor::ErrorKind::RuntimeState`] or backend
+    /// failure when the provider cannot materialize the destination tensor, or
+    /// a validation error such as dtype, shape, placement, or buffer mismatch
+    /// when the transfer request is unsupported.
     fn transfer(&self, request: TransferRequest<'_>) -> crate::Result<Tensor>;
 }
 

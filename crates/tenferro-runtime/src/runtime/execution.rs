@@ -62,8 +62,9 @@ impl ExecutionHandle {
     ///
     /// # Errors
     ///
-    /// Returns the submitted runtime execution error, or a runtime-state error
-    /// if the worker panicked.
+    /// Returns the submitted runtime execution [`Error`], including
+    /// [`ErrorKind::RuntimeState`](tenferro_tensor::ErrorKind::RuntimeState)
+    /// when the handle was already consumed or the worker panicked.
     pub fn wait(mut self) -> Result<Vec<Tensor>> {
         let Some(join) = self.join.take() else {
             return Err(Error::runtime_state(

@@ -73,7 +73,8 @@ The release API should make crate ownership obvious.
 | --- | --- |
 | `tenferro-tensor-core` | Host-only dtype tags, scalar traits, rank/layout metadata, compact host tensors, and metadata-only host views. It must not depend on execution backends, graph execution, AD, or GPU runtimes. |
 | `tenferro-tensor` | Runtime dense tensor values, runtime views, placement metadata, backend traits, and backend-parametric tensor contracts. It does not own CPU or GPU kernel implementations. |
-| `tenferro-cpu` | CPU backend implementations, CPU kernels, CPU execution context, provider selection, thread policy, and CPU resource pools. |
+| `tenferro-cpu` | Public CPU backend, CPU execution sessions, CPU execution context, provider selection, thread policy, public resource-pool controls, and runtime-registration adapters. |
+| `tenferro-internal-cpu-kernels` | Internal CPU elementwise kernels and typed buffer-pool implementation reused by `tenferro-cpu`; not a user-facing API surface. |
 | `tenferro-gpu` | GPU backend implementations, device buffers, explicit upload/download helpers, CubeCL/CUDA integration, GPU launch metadata, and GPU resource ownership. |
 | `tenferro-core-ops` | Internal primitive operation catalog metadata shared by lower layers. |
 | `tenferro-internal-ops` | Internal graph operation vocabulary and graph-level AD rule implementations. |

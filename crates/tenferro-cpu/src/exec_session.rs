@@ -563,7 +563,7 @@ impl TensorFusion for CpuExecSession<'_> {
     ) -> crate::Result<Option<TensorValue>> {
         let domain = self.entry.domain_id();
         self.run_native(|buffers| {
-            elementwise::broadcast_multiply_value_with_pool_in_domain(
+            elementwise::broadcast_multiply_value_with_pool_and_tag(
                 buffers,
                 lhs,
                 lhs_shape,
@@ -571,7 +571,7 @@ impl TensorFusion for CpuExecSession<'_> {
                 rhs,
                 rhs_shape,
                 rhs_dims,
-                Some(domain),
+                |tensor| tag_fresh_output(tensor, domain),
             )
         })
     }

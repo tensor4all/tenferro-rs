@@ -42,6 +42,15 @@ splitting the follow-up work into unrelated pull requests.
   reductions, #1482 CPU indexing hot loops, #1483 eager AD accumulation
   allocation, #1484 FFT plan/scratch reuse, and #1485 cuTENSOR
   descriptor/plan/workspace caching.
+- #1472 release build/crate split checkpoint: added
+  `tenferro-internal-cpu-kernels` and moved CPU `elementwise` kernels plus
+  `BufferPool` ownership there while preserving the public `tenferro-cpu`
+  crate/API surface. `tenferro-cpu` now imports the internal kernel crate
+  through crate-private re-exports, keeps `linalg_interop::BufferPool` as the
+  owner-scoped public pool path, and retains source-contract coverage that the
+  heavy elementwise/buffer-pool implementation files do not move back into the
+  public CPU crate. The remaining fine-grained CPU release-codegen split is
+  tracked separately in #1486.
 
 ## Current runtime boundary
 
@@ -84,8 +93,27 @@ RUN_ORACLE_REPLAY=1 ORACLE_REPLAY_JOBS=64 cargo test -p tenferro-linalg --test i
 cargo test -p tenferro-cpu two_input_binary_tail_classifier --lib -- --nocapture
 cargo test -p tenferro-cpu binary_tail_specialization --lib -- --nocapture
 cargo test -p tenferro-cpu elementwise_fusion --lib -- --nocapture
+cargo test -p tenferro-internal-cpu-kernels --lib
+cargo test -p tenferro-internal-cpu-kernels --doc
+cargo test -p tenferro-cpu --lib
+cargo test -p tenferro-cpu --test integration backend_capability_contracts -- --nocapture
+cargo test -p tenferro-cpu --test provider_boundary_allocation_tests warmed_public_session_request_provider_dispatch_does_not_allocate -- --nocapture
+CARGO_INCREMENTAL=0 cargo llvm-cov --workspace --profile ci --no-report --test provider_boundary_allocation_tests -- --nocapture
+CARGO_INCREMENTAL=0 cargo llvm-cov --workspace --profile ci --json --output-path /tmp/tenferro-post-u8-coverage.json
+python3 scripts/check-coverage.py /tmp/tenferro-post-u8-coverage.json
 cargo test -p tenferro-runtime --test integration runtime_public_api -- --nocapture
+python3 scripts/gen_dep_graph.py --check-svg docs/assets/dependency-footprint.svg
+python3 scripts/test-gen-dep-graph.py
+python3 scripts/check-public-error-docs.py --root .
+cargo metadata --no-deps --format-version 1
+cargo doc --workspace --no-deps
+python3 scripts/check-docs-site.py --root-dir . --site-index /tmp/tenferro-missing-api-index.html --docs-site-root /tmp/tenferro-missing-docs-site
+cargo package -p tenferro-internal-cpu-kernels --allow-dirty --no-verify
+CARGO_BUILD_JOBS=64 bash scripts/check-pr-fast.sh --coverage-reviewed --test 'cargo test -p tenferro-cpu --test provider_boundary_allocation_tests warmed_public_session_request_provider_dispatch_does_not_allocate -- --nocapture'
 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 RAYON_NUM_THREADS=1 CARGO_BUILD_JOBS=64 cargo bench -p tenferro-runtime --features __bench_unification_run_compiled_api --bench elementwise_fusion -- --sample-size 10 --warm-up-time 0.1 --measurement-time 0.3
+CARGO_TARGET_DIR=/tmp/tenferro-1472-candidate-target.Y3WFns CARGO_BUILD_JOBS=64 CARGO_INCREMENTAL=0 RUSTC_WRAPPER= /usr/bin/time -v cargo build --workspace --release --timings
+CARGO_TARGET_DIR=/tmp/tenferro-1472-candidate-target.Y3WFns CARGO_BUILD_JOBS=64 CARGO_INCREMENTAL=0 RUSTC_WRAPPER= /usr/bin/time -v cargo build -p tenferro-cpu --release --timings
+CARGO_TARGET_DIR=/tmp/tenferro-1472-candidate-target.Y3WFns CARGO_BUILD_JOBS=64 CARGO_INCREMENTAL=0 RUSTC_WRAPPER= /usr/bin/time -v cargo test -p tenferro-cpu --release --lib --no-run --timings
 gh issue close 1473 --reason completed
 git diff --check
 ```
@@ -108,6 +136,79 @@ runtime_elementwise_chain/f64/broadcast_mul/segmented_graph/256x256       112.53
 runtime_elementwise_chain/f64/broadcast_mul/segmented_graph/1024x1024     1.9468 ms
 runtime_elementwise_chain/f64/broadcast_mul_add/segmented_graph/256x256   146.97 us
 runtime_elementwise_chain/f64/broadcast_mul_add/segmented_graph/1024x1024 2.7071 ms
+```
+
+The #1472 release build-time checkpoint used Rust/Cargo 1.97.1, a fresh target
+directory at `/tmp/tenferro-1472-candidate-target.Y3WFns`, `CARGO_BUILD_JOBS=64`,
+`CARGO_INCREMENTAL=0`, and no `RUSTC_WRAPPER`.
+
+The new internal crate also packaged successfully with
+`cargo package -p tenferro-internal-cpu-kernels --allow-dirty --no-verify`.
+The corresponding `tenferro-cpu` package check still stops on the pre-existing
+`t4a-tblis-src` crates.io resolution gap, not on the new internal kernel
+dependency. That publish-resolution follow-up is #1487.
+
+Coverage thresholds were updated for the post-U8 execution-path shift and CPU
+kernel split: the moved elementwise implementation now lives under
+`tenferro-internal-cpu-kernels`, and `Runtime::run_compiled` no longer exercises
+the legacy `ExecProgram`/segment interpreter as the primary path. Local
+workspace `cargo llvm-cov` plus `scripts/check-coverage.py` passed with the
+updated thresholds.
+
+Candidate clean workspace release build:
+
+```text
+cargo build --workspace --release --timings
+wall: 3m39s
+user: 1509.88s
+max RSS: 4.48 GiB
+timing report: /tmp/tenferro-1472-candidate-target.Y3WFns/cargo-timings/cargo-timing-20260726T151835536Z-dc09497ede236b02.html
+
+Top units:
+tenferro-internal-cpu-kernels 213.3s total, 8.3s frontend, 204.9s codegen
+tenferro-cpu                  141.5s total, 8.2s frontend, 133.3s codegen
+faer                           30.0s total, 29.8s frontend, 0.2s codegen
+tenferro-linalg                11.7s total, 3.9s frontend, 7.8s codegen
+tenferro-fft                   11.4s total, 0.8s frontend, 10.6s codegen
+tenferro-runtime                6.8s total, 3.6s frontend, 3.1s codegen
+```
+
+Representative release rebuilds in the same target:
+
+```text
+touch crates/tenferro-cpu/src/provider.rs
+cargo build -p tenferro-cpu --release --timings
+wall: 2m17s
+user: 524.16s
+max RSS: 3.67 GiB
+top unit: tenferro-cpu 133.3s total, 125.6s codegen
+observation: tenferro-internal-cpu-kernels was reused and did not recompile.
+
+touch crates/tenferro-internal-cpu-kernels/src/elementwise.rs
+cargo build -p tenferro-cpu --release --timings
+wall: 3m30s
+user: 1200.96s
+max RSS: 4.71 GiB
+top units: tenferro-internal-cpu-kernels 210.1s total, 202.5s codegen;
+           tenferro-cpu 140.6s total, 132.8s codegen
+observation: provider/domain edits now reuse kernel artifacts, but kernel
+edits still rebuild both the internal kernel unit and the public CPU crate.
+```
+
+Focused release test no-run in the same target:
+
+```text
+cargo test -p tenferro-cpu --release --lib --no-run --timings
+wall: 5m44s
+user: 1282.94s
+max RSS: 4.75 GiB
+timing report: /tmp/tenferro-1472-candidate-target.Y3WFns/cargo-timings/cargo-timing-20260726T153017832Z-dc09497ede236b02.html
+
+Top units:
+tenferro-internal-cpu-kernels          203.8s total, 8.2s frontend, 195.6s codegen
+tenferro-cpu tenferro_cpu "lib" test   137.4s total
+faer                                    30.0s total, 29.8s frontend, 0.2s codegen
+criterion                                3.1s total
 ```
 
 ## Residual risks to carry forward
@@ -136,3 +237,10 @@ runtime_elementwise_chain/f64/broadcast_mul_add/segmented_graph/1024x1024 2.7071
   cache owners (#1478), but performance follow-ups #1484 and #1485 will add or
   reuse FFT/cuTENSOR caches only if they inherit the same owner, bounded
   default, retained-byte accounting, clear/configure API, and stats contract.
+- The #1472 split deliberately stopped at the first high-value reuse boundary:
+  provider/domain/runtime edits no longer force `elementwise`/`BufferPool`
+  re-optimization. The new `tenferro-internal-cpu-kernels` crate remains the
+  largest release codegen unit, so a later timing-backed split can separate
+  elementwise, reductions/indexing, dot/GEMM helpers, and provider contracts if
+  those edit patterns become the dominant bottleneck. That narrower follow-up
+  is #1486.
