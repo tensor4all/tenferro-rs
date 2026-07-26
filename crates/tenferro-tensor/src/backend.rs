@@ -201,12 +201,12 @@ pub fn validate_dot_general_read_into(
             },
         ));
     }
-    if out.dtype() != lhs.dtype() {
+    if lhs.dtype() != out.dtype() {
         return Err(validation(
             op,
             ValidationError::DTypeMismatch {
-                expected: crate::core_dtype(out.dtype()),
-                actual: crate::core_dtype(lhs.dtype()),
+                expected: crate::core_dtype(lhs.dtype()),
+                actual: crate::core_dtype(out.dtype()),
             },
         ));
     }
